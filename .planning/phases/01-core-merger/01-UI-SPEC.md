@@ -1,7 +1,8 @@
 ---
 phase: 1
 slug: core-merger
-status: draft
+status: approved
+reviewed_at: 2026-07-10T23:17:57Z
 shadcn_initialized: false
 preset: none
 created: 2026-07-11
@@ -161,12 +162,12 @@ When the shared stream is reconnecting, preserve the existing global `与服务�
 
 | Surface | Loading | Empty | Error |
 |---------|---------|-------|-------|
-| Portfolio summary and holdings | Summary-cell skeletons plus 8 fixed-height row/card skeletons; retain prior data during background refresh | `还没有持仓` — `先新建账户，再添加第一笔持仓。` with `添加持仓` action | `无法读取投资组合。请检查服务连接后重试。` with `重试` action |
+| Portfolio summary and holdings | Summary-cell skeletons plus 8 fixed-height row/card skeletons; retain prior data during background refresh | `还没有持仓` — `先新建账户，再添加第一笔持仓。` with `添加持仓` action | `无法读取投资组合。请检查服务连接后重新加载投资组合。` with `重新加载投资组合` action |
 | Account filter | Disabled selector with a 32px skeleton | `还没有账户` — `新建账户后即可记录持仓与可用资金。` | Inline compact error; do not erase existing holdings |
-| Monitor rules | Existing compact rule skeletons | `暂无监控规则` — `新建规则后，可在持仓、价格或市场条件满足时记录提醒。` with `新建规则` action | `无法加载监控规则。请检查服务连接后重试。` |
-| Alert history | Existing compact event skeletons | `暂无触发记录` — `规则命中后，记录和投递结果会显示在这里。` | `无法加载触发记录。请检查服务连接后重试。` |
-| Delivery detail | Two compact status-row skeletons | `此规则未配置外部通知渠道。` | `无法读取投递结果。请稍后重试。` |
-| Playbook inspector | Field-row skeletons; preserve any prior snapshot until new data resolves | `尚无可用决策计划` — `完成数据同步后生成确定性计划。` | `无法读取决策计划。请检查数据状态后重试。` |
+| Monitor rules | Existing compact rule skeletons | `暂无监控规则` — `新建规则后，可在持仓、价格或市场条件满足时记录提醒。` with `新建规则` action | `无法加载监控规则。请检查服务连接后重新加载监控规则。` with `重新加载监控规则` action |
+| Alert history | Existing compact event skeletons | `暂无触发记录` — `规则命中后，记录和投递结果会显示在这里。` | `无法加载触发记录。请检查服务连接后重新加载告警记录。` with `重新加载告警记录` action |
+| Delivery detail | Two compact status-row skeletons | `此规则未配置外部通知渠道。` | `无法读取投递结果。请稍后重新加载投递结果。` with `重新加载投递结果` action |
+| Playbook inspector | Field-row skeletons; preserve any prior snapshot until new data resolves | `尚无可用决策计划` — `完成数据同步后生成确定性计划。` | `无法读取决策计划。请检查数据状态后重新加载决策计划。` with `重新加载决策计划` action |
 
 Use `Skeleton`, never a blank panel or full-page spinner, for local loading. Mutations disable only the submitted form and show progress in the submit button; do not lock unrelated navigation. After a successful account/holding/rule mutation, close the dialog, invalidate the affected queries, preserve the user’s current filter, and show a concise success toast.
 
@@ -180,7 +181,7 @@ All creation and edit flows use page-level `Modal` dialogs. `新建账户` and `
 
 Account fields, in visual order: `账户名称`, `可用资金`, optional `备注`, then active/archive state when editing. Holding fields: `账户`, `标的搜索`, `成本价`, `数量`, `投入金额`, `交易风格` (`短线`, `波段`, `长线`), optional `备注`. The instrument search uses the established accessible combobox behavior: input focus opens results, Arrow Up/Down changes the active result, Enter selects, Escape closes, and selected value remains visible. Require account, instrument, positive quantity, and non-negative cost/amount before submit. Show field-level validation directly below the relevant control and move focus to the first invalid field after submit.
 
-Dialog footer buttons are `取消` (secondary) and `保存账户` / `保存持仓` (accent primary). Editing never overwrites real-time valuation fields; those remain calculated display-only values in the list. When a selected instrument already exists in the selected account, block submission with `该账户已持有此标的。请编辑现有持仓。`.
+Dialog footer buttons are `返回投资组合` (secondary) and `保存账户` / `保存持仓` (accent primary). Editing never overwrites real-time valuation fields; those remain calculated display-only values in the list. When a selected instrument already exists in the selected account, block submission with `该账户已持有此标的。请编辑现有持仓。`.
 
 Accounts or holdings referenced by history or rules show `归档` rather than delete. The archive confirmation copy is `归档后将不再计入默认汇总；持仓、规则和告警历史会保留。` Empty, unreferenced records may expose `删除`; its confirmation names the record and states `删除后无法恢复。`. Archive/delete controls use `Archive`/`Trash2` icons and explicit accessible labels. Do not offer bulk deletion.
 
@@ -190,7 +191,7 @@ Extend the existing Monitor `RuleEditor` in the shared modal presentation. The f
 
 `通知与时间` contains severity, cooldown, active-time range, quiet-period behavior, and delivery channels. Use checkboxes for Feishu and Telegram. A selected but unconfigured channel stays selectable but shows `未配置` plus a direct internal `前往设置` action. The high-severity quiet-period bypass is a switch labeled `高优先级可绕过静默时段`; show a 12px helper line: `规则命中始终会保存；静默时段只影响外部投递。` Do not expose unsupported channels as selectable controls.
 
-The rule form primary action is `保存规则`; a disabled submitting action reads `正在保存…`. Invalid condition, empty holding selection, or impossible active-time input produces adjacent field errors and a concise top form summary. Closing a dialog with unsaved changes opens `放弃未保存的更改？` with `继续编辑` and `放弃更改`.
+The rule form footer uses `返回监控中心` (secondary) and `保存规则` (accent primary); a disabled submitting action reads `正在保存…`. Invalid condition, empty holding selection, or impossible active-time input produces adjacent field errors and a concise top form summary. Closing a dialog with unsaved changes opens `放弃未保存的更改？` with `继续编辑` and `放弃更改`.
 
 ### Alert History And Delivery Detail
 
@@ -211,7 +212,7 @@ At all widths, use `min-width: 0`, truncation with a title/accessible name where
 - Use semantic `table`, `thead`, `th scope="col"`, and row headers for desktop holdings. Mobile holding cards must expose the same values with visible labels; do not hide a required value solely because the table has changed shape.
 - Every form input has a persistent visible label. Placeholder text is supplementary, never the only label. Required fields include programmatic required state; validation messages are associated with the input through `aria-describedby`.
 - All interactive controls are keyboard reachable. Icon-only buttons have `aria-label` and `title`. Selected filter chips expose `aria-pressed`; rule/channel switches expose checked state; disabled controls state why through visible helper copy or tooltip.
-- Focus uses a visible 2px accent ring with sufficient contrast. Preserve the shared Modal focus trap, Escape close, and focus restoration. Destructive confirmations receive initial focus on `取消`, never on the destructive action.
+- Focus uses a visible 2px accent ring with sufficient contrast. Preserve the shared Modal focus trap, Escape close, and focus restoration. Destructive confirmations receive initial focus on `返回投资组合`, never on the destructive action.
 - Announce user-initiated mutation success and noncritical query errors through the existing polite live region. Alert toasts and SSE reconnect notices remain polite. Do not announce each tick-level valuation update; refresh visual values silently.
 - Color is always paired with text, icon, sign, or state label. Respect `prefers-reduced-motion`; reduce row/alert/dialog transitions to opacity-only or none, and never make an essential state depend on pulse animation.
 
@@ -228,7 +229,9 @@ At all widths, use `min-width: 0`, truncation with a title/accessible name where
 | Rule empty state body | `新建规则后，可在持仓、价格或市场条件满足时记录提醒。` |
 | Alert-history empty state heading | `暂无触发记录` |
 | Alert-history empty state body | `规则命中后，记录和投递结果会显示在这里。` |
-| Generic error state | `无法加载数据。请检查服务连接后重试。` |
+| Portfolio error recovery | `无法读取投资组合。请检查服务连接后重新加载投资组合。` |
+| Monitor-rules error recovery | `无法加载监控规则。请检查服务连接后重新加载监控规则。` |
+| Alert-history error recovery | `无法加载触发记录。请检查服务连接后重新加载告警记录。` |
 | Missing valuation | `暂无法估值` |
 | Fresh quote label | `实时 · HH:mm:ss` |
 | Fallback-close label | `收盘 · YYYY-MM-DD` |
@@ -239,7 +242,7 @@ At all widths, use `min-width: 0`, truncation with a title/accessible name where
 | Unsaved form confirmation | `放弃未保存的更改？` |
 | Replay in progress | `正在以历史数据回放；AI 已禁用` |
 
-Use direct Chinese operational verbs: `新建`, `添加`, `保存`, `编辑`, `归档`, `删除`, `查看详情`, `重试`, and `前往设置`. Avoid marketing claims, reassurance language, unexplained acronyms, vague “latest” labels, and copied raw backend errors.
+Use direct Chinese operational verbs: `新建`, `添加`, `保存`, `编辑`, `归档`, `删除`, `查看详情`, `重新加载`, and `前往设置`. Avoid marketing claims, reassurance language, unexplained acronyms, vague “latest” labels, and copied raw backend errors.
 
 ---
 
