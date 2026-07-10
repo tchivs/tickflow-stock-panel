@@ -1,0 +1,42 @@
+{
+  "source_path": "/root/source/AthenaQuant/docs/ARCHITECTURE.md",
+  "type": "DOC",
+  "confidence": "medium",
+  "manifest_override": false,
+  "title": "AthenaQuant — 完全体架构文档",
+  "summary": "Defines AthenaQuant's target architecture, integrated source projects, data flows, component responsibilities, and phased adoption roadmap.",
+  "scope": [
+    "AthenaQuant",
+    "quantitative research platform",
+    "data lake",
+    "factor research",
+    "decision engine",
+    "AI analysis",
+    "agent orchestration",
+    "market monitoring",
+    "adoption roadmap"
+  ],
+  "cross_refs": [
+    "/root/source/docs/aaa/tickflow-stock-panel/",
+    "/root/source/docs/aaa/panwatch/",
+    "/root/source/docs/aaa/alphaagent/",
+    "/root/source/docs/aaa/qlib/",
+    "/root/source/docs/aaa/alpha-evolution-lab/",
+    "/root/source/docs/aaa/rd-agent/",
+    "/root/source/docs/aaa/quantdinger/",
+    "/root/source/docs/aaa/vibe-trading/",
+    "/root/source/docs/aaa/uzi-skill/",
+    "/root/source/docs/aaa/x2t/",
+    "/root/source/docs/aaa/deepear/",
+    "/root/source/docs/aaa/ai-berkshire/",
+    "/root/source/docs/aaa/daily-stock-data/",
+    "/root/source/docs/aaa/tradingagents-family/",
+    "/root/source/docs/aaa/financial-timeseries-foundation/",
+    "/root/source/docs/aaa/tdx-market-data-clients/",
+    "/root/source/docs/aaa/daily-stock-analysis/",
+    "/root/source/docs/aaa/a-stock-data/"
+  ],
+  "locked": false,
+  "precedence": null,
+  "notes": ""
+}

@@ -1,0 +1,88 @@
+# Roadmap: AthenaQuant
+
+## Overview
+
+AthenaQuant first delivers a single-container, data-lake-first market and portfolio loop. It then builds reproducible factor research, evidence-grounded AI analysis, and controlled advanced workflows. The final phase preserves the source architecture's optional enhancements without making them prerequisites for the usable v1 system.
+
+## Phases
+
+**Phase Numbering:**
+- Integer phases are planned delivery work.
+- Decimal phases are reserved for urgent inserted work.
+
+- [ ] **Phase 1: Core Merger** - Deliver the self-hosted data, position, monitoring, decision-plan, and real-time notification loop.
+- [ ] **Phase 2: Factor And Strategy Research** - Let researchers create, validate, evaluate, backtest, and compare factors and strategies.
+- [ ] **Phase 3: AI Analysis** - Make AI-assisted research evidence-grounded, quality-aware, and traceable over a signal's lifecycle.
+- [ ] **Phase 4: Advanced Capabilities** - Provide controlled viewpoint tracking, research automation, strategy evolution, agent access, and sandbox execution.
+- [ ] **Phase 5: Optional Enhancements** - Add nonessential Shadow Account, thesis-tracking, and forecasting capabilities without blocking v1.
+
+## Phase Details
+
+### Phase 1: Core Merger
+**Goal**: Investors can operate the complete data-sync, position-maintenance, price-rule, notification, and real-time display loop from one Docker Compose deployment.
+**Depends on**: Nothing (first phase)
+**Requirements**: CORE-01, CORE-02, CORE-03, CORE-04, CORE-05, CORE-06, CORE-07, PLAN-01, PLAN-02
+**Success Criteria** (what must be TRUE):
+  1. Operator can start the application with one Docker Compose command and run an automated check that completes data synchronization, position maintenance, a price-rule trigger, notification delivery, and an SSE display update without an external database or queue.
+  2. User can manage accounts and positions, then inspect current position profit and loss alongside synchronized market data.
+  3. User can create a position, price, or market monitoring rule, receive a configured notification after a matching event, and review stored alert history.
+  4. User can view current market and position changes in the main interface through the shared SSE pipeline.
+  5. User can inspect a deterministic trade playbook, distinguish its baseline from bounded audited AI adjustments, and review an AI-free historical replay.
+**Plans**: TBD
+**UI hint**: yes
+
+### Phase 2: Factor And Strategy Research
+**Goal**: Researchers can turn factor hypotheses into comparable, reproducible evaluations using the governed market-data foundation.
+**Depends on**: Phase 1
+**Requirements**: FACT-01, FACT-02, FACT-03
+**Success Criteria** (what must be TRUE):
+  1. Researcher can create a factor with the permitted expression language, validate it before evaluation, store it, and find similar existing factors.
+  2. Researcher can convert a natural-language factor hypothesis into a validated expression, run its evaluation, and view IC and RankIC results.
+  3. Researcher can run a factor or strategy backtest and compare retained configurations, data inputs, predictions, metrics, artifacts, and model versions across experiments.
+**Plans**: TBD
+**UI hint**: yes
+
+### Phase 3: AI Analysis
+**Goal**: Investors can consume AI-assisted research that makes quality, reasoning, and signal validity visible rather than opaque.
+**Depends on**: Phase 2
+**Requirements**: ANLY-01, ANLY-02, ANLY-03
+**Success Criteria** (what must be TRUE):
+  1. User can review market or portfolio analysis labeled with A/B/C source-quality context and see whether material numbers were cross-checked or unresolved.
+  2. User can inspect a multi-perspective report with visible scoring rationale, applicable valuation analysis, and an investment-committee memo.
+  3. User can view a signal's current lifecycle status and its recorded evolution or outcome over time.
+**Plans**: TBD
+**UI hint**: yes
+
+### Phase 4: Advanced Capabilities
+**Goal**: Researchers and operators can use advanced research and automation workflows within explicit promotion, authorization, audit, and execution safeguards.
+**Depends on**: Phase 3
+**Requirements**: ADV-01, ADV-02, ADV-03, SAFE-01, SAFE-02
+**Success Criteria** (what must be TRUE):
+  1. User can review an attributed market viewpoint, identify a material stance change, and inspect its confidence-aware performance result.
+  2. Researcher can progress a hypothesis through a sandboxed experiment and recorded feedback, then evaluate an evolved strategy for promotion through explicit gates.
+  3. Operator can start an authorized agent job for an allowed market and instrument, observe SSE progress, and inspect its audit summary; unauthorized, out-of-allowlist, or rate-limited requests are rejected before work starts.
+  4. Researcher can submit a custom strategy only when its machine-readable contract, AST, imports, timeout, and memory constraints pass validation, and can review the constrained run's result or failure record.
+**Plans**: TBD
+
+### Phase 5: Optional Enhancements
+**Goal**: Investors and researchers can optionally extend the platform with strategy distillation, thesis evidence, and forecast capabilities without changing the completed v1 operating loop.
+**Depends on**: Phase 4
+**Requirements**: SHDW-01, THES-01, FORE-01
+**Success Criteria** (what must be TRUE):
+  1. User can create and evaluate a Shadow Account-derived strategy from their actual trading logs.
+  2. User can view an investment thesis with its valuation anchor, invalidation conditions, and periodic evidence checks.
+  3. Researcher can request and inspect a time-series forecast that includes quantiles, sampled paths, and the associated model checkpoint.
+**Plans**: TBD
+**UI hint**: yes
+
+## Progress
+
+**Execution Order:** Phase 1 -> Phase 2 -> Phase 3 -> Phase 4 -> Phase 5 (optional)
+
+| Phase | Plans Complete | Status | Completed |
+|-------|----------------|--------|-----------|
+| 1. Core Merger | 0/TBD | Not started | - |
+| 2. Factor And Strategy Research | 0/TBD | Not started | - |
+| 3. AI Analysis | 0/TBD | Not started | - |
+| 4. Advanced Capabilities | 0/TBD | Not started | - |
+| 5. Optional Enhancements | 0/TBD | Optional | - |
