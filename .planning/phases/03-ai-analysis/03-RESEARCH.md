@@ -370,26 +370,26 @@ class AnalysisReport(GeneratedAnalysis):
 
 | # | Claim | Section | Risk if Wrong |
 |---|-------|---------|---------------|
-| A1 | The existing authenticated session identity can supply a meaningful human reviewer identity for lifecycle confirmations. | Architecture Patterns | If unavailable, the phase must add a bounded reviewer identity field/audit policy before official confirmation is enabled. [ASSUMED] |
-| A2 | A dedicated SQLite checkpoint database is acceptable alongside `operational.db` in the single-container deployment. | Standard Stack | If the deployment prohibits a second file, an approved saver/storage layout must be selected without making checkpoints authoritative. [ASSUMED] |
-| A3 | The exact source-provider composition and material-number vocabulary will be resolved from currently governed inputs rather than introducing external web retrieval. | Existing Integration Map | If required source types are absent, planner must surface `context_insufficient` rather than fabricate A/B/C evidence. [ASSUMED] |
+| A1 | RESOLVED: existing session validation alone is not a reviewer identity. The auth service persists and resolves an opaque authenticated-session principal before lifecycle confirmation is enabled. | Architecture Patterns | If the resolver is unavailable, confirmation stops before the audit transaction; the API never accepts caller-provided reviewer identity. [VERIFIED: codebase] |
+| A2 | RESOLVED: a dedicated SQLite checkpoint database remains non-authoritative and is permitted only after the human package checkpoint and exact lockfile compile/invoke smoke test. | Standard Stack | If approval, resolution, compile, invoke, or deployment compatibility fails, retain the current lockfile and stop the graph implementation path. [CITED: .planning/phases/03-ai-analysis/03-01-PLAN.md] |
+| A3 | RESOLVED: a versioned local policy maps only currently governed providers and material-number vocabulary; it does not introduce external retrieval. | Existing Integration Map | Unmapped source types or missing inputs return `context_insufficient`, `unresolved`, or `conflicting` rather than fabricated A/B/C evidence. [CITED: .planning/phases/03-ai-analysis/03-04-PLAN.md] |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **Confirmed reviewer identity**
-   - What we know: all official state changes require a human reviewer and audit timestamp. [CITED: .planning/phases/03-ai-analysis/03-CONTEXT.md]
-   - What's unclear: the current local session API's stable user/audit identifier was not confirmed in this research. [ASSUMED]
-   - Recommendation: plan an explicit repository/API test proving that confirmation records a stable authenticated reviewer ID; block confirmation when identity is unavailable. [ASSUMED]
+1. **Confirmed reviewer identity — RESOLVED**
+   - Decision: the existing password-auth session is an authentication gate, not a reviewer principal. Before lifecycle confirmation is enabled, `app.services.auth` will persist one opaque `AuthenticatedReviewer` principal alongside each valid server session and expose a server-only resolver for its stable session lifetime. The authentication middleware resolves that principal from the HttpOnly session cookie and attaches it to trusted request context; `POST .../confirm` consumes only that context and its request schema has no reviewer field. [VERIFIED: codebase] [CITED: .planning/phases/03-ai-analysis/03-CONTEXT.md]
+   - Failure path: a valid session whose principal cannot be resolved, or an unavailable auth identity service, returns a sanitized identity-unavailable error before the confirmation transaction; no official event or observation plan is inserted. A caller-supplied reviewer value is rejected by the strict request schema and never becomes audit data. [CITED: .planning/phases/03-ai-analysis/03-AI-SPEC.md]
+   - Responsibility boundary: `app.services.auth` owns principal issuance and persistence, `main.py` middleware owns request-context attachment, `analysis.api` reads the trusted context, and `LifecycleRuleService` accepts only the resolved server principal. Repository records retain the opaque principal and timestamp; they do not retain a cookie or request-body identity. Plans 03-02, 03-06, and 03-07 test this contract. [VERIFIED: codebase]
 
-2. **Production checkpoint compatibility**
-   - What we know: LangGraph documents a separately installed SQLite saver, and current package versions are available on PyPI. [CITED: https://docs.langchain.com/oss/python/langgraph/checkpointers] [VERIFIED: PyPI]
-   - What's unclear: exact `langgraph`/SQLite-saver API compatibility under the selected lockfile has not been run. [ASSUMED]
-   - Recommendation: make the human package checkpoint followed by a startup smoke test a Wave 0 gate before domain implementation. [ASSUMED]
+2. **Production checkpoint compatibility — RESOLVED**
+   - Decision: retain the required blocking human package-legitimacy checkpoint for exactly `langgraph==1.2.9` and `langgraph-checkpoint-sqlite==3.1.0`, then run the locked `uv lock --check` plus temporary SQLite saver compile/invoke smoke test before any graph-domain implementation. [CITED: .planning/phases/03-ai-analysis/03-RESEARCH.md §Package Legitimacy Audit]
+   - Failure path: if approval is denied or the exact approved pair cannot resolve, compile, or invoke together, retain the current lockfile, record the actual incompatibility in the plan summary, and stop the graph installation/implementation path. Do not substitute a version or add `langchain-openai` without a new human review. [CITED: .planning/phases/03-ai-analysis/03-CONTEXT.md]
+   - Responsibility boundary: the human approves package provenance; Plan 03-02 owns exact lock and smoke validation; the graph service may be implemented only after that gate succeeds. [CITED: .planning/phases/03-ai-analysis/03-01-PLAN.md]
 
-3. **Official source grade policy**
-   - What we know: grade assignment and cross-checking must be deterministic and source-grade is per source. [CITED: .planning/phases/03-ai-analysis/03-CONTEXT.md]
-   - What's unclear: the concrete A/B/C mapping for every current governed provider is discretionary. [CITED: .planning/phases/03-ai-analysis/03-CONTEXT.md]
-   - Recommendation: define a versioned local grade-policy table and fixtures for A, B, C, duplicate-origin, conflict, and insufficient-evidence cases before UI work. [ASSUMED]
+3. **Official source grade policy — RESOLVED**
+   - Decision: `EvidencePreparationService` owns a versioned local policy table for currently governed market and financial readers. It deterministically maps each provider/origin class to A, B, or C, records the policy version on every frozen source, and treats duplicate-origin observations as non-independent. [CITED: .planning/phases/03-ai-analysis/03-CONTEXT.md]
+   - Failure path: unmapped providers, missing material-number metadata, or insufficient independent observations return explicit `context_insufficient`, `unresolved`, or `conflicting` states. They cannot yield a confirmed number, be upgraded by model prose, or trigger a lifecycle proposal requiring independent confirmation. [CITED: .planning/phases/03-ai-analysis/03-AI-SPEC.md]
+   - Responsibility boundary: the evidence service and its fixtures own grade/cross-check decisions; the model receives the frozen result; the UI only displays server-issued policy/version and uncertainty. Plan 03-04 tests A/B/C, duplicate-origin, conflict, mismatch, and insufficient-evidence cases. [CITED: .planning/phases/03-ai-analysis/03-04-PLAN.md]
 
 ## Environment Availability
 

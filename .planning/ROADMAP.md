@@ -122,7 +122,34 @@ Plans:
   2. User can inspect a multi-perspective report with visible scoring rationale, applicable valuation analysis, and an investment-committee memo.
   3. User can view a signal's current lifecycle status and its recorded evolution or outcome over time.
 
-**Plans**: TBD
+**Plans**: 9 plans
+Plans:
+**Wave 1**
+
+- [ ] 03-01-PLAN.md — 人工核验 LangGraph 依赖合法性。
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 03-02-PLAN.md — 锁定图依赖并建立后端 Wave 0 合同。
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 03-03-PLAN.md — 建立前端 API、缓存、SSE 与浏览器合同。
+- [ ] 03-04-PLAN.md — 实现冻结证据和 SQLite 不可变记录。
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [ ] 03-05-PLAN.md — 实现固定图和双重验证报告服务。
+- [ ] 03-06-PLAN.md — 实现人工确认的信号生命周期治理。
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [ ] 03-07-PLAN.md — 将安全 API、主机生命周期和粗粒度 SSE 集成。
+- [ ] 03-09-PLAN.md — 从成功冻结证据分析后创建可审阅的生命周期提案。
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
+- [ ] 03-08-PLAN.md — 在 stock、Portfolio 和 AI 宿主中完成证据优先 UI。
 **UI hint**: yes
 
 ### Phase 4: Advanced Capabilities
