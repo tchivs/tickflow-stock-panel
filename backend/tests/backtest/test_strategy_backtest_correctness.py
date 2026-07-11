@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+from dataclasses import asdict, replace
 from datetime import date, timedelta
 from types import SimpleNamespace
 
 import polars as pl
 
 from app.backtest.engine import BacktestEngine, SimResult
-from app.backtest.strategy import StrategyBacktestConfig, StrategyBacktestService
+from app.backtest.strategy import StrategyBacktestConfig, StrategyBacktestResult, StrategyBacktestService
 from app.strategy.engine import StrategyDef
 
 
@@ -162,3 +163,55 @@ def test_full_mode_executes_every_candidate_with_strategy_rules():
     assert result.trades[0]["entry_date"] == str(start + timedelta(days=1))
     assert result.trades[0]["exit_reason"] == "max_hold"
     assert result.stats["avg_return"] == round(20 / 11 - 1, 4)
+
+
+def test_successful_runs_derive_stable_governed_panel_identity() -> None:
+    start = date(2024, 1, 1)
+    rows = [
+        {
+            "symbol": "A",
+            "name": "A",
+            "date": start + timedelta(days=offset),
+            "open": 10.0 + offset,
+            "high": 10.0 + offset,
+            "low": 10.0 + offset,
+            "close": 10.0 + offset,
+            "volume": 100_000,
+            "amount": 1_000.0,
+            "signal_limit_up": False,
+            "signal_limit_down": False,
+        }
+        for offset in range(3)
+    ]
+    config = StrategyBacktestConfig(
+        strategy_id="test",
+        symbols=["A"],
+        start=start,
+        end=start + timedelta(days=2),
+        matching="close_t",
+        mode="position",
+        asset_type="fund",
+    )
+
+    def run(panel: pl.DataFrame):
+        return StrategyBacktestService(
+            engine=_EngineStub(panel), strategy_engine=_StrategyEngineStub(_strategy())
+        ).run(config)
+
+    first = run(pl.DataFrame(rows).sort(["symbol", "date"]))
+    second = run(pl.DataFrame(rows).sort(["symbol", "date"]))
+    changed = run(pl.DataFrame([*rows, {**rows[-1], "date": start + timedelta(days=3)}]).sort(["symbol", "date"]))
+    schema_changed = run(pl.DataFrame(rows).with_columns(pl.lit("v2").alias("governed_marker")).sort(["symbol", "date"]))
+
+    assert first.error is None
+    assert first.governed_input_manifest == second.governed_input_manifest
+    assert first.governed_input_manifest["revision"] == second.governed_input_manifest["revision"]
+    assert first.governed_input_manifest["fingerprint"] == second.governed_input_manifest["fingerprint"]
+    assert first.governed_input_manifest["fingerprint"] != changed.governed_input_manifest["fingerprint"]
+    assert first.governed_input_manifest["revision"] != schema_changed.governed_input_manifest["revision"]
+    assert first.config["asset_type"] == "fund"
+
+    failed = StrategyBacktestResult(run_id="failed", config={}, error="failed")
+    assert asdict(replace(failed)) == asdict(failed)
+    cancelled = StrategyBacktestResult(run_id="cancelled", config={}, error="cancelled")
+    assert asdict(replace(cancelled)) == asdict(cancelled)

@@ -3,8 +3,10 @@
 核心优化: 向量化 filter_fn，不逐日调用 StrategyEngine.run()。
 """
 from __future__ import annotations
+import json
 
 import logging
+from hashlib import sha256
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -66,6 +68,7 @@ class StrategyBacktestResult:
     strategy_info: dict = field(default_factory=dict)
     elapsed_ms: float = 0.0
     error: str | None = None
+    governed_input_manifest: dict[str, object] = field(default_factory=dict)
 
 
 class StrategyBacktestService:
@@ -154,6 +157,7 @@ class StrategyBacktestService:
         timing_ms["load_panel"] = round((time.perf_counter() - t_load) * 1000, 1)
         if panel.is_empty():
             return _err("无数据，请检查日期范围或先运行盘后管道")
+        governed_input_manifest = self._governed_input_manifest(panel, config)
 
         formal_range = self._date_range_mask(panel, config.start, config.end)
         if not formal_range.any():
@@ -281,7 +285,31 @@ class StrategyBacktestService:
             per_symbol_stats=result.per_symbol_stats,
             strategy_info=strategy_info,
             elapsed_ms=round(elapsed, 1),
+            governed_input_manifest=governed_input_manifest,
         )
+
+    @staticmethod
+    def _governed_input_manifest(loaded: pl.DataFrame, config: StrategyBacktestConfig) -> dict[str, object]:
+        """Summarize the exact governed panel loaded for reproducible strategy runs."""
+        schema = {name: str(dtype) for name, dtype in loaded.schema.items()}
+        observed_start = loaded.select(pl.col("date").min()).item()
+        observed_end = loaded.select(pl.col("date").max()).item()
+        source_reference = {
+            "loader": "BacktestEngine.load_panel",
+            "source_kind": "governed_enriched_parquet",
+            "asset_type": config.asset_type,
+            "schema": schema,
+            "observed_start": str(observed_start),
+            "observed_end": str(observed_end),
+            "loaded_row_count": loaded.height,
+        }
+        encode = lambda value: json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return {
+            **source_reference,
+            "source": "governed_backtest_engine",
+            "revision": sha256(encode(schema)).hexdigest(),
+            "fingerprint": sha256(encode(source_reference)).hexdigest(),
+        }
 
     # ── 全量模拟 (选股能力统计, 不建组合不算净值) ──
 
@@ -666,6 +694,7 @@ class StrategyBacktestService:
             "initial_capital": c.initial_capital,
             "position_sizing": c.position_sizing,
             "mode": c.mode,
+            "asset_type": c.asset_type,
             "holding_days": c.holding_days,
         }
 
