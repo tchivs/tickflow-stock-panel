@@ -2,62 +2,53 @@
 phase: 01-core-merger
 verified: 2026-07-11
 status: gaps
-verification_ref: 918b8a6
+verification_ref: 2684b96
 ---
 
 # Phase 01 Verification
 
 ## Status: gaps
 
-Phase 01 is **not complete**. The committed backend contracts pass, and the Phase 11 topology correctly selects typed fixtures and internal notification receivers. However, the committed Compose acceptance flow cannot prepare its application image because the committed frontend does not type-check. Its effective Compose configuration also retains the base service's publicly published `3018` port, violating the required loopback-only fixture runtime. These are committed Phase 01 defects, confirmed in a detached worktree at `918b8a6`; they are not caused by the unrelated edits in the primary worktree.
+Commit `2684b96` closes both previously documented defects: the `QK.alerts` cache key now accepts and distinguishes source, severity, and delivery filters, and the fixture Compose override replaces the inherited port list. The committed frontend builds, the network-disabled verifier smoke passes, and the fixture-only Compose acceptance passes. Phase 01 nevertheless remains **not complete**: a clean cold invocation of `bash compose/phase1/prepare-images.sh` cannot build the application image because `backend/uv.lock` pins direct `pypi.tuna.tsinghua.edu.cn` artifact URLs that return HTTP 403. `USE_CN_MIRROR=0` does not change those locked artifact URLs. This newly exposed committed preparation defect still blocks CORE-06's required cold image-preparation contract.
 
 ## Scope and evidence basis
 
-Reviewed all 15 Phase 01 plans and their 15 summaries, the validation strategy, roadmap, requirements, implementation commits, and the committed source in a detached worktree at `918b8a6`.
+Reviewed the 15 Phase 01 plans/summaries, validation strategy, roadmap, requirement mapping, repair commit, and source in a detached clean worktree at `2684b96`; unrelated primary-worktree changes were excluded.
 
 | Evidence | Result |
 | --- | --- |
-| `uv run --index-url https://pypi.org/simple --directory backend --extra dev pytest tests/test_phase1_fixture_sync.py tests/test_data_contracts.py tests/test_portfolio_api.py tests/test_position_monitor.py tests/test_notification_delivery.py tests/test_portfolio_sse.py tests/test_decision_playbook.py tests/test_decision_adjustments.py tests/test_decision_ai_review.py tests/test_decision_replay.py -q` | **37 passed** (three existing Polars warnings) |
-| `docker compose -p athenaquant-phase1-test -f docker-compose.yml -f compose/phase1.test.yml config --format json` | Internal-only `phase1_test` network, fixture mode, read-only fixture mount, receiver-only Feishu/Telegram URLs, and AI review disabled are present; it also exposes an unexpected public `3018` port. |
-| `bash compose/phase1/prepare-images.sh` | **Failed** during the committed image build: `frontend/src/pages/Monitor.tsx:81` calls `QK.alerts` with three arguments although its committed signature accepts at most one. Therefore the network-disabled smoke check and `run.sh` acceptance were not reached. |
+| `git show 2684b96` | `QK.alerts(source?, severity?, delivery?)` emits all three dimensions; `compose/phase1.test.yml` uses `ports: !override`. |
+| `docker build --target frontend-builder --build-arg USE_CN_MIRROR=0 -t athenaquant-phase1-frontend-reverify:2684b96 .` | **Passed**: `tsc -b && vite build` completed successfully from clean committed frontend source. |
+| `docker compose -p athenaquant-phase1-reverify -f docker-compose.yml -f compose/phase1.test.yml config --format json` | Exactly one app port resolves: `127.0.0.1:13018 -> 3018`; the three services use only internal `phase1_test`, fixture mode, read-only fixture mount, receiver-only notification URLs, cleared credentials, and disabled AI review. |
+| `docker run --rm --network none ... athenaquant-phase1-verifier:phase1 --smoke` | **Passed**: `phase1 verifier smoke passed`. |
+| `bash compose/phase1/run.sh` with the prepared static Phase 1 tags | **Passed**: fixture acceptance completed; Playwright reported **2 passed, 2 intentionally cross-project skipped**; matching Compose resources were removed. |
+| Focused Phase 01 pytest command covering fixture sync, contracts, portfolio, monitoring, delivery, SSE, playbook, AI review, and replay | **37 passed**, three existing Polars warnings. |
+| `bash compose/phase1/prepare-images.sh` in the clean `2684b96` worktree | **Failed before smoke**: the app build's `uv sync` follows the direct locked Tsinghua wheel URLs and receives HTTP 403 for `numpy`/`pydantic`; this is independent of the repaired frontend stage. |
 
-The initially attempted backend command used the configured Tsinghua package mirror and was blocked by HTTP 403 for `h11`; retrying the same focused suite against public PyPI produced the result above. The direct detached-worktree frontend build was not a valid source result because dependencies are intentionally absent in a fresh worktree; the Docker build installed the locked dependencies and exposed the real committed TypeScript error.
+## Repair assessment
+
+1. **Query-key repair: closed.** The exact three-argument `Monitor.tsx` call now conforms to `QK.alerts(source?, severity?, delivery?)`; the clean Docker frontend-builder completed TypeScript checking and production Vite build.
+2. **Loopback-port repair: closed.** The Compose `!override` replaces the base `3018` publication. Resolved configuration contains only `host_ip: 127.0.0.1`, `published: 13018`, `target: 3018`.
+3. **Cold preparation: open.** The preparation script is required to build all three static tags before running the no-network smoke. A clean reproduction cannot reach that step because the committed lock contains unavailable direct mirror artifacts. Existing prepared tags support the passing smoke and fixture acceptance, but do not satisfy the required cold-preparation proof.
 
 ## Requirement traceability
 
 | Requirement | Plans | Status | Concrete committed evidence |
 | --- | --- | --- | --- |
-| CORE-01 | 01, 02, 11 | passed | `FixtureProvider`, `run_phase1_fixture_sync`, two-file fixture bundle, and `test_phase1_fixture_sync.py`; focused suite passes. |
-| CORE-02 | 01, 02, 11 | passed | `app/contracts/validator.py` enforces primary-key, market-time, repair-window, and schema-drift checks; `test_data_contracts.py` passes. |
-| CORE-03 | 03, 08, 09, 11, 13 | passed | SQLite operational repository, Portfolio API/service, typed client and `/portfolio`; `test_portfolio_api.py` passes. |
-| CORE-04 | 05, 08, 10, 11, 12, 13 | passed | Existing Monitor rule domain persists events, stores sanitized delivery outcomes, and exposes alert reads; position/delivery tests pass. |
-| CORE-05 | 08, 09, 11, 12, 13 | passed | Existing intraday SSE emits `strategy_alert` and `portfolio_updated`; independent-subscriber and frontend contract coverage passes. |
-| CORE-06 | 06, 07, 11 | **gap** | Human Playwright approval and browser contracts exist, but the required one-command Compose proof cannot prepare because the committed frontend build fails. Effective Compose also retains public `3018`. |
-| CORE-07 | 11 | passed | `docs/UPSTREAM-SYNC.md` maps Tickflow, PanWatch, HermesAlpha, and daily_stock_data source identity, owner, preserved boundary, named regressions, and review/update workflow. |
-| PLAN-01 | 04, 08, 10, 14 | passed | Persisted deterministic governed-data playbook baseline and API; `test_decision_playbook.py` passes. |
-| PLAN-02 | 08, 10, 14, 15 | passed | Configured proposal provenance, bounded field audit, unavailable fallback, and AI-free stable-hash replay; decision adjustment/review/replay tests pass. |
-
-## Must-have assessment
-
-### Proven
-
-- The governed lake path uses exactly `instruments.json` and `market-data.json`, selected by `PHASE1_FIXTURE_MODE`; it does not add a SQLite market-series mirror.
-- `compose/phase1.test.yml` mounts that fixture directory read-only at `/app/phase1-fixtures`, sets `PHASE1_FIXTURE_MODE=true`, clears real credentials, disables decision AI review, and configures both notification channels only as `http://receiver:8080/...`.
-- The Compose services attach only to the named internal `phase1_test` network. `receiver.py` accepts only `/feishu` and `/telegram`, retains sanitized channel/status outcomes, and exposes them only through `/outcomes`.
-- `verifier.py` requires fixture mode and rejects a Feishu or Telegram endpoint that is not its expected receiver URL before triggering a rule. It exercises sync, SQLite portfolio/rule mutations, named SSE events, receiver outcomes, baseline-only review, provider-free replay, and desktop/mobile Playwright workflows when acceptance can run.
-- `prepare-images.sh` separates builds from acceptance, verifies all three static tags, and runs verifier smoke with `--network none`; `run.sh` uses one `up --no-build --pull never --abort-on-container-exit --exit-code-from verifier` and performs project-scoped cleanup.
-
-### Gaps
-
-1. **Committed frontend type error blocks CORE-06.** `frontend/src/pages/Monitor.tsx:79-83` calls `QK.alerts(filter, severity, delivery)`, while the committed `QK.alerts` API accepts only zero or one argument. The application image cannot build, so no prepared local app image, offline smoke result, or Compose end-to-end acceptance result exists for this revision.
-2. **Effective Compose service publishes a non-loopback port.** Base `docker-compose.yml:11-12` contributes `${PORT:-3018}:3018`; `compose/phase1.test.yml` adds `127.0.0.1:13018:3018` rather than overriding the inherited list. Resolved configuration therefore contains both a public `3018` binding and the intended loopback binding. This violates the Plan 11/D-16 loopback-only acceptance runtime contract.
+| CORE-01 | 01, 02, 11 | passed | Two-file governed fixture bundle, `FixtureProvider`, `run_phase1_fixture_sync`, and focused sync coverage pass. |
+| CORE-02 | 01, 02, 11 | passed | Contract validator covers key, time, repair-window, and schema-drift failures; focused contract coverage passes. |
+| CORE-03 | 03, 08, 09, 11, 13 | passed | SQLite portfolio API/service and typed client are exercised by focused portfolio coverage and fixture acceptance. |
+| CORE-04 | 05, 08, 10, 11, 12, 13 | passed | Persisted monitor events and sanitized delivery outcomes are covered by focused tests and verified during fixture acceptance. |
+| CORE-05 | 08, 09, 11, 12, 13 | passed | Named intraday SSE alert/portfolio events and independent subscriber behavior are covered by focused tests and acceptance. |
+| CORE-06 | 06, 07, 11 | **gap** | Query-key and loopback defects are repaired; smoke and no-build/no-pull fixture acceptance pass with prepared tags, but the clean required `prepare-images.sh` cold build fails on direct locked mirror artifacts. |
+| CORE-07 | 11 | passed | `docs/UPSTREAM-SYNC.md` provides source identity, owner, preserved boundary, regressions, and review/update workflow. |
+| PLAN-01 | 04, 08, 10, 14 | passed | Deterministic governed-data baseline persistence/API passes focused playbook coverage. |
+| PLAN-02 | 08, 10, 14, 15 | passed | Provenance, bounded audit, unavailable fallback, and AI-free replay pass focused adjustment/review/replay coverage. |
 
 ## Required next step
 
-1. Repair the Phase 01 `QK.alerts` call/key contract so the committed frontend build succeeds; retain query-key distinctions for source, severity, and delivery status.
-2. Change the Phase 11 override to replace—not append to—the base `ports` list, retaining only the loopback test binding.
-3. In a clean committed worktree, rerun the focused backend suite, `bash compose/phase1/prepare-images.sh`, and `bash compose/phase1/run.sh`. Record passing smoke and end-to-end acceptance evidence before changing this status to `passed`.
+Repair the committed backend lock/build source configuration so `bash compose/phase1/prepare-images.sh` can complete from a clean environment without fetching unavailable direct mirror artifacts. Then rerun that script followed by `bash compose/phase1/run.sh` in a clean worktree and change CORE-06 and phase status to `passed` only after the cold preparation succeeds.
 
 ## Human verification
 
-No additional human approval blocks the repair: the Plan 06 record explicitly approves only `@playwright/test@1.61.1`. Future upstream-update reviews should follow the documented manifest workflow, but this is not a current Phase 01 completion gate.
+No additional human approval blocks this result: the Plan 06 record approves only `@playwright/test@1.61.1`. The remaining blocker is automated cold image preparation, not a human checkpoint.
