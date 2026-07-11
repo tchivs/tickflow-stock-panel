@@ -448,25 +448,28 @@ export interface MonitorRule {
   id: string
   name: string
   enabled: boolean
-  type: 'strategy' | 'signal' | 'price' | 'market' | 'ladder'
+  type: 'strategy' | 'signal' | 'price' | 'market' | 'position' | 'ladder'
   asset_type?: 'stock' | 'etf'
-  scope: 'symbols' | 'all' | 'sector'
+  scope: 'symbols' | 'all' | 'sector' | 'positions'
   symbols: string[]
+  position_ids?: Array<string | number>
   sector?: string | null
   strategy_id?: string | null
   direction: 'entry' | 'exit' | 'both' | 'up' | 'down'
   conditions: MonitorCondition[]
   logic: 'and' | 'or'
   cooldown_seconds: number
+  active_time_start?: string | null
+  active_time_end?: string | null
+  bypass_quiet_period?: boolean
   severity: 'info' | 'warn' | 'critical'
   message: string
   webhook_url?: string
-  webhook_enabled?: boolean  // 兼容老规则, 已由 webhook_channels 取代
-  webhook_channels?: string[]  // 命中时推送的外部渠道 (合法值 'feishu' | 'wecom')
+  webhook_enabled?: boolean
+  webhook_channels?: string[]
   created_at?: string
-  // ladder 专属: 封单监控
-  metric?: 'sealed_vol' | 'sealed_amount'  // 量(手) / 额(元)
-  threshold?: number                        // 封单 <= 此值时报警
+  metric?: 'sealed_vol' | 'sealed_amount'
+  threshold?: number
 }
 
 export interface MonitorRuleOptions {
@@ -481,8 +484,29 @@ export interface MonitorRuleOptions {
   directions: { key: string; label: string }[]
 }
 
+export type DeliveryStatus = 'pending' | 'sent' | 'failed' | 'skipped'
+
+export interface DeliveryOutcome {
+  channel: 'feishu' | 'telegram'
+  status: DeliveryStatus
+  error: string | null
+  created_at?: string
+  updated_at?: string
+}
+
+export interface AlertHistoryFilters {
+  days?: number
+  limit?: number
+  source?: string
+  type?: string
+  severity?: 'info' | 'warn' | 'critical'
+  delivery_status?: DeliveryStatus
+}
+
 export interface AlertEvent {
-  ts: number
+  id?: string
+  ts?: number
+  occurred_at?: string
   rule_id?: string
   rule_name?: string
   source: string
@@ -493,10 +517,119 @@ export interface AlertEvent {
   price?: number | null
   change_pct?: number | null
   signals?: string[]
-  severity?: string
+  severity?: 'info' | 'warn' | 'critical'
   strategy_id?: string
   conditions?: MonitorCondition[]
   logic?: 'and' | 'or'
+  account_id?: string | number | null
+  position_id?: string | number | null
+  valuation_source?: 'shared_quote' | 'governed_close' | 'unavailable' | null
+  valuation_as_of?: string | null
+  deliveries?: DeliveryOutcome[]
+}
+
+// ===== Portfolio =====
+export interface PortfolioAccount {
+  id: number
+  name: string
+  available_funds: number
+  enabled: boolean
+  archived_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface PortfolioAccountInput {
+  name: string
+  available_funds?: number
+  enabled?: boolean
+}
+
+export interface PortfolioPositionInput {
+  account_id: number
+  instrument_symbol: string
+  cost_price: number
+  quantity: number
+  invested_amount: number
+  trading_style: 'short' | 'swing' | 'long'
+  enabled?: boolean
+}
+
+export interface PortfolioPosition extends PortfolioPositionInput {
+  id: number
+  position_id: number
+  archived_at: string | null
+  created_at: string
+  updated_at: string
+  market_value: number | null
+  unrealized_pnl: number | null
+  pnl_pct: number | null
+  source: 'shared_quote' | 'governed_close' | 'unavailable'
+  as_of: string | null
+  fresh: boolean
+}
+
+export interface PortfolioSummary {
+  account_id: number | null
+  available_funds: number
+  market_value: number | null
+  total_assets: number | null
+  unrealized_pnl: number | null
+  accounts: PortfolioAccount[]
+  positions: PortfolioPosition[]
+  unavailable_position_ids: number[]
+}
+
+// ===== Decision playbook =====
+export interface PlaybookSnapshot {
+  symbol: string
+  entry_low: number
+  entry_high: number
+  stop: number
+  target1: number
+  target2: number
+  position_pct: number
+  action: string
+  score: number
+  risk_reward: number
+  reason_snapshot: Record<string, string>
+}
+
+export interface AdjustmentAudit {
+  field: string
+  proposed_value: string | null
+  final_value: string | null
+  disposition: 'applied' | 'clamped' | 'rejected'
+  rationale: string
+}
+
+export interface DecisionRun {
+  id: string
+  symbol: string
+  data_as_of: string
+  engine_config_version: string
+  created_at: string
+  baseline: PlaybookSnapshot
+  final: PlaybookSnapshot
+  proposal: Record<string, unknown> | null
+  adjustments: AdjustmentAudit[]
+}
+
+export interface DecisionRunInput {
+  symbol: string
+  as_of: string
+  engine_config_version?: string
+  configuration?: Record<string, unknown>
+}
+
+export interface HistoricalReplay {
+  id: string
+  as_of: string
+  engine_config_version: string
+  result_hash: string
+  snapshot: Record<string, unknown>
+  provider: null
+  model: null
 }
 
 /** 生成监控规则 id (时间戳 + 随机后缀), 用户无需手动填写。 */
@@ -1869,6 +2002,81 @@ export const api = {
   customSignalDelete: (id: string) =>
     request<{ ok: boolean }>(`/api/custom-signals/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
+  // ===== Portfolio =====
+  portfolioAccounts: (includeArchived = false) =>
+    request<{ accounts: PortfolioAccount[] }>(
+      `/api/portfolio/accounts?include_archived=${includeArchived}`,
+    ),
+  portfolioCreateAccount: (account: Pick<PortfolioAccountInput, 'name' | 'available_funds'>) =>
+    request<{ account: PortfolioAccount }>('/api/portfolio/accounts', {
+      method: 'POST',
+      body: JSON.stringify(account),
+    }),
+  portfolioUpdateAccount: (accountId: number, account: PortfolioAccountInput) =>
+    request<{ account: PortfolioAccount }>(`/api/portfolio/accounts/${encodeURIComponent(String(accountId))}`, {
+      method: 'PUT',
+      body: JSON.stringify(account),
+    }),
+  portfolioArchiveAccount: (accountId: number) =>
+    request<{ account: PortfolioAccount }>(`/api/portfolio/accounts/${encodeURIComponent(String(accountId))}/archive`, {
+      method: 'POST',
+    }),
+  portfolioDeleteAccount: (accountId: number) =>
+    request<{ ok: boolean }>(`/api/portfolio/accounts/${encodeURIComponent(String(accountId))}`, {
+      method: 'DELETE',
+    }),
+  portfolioHoldings: (accountId?: number, includeArchived = false) => {
+    const params = new URLSearchParams({ include_archived: String(includeArchived) })
+    if (accountId != null) params.set('account_id', String(accountId))
+    return request<{ positions: PortfolioPosition[] }>(`/api/portfolio/positions?${params}`)
+  },
+  portfolioCreateHolding: (position: PortfolioPositionInput) =>
+    request<{ position: PortfolioPosition }>('/api/portfolio/positions', {
+      method: 'POST',
+      body: JSON.stringify(position),
+    }),
+  portfolioUpdateHolding: (positionId: number, position: Partial<Omit<PortfolioPositionInput, 'account_id'>>) =>
+    request<{ position: PortfolioPosition }>(`/api/portfolio/positions/${encodeURIComponent(String(positionId))}`, {
+      method: 'PUT',
+      body: JSON.stringify(position),
+    }),
+  portfolioArchiveHolding: (positionId: number) =>
+    request<{ position: PortfolioPosition }>(`/api/portfolio/positions/${encodeURIComponent(String(positionId))}/archive`, {
+      method: 'POST',
+    }),
+  portfolioDeleteHolding: (positionId: number) =>
+    request<{ ok: boolean }>(`/api/portfolio/positions/${encodeURIComponent(String(positionId))}`, {
+      method: 'DELETE',
+    }),
+  portfolioSummary: (accountId?: number, includeArchived = false) => {
+    const params = new URLSearchParams({ include_archived: String(includeArchived) })
+    if (accountId != null) params.set('account_id', String(accountId))
+    return request<PortfolioSummary>(`/api/portfolio/summary?${params}`)
+  },
+
+  // ===== Decision playbook =====
+  decisionGenerate: (payload: DecisionRunInput) =>
+    request<DecisionRun>('/api/decision/runs', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  decisionRun: (runId: string) =>
+    request<DecisionRun>(`/api/decision/runs/${encodeURIComponent(runId)}`),
+  decisionReview: (runId: string) =>
+    request<{ review_status: string; final: PlaybookSnapshot }>(`/api/decision/runs/${encodeURIComponent(runId)}/review`, {
+      method: 'POST',
+    }),
+  decisionAdjustments: (runId: string, proposal: Record<string, Record<string, unknown>>) =>
+    request<DecisionRun>(`/api/decision/runs/${encodeURIComponent(runId)}/adjustments`, {
+      method: 'POST',
+      body: JSON.stringify({ proposal }),
+    }),
+  decisionReplay: (runIds: string[], asOf: string) =>
+    request<HistoricalReplay>('/api/decision/replay', {
+      method: 'POST',
+      body: JSON.stringify({ run_ids: runIds, as_of: asOf }),
+    }),
+
   // ===== Monitor Rules (监控规则) =====
   monitorRulesList: () =>
     request<{ rules: MonitorRule[] }>('/api/monitor-rules'),
@@ -1918,15 +2126,19 @@ export const api = {
     request<{ ok: boolean; generated: number }>('/api/monitor-rules/seed', { method: 'POST' }),
 
   // ===== Alerts (触发记录) =====
-  alertsList: (params?: { days?: number; limit?: number; source?: string; type?: string }) => {
+  alertsList: (params?: AlertHistoryFilters) => {
     const qs = new URLSearchParams()
     if (params?.days) qs.set('days', String(params.days))
     if (params?.limit) qs.set('limit', String(params.limit))
     if (params?.source) qs.set('source', params.source)
     if (params?.type) qs.set('type', params.type)
+    if (params?.severity) qs.set('severity', params.severity)
+    if (params?.delivery_status) qs.set('delivery_status', params.delivery_status)
     const s = qs.toString()
     return request<{ alerts: AlertEvent[]; total: number }>(`/api/alerts${s ? `?${s}` : ''}`)
   },
+  alertDeliveryDetails: (eventId: string) =>
+    request<{ deliveries: DeliveryOutcome[] }>(`/api/alerts/${encodeURIComponent(eventId)}/deliveries`),
 
   alertsClear: () =>
     request<{ ok: boolean; cleared: number }>('/api/alerts', { method: 'DELETE' }),

@@ -75,6 +75,16 @@ export const QK = {
   monitorRules:         ['monitor-rules'] as const,
   monitorRuleOptions:   ['monitor-rule-options'] as const,
   alerts:               (source?: string) => ['alerts', source ?? ''] as const,
+  monitorDelivery:      (eventId: string) => ['monitor-delivery', eventId] as const,
+
+  // Portfolio
+  portfolioAccounts:    (includeArchived = false) => ['portfolio-accounts', includeArchived] as const,
+  portfolioSummary:     (accountId?: number) => ['portfolio-summary', accountId ?? 'all'] as const,
+  portfolioHoldings:    (accountId?: number) => ['portfolio-holdings', accountId ?? 'all'] as const,
+
+  // Decision playbook
+  decisionPlaybook:     (runId: string) => ['decision-playbook', runId] as const,
+  decisionReplay:       (runIds: string[], asOf: string) => ['decision-replay', asOf, ...runIds] as const,
 
   // AI 大盘复盘
   reviewReports:        ['review-reports'] as const,
@@ -97,4 +107,6 @@ export const SSE_INVALIDATE_PREFIXES = [
   'index-quotes',
   'overview-market',
   'limit-ladder',
+  'portfolio-summary',
+  'portfolio-holdings',
 ] as const
