@@ -23,6 +23,7 @@ test.describe('Phase 2 researcher workflow', () => {
     const baseline = makeExperiment('experiment-baseline', true, { end: '2024-05-31' })
     const completed = makeExperiment('experiment-completed', false)
 
+    await page.route('**/api/**', route => route.fulfill({ contentType: 'application/json', body: '{}' }))
     await page.route('**/api/settings', route => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ onboarding_completed: true }) }))
     await page.route('**/api/research/**', async route => {
       const request = route.request()
