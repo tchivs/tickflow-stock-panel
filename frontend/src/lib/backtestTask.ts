@@ -67,19 +67,95 @@ function buildQuery(params: Record<string, string | number | boolean | undefined
   return sp.toString()
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value)
+}
+
+function isNullableFiniteNumber(value: unknown): boolean {
+  return value === null || isFiniteNumber(value)
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every(item => typeof item === 'string')
+}
+
+function isStrategyInfo(value: unknown): boolean {
+  if (!isRecord(value)) return false
+  return typeof value.id === 'string' && value.id.trim().length > 0
+    && typeof value.name === 'string' && value.name.trim().length > 0
+    && typeof value.description === 'string'
+    && isStringArray(value.entry_signals)
+    && isStringArray(value.exit_signals)
+    && isNullableFiniteNumber(value.stop_loss)
+    && isNullableFiniteNumber(value.take_profit)
+    && isNullableFiniteNumber(value.trailing_stop)
+    && isNullableFiniteNumber(value.trailing_take_profit_activate)
+    && isNullableFiniteNumber(value.trailing_take_profit_drawdown)
+    && isNullableFiniteNumber(value.score_min)
+    && isNullableFiniteNumber(value.score_max)
+    && isNullableFiniteNumber(value.max_hold_days)
+    && typeof value.source === 'string' && value.source.trim().length > 0
+}
+
+function isEquityPoint(value: unknown): boolean {
+  return isRecord(value) && typeof value.date === 'string' && isFiniteNumber(value.value)
+    && (value.cash === undefined || isFiniteNumber(value.cash))
+    && (value.positions === undefined || isFiniteNumber(value.positions))
+    && (value.exposure === undefined || isFiniteNumber(value.exposure))
+}
+
+function isDrawdownPoint(value: unknown): boolean {
+  return isRecord(value) && typeof value.date === 'string' && isFiniteNumber(value.value)
+}
+
+function isBenchmarkPoint(value: unknown): boolean {
+  return isRecord(value) && typeof value.date === 'string' && isFiniteNumber(value.value)
+    && (value.close === undefined || isFiniteNumber(value.close))
+    && (value.name === undefined || typeof value.name === 'string')
+    && (value.symbol === undefined || typeof value.symbol === 'string')
+}
+
+function isStrategyTrade(value: unknown): boolean {
+  return isRecord(value) && typeof value.symbol === 'string' && typeof value.entry_date === 'string'
+    && typeof value.exit_date === 'string' && isFiniteNumber(value.entry_price)
+    && isFiniteNumber(value.exit_price) && isFiniteNumber(value.pnl_pct)
+    && isFiniteNumber(value.duration) && typeof value.exit_reason === 'string'
+    && (value.name === undefined || typeof value.name === 'string')
+    && (value.shares === undefined || isFiniteNumber(value.shares))
+    && (value.lots === undefined || isFiniteNumber(value.lots))
+    && (value.position_pct === undefined || isFiniteNumber(value.position_pct))
+    && (value.entry_value === undefined || isFiniteNumber(value.entry_value))
+    && (value.exit_value === undefined || isFiniteNumber(value.exit_value))
+    && (value.pnl_amount === undefined || isFiniteNumber(value.pnl_amount))
+    && (value.entry_score === undefined || isNullableFiniteNumber(value.entry_score))
+    && (value.entry_signal_date === undefined || value.entry_signal_date === null || typeof value.entry_signal_date === 'string')
+    && (value.exit_signal_date === undefined || value.exit_signal_date === null || typeof value.exit_signal_date === 'string')
+    && (value.blocked_exit_days === undefined || isFiniteNumber(value.blocked_exit_days))
+}
+
+function isPerSymbolStats(value: unknown): boolean {
+  return isRecord(value) && typeof value.symbol === 'string' && isFiniteNumber(value.n_trades)
+    && isFiniteNumber(value.total_return) && isFiniteNumber(value.win_rate)
+    && isFiniteNumber(value.best) && isFiniteNumber(value.worst)
+}
+
 function isStrategyBacktestResult(value: unknown): value is StrategyBacktestResult {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
-  const result = value as Record<string, unknown>
-  return (typeof result.error === 'string' || result.error === null)
-    && typeof result.run_id === 'string'
-    && typeof result.config === 'object' && result.config !== null && !Array.isArray(result.config)
-    && typeof result.stats === 'object' && result.stats !== null && !Array.isArray(result.stats)
-    && Array.isArray(result.equity_curve)
-    && Array.isArray(result.drawdown_curve)
-    && Array.isArray(result.trades)
-    && Array.isArray(result.per_symbol_stats)
-    && typeof result.strategy_info === 'object' && result.strategy_info !== null && !Array.isArray(result.strategy_info)
-    && typeof result.elapsed_ms === 'number'
+  if (!isRecord(value)) return false
+  return (typeof value.error === 'string' || value.error === null)
+    && typeof value.run_id === 'string' && value.run_id.trim().length > 0
+    && isRecord(value.config)
+    && isRecord(value.stats)
+    && Array.isArray(value.equity_curve) && value.equity_curve.every(isEquityPoint)
+    && Array.isArray(value.drawdown_curve) && value.drawdown_curve.every(isDrawdownPoint)
+    && (value.benchmark_curve === undefined || (Array.isArray(value.benchmark_curve) && value.benchmark_curve.every(isBenchmarkPoint)))
+    && Array.isArray(value.trades) && value.trades.every(isStrategyTrade)
+    && Array.isArray(value.per_symbol_stats) && value.per_symbol_stats.every(isPerSymbolStats)
+    && isStrategyInfo(value.strategy_info)
+    && isFiniteNumber(value.elapsed_ms)
 }
 
 /** 连接 SSE (新建或重连都用这个) */

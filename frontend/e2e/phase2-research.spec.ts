@@ -86,6 +86,18 @@ const strategyTrades = Array.from({ length: 22 }, (_, index) => ({ symbol: `6000
 const strategyResult = {
   run_id: 'strategy-run', config: { start: '2024-01-01', end: '2024-01-31' }, stats: { mode: 'position', final_equity: 1100000, n_trades: strategyTrades.length }, equity_curve: [{ date: '2024-01-01', value: 1000000 }, { date: '2024-01-31', value: 1100000 }], drawdown_curve: [], benchmark_curve: [], trades: strategyTrades, per_symbol_stats: [{ symbol: '600000.SH', n_trades: strategyTrades.length, total_return: 0.1, win_rate: 1, best: 0.1, worst: 0.1 }], strategy_info: { ...strategyDetail, entry_signals: [], exit_signals: [] }, elapsed_ms: 1, error: null,
 }
+const shallowlyValidButStructurallyInvalidStrategyResult = {
+  error: null,
+  run_id: 'strategy-run',
+  config: {},
+  stats: {},
+  equity_curve: [],
+  drawdown_curve: [],
+  trades: [],
+  per_symbol_stats: [],
+  strategy_info: {},
+  elapsed_ms: 1,
+}
 const retainedStrategy = { ...makeExperiment('strategy-retained', true), subject: { kind: 'strategy' as const, id: 'registered-demo', version: 'v1' } }
 
 type RetainResponse = { body: unknown; status: number }
@@ -275,9 +287,9 @@ test('strategy retention keyboard Scenario 5 covers every required viewport', as
   }
 })
 
-test('malformed strategy terminal data clears the trusted handle and is never retainable', async ({ page }, testInfo) => {
+test('incomplete nested strategy terminal data clears the trusted handle and is never retainable', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-chromium only')
-  const fixture = await installStrategyFixture(page, { donePayload: {} })
+  const fixture = await installStrategyFixture(page, { donePayload: shallowlyValidButStructurallyInvalidStrategyResult })
   await page.goto('/backtest')
   await activateWithKeyboard(page, page.getByRole('button', { name: '注册策略', exact: true }))
   await activateWithKeyboard(page, page.getByRole('button', { name: '运行回测' }))
