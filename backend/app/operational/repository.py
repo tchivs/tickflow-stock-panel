@@ -1,12 +1,15 @@
 """Parameterized repository for durable operational portfolio records."""
 from __future__ import annotations
 
+import json
 import math
 import sqlite3
+import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterator, Mapping
 
 from app.operational.migrations import migrate_operational_db
 
@@ -294,3 +297,184 @@ class OperationalRepository:
                 raise ValueError("position does not exist") from error
             row = connection.execute("SELECT * FROM alert_references WHERE id = ?", (cursor.lastrowid,)).fetchone()
             return _record(row)  # type: ignore[return-value]
+
+    @staticmethod
+    def _decision_snapshot_json(snapshot: Mapping[str, Any]) -> str:
+        if not isinstance(snapshot, Mapping):
+            raise ValueError("decision snapshot is required")
+        return json.dumps(dict(snapshot), default=str, sort_keys=True, separators=(",", ":"))
+
+    @staticmethod
+    def _decision_snapshot(value: str) -> dict[str, Any]:
+        snapshot = json.loads(value)
+        for field in ("entry_low", "entry_high", "stop", "target1", "target2", "position_pct", "score", "risk_reward"):
+            if field in snapshot and snapshot[field] is not None:
+                snapshot[field] = Decimal(snapshot[field])
+        return snapshot
+
+    @staticmethod
+    def _require_run(connection: sqlite3.Connection, run_id: str) -> None:
+        if not isinstance(run_id, str) or not run_id:
+            raise ValueError("run_id is required")
+        if connection.execute("SELECT 1 FROM playbooks WHERE run_id = ?", (run_id,)).fetchone() is None:
+            raise ValueError("decision run does not exist")
+
+    def persist_decision_baseline(self, baseline: Any) -> dict[str, Any]:
+        """Persist immutable baseline and identical initial final plan atomically."""
+        snapshot = baseline.to_snapshot()
+        run_id = uuid.uuid4().hex
+        now = _now()
+        data_as_of = getattr(baseline, "data_as_of", None)
+        engine_config_version = getattr(baseline, "engine_config_version", None)
+        symbol = snapshot.get("symbol")
+        if not isinstance(symbol, str) or not symbol or data_as_of is None or not isinstance(engine_config_version, str) or not engine_config_version:
+            raise ValueError("baseline provenance is required")
+        serialized = self._decision_snapshot_json(snapshot)
+        with self._connection() as connection, connection:
+            connection.execute(
+                "INSERT INTO decision_runs (id, symbol, data_as_of, engine_config_version, created_at) VALUES (?, ?, ?, ?, ?)",
+                (run_id, symbol, str(data_as_of), engine_config_version, now),
+            )
+            connection.execute(
+                "INSERT INTO playbooks (run_id, baseline_json, final_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                (run_id, serialized, serialized, now, now),
+            )
+        return {"id": run_id, "symbol": symbol, "data_as_of": str(data_as_of), "engine_config_version": engine_config_version}
+
+    def get_decision_run(self, run_id: str) -> dict[str, Any] | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                """SELECT runs.id, runs.symbol, runs.data_as_of, runs.engine_config_version, runs.created_at,
+                          playbooks.baseline_json, playbooks.final_json
+                   FROM decision_runs AS runs JOIN playbooks ON playbooks.run_id = runs.id
+                   WHERE runs.id = ?""",
+                (run_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            proposal_row = connection.execute(
+                "SELECT provider, model, proposal_json FROM ai_review_proposals WHERE run_id = ?", (run_id,)
+            ).fetchone()
+            audit_rows = connection.execute(
+                """SELECT field, proposed_value, final_value, disposition, rationale
+                   FROM adjustment_audit WHERE run_id = ? ORDER BY id""",
+                (run_id,),
+            ).fetchall()
+        return {
+            "id": row["id"],
+            "symbol": row["symbol"],
+            "data_as_of": row["data_as_of"],
+            "engine_config_version": row["engine_config_version"],
+            "created_at": row["created_at"],
+            "baseline": self._decision_snapshot(row["baseline_json"]),
+            "final": self._decision_snapshot(row["final_json"]),
+            "proposal": None if proposal_row is None else {
+                "provider": proposal_row["provider"],
+                "model": proposal_row["model"],
+                **json.loads(proposal_row["proposal_json"]),
+            },
+            "adjustments": [dict(record) for record in audit_rows],
+        }
+
+    def replace_decision_baseline(self, run_id: str, snapshot: Mapping[str, Any]) -> None:
+        """Baseline snapshots are deliberately immutable after a run is created."""
+        del run_id, snapshot
+        raise ValueError("decision baseline is immutable")
+
+    def replace_decision_final(self, run_id: str, snapshot: Mapping[str, Any]) -> dict[str, Any]:
+        """Update only the independently stored final snapshot for bounded adjustments."""
+        serialized = self._decision_snapshot_json(snapshot)
+        with self._connection() as connection, connection:
+            self._require_run(connection, run_id)
+            connection.execute(
+                "UPDATE playbooks SET final_json = ?, updated_at = ? WHERE run_id = ?",
+                (serialized, _now(), run_id),
+            )
+        persisted = self.get_decision_run(run_id)
+        assert persisted is not None
+        return persisted
+
+    def record_ai_review_proposal(
+        self,
+        *,
+        run_id: str,
+        provider: str,
+        model: str,
+        proposal: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        if not isinstance(provider, str) or not provider or not isinstance(model, str) or not model:
+            raise ValueError("proposal provider and model are required")
+        if not isinstance(proposal, Mapping):
+            raise ValueError("proposal must be a record")
+        proposal_json = json.dumps(dict(proposal), default=str, sort_keys=True, separators=(",", ":"))
+        with self._connection() as connection, connection:
+            self._require_run(connection, run_id)
+            try:
+                connection.execute(
+                    """INSERT INTO ai_review_proposals (id, run_id, provider, model, proposal_json, created_at)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (uuid.uuid4().hex, run_id, provider, model, proposal_json, _now()),
+                )
+            except sqlite3.IntegrityError as error:
+                raise ValueError("proposal already exists for decision run") from error
+        return {"provider": provider, "model": model, **json.loads(proposal_json)}
+
+    def record_adjustment_audit(
+        self,
+        *,
+        run_id: str,
+        field: str,
+        proposed_value: str | None,
+        final_value: str | None,
+        disposition: str,
+        rationale: str,
+    ) -> dict[str, Any]:
+        if not isinstance(field, str) or not field or disposition not in {"applied", "clamped", "rejected"}:
+            raise ValueError("adjustment audit is invalid")
+        if not isinstance(rationale, str):
+            raise ValueError("adjustment rationale is required")
+        with self._connection() as connection, connection:
+            self._require_run(connection, run_id)
+            cursor = connection.execute(
+                """INSERT INTO adjustment_audit (
+                       run_id, field, proposed_value, final_value, disposition, rationale, created_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (run_id, field, proposed_value, final_value, disposition, rationale, _now()),
+            )
+            row = connection.execute(
+                "SELECT field, proposed_value, final_value, disposition, rationale FROM adjustment_audit WHERE id = ?",
+                (cursor.lastrowid,),
+            ).fetchone()
+        return dict(row)
+
+    def record_replay_run(
+        self,
+        *,
+        as_of: str,
+        engine_config_version: str,
+        result_hash: str,
+        snapshot: Mapping[str, Any],
+        provider: str | None = None,
+        model: str | None = None,
+    ) -> dict[str, Any]:
+        if not all(isinstance(value, str) and value for value in (as_of, engine_config_version, result_hash)):
+            raise ValueError("replay provenance is required")
+        run_id = uuid.uuid4().hex
+        snapshot_json = self._decision_snapshot_json(snapshot)
+        with self._connection() as connection, connection:
+            connection.execute(
+                """INSERT INTO replay_runs (
+                       id, as_of, engine_config_version, provider, model, result_hash, snapshot_json, created_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (run_id, as_of, engine_config_version, provider, model, result_hash, snapshot_json, _now()),
+            )
+        return {"id": run_id, "as_of": as_of, "engine_config_version": engine_config_version, "result_hash": result_hash, "snapshot": dict(snapshot), "provider": provider, "model": model}
+
+    def get_replay_run(self, run_id: str) -> dict[str, Any] | None:
+        with self._connection() as connection:
+            row = connection.execute("SELECT * FROM replay_runs WHERE id = ?", (run_id,)).fetchone()
+        if row is None:
+            return None
+        record = dict(row)
+        record["snapshot"] = json.loads(record.pop("snapshot_json"))
+        return record
