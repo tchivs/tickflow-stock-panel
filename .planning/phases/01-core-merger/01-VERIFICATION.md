@@ -1,56 +1,44 @@
 ---
 phase: 01-core-merger
 verified: 2026-07-11
-status: gaps
-verification_ref: 3f3126e
+status: passed
+verification_ref: 1034413f6f9c0fd4686c05e49cecfd422bb33ac5
 ---
 
 # Phase 01 Verification
 
-## Status: gaps
+## Status: passed
 
-Phase 01 is **not complete**. The final committed artifact at `3f3126e` clears the earlier fixture-mode and fixture-status gaps: a clean detached Compose run starts the app, completes fixture synchronization, and returns `200` from `/api/pipeline/phase1-fixture`. Image preparation, the network-disabled verifier smoke, PyPI-only lock provenance, and loopback-only port binding also pass. The required no-build/no-pull acceptance then fails at the price-rule trigger: `POST /api/intraday/phase1-trigger` returns `405 Method Not Allowed`. The needed `@router.post("/phase1-trigger")` exists only as a dirty primary-worktree change, not in `3f3126e`; it is excluded from this certification. The verifier aborts before notification delivery, named SSE assertions, decision/replay checks, and Playwright can run. This committed endpoint gap blocks CORE-06.
+Phase 01 is **complete** at `1034413f6f9c0fd4686c05e49cecfd422bb33ac5` (`fix(phase1): support fixture monitor delivery`). A newly created clean detached worktree at `/tmp/athenaquant-phase1-final-certification` prepared the three Compose images, passed the network-disabled verifier smoke, and then completed the no-build/no-pull fixture acceptance end to end. The acceptance exercised governed synchronization, SQLite portfolio operations, monitor delivery, named SSE events, deterministic decision review/replay, and desktop/mobile Playwright workflows.
 
 ## Scope and evidence basis
 
-Reviewed all 15 Phase 01 plans and all 15 summaries, the Phase 01 requirement mapping, the upstream synchronization manifest, prior detached-worktree evidence, and final committed source at `3f3126e`. The final certification used a clean detached worktree at `/tmp/athenaquant-phase1-certification`; unrelated changes in the primary worktree were neither read as evidence nor committed.
+Certification evaluated the exact target revision in the clean detached worktree; unrelated primary-worktree changes were excluded. The Phase 01 artifact set contains all 15 summaries (`01-01` through `01-15`), including Plan 06's explicit approval of only `@playwright/test@1.61.1`.
 
 | Evidence | Result |
 | --- | --- |
-| 15 plan summaries (`01-01` through `01-15`) | **Passed**: every plan has a completion summary; Plan 06 records the required human approval for exactly `@playwright/test@1.61.1`. |
-| `backend/uv.lock` at `3f3126e` | **Passed**: URL hosts are only `pypi.org` and `files.pythonhosted.org`; case-insensitive search found no `tsinghua` or `tuna` reference. |
-| Resolved `compose/phase1.test.yml` | **Passed**: `ports: !override` resolves to only `127.0.0.1:13018:3018`; the fixture network is internal. |
-| Clean `bash compose/phase1/prepare-images.sh` at `3f3126e` | **Passed**: application, receiver, and verifier images were built and inspected; its `docker run --network none ... --smoke` gate completed before the runner began. |
-| Clean `bash compose/phase1/run.sh` immediately after preparation | **Failed**: health, fixture-status (`200`), governed instrument lookup, SSE connection, SQLite account/position creation, portfolio summary, and monitor-rule creation passed. `POST /api/intraday/phase1-trigger` returned `405 {"detail":"Method Not Allowed"}`, so acceptance stopped before delivery, named SSE-event, decision/replay, and Playwright assertions. |
-| Final committed endpoint inspection | **Failed**: `3f3126e` adds `/api/pipeline/phase1-fixture`, but its committed `backend/app/api/intraday.py` has no `/phase1-trigger` POST route. The matching route visible in the primary worktree is uncommitted and intentionally excluded. |
-| `docs/UPSTREAM-SYNC.md` | **Passed**: it identifies the adopted sources, local owners, preserved deployment/persistence boundaries, exact regressions, and update workflow. |
-
-## Repair assessment
-
-1. **Mirror provenance: closed.** `f8b49cf` removed unavailable mirror artifacts, and the final cold image preparation succeeded from the public PyPI lock.
-2. **Fixture-mode compatibility: closed.** `208ecba` accepts Compose's boolean fixture value, allowing application startup and governed fixture synchronization.
-3. **Fixture-status endpoint: closed.** `3f3126e` exposes the recorded sync report consumed by the verifier.
-4. **Loopback-port isolation: closed.** The resolved fixture topology exposes only `127.0.0.1:13018:3018` and keeps its service network internal.
-5. **Price-rule trigger endpoint: open.** The final commit does not provide the verifier's required `POST /api/intraday/phase1-trigger`; the uncommitted implementation cannot certify the commit.
+| `backend/uv.lock` at `1034413` | **Passed**: registry entries use `pypi.org`, artifacts use `files.pythonhosted.org`, and a case-insensitive audit found no Tsinghua, Tuna, Aliyun, or npmmirror reference. |
+| Resolved `compose/phase1.test.yml` | **Passed**: the only published port is `127.0.0.1:13018:3018`; the `phase1_test` network resolves as internal. |
+| `bash compose/phase1/prepare-images.sh` | **Passed**: app, receiver, and verifier images prepared successfully; `docker run --network none ... --smoke` reported `phase1 verifier smoke passed`. |
+| `bash compose/phase1/run.sh` immediately after preparation | **Passed**: the no-build/no-pull runner completed with verifier exit code 0 and reported `phase1 fixture acceptance passed`. |
+| Fixture delivery and SSE assertions | **Passed**: the committed `POST /api/intraday/phase1-trigger` returned 200; the receiver captured both Feishu and Telegram outcomes; the verifier observed both `strategy_alert` and `portfolio_updated`. |
+| Decision safety and browser workflow | **Passed**: fixture review remained unavailable, replay returned no provider/model, and Playwright completed the desktop and mobile workflow tests (2 passed; the cross-project duplicates were explicitly skipped). |
+| `docs/UPSTREAM-SYNC.md` | **Passed**: it identifies adopted sources, local owners, preserved deployment/persistence boundaries, regressions, and update workflow. |
 
 ## Requirement traceability
 
 | Requirement | Plans | Status | Concrete committed evidence |
 | --- | --- | --- |
-| CORE-01 | 01, 02, 11 | passed | Two-file governed fixture bundle, `FixtureProvider`, `run_phase1_fixture_sync`, contract coverage, and final clean fixture startup. |
-| CORE-02 | 01, 02, 11 | passed | Contract validator covers key, time, repair-window, and schema-drift failures; its governed fixture path started successfully in the final clean run. |
-| CORE-03 | 03, 08, 09, 11, 13 | passed | SQLite-backed account and position creation plus portfolio summary passed in the final clean run. |
-| CORE-04 | 05, 08, 10, 11, 12, 13 | passed | Persisted monitor rules and delivery contracts have focused coverage; the final run created the fixture monitor rule before the missing trigger endpoint. |
-| CORE-05 | 08, 09, 11, 12, 13 | passed | The final run connected to the shared intraday SSE endpoint; named-event coverage remains recorded in the completed Plan 11 acceptance evidence. |
-| CORE-06 | 06, 07, 11 | **gap** | Cold images, no-network smoke, isolated topology, and all pre-trigger workflow checks pass, but the mandatory price-rule trigger receives `405`, preventing delivery/SSE/Playwright completion. |
-| CORE-07 | 11 | passed | `docs/UPSTREAM-SYNC.md` supplies source identity, owner, preserved boundary, regressions, and review/update workflow. |
-| PLAN-01 | 04, 08, 10, 14 | passed | Deterministic governed-data baseline persistence/API is covered by the completed focused playbook verification. |
-| PLAN-02 | 08, 10, 14, 15 | passed | Configured-provider provenance, bounded audit, unavailable fallback, and AI-free replay are covered by the completed focused verification. |
-
-## Required next step
-
-Commit the intended `/api/intraday/phase1-trigger` POST route (and its focused coverage) as application work. Then create a new clean detached worktree at that commit and rerun `bash compose/phase1/prepare-images.sh` followed by `bash compose/phase1/run.sh`. Mark CORE-06 and the phase `passed` only when the verifier reaches and passes its receiver-delivery, named-SSE, decision/replay, and desktop/mobile Playwright checks.
+| CORE-01 | 01, 02, 11 | passed | Governed two-file fixture bundle, `FixtureProvider`, fixture synchronization, and the clean fixture startup/API lookup all passed. |
+| CORE-02 | 01, 02, 11 | passed | Contract coverage handles key, time, repair-window, and schema-drift failures; the governed fixture path completed in acceptance. |
+| CORE-03 | 03, 08, 09, 11, 13 | passed | Acceptance created a SQLite account and position and returned a populated portfolio summary. |
+| CORE-04 | 05, 08, 10, 11, 12, 13 | passed | The fixture price rule fired and persisted delivery outcomes reached both internal receiver channels. |
+| CORE-05 | 08, 09, 11, 12, 13 | passed | The shared intraday SSE stream delivered the asserted `strategy_alert` and `portfolio_updated` event names. |
+| CORE-06 | 06, 07, 11 | passed | Clean image preparation, network-disabled smoke, loopback/internal topology, no-build/no-pull acceptance, and desktop/mobile Playwright workflows passed. |
+| CORE-07 | 11 | passed | `docs/UPSTREAM-SYNC.md` records source identity, owner, preserved boundary, regressions, and update workflow. |
+| PLAN-01 | 04, 08, 10, 14 | passed | Deterministic governed-data baseline persistence/API remains covered by completed playbook verification. |
+| PLAN-02 | 08, 10, 14, 15 | passed | Acceptance proved unavailable fixture review and AI-free replay; focused verification covers bounded proposal/audit behavior. |
 
 ## Human verification
 
-No additional human approval blocks this result: Plan 06 approves only `@playwright/test@1.61.1`. The remaining blocker is the missing committed automated-acceptance endpoint.
+Plan 06's approval applies only to `@playwright/test@1.61.1`; no additional human gate remains. All Phase 01 requirements are certified passed at the verification reference above.
