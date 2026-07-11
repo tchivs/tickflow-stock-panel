@@ -28,7 +28,7 @@ AthenaQuant first delivers a single-container, data-lake-first market and portfo
   3. User can create a position, price, or market monitoring rule, receive a configured notification after a matching event, and review stored alert history.
   4. User can view current market and position changes in the main interface through the shared SSE pipeline.
   5. User can inspect a deterministic trade playbook, distinguish its baseline from bounded audited AI adjustments, and review an AI-free historical replay.
-**Plans**: 16 plans
+**Plans**: 15 plans
 Plans:
 - [ ] 01-01-PLAN.md — Create governed-data Wave 1 contracts.
 - [ ] 01-13-PLAN.md — Create operational-loop Wave 1 contracts.

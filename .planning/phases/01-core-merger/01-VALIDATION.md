@@ -29,7 +29,7 @@ created: 2026-07-10
 
 - **After every task commit:** Run the focused pytest files for the changed module, plus `pnpm --dir frontend build` after UI or API type changes.
 - **After every plan wave:** Run `uv run --directory backend pytest -q && pnpm --dir frontend build`.
-- **Before `/gsd-verify-work`:** Run the full suite and the isolated Compose acceptance command.
+- **Before `/gsd-verify-work`:** Run the full suite, `bash compose/phase1/prepare-images.sh`, and the isolated no-build/no-pull Compose acceptance command.
 - **Max feedback latency:** 120 seconds for focused tests; 10 minutes for the Compose acceptance flow.
 
 ---
