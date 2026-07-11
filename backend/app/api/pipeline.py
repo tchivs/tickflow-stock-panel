@@ -18,6 +18,15 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/pipeline", tags=["pipeline"])
 
+@router.get("/phase1-fixture")
+def phase1_fixture_status(request: Request) -> dict:
+    """Return the isolated fixture-sync report; unavailable in normal runtime."""
+    report = getattr(request.app.state, "phase1_fixture_sync", None)
+    if report is None:
+        raise HTTPException(status_code=404, detail="not found")
+    return report
+
+
 
 @router.post("/run")
 async def run_now(request: Request) -> dict:
