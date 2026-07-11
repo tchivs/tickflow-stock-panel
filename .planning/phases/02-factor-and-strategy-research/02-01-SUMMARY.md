@@ -70,8 +70,8 @@ Implemented the safe factor-definition foundation on the existing operational SQ
 
 - Added a versioned parser/tokenizer, typed immutable AST, canonical serialization, stable structural signatures, dependency extraction, and fixed AST-to-Polars dispatch for the restricted factor DSL.
 - Added an immutable factor definition/revision repository and registry. Changed definitions append revisions, preserve prior rows, and return deterministic explainable similarity candidates.
-- Appended the Phase 2 research schema—including reserved experiment catalog tables—to the existing migration sequence, then attached `ResearchRepository` and `FactorRegistry` to the existing FastAPI lifespan after `OperationalRepository` migration.
-- Added focused offline domain tests using temporary SQLite databases and a small Polars frame.
+- Appended the Phase 2 research schema—including reserved experiment catalog tables and immutable prediction/signal references—to the existing migration sequence, then attached `ResearchRepository` and `FactorRegistry` to the existing FastAPI lifespan after `OperationalRepository` migration.
+- Added focused offline domain tests using temporary SQLite databases, a small Polars frame, and fresh-migration evidence-reference coverage.
 
 ## Task Commits
 
@@ -81,12 +81,14 @@ Each task was committed atomically:
 2. **Task 2: Add immutable factor definitions, revisions, and explainable deterministic discovery** - `b415766` (feat)
 3. **Task 3: Prove the safety and immutable-registry contracts at domain boundaries** - `9d3c456` (test)
 
+4. **Schema reservation follow-up: immutable prediction/signal references for Plans 02-02/02-03** - `e1660e4` (fix)
+
 **Plan metadata:** committed with this summary.
 
 ## Verification
 
-- `uv run pytest tests/research/test_factor_dsl.py tests/research/test_factor_registry.py -q` — **14 passed**
-- The tests create a fresh temporary `operational.db`, apply the complete migration sequence, reject unsafe DSL source before compilation, exercise actual Polars compilation, preserve an earlier revision byte-for-byte after a revision append, and verify repeated explained similarity ordering including a deterministic tie-break.
+- `uv run pytest tests/research/test_factor_dsl.py tests/research/test_factor_registry.py -q` — **15 passed**
+- The tests create a fresh temporary `operational.db`, apply the complete migration sequence (including `research_experiments.prediction_signal_json`), reject unsafe DSL source before compilation, exercise actual Polars compilation, preserve an earlier revision byte-for-byte after a revision append, and verify repeated explained similarity ordering including a deterministic tie-break.
 
 ## Deviations from Plan
 
