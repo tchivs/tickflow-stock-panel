@@ -1,3 +1,4 @@
+import type { Page } from '@playwright/test'
 import { expect, test } from '@playwright/test'
 
 const DESKTOP_PROJECT = 'desktop-chromium'
@@ -25,7 +26,7 @@ test.describe('Phase 2 researcher workflow', () => {
 
     await page.route('**/api/**', route => route.fulfill({ contentType: 'application/json', body: '{}' }))
     await page.route('**/api/settings', route => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ onboarding_completed: true }) }))
-    await page.route('**/api/research/**', async route => {
+    await page.route('**/api/research**', async route => {
       const request = route.request()
       const url = new URL(request.url())
       const path = url.pathname
@@ -76,4 +77,83 @@ test.describe('Phase 2 researcher workflow', () => {
     await expect(page.getByRole('complementary', { name: '兼容性警告' })).toContainText('data revision differs')
     await expect(page.getByText('度量（Pearson IC 与 RankIC 独立）').first()).toBeVisible()
   })
+})
+
+const strategyDetail = {
+  id: 'registered-demo', name: '注册策略', description: '确定性测试策略', source: 'builtin', params: [], params_defaults: {}, basic_filter: {}, entry_signals: [], exit_signals: [], scoring: {}, stop_loss: null, take_profit: null, trailing_stop: null, trailing_take_profit_activate: null, trailing_take_profit_drawdown: null, score_min: null, score_max: null, max_hold_days: null,
+}
+const strategyTrades = Array.from({ length: 12 }, (_, index) => ({ symbol: `6000${index}.SH`, name: `测试${index}`, entry_date: `2024-01-${String(index + 1).padStart(2, '0')}`, exit_date: `2024-01-${String(index + 2).padStart(2, '0')}`, entry_price: 10, exit_price: 11, pnl_pct: 0.1, pnl_amount: 100, duration: 1, exit_reason: 'signal', shares: 100, lots: 1, position_pct: 0.1, entry_value: 1000, exit_value: 1100 }))
+const strategyResult = {
+  run_id: 'strategy-run', config: { start: '2024-01-01', end: '2024-01-31' }, stats: { mode: 'position', final_equity: 1100000, n_trades: strategyTrades.length }, equity_curve: [{ date: '2024-01-01', value: 1000000 }, { date: '2024-01-31', value: 1100000 }], drawdown_curve: [], benchmark_curve: [], trades: strategyTrades, per_symbol_stats: [{ symbol: '600000.SH', n_trades: 12, total_return: 0.1, win_rate: 1, best: 0.1, worst: 0.1 }], strategy_info: { ...strategyDetail, entry_signals: [], exit_signals: [] }, elapsed_ms: 1, error: null,
+}
+const retainedStrategy = { ...makeExperiment('strategy-retained', true), subject: { kind: 'strategy' as const, id: 'registered-demo', version: 'v1' } }
+
+async function installStrategyFixture(page: Page, retainStatus = 200) {
+  let retained = false
+  await page.route('**/api/**', route => route.fulfill({ contentType: 'application/json', body: '{}' }))
+  await page.route('**/api/screener/strategies?**', route => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ presets: [{ id: 'registered-demo', name: '注册策略', description: '确定性测试策略', source: 'builtin' }] }) }))
+  await page.route('**/api/strategies/registered-demo', route => route.fulfill({ contentType: 'application/json', body: JSON.stringify(strategyDetail) }))
+  await page.route('**/api/backtest/strategy/stream?**', route => route.fulfill({ contentType: 'text/event-stream', body: `event: research\ndata: {"execution_handle":"sse-only-handle"}\n\nevent: done\ndata: ${JSON.stringify({ ...strategyResult, research_execution_handle: 'sse-only-handle' })}\n\n` }))
+  await page.route('**/api/research**', async route => {
+    const path = new URL(route.request().url()).pathname
+    const json = (body: unknown, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
+    if (path.endsWith('/strategy-executions/sse-only-handle/retain')) {
+      if (retainStatus !== 200) return json({ detail: '执行句柄已过期或已保留' }, retainStatus)
+      retained = true
+      return json(retainedStrategy)
+    }
+    if (path.endsWith('/experiments') || path.endsWith('/experiments/')) return json({ experiments: retained ? [retainedStrategy] : [] })
+    if (path.endsWith('/comparison/candidates') || path.endsWith('/comparison/candidates/')) return json({ experiments: retained ? [retainedStrategy, { ...makeExperiment('baseline-strategy', true), subject: { kind: 'strategy', id: 'baseline', version: 'v1' } }] : [] })
+    if (path.endsWith('/comparison') || path.endsWith('/comparison/')) return json({ experiments: [retainedStrategy], warnings: ['data revision differs'], deltas: { input_manifest: {} } })
+    if (path.endsWith('/factors') || path.endsWith('/factors/')) return json({ factors: [] })
+    return json({})
+  })
+}
+
+test('strategy retention keyboard flow keeps an SSE handle scoped at every required viewport', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-chromium only')
+  for (const viewport of [{ width: 1440, height: 960 }, { width: 1024, height: 900 }, { width: 375, height: 844 }]) {
+    await installStrategyFixture(page)
+    await page.setViewportSize(viewport)
+    await page.goto('/backtest')
+    const strategyTab = page.getByRole('tab', { name: '策略回测' })
+    await expect(strategyTab).toHaveAttribute('aria-selected', 'true')
+    await strategyTab.press('ArrowLeft')
+    await expect(page.getByRole('tab', { name: '因子回测' })).toHaveAttribute('aria-selected', 'true')
+    await page.getByRole('tab', { name: '因子回测' }).press('ArrowRight')
+    await expect(strategyTab).toHaveAttribute('aria-selected', 'true')
+    await page.getByText('注册策略', { exact: true }).first().press('Enter')
+    await page.getByRole('button', { name: '运行回测' }).press('Enter')
+    const retain = page.getByRole('button', { name: '保留此完成策略实验以供比较' })
+    await expect(retain).toBeVisible()
+    if (viewport.width === 375) await expect(retain).toHaveJSProperty('offsetHeight', 44)
+    await retain.press('Enter')
+    await expect(page.getByText('已保留：此完成快照现在可在比较中选择。')).toBeVisible()
+    await expect(page.getByText('实验 ID：')).toBeVisible()
+    const daily = page.getByRole('tab', { name: /每日交易/ })
+    await daily.press('ArrowRight')
+    await expect(page.getByRole('tab', { name: /交易明细/ })).toHaveAttribute('aria-selected', 'true')
+    await page.getByRole('tab', { name: /交易明细/ }).press('ArrowLeft')
+    const wrapper = page.getByLabel('每日交易结果表，可使用左右方向键或 End 键查看全部列')
+    await wrapper.focus()
+    await expect(wrapper).toBeFocused()
+    if (viewport.width === 375) {
+      await expect(wrapper).toHaveJSProperty('scrollLeft', 0)
+      await wrapper.press('ArrowRight')
+      await expect(wrapper).not.toHaveJSProperty('scrollLeft', 0)
+      await expect(page.getByRole('columnheader', { name: '累计收益' })).toBeInViewport()
+    }
+  }
+})
+
+test('stale strategy retention restores retryable state without promotion', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-chromium only')
+  await installStrategyFixture(page, 409)
+  await page.goto('/backtest')
+  await page.getByText('注册策略', { exact: true }).first().press('Enter')
+  await page.getByRole('button', { name: '运行回测' }).press('Enter')
+  await page.getByRole('button', { name: '保留此完成策略实验以供比较' }).press('Enter')
+  await expect(page.getByRole('alert')).toHaveText('无法保留此完成策略实验：执行句柄已过期或已保留。请重试。')
+  await expect(page.getByRole('button', { name: '保留此完成策略实验以供比较' })).toBeEnabled()
+  await expect(page.getByText('实验 ID：')).toHaveCount(0)
 })
