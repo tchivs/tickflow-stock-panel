@@ -1,11 +1,12 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { motion, AnimatePresence } from 'framer-motion'
-import { RadioTower, Plus, Trash2, Settings2, Zap, Bell, ListChecks, BellRing, TrendingUp, TrendingDown, Flame } from 'lucide-react'
+import { motion } from 'framer-motion'
+import { RadioTower, Plus, Trash2, Settings2, Zap, Bell, ListChecks, BellRing, TrendingUp, TrendingDown, Flame, Check, Clock3, AlertTriangle, Moon } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
 import { Skeleton } from '@/components/data/Skeleton'
-import { api, type MonitorRule, type AlertEvent, type MonitorCondition } from '@/lib/api'
+import { Modal } from '@/components/Modal'
+import { api, type MonitorRule, type AlertEvent, type MonitorCondition, type DeliveryStatus } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { fmtPrice, fmtPct } from '@/lib/format'
 import { cn } from '@/lib/cn'
@@ -13,10 +14,11 @@ import { cnSignal } from '@/lib/signals'
 import { boardTag } from '@/components/stock-table/primitives'
 import { markSeen, resetBadge, leaveMonitorPage } from '@/lib/monitorBadge'
 import { RuleEditor } from '@/components/monitor/RuleEditor'
+import { DeliveryDetailDialog } from '@/components/monitor/DeliveryDetailDialog'
 import { StockPreviewDialog } from '@/components/StockPreviewDialog'
 
 const TYPE_LABEL: Record<string, string> = {
-  signal: '个股信号', price: '价格/涨跌', market: '市场异动', strategy: '策略监控',
+  position: '持仓', signal: '信号', price: '价格', market: '市场', strategy: '策略',
 }
 
 /** 严重级别 → 左侧色条 + 图标 */
@@ -26,10 +28,18 @@ const SEVERITY_CONFIG: Record<string, { bar: string; icon: any; iconCls: string 
   critical: { bar: 'bg-danger',           icon: Flame,       iconCls: 'text-danger' },
 }
 const SOURCE_BADGE_STYLE: Record<string, string> = {
+  position: 'bg-accent/10 text-accent border-accent/20',
   strategy: 'bg-amber-400/10 text-amber-400 border-amber-400/20',
   signal:   'bg-accent/10 text-accent border-accent/20',
   price:    'bg-emerald-400/10 text-emerald-400 border-emerald-400/20',
   market:   'bg-purple-500/10 text-purple-400 border-purple-500/20',
+}
+
+const DELIVERY_LABEL: Record<DeliveryStatus, { label: string; icon: typeof Check; className: string }> = {
+  pending: { label: '待投递', icon: Clock3, className: 'text-muted' },
+  sent: { label: '已发送', icon: Check, className: 'text-emerald-500' },
+  failed: { label: '投递失败', icon: AlertTriangle, className: 'text-danger' },
+  skipped: { label: '已跳过', icon: Moon, className: 'text-warning' },
 }
 
 /**
@@ -58,15 +68,22 @@ export function Monitor() {
   const [editorOpen, setEditorOpen] = useState(false)
   const [editingRule, setEditingRule] = useState<MonitorRule | null>(null)
 
-  // 触发记录: 过滤 + 统计 (提升到主组件, 供 header 行使用)
-  const [filter, setFilter] = useState<'all' | 'strategy' | 'signal' | 'price' | 'market'>('all')
+  // 触发记录: 类型、严重级别与投递状态均来自持久化历史。
+  const [filter, setFilter] = useState<'all' | 'position' | 'strategy' | 'signal' | 'price' | 'market'>('all')
+  const [severity, setSeverity] = useState<'all' | 'info' | 'warn' | 'critical'>('all')
+  const [delivery, setDelivery] = useState<'all' | DeliveryStatus>('all')
+  const [deliveryEventId, setDeliveryEventId] = useState<string | null>(null)
   const [confirmClear, setConfirmClear] = useState(false)
   const [confirmClearRules, setConfirmClearRules] = useState(false)
   const alertsQuery = useQuery({
-    queryKey: QK.alerts(filter === 'all' ? undefined : filter),
-    queryFn: () => api.alertsList({ days: 7, limit: 500, source: filter === 'all' ? undefined : filter }),
-    refetchInterval: 10000,
-    refetchIntervalInBackground: true,
+    queryKey: ['alerts', filter, severity, delivery],
+    queryFn: () => api.alertsList({
+      days: 7, limit: 500,
+      source: filter === 'all' ? undefined : filter,
+      severity: severity === 'all' ? undefined : severity,
+      delivery_status: delivery === 'all' ? undefined : delivery,
+    }),
+    placeholderData: previous => previous,
   })
   const total = alertsQuery.data?.total ?? 0
 
@@ -99,47 +116,30 @@ export function Monitor() {
   return (
     <div className="flex flex-col h-full">
       <PageHeader title="监控中心" subtitle="实时信号与规则管理" />
-      <div className="flex-1 min-h-0 px-5 py-4">
-        <div className="mx-auto flex h-full max-w-7xl flex-col gap-4 lg:flex-row">
-          {/* 左栏: 触发记录 */}
-          <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-border bg-surface/40 shadow-lg shadow-black/5">
-            <div className="flex items-center gap-3 border-b border-border/60 bg-surface/60 px-4 py-2.5">
+      <div className="flex-1 min-h-0 px-4 py-4 sm:px-5">
+        <div className="mx-auto flex h-full max-w-7xl flex-col gap-4 md:flex-row">
+          <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-card border border-border bg-surface/40">
+            <div className="flex flex-wrap items-center gap-2 border-b border-border/60 bg-surface/60 px-3 py-3">
               <SectionHeader icon={BellRing} title="触发记录" />
-              {/* 过滤标签 */}
-              <div className="flex flex-wrap items-center gap-0.5">
-                {(['all', 'strategy', 'signal', 'price', 'market'] as const).map(f => (
-                  <button
-                    key={f}
-                    onClick={() => setFilter(f)}
-                    className={cn(
-                      'rounded-md px-1.5 py-0.5 text-[10px] font-medium transition-all cursor-pointer',
-                      filter === f ? 'bg-accent/15 text-accent' : 'text-muted hover:bg-elevated/60 hover:text-secondary',
-                    )}
-                  >
-                    {f === 'all' ? '全部' : TYPE_LABEL[f]}
-                  </button>
-                ))}
+              <div className="order-3 flex w-full flex-wrap items-center gap-1 md:order-none md:w-auto" aria-label="告警类型筛选">
+                {(['all', 'position', 'price', 'signal', 'market', 'strategy'] as const).map(value => <button key={value} type="button" aria-pressed={filter === value} onClick={() => setFilter(value)} className={cn('min-h-8 rounded-btn px-2 text-xs', filter === value ? 'bg-accent/15 text-accent' : 'text-muted hover:bg-elevated hover:text-secondary')}>{value === 'all' ? '全部' : TYPE_LABEL[value]}</button>)}
               </div>
-              {/* 数量 + 清空 */}
-              <div className="ml-auto flex items-center gap-2 shrink-0">
+              <label className="sr-only" htmlFor="monitor-severity">严重级别</label>
+              <select id="monitor-severity" value={severity} onChange={event => setSeverity(event.target.value as typeof severity)} className="h-8 rounded-btn border border-border bg-base px-2 text-xs text-secondary"><option value="all">全部级别</option><option value="info">普通</option><option value="warn">警告</option><option value="critical">重要</option></select>
+              <label className="sr-only" htmlFor="monitor-delivery">投递状态</label>
+              <select id="monitor-delivery" value={delivery} onChange={event => setDelivery(event.target.value as typeof delivery)} className="h-8 rounded-btn border border-border bg-base px-2 text-xs text-secondary"><option value="all">全部投递</option><option value="pending">待投递</option><option value="sent">已发送</option><option value="failed">投递失败</option><option value="skipped">已跳过</option></select>
+              <div className="ml-auto flex items-center gap-2">
                 <span className="rounded-md bg-elevated/50 px-1.5 py-0.5 text-[10px] font-medium text-muted">{total}</span>
-                {total > 0 && (
-                  <button
-                    onClick={() => setConfirmClear(true)}
-                    className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] text-muted transition-colors hover:bg-danger/10 hover:text-danger cursor-pointer"
-                  >
-                    <Trash2 className="h-2.5 w-2.5" />清空
-                  </button>
-                )}
+                {total > 0 && <button onClick={() => setConfirmClear(true)} className="inline-flex min-h-8 items-center gap-1 rounded-btn px-2 text-xs text-muted hover:bg-danger/10 hover:text-danger"><Trash2 className="h-3 w-3" />清空</button>}
               </div>
             </div>
-            <div className="min-h-0 flex-1 overflow-auto p-3.5">
-              <AlertsList alertsQuery={alertsQuery} confirmClear={confirmClear} setConfirmClear={setConfirmClear} total={total} enterTs={enterTsRef.current} />
+            <div className="min-h-0 flex-1 overflow-auto p-3">
+              <AlertsList alertsQuery={alertsQuery} confirmClear={confirmClear} setConfirmClear={setConfirmClear} total={total} enterTs={enterTsRef.current} onDelivery={setDeliveryEventId} />
             </div>
           </section>
 
           {/* 右栏: 监控规则 */}
-          <section className="flex min-h-0 w-full flex-col overflow-hidden rounded-xl border border-border bg-surface/40 shadow-lg shadow-black/5 lg:w-[400px] lg:shrink-0">
+          <section className="flex min-h-0 w-full flex-col overflow-hidden rounded-card border border-border bg-surface/40 md:w-[400px] md:shrink-0">
             <div className="flex items-center gap-3 border-b border-border/60 bg-surface/60 px-4 py-2.5">
               <SectionHeader icon={ListChecks} title="监控规则" />
               <span className="rounded-md bg-elevated/50 px-1.5 py-0.5 text-[10px] font-medium text-muted">{rulesCount}</span>
@@ -176,6 +176,7 @@ export function Monitor() {
         rule={editingRule}
         onClose={() => { setEditorOpen(false); setEditingRule(null) }}
       />
+      {deliveryEventId && <DeliveryDetailDialog eventId={deliveryEventId} onClose={() => setDeliveryEventId(null)} />}
 
       <ConfirmDialog
         open={confirmClearRules}
@@ -201,12 +202,13 @@ function SectionHeader({ icon: Icon, title }: { icon: any; title: string }) {
 }
 
 // ── 触发记录列表 ──────────────────────────────────────
-function AlertsList({ alertsQuery, confirmClear, setConfirmClear, total, enterTs }: {
+function AlertsList({ alertsQuery, confirmClear, setConfirmClear, total, enterTs, onDelivery }: {
   alertsQuery: ReturnType<typeof useQuery>
   confirmClear: boolean
   setConfirmClear: (v: boolean) => void
   total: number
   enterTs: number
+  onDelivery: (eventId: string) => void
 }) {
   const qc = useQueryClient()
   const [confirmTs, setConfirmTs] = useState<number | null>(null)
@@ -261,6 +263,8 @@ function AlertsList({ alertsQuery, confirmClear, setConfirmClear, total, enterTs
             const sev = SEVERITY_CONFIG[ev.severity ?? 'info'] ?? SEVERITY_CONFIG.info
             const SevIcon = sev.icon
             const isNew = ev.ts > enterTs
+            const outcomes = (ev.deliveries ?? []) as Array<{ status: DeliveryStatus }>
+            const primaryDelivery = outcomes.find(outcome => outcome.status === 'failed') ?? outcomes.find(outcome => outcome.status === 'pending') ?? outcomes[0]
             return (
               <motion.div
                 key={`${ev.ts}-${i}`}
@@ -410,11 +414,24 @@ function AlertsList({ alertsQuery, confirmClear, setConfirmClear, total, enterTs
                       )}
                     </>
                   )}
+                  <div className="mt-1 flex flex-wrap gap-x-2 gap-y-0.5 text-[10px] text-muted">
+                    {ev.account_id != null && <span>账户 {ev.account_id}</span>}
+                    {ev.position_id != null && <span>持仓 {ev.position_id}</span>}
+                    {ev.valuation_source && <span>估值来源 {ev.valuation_source === 'shared_quote' ? '共享报价' : ev.valuation_source === 'governed_close' ? '治理收盘价' : '暂无法估值'}</span>}
+                    {ev.valuation_as_of && <time className="font-mono">{ev.valuation_as_of}</time>}
+                  </div>
                 </div>
                 <div className="flex shrink-0 flex-col items-end gap-1">
                   <span className="text-[10px] text-muted/60 font-mono">
-                    {new Date(ev.ts).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                    {new Date(ev.occurred_at ?? ev.ts).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}
                   </span>
+                  {primaryDelivery && (() => {
+                    const meta = DELIVERY_LABEL[primaryDelivery.status]
+                    const Icon = meta.icon
+                    return ev.id ? <button type="button" onClick={() => onDelivery(ev.id)} className={`inline-flex min-h-7 items-center gap-1 rounded-btn px-1.5 text-[10px] ${meta.className} hover:bg-elevated`} title="查看投递详情"><Icon className="h-3 w-3" />{outcomes.length > 1 && primaryDelivery.status === 'sent' ? `${outcomes.filter(outcome => outcome.status === 'sent').length}/${outcomes.length} 已发送` : meta.label}</button> : <span className={`inline-flex items-center gap-1 text-[10px] ${meta.className}`}><Icon className="h-3 w-3" />{meta.label}</span>
+                  })()}
+                  {!primaryDelivery && <span className="text-[10px] text-muted">待投递</span>}
+
                   {confirmTs === ev.ts ? (
                     // 确认态: 红色实心按钮 (原删除图标位置), 再点确认删除
                     <button
@@ -653,34 +670,8 @@ function RulesList({ rulesQuery, onEdit }: {
 
 // ── 规则编辑对话框 ────────────────────────────────────
 function RuleEditorDialog({ open, rule, onClose }: { open: boolean; rule: MonitorRule | null; onClose: () => void }) {
-  return (
-    <AnimatePresence>
-      {open && (
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          className="fixed inset-0 z-50 flex items-start justify-center overflow-auto bg-black/40 backdrop-blur-sm p-4"
-          onClick={onClose}
-        >
-          <motion.div
-            initial={{ opacity: 0, scale: 0.96, y: 8 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.96, y: 8 }}
-            transition={{ duration: 0.15 }}
-            className="mt-12 w-full max-w-2xl"
-            onClick={e => e.stopPropagation()}
-          >
-            <RuleEditor
-              rule={rule}
-              onClose={onClose}
-              onSaved={onClose}
-            />
-          </motion.div>
-        </motion.div>
-      )}
-    </AnimatePresence>
-  )
+  if (!open) return null
+  return <Modal onClose={onClose} ariaLabel="监控规则" panelClassName="w-[calc(100vw-32px)] max-w-2xl max-h-[90vh] overflow-auto rounded-card border border-border bg-surface shadow-xl"><RuleEditor rule={rule} onClose={onClose} onSaved={onClose} /></Modal>
 }
 
 // ── 确认对话框 ────────────────────────────────────────
@@ -694,42 +685,6 @@ function ConfirmDialog({ open, title, message, confirmText, danger, pending, onC
   onCancel: () => void
   onConfirm: () => void
 }) {
-  return (
-    <AnimatePresence>
-      {open && (
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4"
-          onClick={onCancel}
-        >
-          <motion.div
-            initial={{ opacity: 0, scale: 0.96 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.96 }}
-            transition={{ duration: 0.15 }}
-            className="w-full max-w-sm rounded-2xl border border-border bg-surface p-5 shadow-2xl"
-            onClick={e => e.stopPropagation()}
-          >
-            <h3 className="text-sm font-medium text-foreground">{title}</h3>
-            <p className="mt-1.5 text-xs text-muted">{message}</p>
-            <div className="mt-4 flex justify-end gap-2">
-              <button onClick={onCancel} className="px-3 py-1.5 rounded-btn bg-elevated text-secondary text-xs cursor-pointer">取消</button>
-              <button
-                onClick={onConfirm}
-                disabled={pending}
-                className={cn(
-                  'px-3 py-1.5 rounded-btn text-xs font-medium disabled:opacity-50 cursor-pointer',
-                  danger ? 'bg-danger text-base' : 'bg-accent text-base',
-                )}
-              >
-                {confirmText ?? '确定'}
-              </button>
-            </div>
-          </motion.div>
-        </motion.div>
-      )}
-    </AnimatePresence>
-  )
+  if (!open) return null
+  return <Modal onClose={onCancel} ariaLabel={title} panelClassName="w-[calc(100vw-32px)] max-w-sm rounded-card border border-border bg-surface p-5 shadow-xl"><h3 className="text-sm font-medium text-foreground">{title}</h3><p className="mt-1.5 text-xs text-muted">{message}</p><div className="mt-4 flex justify-end gap-2"><button onClick={onCancel} className="px-3 py-1.5 rounded-btn bg-elevated text-secondary text-xs">取消</button><button onClick={onConfirm} disabled={pending} className={cn('px-3 py-1.5 rounded-btn text-xs font-medium disabled:opacity-50', danger ? 'bg-danger text-base' : 'bg-accent text-base')}>{confirmText ?? '确定'}</button></div></Modal>
 }

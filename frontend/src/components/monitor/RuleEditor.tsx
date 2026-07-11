@@ -19,7 +19,7 @@ interface Props {
 }
 
 const TYPE_DEFAULT_NAME: Record<string, string> = {
-  signal: '个股信号监控', price: '价格监控', market: '市场异动监控', strategy: '策略监控',
+  signal: '个股信号监控', price: '价格监控', market: '市场异动监控', strategy: '策略监控', position: '持仓监控',
 }
 
 const emptyRule = (preset?: Partial<MonitorRule>): MonitorRule => ({
@@ -46,7 +46,7 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
   const options = useQuery({ queryKey: QK.monitorRuleOptions, queryFn: api.monitorRuleOptions })
   const { data: prefs } = usePreferences()
   const feishuConfigured = !!(prefs?.feishu_webhook_url)
-  const wecomConfigured = !!(prefs?.wecom_webhook_url)
+  const telegramConfigured = Boolean((prefs as { telegram_bot_token?: string } | undefined)?.telegram_bot_token)
   const [editing] = useState(!!rule)
   // 新建规则: 预填全局「默认推送渠道」(多选数组), preset 显式指定时以 preset 为准。
   // 编辑规则: 完全沿用规则自身配置, 不受默认值影响。
@@ -58,6 +58,17 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
           webhook_channels: preset?.webhook_channels ?? (prefs?.webhook_default_channels ?? []),
         },
   )
+  const holdings = useQuery({
+    queryKey: QK.portfolioHoldings(),
+    queryFn: () => api.portfolioHoldings(),
+    enabled: draft.type === 'position',
+  })
+  const accounts = useQuery({
+    queryKey: QK.portfolioAccounts(),
+    queryFn: () => api.portfolioAccounts(),
+    enabled: draft.type === 'position',
+  })
+  const accountNames = new Map((accounts.data?.accounts ?? []).map(account => [account.id, account.name]))
   const assetType = draft.asset_type ?? 'stock'
   // 策略列表跟随资产类型: ETF 只列技术类策略。
   const strategies = useQuery({
@@ -94,6 +105,7 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
         }
       }
       if (d.scope === 'symbols' && d.symbols.length === 0) throw new Error('请选择至少一只股票')
+      if (d.scope === 'positions' && !(d.position_ids?.length)) throw new Error('请选择至少一笔持仓')
       return api.monitorRuleSave(d)
     },
     onSuccess: () => {
@@ -102,6 +114,17 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
       onClose()
     },
     onError: err => setError(String((err as any)?.message ?? err)),
+  })
+  const changeType = (type: MonitorRule['type']) => {
+    setDraft(d => type === 'position'
+      ? { ...d, type, scope: 'positions', symbols: [] }
+      : { ...d, type, scope: d.scope === 'positions' ? 'symbols' : d.scope, position_ids: d.scope === 'positions' ? [] : d.position_ids },
+    )
+  }
+
+  const togglePosition = (positionId: number) => setDraft(d => {
+    const selected = d.position_ids ?? []
+    return { ...d, position_ids: selected.includes(positionId) ? selected.filter(id => id !== positionId) : [...selected, positionId] }
   })
 
   // 条件编辑
@@ -250,61 +273,56 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
       )}
 
       {/* 描述 (可选) + 类型 */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-        <label className="md:col-span-2 space-y-1.5">
+      {/* 基本信息与监控范围 */}
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+        <label className="space-y-1.5 md:col-span-2">
           <span className="text-[11px] text-muted">描述 (可选)</span>
           <input value={draft.name} onChange={e => setDraft(d => ({ ...d, name: e.target.value }))} placeholder="留空用默认名称" className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs text-foreground" />
         </label>
         <label className="space-y-1.5">
           <span className="text-[11px] text-muted">监控类型</span>
-          <select value={draft.type} onChange={e => setDraft(d => ({ ...d, type: e.target.value as MonitorRule['type'] }))} className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs text-foreground">
+          <select value={draft.type} onChange={e => changeType(e.target.value as MonitorRule['type'])} className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs text-foreground">
             {(options.data?.types ?? []).map(t => <option key={t.key} value={t.key}>{t.label}</option>)}
           </select>
         </label>
       </div>
 
-      {/* 作用范围 */}
-      <div className="space-y-2">
-        <span className="text-[11px] text-muted">作用范围</span>
-        <div className="flex items-center gap-2">
-          <select value={draft.scope} onChange={e => setDraft(d => ({ ...d, scope: e.target.value as MonitorRule['scope'] }))} className="h-9 w-32 rounded-btn border border-border bg-base px-3 text-xs text-foreground">
-            {(options.data?.scopes ?? []).map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
-          </select>
-          {draft.scope === 'symbols' && (
-            <div className="flex-1 flex flex-wrap items-center gap-1.5">
-              {draft.symbols.map(sym => (
-                <span key={sym} className="inline-flex items-center gap-1 rounded bg-elevated px-1.5 py-0.5 text-[10px] text-secondary">
-                  {sym}
-                  <button onClick={() => setDraft(d => ({ ...d, symbols: d.symbols.filter(s => s !== sym) }))} className="text-muted hover:text-danger cursor-pointer">
-                    <X className="h-2.5 w-2.5" />
-                  </button>
-                </span>
-              ))}
-              <div className="relative">
-                <input
-                  value={symbolQuery}
-                  onChange={e => setSymbolQuery(e.target.value)}
-                  placeholder="搜索股票..."
-                  className="h-7 w-32 rounded border border-border bg-base pl-6 pr-2 text-[11px] text-foreground focus:outline-none focus:border-accent/50"
-                />
-                <Search className="absolute left-1.5 top-1.5 h-3.5 w-3.5 text-muted" />
-                {symbolSearch.data && symbolSearch.data.results.length > 0 && (
-                  <div className="absolute z-10 mt-1 max-h-48 w-48 overflow-auto rounded border border-border bg-surface shadow-lg">
-                    {symbolSearch.data.results.map(r => (
-                      <button key={r.symbol} onClick={() => addSymbol(r.symbol)} className="block w-full px-2 py-1 text-left text-[11px] hover:bg-elevated cursor-pointer">
-                        <span className="font-mono text-foreground/80">{r.symbol}</span>
-                        <span className="ml-1 text-muted">{r.name}</span>
-                      </button>
-                    ))}
-                  </div>
-                )}
+      {draft.type === 'position' ? (
+        <fieldset className="space-y-2">
+          <legend className="text-[11px] text-muted">监控范围 · 持仓</legend>
+          <p className="text-[10px] text-muted">选择需要监控的持仓；每项明确显示标的与账户。</p>
+          <div className="max-h-44 space-y-1 overflow-auto rounded-btn border border-border bg-base p-2" aria-describedby="position-selection-help">
+            {holdings.isLoading ? <span className="block px-2 py-2 text-xs text-muted">正在加载持仓…</span> : (holdings.data?.positions ?? []).length === 0 ? <span className="block px-2 py-2 text-xs text-warning">暂无可选择持仓，请先添加持仓。</span> : (holdings.data?.positions ?? []).map(position => (
+              <label key={position.id} className="flex min-h-9 cursor-pointer items-center gap-2 rounded px-2 text-xs hover:bg-elevated">
+                <input type="checkbox" checked={(draft.position_ids ?? []).includes(position.id)} onChange={() => togglePosition(position.id)} className="h-4 w-4 accent-accent" />
+                <span className="font-mono text-foreground">{position.instrument_symbol}</span>
+                <span className="min-w-0 truncate text-secondary">{accountNames.get(position.account_id) ?? `账户 ${position.account_id}`}</span>
+              </label>
+            ))}
+          </div>
+          <p id="position-selection-help" className="text-[10px] text-muted">已选择 {(draft.position_ids ?? []).length} 笔持仓。</p>
+        </fieldset>
+      ) : (
+        <div className="space-y-2">
+          <span className="text-[11px] text-muted">作用范围</span>
+          <div className="flex flex-wrap items-center gap-2">
+            <select value={draft.scope} onChange={e => setDraft(d => ({ ...d, scope: e.target.value as MonitorRule['scope'] }))} className="h-9 w-32 rounded-btn border border-border bg-base px-3 text-xs text-foreground">
+              {(options.data?.scopes ?? []).filter(scope => scope.key !== 'positions').map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
+            </select>
+            {draft.scope === 'symbols' && (
+              <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
+                {draft.symbols.map(sym => <span key={sym} className="inline-flex items-center gap-1 rounded bg-elevated px-1.5 py-0.5 text-[10px] text-secondary">{sym}<button type="button" onClick={() => setDraft(d => ({ ...d, symbols: d.symbols.filter(s => s !== sym) }))} className="text-muted hover:text-danger"><X className="h-2.5 w-2.5" /></button></span>)}
+                <div className="relative">
+                  <input value={symbolQuery} onChange={e => setSymbolQuery(e.target.value)} placeholder="搜索股票..." className="h-7 w-32 rounded border border-border bg-base pl-6 pr-2 text-[11px] text-foreground focus:outline-none focus:border-accent/50" />
+                  <Search className="absolute left-1.5 top-1.5 h-3.5 w-3.5 text-muted" />
+                  {symbolSearch.data && symbolSearch.data.results.length > 0 && <div className="absolute z-10 mt-1 max-h-48 w-48 overflow-auto rounded border border-border bg-surface shadow-lg">{symbolSearch.data.results.map(r => <button type="button" key={r.symbol} onClick={() => addSymbol(r.symbol)} className="block w-full px-2 py-1 text-left text-[11px] hover:bg-elevated"><span className="font-mono text-foreground/80">{r.symbol}</span><span className="ml-1 text-muted">{r.name}</span></button>)}</div>}
+                </div>
               </div>
-            </div>
-          )}
-          {draft.scope === 'all' && <span className="text-[11px] text-muted">对全市场所有股票生效</span>}
-          {draft.scope === 'sector' && <span className="text-[11px] text-muted/60">板块精确过滤(开发中,当前等同全市场)</span>}
+            )}
+            {draft.scope === 'all' && <span className="text-[11px] text-muted">对全市场所有股票生效</span>}
+          </div>
         </div>
-      </div>
+      )}
 
       {/* 触发条件 (非 strategy) */}
       {draft.type !== 'strategy' && (
@@ -397,116 +415,29 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
         </div>
       )}
 
-      {/* 通知设置 */}
-      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-        <label className="space-y-1.5">
-          <span className="text-[11px] text-muted">冷却期(秒)</span>
-          <input type="number" value={draft.cooldown_seconds} onChange={e => setDraft(d => ({ ...d, cooldown_seconds: parseInt(e.target.value) || 0 }))} min={0} className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs text-foreground" />
-        </label>
-        <label className="space-y-1.5">
-          <span className="text-[11px] text-muted">严重级别</span>
-          <select value={draft.severity} onChange={e => setDraft(d => ({ ...d, severity: e.target.value as MonitorRule['severity'] }))} className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs text-foreground">
-            {(options.data?.severities ?? []).map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
-          </select>
-        </label>
-        <label className="space-y-1.5 md:col-span-1">
-          <span className="text-[11px] text-muted">自定义提示(可选)</span>
-          <input value={draft.message} onChange={e => setDraft(d => ({ ...d, message: e.target.value }))} placeholder="留空用默认文案" className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs text-foreground" />
-        </label>
-      </div>
-
-      {/* Webhook 推送 — 飞书 / 企业微信 可用, QMT/ptrade 待定 */}
-      <div className="rounded-btn border border-border/40 bg-base/40 p-3 space-y-2">
-        <div className="flex items-center gap-1.5">
-          <span className="text-[11px] font-medium text-foreground">Webhook 推送</span>
-          <span className="text-[9px] text-muted">触发时推送告警到外部</span>
+      {/* 通知与时间 */}
+      <section className="space-y-3 rounded-btn border border-border/40 bg-base/40 p-3">
+        <h3 className="text-[11px] font-medium text-foreground">通知与时间</h3>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <label className="space-y-1.5"><span className="text-[11px] text-muted">严重级别</span><select value={draft.severity} onChange={e => setDraft(d => ({ ...d, severity: e.target.value as MonitorRule['severity'] }))} className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs text-foreground">{(options.data?.severities ?? []).map(s => <option key={s.key} value={s.key}>{s.label}</option>)}</select></label>
+          <label className="space-y-1.5"><span className="text-[11px] text-muted">冷却期（秒）</span><input type="number" value={draft.cooldown_seconds} onChange={e => setDraft(d => ({ ...d, cooldown_seconds: parseInt(e.target.value) || 0 }))} min={0} className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs text-foreground" /></label>
+          <label className="space-y-1.5"><span className="text-[11px] text-muted">生效开始时间</span><input type="time" value={draft.active_time_start ?? ''} onChange={e => setDraft(d => ({ ...d, active_time_start: e.target.value || null, active_time_end: e.target.value ? (d.active_time_end ?? '23:59') : null }))} className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs text-foreground" /></label>
+          <label className="space-y-1.5"><span className="text-[11px] text-muted">生效结束时间</span><input type="time" value={draft.active_time_end ?? ''} onChange={e => setDraft(d => ({ ...d, active_time_end: e.target.value || null, active_time_start: e.target.value ? (d.active_time_start ?? '00:00') : null }))} className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs text-foreground" /></label>
         </div>
-
-        {/* 渠道列表 */}
-        <div className="space-y-1.5">
-          {/* 飞书 (可用) */}
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={(draft.webhook_channels ?? []).includes('feishu')}
-              onChange={() => toggleChannel('feishu')}
-              className="h-3 w-3 accent-accent cursor-pointer"
-            />
-            <span className="text-[11px] text-foreground">飞书</span>
-            <span className="text-[9px] text-muted">群推送 Webhook</span>
-            {(draft.webhook_channels ?? []).includes('feishu') && (
-              <span className={`ml-auto text-[9px] ${feishuConfigured ? 'text-emerald-500' : 'text-warning'}`}>
-                {feishuConfigured ? '已配置' : '未配置'}
-              </span>
-            )}
-          </label>
-
-          {/* 企业微信 (可用) */}
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={(draft.webhook_channels ?? []).includes('wecom')}
-              onChange={() => toggleChannel('wecom')}
-              className="h-3 w-3 accent-accent cursor-pointer"
-            />
-            <span className="text-[11px] text-foreground">企业微信</span>
-            <span className="text-[9px] text-muted">群推送 Webhook</span>
-            {(draft.webhook_channels ?? []).includes('wecom') && (
-              <span className={`ml-auto text-[9px] ${wecomConfigured ? 'text-emerald-500' : 'text-warning'}`}>
-                {wecomConfigured ? '已配置' : '未配置'}
-              </span>
-            )}
-          </label>
-
-          {/* QMT (待定) */}
-          <label className="flex items-center gap-2 cursor-not-allowed opacity-50">
-            <input type="checkbox" disabled className="h-3 w-3 accent-accent" />
-            <span className="text-[11px] text-secondary">QMT</span>
-            <span className="rounded bg-muted/10 px-1 py-px text-[9px] text-muted">待定</span>
-          </label>
-
-          {/* ptrade (待定) */}
-          <label className="flex items-center gap-2 cursor-not-allowed opacity-50">
-            <input type="checkbox" disabled className="h-3 w-3 accent-accent" />
-            <span className="text-[11px] text-secondary">ptrade</span>
-            <span className="rounded bg-muted/10 px-1 py-px text-[9px] text-muted">待定</span>
-          </label>
+        <label className="flex cursor-pointer items-start gap-2 text-xs text-secondary"><input type="checkbox" checked={draft.bypass_quiet_period ?? false} onChange={e => setDraft(d => ({ ...d, bypass_quiet_period: e.target.checked }))} className="mt-0.5 h-4 w-4 accent-accent" /><span><span className="block text-foreground">高优先级可绕过静默时段</span><span className="mt-1 block text-[10px] text-muted">规则命中始终会保存；静默时段只影响外部投递。</span></span></label>
+        <div className="space-y-2 border-t border-border/60 pt-3">
+          <span className="text-[11px] text-muted">投递渠道</span>
+          <label className="flex cursor-pointer items-center gap-2 text-xs"><input type="checkbox" checked={(draft.webhook_channels ?? []).includes('feishu')} onChange={() => toggleChannel('feishu')} className="h-4 w-4 accent-accent" /><span className="text-foreground">飞书</span><span className={`ml-auto text-[10px] ${feishuConfigured ? 'text-emerald-500' : 'text-warning'}`}>{feishuConfigured ? '已配置' : '未配置'}</span></label>
+          <label className="flex cursor-pointer items-center gap-2 text-xs"><input type="checkbox" checked={(draft.webhook_channels ?? []).includes('telegram')} onChange={() => toggleChannel('telegram')} className="h-4 w-4 accent-accent" /><span className="text-foreground">Telegram</span><span className={`ml-auto text-[10px] ${telegramConfigured ? 'text-emerald-500' : 'text-warning'}`}>{telegramConfigured ? '已配置' : '未配置'}</span></label>
+          {(draft.webhook_channels ?? []).some(channel => (channel === 'feishu' && !feishuConfigured) || (channel === 'telegram' && !telegramConfigured)) && <p className="text-[10px] text-warning">所选渠道尚未配置，<Link to="/settings?tab=monitoring" className="text-accent hover:text-accent/80">前往设置</Link></p>}
         </div>
-
-        {/* 勾选了某渠道但该渠道地址未配置 → 提示前往设置 */}
-        {(draft.webhook_channels ?? []).length > 0 && (() => {
-          const selected = draft.webhook_channels ?? []
-          const unconfigured: string[] = []
-          if (selected.includes('feishu') && !feishuConfigured) unconfigured.push('飞书')
-          if (selected.includes('wecom') && !wecomConfigured) unconfigured.push('企业微信')
-          if (unconfigured.length === 0) return null
-          return (
-            <p className="text-[10px] leading-relaxed text-warning/80">
-              {unconfigured.join('、')}尚未配置,
-              <Link to="/settings?tab=monitoring" className="text-accent hover:text-accent/80">前往设置页配置 →</Link>
-            </p>
-          )
-        })()}
-        {(draft.webhook_channels ?? []).length > 0 && (() => {
-          const selected = draft.webhook_channels ?? []
-          const ready: string[] = []
-          if (selected.includes('feishu') && feishuConfigured) ready.push('飞书')
-          if (selected.includes('wecom') && wecomConfigured) ready.push('企业微信')
-          if (ready.length === 0) return null
-          return (
-            <p className="text-[10px] leading-relaxed text-muted">
-              命中本规则时,告警将推送到已配置的{ready.join(' + ')}。
-            </p>
-          )
-        })()}
-      </div>
-
+      </section>
       {error && <div className="rounded-btn border border-danger/30 bg-danger/5 px-3 py-2 text-xs text-danger">{error}</div>}
 
       <div className="flex justify-end gap-2">
-        <button onClick={onClose} className="px-4 py-1.5 rounded-btn bg-elevated text-secondary text-xs cursor-pointer">取消</button>
+        <button onClick={onClose} className="px-4 py-1.5 rounded-btn bg-elevated text-secondary text-xs cursor-pointer">返回监控中心</button>
         <button onClick={() => save.mutate()} disabled={save.isPending} className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-btn bg-accent text-base text-xs font-medium disabled:opacity-50 cursor-pointer">
-          <Save className="h-3.5 w-3.5" />保存
+          <Save className="h-3.5 w-3.5" />{save.isPending ? '正在保存…' : '保存规则'}
         </button>
       </div>
     </div>
