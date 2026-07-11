@@ -7,15 +7,15 @@
 
 ### Core Merger
 
-- [ ] **CORE-01**: User can synchronize A-share instruments, daily prices, adjustment factors, financial data, and enriched indicators into the governed Parquet data lake.
-- [ ] **CORE-02**: Operator can verify the time-series data contract, including primary keys, time semantics, repair windows, and schema-drift checks for synchronized data.
-- [ ] **CORE-03**: User can manage accounts and positions and view current position-level profit and loss.
-- [ ] **CORE-04**: User can define position, price, and market monitoring rules; receive a notification when a rule matches; and review persisted alert history.
-- [ ] **CORE-05**: User can view current market and position updates through the shared real-time SSE pipeline.
-- [ ] **CORE-06**: Operator can start the Phase 1 workflow with one Docker Compose command and run an automated check covering data sync, position maintenance, a price-rule trigger, notification delivery, and SSE display without an external database or queue.
-- [ ] **CORE-07**: Operator can update each adopted upstream integration through a documented synchronization path without replacing the shared data-lake or operational-state boundaries.
-- [ ] **PLAN-01**: User can generate deterministic market state, quality-screened pools, and a playbook with entry range, stop, target, and position sizing.
-- [ ] **PLAN-02**: User can compare a deterministic playbook baseline with field-bounded, audited AI adjustments and replay historical decisions with AI influence disabled.
+- [x] **CORE-01**: User can synchronize A-share instruments, daily prices, adjustment factors, financial data, and enriched indicators into the governed Parquet data lake.
+- [x] **CORE-02**: Operator can verify the time-series data contract, including primary keys, time semantics, repair windows, and schema-drift checks for synchronized data.
+- [x] **CORE-03**: User can manage accounts and positions and view current position-level profit and loss.
+- [x] **CORE-04**: User can define position, price, and market monitoring rules; receive a notification when a rule matches; and review persisted alert history.
+- [x] **CORE-05**: User can view current market and position updates through the shared real-time SSE pipeline.
+- [x] **CORE-06**: Operator can start the Phase 1 workflow with one Docker Compose command and run an automated check covering data sync, position maintenance, a price-rule trigger, notification delivery, and SSE display without an external database or queue.
+- [x] **CORE-07**: Operator can update each adopted upstream integration through a documented synchronization path without replacing the shared data-lake or operational-state boundaries.
+- [x] **PLAN-01**: User can generate deterministic market state, quality-screened pools, and a playbook with entry range, stop, target, and position sizing.
+- [x] **PLAN-02**: User can compare a deterministic playbook baseline with field-bounded, audited AI adjustments and replay historical decisions with AI influence disabled.
 
 ### Factor And Strategy Research
 
@@ -57,15 +57,15 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| CORE-01 | Phase 1 | Pending |
-| CORE-02 | Phase 1 | Pending |
-| CORE-03 | Phase 1 | Pending |
-| CORE-04 | Phase 1 | Pending |
-| CORE-05 | Phase 1 | Pending |
-| CORE-06 | Phase 1 | Pending |
-| CORE-07 | Phase 1 | Pending |
-| PLAN-01 | Phase 1 | Pending |
-| PLAN-02 | Phase 1 | Pending |
+| CORE-01 | Phase 1 | Complete |
+| CORE-02 | Phase 1 | Complete |
+| CORE-03 | Phase 1 | Complete |
+| CORE-04 | Phase 1 | Complete |
+| CORE-05 | Phase 1 | Complete |
+| CORE-06 | Phase 1 | Complete |
+| CORE-07 | Phase 1 | Complete |
+| PLAN-01 | Phase 1 | Complete |
+| PLAN-02 | Phase 1 | Complete |
 | FACT-01 | Phase 2 | Pending |
 | FACT-02 | Phase 2 | Pending |
 | FACT-03 | Phase 2 | Pending |
@@ -82,6 +82,7 @@
 | FORE-01 | Phase 5 | Optional v2 |
 
 **Coverage:**
+
 - v1 requirements: 20 total
 - Mapped to phases: 20
 - Unmapped: 0
