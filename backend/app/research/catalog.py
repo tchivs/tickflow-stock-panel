@@ -462,16 +462,10 @@ class ExperimentCatalog:
             (
                 "date window differs",
                 [
-                    _value_at(
-                        config,
-                        ("start",),
-                        ("start_date",),
-                        ("window", "start"),
+                    (
+                        _value_at(config, ("start",), ("start_date",), ("window", "start")),
+                        _value_at(config, ("end",), ("end_date",), ("window", "end")),
                     )
-                    for config in configs
-                ]
-                + [
-                    _value_at(config, ("end",), ("end_date",), ("window", "end"))
                     for config in configs
                 ],
             ),
@@ -490,12 +484,9 @@ class ExperimentCatalog:
             (
                 "governed data manifest revision/fingerprint differs",
                 [
-                    _value_at(
-                        manifest,
-                        ("revision",),
-                        ("data_revision",),
-                        ("fingerprint",),
-                        ("schema_fingerprint",),
+                    (
+                        _value_at(manifest, ("revision",), ("data_revision",)),
+                        _value_at(manifest, ("fingerprint",), ("schema_fingerprint",)),
                     )
                     for manifest in manifests
                 ],
