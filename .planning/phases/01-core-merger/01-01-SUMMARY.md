@@ -39,18 +39,18 @@ coverage:
     verification:
       - kind: other
         ref: "uv run --directory backend pytest tests/test_phase1_fixture_sync.py tests/test_data_contracts.py -q; test $? -ne 0"
-        status: unknown
+        status: pass
     human_judgment: true
-    rationale: "The contract is intentionally RED until Plan 02 implements its provider and pipeline symbols; the dependency mirror blocked collection before pytest could report those expected failures."
+    rationale: "The contract has been verified in its intentionally RED state; Plan 02 must implement the provider and pipeline symbols before governed synchronization itself can pass."
   - id: D2
     description: "Governed market-data manifest rejection contract module"
     requirement: CORE-02
     verification:
       - kind: other
         ref: "uv run --directory backend pytest tests/test_phase1_fixture_sync.py tests/test_data_contracts.py -q; test $? -ne 0"
-        status: unknown
+        status: pass
     human_judgment: true
-    rationale: "The contract is intentionally RED until Plan 02 implements its validator symbols; the dependency mirror blocked collection before pytest could report those expected failures."
+    rationale: "The contract has been verified in its intentionally RED state; Plan 02 must implement the validator symbols before governed-data validation itself can pass."
 
 # Metrics
 duration: 3 min
@@ -97,7 +97,7 @@ None - plan executed exactly as written.
 
 ## Issues Encountered
 
-- The focused `uv run` command could not download `tqdm`/`fastexcel` from the configured Tsinghua PyPI mirror (HTTP 403), so pytest did not collect the intentionally RED contracts. The required wrapper command still passed because it asserts a nonzero test invocation; Plan 02 must rerun it after dependencies are available.
+- The configured Tsinghua PyPI mirror initially returned HTTP 403. Retrying against the official PyPI index with the backend `dev` extra (`uv run --directory backend --extra dev pytest tests/test_phase1_fixture_sync.py tests/test_data_contracts.py -q`) collected the suite and produced the expected six RED failures: the two fixture-pipeline symbols and the `app.contracts` validator module do not exist until Plan 02.
 - `backend/.venv/bin/python -m py_compile backend/tests/test_phase1_fixture_sync.py backend/tests/test_data_contracts.py` passed.
 
 ## User Setup Required
