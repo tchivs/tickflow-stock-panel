@@ -191,3 +191,55 @@ def test_registered_strategy_snapshot_and_comparison_expose_deltas_without_winne
     ]
     assert "winner" not in rendered
     assert "ranking" not in rendered
+
+
+def test_strategy_comparison_warns_only_for_changed_governed_identity(tmp_path: Path) -> None:
+    catalog, _ = _catalog(tmp_path)
+
+    def retain(run_id: str, revision: str, fingerprint: str):
+        result = StrategyBacktestResult(
+            run_id=run_id,
+            config={
+                "symbols": ["000001.SZ"],
+                "asset_type": "stock",
+                "start": "2025-01-01",
+                "end": "2025-01-31",
+                "forward_return_horizon": 5,
+            },
+            stats={"annual_return": 0.12, "panel_rows": 50},
+            trades=[{"symbol": "000001.SZ", "side": "buy"}],
+            strategy_info={"id": "registered-mean-reversion", "source": "builtin"},
+            governed_input_manifest={"revision": revision, "fingerprint": fingerprint},
+        )
+        snapshot = catalog.record_strategy_backtest(
+            result,
+            strategy_id="registered-mean-reversion",
+            strategy_version="v3",
+            input_manifest={
+                "source": "governed_backtest_engine",
+                "revision": revision,
+                "fingerprint": fingerprint,
+                "rows": 50,
+            },
+            artifacts=(_artifact(tmp_path, run_id, "result.json"),),
+        )
+        return catalog.retain(snapshot.id)
+
+    baseline = retain("a" * 32, "governed-v1", "1" * 64)
+    changed = retain("b" * 32, "governed-v2", "2" * 64)
+
+    comparison = catalog.compare([baseline.id, changed.id]).as_dict()
+    assert comparison["warnings"] == ["governed data manifest revision/fingerprint differs"]
+    assert comparison["deltas"]["governed_data_input"]["equal"] is False
+    governed_values = comparison["deltas"]["governed_data_input"]["values"]
+    assert governed_values[baseline.id] == {
+        "source": "governed_backtest_engine", "revision": "governed-v1", "fingerprint": "1" * 64, "rows": 50
+    }
+    assert governed_values[changed.id] == {
+        "source": "governed_backtest_engine", "revision": "governed-v2", "fingerprint": "2" * 64, "rows": 50
+    }
+    assert "winner" not in comparison
+    assert "ranking" not in comparison
+
+    identical = retain("c" * 32, "governed-v1", "1" * 64)
+    assert catalog.compare([baseline.id, identical.id]).as_dict()["warnings"] == []
