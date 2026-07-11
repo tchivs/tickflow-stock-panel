@@ -108,3 +108,68 @@ def test_plan_01_persists_immutable_baseline_and_initial_final_before_review(tmp
         assert "immutable" in str(exc)
     else:
         raise AssertionError("persisted baseline must remain immutable after audit association")
+
+
+def test_plan_01_api_generates_and_retrieves_persisted_baseline(tmp_path):
+    """The host route reads governed history, validates input, and exposes provenance."""
+    import polars as pl
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.api.decision import router as decision_router
+    from app.operational.repository import OperationalRepository
+
+    class GovernedRepository:
+        def get_daily(self, symbol, start, end, columns):
+            assert symbol == "600000.SH"
+            assert end == date(2024, 1, 22)
+            return pl.DataFrame(
+                {
+                    "date": [date(2024, 1, day) for day in range(2, 23)],
+                    "open": [10.0] * 21,
+                    "high": [10.2] * 21,
+                    "low": [9.8] * 21,
+                    "close": [10.0] * 21,
+                    "ma5": [9.9] * 21,
+                    "ma10": [9.8] * 21,
+                    "ma20": [9.0] * 21,
+                }
+            ).select(columns)
+
+    app = FastAPI()
+    app.include_router(decision_router)
+    repository = OperationalRepository(tmp_path / "operational.db")
+    repository.migrate()
+    app.state.operational = repository
+    app.state.repo = GovernedRepository()
+    client = TestClient(app)
+
+    invalid = client.post("/api/decision/runs", json={"symbol": "600000.SH", "as_of": "not-a-date"})
+    assert invalid.status_code == 400
+
+    generated = client.post(
+        "/api/decision/runs",
+        json={
+            "symbol": "600000.SH",
+            "as_of": "2024-01-22",
+            "engine_config_version": "playbook-v1",
+            "configuration": {**_governed_snapshot()["config"], "score": "8.00", "market_state": "震荡", "position_cap": "0.50"},
+        },
+    )
+    assert generated.status_code == 201
+    created = generated.json()
+    assert created["data_as_of"] == "2024-01-22"
+    assert created["engine_config_version"] == "playbook-v1"
+    assert created["baseline"] == created["final"]
+    assert created["baseline"]["entry_low"] == "9.7000"
+
+    retrieved = client.get(f"/api/decision/runs/{created['id']}")
+    assert retrieved.status_code == 200
+    assert retrieved.json() == created
+
+
+def test_plan_01_main_application_registers_decision_router():
+    """Decision routes stay attached to the existing authenticated Tickflow host."""
+    from app.main import app
+
+    assert any(route.path == "/api/decision/runs" for route in app.routes)
