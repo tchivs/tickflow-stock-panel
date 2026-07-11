@@ -344,6 +344,9 @@ def _begin_strategy_experiment(request: Request, strategy_id: str) -> str | None
 def _strategy_input_manifest(result, strategy_id: str) -> dict:
     config = result.config if isinstance(result.config, dict) else {}
     stats = result.stats if isinstance(result.stats, dict) else {}
+    governed = getattr(result, "governed_input_manifest", {})
+    if not isinstance(governed, dict):
+        governed = {}
     symbols = config.get("symbols")
     return {
         "source": "governed_backtest_engine",
@@ -353,6 +356,7 @@ def _strategy_input_manifest(result, strategy_id: str) -> dict:
         "start": config.get("start"),
         "end": config.get("end"),
         "row_count": stats.get("panel_rows"),
+        **{key: governed[key] for key in ("revision", "fingerprint") if key in governed},
     }
 
 

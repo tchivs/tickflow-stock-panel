@@ -46,6 +46,12 @@ class StubStrategyBacktestService:
             benchmark_curve=[{"date": "2024-01-02", "equity": 1.0}],
             trades=[{"symbol": "000001.SZ", "side": "buy"}],
             strategy_info={"id": config.strategy_id, "source": "builtin"},
+            governed_input_manifest={
+                "loader": "BacktestEngine.load_panel",
+                "source_kind": "governed_enriched_parquet",
+                "revision": "governed-revision-v1",
+                "fingerprint": "governed-fingerprint-v1",
+            },
         )
 
 
@@ -74,6 +80,11 @@ def test_sync_registered_strategy_handoff_uses_server_snapshot_only(tmp_path: Pa
         "/api/backtest/strategy/run", json={"strategy_id": "registered", "metrics": {"annual_return": 999}}
     )
     assert rejected_metrics.status_code == 422
+    rejected_manifest = client.post(
+        "/api/backtest/strategy/run",
+        json={"strategy_id": "registered", "governed_input_manifest": {"revision": "forged"}},
+    )
+    assert rejected_manifest.status_code == 422
     run = client.post("/api/backtest/strategy/run", json={"strategy_id": "registered"})
     assert run.status_code == 200
     handle = run.json()["research_execution_handle"]
@@ -84,6 +95,17 @@ def test_sync_registered_strategy_handoff_uses_server_snapshot_only(tmp_path: Pa
     retained = client.post(f"/api/research/strategy-executions/{handle}/retain")
     assert retained.status_code == 200
     assert retained.json()["metrics"]["stats"] == {"annual_return": 0.12, "panel_rows": 2}
+    assert retained.json()["input_manifest"] == {
+        "source": "governed_backtest_engine",
+        "strategy_id": "registered",
+        "asset_type": "stock",
+        "resolved_symbols": ["000001.SZ"],
+        "start": retained.json()["resolved_config"]["start"],
+        "end": retained.json()["resolved_config"]["end"],
+        "row_count": 2,
+        "revision": "governed-revision-v1",
+        "fingerprint": "governed-fingerprint-v1",
+    }
     assert retained.json()["artifacts"]
     assert client.get("/api/research/comparison/candidates").json()["experiments"][0]["id"] == retained.json()["id"]
 
@@ -109,4 +131,7 @@ def test_failed_cancelled_and_sse_strategy_runs_never_bypass_handoff_gates(tmp_p
     matched = re.search(r'event: research\ndata: (\{[^\n]+\})', stream.text)
     assert matched is not None
     streamed_handle = json.loads(matched.group(1))["execution_handle"]
-    assert client.post(f"/api/research/strategy-executions/{streamed_handle}/retain").status_code == 200
+    streamed = client.post(f"/api/research/strategy-executions/{streamed_handle}/retain")
+    assert streamed.status_code == 200
+    assert streamed.json()["input_manifest"]["revision"] == "governed-revision-v1"
+    assert streamed.json()["input_manifest"]["fingerprint"] == "governed-fingerprint-v1"
