@@ -26,12 +26,14 @@ logger = logging.getLogger(__name__)
 
 # ── 常量 ────────────────────────────────────────────────
 ID_RE = re.compile(r"^[a-z0-9_]{1,40}$")
-RULE_TYPES = {"strategy", "signal", "price", "market", "ladder"}
-SCOPES = {"symbols", "all", "sector"}
+RULE_TYPES = {"strategy", "signal", "price", "market", "ladder", "position"}
+SCOPES = {"symbols", "all", "sector", "positions"}
 LOGICS = {"and", "or"}
 DIRECTIONS = {"entry", "exit", "both"}
 SEVERITIES = {"info", "warn", "critical"}
 OPS = {">", ">=", "<", "<=", "==", "!="}
+DELIVERY_CHANNELS = {"feishu", "telegram", "wecom"}
+TIME_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
 # ladder 规则: 封单监控的指标 (量=手, 额=元)
 LADDER_METRICS = {"sealed_vol", "sealed_amount"}
 # ladder 规则: 方向 (up=涨停炸板预警, down=跌停翘板预警)
@@ -148,17 +150,27 @@ def validate(rule: dict) -> None:
                 raise ValueError(f"第 {i+1} 个条件: op {op!r} 非法 (应为 truth 或 {OPS})")
 
     # scope 校验
-    if rule.get("scope", "symbols") not in SCOPES:
+    scope = rule.get("scope", "symbols")
+    if scope not in SCOPES:
         raise ValueError(f"scope 必须是 {SCOPES} 之一")
-    if rule.get("scope") == "symbols":
+    if scope == "symbols":
         syms = rule.get("symbols")
         if not isinstance(syms, list) or len(syms) == 0:
             raise ValueError("scope=symbols 时 symbols 不能为空")
+    if scope == "positions":
+        position_ids = rule.get("position_ids")
+        if not isinstance(position_ids, list) or not position_ids or any(
+            not isinstance(position_id, (str, int)) or isinstance(position_id, bool)
+            for position_id in position_ids
+        ):
+            raise ValueError("scope=positions 时 position_ids 不能为空且必须为持仓 ID")
     # sector 作用域的板块 JOIN 尚未实现: _apply_scope 目前会退化为「全市场」,
     # 一条本意针对某板块的规则会对全市场每只命中都触发(告警风暴)。在板块 JOIN
     # 落地前, 拒绝创建 sector 规则(fail-closed), 避免用户建出会刷屏的规则。
-    if rule.get("scope") == "sector":
+    if scope == "sector":
         raise ValueError("scope=sector 暂未支持(板块 JOIN 未实现),请改用 scope=symbols 指定标的或 scope=all")
+    if rule.get("type") == "position" and scope != "positions":
+        raise ValueError("position 规则必须使用 scope=positions")
 
     # 其余枚举
     if rule.get("severity", "info") not in SEVERITIES:
@@ -166,6 +178,18 @@ def validate(rule: dict) -> None:
     cd = rule.get("cooldown_seconds", 3600)
     if not isinstance(cd, int) or cd < 0:
         raise ValueError("cooldown_seconds 必须是非负整数")
+    start = rule.get("active_time_start")
+    end = rule.get("active_time_end")
+    if (start is None) != (end is None):
+        raise ValueError("active_time_start 和 active_time_end 必须同时设置")
+    if start is not None:
+        if not isinstance(start, str) or not isinstance(end, str) or not TIME_RE.match(start) or not TIME_RE.match(end) or start >= end:
+            raise ValueError("active 时间范围必须是有效且递增的 HH:MM")
+    if not isinstance(rule.get("bypass_quiet_period", False), bool):
+        raise ValueError("bypass_quiet_period 必须是布尔值")
+    channels = rule.get("webhook_channels", [])
+    if not isinstance(channels, list) or any(channel not in DELIVERY_CHANNELS for channel in channels):
+        raise ValueError("channel 必须是已批准的 Feishu、Telegram 或企业微信渠道")
 
 
 def normalize(rule: dict) -> dict:
@@ -175,6 +199,7 @@ def normalize(rule: dict) -> dict:
     r.setdefault("asset_type", "stock")
     r.setdefault("scope", "symbols")
     r.setdefault("symbols", [])
+    r.setdefault("position_ids", [])
     r.setdefault("sector", None)
     r.setdefault("strategy_id", None)
     # direction 默认值: ladder 用 "up", 其余用 "entry"
@@ -185,19 +210,18 @@ def normalize(rule: dict) -> dict:
     r.setdefault("threshold", 0)
     r.setdefault("logic", "and")
     r.setdefault("cooldown_seconds", 3600)
+    r.setdefault("active_time_start", None)
+    r.setdefault("active_time_end", None)
+    r.setdefault("bypass_quiet_period", False)
     r.setdefault("severity", "info")
     r.setdefault("message", "")
     r.setdefault("webhook_url", "")
     r.setdefault("webhook_enabled", False)
-    # webhook_channels: 命中时推送的外部渠道 (合法值 'feishu' | 'wecom')。
-    # 向后兼容: 老规则只有 webhook_enabled 布尔 (当时勾选即飞书+企业微信双推),
-    # 这里把 webhook_enabled=True 但未带 webhook_channels 的老规则迁移为 ['feishu','wecom'],
-    # 还原其当时的实际行为, 用户无感知。
+    # 兼容旧规则的企业微信渠道；新持仓规则可明确选择 Feishu/Telegram。
     if r.get("webhook_channels") is None:
         r["webhook_channels"] = ["feishu", "wecom"] if r.get("webhook_enabled") else []
     else:
-        # 防御性过滤, 只保留合法渠道
-        r["webhook_channels"] = [c for c in r["webhook_channels"] if c in ("feishu", "wecom")]
+        r["webhook_channels"] = list(r["webhook_channels"])
     r.setdefault("created_at", datetime.now(timezone.utc).isoformat())
     return r
 

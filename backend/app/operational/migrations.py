@@ -93,6 +93,39 @@ MIGRATIONS: tuple[str, ...] = (
     CREATE INDEX idx_adjustment_audit_run_id ON adjustment_audit(run_id, id);
     CREATE INDEX idx_replay_runs_as_of ON replay_runs(as_of);
     """,
+    """
+    CREATE TABLE monitor_rules (
+        id TEXT PRIMARY KEY,
+        rule_json TEXT NOT NULL,
+        enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE alert_events (
+        id TEXT PRIMARY KEY,
+        rule_id TEXT NOT NULL,
+        source TEXT NOT NULL,
+        type TEXT NOT NULL,
+        symbol TEXT NOT NULL,
+        name TEXT NOT NULL,
+        price REAL,
+        change_pct REAL,
+        severity TEXT NOT NULL,
+        conditions_json TEXT NOT NULL,
+        account_id TEXT,
+        position_id TEXT,
+        valuation_source TEXT,
+        valuation_as_of TEXT,
+        occurred_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        event_json TEXT NOT NULL
+    );
+
+    CREATE INDEX idx_monitor_rules_updated_at ON monitor_rules(updated_at DESC);
+    CREATE INDEX idx_alert_events_rule_occurred_at ON alert_events(rule_id, occurred_at DESC);
+    CREATE INDEX idx_alert_events_position_occurred_at ON alert_events(position_id, occurred_at DESC);
+    """,
 )
 
 

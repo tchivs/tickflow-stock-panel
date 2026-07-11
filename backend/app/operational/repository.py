@@ -299,6 +299,98 @@ class OperationalRepository:
             return _record(row)  # type: ignore[return-value]
 
     @staticmethod
+    def _json_snapshot(value: Any, field: str) -> str:
+        try:
+            return json.dumps(value, default=str, sort_keys=True, separators=(",", ":"))
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"{field} must be JSON serializable") from error
+
+    def save_monitor_rule(self, rule: Mapping[str, Any]) -> dict[str, Any]:
+        """Persist the validated Monitor-domain rule without creating another rule model."""
+        rule_id = rule.get("id")
+        if not isinstance(rule_id, str) or not rule_id:
+            raise ValueError("monitor rule id is required")
+        now = _now()
+        serialized = self._json_snapshot(dict(rule), "monitor rule")
+        with self._connection() as connection, connection:
+            connection.execute(
+                """INSERT INTO monitor_rules (id, rule_json, enabled, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?)
+                   ON CONFLICT(id) DO UPDATE SET rule_json = excluded.rule_json,
+                                                enabled = excluded.enabled,
+                                                updated_at = excluded.updated_at""",
+                (rule_id, serialized, int(bool(rule.get("enabled", True))), rule.get("created_at", now), now),
+            )
+        return dict(rule)
+
+    def delete_monitor_rule(self, rule_id: str) -> bool:
+        with self._connection() as connection, connection:
+            return connection.execute("DELETE FROM monitor_rules WHERE id = ?", (rule_id,)).rowcount == 1
+
+    def record_alert_event(self, event: Mapping[str, Any]) -> dict[str, Any]:
+        """Atomically retain an immutable alert snapshot before SSE or delivery work."""
+        event_id = event.get("id") or uuid.uuid4().hex
+        rule_id = event.get("rule_id")
+        if not isinstance(event_id, str) or not event_id or not isinstance(rule_id, str) or not rule_id:
+            raise ValueError("alert event id and rule_id are required")
+        now = _now()
+        occurred_at = event.get("occurred_at") or now
+        if not isinstance(occurred_at, str) or not occurred_at:
+            raise ValueError("alert event occurred_at is required")
+        conditions = event.get("conditions", [])
+        if not isinstance(conditions, list):
+            raise ValueError("alert event conditions must be a list")
+        snapshot = dict(event)
+        snapshot["id"] = event_id
+        snapshot["occurred_at"] = occurred_at
+        with self._connection() as connection, connection:
+            connection.execute(
+                """INSERT INTO alert_events (
+                       id, rule_id, source, type, symbol, name, price, change_pct, severity,
+                       conditions_json, account_id, position_id, valuation_source, valuation_as_of,
+                       occurred_at, created_at, event_json
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    event_id,
+                    rule_id,
+                    str(event.get("source", "position")),
+                    str(event.get("type", "position")),
+                    str(event.get("symbol", "")),
+                    str(event.get("name", "")),
+                    event.get("price"),
+                    event.get("change_pct"),
+                    str(event.get("severity", "info")),
+                    self._json_snapshot(conditions, "alert event conditions"),
+                    None if event.get("account_id") is None else str(event["account_id"]),
+                    None if event.get("position_id") is None else str(event["position_id"]),
+                    event.get("valuation_source"),
+                    event.get("valuation_as_of"),
+                    occurred_at,
+                    now,
+                    self._json_snapshot(snapshot, "alert event"),
+                ),
+            )
+        persisted = self.get_alert_event(event_id)
+        assert persisted is not None
+        return persisted
+
+    def get_alert_event(self, event_id: str) -> dict[str, Any] | None:
+        with self._connection() as connection:
+            row = connection.execute("SELECT * FROM alert_events WHERE id = ?", (event_id,)).fetchone()
+        if row is None:
+            return None
+        record = dict(row)
+        event = json.loads(record.pop("event_json"))
+        event["conditions"] = json.loads(record.pop("conditions_json"))
+        event["account_id"] = record.pop("account_id")
+        event["position_id"] = record.pop("position_id")
+        event["valuation_source"] = record.pop("valuation_source")
+        event["valuation_as_of"] = record.pop("valuation_as_of")
+        event["occurred_at"] = record.pop("occurred_at")
+        event["created_at"] = record.pop("created_at")
+        return event
+
+    @staticmethod
     def _decision_snapshot_json(snapshot: Mapping[str, Any]) -> str:
         if not isinstance(snapshot, Mapping):
             raise ValueError("decision snapshot is required")

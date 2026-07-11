@@ -15,6 +15,7 @@ import datetime as _dt
 import logging
 import threading
 import time
+import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -316,8 +317,14 @@ class MonitorRuleEngine:
       - ★ cooldown 去重: 同一 (rule_id, symbol) 在冷却期内不重复触发
     """
 
-    def __init__(self, alert_handler: Callable[[dict], None] | None = None):
+    def __init__(
+        self,
+        alert_handler: Callable[[dict], None] | None = None,
+        *,
+        clock: Callable[[], _dt.datetime | float] | None = None,
+    ):
         self._alert_handler = alert_handler
+        self._clock = clock or time.time
         self._rules: dict[str, dict] = {}  # rule_id → rule
         # (rule_id, symbol) → 上次触发时间戳(秒)。用于 cooldown 去重。
         self._last_fire: dict[tuple[str, str], float] = {}
@@ -486,7 +493,7 @@ class MonitorRuleEngine:
         # list() 快照: 本方法跑在行情轮询线程, API 线程同时 add/remove 规则
         # 会触发 "dictionary changed size during iteration", 整轮告警丢失
         for rule_id, rule in list(self._rules.items()):
-            if rule.get("asset_type", "stock") != asset_type:
+            if rule.get("type") == "position" or rule.get("asset_type", "stock") != asset_type:
                 continue
             try:
                 events.extend(self._evaluate_rule(df, rule, now))
@@ -498,6 +505,82 @@ class MonitorRuleEngine:
         self._latest_strategy_results = self._building_strategy_results
 
         return events
+
+    def evaluate_positions(self, positions: pl.DataFrame) -> list[dict]:
+        """Evaluate selected holding rules after generic quote rules against explicit valuations."""
+        required = {"position_id", "account_id", "symbol", "close", "valuation_source", "valuation_as_of"}
+        if not self._rules or positions.is_empty() or not required.issubset(positions.columns):
+            return []
+        raw_now = self._clock()
+        if isinstance(raw_now, _dt.datetime):
+            current_time = raw_now if raw_now.tzinfo else raw_now.replace(tzinfo=_dt.timezone.utc)
+            now = current_time.timestamp()
+        else:
+            now = float(raw_now)
+            current_time = _dt.datetime.fromtimestamp(
+                now,
+                tz=_dt.timezone(_dt.timedelta(hours=8)),
+            )
+
+        events: list[dict] = []
+        for rule in list(self._rules.values()):
+            if rule.get("type") != "position" or not self._is_active_position_rule(rule, current_time):
+                continue
+            selected_ids = {str(position_id) for position_id in rule.get("position_ids", [])}
+            scoped = positions.filter(pl.col("position_id").cast(pl.String).is_in(selected_ids))
+            if scoped.is_empty():
+                continue
+            for row in _build_condition_mask(scoped, rule.get("conditions", []), rule.get("logic", "and")).iter_rows(named=True):
+                position_id = str(row["position_id"])
+                symbol = str(row["symbol"])
+                # A position rule must not hide a second selected holding that shares a symbol.
+                key = (rule["id"], f"{symbol}:{position_id}")
+                cooldown = rule.get("cooldown_seconds", 3600)
+                last = self._last_fire.get(key)
+                if last is not None and (now - last) < cooldown:
+                    continue
+                self._last_fire[key] = now
+                price = row.get("close")
+                name = row.get("name") or self._name_map.get(symbol, "")
+                conditions = [dict(condition) for condition in rule.get("conditions", [])]
+                events.append({
+                    "id": uuid.uuid4().hex,
+                    "ts": int(now * 1000),
+                    "occurred_at": current_time.isoformat(),
+                    "rule_id": rule["id"],
+                    "rule_name": rule.get("name", ""),
+                    "source": "position",
+                    "type": "position",
+                    "symbol": symbol,
+                    "name": name,
+                    "message": rule.get("message", "") or self._default_message(
+                        rule, ev_type="position", sym=symbol, name=name,
+                        pct=row.get("change_pct"), price=price, conditions=conditions,
+                    ),
+                    "price": price,
+                    "change_pct": row.get("change_pct"),
+                    "signals": [
+                        condition["field"] for condition in conditions
+                        if condition.get("op") == "truth" and row.get(condition["field"])
+                    ],
+                    "severity": rule.get("severity", "info"),
+                    "conditions": conditions,
+                    "logic": rule.get("logic", "and"),
+                    "account_id": row["account_id"],
+                    "position_id": row["position_id"],
+                    "valuation_source": row["valuation_source"],
+                    "valuation_as_of": row["valuation_as_of"],
+                })
+        return events
+
+    @staticmethod
+    def _is_active_position_rule(rule: dict, current_time: _dt.datetime) -> bool:
+        start = rule.get("active_time_start")
+        end = rule.get("active_time_end")
+        if start is None and end is None:
+            return True
+        current = current_time.strftime("%H:%M")
+        return bool(isinstance(start, str) and isinstance(end, str) and start <= current < end)
 
     def _evaluate_rule(self, df: pl.DataFrame, rule: dict, now: float) -> list[dict]:
         """评估单条规则,返回触发的 events。"""
@@ -556,7 +639,9 @@ class MonitorRuleEngine:
                 )
 
             ev = {
+                "id": uuid.uuid4().hex,
                 "ts": int(now * 1000),
+                "occurred_at": _dt.datetime.fromtimestamp(now, tz=_dt.timezone.utc).isoformat(),
                 "rule_id": rule["id"],
                 "rule_name": rule.get("name", ""),
                 "source": source,
@@ -570,7 +655,7 @@ class MonitorRuleEngine:
                 "severity": severity,
                 # 触发条件快照 (signal/price/market 类型): 用于触发记录展示
                 # 「命中了什么条件」。strategy 类型靠策略选股池 diff, 不写条件。
-                "conditions": list(rule.get("conditions", [])) if rtype != "strategy" else [],
+                "conditions": [dict(condition) for condition in rule.get("conditions", [])] if rtype != "strategy" else [],
                 "logic": rule.get("logic", "and") if rtype != "strategy" else "and",
             }
             events.append(ev)

@@ -1005,18 +1005,51 @@ class QuoteService:
                                 )
                         except Exception as e:  # noqa: BLE001
                             logger.warning("ETF 监控评估失败 (不影响股票告警): %s", e)
-                    if rule_events:
-                        # 落盘到 alerts.jsonl
+                    # Generic rules consume the deduplicated quote frame above. Position rules
+                    # run afterwards against one explicit, shared-quote valuation per holding.
+                    if engine.has_rule_type("position"):
                         try:
-                            from app.services import alert_store
-                            alert_store.append_many(
-                                self._app_state.repo.store.data_dir, rule_events,
-                            )
+                            portfolio_service = getattr(self._app_state, "portfolio_service", None)
+                            valued_positions = portfolio_service.valued_positions() if portfolio_service else []
+                            projection = [
+                                {
+                                    "position_id": position["position_id"],
+                                    "account_id": position["account_id"],
+                                    "symbol": position["instrument_symbol"],
+                                    "close": float(position["market_value"]) / float(position["quantity"]),
+                                    "valuation_source": position["source"],
+                                    "valuation_as_of": position["as_of"],
+                                }
+                                for position in valued_positions
+                                if position.get("market_value") is not None and float(position["quantity"]) > 0
+                            ]
+                            if projection:
+                                rule_events.extend(engine.evaluate_positions(pl.DataFrame(projection)))
                         except Exception as e:  # noqa: BLE001
-                            logger.warning("告警落盘失败: %s", e)
+                            logger.warning("持仓监控评估失败 (不影响通用规则): %s", e)
+                    if rule_events:
+                        # Durable operational history is the authoritative handoff boundary:
+                        # no event is broadcast or delivered until its immutable snapshot exists.
+                        operational = getattr(self._app_state, "operational", None)
+                        persisted_events: list[dict] = []
+                        if operational is None:
+                            logger.error("告警未持久化: operational repository 未初始化")
+                        else:
+                            for event in rule_events:
+                                try:
+                                    persisted = operational.record_alert_event(event)
+                                    event["id"] = persisted["id"]
+                                    event["occurred_at"] = persisted["occurred_at"]
+                                    persisted_events.append(event)
+                                except Exception as e:  # noqa: BLE001
+                                    logger.warning("告警持久化失败,跳过广播和投递: %s", e)
+                        rule_events = persisted_events
+                    if rule_events:
                         # 转为 SSE 推送格式 (兼容旧 alert schema)
                         for ev in rule_events:
                             all_alerts.append({
+                                "id": ev["id"],
+                                "occurred_at": ev["occurred_at"],
                                 "source": ev["source"],
                                 "type": ev["type"],
                                 "rule_id": ev.get("rule_id"),
@@ -1030,6 +1063,10 @@ class QuoteService:
                                 "severity": ev.get("severity", "info"),
                                 "conditions": ev.get("conditions") or [],
                                 "logic": ev.get("logic") or "and",
+                                "account_id": ev.get("account_id"),
+                                "position_id": ev.get("position_id"),
+                                "valuation_source": ev.get("valuation_source"),
+                                "valuation_as_of": ev.get("valuation_as_of"),
                             })
 
             # 策略页实时回显: 不写文件 (实时行情每轮更新 enriched, 写文件会被 read_cache

@@ -37,20 +37,24 @@ class RuleModel(BaseModel):
     id: str
     name: str
     enabled: bool = True
-    type: str          # strategy | signal | price | market
+    type: str          # strategy | signal | price | market | position
     asset_type: str = "stock"   # stock | etf (etf: strategy 型走 ETF 历史加载器)
-    scope: str = "symbols"   # symbols | all | sector
+    scope: str = "symbols"   # symbols | all | sector | positions
     symbols: list[str] = []
+    position_ids: list[str | int] = []
     sector: str | None = None
     strategy_id: str | None = None
     direction: str = "entry"  # entry | exit | both
     conditions: list[ConditionModel] = []
     logic: str = "and"        # and | or
     cooldown_seconds: int = 3600
+    active_time_start: str | None = None
+    active_time_end: str | None = None
+    bypass_quiet_period: bool = False
     severity: str = "info"    # info | warn | critical
     webhook_url: str = ""     # Webhook 推送地址 (推送到 QMT 等外部软件, 待定)
     webhook_enabled: bool = False  # 兼容老规则 (已由 webhook_channels 取代, 仅做向后兼容读)
-    webhook_channels: list[str] = []  # 命中时推送的外部渠道 (合法值 'feishu' | 'wecom')
+    webhook_channels: list[str] = []  # Feishu、Telegram、企业微信
     message: str = ""
     # ladder 专属 (连板梯队封单监控)
     metric: str = "sealed_vol"   # sealed_vol=封单量(手) | sealed_amount=封单额(元)
@@ -97,11 +101,13 @@ def get_options(request: Request):
             {"key": "price", "label": "价格/涨跌"},
             {"key": "market", "label": "市场异动"},
             {"key": "strategy", "label": "策略监控"},
+            {"key": "position", "label": "持仓监控"},
         ],
         "scopes": [
             {"key": "symbols", "label": "指定股票"},
             {"key": "all", "label": "全市场"},
             {"key": "sector", "label": "板块"},
+            {"key": "positions", "label": "指定持仓"},
         ],
         "logics": [
             {"key": "and", "label": "全部满足 (AND)"},
@@ -152,16 +158,21 @@ def save_rule(req: RuleModel, request: Request):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     monitor_rules.save_one(_data_dir(request), rule)
+    operational = getattr(request.app.state, "operational", None)
+    if operational is not None:
+        operational.save_monitor_rule(rule)
     _sync_engine(request)
     return {"ok": True, "rule": rule}
 
 
-# ── 删除 ───────────────────────────────────────────────
 @router.delete("/{rule_id}")
 def delete_rule(rule_id: str, request: Request):
     if not monitor_rules.ID_RE.match(rule_id):
         raise HTTPException(status_code=400, detail="规则 id 非法")
     deleted = monitor_rules.delete_one(_data_dir(request), rule_id)
+    operational = getattr(request.app.state, "operational", None)
+    if operational is not None:
+        deleted = operational.delete_monitor_rule(rule_id) or deleted
     if not deleted:
         raise HTTPException(status_code=404, detail="规则不存在")
     _sync_engine(request)
