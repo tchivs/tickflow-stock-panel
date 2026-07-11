@@ -11,7 +11,7 @@ AthenaQuant first delivers a single-container, data-lake-first market and portfo
 - Integer phases are planned delivery work.
 - Decimal phases are reserved for urgent inserted work.
 
-- [ ] **Phase 1: Core Merger** - Deliver the self-hosted data, position, monitoring, decision-plan, and real-time notification loop.
+- [x] **Phase 1: Core Merger** - Deliver the self-hosted data, position, monitoring, decision-plan, and real-time notification loop. (completed 2026-07-11)
 - [ ] **Phase 2: Factor And Strategy Research** - Let researchers create, validate, evaluate, backtest, and compare factors and strategies.
 - [ ] **Phase 3: AI Analysis** - Make AI-assisted research evidence-grounded, quality-aware, and traceable over a signal's lifecycle.
 - [ ] **Phase 4: Advanced Capabilities** - Provide controlled viewpoint tracking, research automation, strategy evolution, agent access, and sandbox execution.
@@ -32,7 +32,7 @@ AthenaQuant first delivers a single-container, data-lake-first market and portfo
   4. User can view current market and position changes in the main interface through the shared SSE pipeline.
   5. User can inspect a deterministic trade playbook, distinguish its baseline from bounded audited AI adjustments, and review an AI-free historical replay.
 
-**Plans**: 14/15 plans executed
+**Plans**: 15/15 plans complete
 Plans:
 **Wave 1**
 
@@ -71,7 +71,7 @@ Plans:
 
 **Wave 8** *(blocked on Wave 7 completion)*
 
-- [ ] 01-11-PLAN.md — Prove isolated Compose acceptance and document upstream sync.
+- [x] 01-11-PLAN.md — Prove isolated Compose acceptance and document upstream sync.
 
 **UI hint**: yes
 
@@ -137,7 +137,7 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Core Merger | 14/15 | In Progress|  |
+| 1. Core Merger | 15/15 | Complete   | 2026-07-11 |
 | 2. Factor And Strategy Research | 0/TBD | Not started | - |
 | 3. AI Analysis | 0/TBD | Not started | - |
 | 4. Advanced Capabilities | 0/TBD | Not started | - |
