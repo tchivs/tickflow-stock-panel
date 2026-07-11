@@ -87,7 +87,7 @@ status: complete
 
 Each task was committed atomically:
 
-1. **Task 1: Derive deterministic governed-panel identity in registered strategy results** — `cf06907` (`feat`)
+1. **Task 1: Derive deterministic governed-panel identity in registered strategy results** — `cf06907` (`feat`), `9059c2e` (`test` coverage refinement)
 2. **Task 2: Preserve trusted manifest identity through synchronous and SSE catalog handoff** — `89e9e55` (`feat`)
 3. **Task 3: Isolate the governed-data mismatch warning for retained strategy snapshots** — `d233742` (`test`)
 
@@ -97,7 +97,7 @@ Each task was committed atomically:
 
 ```text
 uv run --project backend pytest backend/tests/backtest/test_strategy_backtest_correctness.py backend/tests/research/test_strategy_experiment_handoff.py backend/tests/research/test_experiment_catalog.py -q
-11 passed in 2.24s
+11 passed in 2.19s
 ```
 
 Focused task evidence:
@@ -162,7 +162,7 @@ FACT-03's remaining governed-data provenance gap is covered by focused service, 
 
 ## Self-Check: PASSED
 
-Verified all five implementation/test artifacts, the summary artifact, and task commits `cf06907`, `89e9e55`, and `d233742` exist.
+Verified all five implementation/test artifacts, the summary artifact, and task commits `cf06907`, `9059c2e`, `89e9e55`, and `d233742` exist.
 
 ---
 *Phase: 02-factor-and-strategy-research*
