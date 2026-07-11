@@ -10,7 +10,8 @@ import polars as pl
 
 def _write_fixture_bundle(fixtures_dir: Path) -> None:
     fixtures_dir.mkdir()
-    (fixtures_dir / "governed-market-data.json").write_text(
+    instruments_path = fixtures_dir / "instruments.json"
+    instruments_path.write_text(
         json.dumps(
             {
                 "instruments": [
@@ -20,7 +21,16 @@ def _write_fixture_bundle(fixtures_dir: Path) -> None:
                         "code": "600000",
                         "exchange": "SH",
                     }
-                ],
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    market_data_path = fixtures_dir / "market-data.json"
+    market_data_path.write_text(
+        json.dumps(
+            {
                 "daily": [
                     {
                         "symbol": "600000.SH",
@@ -45,6 +55,9 @@ def _write_fixture_bundle(fixtures_dir: Path) -> None:
         ),
         encoding="utf-8",
     )
+    instruments_path.chmod(0o444)
+    market_data_path.chmod(0o444)
+    fixtures_dir.chmod(0o555)
 
 
 def _deny_network(*_args, **_kwargs) -> None:

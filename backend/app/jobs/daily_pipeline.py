@@ -48,6 +48,74 @@ def _noop(stage: str, pct: int, msg: str, **kwargs) -> None:  # noqa: ARG001
     pass
 
 
+def fixture_provider_enabled() -> bool:
+    """Whether the isolated Phase 1 acceptance provider was explicitly enabled."""
+    import os
+
+    return os.environ.get("PHASE1_FIXTURE_MODE") == "1"
+
+
+def run_phase1_fixture_sync(data_dir: Path) -> dict:
+    """Write the read-only acceptance fixture through the normal governed lake path."""
+    import os
+
+    from app.contracts.validator import validate_market_data_contract
+    from app.data_providers.fixture_provider import FixtureProvider
+    from app.tickflow.repository import DataStore
+
+    if not fixture_provider_enabled():
+        raise RuntimeError("D-13 fixture mode requires PHASE1_FIXTURE_MODE=1")
+    fixture_dir = os.environ.get("PHASE1_FIXTURE_DIR")
+    if not fixture_dir:
+        raise RuntimeError("D-13 fixture mode requires PHASE1_FIXTURE_DIR")
+
+    provider = FixtureProvider(Path(fixture_dir))
+    store = DataStore(Path(data_dir))
+    repo = KlineRepository(store)
+    stages: list[str] = []
+
+    def emit(stage: str, pct: int, message: str) -> None:
+        logger.info("fixture sync %s (%d%%): %s", stage, pct, message)
+        stages.append(stage)
+
+    try:
+        emit("sync_instruments", 10, "writing fixture instruments")
+        instruments = provider.get_instruments("stock")
+        instruments_path = store.data_dir / "instruments" / "instruments.parquet"
+        repo._atomic_write_parquet(instruments.unique(subset=["symbol"]).sort("symbol"), instruments_path)
+
+        symbols = instruments["symbol"].to_list()
+        emit("sync_daily", 35, "writing fixture daily bars")
+        daily = provider.get_daily(symbols, None, None, "stock")
+        repo.append_daily(daily)
+
+        emit("sync_adj", 50, "writing fixture adjustment factors")
+        factors = provider.get_adj_factors(symbols, None, None, "stock").rename({"adj_factor": "ex_factor"})
+        factors_path = store.data_dir / "adj_factor" / "all.parquet"
+        repo._atomic_write_parquet(
+            factors.unique(subset=["symbol", "trade_date"], keep="last").sort(["symbol", "trade_date"]),
+            factors_path,
+        )
+
+        emit("sync_financials", 60, "writing fixture financial records")
+        financials = provider.get_financials()
+        financials_path = store.data_dir / "financials" / "metrics" / "part.parquet"
+        repo._atomic_write_parquet(financials, financials_path)
+
+        emit("compute_enriched", 80, "computing governed enriched data")
+        run_pipeline(data_dir=store.data_dir)
+
+        emit("refresh_views", 90, "refreshing DuckDB views")
+        _refresh_views(repo)
+        repo.refresh_cache()
+
+        validate_market_data_contract(store.data_dir)
+        emit("done", 100, "fixture synchronization complete")
+        return {"provider": provider.name, "stages": stages}
+    finally:
+        store.db.close()
+
+
 def _invalidate(table: str | None = None) -> None:
     """stage 写完调用,让 /api/data/status 只重算被影响的那张表。"""
     from app.api.data import invalidate_data_cache
