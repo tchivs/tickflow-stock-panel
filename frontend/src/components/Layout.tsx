@@ -47,6 +47,8 @@ import {
   Moon,
   X,
   WifiOff,
+  Menu,
+  WalletCards,
 } from 'lucide-react'
 import { Logo } from './Logo'
 import { api, type IndexQuote } from '@/lib/api'
@@ -77,12 +79,21 @@ const nav = [
   { to: '/concept-analysis', label: '概念分析', icon: Layers3 },
   { to: '/industry-analysis', label: '行业分析', icon: Landmark },
   { to: '/financials', label: '财务分析', icon: FileText },
+  { to: '/portfolio', label: '投资组合', icon: WalletCards },
   { to: '/monitor', label: '监控中心', icon: RadioTower },
   { to: '/review',      label: '复盘',   icon: BookOpenCheck },
   { to: '/indices', label: '指数', icon: BarChart3 },
   { to: '/trading', label: '交易', icon: Cable },
   { to: '/data',       label: '数据',   icon: Database },
 ] as const
+
+const FOCUSABLE_SELECTOR = [
+  'a[href]',
+  'button:not([disabled])',
+  'input:not([disabled])',
+  'select:not([disabled])',
+  '[tabindex]:not([tabindex="-1"])',
+].join(',')
 
 /** 亮/暗主题切换 — 状态存 localStorage, 生效见 lib/theme.ts */
 function ThemeToggle() {
@@ -320,6 +331,67 @@ export function Layout() {
 
   const qc = useQueryClient()
   const navigate = useNavigate()
+  const menuButtonRef = useRef<HTMLButtonElement>(null)
+  const drawerRef = useRef<HTMLElement>(null)
+  const [isMobile, setIsMobile] = useState(() =>
+    typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches,
+  )
+  const [mobileNavOpen, setMobileNavOpen] = useState(false)
+
+  useEffect(() => {
+    const media = window.matchMedia('(max-width: 767px)')
+    const syncViewport = () => {
+      setIsMobile(media.matches)
+      if (!media.matches) setMobileNavOpen(false)
+    }
+    syncViewport()
+    media.addEventListener('change', syncViewport)
+    return () => media.removeEventListener('change', syncViewport)
+  }, [])
+
+  useEffect(() => {
+    if (!isMobile || !mobileNavOpen) return
+    const drawer = drawerRef.current
+    if (!drawer) return
+
+    const focusFirst = () => {
+      const first = drawer.querySelector<HTMLElement>(FOCUSABLE_SELECTOR)
+      ;(first ?? drawer).focus()
+    }
+    const frame = requestAnimationFrame(focusFirst)
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        setMobileNavOpen(false)
+        return
+      }
+      if (event.key !== 'Tab') return
+      const focusable = Array.from(drawer.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR))
+        .filter(element => element.offsetParent !== null || element === document.activeElement)
+      if (focusable.length === 0) {
+        event.preventDefault()
+        drawer.focus()
+        return
+      }
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      const activeElement = document.activeElement
+      if (event.shiftKey && (activeElement === first || !drawer.contains(activeElement))) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && (activeElement === last || !drawer.contains(activeElement))) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+    document.addEventListener('keydown', onKeyDown, true)
+    return () => {
+      cancelAnimationFrame(frame)
+      document.removeEventListener('keydown', onKeyDown, true)
+      menuButtonRef.current?.focus()
+    }
+  }, [isMobile, mobileNavOpen])
+
   const version = versionData?.version
   const realtimeEnabled = prefs?.realtime_quotes_enabled ?? false
   // Free 档监控限制提示: 可手动关闭, 不持久化 (刷新后恢复显示)
@@ -424,8 +496,28 @@ export function Layout() {
   }
 
   return (
-    <div className="h-screen grid grid-cols-[14rem_1fr] bg-base text-foreground overflow-hidden">
-      <aside className="border-r border-border bg-surface flex flex-col h-full min-h-0 overflow-hidden">
+    <div className="h-screen bg-base text-foreground overflow-hidden md:grid md:grid-cols-[14rem_1fr]">
+      {isMobile && mobileNavOpen && (
+        <button
+          type="button"
+          aria-label="关闭导航菜单"
+          className="fixed inset-0 z-40 bg-black/50"
+          onClick={() => setMobileNavOpen(false)}
+        />
+      )}
+      <aside
+        ref={drawerRef}
+        role={isMobile && mobileNavOpen ? 'dialog' : undefined}
+        aria-modal={isMobile && mobileNavOpen ? true : undefined}
+        aria-label={isMobile && mobileNavOpen ? '主导航' : undefined}
+        aria-hidden={isMobile && !mobileNavOpen ? true : undefined}
+        tabIndex={isMobile && mobileNavOpen ? -1 : undefined}
+        className={cn(
+          'border-r border-border bg-surface flex flex-col h-full min-h-0 overflow-hidden',
+          'fixed inset-y-0 left-0 z-50 w-[calc(100vw-2rem)] max-w-56 transition-transform duration-150 md:static md:w-auto md:max-w-none md:translate-x-0',
+          isMobile && !mobileNavOpen ? '-translate-x-full invisible' : 'translate-x-0',
+        )}
+      >
         <div className="px-5 py-5 border-b border-border shrink-0">
           {/* Brand block — 原创 logo + 等宽 wordmark */}
           <div className="flex items-center gap-2.5">
@@ -462,11 +554,12 @@ export function Layout() {
           />
         </div>
 
-        <nav className="flex-1 min-h-0 overflow-y-auto px-2 py-3 space-y-0.5">
+        <nav id="workspace-navigation" className="flex-1 min-h-0 overflow-y-auto px-2 py-3 space-y-0.5">
           {visibleNavItems.map(({ to, label, icon: Icon }) => (
             <NavLink
               key={to}
               to={to}
+              onClick={() => { if (isMobile) setMobileNavOpen(false) }}
               className={({ isActive }) =>
                 cn(
                   'flex items-center gap-3 px-3 py-2 rounded-btn text-sm transition-colors duration-150 ease-smooth',
@@ -639,6 +732,7 @@ export function Layout() {
           <div className="flex items-center gap-1">
             <ThemeToggle />
             <NavLink
+              onClick={() => { if (isMobile) setMobileNavOpen(false) }}
               to="/settings"
               className={({ isActive }) =>
                 cn(
@@ -665,8 +759,19 @@ export function Layout() {
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
-        className="h-full overflow-auto scrollbar-gutter-stable"
+        className="h-full overflow-auto pt-14 scrollbar-gutter-stable md:pt-0"
       >
+        <button
+          ref={menuButtonRef}
+          type="button"
+          aria-label="打开导航菜单"
+          aria-expanded={mobileNavOpen}
+          aria-controls="workspace-navigation"
+          className="fixed left-3 top-3 z-30 inline-flex h-11 w-11 items-center justify-center rounded-btn border border-border bg-surface text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent md:hidden"
+          onClick={() => setMobileNavOpen(true)}
+        >
+          <Menu className="h-5 w-5" />
+        </button>
         {streamStatus === 'reconnecting' && (
           <div
             role="status"
