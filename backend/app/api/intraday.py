@@ -13,7 +13,7 @@ import asyncio
 import json
 import time
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from sse_starlette.sse import EventSourceResponse
 
 router = APIRouter(prefix="/api/intraday", tags=["quotes"])
@@ -208,3 +208,16 @@ def refresh_quotes(request: Request):
     if qs:
         return qs.refresh()
     return {"error": "QuoteService not available"}
+
+
+@router.post("/phase1-trigger")
+def trigger_phase1_fixture(request: Request) -> dict[str, bool]:
+    """Exercise the governed fixture price-rule path without a live quote request."""
+    import os
+
+    if os.environ.get("PHASE1_FIXTURE_MODE", "").strip().lower() not in {"1", "true", "yes"}:
+        raise HTTPException(status_code=404, detail="not found")
+    qs = _get_quote_service(request)
+    if qs is None:
+        raise HTTPException(status_code=503, detail="QuoteService not available")
+    return qs.trigger_phase1_fixture_monitor()
