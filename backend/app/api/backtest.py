@@ -5,13 +5,14 @@ import asyncio
 import json
 import queue
 import threading
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import date, timedelta
+import uuid
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.config import settings
 from app.services.backtest import (
@@ -184,6 +185,8 @@ def factor_run(req: FactorBacktestRequest, request: Request):
 # ================================================================
 
 class StrategyBacktestRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     strategy_id: str
     symbols: list[str] | None = None
     start: date | None = None
@@ -205,6 +208,9 @@ class StrategyBacktestRequest(BaseModel):
     mode: Literal["position", "full"] = "position"
     holding_days: int = 5
     asset_type: str = "stock"
+
+
+StrategyBacktestRequest.model_rebuild()
 
 
 @router.post("/strategy/run")
@@ -242,8 +248,13 @@ def strategy_run(req: StrategyBacktestRequest, request: Request):
         holding_days=req.holding_days,
         asset_type=req.asset_type,
     )
+    execution_handle = _begin_strategy_experiment(request, req.strategy_id)
     result = svc.run(cfg)
-    return asdict(result)
+    _finalize_strategy_experiment(request, execution_handle, result)
+    response = asdict(result)
+    if execution_handle is not None:
+        response["research_execution_handle"] = execution_handle
+    return response
 
 
 # ── SSE 流式回测 (实时进度 + 可取消 + 支持重连) ───────────────────
@@ -254,7 +265,7 @@ import hashlib
 
 class _BacktestJob:
     """单个回测任务的状态, 存模块级供重连使用。"""
-    __slots__ = ("key", "cancel_event", "progress", "result", "error", "done", "finish_ts")
+    __slots__ = ("key", "cancel_event", "progress", "result", "error", "done", "finish_ts", "research_execution_handle")
 
     def __init__(self, key: str):
         self.key = key
@@ -264,6 +275,7 @@ class _BacktestJob:
         self.error: str | None = None
         self.done = False
         self.finish_ts: float = 0.0
+        self.research_execution_handle: str | None = None
 
 
 # 模块级任务表: key -> _BacktestJob
@@ -297,6 +309,122 @@ def _make_job_key(
 ) -> str:
     raw = f"{strategy_id}|{symbols}|{start}|{end}|{matching}|{entry_fill}|{exit_fill}|{fees_pct}|{slippage_bps}|{max_positions}|{max_exposure_pct}|{initial_capital}|{position_sizing}|{params}|{overrides}|{mode}|{holding_days}|{commission_pct}|{stamp_tax_pct}|{asset_type}"
     return hashlib.md5(raw.encode()).hexdigest()[:12]
+
+
+def _strategy_version(request: Request, strategy_id: str) -> str:
+    """Resolve a registered strategy version on the server, never from a request."""
+    try:
+        definition = request.app.state.strategy_engine.get(strategy_id)
+    except (AttributeError, ValueError):
+        return "unresolved"
+    meta = getattr(definition, "meta", {})
+    if isinstance(meta, dict):
+        version = meta.get("version") or meta.get("updated_at")
+        if isinstance(version, str) and version.strip():
+            return version.strip()
+    source = getattr(definition, "source", "registered")
+    return f"registered:{source}"
+
+
+def _begin_strategy_experiment(request: Request, strategy_id: str) -> str | None:
+    """Allocate an opaque server handle before a registered strategy can execute."""
+    catalog = getattr(request.app.state, "experiment_catalog", None)
+    handles = getattr(request.app.state, "research_strategy_handles", None)
+    if catalog is None or not isinstance(handles, dict):
+        return None
+    handle = uuid.uuid4().hex
+    handles[handle] = {
+        "status": "running",
+        "strategy_id": strategy_id,
+        "strategy_version": _strategy_version(request, strategy_id),
+    }
+    return handle
+
+
+def _strategy_input_manifest(result, strategy_id: str) -> dict:
+    config = result.config if isinstance(result.config, dict) else {}
+    stats = result.stats if isinstance(result.stats, dict) else {}
+    symbols = config.get("symbols")
+    return {
+        "source": "governed_backtest_engine",
+        "strategy_id": strategy_id,
+        "asset_type": config.get("asset_type"),
+        "resolved_symbols": sorted(symbols) if isinstance(symbols, list) else None,
+        "start": config.get("start"),
+        "end": config.get("end"),
+        "row_count": stats.get("panel_rows"),
+    }
+
+
+def _finalize_strategy_experiment(request: Request, execution_handle: str | None, result) -> None:
+    """Record only server-produced terminal evidence; client payloads never reach this boundary."""
+    if execution_handle is None:
+        return
+    catalog = getattr(request.app.state, "experiment_catalog", None)
+    handles = getattr(request.app.state, "research_strategy_handles", None)
+    artifact_service = getattr(request.app.state, "research_artifact_service", None)
+    if catalog is None or not isinstance(handles, dict):
+        return
+    state = handles.get(execution_handle)
+    if not isinstance(state, dict):
+        return
+    error = getattr(result, "error", None)
+    if error:
+        status = "cancelled" if error == "cancelled" else "failed"
+        try:
+            catalog.record_diagnostic(
+                originating_run_id=execution_handle,
+                status=status,
+                validated=False,
+                strategy_id=state["strategy_id"],
+                strategy_version=state["strategy_version"],
+                diagnostics={"message": str(error)},
+            )
+        except (TypeError, ValueError):
+            pass
+        state["status"] = status
+        return
+    try:
+        if artifact_service is None:
+            raise ValueError("managed research artifact service is unavailable")
+        artifacts = artifact_service.write_bundle(
+            execution_handle,
+            signals=list(getattr(result, "trades", [])),
+            metric_series=[
+                {"series": "equity_curve", "values": list(getattr(result, "equity_curve", []))},
+                {"series": "drawdown_curve", "values": list(getattr(result, "drawdown_curve", []))},
+                {"series": "benchmark_curve", "values": list(getattr(result, "benchmark_curve", []))},
+            ],
+            result={
+                "config": getattr(result, "config", {}),
+                "stats": getattr(result, "stats", {}),
+                "strategy_info": getattr(result, "strategy_info", {}),
+                "trades": list(getattr(result, "trades", [])),
+            },
+        )
+        snapshot = catalog.record_strategy_backtest(
+            replace(result, run_id=execution_handle),
+            strategy_id=state["strategy_id"],
+            strategy_version=state["strategy_version"],
+            input_manifest=_strategy_input_manifest(result, state["strategy_id"]),
+            artifacts=artifacts,
+        )
+    except Exception as error:
+        try:
+            catalog.record_diagnostic(
+                originating_run_id=execution_handle,
+                status="failed",
+                validated=False,
+                strategy_id=state["strategy_id"],
+                strategy_version=state["strategy_version"],
+                diagnostics={"message": f"strategy evidence handoff failed: {error}"},
+            )
+        except (TypeError, ValueError):
+            pass
+        state["status"] = "failed"
+        return
+    state["status"] = "completed"
+    state["experiment_id"] = snapshot.id
 
 
 @router.get("/strategy/stream")
@@ -377,11 +505,17 @@ async def strategy_stream(
         else:
             is_new = False
 
+    if not guard_violated and job.research_execution_handle is None:
+        job.research_execution_handle = _begin_strategy_experiment(request, strategy_id)
+
     async def event_generator():
         # 范围保护: 直接报错
         if guard_violated:
             yield f"event: error\ndata: {json.dumps({'message': BACKTEST_SERVER_GUARD_MESSAGE}, ensure_ascii=False)}\n\n"
             return
+
+        if job.research_execution_handle is not None:
+            yield f"event: research\ndata: {json.dumps({'execution_handle': job.research_execution_handle}, ensure_ascii=False)}\n\n"
 
         # 如果是新任务, 启动回测线程
         if is_new and not job.done:
@@ -414,10 +548,13 @@ async def strategy_stream(
                 _backtest_semaphore.acquire()
                 try:
                     result = svc.run(cfg, lambda d: job.progress.append(d), job.cancel_event)
+                    _finalize_strategy_experiment(request, job.research_execution_handle, result)
                     job.result = result
                     job.done = True
                     job.finish_ts = time.time()
                 except Exception as e:
+                    failed_result = StrategyBacktestResult(run_id="", config={}, error=str(e))
+                    _finalize_strategy_experiment(request, job.research_execution_handle, failed_result)
                     job.error = str(e)
                     job.done = True
                     job.finish_ts = time.time()
@@ -444,7 +581,10 @@ async def strategy_stream(
                         elif hasattr(r, "error") and r.error:
                             yield f"event: error\ndata: {json.dumps({'message': r.error}, ensure_ascii=False)}\n\n"
                         else:
-                            yield f"event: done\ndata: {json.dumps(asdict(r), ensure_ascii=False, default=str)}\n\n"
+                            response = asdict(r)
+                            if job.research_execution_handle is not None:
+                                response["research_execution_handle"] = job.research_execution_handle
+                            yield f"event: done\ndata: {json.dumps(response, ensure_ascii=False, default=str)}\n\n"
                     return
 
                 # 断开检测: 每 4 轮检查一次 (降低 GIL 抢占频率)

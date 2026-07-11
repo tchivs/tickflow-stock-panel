@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app import __version__
-from app.api import analysis, auth as auth_api, backtest, data, decision, ext_data, financials, indices, intraday, kline, market_recap, monitor_rules, alerts, overview, pipeline, portfolio, rps, screener, settings as settings_api, signals, stock_analysis, strategy, watchlist
+from app.api import analysis, auth as auth_api, backtest, data, decision, ext_data, financials, indices, intraday, kline, market_recap, monitor_rules, alerts, overview, pipeline, portfolio, research, rps, screener, settings as settings_api, signals, stock_analysis, strategy, watchlist
 from app.api.routes import router as core_router
 from app.config import settings
 from app.jobs import daily_pipeline
@@ -63,12 +63,28 @@ async def lifespan(app: FastAPI):
     operational = OperationalRepository(store.data_dir / "operational.db")
     operational.migrate()
     app.state.operational = operational
+    from app.backtest.engine import BacktestEngine
+    from app.research.artifacts import EvaluationArtifactService
+    from app.research.catalog import ExperimentCatalog
+    from app.research.evaluation import FactorEvaluationService
     from app.research.factor_registry import FactorRegistry
+    from app.research.hypotheses import ConfiguredFactorHypothesisGateway, FactorHypothesisService
     from app.research.repository import ResearchRepository
 
     research_repository = ResearchRepository(operational.database_path)
+    artifact_service = EvaluationArtifactService(store.data_dir)
     app.state.research_repository = research_repository
     app.state.factor_registry = FactorRegistry(research_repository)
+    app.state.research_artifact_service = artifact_service
+    app.state.experiment_catalog = ExperimentCatalog(research_repository)
+    app.state.backtest_engine = BacktestEngine(repo)
+    app.state.factor_evaluation_service = FactorEvaluationService(
+        app.state.backtest_engine, app.state.factor_registry, artifact_service
+    )
+    app.state.factor_hypothesis_service = FactorHypothesisService(
+        ConfiguredFactorHypothesisGateway.from_current_configuration()
+    )
+    app.state.research_strategy_handles = {}
     # 指标异步预热标志: enriched 缓存在后台线程构建, 完成后置 True
     app.state.indicators_ready = False
     repo._on_warmup_done = lambda: setattr(app.state, "indicators_ready", True)  # noqa: SLF001
@@ -303,6 +319,7 @@ app.include_router(kline.router)
 app.include_router(watchlist.router)
 app.include_router(screener.router)
 app.include_router(backtest.router)
+app.include_router(research.router)
 app.include_router(intraday.router)
 app.include_router(indices.router)
 app.include_router(overview.router)

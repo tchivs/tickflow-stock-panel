@@ -403,6 +403,9 @@ class ExperimentCatalog:
         record = self.repository.get_experiment(_required_text(experiment_id, "experiment_id"))
         return None if record is None else ExperimentSnapshot.from_record(record)
 
+    def list_history(self) -> list[ExperimentSnapshot]:
+        return [ExperimentSnapshot.from_record(record) for record in self.repository.list_experiments()]
+
     def retain(self, experiment_id: str) -> ExperimentSnapshot:
         record = self.repository.retain_experiment(_required_text(experiment_id, "experiment_id"))
         return ExperimentSnapshot.from_record(record)

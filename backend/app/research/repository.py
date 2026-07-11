@@ -393,6 +393,12 @@ class ResearchRepository:
     def get_experiment(self, experiment_id: str) -> dict[str, Any] | None:
         with self._connection() as connection:
             return self._experiment_row(connection, experiment_id)
+    def list_experiments(self) -> list[dict[str, Any]]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                "SELECT id FROM research_experiments ORDER BY created_at DESC, id DESC"
+            ).fetchall()
+            return [self._experiment_row(connection, row["id"]) for row in rows]  # type: ignore[list-item]
 
     def retain_experiment(self, experiment_id: str) -> dict[str, Any]:
         """Set retention once for a completed validated snapshot, never update it afterward."""
