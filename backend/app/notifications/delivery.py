@@ -1,12 +1,13 @@
 """Bounded Feishu and Telegram delivery with durable, credential-safe outcomes."""
 from __future__ import annotations
 
+import os
 import logging
 import re
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from typing import Any, Mapping, Protocol
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 import httpx
 
@@ -17,6 +18,18 @@ logger = logging.getLogger(__name__)
 
 _TELEGRAM_API_ORIGIN = "https://api.telegram.org"
 _SAFE_ERROR = "delivery failed"
+
+
+def _fixture_mode() -> bool:
+    return os.environ.get("PHASE1_FIXTURE_MODE", "").strip().lower() in {"1", "true", "yes"}
+
+
+def _fixture_receiver_url(value: object) -> str:
+    url = str(value or "").strip()
+    parsed = urlparse(url)
+    if parsed.scheme != "http" or parsed.hostname != "receiver" or not parsed.path.startswith("/"):
+        raise ValueError("fixture delivery target must be an internal receiver URL")
+    return url
 
 
 @dataclass(frozen=True)
@@ -50,16 +63,19 @@ class FeishuChannel:
     def __init__(self, delivery_config: DeliveryConfig, *, timeout_seconds: float = 2.0) -> None:
         if delivery_config.channel != self.name:
             raise ValueError("Feishu delivery config must use the feishu channel")
+        self._fixture_url = ""
         self._webhook = str(delivery_config.config.get("webhook") or "").strip()
         self._secret = str(delivery_config.config.get("secret") or "").strip()
-        if not webhook_adapter.is_valid_feishu_url(self._webhook):
+        if _fixture_mode():
+            self._fixture_url = _fixture_receiver_url(delivery_config.config.get("fixture_url"))
+        elif not webhook_adapter.is_valid_feishu_url(self._webhook):
             raise ValueError("Feishu webhook must use the approved hook prefix")
         self._timeout = httpx.Timeout(timeout_seconds, connect=timeout_seconds)
 
     def deliver(self, event: Mapping[str, Any]) -> Mapping[str, str]:
         title, body = _message(event)
         payload = webhook_adapter.build_feishu_text_payload(title, body, self._secret)
-        response = httpx.post(self._webhook, json=payload, timeout=self._timeout)
+        response = httpx.post(self._fixture_url or self._webhook, json=payload, timeout=self._timeout)
         if response.status_code != 200:
             raise RuntimeError(f"Feishu returned HTTP {response.status_code}")
         try:
@@ -77,18 +93,22 @@ class TelegramChannel:
     def __init__(self, delivery_config: DeliveryConfig, *, timeout_seconds: float = 2.0) -> None:
         if delivery_config.channel != self.name:
             raise ValueError("Telegram delivery config must use the telegram channel")
+        self._fixture_url = ""
         if "url" in delivery_config.config:
             raise ValueError("Telegram delivery does not accept a caller-provided URL")
         self._bot_token = str(delivery_config.config.get("bot_token") or "").strip()
         self._chat_id = str(delivery_config.config.get("chat_id") or "").strip()
-        if not self._bot_token or not self._chat_id:
+        if _fixture_mode():
+            self._fixture_url = _fixture_receiver_url(delivery_config.config.get("fixture_url"))
+        elif not self._bot_token or not self._chat_id:
             raise ValueError("Telegram requires bot_token and chat_id")
         self._timeout = httpx.Timeout(timeout_seconds, connect=timeout_seconds)
 
     def deliver(self, event: Mapping[str, Any]) -> Mapping[str, str]:
         title, body = _message(event)
+        url = self._fixture_url or f"{_TELEGRAM_API_ORIGIN}/bot{quote(self._bot_token, safe='')}/sendMessage"
         response = httpx.post(
-            f"{_TELEGRAM_API_ORIGIN}/bot{quote(self._bot_token, safe='')}/sendMessage",
+            url,
             json={"chat_id": self._chat_id, "text": f"{title}\n{body}".strip()},
             timeout=self._timeout,
         )

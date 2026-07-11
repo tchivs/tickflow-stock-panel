@@ -124,6 +124,23 @@ def test_delivery_rejects_arbitrary_origins_times_out_and_redacts_sensitive_fail
     assert "secret-token" not in outcome["error"]
     assert "api.telegram.org" not in outcome["error"]
 
+def test_fixture_delivery_accepts_only_internal_receiver_urls(monkeypatch):
+    monkeypatch.setenv("PHASE1_FIXTURE_MODE", "true")
+
+    feishu = FeishuChannel(
+        DeliveryConfig(channel="feishu", config={"fixture_url": "http://receiver:8080/feishu"}),
+    )
+    telegram = TelegramChannel(
+        DeliveryConfig(channel="telegram", config={"fixture_url": "http://receiver:8080/telegram"}),
+    )
+
+    assert feishu._fixture_url == "http://receiver:8080/feishu"
+    assert telegram._fixture_url == "http://receiver:8080/telegram"
+    with pytest.raises(ValueError, match="internal receiver"):
+        FeishuChannel(
+            DeliveryConfig(channel="feishu", config={"fixture_url": "https://outside.example/hook"}),
+        )
+
 
 def test_quiet_period_records_skipped_outcome_but_cooldown_non_event_has_no_delivery(tmp_path):
     repository = OperationalRepository(tmp_path / "operational.db")

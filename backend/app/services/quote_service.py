@@ -24,6 +24,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from contextlib import contextmanager
@@ -527,6 +528,13 @@ class QuoteService:
         self._fetch_quotes()
         return self.status()
 
+    def trigger_phase1_fixture_monitor(self) -> dict[str, bool]:
+        """Evaluate persisted fixture data without opening the live quote path."""
+        if os.environ.get("PHASE1_FIXTURE_MODE", "").strip().lower() not in {"1", "true", "yes"}:
+            raise RuntimeError("fixture monitor trigger is unavailable outside Phase 1 acceptance")
+        self._evaluate_monitors(pl.DataFrame(), None)
+        return {"triggered": True}
+
     # ================================================================
     # 后台轮询
     # ================================================================
@@ -988,7 +996,8 @@ class QuoteService:
             # 仅在「交易日 + 连续竞价时段」评估监控 —— 避开集合竞价指示价、盘前/收盘后
             # 缓冲。轮询窗口(_is_trading_hours)更宽是为盘前预热/收盘捕捉, 但告警不应
             # 基于这些非连续竞价价格。
-            if not self._is_continuous_trading():
+            fixture_mode = os.environ.get("PHASE1_FIXTURE_MODE", "").strip().lower() in {"1", "true", "yes"}
+            if not fixture_mode and not self._is_continuous_trading():
                 return
             # 获取 enriched 数据 (刚算好的)
             enriched_today, enriched_date = self.get_enriched_today()
@@ -996,7 +1005,7 @@ class QuoteService:
                 return
             # 快照日期必须是北京当日: 节假日或数据未刷新时 enriched_date 会落后于当日,
             # 说明市场未在交易 → 跳过。无需维护 A股交易日历即可挡住节假日与陈旧价告警。
-            if enriched_date != cn_today():
+            if not fixture_mode and enriched_date != cn_today():
                 logger.debug("监控评估跳过: enriched 快照日期 %s 非当日 %s (节假日/数据未刷新)",
                              enriched_date, cn_today())
                 return
@@ -1179,25 +1188,38 @@ class QuoteService:
             delivery_service = getattr(self._app_state, "notification_delivery", None)
             if delivery_service is None:
                 return
+            fixture_mode = os.environ.get("PHASE1_FIXTURE_MODE", "").strip().lower() in {"1", "true", "yes"}
             configured = preferences.load()
             rules = engine.rules if engine is not None else {}
             for event in rule_events:
                 rule = rules.get(event.get("rule_id")) or {}
                 requested = set(rule.get("webhook_channels") or [])
                 channel_configs: list[DeliveryConfig] = []
-                feishu_url = preferences.get_feishu_webhook_url()
-                if "feishu" in requested and feishu_url:
-                    channel_configs.append(DeliveryConfig(
-                        channel="feishu",
-                        config={"webhook": feishu_url, "secret": preferences.get_feishu_webhook_secret()},
-                    ))
-                telegram_token = str(configured.get("telegram_bot_token") or "").strip()
-                telegram_chat_id = str(configured.get("telegram_chat_id") or "").strip()
-                if "telegram" in requested and telegram_token and telegram_chat_id:
-                    channel_configs.append(DeliveryConfig(
-                        channel="telegram",
-                        config={"bot_token": telegram_token, "chat_id": telegram_chat_id},
-                    ))
+                if fixture_mode:
+                    if "feishu" in requested:
+                        channel_configs.append(DeliveryConfig(
+                            channel="feishu",
+                            config={"fixture_url": os.environ.get("PHASE1_FEISHU_RECEIVER_URL", "")},
+                        ))
+                    if "telegram" in requested:
+                        channel_configs.append(DeliveryConfig(
+                            channel="telegram",
+                            config={"fixture_url": os.environ.get("PHASE1_TELEGRAM_RECEIVER_URL", "")},
+                        ))
+                else:
+                    feishu_url = preferences.get_feishu_webhook_url()
+                    if "feishu" in requested and feishu_url:
+                        channel_configs.append(DeliveryConfig(
+                            channel="feishu",
+                            config={"webhook": feishu_url, "secret": preferences.get_feishu_webhook_secret()},
+                        ))
+                    telegram_token = str(configured.get("telegram_bot_token") or "").strip()
+                    telegram_chat_id = str(configured.get("telegram_chat_id") or "").strip()
+                    if "telegram" in requested and telegram_token and telegram_chat_id:
+                        channel_configs.append(DeliveryConfig(
+                            channel="telegram",
+                            config={"bot_token": telegram_token, "chat_id": telegram_chat_id},
+                        ))
                 if not channel_configs:
                     continue
                 delivery_service.enqueue(
