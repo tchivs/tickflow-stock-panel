@@ -32,7 +32,7 @@ AthenaQuant first delivers a single-container, data-lake-first market and portfo
   4. User can view current market and position changes in the main interface through the shared SSE pipeline.
   5. User can inspect a deterministic trade playbook, distinguish its baseline from bounded audited AI adjustments, and review an AI-free historical replay.
 
-**Plans**: 5/15 plans executed
+**Plans**: 6/15 plans executed
 Plans:
 **Wave 1**
 
@@ -44,7 +44,7 @@ Plans:
 **Wave 2** *(blocked on Wave 1 completion)*
 
 - [x] 01-02-PLAN.md — Implement governed fixture synchronization and lake contract validation.
-- [ ] 01-03-PLAN.md — Add SQLite operational persistence and Portfolio APIs.
+- [x] 01-03-PLAN.md — Add SQLite operational persistence and Portfolio APIs.
 - [ ] 01-07-PLAN.md — Install approved browser tooling and define browser contracts.
 
 **Wave 3** *(blocked on Wave 2 completion)*
@@ -137,7 +137,7 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Core Merger | 5/15 | In Progress|  |
+| 1. Core Merger | 6/15 | In Progress|  |
 | 2. Factor And Strategy Research | 0/TBD | Not started | - |
 | 3. AI Analysis | 0/TBD | Not started | - |
 | 4. Advanced Capabilities | 0/TBD | Not started | - |
