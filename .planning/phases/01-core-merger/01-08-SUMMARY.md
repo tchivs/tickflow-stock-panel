@@ -32,6 +32,9 @@ key-files:
     - frontend/src/lib/queryKeys.ts
     - frontend/src/lib/useQuoteStream.ts
     - frontend/src/components/Layout.tsx
+    - backend/app/api/alerts.py
+    - backend/app/operational/repository.py
+    - backend/tests/test_notification_delivery.py
 key-decisions:
   - "Portfolio query keys preserve account identity so SSE events refetch only affected account views and the aggregate view."
   - "The existing Layout sidebar becomes the accessible mobile drawer; it remains the sole navigation model and sole root stream owner."
@@ -67,6 +70,14 @@ coverage:
         status: pass
     human_judgment: true
     rationale: "Keyboard and viewport behavior require the later desktop/mobile browser workflow."
+  - id: D4
+    description: Operational alert history filters and per-event delivery details expose persisted channel outcome fields without credentials or raw response data.
+    requirement: CORE-04
+    verification:
+      - kind: integration
+        ref: uv run --directory backend pytest tests/test_notification_delivery.py -q
+        status: pass
+    human_judgment: false
 duration: not recorded
 completed: 2026-07-11
 status: complete
@@ -81,11 +92,12 @@ status: complete
 - **Duration:** Not recorded
 - **Completed:** 2026-07-11T02:56:22Z
 - **Tasks:** 3/3
-- **Files modified:** 4
+- **Files modified:** 7
 
 ## Accomplishments
 
 - Extended the established request client with typed Portfolio CRUD/valuation, monitor delivery/history, deterministic playbook, audit, and historical replay operations; all path identifiers are encoded.
+- Added the missing operational alert-history filters and credential-safe per-event delivery-detail endpoint required by the typed client, with focused API coverage.
 - Added stable account-aware Portfolio, delivery-detail, and decision query-key factories, and extended the sole root EventSource hook to invalidate aggregate and affected account valuation data.
 - Kept the existing workspace shell, stream status, and toast hosts intact while making its navigation an accessible mobile drawer and adding the Portfolio navigation definition.
 
@@ -96,6 +108,7 @@ Each task was committed atomically:
 1. **Task 1: Add typed operational API methods and query keys** — `b428049` (feat)
 2. **Task 2: Extend the existing root SSE hook for Portfolio invalidation** — `7bc28a7` (feat)
 3. **Task 3: Make the shared workspace shell mobile-operable** — `01703ee` (feat)
+4. **Required Rule 2 contract fix: Expose durable alert delivery reads** — `74627cf` (fix)
 
 ## Files Created/Modified
 
@@ -103,6 +116,9 @@ Each task was committed atomically:
 - `frontend/src/lib/queryKeys.ts` — Stable Portfolio, delivery, and decision query factories plus valuation invalidation prefixes.
 - `frontend/src/lib/useQuoteStream.ts` — Account-scoped `portfolio_updated` handling within the existing EventSource.
 - `frontend/src/components/Layout.tsx` — Portfolio-ready shared navigation and a keyboard-safe responsive drawer.
+- `backend/app/api/alerts.py` — Operational alert-history filters and safe delivery-detail route.
+- `backend/app/operational/repository.py` — Parameterized durable alert queries and UI-safe delivery projections.
+- `backend/tests/test_notification_delivery.py` — Focused operational history/filter and delivery-detail API coverage.
 
 ## Decisions Made
 
@@ -111,7 +127,20 @@ Each task was committed atomically:
 
 ## Deviations from Plan
 
-None - plan executed exactly as written.
+### Auto-fixed Issues
+
+**1. [Rule 2 - Missing Critical] Operational delivery-read routes were absent**
+- **Found during:** Task 1 (Add typed operational API methods and query keys)
+- **Issue:** The required typed alert history filters and per-event delivery detail client methods had no matching backend read routes, preventing the planned Monitor UI from loading durable delivery data.
+- **Fix:** Added minimal parameterized operational alert-history filtering and a sanitized `GET /api/alerts/{event_id}/deliveries` response containing only channel, status, timestamps, and stored safe error text.
+- **Files modified:** `backend/app/api/alerts.py`, `backend/app/operational/repository.py`, `backend/tests/test_notification_delivery.py`
+- **Verification:** `uv run --directory backend pytest tests/test_notification_delivery.py -q` — 4 passed
+- **Committed in:** `74627cf`
+
+---
+
+**Total deviations:** 1 auto-fixed (1 missing critical contract).
+**Impact on plan:** The minimal backend read surface makes the typed client operational without adding another service, credential field, or delivery path.
 
 ## Issues Encountered
 
@@ -120,6 +149,7 @@ None - plan executed exactly as written.
 ## Verification
 
 - **PASS** — `pnpm --dir frontend build` completed TypeScript checking and Vite production build successfully.
+- **PASS** — `uv run --directory backend pytest tests/test_notification_delivery.py -q` completed with 4 passing focused delivery/history tests.
 
 ## User Setup Required
 
