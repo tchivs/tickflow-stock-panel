@@ -3,6 +3,8 @@ import { PageHeader } from '@/components/PageHeader'
 import { FactorBacktest } from './backtest/FactorBacktest'
 import { StrategyBacktest } from './backtest/StrategyBacktest'
 import { StrategyOptimizer } from './backtest/StrategyOptimizer'
+import { ResearchLibrary } from './backtest/ResearchLibrary'
+import { ExperimentComparison } from './backtest/ExperimentComparison'
 import { BarChart3, FlaskConical, SlidersHorizontal } from 'lucide-react'
 
 type Tab = 'factor' | 'strategy' | 'optimizer'
@@ -74,7 +76,7 @@ export function Backtest() {
       />
 
       <main className="flex-1 min-h-0 px-3 pb-3 pt-3 lg:px-4 lg:pb-4">
-        {activeTab === 'factor' && <FactorBacktest />}
+        {activeTab === 'factor' && <div className="space-y-4"><FactorBacktest /><ResearchLibrary /><ExperimentComparison /></div>}
         {activeTab === 'strategy' && <StrategyBacktest />}
         {activeTab === 'optimizer' && <StrategyOptimizer />}
       </main>
