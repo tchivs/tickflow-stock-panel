@@ -9,6 +9,8 @@ from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
 from app.decision.playbook import DecisionPlaybookService
+from app.decision.adjustments import DecisionAdjustmentService
+from app.decision.ai_review import ConfiguredAIReviewGateway, DecisionReviewService
 
 
 router = APIRouter(prefix="/api/decision", tags=["decision"])
@@ -68,6 +70,17 @@ class DecisionRunResponse(BaseModel):
     adjustments: list[AdjustmentAuditResponse]
 
 
+class DecisionAdjustmentRequest(BaseModel):
+    """Untrusted proposal values are validated and audited by the bounded domain service."""
+
+    proposal: dict[str, dict[str, Any]]
+
+
+class DecisionReviewResponse(BaseModel):
+    review_status: str
+    final: PlaybookSnapshotResponse
+
+
 def _operational(request: Request):
     repository = getattr(request.app.state, "operational", None)
     if repository is None:
@@ -111,3 +124,32 @@ def get_decision_run(run_id: str, request: Request) -> DecisionRunResponse:
     if run is None:
         raise HTTPException(status_code=404, detail="decision run not found")
     return _response(run)
+
+
+@router.post("/runs/{run_id}/review", response_model=DecisionReviewResponse)
+async def review_decision_run(run_id: str, request: Request) -> DecisionReviewResponse:
+    """Request an optional OpenAI-compatible proposal without changing baseline facts."""
+    service = DecisionReviewService(
+        repository=_operational(request),
+        gateway=ConfiguredAIReviewGateway.from_current_configuration(),
+    )
+    try:
+        return DecisionReviewResponse.model_validate(await service.review(run_id=run_id))
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@router.post("/runs/{run_id}/adjustments", response_model=DecisionRunResponse)
+def apply_decision_adjustments(
+    run_id: str,
+    payload: DecisionAdjustmentRequest,
+    request: Request,
+) -> DecisionRunResponse:
+    """Audit and apply only bounded numeric adjustments to a persisted final plan."""
+    try:
+        DecisionAdjustmentService(_operational(request)).apply(run_id=run_id, proposal=payload.proposal)
+        run = _operational(request).get_decision_run(run_id)
+        assert run is not None
+        return _response(run)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
