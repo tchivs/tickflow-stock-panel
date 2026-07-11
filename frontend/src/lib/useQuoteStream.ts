@@ -97,6 +97,23 @@ export function useQuoteStream(
     let failCount = 0
     let toastFired = false
 
+    const invalidatePortfolio = (accountIds: unknown) => {
+      const affectedAccounts = new Set(
+        Array.isArray(accountIds)
+          ? accountIds.map(accountId => String(accountId))
+          : [],
+      )
+      qc.invalidateQueries({ queryKey: ['portfolio-accounts'] })
+      qc.invalidateQueries({
+        predicate: (query) => {
+          const prefix = String(query.queryKey[0])
+          if (prefix !== 'portfolio-summary' && prefix !== 'portfolio-holdings') return false
+          const accountId = String(query.queryKey[1] ?? 'all')
+          return affectedAccounts.size === 0 || accountId === 'all' || affectedAccounts.has(accountId)
+        },
+      })
+    }
+
     const connect = () => {
       _setStatus(failCount > 0 ? 'reconnecting' : _streamStatus)
       const es = new EventSource('/api/intraday/stream')
@@ -139,6 +156,15 @@ export function useQuoteStream(
           })
         }
       })
+      es.addEventListener('portfolio_updated', (e: MessageEvent) => {
+        try {
+          const data = JSON.parse(e.data)
+          invalidatePortfolio(data.account_ids)
+        } catch {
+          // Ignore malformed stream payloads without disrupting the shared connection.
+        }
+      })
+
 
       es.addEventListener('strategy_results_updated', () => {
         // 策略监控完成后只刷新策略结果缓存，不扩散到其他行情页面。
