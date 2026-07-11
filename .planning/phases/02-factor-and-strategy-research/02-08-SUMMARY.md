@@ -93,6 +93,7 @@ status: complete
 2. **Task 2: Add the explicit completed-strategy retention action and existing comparison reachability** — `fe76249` (`feat`)
 3. **Task 3: Prove the complete approved responsive and keyboard Scenario 5 in the focused browser suite** — `ad0912b`, `9bb1144` (`test`)
 4. **Review remediation: CR-01, CR-02, WR-01–WR-04** — `ef23616` (`fix`)
+5. **Post-fix review remediation: validate nested CR-01 strategy terminal payloads** — `2a43b72` (`fix`)
 
 ## Files Created/Modified
 
@@ -106,15 +107,15 @@ status: complete
 
 ```text
 pnpm --dir frontend build
-passed — TypeScript and Vite production build completed in 9.74s
+passed — TypeScript and Vite production build completed successfully.
 
 pnpm --dir frontend exec playwright test e2e/phase2-research.spec.ts --project=desktop-chromium
-6 passed in 56.6s
+6 passed in 51.7s
 ```
 
 ## Review Remediation
 
-- CR-01: Runtime structural validation now rejects JSON-valid malformed strategy terminal payloads with `结果解析失败`, clears the task-owned handle, and exposes no retention action.
+- CR-01: Terminal validation now requires a non-empty run ID, a complete typed `strategy_info`, and typed entries in every result array before a successful payload can preserve its task-owned handle. The focused fixture supplies the old guard's outer containers with empty nested strategy metadata; it now shows `结果解析失败` and never exposes a retention action or request.
 - CR-02: Retention mutations, pending/error UI, and retained snapshots are task-and-handle scoped; a delayed old-task success still invalidates shared queries but cannot mark a newer result retained.
 - WR-01–WR-04: Both dense tables carry active-range sr-only captions; fixtures record and validate the one opaque-handle retention request; 409 rejects prove no promotion or retry; the 1440px/1024px/375px keyboard scenario now covers factor lifecycle/disclosures, strategy retention, comparison, pagination focus, and narrow-table keyboard scrolling.
 

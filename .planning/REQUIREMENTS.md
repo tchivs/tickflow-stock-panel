@@ -19,8 +19,8 @@
 
 ### Factor And Strategy Research
 
-- [ ] **FACT-01**: Researcher can define a factor through a restricted expression language, store it, find similar stored factors, and evaluate it with IC and RankIC metrics.
-- [ ] **FACT-02**: Researcher can turn a natural-language factor hypothesis into a validated factor expression and backtest it before it is retained for comparison.
+- [x] **FACT-01**: Researcher can define a factor through a restricted expression language, store it, find similar stored factors, and evaluate it with IC and RankIC metrics.
+- [x] **FACT-02**: Researcher can turn a natural-language factor hypothesis into a validated factor expression and backtest it before it is retained for comparison.
 - [x] **FACT-03**: Researcher can run factor or strategy experiments and compare retained configuration, data inputs, predictions, metrics, artifacts, and registered model versions.
 
 ### AI Analysis
@@ -66,8 +66,8 @@
 | CORE-07 | Phase 1 | Complete |
 | PLAN-01 | Phase 1 | Complete |
 | PLAN-02 | Phase 1 | Complete |
-| FACT-01 | Phase 2 | Pending |
-| FACT-02 | Phase 2 | Pending |
+| FACT-01 | Phase 2 | Complete |
+| FACT-02 | Phase 2 | Complete |
 | FACT-03 | Phase 2 | Complete |
 | ANLY-01 | Phase 3 | Pending |
 | ANLY-02 | Phase 3 | Pending |
