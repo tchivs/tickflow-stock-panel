@@ -12,7 +12,7 @@ AthenaQuant first delivers a single-container, data-lake-first market and portfo
 - Decimal phases are reserved for urgent inserted work.
 
 - [x] **Phase 1: Core Merger** - Deliver the self-hosted data, position, monitoring, decision-plan, and real-time notification loop. (completed 2026-07-11)
-- [ ] **Phase 2: Factor And Strategy Research** - Let researchers create, validate, evaluate, backtest, and compare factors and strategies.
+- [x] **Phase 2: Factor And Strategy Research** - Let researchers create, validate, evaluate, backtest, and compare factors and strategies. (completed 2026-07-11)
 - [ ] **Phase 3: AI Analysis** - Make AI-assisted research evidence-grounded, quality-aware, and traceable over a signal's lifecycle.
 - [ ] **Phase 4: Advanced Capabilities** - Provide controlled viewpoint tracking, research automation, strategy evolution, agent access, and sandbox execution.
 - [ ] **Phase 5: Optional Enhancements** - Add nonessential Shadow Account, thesis-tracking, and forecasting capabilities without blocking v1.
@@ -86,7 +86,7 @@ Plans:
   2. Researcher can convert a natural-language factor hypothesis into a validated expression, run its evaluation, and view IC and RankIC results.
   3. Researcher can run a factor or strategy backtest and compare retained configurations, data inputs, predictions, metrics, artifacts, and model versions across experiments.
 
-**Plans**: 5/7 plans executed
+**Plans**: 7/7 plans complete
 **Wave 1**
 
 - [x] 02-01-PLAN.md
@@ -99,12 +99,12 @@ Plans:
 **Wave 3** *(blocked on Wave 2 completion)*
 
 - [x] 02-04-PLAN.md
-- [ ] 02-06-PLAN.md
+- [x] 02-06-PLAN.md
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
 - [x] 02-05-PLAN.md
-- [ ] 02-07-PLAN.md
+- [x] 02-07-PLAN.md
 
 **UI hint**: yes
 
@@ -157,7 +157,7 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Core Merger | 15/15 | Complete    | 2026-07-11 |
-| 2. Factor And Strategy Research | 5/7 | In Progress|  |
+| 2. Factor And Strategy Research | 7/7 | Complete   | 2026-07-11 |
 | 3. AI Analysis | 0/TBD | Not started | - |
 | 4. Advanced Capabilities | 0/TBD | Not started | - |
 | 5. Optional Enhancements | 0/TBD | Optional | - |

@@ -5,16 +5,16 @@ milestone_name: milestone
 current_phase: 02
 current_phase_name: factor-and-strategy-research
 status: executing
-stopped_at: Phase 1 UI-SPEC approved
-last_updated: "2026-07-11T08:13:08.999Z"
+stopped_at: Completed 02-07-PLAN.md
+last_updated: "2026-07-11T08:31:44.228Z"
 last_activity: 2026-07-11
 last_activity_desc: Phase 02 execution started
 progress:
   total_phases: 5
-  completed_phases: 1
-  total_plans: 20
-  completed_plans: 16
-  percent: 20
+  completed_phases: 2
+  total_plans: 22
+  completed_plans: 22
+  percent: 40
 ---
 
 # Project State
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-07-10)
 ## Current Position
 
 Phase: 02 (factor-and-strategy-research) — EXECUTING
-Plan: 1 of 5
+Plan: 2 of 7
 Status: Ready to execute
 Last activity: 2026-07-11 — Phase 02 execution started
 
@@ -54,6 +54,8 @@ Progress: [----------] 0%
 - Last 5 plans: None
 - Trend: N/A
 
+| Phase 02-factor-and-strategy-research P07 | 4m 30s | 3 tasks | 5 files |
+
 ## Accumulated Context
 
 ### Decisions
@@ -63,6 +65,9 @@ No implementation decision was explicitly locked by the architecture intake. Req
 - [Phase 1]: Phase 1 must run as one Linux Docker Compose container with no external database or message queue.
 - [Phase 1]: Preserve Parquet/DuckDB/Polars for time-series data and SQLite for operational state.
 - [All phases]: Preserve upstream synchronization paths and independently activatable module boundaries.
+- [Phase ?]: Completed strategy results fingerprint the full governed panel loaded for execution, including warmup and any full-mode buffer.
+- [Phase ?]: The catalog receives only revision and fingerprint copied from the server-issued result under its existing recognized keys.
+- [Phase ?]: Catalog warning vocabulary and no-winner comparison semantics remain unchanged.
 
 ### Pending Todos
 
@@ -80,6 +85,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-07-10T23:18:46.565Z
-Stopped at: Phase 1 UI-SPEC approved
-Resume file: .planning/phases/01-core-merger/01-UI-SPEC.md
+Last session: 2026-07-11T08:31:44.221Z
+Stopped at: Completed 02-07-PLAN.md
+Resume file: None
