@@ -23,7 +23,7 @@ export function AccountDialog({ account, onClose }: AccountDialogProps) {
   const availableFundsRef = useRef<HTMLInputElement>(null)
   const [name, setName] = useState(account?.name ?? '')
   const [availableFunds, setAvailableFunds] = useState(String(account?.available_funds ?? 0))
-  const [notes, setNotes] = useState('')
+  const [notes, setNotes] = useState(account?.notes ?? '')
   const [errors, setErrors] = useState<Partial<Record<Field, string>>>({})
   const [submitError, setSubmitError] = useState('')
   const [confirmArchive, setConfirmArchive] = useState(false)
@@ -31,7 +31,7 @@ export function AccountDialog({ account, onClose }: AccountDialogProps) {
   useEffect(() => {
     setName(account?.name ?? '')
     setAvailableFunds(String(account?.available_funds ?? 0))
-    setNotes('')
+    setNotes(account?.notes ?? '')
     setErrors({})
     setSubmitError('')
   }, [account])
@@ -47,6 +47,7 @@ export function AccountDialog({ account, onClose }: AccountDialogProps) {
       const payload: PortfolioAccountInput = {
         name: name.trim(),
         available_funds: Number(availableFunds),
+        notes,
         ...(account ? { enabled: account.enabled } : {}),
       }
       return account

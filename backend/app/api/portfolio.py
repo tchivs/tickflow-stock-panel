@@ -30,12 +30,14 @@ def _notify_portfolio_updated(request: Request, account_ids: list[int | str]) ->
 class AccountCreate(BaseModel):
     name: str
     available_funds: float = 0
+    notes: str = ""
 
 
 class AccountUpdate(BaseModel):
     name: str | None = None
     available_funds: float | None = None
     enabled: bool | None = None
+    notes: str | None = None
 
 
 class PositionCreate(BaseModel):
@@ -45,6 +47,7 @@ class PositionCreate(BaseModel):
     quantity: float
     invested_amount: float
     trading_style: str
+    notes: str = ""
 
 
 class PositionUpdate(BaseModel):
@@ -54,6 +57,7 @@ class PositionUpdate(BaseModel):
     invested_amount: float | None = None
     trading_style: str | None = None
     enabled: bool | None = None
+    notes: str | None = None
 
 
 def _invalid(error: ValueError) -> HTTPException:

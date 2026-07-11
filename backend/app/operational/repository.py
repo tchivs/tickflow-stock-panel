@@ -43,6 +43,12 @@ def _positive(value: float | int, field: str) -> float:
     return value
 
 
+def _notes(value: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError("notes must be a string")
+    return value.strip()
+
+
 class OperationalRepository:
     """Owns SQLite connections and transaction-safe account/position mutations."""
 
@@ -90,14 +96,14 @@ class OperationalRepository:
             trading_style,
         )
 
-    def create_account(self, *, name: str, available_funds: float | int = 0) -> dict[str, Any]:
+    def create_account(self, *, name: str, available_funds: float | int = 0, notes: str = "") -> dict[str, Any]:
         name, available_funds = self._account_input(name, available_funds)
         now = _now()
         with self._connection() as connection, connection:
             cursor = connection.execute(
-                """INSERT INTO accounts (name, available_funds, enabled, archived_at, created_at, updated_at)
-                   VALUES (?, ?, 1, NULL, ?, ?)""",
-                (name, available_funds, now, now),
+                """INSERT INTO accounts (name, available_funds, notes, enabled, archived_at, created_at, updated_at)
+                   VALUES (?, ?, ?, 1, NULL, ?, ?)""",
+                (name, available_funds, _notes(notes), now, now),
             )
             return self._get_account(connection, cursor.lastrowid)
 
@@ -108,6 +114,7 @@ class OperationalRepository:
         name: str | None = None,
         available_funds: float | int | None = None,
         enabled: bool | None = None,
+        notes: str | None = None,
     ) -> dict[str, Any] | None:
         if self.get_account(account_id) is None:
             return None
@@ -123,6 +130,9 @@ class OperationalRepository:
         if enabled is not None:
             fields.append("enabled = ?")
             values.append(int(bool(enabled)))
+        if notes is not None:
+            fields.append("notes = ?")
+            values.append(_notes(notes))
         if not fields:
             return self.get_account(account_id)
         fields.append("updated_at = ?")
@@ -168,6 +178,7 @@ class OperationalRepository:
         quantity: float | int,
         invested_amount: float | int,
         trading_style: str,
+        notes: str = "",
     ) -> dict[str, Any]:
         symbol, cost_price, quantity, invested_amount, trading_style = self._position_input(
             instrument_symbol, cost_price, quantity, invested_amount, trading_style
@@ -179,10 +190,10 @@ class OperationalRepository:
                     raise ValueError("account does not exist")
                 cursor = connection.execute(
                     """INSERT INTO positions (
-                        account_id, instrument_symbol, cost_price, quantity, invested_amount, trading_style,
+                        account_id, instrument_symbol, cost_price, quantity, invested_amount, trading_style, notes,
                         enabled, archived_at, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, 1, NULL, ?, ?)""",
-                    (account_id, symbol, cost_price, quantity, invested_amount, trading_style, now, now),
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, NULL, ?, ?)""",
+                    (account_id, symbol, cost_price, quantity, invested_amount, trading_style, _notes(notes), now, now),
                 )
                 return self._get_position(connection, cursor.lastrowid)
         except sqlite3.IntegrityError as error:
@@ -200,6 +211,7 @@ class OperationalRepository:
         invested_amount: float | int | None = None,
         trading_style: str | None = None,
         enabled: bool | None = None,
+        notes: str | None = None,
     ) -> dict[str, Any] | None:
         if self.get_position(position_id) is None:
             return None
@@ -223,6 +235,9 @@ class OperationalRepository:
                 raise ValueError("trading_style must be short, swing, or long")
             fields.append("trading_style = ?")
             values.append(trading_style)
+        if notes is not None:
+            fields.append("notes = ?")
+            values.append(_notes(notes))
         if enabled is not None:
             fields.append("enabled = ?")
             values.append(int(bool(enabled)))

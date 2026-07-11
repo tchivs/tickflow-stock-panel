@@ -42,7 +42,7 @@ export function HoldingDialog({ holding, accounts, initialAccountId, onClose }: 
   const [quantity, setQuantity] = useState(String(holding?.quantity ?? ''))
   const [investedAmount, setInvestedAmount] = useState(String(holding?.invested_amount ?? ''))
   const [tradingStyle, setTradingStyle] = useState<PortfolioPositionInput['trading_style']>(holding?.trading_style ?? 'swing')
-  const [notes, setNotes] = useState('')
+  const [notes, setNotes] = useState(holding?.notes ?? '')
   const [errors, setErrors] = useState<Partial<Record<Field, string>>>({})
   const [submitError, setSubmitError] = useState('')
   const [confirmArchive, setConfirmArchive] = useState(false)
@@ -55,7 +55,7 @@ export function HoldingDialog({ holding, accounts, initialAccountId, onClose }: 
     setQuantity(String(holding?.quantity ?? ''))
     setInvestedAmount(String(holding?.invested_amount ?? ''))
     setTradingStyle(holding?.trading_style ?? 'swing')
-    setNotes('')
+    setNotes(holding?.notes ?? '')
     setErrors({})
     setSubmitError('')
   }, [accounts, holding, initialAccountId])
@@ -83,6 +83,7 @@ export function HoldingDialog({ holding, accounts, initialAccountId, onClose }: 
         quantity: Number(quantity),
         invested_amount: Number(investedAmount),
         trading_style: tradingStyle,
+        notes,
       }
       return holding
         ? api.portfolioUpdateHolding(holding.id, {
@@ -91,6 +92,7 @@ export function HoldingDialog({ holding, accounts, initialAccountId, onClose }: 
             quantity: payload.quantity,
             invested_amount: payload.invested_amount,
             trading_style: payload.trading_style,
+            notes: payload.notes,
           })
         : api.portfolioCreateHolding(payload)
     },

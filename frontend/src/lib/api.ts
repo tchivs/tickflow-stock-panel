@@ -537,12 +537,14 @@ export interface PortfolioAccount {
   archived_at: string | null
   created_at: string
   updated_at: string
+  notes: string
 }
 
 export interface PortfolioAccountInput {
   name: string
   available_funds?: number
   enabled?: boolean
+  notes?: string
 }
 
 export interface PortfolioPositionInput {
@@ -553,6 +555,7 @@ export interface PortfolioPositionInput {
   invested_amount: number
   trading_style: 'short' | 'swing' | 'long'
   enabled?: boolean
+  notes?: string
 }
 
 export interface PortfolioPosition extends PortfolioPositionInput {

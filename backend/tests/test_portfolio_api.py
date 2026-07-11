@@ -83,6 +83,26 @@ def test_accounts_positions_and_summary_remain_account_scoped_and_aggregate(tmp_
     assert {row["as_of"] for row in summary["positions"]} == {"2026-07-10T01:30:00+00:00"}
 
 
+
+def test_portfolio_notes_round_trip_through_api_and_repository(tmp_path):
+    repository, service = _service(tmp_path)
+    app = FastAPI()
+    app.include_router(portfolio_router)
+    app.state.operational = repository
+    app.state.portfolio_service = service
+    app.state.quote_service = _quotes()
+    client = TestClient(app)
+
+    account = client.post('/api/portfolio/accounts', json={'name': 'Notes', 'available_funds': 1, 'notes': '主账户'}).json()['account']
+    position = client.post('/api/portfolio/positions', json={
+        'account_id': account['id'], 'instrument_symbol': '600519.SH', 'cost_price': 1,
+        'quantity': 1, 'invested_amount': 1, 'trading_style': 'swing', 'notes': '观察突破',
+    }).json()['position']
+
+    assert account['notes'] == '主账户'
+    assert position['notes'] == '观察突破'
+    updated = client.put(f"/api/portfolio/positions/{position['id']}", json={'notes': '已建仓'}).json()['position']
+    assert updated['notes'] == '已建仓'
 def test_position_requires_valid_values_unique_account_instrument_and_supported_style(tmp_path):
     """Untrusted portfolio inputs are validated before parameter-bound SQLite writes."""
     repository, _ = _service(tmp_path)
