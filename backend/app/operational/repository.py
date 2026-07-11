@@ -670,15 +670,16 @@ class OperationalRepository:
         if not all(isinstance(value, str) and value for value in (as_of, engine_config_version, result_hash)):
             raise ValueError("replay provenance is required")
         run_id = uuid.uuid4().hex
+        created_at = _now()
         snapshot_json = self._decision_snapshot_json(snapshot)
         with self._connection() as connection, connection:
             connection.execute(
                 """INSERT INTO replay_runs (
                        id, as_of, engine_config_version, provider, model, result_hash, snapshot_json, created_at
                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (run_id, as_of, engine_config_version, provider, model, result_hash, snapshot_json, _now()),
+                (run_id, as_of, engine_config_version, provider, model, result_hash, snapshot_json, created_at),
             )
-        return {"id": run_id, "as_of": as_of, "engine_config_version": engine_config_version, "result_hash": result_hash, "snapshot": dict(snapshot), "provider": provider, "model": model}
+        return {"id": run_id, "as_of": as_of, "engine_config_version": engine_config_version, "result_hash": result_hash, "snapshot": dict(snapshot), "provider": provider, "model": model, "created_at": created_at}
 
     def get_replay_run(self, run_id: str) -> dict[str, Any] | None:
         with self._connection() as connection:

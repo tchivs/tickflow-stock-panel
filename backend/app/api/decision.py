@@ -93,6 +93,7 @@ class HistoricalReplayResponse(BaseModel):
     id: str
     as_of: str
     engine_config_version: str
+    created_at: str
     result_hash: str
     snapshot: dict[str, Any]
     provider: None = None

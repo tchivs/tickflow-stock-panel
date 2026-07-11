@@ -633,6 +633,7 @@ export interface HistoricalReplay {
   snapshot: Record<string, unknown>
   provider: null
   model: null
+  created_at: string
 }
 
 /** 生成监控规则 id (时间戳 + 随机后缀), 用户无需手动填写。 */

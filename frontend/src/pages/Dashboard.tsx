@@ -15,6 +15,7 @@ import { STAGE_LABELS } from '@/components/data/ActiveJobCard'
 import { cn } from '@/lib/cn'
 import { cnSignal } from '@/lib/signals'
 import { boardTag } from '@/components/stock-table/primitives'
+import { PlaybookInspector } from '@/components/decision/PlaybookInspector'
 
 function n(v: number | null | undefined) {
   return typeof v === 'number' && Number.isFinite(v) ? v : null
@@ -496,6 +497,7 @@ export function Dashboard() {
   const [selectedDate, setSelectedDate] = useState<string | undefined>()
   const [manualFetching, setManualFetching] = useState(false)
   const [previewStock, setPreviewStock] = useState<{symbol: string; name?: string} | null>(null)
+  const [playbookOpen, setPlaybookOpen] = useState(false)
   // 首次使用(无数据 + 未完成引导)自动弹窗: 同一会话只弹一次
   const [showWelcomeModal, setShowWelcomeModal] = useState(false)
   const dataStatus = useDataStatus({ staleTime: 60_000 })
@@ -676,6 +678,7 @@ export function Dashboard() {
           >
             <RefreshCw className={`h-3 w-3 ${manualFetching ? 'animate-spin' : ''}`} />重载
           </button>
+          <button onClick={() => setPlaybookOpen(true)} className="inline-flex items-center gap-1 rounded-btn border border-border bg-elevated px-2 py-1 text-[11px] text-secondary transition-colors hover:text-foreground"><Target className="h-3 w-3" />查看决策计划</button>
         </div>
       </div>
 
@@ -792,6 +795,7 @@ export function Dashboard() {
         name={previewStock?.name}
         onClose={() => setPreviewStock(null)}
       />
+      {playbookOpen && <PlaybookInspector onClose={() => setPlaybookOpen(false)} />}
     </div>
   )
 }
