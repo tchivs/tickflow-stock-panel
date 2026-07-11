@@ -28,7 +28,23 @@ AthenaQuant first delivers a single-container, data-lake-first market and portfo
   3. User can create a position, price, or market monitoring rule, receive a configured notification after a matching event, and review stored alert history.
   4. User can view current market and position changes in the main interface through the shared SSE pipeline.
   5. User can inspect a deterministic trade playbook, distinguish its baseline from bounded audited AI adjustments, and review an AI-free historical replay.
-**Plans**: TBD
+**Plans**: 16 plans
+Plans:
+- [ ] 01-01-PLAN.md — Create governed-data Wave 1 contracts.
+- [ ] 01-13-PLAN.md — Create operational-loop Wave 1 contracts.
+- [ ] 01-14-PLAN.md — Create decision-safety Wave 1 contracts.
+- [ ] 01-02-PLAN.md — Implement governed fixture synchronization and lake contract validation.
+- [ ] 01-03-PLAN.md — Add SQLite operational persistence and Portfolio APIs.
+- [ ] 01-04-PLAN.md — Add deterministic decision baseline, API, and persistence.
+- [ ] 01-05-PLAN.md — Extend Monitor, delivery outcomes, and shared SSE.
+- [ ] 01-15-PLAN.md — Add configured-provider adjustments, audit, and replay guard.
+- [ ] 01-06-PLAN.md — Obtain human Playwright package-legitimacy approval.
+- [ ] 01-07-PLAN.md — Install approved browser tooling and define browser contracts.
+- [ ] 01-08-PLAN.md — Wire typed frontend operational data, root SSE, and mobile shell.
+- [ ] 01-09-PLAN.md — Build the responsive Portfolio workspace.
+- [ ] 01-10-PLAN.md — Extend Monitor and Dashboard decision inspection.
+- [ ] 01-11-PLAN.md — Prove isolated Compose acceptance and document upstream sync.
+- [ ] 01-12-PLAN.md — Add bounded notification delivery and shared SSE handoff.
 **UI hint**: yes
 
 ### Phase 2: Factor And Strategy Research
