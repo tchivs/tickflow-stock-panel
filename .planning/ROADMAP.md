@@ -32,11 +32,11 @@ AthenaQuant first delivers a single-container, data-lake-first market and portfo
   4. User can view current market and position changes in the main interface through the shared SSE pipeline.
   5. User can inspect a deterministic trade playbook, distinguish its baseline from bounded audited AI adjustments, and review an AI-free historical replay.
 
-**Plans**: 15 plans
+**Plans**: 1/15 plans executed
 Plans:
 **Wave 1**
 
-- [ ] 01-01-PLAN.md — Create governed-data Wave 1 contracts.
+- [x] 01-01-PLAN.md — Create governed-data Wave 1 contracts.
 - [ ] 01-13-PLAN.md — Create operational-loop Wave 1 contracts.
 - [ ] 01-14-PLAN.md — Create decision-safety Wave 1 contracts.
 - [ ] 01-06-PLAN.md — Obtain human Playwright package-legitimacy approval.
@@ -137,7 +137,7 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Core Merger | 0/TBD | Not started | - |
+| 1. Core Merger | 1/15 | In Progress|  |
 | 2. Factor And Strategy Research | 0/TBD | Not started | - |
 | 3. AI Analysis | 0/TBD | Not started | - |
 | 4. Advanced Capabilities | 0/TBD | Not started | - |
