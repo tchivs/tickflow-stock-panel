@@ -11,10 +11,12 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app import __version__
-from app.api import analysis, auth as auth_api, backtest, data, ext_data, financials, indices, intraday, kline, market_recap, monitor_rules, alerts, overview, pipeline, rps, screener, settings as settings_api, signals, stock_analysis, strategy, watchlist
+from app.api import analysis, auth as auth_api, backtest, data, ext_data, financials, indices, intraday, kline, market_recap, monitor_rules, alerts, overview, pipeline, portfolio, rps, screener, settings as settings_api, signals, stock_analysis, strategy, watchlist
 from app.api.routes import router as core_router
 from app.config import settings
 from app.jobs import daily_pipeline
+from app.operational.repository import OperationalRepository
+from app.portfolio.service import PortfolioService
 from app.services.quote_service import QuoteService
 from app.tickflow import client as tf_client
 from app.tickflow.policy import detect_capabilities
@@ -47,6 +49,9 @@ async def lifespan(app: FastAPI):
     repo = KlineRepository(store)
     app.state.datastore = store
     app.state.repo = repo
+    operational = OperationalRepository(store.data_dir / "operational.db")
+    operational.migrate()
+    app.state.operational = operational
     # 指标异步预热标志: enriched 缓存在后台线程构建, 完成后置 True
     app.state.indicators_ready = False
     repo._on_warmup_done = lambda: setattr(app.state, "indicators_ready", True)  # noqa: SLF001
@@ -73,6 +78,11 @@ async def lifespan(app: FastAPI):
     app.state.quote_service = qs
     qs.set_repo(repo)
     qs.boot_check()
+    app.state.portfolio_service = PortfolioService(
+        repository=operational,
+        quote_service=qs,
+        governed_closes=repo,
+    )
 
     # QuoteService 需要访问 strategy_monitor 等单例
     # 先创建 strategy_monitor，再注入 app.state
@@ -293,6 +303,7 @@ app.include_router(settings_api.router)
 app.include_router(strategy.router)
 app.include_router(signals.router)
 app.include_router(monitor_rules.router)
+app.include_router(portfolio.router)
 app.include_router(alerts.router)
 app.include_router(rps.router)
 

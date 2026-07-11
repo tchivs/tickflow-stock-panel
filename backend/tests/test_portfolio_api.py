@@ -4,6 +4,10 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from app.api.portfolio import router as portfolio_router
 
 from app.operational.repository import OperationalRepository
 from app.portfolio.service import PortfolioService
@@ -149,3 +153,46 @@ def test_referenced_records_archive_and_empty_records_delete_without_losing_ids(
     archived_account = repository.archive_account(account["id"])
     assert archived_account["id"] == account["id"]
     assert archived_account["archived_at"] is not None
+
+
+def test_portfolio_api_returns_quote_projected_positions_and_archive_guards(tmp_path):
+    """HTTP mutations use the same archive-safe repository and valuation projection."""
+    repository, service = _service(tmp_path)
+    app = FastAPI()
+    app.include_router(portfolio_router)
+    app.state.operational = repository
+    app.state.portfolio_service = service
+    app.state.quote_service = _quotes()
+    client = TestClient(app)
+
+    created_account = client.post("/api/portfolio/accounts", json={"name": "Cash", "available_funds": 500}).json()["account"]
+    created_position = client.post(
+        "/api/portfolio/positions",
+        json={
+            "account_id": created_account["id"],
+            "instrument_symbol": "600519.SH",
+            "cost_price": 1500,
+            "quantity": 2,
+            "invested_amount": 3000,
+            "trading_style": "swing",
+        },
+    ).json()["position"]
+
+    summary = client.get(f"/api/portfolio/summary?account_id={created_account['id']}").json()
+    positions = client.get("/api/portfolio/positions").json()["positions"]
+    assert summary["market_value"] == 3200.0
+    assert positions[0]["source"] == "shared_quote"
+    assert positions[0]["as_of"] == "2026-07-10T01:30:00+00:00"
+
+    repository.record_alert_reference(position_id=created_position["id"], rule_id="rule_01")
+    assert client.delete(f"/api/portfolio/positions/{created_position['id']}").status_code == 400
+    archived = client.post(f"/api/portfolio/positions/{created_position['id']}/archive")
+    assert archived.status_code == 200
+    assert archived.json()["position"]["id"] == created_position["id"]
+
+
+def test_main_application_registers_portfolio_router():
+    """The operational boundary is reachable from the single host application."""
+    from app.main import app
+
+    assert any(route.path == "/api/portfolio/summary" for route in app.routes)
