@@ -486,12 +486,12 @@ def _compile_node(expression: Expression) -> pl.Expr:
             high = _literal_number(expression.arguments[2], "clip upper bound must be a numeric literal", expression.location)
             return arguments[0].clip(low, high)
         if expression.name == "rank":
-            return arguments[0].rank()
+            return arguments[0].rank().over("date")
         if expression.name == "zscore":
             value = arguments[0]
-            return (value - value.mean()) / value.std()
+            return (value - value.mean().over("date")) / value.std().over("date")
         if expression.name == "rolling_mean":
             window = int(_literal_number(expression.arguments[1], "rolling_mean window must be an integer literal", expression.location))
-            return arguments[0].rolling_mean(window_size=window)
+            return arguments[0].rolling_mean(window_size=window, min_samples=1).over("symbol")
         raise FactorDslError(f"unknown factor function {expression.name!r}", expression.location)
     raise TypeError("expression is not a factor DSL AST node")

@@ -38,10 +38,36 @@ def test_equivalent_text_has_canonical_expression_and_signature() -> None:
 def test_compiler_uses_only_governed_dependencies() -> None:
     parsed = parse_factor("clip(log1p(close / prev_close), -1, 1) + rolling_mean(volume, 2)")
     expression = parsed.compile()
-    frame = pl.DataFrame({"close": [11.0, 12.0, 13.0], "prev_close": [10.0, 11.0, 12.0], "volume": [100.0, 200.0, 300.0]})
+    frame = pl.DataFrame(
+        {
+            "symbol": ["A", "A", "A"],
+            "date": ["2024-01-02", "2024-01-03", "2024-01-04"],
+            "close": [11.0, 12.0, 13.0],
+            "prev_close": [10.0, 11.0, 12.0],
+            "volume": [100.0, 200.0, 300.0],
+        }
+    )
 
     result = frame.select(expression.alias("factor"))
-
     assert parsed.referenced_fields == {"close", "prev_close", "volume"}
     assert result.columns == ["factor"]
     assert result.height == 3
+
+
+def test_compiler_partitions_stateful_functions_by_date_or_symbol() -> None:
+    frame = pl.DataFrame(
+        {
+            "symbol": ["B", "A", "B", "A"],
+            "date": ["2024-01-03", "2024-01-02", "2024-01-02", "2024-01-03"],
+            "close": [40.0, 10.0, 20.0, 30.0],
+        }
+    ).sort(["symbol", "date"])
+
+    rank = frame.with_columns(parse_factor("rank(close)").compile().alias("factor"))["factor"].to_list()
+    zscore = frame.with_columns(parse_factor("zscore(close)").compile().alias("factor"))["factor"].to_list()
+    rolling_mean = frame.with_columns(parse_factor("rolling_mean(close, 2)").compile().alias("factor"))["factor"].to_list()
+
+    assert rank == [1.0, 1.0, 2.0, 2.0]
+    assert zscore == pytest.approx([-0.7071067811865475, -0.7071067811865475, 0.7071067811865475, 0.7071067811865475])
+    assert rolling_mean == pytest.approx([10.0, 20.0, 20.0, 30.0])
+
