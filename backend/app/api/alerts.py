@@ -1,4 +1,4 @@
-"""告警触发记录 API — 查询/清空/生成演示数据 alerts.jsonl。"""
+"""Alert history API, preferring durable operational events when available."""
 from __future__ import annotations
 
 import random
@@ -23,13 +23,34 @@ def list_alerts(
     limit: int = 5000,
     source: str | None = None,
     type: str | None = None,
+    severity: str | None = None,
+    delivery_status: str | None = None,
 ):
-    """查询触发记录 (时间倒序)。"""
+    """Return durable operational history and credential-safe delivery summaries."""
+    operational = getattr(request.app.state, "operational", None)
+    if operational is not None:
+        events, total = operational.list_alert_events(
+            days=days,
+            limit=limit,
+            source=source,
+            event_type=type,
+            severity=severity,
+            delivery_status=delivery_status,
+        )
+        return {"alerts": events, "total": total}
     events = alert_store.list_recent(
         _data_dir(request), days=days, limit=limit, source=source, type=type,
     )
     total = alert_store.count(_data_dir(request))
     return {"alerts": events, "total": total}
+
+@router.get("/{event_id}/deliveries")
+def delivery_details(event_id: str, request: Request):
+    """Return only persisted channel status, timestamps, and sanitized errors."""
+    operational = getattr(request.app.state, "operational", None)
+    if operational is None or operational.get_alert_event(event_id) is None:
+        raise HTTPException(status_code=404, detail="alert event not found")
+    return {"deliveries": operational.delivery_details(event_id)}
 
 
 @router.delete("")

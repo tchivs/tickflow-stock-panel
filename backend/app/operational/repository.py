@@ -6,7 +6,7 @@ import math
 import sqlite3
 import uuid
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Iterator, Mapping
@@ -390,6 +390,49 @@ class OperationalRepository:
         event["created_at"] = record.pop("created_at")
         return event
 
+    def list_alert_events(
+        self,
+        *,
+        days: int = 7,
+        limit: int = 5000,
+        source: str | None = None,
+        event_type: str | None = None,
+        severity: str | None = None,
+        delivery_status: str | None = None,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Return durable alert snapshots and safe delivery state for the Monitor history."""
+        predicates: list[str] = []
+        values: list[Any] = []
+        if days > 0:
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+            predicates.append("occurred_at >= ?")
+            values.append(cutoff)
+        for column, value in (("source", source), ("type", event_type), ("severity", severity)):
+            if value:
+                predicates.append(f"{column} = ?")
+                values.append(value)
+        if delivery_status:
+            predicates.append(
+                "EXISTS (SELECT 1 FROM notification_deliveries d "
+                "WHERE d.event_id = alert_events.id AND d.status = ?)"
+            )
+            values.append(delivery_status)
+        where = f"WHERE {' AND '.join(predicates)}" if predicates else ""
+        bounded_limit = max(1, min(limit, 5000))
+        with self._connection() as connection:
+            total = int(connection.execute(
+                f"SELECT COUNT(*) FROM alert_events {where}", values,
+            ).fetchone()[0])
+            rows = connection.execute(
+                f"SELECT id FROM alert_events {where} ORDER BY occurred_at DESC LIMIT ?",
+                [*values, bounded_limit],
+            ).fetchall()
+        events = [event for row in rows if (event := self.get_alert_event(str(row["id"]))) is not None]
+        for event in events:
+            event["deliveries"] = self.delivery_details(event["id"])
+        return events, total
+
+
     def create_delivery_outcome(
         self,
         *,
@@ -438,6 +481,17 @@ class OperationalRepository:
                 (event_id,),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def delivery_details(self, event_id: str) -> list[dict[str, Any]]:
+        """Expose only sanitized delivery outcome fields suitable for the frontend."""
+        with self._connection() as connection:
+            rows = connection.execute(
+                """SELECT channel, status, error, created_at, updated_at FROM notification_deliveries
+                   WHERE event_id = ? ORDER BY id""",
+                (event_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
 
     @staticmethod
     def _decision_snapshot_json(snapshot: Mapping[str, Any]) -> str:

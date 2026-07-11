@@ -3,6 +3,10 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from threading import Event
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from app.api.alerts import router as alerts_router
 
 import pytest
 
@@ -139,3 +143,36 @@ def test_quiet_period_records_skipped_outcome_but_cooldown_non_event_has_no_deli
     ]
     assert repository.get_alert_event("alert_01")["id"] == "alert_01"
     assert repository.list_delivery_outcomes("cooldown_suppressed") == []
+
+def test_operational_alert_history_filters_and_delivery_detail_are_safe(tmp_path):
+    repository = OperationalRepository(tmp_path / "operational.db")
+    repository.migrate()
+    repository.record_alert_event({
+        **_event(),
+        "source": "position",
+        "type": "position",
+        "name": "贵州茅台",
+        "valuation_source": "shared_quote",
+        "valuation_as_of": "2026-07-10T01:30:00+00:00",
+    })
+    repository.create_delivery_outcome(
+        event_id="alert_01", channel="telegram", status="failed", error="delivery failed",
+    )
+    app = FastAPI()
+    app.include_router(alerts_router)
+    app.state.operational = repository
+    client = TestClient(app)
+
+    history = client.get("/api/alerts?severity=warn&delivery_status=failed")
+    assert history.status_code == 200
+    event = history.json()["alerts"][0]
+    assert event["id"] == "alert_01"
+    assert event["deliveries"][0]["status"] == "failed"
+    assert event["deliveries"][0]["error"] == "delivery failed"
+
+    detail = client.get("/api/alerts/alert_01/deliveries")
+    assert detail.status_code == 200
+    assert detail.json()["deliveries"] == event["deliveries"]
+    assert set(detail.json()["deliveries"][0]) == {
+        "channel", "status", "error", "created_at", "updated_at",
+    }
