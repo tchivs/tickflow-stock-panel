@@ -68,7 +68,7 @@
 | PLAN-02 | Phase 1 | Complete |
 | FACT-01 | Phase 2 | Pending |
 | FACT-02 | Phase 2 | Pending |
-| FACT-03 | Phase 2 | Complete |
+| FACT-03 | Phase 2 | Pending |
 | ANLY-01 | Phase 3 | Pending |
 | ANLY-02 | Phase 3 | Pending |
 | ANLY-03 | Phase 3 | Pending |
