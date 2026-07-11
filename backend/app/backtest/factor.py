@@ -70,12 +70,18 @@ class GroupStats:
 class FactorResult:
     run_id: str
     config: dict
-    # IC 分析
+    # IC = Pearson cross-sectional correlation.
     ic_mean: float | None = None
     ic_std: float | None = None
     ir: float | None = None
     ic_win_rate: float | None = None
     ic_series: list[dict] = field(default_factory=list)
+    # RankIC = Spearman cross-sectional correlation; never mislabeled as IC.
+    rank_ic_mean: float | None = None
+    rank_ic_std: float | None = None
+    rank_ir: float | None = None
+    rank_ic_win_rate: float | None = None
+    rank_ic_series: list[dict] = field(default_factory=list)
     # 分层
     group_stats: list[dict] = field(default_factory=list)
     group_nav: list[dict] = field(default_factory=list)
@@ -130,7 +136,7 @@ class FactorBacktestService:
             return _err(f"因子列 '{factor_col}' 不存在于 enriched 数据中, 且无法从基础行情计算")
         if "close" not in panel.columns:
             return _err("enriched 数据缺少收盘价 close")
-        panel = panel.select(["symbol", "date", "close", factor_col])
+        panel = panel.select(list(dict.fromkeys(["symbol", "date", "close", factor_col])))
         panel = panel.filter((pl.col("date") >= config.start) & (pl.col("date") <= config.end))
 
         # 过滤有效行
@@ -158,18 +164,23 @@ class FactorBacktestService:
             # weekly/monthly: 计算到下个调仓日的收益
             panel = self._calc_period_return(panel, config.rebalance)
 
-        # ── 1. IC 分析 ──
+        # ── 1. Pearson IC and Spearman RankIC analysis ──
         ic_df = self._calc_ic(panel, factor_col)
+        rank_ic_df = self._calc_rank_ic(panel, factor_col)
         ic_series = [
             {"date": str(row["date"]), "ic": round(float(row["ic"]), 4)}
             for row in ic_df.iter_rows(named=True)
             if row["ic"] is not None and not np.isnan(float(row["ic"]))
         ]
-        ic_values = [r["ic"] for r in ic_series]
-        ic_mean = float(np.mean(ic_values)) if ic_values else None
-        ic_std = float(np.std(ic_values)) if ic_values else None
-        ir = (ic_mean / ic_std) if (ic_mean is not None and ic_std and ic_std > 1e-8) else None
-        ic_win_rate = (sum(1 for v in ic_values if v > 0) / len(ic_values)) if ic_values else None
+        rank_ic_series = [
+            {"date": str(row["date"]), "rank_ic": round(float(row["rank_ic"]), 4)}
+            for row in rank_ic_df.iter_rows(named=True)
+            if row["rank_ic"] is not None and not np.isnan(float(row["rank_ic"]))
+        ]
+        ic_mean, ic_std, ir, ic_win_rate = self._metric_summary([row["ic"] for row in ic_series])
+        rank_ic_mean, rank_ic_std, rank_ir, rank_ic_win_rate = self._metric_summary(
+            [row["rank_ic"] for row in rank_ic_series]
+        )
 
         # ── 2. 分层回测 ──
         panel = self._add_groups(panel, factor_col, config.n_groups)
@@ -188,6 +199,11 @@ class FactorBacktestService:
             ir=round(ir, 4) if ir is not None else None,
             ic_win_rate=round(ic_win_rate, 4) if ic_win_rate is not None else None,
             ic_series=ic_series,
+            rank_ic_mean=round(rank_ic_mean, 4) if rank_ic_mean is not None else None,
+            rank_ic_std=round(rank_ic_std, 4) if rank_ic_std is not None else None,
+            rank_ir=round(rank_ir, 4) if rank_ir is not None else None,
+            rank_ic_win_rate=round(rank_ic_win_rate, 4) if rank_ic_win_rate is not None else None,
+            rank_ic_series=rank_ic_series,
             group_stats=group_stats,
             group_nav=group_nav,
             long_short_stats=long_short_stats,
@@ -217,7 +233,17 @@ class FactorBacktestService:
 
     @staticmethod
     def _calc_ic(panel: pl.DataFrame, factor_col: str) -> pl.DataFrame:
-        """计算截面 Rank IC (因子值 rank vs 下期收益 rank 的相关系数)。"""
+        """Calculate Pearson cross-sectional IC for each evaluation date."""
+        return (
+            panel.filter(pl.col("_next_return").is_not_null())
+            .group_by("date")
+            .agg(pl.corr(factor_col, "_next_return").alias("ic"))
+            .sort("date")
+        )
+
+    @staticmethod
+    def _calc_rank_ic(panel: pl.DataFrame, factor_col: str) -> pl.DataFrame:
+        """Calculate Spearman cross-sectional RankIC for each evaluation date."""
         return (
             panel.filter(pl.col("_next_return").is_not_null())
             .group_by("date")
@@ -225,10 +251,20 @@ class FactorBacktestService:
                 pl.corr(
                     pl.col(factor_col).rank(method="average"),
                     pl.col("_next_return").rank(method="average"),
-                ).alias("ic")
+                ).alias("rank_ic")
             )
             .sort("date")
         )
+
+    @staticmethod
+    def _metric_summary(values: list[float]) -> tuple[float | None, float | None, float | None, float | None]:
+        if not values:
+            return None, None, None, None
+        mean = float(np.mean(values))
+        std = float(np.std(values))
+        information_ratio = mean / std if std > 1e-8 else None
+        positive_rate = sum(value > 0 for value in values) / len(values)
+        return mean, std, information_ratio, positive_rate
 
     # ── 调仓期收益 ──
 
