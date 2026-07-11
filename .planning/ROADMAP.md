@@ -32,7 +32,7 @@ AthenaQuant first delivers a single-container, data-lake-first market and portfo
   4. User can view current market and position changes in the main interface through the shared SSE pipeline.
   5. User can inspect a deterministic trade playbook, distinguish its baseline from bounded audited AI adjustments, and review an AI-free historical replay.
 
-**Plans**: 10/15 plans executed
+**Plans**: 11/15 plans executed
 Plans:
 **Wave 1**
 
@@ -58,7 +58,7 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 01-12-PLAN.md — Add bounded notification delivery and shared SSE handoff.
+- [x] 01-12-PLAN.md — Add bounded notification delivery and shared SSE handoff.
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
@@ -137,7 +137,7 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Core Merger | 10/15 | In Progress|  |
+| 1. Core Merger | 11/15 | In Progress|  |
 | 2. Factor And Strategy Research | 0/TBD | Not started | - |
 | 3. AI Analysis | 0/TBD | Not started | - |
 | 4. Advanced Capabilities | 0/TBD | Not started | - |
