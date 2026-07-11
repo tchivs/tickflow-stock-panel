@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
+import json
 from hashlib import sha256
 from pathlib import Path
 import uuid
@@ -113,6 +114,63 @@ def test_evaluation_reports_distinct_ic_rankic_and_reproducible_evidence(tmp_pat
         assert artifact.byte_size == len(content)
         assert artifact.checksum_sha256 == sha256(content).hexdigest()
 
+
+
+@pytest.mark.parametrize(
+    ("expression", "expected_factors"),
+    [
+        ("rank(close)", [1.0, 2.0, 1.0, 2.0]),
+        ("zscore(close)", [-0.7071067811865475, 0.7071067811865475, -0.7071067811865475, 0.7071067811865475]),
+        ("rolling_mean(close, 2)", [10.0, 20.0, 20.0, 30.0]),
+    ],
+)
+def test_evaluation_artifacts_preserve_stateful_factor_partitions(
+    tmp_path: Path, expression: str, expected_factors: list[float]
+) -> None:
+    registry = _registry(tmp_path)
+    revision = registry.create_factor(name="Partitioned", expression=expression, provenance={"author": "fixture"})
+    panel = pl.DataFrame(
+        {
+            "symbol": ["B", "A", "B", "A", "B", "A"],
+            "date": [
+                date(2024, 1, 3),
+                date(2024, 1, 2),
+                date(2024, 1, 2),
+                date(2024, 1, 3),
+                date(2024, 1, 4),
+                date(2024, 1, 4),
+            ],
+            "close": [40.0, 10.0, 20.0, 30.0, 80.0, 50.0],
+        }
+    )
+    engine = StubBacktestEngine(panel)
+    service = FactorEvaluationService(engine, registry, EvaluationArtifactService(tmp_path / "app-data"))
+
+    result = service.evaluate(_config(revision.id, symbols=("A", "B")))
+
+    assert result.status == "completed"
+    assert result.resolved_config and result.resolved_config["symbols"] == ["A", "B"]
+    assert result.input_manifest and result.input_manifest["required_source_fields"] == ["symbol", "date", "close"]
+    assert result.ic_series and result.rank_ic_series
+    assert engine.calls == [{
+        "symbols": ["A", "B"],
+        "start": date(2023, 12, 30),
+        "end": date(2024, 1, 3),
+        "columns": ["symbol", "date", "close"],
+        "asset_type": "stock",
+    }]
+
+    signals_artifact = next(artifact for artifact in result.artifacts if artifact.relative_path.endswith("signals.json"))
+    signals = json.loads((tmp_path / "app-data" / signals_artifact.relative_path).read_text())
+
+    assert [(row["symbol"], row["date"]) for row in signals] == [
+        ("A", "2024-01-02"),
+        ("B", "2024-01-02"),
+        ("A", "2024-01-03"),
+        ("B", "2024-01-03"),
+    ]
+    assert [row["factor"] for row in signals] == pytest.approx(expected_factors)
+    assert [row["forward_return"] for row in signals] == pytest.approx([2.0, 1.0, 2.0 / 3.0, 1.0])
 
 def test_invalid_configuration_or_revision_fails_before_governed_load(tmp_path: Path) -> None:
     registry = _registry(tmp_path)
