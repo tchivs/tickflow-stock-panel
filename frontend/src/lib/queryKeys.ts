@@ -43,6 +43,17 @@ export const QK = {
   backtestStatus:       ['backtest-status'] as const,
   strategyDetail:       (id: string) => ['strategy-detail', id] as const,
 
+  // Research workspace — preserve independent cache ownership by resource.
+  researchDslOptions: ['research', 'dsl-options'] as const,
+  researchFactors: ['research', 'factors'] as const,
+  researchFactor: (factorId: string) => ['research', 'factors', factorId] as const,
+  researchFactorRevisions: (factorId: string) => ['research', 'factors', factorId, 'revisions'] as const,
+  researchSimilarity: (expression: string) => ['research', 'similarity', expression] as const,
+  researchExperiments: ['research', 'experiments'] as const,
+  researchExperiment: (experimentId: string) => ['research', 'experiments', experimentId] as const,
+  researchComparisonCandidates: ['research', 'comparison', 'candidates'] as const,
+  researchComparison: (experimentIds: string[]) => ['research', 'comparison', ...experimentIds] as const,
+
   // Data / Pipeline
   dataStatus:           ['data-status'] as const,
   pipelineJobs:         ['pipeline-jobs'] as const,

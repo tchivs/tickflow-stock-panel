@@ -982,6 +982,165 @@ export interface StrategyAlertEvent {
   signals?: string[]
 }
 
+// ===== Phase 2 research =====
+export type JsonPrimitive = string | number | boolean | null
+export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue }
+
+export interface ResearchDslOptions {
+  dsl_version: string
+  fields: string[]
+  functions: Record<string, string[]>
+  operators: string[]
+}
+
+export interface ResearchDslValidation {
+  valid: true
+  normalized_expression: string
+  dsl_version: string
+  fields: string[]
+  operators: string[]
+  functions: string[]
+}
+
+export interface FactorRevision {
+  id: string
+  factor_id: string
+  revision_number: number
+  name: string
+  description: string
+  hypothesis: string
+  canonical_expression: string
+  dsl_version: string
+  ast_signature: string
+  shape_signature: string
+  fields: string[]
+  operators: string[]
+  functions: string[]
+  provenance: Record<string, JsonValue>
+  created_at: string
+}
+
+export interface SimilarityCandidate {
+  revision: FactorRevision
+  score: number
+  components: {
+    exact_structural_match: boolean
+    shape_match: number
+    field_overlap: number
+    operator_function_overlap: number
+  }
+  reason: string
+}
+
+export interface ModelProvenance {
+  provider: string
+  model: string
+  model_version: string | null
+  provenance: Record<string, JsonValue>
+}
+
+export interface HypothesisDraft {
+  draft_id: string
+  hypothesis: string
+  expression: string
+  normalized_expression: string
+  explanation: string
+  assumptions: string[]
+  provenance: Record<string, JsonValue>
+}
+
+export interface MetricSummary {
+  mean: number | null
+  std: number | null
+  information_ratio: number | null
+  positive_rate: number | null
+  observations: number
+}
+
+export interface MetricPoint {
+  date: string
+  ic?: number | null
+  rank_ic?: number | null
+}
+
+export interface GovernedInputManifest {
+  [key: string]: JsonValue
+}
+
+export interface ResearchArtifact {
+  evaluation_run_id: string
+  relative_path: string
+  content_type: string
+  byte_size: number
+  checksum_sha256: string
+  created_at: string
+}
+
+export interface FactorEvaluation {
+  evaluation_run_id: string | null
+  status: 'completed' | 'failed' | 'invalid'
+  factor_revision: FactorRevision | null
+  resolved_config: Record<string, JsonValue> | null
+  input_manifest: GovernedInputManifest | null
+  ic_series: MetricPoint[]
+  rank_ic_series: MetricPoint[]
+  ic_summary: MetricSummary | null
+  rank_ic_summary: MetricSummary | null
+  group_stats: Record<string, JsonValue>[]
+  group_nav: Record<string, JsonValue>[]
+  long_short_stats: Record<string, JsonValue>
+  long_short_nav: Record<string, JsonValue>[]
+  artifacts: ResearchArtifact[]
+  diagnostics: string[]
+}
+
+export type ExperimentStatus = 'draft' | 'running' | 'completed' | 'failed' | 'cancelled' | 'invalid'
+
+export interface ResearchExperiment {
+  id: string
+  originating_run_id: string
+  status: ExperimentStatus
+  validated: boolean
+  retained_at: string | null
+  subject: { kind: 'factor'; revision_id: string } | { kind: 'strategy'; id: string; version: string }
+  resolved_config: Record<string, JsonValue>
+  input_manifest: GovernedInputManifest
+  prediction_signals: Record<string, JsonValue>
+  metrics: {
+    ic_series?: MetricPoint[]
+    rank_ic_series?: MetricPoint[]
+    ic_summary?: MetricSummary
+    rank_ic_summary?: MetricSummary
+    [key: string]: JsonValue | MetricPoint[] | MetricSummary | undefined
+  }
+  artifacts: ResearchArtifact[]
+  diagnostics: Record<string, JsonValue>
+  model_provenance: ModelProvenance | null
+  created_at: string
+}
+
+export interface ExperimentComparison {
+  experiments: ResearchExperiment[]
+  deltas: Record<string, Record<string, JsonValue>>
+  warnings: string[]
+}
+
+export interface FactorEvaluationRequest {
+  universe: string
+  symbols: string[]
+  asset_type: 'stock' | 'etf'
+  start: string
+  end: string
+  forward_return_horizon: number
+  rebalance: 'daily' | 'weekly' | 'monthly'
+  missing_data_treatment: 'drop'
+  warmup_treatment: 'exclude'
+  warmup_days: number
+  n_groups: number
+  weight: 'equal' | 'factor_weight'
+  fees_pct: number
+  slippage_bps: number
+}
 // ===== API surface =====
 export const api = {
   health: () => request<{ status: string; version: string; mode: string }>('/health'),
@@ -1494,6 +1653,33 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+
+  researchDslOptions: () => request<ResearchDslOptions>('/api/research/dsl/options'),
+  validateResearchDsl: (expression: string) => request<ResearchDslValidation>('/api/research/dsl/validate', {
+    method: 'POST', body: JSON.stringify({ expression }),
+  }),
+  researchFactors: () => request<{ factors: FactorRevision[] }>('/api/research/factors'),
+  researchFactorRevisions: (factorId: string) => request<{ revisions: FactorRevision[] }>(`/api/research/factors/${factorId}/revisions`),
+  saveResearchFactor: (payload: Pick<FactorRevision, 'name'> & { expression: string; description?: string; hypothesis?: string }) =>
+    request<FactorRevision>('/api/research/factors', { method: 'POST', body: JSON.stringify(payload) }),
+  reviseResearchFactor: (factorId: string, payload: Pick<FactorRevision, 'name'> & { expression: string; description?: string; hypothesis?: string }) =>
+    request<FactorRevision>(`/api/research/factors/${factorId}/revisions`, { method: 'POST', body: JSON.stringify(payload) }),
+  researchSimilarity: (payload: { expression: string; limit?: number; exclude_revision_id?: string }) =>
+    request<{ candidates: SimilarityCandidate[] }>('/api/research/factors/similarity', { method: 'POST', body: JSON.stringify(payload) }),
+  draftResearchHypothesis: (hypothesis: string, options?: Record<string, string>) =>
+    request<HypothesisDraft>('/api/research/hypotheses/drafts', { method: 'POST', body: JSON.stringify({ hypothesis, options }) }),
+  saveReviewedHypothesis: (payload: { draft_id: string; name: string; expression: string; explanation: string; provenance: Record<string, JsonValue>; reviewed: true; factor_id?: string; description?: string }) =>
+    request<FactorRevision>('/api/research/hypotheses/reviewed-factor', { method: 'POST', body: JSON.stringify(payload) }),
+  evaluateResearchFactor: (revisionId: string, payload: FactorEvaluationRequest) =>
+    request<{ evaluation: FactorEvaluation; experiment: ResearchExperiment }>(`/api/research/factor-revisions/${revisionId}/evaluate`, { method: 'POST', body: JSON.stringify(payload) }),
+  researchExperiments: () => request<{ experiments: ResearchExperiment[] }>('/api/research/experiments'),
+  researchExperiment: (experimentId: string) => request<ResearchExperiment>(`/api/research/experiments/${experimentId}`),
+  retainResearchExperiment: (experimentId: string) => request<ResearchExperiment>(`/api/research/experiments/${experimentId}/retain`, { method: 'POST' }),
+  researchComparisonCandidates: () => request<{ experiments: ResearchExperiment[] }>('/api/research/comparison/candidates'),
+  compareResearchExperiments: (experimentIds: string[]) => request<ExperimentComparison>('/api/research/comparison', {
+    method: 'POST', body: JSON.stringify({ experiment_ids: experimentIds }),
+  }),
+  retainStrategyResearchExecution: (handle: string) => request<ResearchExperiment>(`/api/research/strategy-executions/${handle}/retain`, { method: 'POST' }),
 
   strategyBacktestRun: (payload: {
     strategy_id: string
