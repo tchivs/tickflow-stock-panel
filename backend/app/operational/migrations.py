@@ -223,6 +223,12 @@ MIGRATIONS: tuple[str, ...] = (
     CREATE INDEX idx_research_experiment_metrics_experiment ON research_experiment_metrics(experiment_id, id);
     CREATE INDEX idx_research_experiment_artifacts_experiment ON research_experiment_artifacts(experiment_id, id);
     """,
+    """
+    -- Evaluation evidence references are immutable JSON metadata; the managed
+    -- payload bytes remain under the experiment's artifact directory.
+    ALTER TABLE research_experiments
+    ADD COLUMN prediction_signal_json TEXT NOT NULL DEFAULT '{}';
+    """,
 )
 
 

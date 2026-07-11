@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sqlite3
 
 from app.research.factor_registry import FactorRegistry
 from app.research.repository import ResearchRepository
@@ -10,6 +11,15 @@ def _registry(database_path: Path) -> FactorRegistry:
     repository = ResearchRepository(database_path)
     repository.migrate()
     return FactorRegistry(repository)
+
+
+def test_fresh_migration_reserves_prediction_signal_references(tmp_path: Path) -> None:
+    database_path = tmp_path / "operational.db"
+    _registry(database_path)
+    with sqlite3.connect(database_path) as connection:
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(research_experiments)")}
+
+    assert "prediction_signal_json" in columns
 
 
 def test_factor_revisions_are_insert_only_and_history_is_preserved(tmp_path: Path) -> None:
