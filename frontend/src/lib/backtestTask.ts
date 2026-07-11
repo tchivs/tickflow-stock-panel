@@ -67,6 +67,21 @@ function buildQuery(params: Record<string, string | number | boolean | undefined
   return sp.toString()
 }
 
+function isStrategyBacktestResult(value: unknown): value is StrategyBacktestResult {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const result = value as Record<string, unknown>
+  return (typeof result.error === 'string' || result.error === null)
+    && typeof result.run_id === 'string'
+    && typeof result.config === 'object' && result.config !== null && !Array.isArray(result.config)
+    && typeof result.stats === 'object' && result.stats !== null && !Array.isArray(result.stats)
+    && Array.isArray(result.equity_curve)
+    && Array.isArray(result.drawdown_curve)
+    && Array.isArray(result.trades)
+    && Array.isArray(result.per_symbol_stats)
+    && typeof result.strategy_info === 'object' && result.strategy_info !== null && !Array.isArray(result.strategy_info)
+    && typeof result.elapsed_ms === 'number'
+}
+
 /** 连接 SSE (新建或重连都用这个) */
 function connectSSE(url: string): void {
   const id = current?.id ?? ++taskSeq
@@ -119,22 +134,21 @@ function connectSSE(url: string): void {
   es.addEventListener('done', (e: MessageEvent) => {
     if (current?.id !== id) return
     try {
-      const result = JSON.parse(e.data) as StrategyBacktestResult
-      const terminalError = typeof result.error === 'string' && result.error.trim()
-      const terminalHandle = result.research_execution_handle
+      const payload: unknown = JSON.parse(e.data)
+      if (!isStrategyBacktestResult(payload)) throw new Error('Malformed strategy result')
+      const terminalError = typeof payload.error === 'string' && payload.error.trim()
       current = {
         ...current,
         isPending: false,
-        result,
+        result: payload,
         error: terminalError || null,
         reconnecting: false,
-        researchExecutionHandle: terminalError
-          ? null
-          : current.researchExecutionHandle ?? (typeof terminalHandle === 'string' && terminalHandle.trim() ? terminalHandle : null),
+        // Terminal payloads never establish trust; only this task's research event can.
+        researchExecutionHandle: terminalError ? null : current.researchExecutionHandle,
       }
       emit()
     } catch {
-      current = { ...current, isPending: false, error: '结果解析失败', reconnecting: false, researchExecutionHandle: null }
+      current = { ...current, isPending: false, result: null, error: '结果解析失败', reconnecting: false, researchExecutionHandle: null }
       emit()
     }
     es.close()

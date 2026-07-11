@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef, type KeyboardEvent, type ReactNode } from 'react'
+import { useState, useMemo, useEffect, useRef, type FocusEvent, type KeyboardEvent, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Play, FlaskConical, Clock, Loader2, Square, Search, Plus, X, SlidersHorizontal, BarChart3, Gauge, Zap, ListPlus, HelpCircle } from 'lucide-react'
@@ -748,7 +748,7 @@ export function StrategyBacktest() {
   const [dailyPage, setDailyPage] = useState(0)
   const [tradePage, setTradePage] = useState(0)
   const [resultTaskId, setResultTaskId] = useState<number | null>(null)
-  const [retainedExperiment, setRetainedExperiment] = useState<ResearchExperiment | null>(null)
+  const [retainedExperiment, setRetainedExperiment] = useState<{ taskId: number; experiment: ResearchExperiment } | null>(null)
   const resultTabRefs = useRef<Record<'daily' | 'trades' | 'picks', HTMLButtonElement | null>>({ daily: null, trades: null, picks: null })
   const queryClient = useQueryClient()
   const [tradePageSize, setTradePageSize] = useState(10)
@@ -789,13 +789,12 @@ export function StrategyBacktest() {
   const isPending = backtestTask?.isPending ?? false
 
   const retainCompletedStrategy = useMutation({
-    mutationFn: () => {
-      const handle = backtestTask?.researchExecutionHandle
-      if (!handle) throw new Error('此运行没有可保留的研究句柄')
-      return api.retainStrategyResearchExecution(handle)
-    },
-    onSuccess: experiment => {
-      setRetainedExperiment(experiment)
+    mutationFn: ({ handle }: { taskId: number; handle: string }) => api.retainStrategyResearchExecution(handle),
+    onSuccess: (experiment, variables) => {
+      // A late response must not associate an older immutable snapshot with a newer result.
+      if (backtestTask?.id === variables.taskId && resultTaskId === variables.taskId) {
+        setRetainedExperiment({ taskId: variables.taskId, experiment })
+      }
       queryClient.invalidateQueries({ queryKey: QK.researchExperiments })
       queryClient.invalidateQueries({ queryKey: QK.researchComparisonCandidates })
     },
@@ -866,19 +865,26 @@ export function StrategyBacktest() {
     && !backtestTask.error
     && backtestTask.result === result
     && !result?.error
-  const retentionEligible = Boolean(currentCompletedResult && backtestTask?.researchExecutionHandle && !retainedExperiment)
+  const retainedForCurrentResult = retainedExperiment?.taskId === resultTaskId ? retainedExperiment : null
+  const pendingRetentionForCurrentResult = retainCompletedStrategy.isPending
+    && retainCompletedStrategy.variables?.taskId === resultTaskId
+    && retainCompletedStrategy.variables.handle === backtestTask?.researchExecutionHandle
+  const retentionErrorForCurrentResult = retainCompletedStrategy.isError
+    && retainCompletedStrategy.variables?.taskId === resultTaskId
+    && retainCompletedStrategy.variables.handle === backtestTask?.researchExecutionHandle
+  const retentionEligible = Boolean(currentCompletedResult && backtestTask?.researchExecutionHandle && !retainedForCurrentResult)
   const retentionControl = currentCompletedResult ? (
     <div className="flex flex-wrap items-center gap-2">
-      {retainedExperiment ? (
-        <><p role="status" className="text-xs text-bull">已保留：此完成快照现在可在比较中选择。</p><span className="text-[11px] text-muted">实验 ID：<code>{retainedExperiment.id}</code></span></>
+      {retainedForCurrentResult ? (
+        <><p role="status" className="text-xs text-bull">已保留：此完成快照现在可在比较中选择。</p><span className="text-[11px] text-muted">实验 ID：<code>{retainedForCurrentResult.experiment.id}</code></span></>
       ) : retentionEligible ? (
-        <button type="button" disabled={retainCompletedStrategy.isPending} onClick={() => retainCompletedStrategy.mutate()} className="min-h-11 rounded-btn border border-amber-400/40 px-3 py-1.5 text-xs text-amber-500 transition-colors hover:bg-amber-400/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:cursor-not-allowed disabled:opacity-45">
-          {retainCompletedStrategy.isPending ? '正在保留完成策略实验…' : '保留此完成策略实验以供比较'}
+        <button type="button" disabled={pendingRetentionForCurrentResult} onClick={() => retainCompletedStrategy.mutate({ taskId: resultTaskId!, handle: backtestTask!.researchExecutionHandle! })} className="min-h-11 rounded-btn border border-amber-400/40 px-3 py-1.5 text-xs text-amber-500 transition-colors hover:bg-amber-400/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:cursor-not-allowed disabled:opacity-45">
+          {pendingRetentionForCurrentResult ? '正在保留完成策略实验…' : '保留此完成策略实验以供比较'}
         </button>
       ) : (
         <p className="text-xs text-amber-500">此运行没有可保留的研究句柄；请重新运行。</p>
       )}
-      {retainCompletedStrategy.isError && <p role="alert" className="text-xs text-danger">无法保留此完成策略实验：{retainCompletedStrategy.error.message}。请重试。</p>}
+      {retentionErrorForCurrentResult && <p role="alert" className="text-xs text-danger">无法保留此完成策略实验：{retainCompletedStrategy.error.message}。请重试。</p>}
     </div>
   ) : null
 
@@ -907,6 +913,10 @@ export function StrategyBacktest() {
     if (target === wrapper.scrollLeft) return
     wrapper.scrollLeft = target
     event.preventDefault()
+  }
+
+  const handleResultTableFocus = (event: FocusEvent<HTMLDivElement>) => {
+    event.currentTarget.scrollLeft = 0
   }
 
   const handleRun = () => {
@@ -1809,8 +1819,9 @@ export function StrategyBacktest() {
                 {resultTab === 'daily' && (
                   <div id="strategy-result-panel-daily" role="tabpanel" aria-labelledby="strategy-result-tab-daily">
                     <p className="px-4 pt-3 text-xs text-muted">左右滚动查看全部列</p>
-                    <div tabIndex={0} aria-label="每日交易结果表，可使用左右方向键或 End 键查看全部列" onKeyDown={handleResultTableKeyDown} className="overflow-x-auto focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface">
+                    <div tabIndex={0} aria-label="每日交易结果表，可使用左右方向键或 End 键查看全部列" onFocus={handleResultTableFocus} onKeyDown={handleResultTableKeyDown} className="overflow-x-auto focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface">
                     <table className="w-full min-w-[960px] text-sm text-foreground">
+                      <caption className="sr-only">每日交易结果，第 {safeDailyPage + 1} 页，显示 {dailyStart + 1}-{dailyEnd} 天，共 {dailyTradeRows.length} 天</caption>
                       <thead className="bg-elevated">
                         <tr className="text-left text-secondary">
                           <th scope="col" className="px-3 py-2.5 font-medium w-[8.5rem]">日期</th>
@@ -1870,7 +1881,7 @@ export function StrategyBacktest() {
                         <div className="flex flex-wrap items-center gap-2">
                           <button
                             type="button"
-                            onClick={() => setDailyPage(p => Math.max(0, p - 1))}
+                            onClick={event => { const button = event.currentTarget; setDailyPage(p => Math.max(0, p - 1)); requestAnimationFrame(() => button.focus()) }}
                             disabled={safeDailyPage <= 0}
                             className="rounded-btn border border-border bg-surface px-2.5 py-1 text-xs text-secondary transition-colors hover:border-accent/40 hover:text-accent disabled:cursor-not-allowed disabled:opacity-45"
                           >
@@ -1881,7 +1892,7 @@ export function StrategyBacktest() {
                           </span>
                           <button
                             type="button"
-                            onClick={() => setDailyPage(p => Math.min(dailyPageCount - 1, p + 1))}
+                            onClick={event => { const button = event.currentTarget; setDailyPage(p => Math.min(dailyPageCount - 1, p + 1)); requestAnimationFrame(() => button.focus()) }}
                             disabled={safeDailyPage >= dailyPageCount - 1}
                             className="rounded-btn border border-border bg-surface px-2.5 py-1 text-xs text-secondary transition-colors hover:border-accent/40 hover:text-accent disabled:cursor-not-allowed disabled:opacity-45"
                           >
@@ -1896,8 +1907,9 @@ export function StrategyBacktest() {
                 {resultTab === 'trades' && (
                   <div id="strategy-result-panel-trades" role="tabpanel" aria-labelledby="strategy-result-tab-trades">
                     <p className="px-4 pt-3 text-xs text-muted">左右滚动查看全部列</p>
-                    <div tabIndex={0} aria-label="交易明细结果表，可使用左右方向键或 End 键查看全部列" onKeyDown={handleResultTableKeyDown} className="overflow-x-auto focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface">
+                    <div tabIndex={0} aria-label="交易明细结果表，可使用左右方向键或 End 键查看全部列" onFocus={handleResultTableFocus} onKeyDown={handleResultTableKeyDown} className="overflow-x-auto focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface">
                     <table className="w-full min-w-[960px] text-sm text-foreground">
+                      <caption className="sr-only">交易明细结果，第 {safeTradePage + 1} 页，显示 {tradeStart + 1}-{tradeEnd} 条，共 {sortedTrades.length} 条</caption>
                       <thead className="bg-elevated">
                         <tr className="text-left text-secondary">
                           <th scope="col" className="px-4 py-2.5 font-medium">标的</th>
@@ -1968,7 +1980,7 @@ export function StrategyBacktest() {
                           </label>
                           <button
                             type="button"
-                            onClick={() => setTradePage(p => Math.max(0, p - 1))}
+                            onClick={event => { const button = event.currentTarget; setTradePage(p => Math.max(0, p - 1)); requestAnimationFrame(() => button.focus()) }}
                             disabled={safeTradePage <= 0}
                             className="rounded-btn border border-border bg-surface px-2.5 py-1 text-xs text-secondary transition-colors hover:border-accent/40 hover:text-accent disabled:cursor-not-allowed disabled:opacity-45"
                           >
@@ -1979,7 +1991,7 @@ export function StrategyBacktest() {
                           </span>
                           <button
                             type="button"
-                            onClick={() => setTradePage(p => Math.min(tradePageCount - 1, p + 1))}
+                            onClick={event => { const button = event.currentTarget; setTradePage(p => Math.min(tradePageCount - 1, p + 1)); requestAnimationFrame(() => button.focus()) }}
                             disabled={safeTradePage >= tradePageCount - 1}
                             className="rounded-btn border border-border bg-surface px-2.5 py-1 text-xs text-secondary transition-colors hover:border-accent/40 hover:text-accent disabled:cursor-not-allowed disabled:opacity-45"
                           >
