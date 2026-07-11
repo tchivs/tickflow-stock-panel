@@ -18,6 +18,7 @@ status: complete
 - `59e3c55` — typed research API and cache contracts
 - `d43503f` — Backtest research workspace
 - `052f270` — deterministic browser proof
+- `1c82d61` — isolated deterministic browser fixtures
 
 ## Verification
 
