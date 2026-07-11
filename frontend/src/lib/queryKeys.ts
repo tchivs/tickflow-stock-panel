@@ -74,7 +74,10 @@ export const QK = {
   // Monitor (监控规则 + 触发记录)
   monitorRules:         ['monitor-rules'] as const,
   monitorRuleOptions:   ['monitor-rule-options'] as const,
-  alerts:               (source?: string) => ['alerts', source ?? ''] as const,
+  // 触发记录: 三个筛选维度都进 key; 失效仍用前缀 ['alerts'] 一次命中全部变体
+  alerts:               (source?: string, severity?: string, delivery?: string) => ['alerts', source ?? '', severity ?? '', delivery ?? ''] as const,
+  // Dashboard 小组件的精简列表 (limit 不同) — 独立 key, 避免与监控中心全量列表互相覆盖缓存
+  alertsRecent:         (limit = 10) => ['alerts', 'recent', limit] as const,
   monitorDelivery:      (eventId: string) => ['monitor-delivery', eventId] as const,
 
   // Portfolio

@@ -19,7 +19,7 @@ services:
       AI_API_KEY: ""
       AUTH_PASSWORD: ""
     command: ["/app/.venv/bin/uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "3018"]
-    ports:
+    ports: !override
       - 127.0.0.1:13018:3018
     volumes: !override
       - ./.tmp/phase1-data:/app/.tmp/phase1-data
