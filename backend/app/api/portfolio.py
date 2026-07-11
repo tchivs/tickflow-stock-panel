@@ -21,10 +21,10 @@ def _service(request: Request) -> PortfolioService:
     return request.app.state.portfolio_service
 
 
-def _notify_portfolio_updated(request: Request) -> None:
+def _notify_portfolio_updated(request: Request, account_ids: list[int | str]) -> None:
     notifier = getattr(request.app.state.quote_service, "notify_portfolio_updated", None)
     if callable(notifier):
-        notifier()
+        notifier(account_ids)
 
 
 class AccountCreate(BaseModel):
@@ -71,7 +71,7 @@ def create_account(payload: AccountCreate, request: Request) -> dict[str, Any]:
         account = _repository(request).create_account(**payload.model_dump())
     except ValueError as error:
         raise _invalid(error) from error
-    _notify_portfolio_updated(request)
+    _notify_portfolio_updated(request, [account["id"]])
     return {"account": account}
 
 
@@ -83,7 +83,7 @@ def update_account(account_id: int, payload: AccountUpdate, request: Request) ->
         raise _invalid(error) from error
     if account is None:
         raise HTTPException(status_code=404, detail="account not found")
-    _notify_portfolio_updated(request)
+    _notify_portfolio_updated(request, [account["id"]])
     return {"account": account}
 
 
@@ -92,7 +92,7 @@ def archive_account(account_id: int, request: Request) -> dict[str, Any]:
     account = _repository(request).archive_account(account_id)
     if account is None:
         raise HTTPException(status_code=404, detail="account not found")
-    _notify_portfolio_updated(request)
+    _notify_portfolio_updated(request, [account["id"]])
     return {"account": account}
 
 
@@ -103,7 +103,7 @@ def delete_account(account_id: int, request: Request) -> dict[str, bool]:
         raise HTTPException(status_code=404, detail="account not found")
     if not repository.delete_account(account_id):
         raise HTTPException(status_code=400, detail="account has positions or operational history and must be archived")
-    _notify_portfolio_updated(request)
+    _notify_portfolio_updated(request, [account_id])
     return {"ok": True}
 
 
@@ -122,7 +122,7 @@ def create_position(payload: PositionCreate, request: Request) -> dict[str, Any]
         position = _repository(request).create_position(**payload.model_dump())
     except ValueError as error:
         raise _invalid(error) from error
-    _notify_portfolio_updated(request)
+    _notify_portfolio_updated(request, [position["account_id"]])
     return {"position": position}
 
 
@@ -134,7 +134,7 @@ def update_position(position_id: int, payload: PositionUpdate, request: Request)
         raise _invalid(error) from error
     if position is None:
         raise HTTPException(status_code=404, detail="position not found")
-    _notify_portfolio_updated(request)
+    _notify_portfolio_updated(request, [position["account_id"]])
     return {"position": position}
 
 
@@ -143,18 +143,19 @@ def archive_position(position_id: int, request: Request) -> dict[str, Any]:
     position = _repository(request).archive_position(position_id)
     if position is None:
         raise HTTPException(status_code=404, detail="position not found")
-    _notify_portfolio_updated(request)
+    _notify_portfolio_updated(request, [position["account_id"]])
     return {"position": position}
 
 
 @router.delete("/positions/{position_id}")
 def delete_position(position_id: int, request: Request) -> dict[str, bool]:
     repository = _repository(request)
-    if repository.get_position(position_id) is None:
+    position = repository.get_position(position_id)
+    if position is None:
         raise HTTPException(status_code=404, detail="position not found")
     if not repository.delete_position(position_id):
         raise HTTPException(status_code=400, detail="position has operational history and must be archived")
-    _notify_portfolio_updated(request)
+    _notify_portfolio_updated(request, [position["account_id"]])
     return {"ok": True}
 
 

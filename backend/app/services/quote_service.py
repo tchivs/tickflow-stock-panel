@@ -55,6 +55,7 @@ class QuoteSubscriber:
         self._quote_updated = False
         self._strategy_results_updated = False
         self._depth_updated = False
+        self._portfolio_account_ids: list[str] = []
         self._alerts: list[dict] = []
         self._reviews: list[str] = []
 
@@ -70,6 +71,8 @@ class QuoteSubscriber:
                 "quote_updated": self._quote_updated,
                 "strategy_results_updated": self._strategy_results_updated,
                 "depth_updated": self._depth_updated,
+                "portfolio_updated": bool(self._portfolio_account_ids),
+                "portfolio_account_ids": self._portfolio_account_ids,
                 "alerts": self._alerts,
                 "reviews": self._reviews,
             }
@@ -78,6 +81,7 @@ class QuoteSubscriber:
             self._depth_updated = False
             self._alerts = []
             self._reviews = []
+            self._portfolio_account_ids = []
             self._event.clear()
             return out
 
@@ -104,6 +108,7 @@ class QuoteSubscriber:
                 and not self._strategy_results_updated
                 and not self._depth_updated
                 and not self._reviews
+                and not self._portfolio_account_ids
             ):
                 self._event.clear()
 
@@ -121,6 +126,15 @@ class QuoteSubscriber:
         with self._lock:
             self._depth_updated = True
             self._event.set()
+
+    def notify_portfolio_updated(self, account_ids: list[str | int]) -> None:
+        with self._lock:
+            for account_id in account_ids:
+                normalized = str(account_id)
+                if normalized and normalized not in self._portfolio_account_ids:
+                    self._portfolio_account_ids.append(normalized)
+            if self._portfolio_account_ids:
+                self._event.set()
 
 
 
@@ -345,6 +359,11 @@ class QuoteService:
     def _broadcast_alerts(self, alerts: list[dict]) -> None:
         for sub in self._snapshot_subscribers():
             sub.push_alerts(alerts)
+
+    def notify_portfolio_updated(self, account_ids: list[str | int]) -> None:
+        """Fan out coalesced account changes through the existing SSE subscribers."""
+        for sub in self._snapshot_subscribers():
+            sub.notify_portfolio_updated(account_ids)
 
 
     def persist_stream_and_enqueue_alerts(

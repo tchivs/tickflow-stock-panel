@@ -153,6 +153,15 @@ async def quote_stream(request: Request):
                         }, ensure_ascii=False),
                     }
 
+                if data["portfolio_updated"]:
+                    yield {
+                        "event": "portfolio_updated",
+                        "data": json.dumps({
+                            "ts": int(time.time() * 1000),
+                            "account_ids": data["portfolio_account_ids"],
+                        }),
+                    }
+
                 # 复盘进度 (定时复盘流式生成时) — 前端 reviewStore 直接消费
                 # 事件已是 recap_market_stream 产出的 JSON 字符串, 逐条转发
                 for evt_json in data["reviews"]:
