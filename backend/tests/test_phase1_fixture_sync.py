@@ -122,3 +122,5 @@ def test_d13_fixture_mode_requires_an_explicit_test_only_environment_switch(tmp_
     assert fixture_provider_enabled() is False
     monkeypatch.setenv("PHASE1_FIXTURE_MODE", "1")
     assert fixture_provider_enabled() is True
+    monkeypatch.setenv("PHASE1_FIXTURE_MODE", "true")
+    assert fixture_provider_enabled() is True

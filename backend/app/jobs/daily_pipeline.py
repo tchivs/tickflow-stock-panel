@@ -52,7 +52,7 @@ def fixture_provider_enabled() -> bool:
     """Whether the isolated Phase 1 acceptance provider was explicitly enabled."""
     import os
 
-    return os.environ.get("PHASE1_FIXTURE_MODE") == "1"
+    return os.environ.get("PHASE1_FIXTURE_MODE", "").strip().lower() in {"1", "true", "yes"}
 
 
 def run_phase1_fixture_sync(data_dir: Path) -> dict:
