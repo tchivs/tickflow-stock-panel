@@ -126,6 +126,20 @@ MIGRATIONS: tuple[str, ...] = (
     CREATE INDEX idx_alert_events_rule_occurred_at ON alert_events(rule_id, occurred_at DESC);
     CREATE INDEX idx_alert_events_position_occurred_at ON alert_events(position_id, occurred_at DESC);
     """,
+    """
+    CREATE TABLE notification_deliveries (
+        id INTEGER PRIMARY KEY,
+        event_id TEXT NOT NULL REFERENCES alert_events(id) ON DELETE RESTRICT,
+        channel TEXT NOT NULL CHECK (channel IN ('feishu', 'telegram')),
+        status TEXT NOT NULL CHECK (status IN ('pending', 'sent', 'failed', 'skipped')),
+        error TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(event_id, channel)
+    );
+
+    CREATE INDEX idx_notification_deliveries_event_id ON notification_deliveries(event_id, id);
+    """, 
 )
 
 

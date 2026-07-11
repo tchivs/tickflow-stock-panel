@@ -63,6 +63,18 @@ def _gen_sign(timestamp: str, secret: str) -> str:
     ).digest()
     return base64.b64encode(hmac_code).decode("utf-8")
 
+def build_feishu_text_payload(title: str, body: str, secret: str = "") -> dict:
+    """Build the approved Feishu text payload, including optional HMAC signing."""
+    text = _truncate(f"{title}\n{body}".strip())
+    if not text:
+        raise ValueError("Feishu notification text is required")
+    payload: dict = {"msg_type": "text", "content": {"text": text}}
+    if secret:
+        timestamp = str(int(time.time()))
+        payload["timestamp"] = timestamp
+        payload["sign"] = _gen_sign(timestamp, secret)
+    return payload
+
 
 def _truncate_card(text: str) -> str:
     """截断卡片正文 (留余量给标题与卡片结构)。"""

@@ -83,6 +83,8 @@ async def lifespan(app: FastAPI):
         quote_service=qs,
         governed_closes=repo,
     )
+    from app.notifications.delivery import NotificationDeliveryService
+    app.state.notification_delivery = NotificationDeliveryService(repository=operational)
 
     # QuoteService 需要访问 strategy_monitor 等单例
     # 先创建 strategy_monitor，再注入 app.state

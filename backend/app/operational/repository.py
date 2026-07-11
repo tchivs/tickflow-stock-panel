@@ -390,6 +390,55 @@ class OperationalRepository:
         event["created_at"] = record.pop("created_at")
         return event
 
+    def create_delivery_outcome(
+        self,
+        *,
+        event_id: str,
+        channel: str,
+        status: str,
+        error: str | None,
+    ) -> None:
+        if channel not in {"feishu", "telegram"} or status not in {"pending", "sent", "failed", "skipped"}:
+            raise ValueError("notification delivery outcome is invalid")
+        now = _now()
+        with self._connection() as connection, connection:
+            connection.execute(
+                """INSERT INTO notification_deliveries (
+                       event_id, channel, status, error, created_at, updated_at
+                   ) VALUES (?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(event_id, channel) DO UPDATE SET
+                       status = excluded.status, error = excluded.error, updated_at = excluded.updated_at""",
+                (event_id, channel, status, error, now, now),
+            )
+
+    def update_delivery_outcome(
+        self,
+        *,
+        event_id: str,
+        channel: str,
+        status: str,
+        error: str | None,
+    ) -> None:
+        if status not in {"sent", "failed", "skipped"}:
+            raise ValueError("notification delivery status is invalid")
+        with self._connection() as connection, connection:
+            if connection.execute(
+                """UPDATE notification_deliveries
+                   SET status = ?, error = ?, updated_at = ?
+                   WHERE event_id = ? AND channel = ?""",
+                (status, error, _now(), event_id, channel),
+            ).rowcount != 1:
+                raise ValueError("notification delivery does not exist")
+
+    def list_delivery_outcomes(self, event_id: str) -> list[dict[str, Any]]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                """SELECT channel, status, error FROM notification_deliveries
+                   WHERE event_id = ? ORDER BY id""",
+                (event_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     @staticmethod
     def _decision_snapshot_json(snapshot: Mapping[str, Any]) -> str:
         if not isinstance(snapshot, Mapping):
