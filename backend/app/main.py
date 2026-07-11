@@ -63,6 +63,12 @@ async def lifespan(app: FastAPI):
     operational = OperationalRepository(store.data_dir / "operational.db")
     operational.migrate()
     app.state.operational = operational
+    from app.research.factor_registry import FactorRegistry
+    from app.research.repository import ResearchRepository
+
+    research_repository = ResearchRepository(operational.database_path)
+    app.state.research_repository = research_repository
+    app.state.factor_registry = FactorRegistry(research_repository)
     # 指标异步预热标志: enriched 缓存在后台线程构建, 完成后置 True
     app.state.indicators_ready = False
     repo._on_warmup_done = lambda: setattr(app.state, "indicators_ready", True)  # noqa: SLF001

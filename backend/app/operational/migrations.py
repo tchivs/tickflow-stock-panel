@@ -144,6 +144,85 @@ MIGRATIONS: tuple[str, ...] = (
     ALTER TABLE accounts ADD COLUMN notes TEXT NOT NULL DEFAULT '';
     ALTER TABLE positions ADD COLUMN notes TEXT NOT NULL DEFAULT '';
     """,
+    """
+    CREATE TABLE research_factor_definitions (
+        id TEXT PRIMARY KEY,
+        created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE research_factor_revisions (
+        id TEXT PRIMARY KEY,
+        factor_id TEXT NOT NULL REFERENCES research_factor_definitions(id) ON DELETE RESTRICT,
+        revision_number INTEGER NOT NULL CHECK (revision_number > 0),
+        name TEXT NOT NULL,
+        description TEXT NOT NULL,
+        hypothesis TEXT NOT NULL,
+        canonical_expression TEXT NOT NULL,
+        dsl_version TEXT NOT NULL,
+        ast_signature TEXT NOT NULL,
+        shape_signature TEXT NOT NULL,
+        fields_json TEXT NOT NULL,
+        operators_json TEXT NOT NULL,
+        functions_json TEXT NOT NULL,
+        provenance_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(factor_id, revision_number)
+    );
+
+    -- Reserved immutable experiment catalog tables for Phase 2 Plans 02-03.
+    CREATE TABLE research_experiments (
+        id TEXT PRIMARY KEY,
+        factor_revision_id TEXT REFERENCES research_factor_revisions(id) ON DELETE RESTRICT,
+        strategy_id TEXT,
+        strategy_version TEXT,
+        originating_run_id TEXT NOT NULL UNIQUE,
+        status TEXT NOT NULL CHECK (status IN ('draft', 'running', 'completed', 'failed', 'cancelled', 'invalid')),
+        validated INTEGER NOT NULL CHECK (validated IN (0, 1)),
+        retained_at TEXT,
+        resolved_config_json TEXT NOT NULL,
+        input_manifest_json TEXT NOT NULL,
+        diagnostics_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        CHECK (
+            (factor_revision_id IS NOT NULL AND strategy_id IS NULL AND strategy_version IS NULL)
+            OR (factor_revision_id IS NULL AND strategy_id IS NOT NULL AND strategy_version IS NOT NULL)
+        )
+    );
+
+    CREATE TABLE research_experiment_metrics (
+        id INTEGER PRIMARY KEY,
+        experiment_id TEXT NOT NULL REFERENCES research_experiments(id) ON DELETE RESTRICT,
+        metric_json TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE research_experiment_artifacts (
+        id INTEGER PRIMARY KEY,
+        experiment_id TEXT NOT NULL REFERENCES research_experiments(id) ON DELETE RESTRICT,
+        relative_path TEXT NOT NULL,
+        content_type TEXT NOT NULL,
+        byte_size INTEGER NOT NULL CHECK (byte_size >= 0),
+        checksum_sha256 TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(experiment_id, relative_path)
+    );
+
+    CREATE TABLE research_experiment_model_provenance (
+        id INTEGER PRIMARY KEY,
+        experiment_id TEXT NOT NULL UNIQUE REFERENCES research_experiments(id) ON DELETE RESTRICT,
+        provider TEXT NOT NULL,
+        model TEXT NOT NULL,
+        model_version TEXT,
+        provenance_json TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX idx_research_factor_revisions_factor ON research_factor_revisions(factor_id, revision_number);
+    CREATE INDEX idx_research_factor_revisions_signature ON research_factor_revisions(ast_signature);
+    CREATE INDEX idx_research_experiments_comparable ON research_experiments(status, validated, retained_at, created_at);
+    CREATE INDEX idx_research_experiment_metrics_experiment ON research_experiment_metrics(experiment_id, id);
+    CREATE INDEX idx_research_experiment_artifacts_experiment ON research_experiment_artifacts(experiment_id, id);
+    """,
 )
 
 
