@@ -19,6 +19,7 @@ status: complete
 - `d43503f` — Backtest research workspace
 - `052f270` — deterministic browser proof
 - `1c82d61` — isolated deterministic browser fixtures
+- `b52ebf1` — factor revision history view
 
 ## Verification
 
