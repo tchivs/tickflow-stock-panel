@@ -200,14 +200,16 @@ def test_successful_runs_derive_stable_governed_panel_identity() -> None:
 
     first = run(pl.DataFrame(rows).sort(["symbol", "date"]))
     second = run(pl.DataFrame(rows).sort(["symbol", "date"]))
-    changed = run(pl.DataFrame([*rows, {**rows[-1], "date": start + timedelta(days=3)}]).sort(["symbol", "date"]))
+    row_count_changed = run(pl.DataFrame([*rows, rows[-1]]).sort(["symbol", "date"]))
+    window_changed = run(pl.DataFrame([*rows[:-1], {**rows[-1], "date": start + timedelta(days=3)}]).sort(["symbol", "date"]))
     schema_changed = run(pl.DataFrame(rows).with_columns(pl.lit("v2").alias("governed_marker")).sort(["symbol", "date"]))
 
     assert first.error is None
     assert first.governed_input_manifest == second.governed_input_manifest
     assert first.governed_input_manifest["revision"] == second.governed_input_manifest["revision"]
     assert first.governed_input_manifest["fingerprint"] == second.governed_input_manifest["fingerprint"]
-    assert first.governed_input_manifest["fingerprint"] != changed.governed_input_manifest["fingerprint"]
+    assert first.governed_input_manifest["fingerprint"] != row_count_changed.governed_input_manifest["fingerprint"]
+    assert first.governed_input_manifest["fingerprint"] != window_changed.governed_input_manifest["fingerprint"]
     assert first.governed_input_manifest["revision"] != schema_changed.governed_input_manifest["revision"]
     assert first.config["asset_type"] == "fund"
 
