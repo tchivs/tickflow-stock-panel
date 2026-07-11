@@ -92,6 +92,7 @@ status: complete
 1. **Task 1: Preserve the trusted SSE research handle in Backtest task state** — `6768476` (`feat`)
 2. **Task 2: Add the explicit completed-strategy retention action and existing comparison reachability** — `fe76249` (`feat`)
 3. **Task 3: Prove the complete approved responsive and keyboard Scenario 5 in the focused browser suite** — `ad0912b`, `9bb1144` (`test`)
+4. **Review remediation: CR-01, CR-02, WR-01–WR-04** — `ef23616` (`fix`)
 
 ## Files Created/Modified
 
@@ -105,11 +106,17 @@ status: complete
 
 ```text
 pnpm --dir frontend build
-passed — TypeScript and Vite production build completed in 7.43s
+passed — TypeScript and Vite production build completed in 9.74s
 
 pnpm --dir frontend exec playwright test e2e/phase2-research.spec.ts --project=desktop-chromium
-3 passed in 11.4s
+6 passed in 56.6s
 ```
+
+## Review Remediation
+
+- CR-01: Runtime structural validation now rejects JSON-valid malformed strategy terminal payloads with `结果解析失败`, clears the task-owned handle, and exposes no retention action.
+- CR-02: Retention mutations, pending/error UI, and retained snapshots are task-and-handle scoped; a delayed old-task success still invalidates shared queries but cannot mark a newer result retained.
+- WR-01–WR-04: Both dense tables carry active-range sr-only captions; fixtures record and validate the one opaque-handle retention request; 409 rejects prove no promotion or retry; the 1440px/1024px/375px keyboard scenario now covers factor lifecycle/disclosures, strategy retention, comparison, pagination focus, and narrow-table keyboard scrolling.
 
 ## Decisions Made
 
@@ -129,8 +136,16 @@ pnpm --dir frontend exec playwright test e2e/phase2-research.spec.ts --project=d
 - **Verification:** `pnpm --dir frontend build` passed.
 - **Committed in:** `fe76249`
 
-**Total deviations:** 1 auto-fixed (1 Rule 1 bug).
-**Impact on plan:** Required compilation repair only; no behavior or scope change.
+**2. [Review remediation] Preserved focus on result-table pagination controls after keyboard page changes**
+- **Found during:** CR/WR remediation browser verification.
+- **Issue:** A page-control rerender discarded keyboard focus after activation, violating the approved Scenario 5 focus-retention contract.
+- **Fix:** Restored focus to the originating pagination control after the state update and reset a focus-entered overflow wrapper to its left edge before real ArrowRight/End navigation.
+- **Files modified:** `frontend/src/pages/backtest/StrategyBacktest.tsx`, `frontend/e2e/phase2-research.spec.ts`
+- **Verification:** focused build and Playwright commands above passed.
+- **Committed in:** `ef23616`
+
+**Total deviations:** 1 auto-fixed (1 Rule 1 bug), 1 review-remediation accessibility correction.
+**Impact on plan:** Required correctness and keyboard-contract repairs only; no product scope change.
 
 ## Known Stubs
 
