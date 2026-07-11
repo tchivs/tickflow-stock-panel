@@ -32,7 +32,7 @@ AthenaQuant first delivers a single-container, data-lake-first market and portfo
   4. User can view current market and position changes in the main interface through the shared SSE pipeline.
   5. User can inspect a deterministic trade playbook, distinguish its baseline from bounded audited AI adjustments, and review an AI-free historical replay.
 
-**Plans**: 13/15 plans executed
+**Plans**: 14/15 plans executed
 Plans:
 **Wave 1**
 
@@ -67,7 +67,7 @@ Plans:
 **Wave 7** *(blocked on Wave 6 completion)*
 
 - [x] 01-09-PLAN.md — Build the responsive Portfolio workspace.
-- [ ] 01-10-PLAN.md — Extend Monitor and Dashboard decision inspection.
+- [x] 01-10-PLAN.md — Extend Monitor and Dashboard decision inspection.
 
 **Wave 8** *(blocked on Wave 7 completion)*
 
@@ -137,7 +137,7 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Core Merger | 13/15 | In Progress|  |
+| 1. Core Merger | 14/15 | In Progress|  |
 | 2. Factor And Strategy Research | 0/TBD | Not started | - |
 | 3. AI Analysis | 0/TBD | Not started | - |
 | 4. Advanced Capabilities | 0/TBD | Not started | - |
