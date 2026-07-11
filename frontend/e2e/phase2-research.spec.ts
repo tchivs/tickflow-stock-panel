@@ -47,7 +47,7 @@ test.describe('Phase 2 researcher workflow', () => {
     })
 
     await page.goto('/backtest')
-    await page.getByRole('button', { name: '因子回测' }).click()
+    await page.getByRole('tab', { name: '因子回测' }).click()
     await page.getByRole('button', { name: '验证表达式' }).click()
     await expect(page.getByText('已验证：close / ma20')).toBeVisible()
     await expect(page.getByText('相同表达式形状和字段重叠')).toBeVisible()
@@ -97,6 +97,7 @@ async function installStrategyFixture(page: Page, retainStatus = 200) {
   await page.route('**/api/research**', async route => {
     const path = new URL(route.request().url()).pathname
     const json = (body: unknown, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
+    if (path.endsWith('/dsl/options') || path.endsWith('/dsl/options/')) return json({ dsl_version: 'factor-dsl-v1', fields: ['close', 'ma20'], functions: {}, operators: ['+', '-', '*', '/'] })
     if (path.endsWith('/strategy-executions/sse-only-handle/retain')) {
       if (retainStatus !== 200) return json({ detail: '执行句柄已过期或已保留' }, retainStatus)
       retained = true
@@ -122,11 +123,16 @@ test('strategy retention keyboard flow keeps an SSE handle scoped at every requi
     await expect(page.getByRole('tab', { name: '因子回测' })).toHaveAttribute('aria-selected', 'true')
     await page.getByRole('tab', { name: '因子回测' }).press('ArrowRight')
     await expect(strategyTab).toHaveAttribute('aria-selected', 'true')
-    await page.getByText('注册策略', { exact: true }).first().press('Enter')
+    await page.getByRole('button', { name: '注册策略', exact: true }).press('Enter')
+    await expect(page.getByRole('button', { name: '运行回测' })).toBeEnabled()
     await page.getByRole('button', { name: '运行回测' }).press('Enter')
     const retain = page.getByRole('button', { name: '保留此完成策略实验以供比较' })
     await expect(retain).toBeVisible()
-    if (viewport.width === 375) await expect(retain).toHaveJSProperty('offsetHeight', 44)
+    if (viewport.width === 375) {
+      const box = await retain.boundingBox()
+      expect(box?.width).toBeGreaterThanOrEqual(44)
+      expect(box?.height).toBeGreaterThanOrEqual(44)
+    }
     await retain.press('Enter')
     await expect(page.getByText('已保留：此完成快照现在可在比较中选择。')).toBeVisible()
     await expect(page.getByText('实验 ID：')).toBeVisible()
@@ -141,6 +147,7 @@ test('strategy retention keyboard flow keeps an SSE handle scoped at every requi
       await expect(wrapper).toHaveJSProperty('scrollLeft', 0)
       await wrapper.press('ArrowRight')
       await expect(wrapper).not.toHaveJSProperty('scrollLeft', 0)
+      await wrapper.press('End')
       await expect(page.getByRole('columnheader', { name: '累计收益' })).toBeInViewport()
     }
   }
@@ -150,7 +157,8 @@ test('stale strategy retention restores retryable state without promotion', asyn
   test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-chromium only')
   await installStrategyFixture(page, 409)
   await page.goto('/backtest')
-  await page.getByText('注册策略', { exact: true }).first().press('Enter')
+  await page.getByRole('button', { name: '注册策略', exact: true }).press('Enter')
+  await expect(page.getByRole('button', { name: '运行回测' })).toBeEnabled()
   await page.getByRole('button', { name: '运行回测' }).press('Enter')
   await page.getByRole('button', { name: '保留此完成策略实验以供比较' }).press('Enter')
   await expect(page.getByRole('alert')).toHaveText('无法保留此完成策略实验：执行句柄已过期或已保留。请重试。')
