@@ -2010,7 +2010,7 @@ export const api = {
     request<{ accounts: PortfolioAccount[] }>(
       `/api/portfolio/accounts?include_archived=${includeArchived}`,
     ),
-  portfolioCreateAccount: (account: Pick<PortfolioAccountInput, 'name' | 'available_funds'>) =>
+  portfolioCreateAccount: (account: Pick<PortfolioAccountInput, 'name' | 'available_funds' | 'notes'>) =>
     request<{ account: PortfolioAccount }>('/api/portfolio/accounts', {
       method: 'POST',
       body: JSON.stringify(account),
