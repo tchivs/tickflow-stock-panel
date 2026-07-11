@@ -434,22 +434,16 @@ The event must be emitted from the existing subscriber stream, not a new EventSo
 | A4 | The acceptance fixture provider can run through the host's normal repository/pipeline path without a live Tickflow capability probe. | Architecture Pattern 6 | The provider/capability seams may require a narrower test-only orchestration entry point. |
 | A5 | The exact P&L formula should use cost-price times quantity and expose null/unknown valuation when no shared quote/close exists. | Architecture Pattern 2 | Product may require invested amount to override cost for some accounting cases. |
 
-## Open Questions
+## Resolved Decisions
 
-1. **What counts as a retained hit during a cooldown?**
-   - What we know: cooldown is required and every hit must be retained. [VERIFIED: project decisions]
-   - What's unclear: whether a matched-but-cooldown-suppressed evaluation is an alert-history row or only a diagnostic counter. [ASSUMED]
-   - Recommendation: persist delivery-skipped quiet-period events, but make cooldown suppression non-events unless the user explicitly requests a high-volume evaluation audit. [ASSUMED]
+1. **Cooldown and quiet-period semantics are distinct.**
+   - Cooldown-suppressed evaluations are non-events: they create no alert-history or delivery row. Quiet-period or active-time-suppressed delivery follows an accepted hit: the alert event remains persisted and the channel attempt records a `skipped` outcome with a safe reason. An explicit high-severity bypass may deliver during a quiet period. This preserves D-05, D-07, and D-08 without creating high-volume cooldown history. [RESOLVED: phase revision]
 
-2. **What is the canonical integration source layout?**
-   - What we know: the actual Tickflow host is at the AthenaQuant root, whereas older architecture text names a nested path. [VERIFIED: project filesystem]
-   - What's unclear: whether upstream synchronization will use Git remotes, a patch series, or a source-manifest workflow for Tickflow/PanWatch/Hermes. [ASSUMED]
-   - Recommendation: make `docs/UPSTREAM-SYNC.md` the Phase 1 deliverable and record source revision, local owner, adaptation style, and regression suite for each adoption. [ASSUMED]
+2. **`docs/UPSTREAM-SYNC.md` is the canonical upstream source-manifest workflow.**
+   - It records each source path and selected revision/source identity, AthenaQuant host target, local owner, adaptation style, preserved boundary, named regression coverage, and review/update procedure. Phase 1 does not use a Git remote, patch series, or copied upstream runtime as its synchronization workflow. [RESOLVED: phase revision]
 
-3. **Which approved AI provider supplies live adjustments?**
-   - What we know: the host already has an optional OpenAI-compatible client, and Compose acceptance must be offline. [VERIFIED: project codebase]
-   - What's unclear: provider/model selection and credential policy for live review. [ASSUMED]
-   - Recommendation: implement the bounds/audit contract and an offline fake first; keep real-provider invocation behind existing configuration and make a missing provider return the deterministic baseline unchanged. [ASSUMED]
+3. **Optional live review uses the existing configured OpenAI-compatible client only.**
+   - The Tickflow-owned decision gateway calls `app.services.ai_provider.generate_ai_text` only when the current provider is the configured OpenAI-compatible provider, records the configured provider/model with a typed proposal and per-field provenance, and treats the response as a bounded proposal rather than decision authority. Unit tests inject an offline fake provider. Missing configuration, malformed output, and provider failure return the deterministic baseline with an unavailable-review state. Replay and fixture Compose prohibit the gateway; fixture Compose disables review and contains no AI credential or provider URL. [RESOLVED: `backend/app/services/ai_provider.py`, phase revision]
 
 ## Metadata
 
