@@ -8,9 +8,10 @@ from __future__ import annotations
 from contextlib import contextmanager
 from datetime import datetime, timezone
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+import re
 import sqlite3
-from typing import Any, Iterator, Mapping
+from typing import Any, Iterator, Mapping, Sequence
 
 from app.operational.migrations import migrate_operational_db
 
@@ -225,3 +226,200 @@ class ResearchRepository:
                    ORDER BY revisions.name COLLATE NOCASE, revisions.factor_id, revisions.id"""
             ).fetchall()
         return [_record(row) for row in rows]  # type: ignore[list-item]
+
+    def create_experiment(
+        self,
+        *,
+        experiment_id: str,
+        originating_run_id: str,
+        status: str,
+        validated: bool,
+        factor_revision_id: str | None,
+        strategy_id: str | None,
+        strategy_version: str | None,
+        resolved_config: Mapping[str, Any],
+        input_manifest: Mapping[str, Any],
+        prediction_signals: Mapping[str, Any],
+        metrics: Mapping[str, Any],
+        artifacts: Sequence[Mapping[str, Any]],
+        diagnostics: Mapping[str, Any],
+        model_provenance: Mapping[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Atomically insert a complete immutable experiment snapshot."""
+        if not isinstance(validated, bool):
+            raise ValueError("validated must be a boolean")
+        self._validate_artifacts(originating_run_id, artifacts)
+        now = _now()
+        with self._connection() as connection, connection:
+            try:
+                connection.execute(
+                    """INSERT INTO research_experiments (
+                           id, factor_revision_id, strategy_id, strategy_version, originating_run_id,
+                           status, validated, retained_at, resolved_config_json, input_manifest_json,
+                           prediction_signal_json, diagnostics_json, created_at
+                       ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)""",
+                    (
+                        experiment_id,
+                        factor_revision_id,
+                        strategy_id,
+                        strategy_version,
+                        originating_run_id,
+                        status,
+                        int(validated),
+                        _json(dict(resolved_config), "resolved configuration"),
+                        _json(dict(input_manifest), "input manifest"),
+                        _json(dict(prediction_signals), "prediction and signal metadata"),
+                        _json(dict(diagnostics), "diagnostics"),
+                        now,
+                    ),
+                )
+            except sqlite3.IntegrityError as error:
+                if "originating_run_id" in str(error):
+                    raise ValueError("an experiment already exists for this immutable run ID") from error
+                raise
+            connection.execute(
+                """INSERT INTO research_experiment_metrics (experiment_id, metric_json, created_at)
+                   VALUES (?, ?, ?)""",
+                (experiment_id, _json(dict(metrics), "metrics"), now),
+            )
+            for artifact in artifacts:
+                connection.execute(
+                    """INSERT INTO research_experiment_artifacts (
+                           experiment_id, relative_path, content_type, byte_size, checksum_sha256, created_at
+                       ) VALUES (?, ?, ?, ?, ?, ?)""",
+                    (
+                        experiment_id,
+                        artifact["relative_path"],
+                        artifact["content_type"],
+                        artifact["byte_size"],
+                        artifact["checksum_sha256"],
+                        artifact["created_at"],
+                    ),
+                )
+            if model_provenance is not None:
+                connection.execute(
+                    """INSERT INTO research_experiment_model_provenance (
+                           experiment_id, provider, model, model_version, provenance_json, created_at
+                       ) VALUES (?, ?, ?, ?, ?, ?)""",
+                    (
+                        experiment_id,
+                        model_provenance["provider"],
+                        model_provenance["model"],
+                        model_provenance.get("model_version"),
+                        _json(dict(model_provenance["provenance"]), "model provenance"),
+                        now,
+                    ),
+                )
+            record = self._experiment_row(connection, experiment_id)
+        assert record is not None
+        return record
+
+    @staticmethod
+    def _validate_artifacts(originating_run_id: str, artifacts: Sequence[Mapping[str, Any]]) -> None:
+        if not isinstance(originating_run_id, str) or not originating_run_id:
+            raise ValueError("originating_run_id is required")
+        seen_paths: set[str] = set()
+        checksum = re.compile(r"[0-9a-f]{64}\Z")
+        for artifact in artifacts:
+            if not isinstance(artifact, Mapping):
+                raise ValueError("artifact descriptor must be a mapping")
+            if artifact.get("evaluation_run_id") != originating_run_id:
+                raise ValueError("artifact descriptor must be bound to its originating run ID")
+            relative_path = artifact.get("relative_path")
+            if not isinstance(relative_path, str) or not relative_path:
+                raise ValueError("artifact relative_path is required")
+            path = PurePosixPath(relative_path)
+            if path.is_absolute() or "\\" in relative_path or path.parts[:2] != ("research_artifacts", originating_run_id) or len(path.parts) < 3:
+                raise ValueError("artifact path must be a managed relative path bound to its originating run ID")
+            if any(part in {".", ".."} for part in path.parts) or path.as_posix() != relative_path:
+                raise ValueError("artifact path must not escape the managed artifact directory")
+            if relative_path in seen_paths:
+                raise ValueError("artifact paths must be unique within an experiment")
+            seen_paths.add(relative_path)
+            if not isinstance(artifact.get("content_type"), str) or not artifact["content_type"].strip():
+                raise ValueError("artifact content_type is required")
+            byte_size = artifact.get("byte_size")
+            if not isinstance(byte_size, int) or isinstance(byte_size, bool) or byte_size < 0:
+                raise ValueError("artifact byte_size must be a non-negative integer")
+            if not isinstance(artifact.get("checksum_sha256"), str) or not checksum.fullmatch(artifact["checksum_sha256"]):
+                raise ValueError("artifact checksum_sha256 must be a lowercase SHA-256 hex digest")
+            if not isinstance(artifact.get("created_at"), str) or not artifact["created_at"].strip():
+                raise ValueError("artifact created_at is required")
+
+    def _experiment_row(self, connection: sqlite3.Connection, experiment_id: str) -> dict[str, Any] | None:
+        row = connection.execute("SELECT * FROM research_experiments WHERE id = ?", (experiment_id,)).fetchone()
+        if row is None:
+            return None
+        record = dict(row)
+        for column, target in (
+            ("resolved_config_json", "resolved_config"),
+            ("input_manifest_json", "input_manifest"),
+            ("prediction_signal_json", "prediction_signals"),
+            ("diagnostics_json", "diagnostics"),
+        ):
+            record[target] = json.loads(record.pop(column))
+        metric_rows = connection.execute(
+            "SELECT metric_json FROM research_experiment_metrics WHERE experiment_id = ? ORDER BY id", (experiment_id,)
+        ).fetchall()
+        metrics: dict[str, Any] = {}
+        for metric in metric_rows:
+            payload = json.loads(metric["metric_json"])
+            if not isinstance(payload, dict):
+                raise RuntimeError("stored experiment metrics are malformed")
+            metrics.update(payload)
+        record["metrics"] = metrics
+        artifact_rows = connection.execute(
+            """SELECT relative_path, content_type, byte_size, checksum_sha256, created_at
+               FROM research_experiment_artifacts WHERE experiment_id = ? ORDER BY id""",
+            (experiment_id,),
+        ).fetchall()
+        record["artifacts"] = [
+            {"evaluation_run_id": record["originating_run_id"], **dict(artifact)} for artifact in artifact_rows
+        ]
+        model = connection.execute(
+            """SELECT provider, model, model_version, provenance_json
+               FROM research_experiment_model_provenance WHERE experiment_id = ?""",
+            (experiment_id,),
+        ).fetchone()
+        record["model_provenance"] = None if model is None else {
+            "provider": model["provider"],
+            "model": model["model"],
+            "model_version": model["model_version"],
+            "provenance": json.loads(model["provenance_json"]),
+        }
+        record["validated"] = bool(record["validated"])
+        return record
+
+    def get_experiment(self, experiment_id: str) -> dict[str, Any] | None:
+        with self._connection() as connection:
+            return self._experiment_row(connection, experiment_id)
+
+    def retain_experiment(self, experiment_id: str) -> dict[str, Any]:
+        """Set retention once for a completed validated snapshot, never update it afterward."""
+        with self._connection() as connection, connection:
+            record = self._experiment_row(connection, experiment_id)
+            if record is None:
+                raise ValueError("experiment does not exist")
+            if record["status"] != "completed" or not record["validated"]:
+                raise ValueError("only completed validated experiments can be retained")
+            if record["retained_at"] is not None:
+                raise ValueError("experiment has already been retained")
+            retained_at = _now()
+            updated = connection.execute(
+                "UPDATE research_experiments SET retained_at = ? WHERE id = ? AND retained_at IS NULL",
+                (retained_at, experiment_id),
+            ).rowcount
+            if updated != 1:
+                raise RuntimeError("experiment retention was modified concurrently")
+            retained = self._experiment_row(connection, experiment_id)
+        assert retained is not None
+        return retained
+
+    def list_comparison_candidates(self) -> list[dict[str, Any]]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                """SELECT id FROM research_experiments
+                   WHERE status = 'completed' AND validated = 1 AND retained_at IS NOT NULL
+                   ORDER BY retained_at, created_at, id"""
+            ).fetchall()
+            return [self._experiment_row(connection, row["id"]) for row in rows]  # type: ignore[list-item]
