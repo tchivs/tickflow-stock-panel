@@ -14,6 +14,7 @@ const Screener = lazy(() => import('./pages/Screener').then(m => ({ default: m.S
 const Backtest = lazy(() => import('./pages/Backtest').then(m => ({ default: m.Backtest })))
 const Financials = lazy(() => import('./pages/Financials').then(m => ({ default: m.Financials })))
 const Data = lazy(() => import('./pages/Data').then(m => ({ default: m.Data })))
+const Portfolio = lazy(() => import('./pages/Portfolio').then(m => ({ default: m.Portfolio })))
 const Monitor = lazy(() => import('./pages/Monitor').then(m => ({ default: m.Monitor })))
 const Trading = lazy(() => import('./pages/Trading').then(m => ({ default: m.Trading })))
 const Dashboard = lazy(() => import('./pages/Dashboard').then(m => ({ default: m.Dashboard })))
@@ -80,6 +81,7 @@ export const router = createBrowserRouter([
       { path: 'backtest', element: <Backtest /> },
       { path: 'financials', element: <Financials /> },
       { path: 'data', element: <Data /> },
+      { path: 'portfolio', element: <Portfolio /> },
       { path: 'monitor', element: <Monitor /> },
       { path: 'trading', element: <Trading /> },
       { path: 'limit-ladder', element: <LimitUpLadder /> },
