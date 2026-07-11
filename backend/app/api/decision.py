@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from app.decision.playbook import DecisionPlaybookService
 from app.decision.adjustments import DecisionAdjustmentService
 from app.decision.ai_review import ConfiguredAIReviewGateway, DecisionReviewService
+from app.decision.replay import HistoricalReplayService, KlineGovernedDecisionHistory
 
 
 router = APIRouter(prefix="/api/decision", tags=["decision"])
@@ -79,6 +80,23 @@ class DecisionAdjustmentRequest(BaseModel):
 class DecisionReviewResponse(BaseModel):
     review_status: str
     final: PlaybookSnapshotResponse
+
+
+class HistoricalReplayRequest(BaseModel):
+    """Replay only previously persisted decision-run symbols at a historical cutoff."""
+
+    run_ids: list[str] = Field(min_length=1, max_length=100)
+    as_of: str
+
+
+class HistoricalReplayResponse(BaseModel):
+    id: str
+    as_of: str
+    engine_config_version: str
+    result_hash: str
+    snapshot: dict[str, Any]
+    provider: None = None
+    model: None = None
 
 
 def _operational(request: Request):
@@ -152,4 +170,29 @@ def apply_decision_adjustments(
         assert run is not None
         return _response(run)
     except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@router.post("/replay", response_model=HistoricalReplayResponse, status_code=status.HTTP_201_CREATED)
+def replay_decision_runs(payload: HistoricalReplayRequest, request: Request) -> HistoricalReplayResponse:
+    """Rebuild a stable, provider-free snapshot from governed history at ``as_of``."""
+    try:
+        as_of = date.fromisoformat(payload.as_of)
+        runs = [_operational(request).get_decision_run(run_id) for run_id in payload.run_ids]
+        if any(run is None for run in runs):
+            raise ValueError("replay decision run does not exist")
+        persisted_runs = [run for run in runs if run is not None]
+        engine_versions = {run["engine_config_version"] for run in persisted_runs}
+        if len(engine_versions) != 1:
+            raise ValueError("replay decision runs must share an engine configuration")
+        replay = HistoricalReplayService(
+            repository=_operational(request),
+            governed_history=KlineGovernedDecisionHistory(request.app.state.repo),
+        ).replay(
+            symbols=[run["symbol"] for run in persisted_runs],
+            as_of=as_of,
+            engine_config_version=engine_versions.pop(),
+        )
+        return HistoricalReplayResponse.model_validate(replay)
+    except (TypeError, ValueError) as error:
         raise HTTPException(status_code=400, detail=str(error)) from error

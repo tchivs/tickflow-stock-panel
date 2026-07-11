@@ -157,6 +157,9 @@ class DecisionReviewService:
         )
 
     async def review(self, *, run_id: str) -> dict[str, Any]:
+        from app.decision.replay import assert_review_allowed
+
+        assert_review_allowed()
         run = self._repository.get_decision_run(run_id)
         if run is None:
             raise ValueError("decision run not found")
