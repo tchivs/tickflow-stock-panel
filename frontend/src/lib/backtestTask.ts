@@ -25,6 +25,8 @@ export interface BacktestTask {
   result: StrategyBacktestResult | null
   progress: BacktestProgress | null
   error: string | null
+  /** 仅由匹配的服务端 research/done SSE 事件提供的策略研究执行句柄。 */
+  researchExecutionHandle: string | null
   /** 连接中断、正在有界重连中 (UI 显示"连接中断，重试中") */
   reconnecting: boolean
 }
@@ -104,14 +106,35 @@ function connectSSE(url: string): void {
     } catch { /* ignore */ }
   })
 
+  es.addEventListener('research', (e: MessageEvent) => {
+    if (current?.id !== id) return
+    try {
+      const handle = JSON.parse(e.data)?.execution_handle
+      if (typeof handle !== 'string' || !handle.trim()) return
+      current = { ...current, researchExecutionHandle: handle }
+      emit()
+    } catch { /* ignore malformed server event */ }
+  })
+
   es.addEventListener('done', (e: MessageEvent) => {
     if (current?.id !== id) return
     try {
       const result = JSON.parse(e.data) as StrategyBacktestResult
-      current = { ...current, isPending: false, result, error: null, reconnecting: false }
+      const terminalError = typeof result.error === 'string' && result.error.trim()
+      const terminalHandle = result.research_execution_handle
+      current = {
+        ...current,
+        isPending: false,
+        result,
+        error: terminalError || null,
+        reconnecting: false,
+        researchExecutionHandle: terminalError
+          ? null
+          : current.researchExecutionHandle ?? (typeof terminalHandle === 'string' && terminalHandle.trim() ? terminalHandle : null),
+      }
       emit()
     } catch {
-      current = { ...current, isPending: false, error: '结果解析失败', reconnecting: false }
+      current = { ...current, isPending: false, error: '结果解析失败', reconnecting: false, researchExecutionHandle: null }
       emit()
     }
     es.close()
@@ -125,10 +148,10 @@ function connectSSE(url: string): void {
     if (e.data) {
       try {
         const msg = JSON.parse(e.data)?.message ?? '回测出错'
-        current = { ...current, isPending: false, error: msg, reconnecting: false }
+        current = { ...current, isPending: false, error: msg, reconnecting: false, researchExecutionHandle: null }
         emit()
       } catch {
-        current = { ...current, isPending: false, error: '回测出错', reconnecting: false }
+        current = { ...current, isPending: false, error: '回测出错', reconnecting: false, researchExecutionHandle: null }
         emit()
       }
       es.close()
@@ -148,6 +171,7 @@ function connectSSE(url: string): void {
         isPending: false,
         reconnecting: false,
         error: '连接中断，请重试',
+        researchExecutionHandle: null,
       }
       emit()
       return
@@ -188,7 +212,7 @@ export function startBacktest(params: {
   }
 
   const id = ++taskSeq
-  current = { id, isPending: true, result: null, progress: null, error: null, reconnecting: false }
+  current = { id, isPending: true, result: null, progress: null, error: null, reconnecting: false, researchExecutionHandle: null }
   emit()
 
   const qs = buildQuery({
@@ -244,7 +268,7 @@ export async function stopBacktest(): Promise<void> {
     eventSource = null
   }
   if (current?.isPending) {
-    current = { ...current, isPending: false, error: '已取消', reconnecting: false }
+    current = { ...current, isPending: false, error: '已取消', reconnecting: false, researchExecutionHandle: null }
     emit()
   }
   localStorage.removeItem(RECONNECT_KEY)
@@ -262,7 +286,7 @@ export function tryReconnect(): boolean {
   if (!qs) return false
   // 有未完成的任务, 重连
   const id = ++taskSeq
-  current = { id, isPending: true, result: null, progress: null, error: null, reconnecting: false }
+  current = { id, isPending: true, result: null, progress: null, error: null, reconnecting: false, researchExecutionHandle: null }
   emit()
   connectSSE(`/api/backtest/strategy/stream?${qs}`)
   return true

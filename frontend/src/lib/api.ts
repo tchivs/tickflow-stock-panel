@@ -786,6 +786,7 @@ export interface StrategyBacktestResult {
   }
   elapsed_ms: number
   error: string | null
+  research_execution_handle?: string | null
 }
 
 // ===== Settings =====
