@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, type KeyboardEvent } from 'react'
 import { PageHeader } from '@/components/PageHeader'
 import { FactorBacktest } from './backtest/FactorBacktest'
 import { StrategyBacktest } from './backtest/StrategyBacktest'
@@ -36,22 +36,37 @@ const TAB_ICONS: Record<Tab, typeof BarChart3> = {
 export function Backtest() {
   const [activeTab, setActiveTab] = useState<Tab>('strategy')
 
+  const handleModeKeyDown = (event: KeyboardEvent<HTMLButtonElement>, tab: Tab) => {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+    event.preventDefault()
+    const tabs = ['factor', 'strategy', 'optimizer'] as const
+    const next = tabs[(tabs.indexOf(tab) + (event.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length]
+    setActiveTab(next)
+    document.getElementById(`backtest-mode-tab-${next}`)?.focus()
+  }
+
   const modeSwitch = (
-    <div className="inline-flex rounded-btn border border-border bg-surface/80 p-0.5 shadow-sm">
+    <div role="tablist" aria-label="回测模式" className="inline-flex rounded-btn border border-border bg-surface/80 p-0.5 shadow-sm">
       {(['factor', 'strategy', 'optimizer'] as const).map(tab => {
         const Icon = TAB_ICONS[tab]
         const active = activeTab === tab
         return (
           <button
             key={tab}
+            id={`backtest-mode-tab-${tab}`}
+            role="tab"
+            aria-selected={active}
+            aria-controls={`backtest-mode-panel-${tab}`}
+            tabIndex={active ? 0 : -1}
             onClick={() => setActiveTab(tab)}
-            className={`inline-flex items-center gap-1.5 rounded-[5px] px-3 py-1.5 text-xs font-medium transition-colors cursor-pointer ${
+            onKeyDown={event => handleModeKeyDown(event, tab)}
+            className={`inline-flex min-h-11 items-center gap-1.5 rounded-[5px] px-3 py-1.5 text-xs font-medium transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-base ${
               active
                 ? 'bg-accent text-white shadow-sm'
                 : 'text-secondary hover:bg-elevated hover:text-foreground'
             }`}
           >
-            <Icon className="h-3.5 w-3.5" />
+            <Icon aria-hidden="true" className="h-3.5 w-3.5" />
             {MODES[tab].title}
             {tab === 'optimizer' && (
               <span className={`rounded border px-1 py-px text-[8px] font-semibold uppercase ${
@@ -76,9 +91,9 @@ export function Backtest() {
       />
 
       <main className="flex-1 min-h-0 px-3 pb-3 pt-3 lg:px-4 lg:pb-4">
-        {activeTab === 'factor' && <div className="space-y-4"><FactorBacktest /><ResearchLibrary /><ExperimentComparison /></div>}
-        {activeTab === 'strategy' && <StrategyBacktest />}
-        {activeTab === 'optimizer' && <StrategyOptimizer />}
+        {activeTab === 'factor' && <div id="backtest-mode-panel-factor" role="tabpanel" aria-labelledby="backtest-mode-tab-factor" className="space-y-4"><FactorBacktest /><ResearchLibrary /><ExperimentComparison /></div>}
+        {activeTab === 'strategy' && <div id="backtest-mode-panel-strategy" role="tabpanel" aria-labelledby="backtest-mode-tab-strategy" className="space-y-4"><StrategyBacktest /><ResearchLibrary /><ExperimentComparison /></div>}
+        {activeTab === 'optimizer' && <div id="backtest-mode-panel-optimizer" role="tabpanel" aria-labelledby="backtest-mode-tab-optimizer"><StrategyOptimizer /></div>}
       </main>
     </div>
   )

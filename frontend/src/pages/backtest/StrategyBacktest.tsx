@@ -1,5 +1,5 @@
-import { useState, useMemo, useEffect, useRef, type ReactNode } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useState, useMemo, useEffect, useRef, type KeyboardEvent, type ReactNode } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Play, FlaskConical, Clock, Loader2, Square, Search, Plus, X, SlidersHorizontal, BarChart3, Gauge, Zap, ListPlus, HelpCircle } from 'lucide-react'
 import {
@@ -8,6 +8,7 @@ import {
   type StrategyBacktestTrade,
   type StrategyDetail,
   type StrategyParamDef,
+  type ResearchExperiment,
 } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { tierRank } from '@/lib/capability-labels'
@@ -746,6 +747,10 @@ export function StrategyBacktest() {
   const [resultTab, setResultTab] = useState<'daily' | 'trades' | 'picks'>('daily')
   const [dailyPage, setDailyPage] = useState(0)
   const [tradePage, setTradePage] = useState(0)
+  const [resultTaskId, setResultTaskId] = useState<number | null>(null)
+  const [retainedExperiment, setRetainedExperiment] = useState<ResearchExperiment | null>(null)
+  const resultTabRefs = useRef<Record<'daily' | 'trades' | 'picks', HTMLButtonElement | null>>({ daily: null, trades: null, picks: null })
+  const queryClient = useQueryClient()
   const [tradePageSize, setTradePageSize] = useState(10)
   const [selectedTrade, setSelectedTrade] = useState<StrategyBacktestTrade | null>(null)
   const loadedStrategyRef = useRef<string | null>(null)
@@ -783,6 +788,18 @@ export function StrategyBacktest() {
   const backtestTask = useBacktestTask()
   const isPending = backtestTask?.isPending ?? false
 
+  const retainCompletedStrategy = useMutation({
+    mutationFn: () => {
+      const handle = backtestTask?.researchExecutionHandle
+      if (!handle) throw new Error('此运行没有可保留的研究句柄')
+      return api.retainStrategyResearchExecution(handle)
+    },
+    onSuccess: experiment => {
+      setRetainedExperiment(experiment)
+      queryClient.invalidateQueries({ queryKey: QK.researchExperiments })
+      queryClient.invalidateQueries({ queryKey: QK.researchComparisonCandidates })
+    },
+  })
   const dataStatus = useDataStatus()
   const earliestDate = dataStatus.data?.daily?.earliest_date ?? null
 
@@ -814,6 +831,8 @@ export function StrategyBacktest() {
   useEffect(() => {
     if (backtestTask && !backtestTask.isPending && backtestTask.result) {
       setResult(backtestTask.result)
+      setResultTaskId(backtestTask.id)
+      setRetainedExperiment(null)
       setResultTab('daily')
       setDailyPage(0)
       setTradePage(0)
@@ -842,6 +861,54 @@ export function StrategyBacktest() {
     }
   }, [backtestTask])
 
+  const currentCompletedResult = backtestTask?.id === resultTaskId
+    && !backtestTask.isPending
+    && !backtestTask.error
+    && backtestTask.result === result
+    && !result?.error
+  const retentionEligible = Boolean(currentCompletedResult && backtestTask?.researchExecutionHandle && !retainedExperiment)
+  const retentionControl = currentCompletedResult ? (
+    <div className="flex flex-wrap items-center gap-2">
+      {retainedExperiment ? (
+        <><p role="status" className="text-xs text-bull">已保留：此完成快照现在可在比较中选择。</p><span className="text-[11px] text-muted">实验 ID：<code>{retainedExperiment.id}</code></span></>
+      ) : retentionEligible ? (
+        <button type="button" disabled={retainCompletedStrategy.isPending} onClick={() => retainCompletedStrategy.mutate()} className="min-h-11 rounded-btn border border-amber-400/40 px-3 py-1.5 text-xs text-amber-500 transition-colors hover:bg-amber-400/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:cursor-not-allowed disabled:opacity-45">
+          {retainCompletedStrategy.isPending ? '正在保留完成策略实验…' : '保留此完成策略实验以供比较'}
+        </button>
+      ) : (
+        <p className="text-xs text-amber-500">此运行没有可保留的研究句柄；请重新运行。</p>
+      )}
+      {retainCompletedStrategy.isError && <p role="alert" className="text-xs text-danger">无法保留此完成策略实验：{retainCompletedStrategy.error.message}。请重试。</p>}
+    </div>
+  ) : null
+
+  const handleResultTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>, tab: 'daily' | 'trades' | 'picks') => {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+    event.preventDefault()
+    const tabs = ['daily', 'trades', 'picks'] as const
+    const next = tabs[(tabs.indexOf(tab) + (event.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length]
+    setResultTab(next)
+    resultTabRefs.current[next]?.focus()
+  }
+
+  const handleResultTableKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    const wrapper = event.currentTarget
+    if (wrapper.scrollWidth <= wrapper.clientWidth) return
+    const increment = Math.max(48, Math.floor(wrapper.clientWidth * 0.75))
+    const target = event.key === 'ArrowRight'
+      ? Math.min(wrapper.scrollLeft + increment, wrapper.scrollWidth - wrapper.clientWidth)
+      : event.key === 'ArrowLeft'
+        ? Math.max(wrapper.scrollLeft - increment, 0)
+        : event.key === 'End'
+          ? wrapper.scrollWidth - wrapper.clientWidth
+          : event.key === 'Home'
+            ? 0
+            : wrapper.scrollLeft
+    if (target === wrapper.scrollLeft) return
+    wrapper.scrollLeft = target
+    event.preventDefault()
+  }
+
   const handleRun = () => {
     if (!selectedStrategy) return
     startBacktest({
@@ -865,6 +932,8 @@ export function StrategyBacktest() {
       mode: simMode,
       holding_days: Number(holdingDays) || 5,
     })
+    setRetainedExperiment(null)
+    setResultTaskId(null)
   }
 
   // 提取统计
@@ -1543,13 +1612,14 @@ export function StrategyBacktest() {
             transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
             className="space-y-4"
           >
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-3">
               <span className="text-sm font-medium text-foreground">{result.strategy_info?.name ?? '策略'}</span>
               <span className="text-[10px] px-1 py-px rounded border border-accent/30 bg-accent/10 text-accent">全量模拟</span>
               <span className="text-[10px] text-secondary">持有 {result.config?.holding_days ?? 5} 天</span>
               <span className="ml-auto text-[11px] text-muted font-mono">
                 {String(result.config?.start).slice(0,10)} ~ {String(result.config?.end).slice(0,10)}
               </span>
+              {retentionControl}
             </div>
 
             {/* 统计卡片 */}
@@ -1645,6 +1715,7 @@ export function StrategyBacktest() {
                     <span className="num">{fmtDuration(result.elapsed_ms)}</span>
                   </span>
                 )}
+                {retentionControl}
               </div>
             )}
 
@@ -1708,12 +1779,19 @@ export function StrategyBacktest() {
             {/* Tab: 按日期 / 交易明细 / 选股分析 */}
             {(result.trades.length > 0 || result.per_symbol_stats.length > 0) && (
               <div className="rounded-card border border-border overflow-hidden">
-                <div className="flex items-center gap-1 border-b border-border px-4 pt-2">
+                <div role="tablist" aria-label="策略结果视图" className="flex items-center gap-1 border-b border-border px-4 pt-2">
                   {(['daily', 'trades', 'picks'] as const).map(t => (
                     <button
                       key={t}
+                      ref={element => { resultTabRefs.current[t] = element }}
+                      id={`strategy-result-tab-${t}`}
+                      role="tab"
+                      aria-selected={resultTab === t}
+                      aria-controls={`strategy-result-panel-${t}`}
+                      tabIndex={resultTab === t ? 0 : -1}
                       onClick={() => setResultTab(t)}
-                      className={`px-3 py-1.5 text-xs font-medium border-b-2 transition-colors cursor-pointer ${
+                      onKeyDown={event => handleResultTabKeyDown(event, t)}
+                      className={`px-3 py-1.5 text-xs font-medium border-b-2 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface ${
                         resultTab === t
                           ? 'border-accent text-accent'
                           : 'border-transparent text-secondary hover:text-foreground'
@@ -1729,16 +1807,17 @@ export function StrategyBacktest() {
                 </div>
 
                 {resultTab === 'daily' && (
-                  <div>
-                    <div className="overflow-x-auto">
+                  <div id="strategy-result-panel-daily" role="tabpanel" aria-labelledby="strategy-result-tab-daily">
+                    <p className="px-4 pt-3 text-xs text-muted">左右滚动查看全部列</p>
+                    <div tabIndex={0} aria-label="每日交易结果表，可使用左右方向键或 End 键查看全部列" onKeyDown={handleResultTableKeyDown} className="overflow-x-auto focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface">
                     <table className="w-full min-w-[960px] text-sm text-foreground">
                       <thead className="bg-elevated">
                         <tr className="text-left text-secondary">
-                          <th className="px-3 py-2.5 font-medium w-[8.5rem]">日期</th>
-                          <th className="px-3 py-2.5 font-medium">买入</th>
-                          <th className="px-3 py-2.5 font-medium">卖出</th>
-                          <th className="px-3 py-2.5 font-medium text-right w-[8rem]">当日收益</th>
-                          <th className="px-3 py-2.5 font-medium text-right w-[8rem]">累计收益</th>
+                          <th scope="col" className="px-3 py-2.5 font-medium w-[8.5rem]">日期</th>
+                          <th scope="col" className="px-3 py-2.5 font-medium">买入</th>
+                          <th scope="col" className="px-3 py-2.5 font-medium">卖出</th>
+                          <th scope="col" className="px-3 py-2.5 font-medium text-right w-[8rem]">当日收益</th>
+                          <th scope="col" className="px-3 py-2.5 font-medium text-right w-[8rem]">累计收益</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -1815,17 +1894,19 @@ export function StrategyBacktest() {
                 )}
 
                 {resultTab === 'trades' && (
-                  <div className="overflow-x-auto">
+                  <div id="strategy-result-panel-trades" role="tabpanel" aria-labelledby="strategy-result-tab-trades">
+                    <p className="px-4 pt-3 text-xs text-muted">左右滚动查看全部列</p>
+                    <div tabIndex={0} aria-label="交易明细结果表，可使用左右方向键或 End 键查看全部列" onKeyDown={handleResultTableKeyDown} className="overflow-x-auto focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface">
                     <table className="w-full min-w-[960px] text-sm text-foreground">
                       <thead className="bg-elevated">
                         <tr className="text-left text-secondary">
-                          <th className="px-4 py-2.5 font-medium">标的</th>
-                          <th className="px-4 py-2.5 font-medium">买入</th>
-                          <th className="px-4 py-2.5 font-medium">卖出</th>
-                          <th className="px-4 py-2.5 font-medium text-right">仓位 / 手数</th>
-                          <th className="px-4 py-2.5 font-medium text-right">单票盈亏</th>
-                          <th className="px-4 py-2.5 font-medium text-right">持仓</th>
-                          <th className="px-4 py-2.5 font-medium">原因</th>
+                          <th scope="col" className="px-4 py-2.5 font-medium">标的</th>
+                          <th scope="col" className="px-4 py-2.5 font-medium">买入</th>
+                          <th scope="col" className="px-4 py-2.5 font-medium">卖出</th>
+                          <th scope="col" className="px-4 py-2.5 font-medium text-right">仓位 / 手数</th>
+                          <th scope="col" className="px-4 py-2.5 font-medium text-right">单票盈亏</th>
+                          <th scope="col" className="px-4 py-2.5 font-medium text-right">持仓</th>
+                          <th scope="col" className="px-4 py-2.5 font-medium">原因</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -1908,9 +1989,11 @@ export function StrategyBacktest() {
                       </div>
                     )}
                   </div>
+                  </div>
                 )}
 
                 {resultTab === 'picks' && (
+                  <div id="strategy-result-panel-picks" role="tabpanel" aria-labelledby="strategy-result-tab-picks">
                   <table className="w-full text-sm">
                     <thead className="bg-elevated">
                       <tr className="text-left text-secondary">
@@ -1942,6 +2025,7 @@ export function StrategyBacktest() {
                       ))}
                     </tbody>
                   </table>
+                  </div>
                 )}
               </div>
             )}
