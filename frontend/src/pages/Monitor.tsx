@@ -6,7 +6,7 @@ import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
 import { Skeleton } from '@/components/data/Skeleton'
 import { Modal } from '@/components/Modal'
-import { api, type MonitorRule, type AlertEvent, type MonitorCondition, type DeliveryStatus } from '@/lib/api'
+import { api, type MonitorRule, type AlertEvent, type MonitorCondition, type DeliveryStatus, type DeliveryOutcome } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { fmtPrice, fmtPct } from '@/lib/format'
 import { cn } from '@/lib/cn'
@@ -76,7 +76,11 @@ export function Monitor() {
   const [confirmClear, setConfirmClear] = useState(false)
   const [confirmClearRules, setConfirmClearRules] = useState(false)
   const alertsQuery = useQuery({
-    queryKey: ['alerts', filter, severity, delivery],
+    queryKey: QK.alerts(
+      filter === 'all' ? undefined : filter,
+      severity === 'all' ? undefined : severity,
+      delivery === 'all' ? undefined : delivery,
+    ),
     queryFn: () => api.alertsList({
       days: 7, limit: 500,
       source: filter === 'all' ? undefined : filter,
@@ -84,6 +88,12 @@ export function Monitor() {
       delivery_status: delivery === 'all' ? undefined : delivery,
     }),
     placeholderData: previous => previous,
+    // 新告警靠 SSE 失效推送; 但 pending→sent/failed 的投递状态迁移没有 SSE 事件,
+    // 只要列表里还有待投递的行就保持轮询, 全部尘埃落定后停止。
+    refetchInterval: query => {
+      const alerts = query.state.data?.alerts ?? []
+      return alerts.some(ev => (ev.deliveries ?? []).some(d => d.status === 'pending')) ? 10000 : false
+    },
   })
   const total = alertsQuery.data?.total ?? 0
 
@@ -118,7 +128,7 @@ export function Monitor() {
       <PageHeader title="监控中心" subtitle="实时信号与规则管理" />
       <div className="flex-1 min-h-0 px-4 py-4 sm:px-5">
         <div className="mx-auto flex h-full max-w-7xl flex-col gap-4 md:flex-row">
-          <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-card border border-border bg-surface/40">
+          <section aria-label="触发记录" className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-card border border-border bg-surface/40">
             <div className="flex flex-wrap items-center gap-2 border-b border-border/60 bg-surface/60 px-3 py-3">
               <SectionHeader icon={BellRing} title="触发记录" />
               <div className="order-3 flex w-full flex-wrap items-center gap-1 md:order-none md:w-auto" aria-label="告警类型筛选">
@@ -139,7 +149,7 @@ export function Monitor() {
           </section>
 
           {/* 右栏: 监控规则 */}
-          <section className="flex min-h-0 w-full flex-col overflow-hidden rounded-card border border-border bg-surface/40 md:w-[400px] md:shrink-0">
+          <section aria-label="监控规则" className="flex min-h-0 w-full flex-col overflow-hidden rounded-card border border-border bg-surface/40 md:w-[400px] md:shrink-0">
             <div className="flex items-center gap-3 border-b border-border/60 bg-surface/60 px-4 py-2.5">
               <SectionHeader icon={ListChecks} title="监控规则" />
               <span className="rounded-md bg-elevated/50 px-1.5 py-0.5 text-[10px] font-medium text-muted">{rulesCount}</span>
@@ -263,8 +273,13 @@ function AlertsList({ alertsQuery, confirmClear, setConfirmClear, total, enterTs
             const sev = SEVERITY_CONFIG[ev.severity ?? 'info'] ?? SEVERITY_CONFIG.info
             const SevIcon = sev.icon
             const isNew = ev.ts > enterTs
-            const outcomes = (ev.deliveries ?? []) as Array<{ status: DeliveryStatus }>
-            const primaryDelivery = outcomes.find(outcome => outcome.status === 'failed') ?? outcomes.find(outcome => outcome.status === 'pending') ?? outcomes[0]
+            // 摘要徽标取最需要关注的一条: 失败 > 待投递 > 已发送 > 已跳过;
+            // 多渠道且有已发送时显示 x/y 计数, 混合结果 (如 1 发送 + 1 跳过) 不会被首条掩盖。
+            const outcomes: DeliveryOutcome[] = ev.deliveries ?? []
+            const primaryDelivery = outcomes.find(outcome => outcome.status === 'failed')
+              ?? outcomes.find(outcome => outcome.status === 'pending')
+              ?? outcomes.find(outcome => outcome.status === 'sent')
+              ?? outcomes[0]
             return (
               <motion.div
                 key={`${ev.ts}-${i}`}
@@ -425,12 +440,13 @@ function AlertsList({ alertsQuery, confirmClear, setConfirmClear, total, enterTs
                   <span className="text-[10px] text-muted/60 font-mono">
                     {new Date(ev.occurred_at ?? ev.ts).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}
                   </span>
+                  {/* 无 primaryDelivery = 规则未配置外部渠道, 永远不会有投递记录 — 不渲染任何状态,
+                      避免误导性的常驻「待投递」。 */}
                   {primaryDelivery && (() => {
                     const meta = DELIVERY_LABEL[primaryDelivery.status]
                     const Icon = meta.icon
                     return ev.id ? <button type="button" onClick={() => onDelivery(ev.id)} className={`inline-flex min-h-7 items-center gap-1 rounded-btn px-1.5 text-[10px] ${meta.className} hover:bg-elevated`} title="查看投递详情"><Icon className="h-3 w-3" />{outcomes.length > 1 && primaryDelivery.status === 'sent' ? `${outcomes.filter(outcome => outcome.status === 'sent').length}/${outcomes.length} 已发送` : meta.label}</button> : <span className={`inline-flex items-center gap-1 text-[10px] ${meta.className}`}><Icon className="h-3 w-3" />{meta.label}</span>
                   })()}
-                  {!primaryDelivery && <span className="text-[10px] text-muted">待投递</span>}
 
                   {confirmTs === ev.ts ? (
                     // 确认态: 红色实心按钮 (原删除图标位置), 再点确认删除

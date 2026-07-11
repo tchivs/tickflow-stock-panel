@@ -1,0 +1,66 @@
+services:
+  app:
+    image: athenaquant-phase1-app:phase1
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        USE_CN_MIRROR: "0"
+    container_name: athenaquant-phase1-app
+    env_file: !reset []
+    environment:
+      DATA_DIR: /app/.tmp/phase1-data
+      PHASE1_FIXTURE_MODE: "true"
+      PHASE1_FIXTURE_DIR: /app/phase1-fixtures
+      PHASE1_FEISHU_RECEIVER_URL: http://receiver:8080/feishu
+      PHASE1_TELEGRAM_RECEIVER_URL: http://receiver:8080/telegram
+      DECISION_AI_REVIEW_ENABLED: "false"
+      TICKFLOW_API_KEY: ""
+      AI_API_KEY: ""
+      AUTH_PASSWORD: ""
+    command: ["/app/.venv/bin/uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "3018"]
+    ports:
+      - 127.0.0.1:13018:3018
+    volumes: !override
+      - ./.tmp/phase1-data:/app/.tmp/phase1-data
+      - ./compose/phase1/fixtures:/app/phase1-fixtures:ro
+    networks:
+      phase1_test:
+        aliases:
+          - phase1-fixture
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:3018/health', timeout=2).read()"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+      start_period: 5s
+
+  receiver:
+    image: athenaquant-phase1-receiver:phase1
+    build:
+      context: .
+      dockerfile: compose/phase1/Dockerfile.verifier
+      target: receiver
+    environment:
+      PYTHONUNBUFFERED: "1"
+    networks:
+      - phase1_test
+
+  verifier:
+    image: athenaquant-phase1-verifier:phase1
+    build:
+      context: .
+      dockerfile: compose/phase1/Dockerfile.verifier
+      target: verifier
+    environment:
+      PHASE1_BASE_URL: http://phase1-fixture:3018
+      PHASE1_FIXTURE_MODE: "true"
+      PHASE1_FEISHU_RECEIVER_URL: http://receiver:8080/feishu
+      PHASE1_TELEGRAM_RECEIVER_URL: http://receiver:8080/telegram
+      PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
+    networks:
+      - phase1_test
+
+networks:
+  phase1_test:
+    internal: true

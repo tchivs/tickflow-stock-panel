@@ -1,0 +1,30 @@
+FROM python:3.11-alpine AS receiver
+WORKDIR /receiver
+COPY compose/phase1/receiver.py /receiver/receiver.py
+EXPOSE 8080
+CMD ["python", "/receiver/receiver.py"]
+
+FROM python:3.11-slim AS verifier
+ENV DEBIAN_FRONTEND=noninteractive \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
+    UV_LINK_MODE=copy \
+    PYTHONPATH=/verify/backend
+WORKDIR /verify
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends nodejs npm \
+    && npm install --global pnpm@9.10.0 \
+    && rm -rf /var/lib/apt/lists/*
+COPY README.md /verify/README.md
+COPY backend/pyproject.toml backend/uv.lock /verify/backend/
+RUN pip install --no-cache-dir uv \
+    && UV_INDEX_URL=https://pypi.org/simple uv lock --directory /verify/backend --refresh \
+    && UV_INDEX_URL=https://pypi.org/simple uv sync --directory /verify/backend --frozen --extra dev
+COPY backend/app /verify/backend/app
+COPY frontend/package.json frontend/pnpm-lock.yaml frontend/playwright.config.ts /verify/frontend/
+COPY frontend/e2e /verify/frontend/e2e
+RUN pnpm --dir /verify/frontend install --frozen-lockfile \
+    && pnpm --dir /verify/frontend exec playwright install --with-deps chromium
+COPY compose/phase1/fixtures /verify/fixtures
+RUN chmod -R a-w /verify/fixtures
+COPY compose/phase1/verifier.py /verify/verifier.py
+ENTRYPOINT ["/verify/backend/.venv/bin/python", "/verify/verifier.py"]

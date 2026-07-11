@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -47,6 +48,16 @@ async def lifespan(app: FastAPI):
     # 数据层
     store = DataStore()
     repo = KlineRepository(store)
+    fixture_mode = os.environ.get("PHASE1_FIXTURE_MODE", "").strip().lower() in {"1", "true", "yes"}
+    if fixture_mode:
+        app.state.phase1_fixture_sync = daily_pipeline.run_phase1_fixture_sync(store.data_dir)
+        store.db.close()
+        store = DataStore()
+        repo = KlineRepository(store)
+        from app.services import preferences
+        preferences.save({"onboarding_completed": True})
+    else:
+        app.state.phase1_fixture_sync = None
     app.state.datastore = store
     app.state.repo = repo
     operational = OperationalRepository(store.data_dir / "operational.db")
@@ -58,7 +69,7 @@ async def lifespan(app: FastAPI):
 
     # Polars 缓存预热 — enriched 的重计算 (107万行 compute_indicators) 推后台,
     # instruments/index/ETF 仍同步 (毫秒级)。应用立即 ready, 指标算完后自动替换。
-    repo.refresh_cache(background=True)
+    repo.refresh_cache(background=not fixture_mode)
 
     # 能力探测
     capset = detect_capabilities()
@@ -77,7 +88,8 @@ async def lifespan(app: FastAPI):
     qs = QuoteService()
     app.state.quote_service = qs
     qs.set_repo(repo)
-    qs.boot_check()
+    if not fixture_mode:
+        qs.boot_check()
     app.state.portfolio_service = PortfolioService(
         repository=operational,
         quote_service=qs,
@@ -100,51 +112,45 @@ async def lifespan(app: FastAPI):
     depth_service.set_app_state(app.state)
     app.state.depth_service = depth_service
 
-    # 启动调度器(若 enriched 数据为空,首次启动可手动 POST /api/pipeline/run)
-    try:
-        daily_pipeline.set_app_state(app.state)  # 供 depth_finalize job 访问 depth_service
-        scheduler = daily_pipeline.start_scheduler(repo, capset)
-        app.state.scheduler = scheduler
-    except Exception as e:  # noqa: BLE001
-        logger.warning("scheduler not started: %s", e)
+    # Fixture acceptance must not start any polling, scheduler, or optional connector.
+    if fixture_mode:
         app.state.scheduler = None
+        app.state.depth_service = None
+        app.state.wecom_bot_service = None
+        app.state.pull_scheduler = None
+    else:
+        try:
+            daily_pipeline.set_app_state(app.state)
+            app.state.scheduler = daily_pipeline.start_scheduler(repo, capset)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("scheduler not started: %s", e)
+            app.state.scheduler = None
+        try:
+            depth_service.boot_check()
+            depth_service.start_polling()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("depth_service init failed: %s", e)
+        try:
+            from app.services.wecom_bot_service import WecomBotService
+            wecom_bot_service = WecomBotService()
+            wecom_bot_service.set_app_state(app.state)
+            app.state.wecom_bot_service = wecom_bot_service
+            wecom_bot_service.boot_check()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("wecom_bot_service init failed: %s", e)
+            app.state.wecom_bot_service = None
+        from app.services.ext_pull import pull_scheduler
+        pull_scheduler.start(store.data_dir)
+        pull_scheduler.refresh(store.data_dir)
+        app.state.pull_scheduler = pull_scheduler
 
-    # depth sealed: 启动补跑(当天文件不存在) + 盘中轮询(有能力时)
-    try:
-        depth_service.boot_check()
-        depth_service.start_polling()
-    except Exception as e:  # noqa: BLE001
-        logger.warning("depth_service init failed: %s", e)
-
-    # 企业微信智能机器人长连接(可选通道, 失败不阻断启动)
-    try:
-        from app.services.wecom_bot_service import WecomBotService
-        wecom_bot_service = WecomBotService()
-        wecom_bot_service.set_app_state(app.state)
-        app.state.wecom_bot_service = wecom_bot_service
-        wecom_bot_service.boot_check()
-    except Exception as e:  # noqa: BLE001
-        logger.warning("wecom_bot_service init failed: %s", e)
-
-    # 扩展数据定时拉取
-    from app.services.ext_pull import pull_scheduler
-    pull_scheduler.start(store.data_dir)
-    pull_scheduler.refresh(store.data_dir)
-    app.state.pull_scheduler = pull_scheduler
-
-    # 内置扩展表 (概念/行业): 只创建 config (含拉取配置), 不自动拉数据
-    # 数据获取由用户在概念/行业页点「获取数据」手动触发 (POST /api/ext-data/presets/{id}/fetch)
-    try:
-        from app.services.ext_presets import ensure_builtin_presets
-        await ensure_builtin_presets(store.data_dir)
-    except Exception as e:  # noqa: BLE001
-        logger.warning("内置扩展表初始化失败 (不影响启动): %s", e)
-
-    # 财务数据 (需 Expert 套餐): 仅初始化调度器供 /api/financials/sync/* 手动同步,
-    # 不启动自动调度——用户在「财务分析」页点「同步」手动拉取。
-    from app.services.financial_sync import financial_scheduler
-    financial_scheduler.start(store.data_dir, capset)
-    app.state.financial_scheduler = financial_scheduler
+    if fixture_mode:
+        app.state.financial_scheduler = None
+    else:
+        # 财务调度器仅供显式同步使用；fixture runtime 不加载任何外部 provider。
+        from app.services.financial_sync import financial_scheduler
+        financial_scheduler.start(store.data_dir, capset)
+        app.state.financial_scheduler = financial_scheduler
 
     # 策略引擎
     from app.strategy.engine import StrategyEngine

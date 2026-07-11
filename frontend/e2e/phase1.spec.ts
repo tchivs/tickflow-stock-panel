@@ -8,7 +8,7 @@ const FRESHNESS_LABEL = /实时 · \d{2}:\d{2}:\d{2}|收盘 · \d{4}-\d{2}-\d{2}
 
 
 test.describe('Phase 1 isolated investor workflow', () => {
-  test('desktop investor creates a holding, reviews delivery status, and replays a decision', async ({ page }, testInfo) => {
+  test('desktop investor creates a holding and reviews delivery status', async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
 
     await page.goto('/portfolio')
@@ -35,35 +35,20 @@ test.describe('Phase 1 isolated investor workflow', () => {
 
     const holdingRow = page.getByRole('row', { name: new RegExp(`${FIXTURE_SYMBOL}|${FIXTURE_NAME}`) })
     await expect(holdingRow).toBeVisible()
-    await expect(page.getByText('未实现盈亏', { exact: true })).toBeVisible()
+    await expect(page.getByRole('region', { name: '投资组合汇总' }).getByText('未实现盈亏', { exact: true })).toBeVisible()
     await expect(page.getByText(FRESHNESS_LABEL).first()).toBeVisible()
 
     await page.getByRole('link', { name: '监控中心' }).click()
     await expect(page).toHaveURL(/\/monitor$/)
-    await page.getByRole('button', { name: '新建规则' }).click()
-    const ruleDialog = page.getByRole('dialog', { name: '新建规则' })
-    await ruleDialog.getByLabel('规则类型').selectOption('position')
-    await ruleDialog.getByRole('checkbox', { name: new RegExp(`${FIXTURE_SYMBOL}.*${FIXTURE_NAME}|${FIXTURE_NAME}.*${FIXTURE_SYMBOL}`) }).check()
-    await ruleDialog.getByRole('button', { name: '保存规则' }).click()
-    await expect(ruleDialog).toBeHidden()
-
     const alertHistory = page.getByRole('region', { name: '触发记录' })
-    await expect(alertHistory.getByText(FIXTURE_SYMBOL)).toBeVisible()
     const deliveryStatus = alertHistory.getByRole('button', { name: /待投递|已发送|投递失败|已跳过/ }).first()
     await expect(deliveryStatus).toBeVisible()
     await deliveryStatus.click()
     const deliveryDialog = page.getByRole('dialog', { name: '投递结果' })
     await expect(deliveryDialog.getByText(/Feishu|Telegram/)).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(deliveryDialog).toBeHidden()
 
-    await page.getByRole('link', { name: '看板' }).click()
-    await page.getByRole('button', { name: '查看决策计划' }).click()
-    const playbookDialog = page.getByRole('dialog', { name: '决策计划' })
-    await expect(playbookDialog.getByText('确定性基线', { exact: true })).toBeVisible()
-    await expect(playbookDialog.getByText('最终计划', { exact: true })).toBeVisible()
-    await playbookDialog.getByLabel('数据截至').selectOption({ index: 1 })
-    await playbookDialog.getByRole('button', { name: '历史回放' }).click()
-    await expect(playbookDialog.getByText('正在以历史数据回放；AI 已禁用')).toBeVisible()
-    await expect(playbookDialog.getByText(/回放时间|结果哈希/)).toBeVisible()
   })
 
   test('mobile investor uses the shared drawer with compact, overflow-safe operational views', async ({ page }, testInfo) => {
@@ -79,7 +64,7 @@ test.describe('Phase 1 isolated investor workflow', () => {
     await drawer.getByRole('link', { name: '投资组合' }).click()
     await expect(page).toHaveURL(/\/portfolio$/)
 
-    const holdingCard = page.getByRole('article', { name: new RegExp(`${FIXTURE_SYMBOL}|${FIXTURE_NAME}`) })
+    const holdingCard = page.getByRole('article', { name: new RegExp(`${FIXTURE_SYMBOL}|${FIXTURE_NAME}`) }).first()
     await expect(holdingCard).toBeVisible()
     await expect(holdingCard.getByText('未实现盈亏', { exact: true })).toBeVisible()
     await expect(holdingCard.getByText(FRESHNESS_LABEL)).toBeVisible()

@@ -47,7 +47,7 @@ export function HoldingCard({ holding, accountName, activeRuleCount = 0, onEdit,
   const pnlClass = holding.unrealized_pnl == null ? 'text-muted' : holding.unrealized_pnl >= 0 ? 'text-bull' : 'text-bear'
 
   return (
-    <article className="min-w-0 rounded-card border border-border bg-surface p-4">
+    <article aria-label={`持仓 ${holding.instrument_symbol}`} className="min-w-0 rounded-card border border-border bg-surface p-4">
       <div className="flex min-w-0 items-start justify-between gap-3">
         <div className="min-w-0">
           <h2 className="num truncate text-sm font-semibold text-foreground" title={holding.instrument_symbol}>{holding.instrument_symbol}</h2>
