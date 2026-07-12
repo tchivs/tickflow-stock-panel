@@ -34,7 +34,7 @@
 - [x] **ADV-01**: User can track attributed market viewpoints, identify material stance changes, and review confidence-aware performance results.
 - [x] **ADV-02**: Researcher can progress a hypothesis through an experiment specification, sandbox run, and recorded feedback cycle.
 - [x] **ADV-03**: Researcher can evaluate and promote an evolved strategy from research asset through mutation, evaluation, and explicit promotion gates.
-- [ ] **SAFE-01**: Operator can invoke agent workflows through scoped tokens, market and instrument allowlists, rate limits, idempotent jobs, audit summaries, and SSE progress updates.
+- [x] **SAFE-01**: Operator can invoke agent workflows through scoped tokens, market and instrument allowlists, rate limits, idempotent jobs, audit summaries, and SSE progress updates.
 - [ ] **SAFE-02**: Researcher can validate and run custom strategies only through a machine-readable contract and sandbox with AST, import, timeout, and memory controls.
 
 ## v2 Requirements
@@ -75,7 +75,7 @@
 | ADV-01 | Phase 4 | Complete |
 | ADV-02 | Phase 4 | Complete |
 | ADV-03 | Phase 4 | Complete |
-| SAFE-01 | Phase 4 | Pending |
+| SAFE-01 | Phase 4 | Complete |
 | SAFE-02 | Phase 4 | Pending |
 | SHDW-01 | Phase 5 | Optional v2 |
 | THES-01 | Phase 5 | Optional v2 |

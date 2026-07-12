@@ -5,16 +5,16 @@ milestone_name: milestone
 current_phase: 04
 current_phase_name: advanced-capabilities
 status: executing
-stopped_at: Completed 04-12-PLAN.md
-last_updated: "2026-07-12T18:52:45.533Z"
+stopped_at: Completed 04-13-PLAN.md
+last_updated: "2026-07-12T19:03:02.461Z"
 last_activity: 2026-07-12
 last_activity_desc: Phase 04 execution started
 progress:
   total_phases: 5
   completed_phases: 3
   total_plans: 49
-  completed_plans: 47
-  percent: 60
+  completed_plans: 48
+  percent: 98
 ---
 
 # Project State
@@ -29,11 +29,11 @@ See: .planning/PROJECT.md (updated 2026-07-10)
 ## Current Position
 
 Phase: 04 (advanced-capabilities) — EXECUTING
-Plan: 2 of 14
+Plan: 3 of 14
 Status: Ready to execute
 Last activity: 2026-07-12 — Phase 04 execution started
 
-Progress: [##########] implementation complete; verification blocked
+Progress: [██████████] 98%
 
 ## Performance Metrics
 
@@ -71,6 +71,7 @@ Progress: [##########] implementation complete; verification blocked
 | Phase 03 P11 | 527 | 2 tasks | 5 files |
 | Phase 03 P12 | 480 | 3 tasks | 5 files |
 | Phase 04 P12 | 21m | 2 tasks | 6 files |
+| Phase 04 P13 | 7m | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -112,6 +113,8 @@ No implementation decision was explicitly locked by the architecture intake. Req
 - [Phase 03]: Analysis UI keeps stock/portfolio display subjects separate from instrument/account API request subjects. — This preserves object-local UI semantics while preventing client calls from sending unsupported subject kinds.
 - [Phase 04]: Viewpoint reads select the latest immutable evaluation by `created_at` then stable ID, never response ordering.
 - [Phase 04]: Experiment execution uses a spawned, parent-owned process group and returns only bounded manifest metadata.
+- [Phase 04]: Job-state mutation and its append-only audit fact commit together before scoped SSE publication.
+- [Phase 04]: Production advanced workflows receive only persisted server bindings and remain recovery cursors rather than authority sources.
 
 ### Pending Todos
 
@@ -129,6 +132,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-07-12T18:52:45.522Z
-Stopped at: Completed 04-12-PLAN.md
+Last session: 2026-07-12T19:02:31.288Z
+Stopped at: Completed 04-13-PLAN.md
 Resume file: None
