@@ -12,7 +12,7 @@ function ConflictWarning({ limitations }: { limitations: string[] }) {
 
 export function ReportPanel({ report, evidence }: { report: AnalysisReport; evidence?: AnalysisEvidence | null }) {
   const limitations = [...new Set([
-    ...report.evidence_limitations,
+    ...(report.evidence_limitations ?? []),
     ...(evidence?.material_numbers.filter(number => number.cross_check === 'conflicting' || number.cross_check === 'unresolved').map(number => `${number.label} 的来源口径或数值不一致`) ?? []),
   ])]
   const hasConflict = limitations.length > 0
