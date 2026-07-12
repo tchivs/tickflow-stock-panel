@@ -218,6 +218,48 @@ class AdvancedRepository:
         assert row is not None
         return dict(row)
 
+    def transition_job_with_audit(
+        self,
+        *,
+        job_id: str,
+        from_status: str,
+        to_status: str,
+        stage: str,
+        decision: str,
+        reason: str,
+        authorization_id: str,
+        rejection_reason: str | None = None,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Atomically persist a legal cursor transition and its audit fact."""
+        now = self.now()
+        reference = str(uuid4())
+        with self._connection() as connection, connection:
+            connection.execute(
+                "INSERT INTO advanced_security_audit (id, authorization_id, job_id, reference, decision, reason, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (str(uuid4()), authorization_id, job_id, reference, decision, reason, now),
+            )
+            changed = connection.execute(
+                """UPDATE advanced_jobs SET status = ?, stage = ?, stage_recorded_at = ?, rejection_reason = ?, audit_reference = ?, updated_at = ?
+                   WHERE id = ? AND status = ?""",
+                (to_status, stage, now, rejection_reason, reference, now, job_id, from_status),
+            ).rowcount
+            if changed != 1:
+                raise ValueError("advanced job state changed; refresh and retry")
+            job = connection.execute("SELECT * FROM advanced_jobs WHERE id = ?", (job_id,)).fetchone()
+            audit = connection.execute("SELECT * FROM advanced_security_audit WHERE reference = ?", (reference,)).fetchone()
+        assert job is not None and audit is not None
+        return dict(job), dict(audit)
+
+    def get_job_by_audit_reference(self, reference: str) -> dict[str, Any] | None:
+        with self._connection() as connection:
+            row = connection.execute("SELECT * FROM advanced_jobs WHERE audit_reference = ?", (reference,)).fetchone()
+        return None if row is None else dict(row)
+
+    def get_security_audit(self, reference: str) -> dict[str, Any] | None:
+        with self._connection() as connection:
+            row = connection.execute("SELECT * FROM advanced_security_audit WHERE reference = ?", (reference,)).fetchone()
+        return None if row is None else dict(row)
+
     def get_job(self, job_id: str) -> dict[str, Any] | None:
         with self._connection() as connection:
             row = connection.execute("SELECT * FROM advanced_jobs WHERE id = ?", (job_id,)).fetchone()

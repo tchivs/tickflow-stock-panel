@@ -347,7 +347,7 @@ def get_job(job_id: str, request: Request) -> dict[str, object]:
 
 
 @router.post("/subjects/{instrument}/jobs")
-def create_session_bound_job(instrument: str, payload: SessionBoundJobStartRequest, request: Request) -> dict[str, object]:
+async def create_session_bound_job(instrument: str, payload: SessionBoundJobStartRequest, request: Request) -> dict[str, object]:
     """Derive all authorization, scope, market, and idempotency data on the server."""
 
     scope = _scope(request)
@@ -357,9 +357,10 @@ def create_session_bound_job(instrument: str, payload: SessionBoundJobStartReque
     if service is None:
         raise HTTPException(status_code=503, detail="advanced authorization is unavailable")
     try:
-        return {"job": projections.job(service.create_session_bound_job(
+        created = service.create_session_bound_job(
             principal=_principal(request), task_type=payload.task_type, instrument=instrument
-        ))}
+        )
+        return {"job": projections.job(await service.run_authorized_job(job_id=str(created["id"])))}
     except ValueError as error:
         raise HTTPException(status_code=409, detail="advanced job rejected") from error
 

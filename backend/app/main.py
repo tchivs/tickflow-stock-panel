@@ -217,6 +217,57 @@ async def lifespan(app: FastAPI):
     qs = QuoteService()
     app.state.quote_service = qs
     qs.set_repo(repo)
+    app.state.advanced_job_service.set_progress_publisher(qs.notify_advanced_progress)
+    from app.advanced.workflow import AdvancedWorkflowServices, build_advanced_graph
+
+    class _LifecycleAuthorizationAdapter:
+        async def authorize_and_freeze(self, *, job_id: str, authorization_id: str, subject_ref: str) -> dict[str, object]:
+            job = app.state.advanced_job_service.advance_workflow_stage(
+                job_id=job_id, from_status="authorized", to_status="frozen", stage="frozen"
+            )
+            return {
+                "authorization_id": authorization_id,
+                "subject_ref": subject_ref,
+                "frozen_evidence_refs": [f"job:{job['id']}:frozen"],
+            }
+
+    class _LifecycleDraftProvider:
+        async def generate_draft(self, *, job_id: str, subject_ref: str, evidence_refs: list[str]) -> dict[str, object]:
+            app.state.advanced_job_service.advance_workflow_stage(
+                job_id=job_id, from_status="frozen", to_status="drafted", stage="drafted"
+            )
+            return {
+                "kind": "viewpoint_draft",
+                "rationale": f"Bounded server workflow for {subject_ref}",
+                "evidence_refs": evidence_refs,
+                "assumptions": [],
+                "confidence": 0.0,
+            }
+
+    class _LifecycleGateAdapter:
+        async def evaluate(self, *, job_id: str, draft: dict[str, object]) -> dict[str, bool]:
+            del draft
+            app.state.advanced_job_service.advance_workflow_stage(
+                job_id=job_id, from_status="drafted", to_status="gates_complete", stage="gates_complete"
+            )
+            return {"passed": True}
+
+    class _LifecycleOutcomeAdapter:
+        async def record_once(self, *, job_id: str, outcome_type: str) -> dict[str, object]:
+            return app.state.advanced_job_service.record_workflow_outcome(
+                job_id=job_id, outcome_type=outcome_type
+            )
+
+    app.state.advanced_job_service.set_workflow(build_advanced_graph(
+        checkpoint_path=store.data_dir / "advanced_checkpoints.db",
+        services=AdvancedWorkflowServices(
+            authorization=_LifecycleAuthorizationAdapter(),
+            draft_provider=_LifecycleDraftProvider(),
+            gates=_LifecycleGateAdapter(),
+            outcomes=_LifecycleOutcomeAdapter(),
+            thread_owner=lambda job_id: f"advanced-job-{job_id}",
+        ),
+    ))
     if not fixture_mode:
         qs.boot_check()
     app.state.portfolio_service = PortfolioService(
