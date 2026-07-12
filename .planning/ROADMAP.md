@@ -122,7 +122,7 @@ Plans:
   2. User can inspect a multi-perspective report with visible scoring rationale, applicable valuation analysis, and an investment-committee memo.
   3. User can view a signal's current lifecycle status and its recorded evolution or outcome over time.
 
-**Plans**: 2/9 plans executed
+**Plans**: 3/9 plans executed
 Plans:
 **Wave 1**
 
@@ -134,7 +134,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 03-03-PLAN.md — 建立前端 API、缓存、SSE 与浏览器合同。
+- [x] 03-03-PLAN.md — 建立前端 API、缓存、SSE 与浏览器合同。
 - [ ] 03-04-PLAN.md — 实现冻结证据和 SQLite 不可变记录。
 
 **Wave 4** *(blocked on Wave 3 completion)*
@@ -189,6 +189,6 @@ Plans:
 |-------|----------------|--------|-----------|
 | 1. Core Merger | 15/15 | Complete    | 2026-07-11 |
 | 2. Factor And Strategy Research | 8/8 | Complete    | 2026-07-11 |
-| 3. AI Analysis | 2/9 | In Progress|  |
+| 3. AI Analysis | 3/9 | In Progress|  |
 | 4. Advanced Capabilities | 0/TBD | Not started | - |
 | 5. Optional Enhancements | 0/TBD | Optional | - |
