@@ -71,6 +71,54 @@ def test_lifecycle_rules_require_independent_contradiction_and_price_event_conte
     assert priced_in is not None
 
 
+def test_completed_evaluation_requires_new_attributable_frozen_evidence_and_is_idempotent(tmp_path):
+    repository, service = _lifecycle(tmp_path)
+    run = repository.acquire_run(
+        run_id="run-id", subject_kind="stock", subject_key="600519.SH", focus="earnings"
+    )
+    repository.mark_run_running(run["id"])
+    repository.record_frozen_snapshot(
+        run_id=run["id"],
+        snapshot={
+            "subject_key": "600519.SH",
+            "policy_version": "evidence-v1",
+            "context_status": "ready",
+            "sources": [{
+                "source_id": "filing",
+                "grade": "A",
+                "origin": "exchange-filing",
+                "independence_group": "exchange",
+                "retrieved_at": "2026-07-12T00:00:00+00:00",
+                "as_of": "2026-07-11",
+                "period": "2025-Q4",
+                "unit": "CNY_million",
+                "definition": "revenue",
+                "provenance": {"source_locator": "filing"},
+            }],
+            "material_numbers": [],
+            "evidence_fingerprint": "a" * 64,
+        },
+    )
+    report = repository.append_validated_report(
+        subject_kind="stock", subject_key="600519.SH", run_id=run["id"], report={"run_id": run["id"]}
+    )
+    repository.complete_run(run["id"])
+
+    proposal = service.evaluate_completed_analysis(
+        subject_kind="stock", subject_key="600519.SH", run_id=run["id"], report_id=report["id"]
+    )
+    repeated = service.evaluate_completed_analysis(
+        subject_kind="stock", subject_key="600519.SH", run_id=run["id"], report_id=report["id"]
+    )
+
+    assert proposal is not None
+    assert repeated is not None
+    assert repeated["id"] == proposal["id"]
+    assert len(repository.list_lifecycle_reviews(subject_kind="stock", subject_key="600519.SH")) == 1
+    assert repository.current_lifecycle_state(subject_kind="stock", subject_key="600519.SH") == "active"
+    assert repository.list_events(subject_kind="stock", subject_key="600519.SH") == []
+
+
 def test_lifecycle_confirmation_requires_server_resolved_reviewer_and_creates_one_plan(tmp_path):
     repository, service = _lifecycle(
         tmp_path, reviewer_resolver=lambda token: "reviewer-principal-opaque" if token == "session-token" else None

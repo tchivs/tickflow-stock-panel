@@ -113,6 +113,67 @@ async def test_analysis_service_persists_only_a_server_enveloped_validated_repor
     assert run["audit_metadata_json"]
 
 
+async def test_completed_analysis_creates_an_attributable_review_proposal_without_official_transition(tmp_path):
+    from app.analysis.evidence import EvidencePreparationService
+    from app.analysis.lifecycle import LifecycleRuleService
+    from app.analysis.service import AnalysisService
+
+    class FakeGraph:
+        async def ainvoke(self, *_args, **_kwargs):
+            return {"generated_body": _analysis_body()}
+
+    repository = _repository(tmp_path)
+    lifecycle = LifecycleRuleService(repository=repository)
+    service = AnalysisService(
+        repository=repository,
+        evidence_preparer=EvidencePreparationService(),
+        graph=FakeGraph(),
+        evidence_loader=lambda *_args: _evidence_records(),
+        lifecycle_rule_service=lifecycle,
+    )
+
+    run = await service.start_run(subject_kind="stock", subject_key="600519.SH", focus="earnings")
+    reports = repository.list_reports("stock", "600519.SH")
+    reviews = repository.list_lifecycle_reviews(subject_kind="stock", subject_key="600519.SH")
+
+    assert run["status"] == "completed"
+    assert len(reviews) == 1
+    review = reviews[0]
+    assert review["prior_state"] == "active"
+    assert review["proposed_state"] == "strengthened"
+    assert review["evidence"][0]["run_id"] == run["id"]
+    assert review["evidence"][0]["report_id"] == reports[0]["id"]
+    assert review["evidence"][0]["evidence_snapshot_id"] == repository.get_frozen_snapshot(run["id"])["id"]
+    assert repository.current_lifecycle_state(subject_kind="stock", subject_key="600519.SH") == "active"
+    assert repository.list_events(subject_kind="stock", subject_key="600519.SH") == []
+
+
+async def test_failed_or_duplicate_analysis_completion_does_not_create_extra_lifecycle_proposals(tmp_path):
+    from app.analysis.evidence import EvidencePreparationService
+    from app.analysis.lifecycle import LifecycleRuleService
+    from app.analysis.service import AnalysisService
+
+    class InvalidGraph:
+        async def ainvoke(self, *_args, **_kwargs):
+            return {"generated_body": _analysis_body("unknown-source")}
+
+    repository = _repository(tmp_path)
+    lifecycle = LifecycleRuleService(repository=repository)
+    service = AnalysisService(
+        repository=repository,
+        evidence_preparer=EvidencePreparationService(),
+        graph=InvalidGraph(),
+        evidence_loader=lambda *_args: _evidence_records(),
+        lifecycle_rule_service=lifecycle,
+    )
+
+    failed_run = await service.start_run(subject_kind="stock", subject_key="600519.SH", focus="earnings")
+
+    assert failed_run["status"] == "failed"
+    assert repository.list_lifecycle_reviews(subject_kind="stock", subject_key="600519.SH") == []
+    assert repository.list_events(subject_kind="stock", subject_key="600519.SH") == []
+
+
 def test_analysis_repository_orders_versions_and_rejects_history_rewrites(tmp_path):
     repository = _repository(tmp_path)
     first = repository.append_validated_report(
