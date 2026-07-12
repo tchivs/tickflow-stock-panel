@@ -244,6 +244,73 @@ class AnalysisRepository:
             ).fetchall()
         return [self._report_record(row) for row in rows]
 
+    def append_lifecycle_proposal(
+        self,
+        *,
+        subject_kind: str,
+        subject_key: str,
+        prior_state: str,
+        proposed_state: str,
+        evidence: Mapping[str, Any],
+        review_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Append a non-authoritative review proposal with its frozen rule inputs."""
+        self._require_text(subject_kind, "subject_kind")
+        self._require_text(subject_key, "subject_key")
+        self._require_text(prior_state, "prior_state")
+        self._require_text(proposed_state, "proposed_state")
+        identifier = review_id or str(uuid4())
+        now = _now()
+        with self._connection() as connection, connection:
+            signal = connection.execute(
+                "SELECT * FROM analysis_signals WHERE subject_kind = ? AND subject_key = ?",
+                (subject_kind, subject_key),
+            ).fetchone()
+            if signal is None:
+                signal_id = str(uuid4())
+                connection.execute(
+                    "INSERT INTO analysis_signals (id, subject_kind, subject_key, created_at) VALUES (?, ?, ?, ?)",
+                    (signal_id, subject_kind, subject_key, now),
+                )
+            else:
+                signal_id = str(signal["id"])
+            connection.execute(
+                """INSERT INTO analysis_signal_reviews
+                   (id, signal_id, prior_state, proposed_state, evidence_json, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (identifier, signal_id, prior_state, proposed_state, _json(evidence, "lifecycle evidence"), now),
+            )
+            review = connection.execute("SELECT * FROM analysis_signal_reviews WHERE id = ?", (identifier,)).fetchone()
+        assert review is not None
+        return self._review_record(review)
+
+    def get_lifecycle_review(self, review_id: str) -> dict[str, Any] | None:
+        with self._connection() as connection:
+            review = connection.execute("SELECT * FROM analysis_signal_reviews WHERE id = ?", (review_id,)).fetchone()
+        return None if review is None else self._review_record(review)
+
+    def current_lifecycle_state(self, *, subject_kind: str, subject_key: str) -> str:
+        with self._connection() as connection:
+            event = connection.execute(
+                """SELECT events.next_state FROM analysis_signal_events AS events
+                   JOIN analysis_signals AS signals ON signals.id = events.signal_id
+                   WHERE signals.subject_kind = ? AND signals.subject_key = ?
+                   ORDER BY events.occurred_at DESC, events.created_at DESC, events.id DESC LIMIT 1""",
+                (subject_kind, subject_key),
+            ).fetchone()
+        return "active" if event is None else str(event["next_state"])
+
+    def list_events(self, *, subject_key: str, subject_kind: str = "instrument") -> list[dict[str, Any]]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                """SELECT events.* FROM analysis_signal_events AS events
+                   JOIN analysis_signals AS signals ON signals.id = events.signal_id
+                   WHERE signals.subject_kind = ? AND signals.subject_key = ?
+                   ORDER BY events.occurred_at, events.created_at, events.id""",
+                (subject_kind, subject_key),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     @staticmethod
     def _snapshot_record(row: sqlite3.Row) -> dict[str, Any]:
         value = dict(row)
@@ -254,6 +321,15 @@ class AnalysisRepository:
     def _report_record(row: sqlite3.Row) -> dict[str, Any]:
         value = dict(row)
         value["report"] = json.loads(value.pop("report_json"))
+        return value
+
+    @staticmethod
+    def _review_record(row: sqlite3.Row) -> dict[str, Any]:
+        value = dict(row)
+        payload = json.loads(value.pop("evidence_json"))
+        if not isinstance(payload, dict):
+            raise RuntimeError("stored lifecycle review evidence is malformed")
+        value.update(payload)
         return value
 
     @staticmethod
