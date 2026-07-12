@@ -180,6 +180,29 @@ class AdvancedRepository:
             rows = connection.execute("SELECT * FROM advanced_security_audit ORDER BY rowid").fetchall()
         return [dict(row) for row in rows]
 
+    def append_sandbox_validation(self, *, contract_fingerprint: str, source_sha256: str, status: str, reason: str, audit_reference: str) -> dict[str, Any]:
+        identifier = str(uuid4())
+        with self._connection() as connection, connection:
+            connection.execute(
+                "INSERT INTO advanced_sandbox_validations (id, contract_fingerprint, source_sha256, status, reason, audit_reference, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (identifier, contract_fingerprint, source_sha256, status, reason, audit_reference, self.now()),
+            )
+            row = connection.execute("SELECT * FROM advanced_sandbox_validations WHERE id = ?", (identifier,)).fetchone()
+        assert row is not None
+        return dict(row)
+
+    def list_sandbox_validations(self) -> list[dict[str, Any]]:
+        with self._connection() as connection:
+            rows = connection.execute("SELECT * FROM advanced_sandbox_validations ORDER BY rowid").fetchall()
+        return [dict(row) for row in rows]
+
+    def get_sandbox_validation_by_audit_reference(self, audit_reference: str) -> dict[str, Any] | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM advanced_sandbox_validations WHERE audit_reference = ?", (audit_reference,)
+            ).fetchone()
+        return None if row is None else dict(row)
+
     def transition_job(self, *, job_id: str, from_status: str, to_status: str, stage: str, rejection_reason: str | None = None, audit_reference: str | None = None) -> dict[str, Any]:
         """Perform the only legal fact-adjacent update: a guarded job cursor transition."""
         now = self.now()
