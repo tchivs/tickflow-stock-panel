@@ -21,9 +21,12 @@ class AnalysisGraphState(TypedDict):
 class PersistentAnalysisGraph:
     """Graph facade that opens the approved SQLite saver for each async invocation."""
 
-    def __init__(self, *, builder: StateGraph, checkpoint_path: Path) -> None:
+    def __init__(
+        self, *, builder: StateGraph, checkpoint_path: Path, adapter: ConfiguredAnalysisAdapter
+    ) -> None:
         self._builder = builder
         self._checkpoint_path = checkpoint_path
+        self.adapter = adapter
         # Topology inspection is deliberately saver-free; execution always uses SQLite.
         self._topology_graph = builder.compile()
 
@@ -68,4 +71,6 @@ def build_analysis_graph(
     builder.add_edge(START, "validate_frozen_input")
     builder.add_edge("validate_frozen_input", "generate_validated_body")
     builder.add_edge("generate_validated_body", END)
-    return PersistentAnalysisGraph(builder=builder, checkpoint_path=Path(checkpoint_path))
+    return PersistentAnalysisGraph(
+        builder=builder, checkpoint_path=Path(checkpoint_path), adapter=model_adapter
+    )

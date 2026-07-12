@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import sqlite3
 
-
 MIGRATIONS: tuple[str, ...] = (
     """
     CREATE TABLE accounts (
@@ -387,6 +386,9 @@ MIGRATIONS: tuple[str, ...] = (
     BEGIN SELECT RAISE(ABORT, 'analysis audit records are immutable'); END;
     CREATE TRIGGER analysis_observation_outcomes_no_delete BEFORE DELETE ON analysis_observation_outcomes
     BEGIN SELECT RAISE(ABORT, 'analysis audit records are immutable'); END;
+    """,
+    """
+    ALTER TABLE analysis_runs ADD COLUMN audit_metadata_json TEXT;
     """,
 )
 

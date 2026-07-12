@@ -1,12 +1,13 @@
 """Append-only SQLite persistence for governed analysis records."""
 from __future__ import annotations
 
-from contextlib import contextmanager
-from datetime import datetime, timezone
 import json
-from pathlib import Path
 import sqlite3
-from typing import Any, Iterator, Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 from pydantic import BaseModel
@@ -16,7 +17,7 @@ from app.operational.migrations import migrate_operational_db
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _json(value: object, field: str) -> str:
@@ -98,17 +99,21 @@ class AnalysisRepository:
     def mark_run_running(self, run_id: str) -> dict[str, Any]:
         return self._transition_run(run_id, from_status="queued", to_status="running")
 
-    def complete_run(self, run_id: str) -> dict[str, Any]:
-        return self._transition_run(run_id, from_status="running", to_status="completed")
+    def complete_run(self, run_id: str, *, audit_metadata: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        return self._transition_run(
+            run_id, from_status="running", to_status="completed", audit_metadata=audit_metadata
+        )
 
-    def record_run_failure(self, run_id: str, reason: str) -> dict[str, Any]:
+    def record_run_failure(
+        self, run_id: str, reason: str, *, audit_metadata: Mapping[str, Any] | None = None
+    ) -> dict[str, Any]:
         self._require_text(reason, "failure reason")
         now = _now()
         with self._connection() as connection, connection:
             updated = connection.execute(
-                """UPDATE analysis_runs SET status = 'failed', failure_reason = ?, finished_at = ?
+                """UPDATE analysis_runs SET status = 'failed', failure_reason = ?, audit_metadata_json = ?, finished_at = ?
                    WHERE id = ? AND status IN ('queued', 'running')""",
-                (reason, now, run_id),
+                (reason, None if audit_metadata is None else _json(audit_metadata, "run audit metadata"), now, run_id),
             ).rowcount
             if updated != 1:
                 raise ValueError("analysis run cannot be failed from its current state")
@@ -116,13 +121,31 @@ class AnalysisRepository:
         assert row is not None
         return dict(row)
 
-    def _transition_run(self, run_id: str, *, from_status: str, to_status: str) -> dict[str, Any]:
+    def _transition_run(
+        self,
+        run_id: str,
+        *,
+        from_status: str,
+        to_status: str,
+        audit_metadata: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
         now = _now()
-        fields = "status = ?, started_at = ?" if to_status == "running" else "status = ?, finished_at = ?"
+        fields = "status = ?, started_at = ?" if to_status == "running" else "status = ?, audit_metadata_json = ?, finished_at = ?"
         with self._connection() as connection, connection:
+            values: tuple[Any, ...]
+            if to_status == "running":
+                values = (to_status, now, run_id, from_status)
+            else:
+                values = (
+                    to_status,
+                    None if audit_metadata is None else _json(audit_metadata, "run audit metadata"),
+                    now,
+                    run_id,
+                    from_status,
+                )
             updated = connection.execute(
                 f"UPDATE analysis_runs SET {fields} WHERE id = ? AND status = ?",
-                (to_status, now, run_id, from_status),
+                values,
             ).rowcount
             if updated != 1:
                 raise ValueError(f"analysis run cannot transition from {from_status} to {to_status}")

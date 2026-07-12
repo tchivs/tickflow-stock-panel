@@ -6,7 +6,6 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-
 SourceGrade = Literal["A", "B", "C"]
 CrossCheckStatus = Literal["confirmed", "conflicting", "unresolved", "not_required"]
 ContextStatus = Literal["ready", "context_insufficient"]
@@ -56,7 +55,7 @@ class MaterialNumberObservation(BaseModel):
     comparison_reason: str | None = None
 
     @model_validator(mode="after")
-    def _confirmed_requires_independent_peer(self) -> "MaterialNumberObservation":
+    def _confirmed_requires_independent_peer(self) -> MaterialNumberObservation:
         if self.status == "confirmed" and not self.peer_source_ids:
             raise ValueError("confirmed material number requires an independent peer")
         return self
@@ -75,7 +74,7 @@ class FrozenEvidenceSnapshot(BaseModel):
     evidence_fingerprint: str = Field(min_length=64, max_length=64)
 
     @model_validator(mode="after")
-    def _context_matches_sources(self) -> "FrozenEvidenceSnapshot":
+    def _context_matches_sources(self) -> FrozenEvidenceSnapshot:
         if self.context_status == "context_insufficient" and self.sources:
             raise ValueError("context_insufficient snapshot cannot contain sources")
         if self.context_status == "ready" and not self.sources:
@@ -102,7 +101,7 @@ class ValuationAssessment(BaseModel):
     evidence_ids: list[str] = Field(default_factory=list, max_length=32)
 
     @model_validator(mode="after")
-    def _method_matches_applicability(self) -> "ValuationAssessment":
+    def _method_matches_applicability(self) -> ValuationAssessment:
         if self.applicable == (self.method == "not_applicable"):
             raise ValueError("valuation applicability and method disagree")
         return self
@@ -149,9 +148,10 @@ class AnalysisReport(BaseModel):
     run_id: str = Field(min_length=1)
     report_version: int = Field(ge=1)
     schema_version: str = Field(min_length=1)
+    generation_metadata: dict[str, object] = Field(default_factory=dict)
 
     @model_validator(mode="after")
-    def _cites_only_frozen_sources(self) -> "AnalysisReport":
+    def _cites_only_frozen_sources(self) -> AnalysisReport:
         allowed = {source.source_id for source in self.evidence_snapshot.sources}
         cited = set(self.generated.valuation.evidence_ids) | set(self.generated.ic_memo.evidence_ids)
         for perspective in self.generated.perspectives:
