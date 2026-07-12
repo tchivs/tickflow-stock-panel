@@ -76,9 +76,9 @@ No implementation decision was explicitly locked by the architecture intake. Req
 - [Phase ?]: Strategy retention eligibility requires the current successful SSE task and its server-issued handle.
 - [Phase 03]: 批准 langgraph==1.2.9 与 langgraph-checkpoint-sqlite==3.1.0；保留直接 OpenAI SDK 适配器且不添加 langchain-openai。
 - [Phase 03]: Wave 0 analysis contracts remain intentionally RED until plans 03-04 through 03-07 implement app.analysis. — Avoid placeholder production code while preserving executable evidence, graph, lifecycle, and trusted-reviewer invariants.
-- [Phase ?]: Analysis client actions carry only bounded subject identifiers or server-issued review references; they never send reviewer, provenance, grade, or lifecycle authority.
-- [Phase ?]: Every analysis cache key includes the subject so persisted progress invalidates only the affected object's panels.
-- [Phase ?]: Phase 3 browser scenarios remain per-case expected failures until 03-08 removes the markers after delivering the UI.
+- [Phase 03]: Analysis client actions carry only bounded subject identifiers or server-issued review references; they never send reviewer, provenance, grade, or lifecycle authority.
+- [Phase 03]: Every analysis cache key includes the subject so persisted progress invalidates only the affected object's panels.
+- [Phase 03]: Phase 3 browser scenarios remain per-case expected failures until 03-08 removes the markers after delivering the UI.
 
 ### Pending Todos
 
