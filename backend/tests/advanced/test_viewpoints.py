@@ -5,6 +5,8 @@ import sqlite3
 from datetime import UTC, date, datetime
 
 import pytest
+from fastapi import FastAPI, Request
+from fastapi.testclient import TestClient
 
 
 class FixedMarketSnapshot:
@@ -233,3 +235,94 @@ def test_calibration_projects_low_medium_high_buckets_with_coverage_and_insuffic
         "coverage_start": "2026-03-02",
         "coverage_end": "2026-04-02",
     }
+
+
+class _ViewpointApiService:
+    def __init__(self) -> None:
+        self.created: list[dict[str, object]] = []
+
+    def create_viewpoint(self, **payload: object) -> dict[str, object]:
+        self.created.append(payload)
+        return {
+            "id": "version-owned",
+            "viewpoint_id": "viewpoint-owned",
+            "version": 1,
+            "source_profile": "operator-research-v1",
+            "instrument": str(payload["instrument"]),
+            "published_at": "2026-01-02T00:00:00+00:00",
+            "confidence": "high",
+        }
+
+    def list_versions(self, viewpoint_id: str) -> list[dict[str, object]]:
+        if viewpoint_id == "viewpoint-owned":
+            return [{
+                "id": "version-owned",
+                "viewpoint_id": viewpoint_id,
+                "version": 1,
+                "instrument": "600519.SH",
+                "source_profile": "operator-research-v1",
+                "published_at": "2026-01-02T00:00:00+00:00",
+                "confidence": "high",
+            }]
+        return [{"id": "version-other", "viewpoint_id": viewpoint_id, "instrument": "000001.SZ"}]
+
+    def calibration(self, *, source_profile: str) -> dict[str, object]:
+        assert source_profile == "operator-research-v1"
+        return {"low": {"status": "insufficient_sample"}}
+
+
+def test_viewpoint_api_resolves_persisted_instrument_before_safe_projection_and_rejects_mutation_authority():
+    from app.advanced import api as advanced_api
+
+    service = _ViewpointApiService()
+    app = FastAPI()
+    app.include_router(advanced_api.router)
+    app.state.viewpoint_service = service
+    app.state.resolve_advanced_subject_scope = lambda _request: advanced_api.AdvancedSubjectScope(
+        frozenset({("instrument", "600519.SH")})
+    )
+
+    @app.middleware("http")
+    async def authenticated(request: Request, call_next):
+        request.state.reviewer_principal = "server-researcher"
+        return await call_next(request)
+
+    client = TestClient(app)
+    payload = {
+        "source_profile": "operator-research-v1",
+        "market_scope": "CN-A",
+        "asset_type": "stock",
+        "instrument": "600519.SH",
+        "published_at": "2026-01-02T00:00:00+00:00",
+        "direction": "bullish",
+        "conclusion": "受控研究观点",
+        "rating": "overweight",
+        "target_range": [1500, 1600],
+        "horizon_days": 60,
+        "confidence": "high",
+        "evidence": [{"id": "filing-1"}],
+        "evaluation_window_days": 60,
+    }
+
+    assert client.post("/api/advanced/viewpoints", json={**payload, "principal": "browser"}).status_code == 422
+    created = client.post("/api/advanced/viewpoints", json=payload)
+    assert created.status_code == 200
+    assert service.created[0]["instrument"] == "600519.SH"
+    assert "principal" not in service.created[0]
+    assert client.get("/api/advanced/viewpoints/viewpoint-other/versions").status_code == 404
+    allowed = client.get("/api/advanced/viewpoints/viewpoint-owned/versions")
+    assert allowed.status_code == 200
+    assert allowed.json()["versions"][0] == {
+        "id": "version-owned",
+        "viewpoint_id": "viewpoint-owned",
+        "version": 1,
+        "status": "recorded",
+        "source_profile": "operator-research-v1",
+        "instrument": "600519.SH",
+        "published_at": "2026-01-02T00:00:00+00:00",
+        "confidence": "high",
+        "evaluation": None,
+        "audit_reference": None,
+    }
+    assert client.patch("/api/advanced/viewpoints/viewpoint-owned", json={}).status_code == 404
+    assert client.delete("/api/advanced/viewpoints/viewpoint-owned").status_code == 404

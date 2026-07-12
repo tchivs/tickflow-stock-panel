@@ -4,6 +4,8 @@ from __future__ import annotations
 import sqlite3
 
 import pytest
+from fastapi import FastAPI, Request
+from fastapi.testclient import TestClient
 
 
 class FakeGovernedBacktest:
@@ -174,3 +176,66 @@ def test_retry_appends_a_new_run_and_configuration_change_appends_a_new_specific
     assert changed_specification["version"] == 2
     assert changed_specification["supersedes_specification_id"] == original["id"]
     assert service.get_run(failed_run["id"])["status"] == "timed_out"
+
+
+class _ExperimentApiService:
+    def __init__(self) -> None:
+        self.created: list[dict[str, object]] = []
+        self.feedback: list[dict[str, str]] = []
+
+    def create_specification(self, **payload: object) -> dict[str, object]:
+        self.created.append(payload)
+        return {"id": "spec-owned", "research_asset_id": "asset-owned", "version": 1}
+
+    def get_specification(self, specification_id: str) -> dict[str, object] | None:
+        if specification_id == "spec-owned":
+            return {"id": specification_id, "research_asset_id": "asset-owned", "owner_principal": "server-researcher"}
+        return {"id": specification_id, "research_asset_id": "asset-other", "owner_principal": "other-researcher"}
+
+    def get_run(self, run_id: str) -> dict[str, object] | None:
+        if run_id == "run-owned":
+            return {"id": run_id, "specification_id": "spec-owned", "status": "completed"}
+        return None
+
+    def record_feedback(self, *, run_id: str, conclusion: str, notes: str) -> dict[str, str]:
+        self.feedback.append({"run_id": run_id, "conclusion": conclusion, "notes": notes})
+        return {"id": "feedback-owned", "run_id": run_id, "conclusion": conclusion}
+
+
+def test_experiment_api_uses_server_owner_for_append_only_specifications_and_feedback():
+    from app.advanced import api as advanced_api
+
+    service = _ExperimentApiService()
+    app = FastAPI()
+    app.include_router(advanced_api.router)
+    app.state.experiment_service = service
+    app.state.resolve_advanced_research_asset = lambda _request, asset_id: asset_id == "asset-owned"
+
+    @app.middleware("http")
+    async def authenticated(request: Request, call_next):
+        request.state.reviewer_principal = "server-researcher"
+        return await call_next(request)
+
+    client = TestClient(app)
+    payload = {
+        "research_asset_id": "asset-owned",
+        "hypothesis": "受控假设",
+        "data_scope": {"market": "CN-A"},
+        "method": "bounded-method",
+        "metrics": ["sharpe"],
+        "success_criteria": {"sharpe_gt": 1},
+        "failure_criteria": {"drawdown_lt": -0.2},
+    }
+
+    assert client.post("/api/advanced/experiments/specifications", json={**payload, "owner_principal": "browser"}).status_code == 422
+    created = client.post("/api/advanced/experiments/specifications", json=payload)
+    assert created.status_code == 200
+    assert service.created == [payload]
+    assert client.get("/api/advanced/experiments/specifications/spec-other").status_code == 404
+    feedback = client.post(
+        "/api/advanced/experiments/runs/run-owned/feedback",
+        json={"conclusion": "supported", "notes": "完整运行可追加研究结论。"},
+    )
+    assert feedback.status_code == 200
+    assert service.feedback == [{"run_id": "run-owned", "conclusion": "supported", "notes": "完整运行可追加研究结论。"}]
+    assert client.patch("/api/advanced/experiments/specifications/spec-owned", json={}).status_code == 405
