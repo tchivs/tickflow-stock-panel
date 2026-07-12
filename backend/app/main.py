@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import os
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -14,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from app import __version__
 from app.api import analysis as analysis_menus, auth as auth_api, backtest, data, decision, ext_data, financials, indices, intraday, kline, market_recap, monitor_rules, alerts, overview, pipeline, portfolio, research, rps, screener, settings as settings_api, signals, stock_analysis, strategy, watchlist
 from app.analysis import api as analysis_api
+from app.advanced import api as advanced_api
 from app.api.routes import router as core_router
 from app.config import settings
 from app.jobs import daily_pipeline
@@ -29,6 +31,14 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+
+class _UnavailableAdvancedRunner:
+    """Reject execution until a bounded governed-run adapter is configured."""
+
+    def run(self, *, specification: dict[str, object]) -> dict[str, object]:
+        del specification
+        raise RuntimeError("advanced governed runner is temporarily unavailable")
 
 
 @asynccontextmanager
@@ -126,6 +136,72 @@ async def lifespan(app: FastAPI):
         ConfiguredFactorHypothesisGateway.from_current_configuration()
     )
     app.state.research_strategy_handles = {}
+
+    from app.advanced.authorization import AdvancedAuthorizationService, OperatorPolicy
+    from app.advanced.experiments import ExperimentService
+    from app.advanced.evolution import EvolutionService
+    from app.advanced.jobs import AdvancedJobService
+    from app.advanced.policy import AdvancedPolicy
+    from app.advanced.repository import AdvancedRepository
+    from app.advanced.sandbox import CustomStrategySandboxService
+    from app.advanced.viewpoints import ViewpointService
+
+    advanced_repository = AdvancedRepository(operational.database_path)
+    advanced_repository.migrate()
+    advanced_policy = AdvancedPolicy.bootstrap("advanced_policy_v1")
+    app.state.advanced_repository = advanced_repository
+    app.state.advanced_policy = advanced_policy
+    app.state.viewpoint_service = ViewpointService(repository=advanced_repository, policy=advanced_policy)
+    app.state.experiment_service = ExperimentService(
+        repository=advanced_repository,
+        backtest_runner=_UnavailableAdvancedRunner(),
+    )
+    app.state.evolution_service = EvolutionService(
+        repository=advanced_repository,
+        reviewer_resolver=lambda principal: principal,
+    )
+
+    def advanced_operator_policy() -> OperatorPolicy:
+        return OperatorPolicy(
+            revision=advanced_policy.version,
+            task_types=frozenset(advanced_policy.agent_allowlist),
+            markets=frozenset({"CN-A"}),
+            instruments=frozenset(),
+            quota_per_window=max(advanced_policy.rate_limits.values()),
+        )
+
+    advanced_authorization = AdvancedAuthorizationService(
+        repository=advanced_repository,
+        policy_loader=advanced_operator_policy,
+        clock=lambda: datetime.now(UTC),
+    )
+    app.state.advanced_authorization_service = advanced_authorization
+    app.state.advanced_job_service = AdvancedJobService(
+        repository=advanced_repository,
+        authorization_service=advanced_authorization,
+        provider=lambda **_kwargs: None,
+        sandbox=lambda **_kwargs: None,
+        clock=lambda: datetime.now(UTC),
+    )
+    app.state.advanced_sandbox_service = CustomStrategySandboxService(
+        audit_path=operational.database_path,
+        governed_input=store.data_dir,
+    )
+
+    def resolve_advanced_subject_scope(_request: Request) -> advanced_api.AdvancedSubjectScope:
+        # Instruments are authenticated single-user research subjects; account-like
+        # records must remain explicit server-side subjects.
+        return advanced_api.AdvancedSubjectScope(
+            frozenset(), unrestricted_kinds=frozenset({"instrument"})
+        )
+
+    def resolve_advanced_research_asset(_request: Request, asset_id: str) -> bool:
+        # A browser identifier is only a lookup key. The persisted factor registry
+        # remains the authority for whether it identifies a governed research asset.
+        return isinstance(asset_id, str) and app.state.factor_registry.get_revision(asset_id) is not None
+
+    app.state.resolve_advanced_subject_scope = resolve_advanced_subject_scope
+    app.state.resolve_advanced_research_asset = resolve_advanced_research_asset
     # 指标异步预热标志: enriched 缓存在后台线程构建, 完成后置 True
     app.state.indicators_ready = False
     repo._on_warmup_done = lambda: setattr(app.state, "indicators_ready", True)  # noqa: SLF001
@@ -367,6 +443,7 @@ app.include_router(indices.router)
 app.include_router(overview.router)
 app.include_router(analysis_menus.router)
 app.include_router(analysis_api.router)
+app.include_router(advanced_api.router)
 app.include_router(pipeline.router)
 app.include_router(data.router)
 app.include_router(ext_data.router)

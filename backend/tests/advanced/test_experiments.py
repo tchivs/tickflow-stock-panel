@@ -230,7 +230,7 @@ def test_experiment_api_uses_server_owner_for_append_only_specifications_and_fee
     assert client.post("/api/advanced/experiments/specifications", json={**payload, "owner_principal": "browser"}).status_code == 422
     created = client.post("/api/advanced/experiments/specifications", json=payload)
     assert created.status_code == 200
-    assert service.created == [payload]
+    assert service.created == [{**payload, "owner_principal": "server-researcher"}]
     assert client.get("/api/advanced/experiments/specifications/spec-other").status_code == 404
     feedback = client.post(
         "/api/advanced/experiments/runs/run-owned/feedback",

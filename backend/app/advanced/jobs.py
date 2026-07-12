@@ -57,7 +57,7 @@ class AdvancedJobService:
                 job_id=str(uuid4()),
                 authorization_id=authorization_id,
                 principal=principal,
-                subject_kind="advanced_task",
+                subject_kind="instrument",
                 subject_key=parsed.instrument,
                 task_type=parsed.task_type,
                 market=parsed.market,

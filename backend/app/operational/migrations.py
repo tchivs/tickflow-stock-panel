@@ -658,6 +658,11 @@ MIGRATIONS: tuple[str, ...] = (
       OR NEW.window_started_at != OLD.window_started_at OR NEW.created_at != OLD.created_at OR NEW.consumed <= OLD.consumed
     BEGIN SELECT RAISE(ABORT, 'advanced rate consumption must increase within its immutable window'); END;
     """,
+    """
+    -- Opaque experiment records need a server-resolved owner before API disclosure.
+    ALTER TABLE advanced_experiment_specs ADD COLUMN owner_principal TEXT NOT NULL DEFAULT '';
+    CREATE INDEX idx_advanced_experiment_specs_owner ON advanced_experiment_specs(owner_principal, created_at DESC);
+    """,
 )
 
 

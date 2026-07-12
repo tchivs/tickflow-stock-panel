@@ -42,8 +42,9 @@ class ExperimentService:
         success_criteria: Mapping[str, Any],
         failure_criteria: Mapping[str, Any],
         supersedes_specification_id: str | None = None,
+        owner_principal: str = "system",
     ) -> dict[str, Any]:
-        if not all((research_asset_id, hypothesis, method)) or not data_scope or not metrics:
+        if not all((research_asset_id, hypothesis, method, owner_principal)) or not data_scope or not metrics:
             raise ValueError("experiment specification requires frozen research inputs")
         identifier = str(uuid4())
         with self.repository._connection() as connection, connection:
@@ -61,12 +62,12 @@ class ExperimentService:
                 """INSERT INTO advanced_experiment_specs (
                     id, research_asset_id, version, supersedes_specification_id, hypothesis,
                     data_scope_json, method, metrics_json, success_criteria_json,
-                    failure_criteria_json, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    failure_criteria_json, created_at, owner_principal
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     identifier, research_asset_id, version, supersedes_specification_id, hypothesis,
                     _json(dict(data_scope)), method, _json(metrics), _json(dict(success_criteria)),
-                    _json(dict(failure_criteria)), self.repository.now(),
+                    _json(dict(failure_criteria)), self.repository.now(), owner_principal,
                 ),
             )
             row = connection.execute("SELECT * FROM advanced_experiment_specs WHERE id = ?", (identifier,)).fetchone()
@@ -108,6 +109,7 @@ class ExperimentService:
                 success_criteria=changed["success_criteria"],
                 failure_criteria=changed["failure_criteria"],
                 supersedes_specification_id=source["id"],
+                owner_principal=str(source["owner_principal"]),
             )["id"]
         specification = self.get_specification(specification_id)
         assert specification is not None
