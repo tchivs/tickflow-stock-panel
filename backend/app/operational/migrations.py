@@ -649,6 +649,15 @@ MIGRATIONS: tuple[str, ...] = (
     CREATE TRIGGER advanced_viewpoint_evaluations_no_update BEFORE UPDATE ON advanced_viewpoint_evaluations BEGIN SELECT RAISE(ABORT, 'advanced facts are immutable'); END;
     CREATE TRIGGER advanced_viewpoint_evaluations_no_delete BEFORE DELETE ON advanced_viewpoint_evaluations BEGIN SELECT RAISE(ABORT, 'advanced facts are immutable'); END;
     """,
+    """
+    -- Rate windows are security accounting state: identity and window are immutable,
+    -- while consumption may only advance within that exact persisted window.
+    DROP TRIGGER advanced_rate_windows_no_update;
+    CREATE TRIGGER advanced_rate_windows_monotonic_consumption BEFORE UPDATE ON advanced_rate_windows
+    WHEN NEW.id != OLD.id OR NEW.principal != OLD.principal OR NEW.policy_revision_id != OLD.policy_revision_id
+      OR NEW.window_started_at != OLD.window_started_at OR NEW.created_at != OLD.created_at OR NEW.consumed <= OLD.consumed
+    BEGIN SELECT RAISE(ABORT, 'advanced rate consumption must increase within its immutable window'); END;
+    """,
 )
 
 

@@ -94,6 +94,92 @@ class AdvancedRepository:
         assert row is not None
         return dict(row)
 
+    def create_authorization(self, *, principal: str, token_hash: str, policy_revision_id: str, scope: Mapping[str, object], expires_at: str) -> dict[str, Any]:
+        identifier = str(uuid4())
+        with self._connection() as connection, connection:
+            connection.execute(
+                "INSERT INTO advanced_authorizations (id, principal, token_hash, policy_revision_id, scope_json, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (identifier, principal, token_hash, policy_revision_id, _json(scope, "authorization scope"), expires_at, self.now()),
+            )
+            row = connection.execute("SELECT * FROM advanced_authorizations WHERE id = ?", (identifier,)).fetchone()
+        assert row is not None
+        return dict(row)
+
+    def get_authorization_by_token_hash(self, token_hash: str) -> dict[str, Any] | None:
+        with self._connection() as connection:
+            row = connection.execute("SELECT * FROM advanced_authorizations WHERE token_hash = ?", (token_hash,)).fetchone()
+        return None if row is None else dict(row)
+
+    def get_authorization(self, authorization_id: str) -> dict[str, Any] | None:
+        with self._connection() as connection:
+            row = connection.execute("SELECT * FROM advanced_authorizations WHERE id = ?", (authorization_id,)).fetchone()
+        return None if row is None else dict(row)
+
+    def revoke_authorization(self, *, authorization_id: str) -> None:
+        with self._connection() as connection, connection:
+            changed = connection.execute(
+                "UPDATE advanced_authorizations SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL",
+                (self.now(), authorization_id),
+            ).rowcount
+        if changed != 1:
+            raise ValueError("authorization cannot be revoked")
+
+    def acquire_authorized_job(self, *, job_id: str, authorization_id: str, principal: str, subject_kind: str, subject_key: str, task_type: str, market: str, instrument: str, idempotency_key: str, policy_revision_id: str, quota: int, now: str) -> dict[str, Any] | None:
+        """Atomically return an idempotent job or consume one current policy quota slot."""
+        window_started_at = datetime.fromisoformat(now).astimezone(UTC).replace(minute=0, second=0, microsecond=0).isoformat()
+        with self._connection() as connection, connection:
+            existing = connection.execute(
+                "SELECT * FROM advanced_jobs WHERE principal = ? AND idempotency_key = ?", (principal, idempotency_key)
+            ).fetchone()
+            if existing is not None:
+                return dict(existing)
+            rate = connection.execute(
+                "SELECT * FROM advanced_rate_windows WHERE principal = ? AND policy_revision_id = ? AND window_started_at = ?",
+                (principal, policy_revision_id, window_started_at),
+            ).fetchone()
+            consumed = 0 if rate is None else int(rate["consumed"])
+            if consumed >= quota:
+                return None
+            if rate is None:
+                connection.execute(
+                    "INSERT INTO advanced_rate_windows (id, principal, policy_revision_id, window_started_at, consumed, created_at) VALUES (?, ?, ?, ?, 1, ?)",
+                    (str(uuid4()), principal, policy_revision_id, window_started_at, now),
+                )
+            else:
+                connection.execute("UPDATE advanced_rate_windows SET consumed = consumed + 1 WHERE id = ?", (rate["id"],))
+            connection.execute(
+                """INSERT INTO advanced_jobs (id, authorization_id, principal, subject_kind, subject_key, task_type, market,
+                   instrument, idempotency_key, status, stage, stage_recorded_at, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 'authorized', ?, ?, ?)""",
+                (job_id, authorization_id, principal, subject_kind, subject_key, task_type, market, instrument, idempotency_key, now, now, now),
+            )
+            row = connection.execute("SELECT * FROM advanced_jobs WHERE id = ?", (job_id,)).fetchone()
+        assert row is not None
+        return dict(row)
+
+    def quota_is_current(self, *, principal: str, quota: int, now: str) -> bool:
+        window_started_at = datetime.fromisoformat(now).astimezone(UTC).replace(minute=0, second=0, microsecond=0).isoformat()
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT COALESCE(SUM(consumed), 0) AS consumed FROM advanced_rate_windows WHERE principal = ? AND window_started_at = ?",
+                (principal, window_started_at),
+            ).fetchone()
+        assert row is not None
+        return int(row["consumed"]) <= quota
+
+    def count_rate_consumptions(self, *, principal: str) -> int:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT COALESCE(SUM(consumed), 0) AS consumed FROM advanced_rate_windows WHERE principal = ?", (principal,)
+            ).fetchone()
+        assert row is not None
+        return int(row["consumed"])
+
+    def list_security_audits(self) -> list[dict[str, Any]]:
+        with self._connection() as connection:
+            rows = connection.execute("SELECT * FROM advanced_security_audit ORDER BY rowid").fetchall()
+        return [dict(row) for row in rows]
+
     def transition_job(self, *, job_id: str, from_status: str, to_status: str, stage: str, rejection_reason: str | None = None, audit_reference: str | None = None) -> dict[str, Any]:
         """Perform the only legal fact-adjacent update: a guarded job cursor transition."""
         now = self.now()
