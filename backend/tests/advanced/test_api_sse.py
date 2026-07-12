@@ -160,6 +160,7 @@ def test_rejection_responses_and_audit_projections_are_safe_and_never_attach_sse
 
 def test_advanced_progress_is_committed_allowlisted_and_filtered_before_subscriber_queueing():
     from app.advanced.api import AdvancedSubjectScope
+
     from app.services.quote_service import QuoteService
 
     quote_service = QuoteService()

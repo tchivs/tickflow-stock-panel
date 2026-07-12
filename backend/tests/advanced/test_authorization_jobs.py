@@ -104,7 +104,7 @@ def test_expired_or_revoked_authorization_is_rejected_before_job_or_work(tmp_pat
     mutator = mutation(authorization, clock)
     mutator(record["token"])
 
-    with pytest.raises(ValueError, match="expired|revoked|authorization"):
+    with pytest.raises(ValueError, match=r"expired|revoked|authorization"):
         jobs.create_job(principal="server-operator-principal", request=_request(record["token"]))
 
     _assert_audit_only(repository, provider, sandbox, reason=reason)
@@ -122,7 +122,7 @@ def test_out_of_intersection_requests_create_only_redacted_security_audit(tmp_pa
     repository, authorization, jobs, provider, sandbox, _clock, _policy = _services(tmp_path)
     record = _authorization(authorization)
 
-    with pytest.raises(ValueError, match="scope|task type|authorization"):
+    with pytest.raises(ValueError, match=r"scope|task type|authorization"):
         jobs.create_job(
             principal="server-operator-principal",
             request=_request(record["token"], **request_overrides),
@@ -136,7 +136,7 @@ def test_client_authority_fields_are_rejected_before_any_runnable_job_or_sse_wor
     record = _authorization(authorization)
 
     for field in ("principal", "policy", "trusted_job_id", "authority", "allowed_instruments"):
-        with pytest.raises(ValueError, match="client|authority|unknown"):
+        with pytest.raises(ValueError, match=r"client|authority|unknown"):
             jobs.create_job(
                 principal="server-operator-principal",
                 request=_request(record["token"], **{field: "browser-controlled"}),
@@ -158,7 +158,7 @@ def test_quota_rejection_is_audited_without_creating_work_and_idempotency_consum
     assert duplicate["id"] == first["id"]
     assert repository.count_rate_consumptions(principal="server-operator-principal") == 1
     assert len(repository.list_runnable_jobs()) == 1
-    with pytest.raises(ValueError, match="quota|rate"):
+    with pytest.raises(ValueError, match=r"quota|rate"):
         jobs.create_job(
             principal="server-operator-principal",
             request=_request(record["token"], idempotency_key="a-distinct-request"),

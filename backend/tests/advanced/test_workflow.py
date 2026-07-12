@@ -112,14 +112,14 @@ async def test_advanced_graph_has_exact_fixed_topology_without_model_tools_or_au
 async def test_advanced_graph_rejects_absent_client_supplied_or_mismatched_server_thread_ids(tmp_path):
     graph, authorization, provider, gates, outcomes = _graph(tmp_path)
 
-    with pytest.raises(ValueError, match="thread_id|server"):
+    with pytest.raises(ValueError, match=r"thread_id|server"):
         await graph.ainvoke(_state(), {"configurable": {}})
-    with pytest.raises(ValueError, match="thread_id|server"):
+    with pytest.raises(ValueError, match=r"thread_id|server"):
         await graph.ainvoke(
             {**_state(), "thread_id": "browser-controlled"},
             {"configurable": {"thread_id": "browser-controlled"}},
         )
-    with pytest.raises(ValueError, match="ownership|thread_id|server"):
+    with pytest.raises(ValueError, match=r"ownership|thread_id|server"):
         await graph.ainvoke(_state(), {"configurable": {"thread_id": "server-thread-other-job"}})
 
     assert authorization.calls == []
