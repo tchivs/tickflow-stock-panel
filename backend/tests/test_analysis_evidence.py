@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+import sqlite3
 
 import pytest
 from pydantic import BaseModel, ConfigDict, ValidationError
@@ -175,3 +176,42 @@ def test_generated_analysis_and_server_report_reject_extra_fields_and_unknown_ci
             **report.model_dump(),
             "generated": {**generated.model_dump(), "ic_memo": {**generated.ic_memo.model_dump(), "evidence_ids": ["unknown"]}},
         })
+
+
+def test_analysis_repository_migrates_shared_database_and_enforces_single_active_subject_run(tmp_path):
+    from app.analysis.repository import AnalysisRepository
+
+    repository = AnalysisRepository(tmp_path / "operational.db")
+    repository.migrate()
+
+    first = repository.acquire_run(
+        run_id="run-1", subject_kind="stock", subject_key="600519.SH", focus="earnings"
+    )
+    duplicate = repository.acquire_run(
+        run_id="run-2", subject_kind="stock", subject_key="600519.SH", focus="valuation"
+    )
+
+    assert duplicate["id"] == first["id"]
+    assert first["status"] == "queued"
+    assert repository.acquire_run(
+        run_id="run-3", subject_kind="stock", subject_key="000001.SZ", focus="earnings"
+    )["id"] == "run-3"
+
+
+def test_analysis_repository_appends_reports_and_database_blocks_audit_rewrites(tmp_path):
+    from app.analysis.repository import AnalysisRepository
+
+    repository = AnalysisRepository(tmp_path / "operational.db")
+    repository.migrate()
+    first = repository.append_validated_report(
+        subject_kind="stock", subject_key="600519.SH", report={"version": 1}
+    )
+    second = repository.append_validated_report(
+        subject_kind="stock", subject_key="600519.SH", report={"version": 2}
+    )
+
+    assert [row["id"] for row in repository.list_reports("stock", "600519.SH")] == [second["id"], first["id"]]
+    with pytest.raises(sqlite3.DatabaseError, match="immutable"):
+        with sqlite3.connect(repository.database_path) as connection:
+            connection.execute("UPDATE analysis_reports SET report_json = '{}' WHERE id = ?", (first["id"],))
+    assert not hasattr(repository, "delete_report")
