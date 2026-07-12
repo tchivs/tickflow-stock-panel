@@ -12,7 +12,8 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app import __version__
-from app.api import analysis, auth as auth_api, backtest, data, decision, ext_data, financials, indices, intraday, kline, market_recap, monitor_rules, alerts, overview, pipeline, portfolio, research, rps, screener, settings as settings_api, signals, stock_analysis, strategy, watchlist
+from app.api import analysis as analysis_menus, auth as auth_api, backtest, data, decision, ext_data, financials, indices, intraday, kline, market_recap, monitor_rules, alerts, overview, pipeline, portfolio, research, rps, screener, settings as settings_api, signals, stock_analysis, strategy, watchlist
+from app.analysis import api as analysis_api
 from app.api.routes import router as core_router
 from app.config import settings
 from app.jobs import daily_pipeline
@@ -63,6 +64,40 @@ async def lifespan(app: FastAPI):
     operational = OperationalRepository(store.data_dir / "operational.db")
     operational.migrate()
     app.state.operational = operational
+    from app.analysis.api import SubjectScope
+    from app.analysis.evidence import EvidencePreparationService
+    from app.analysis.graph import build_analysis_graph
+    from app.analysis.lifecycle import LifecycleRuleService
+    from app.analysis.repository import AnalysisRepository
+    from app.analysis.service import AnalysisService
+
+    analysis_repository = AnalysisRepository(operational.database_path)
+    analysis_repository.migrate()
+    app.state.analysis_repository = analysis_repository
+    app.state.analysis_graph = build_analysis_graph(
+        checkpoint_path=store.data_dir / "analysis_checkpoints.db"
+    )
+    # The only authenticated principal source is the request middleware. The router
+    # passes that server value through this identity resolver to the lifecycle service.
+    app.state.lifecycle_rule_service = LifecycleRuleService(
+        repository=analysis_repository,
+        reviewer_resolver=lambda principal: principal,
+    )
+    app.state.analysis_service = AnalysisService(
+        repository=analysis_repository,
+        evidence_preparer=EvidencePreparationService(),
+        graph=app.state.analysis_graph,
+    )
+
+    def resolve_analysis_subject_scope(_request: Request) -> SubjectScope:
+        account_subjects = frozenset(
+            ("account", str(account["id"])) for account in operational.list_accounts(include_archived=True)
+        )
+        # Instrument data is public within this authenticated single-user host;
+        # portfolio accounts remain limited to existing server-side account records.
+        return SubjectScope(account_subjects, unrestricted_kinds=frozenset({"instrument"}))
+
+    app.state.resolve_analysis_subject_scope = resolve_analysis_subject_scope
     from app.backtest.engine import BacktestEngine
     from app.research.artifacts import EvaluationArtifactService
     from app.research.catalog import ExperimentCatalog
@@ -307,6 +342,7 @@ async def auth_middleware(request: Request, call_next):
     # 情况 3: 已设密码, 检查会话
     token = request.cookies.get(auth_api.COOKIE_NAME)
     if token and auth_service.is_valid_session(token):
+        request.state.reviewer_principal = auth_service.resolve_authenticated_reviewer(token)
         return await call_next(request)
     # 未登录: 401(前端跳登录页)
     return JSONResponse(status_code=401, content={"detail": "未登录或会话已过期"})
@@ -323,7 +359,8 @@ app.include_router(research.router)
 app.include_router(intraday.router)
 app.include_router(indices.router)
 app.include_router(overview.router)
-app.include_router(analysis.router)
+app.include_router(analysis_menus.router)
+app.include_router(analysis_api.router)
 app.include_router(pipeline.router)
 app.include_router(data.router)
 app.include_router(ext_data.router)

@@ -7,7 +7,6 @@ from typing import Any, Literal, Protocol
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
-
 router = APIRouter(prefix="/api/analysis", tags=["analysis"])
 
 
@@ -22,9 +21,10 @@ class SubjectScope:
     """Minimal concrete scope for the single-user host and focused tests."""
 
     subjects: frozenset[tuple[str, str]]
+    unrestricted_kinds: frozenset[str] = frozenset()
 
     def allows(self, subject_kind: str, subject_key: str) -> bool:
-        return (subject_kind, subject_key) in self.subjects
+        return subject_kind in self.unrestricted_kinds or (subject_kind, subject_key) in self.subjects
 
 
 class RunRequest(BaseModel):
@@ -59,7 +59,7 @@ def _scope(request: Request) -> AnalysisSubjectScope:
         raise _unavailable()
     try:
         scope = resolver(request)
-    except Exception as error:  # noqa: BLE001 - auth scope failures must fail closed
+    except Exception as error:
         raise _unavailable() from error
     if not callable(getattr(scope, "allows", None)):
         raise _unavailable()

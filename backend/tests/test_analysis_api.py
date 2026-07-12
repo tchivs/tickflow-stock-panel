@@ -130,3 +130,32 @@ def test_analysis_api_authorizes_subject_before_start_reads_and_review_writes():
     confirmed = client.post("/api/analysis/reviews/review-1/confirm", json={"window_days": 60})
     assert confirmed.status_code == 200
     assert client.app.state.lifecycle_rule_service.confirmed_with == "reviewer-server-principal"
+
+
+def test_main_registers_analysis_domain_without_replacing_analysis_menus_router():
+    from app.main import app
+
+    paths = {route.path for route in app.routes}
+    assert "/api/analysis/runs" in paths
+    assert "/api/analysis-menus" in paths
+
+
+def test_analysis_progress_is_limited_to_the_server_bound_subscriber_scope():
+    from app.services.quote_service import QuoteService
+
+    service = QuoteService()
+    allowed = service.subscribe(analysis_scope=SubjectScope(frozenset({("instrument", "600519.SH")})))
+    denied = service.subscribe(analysis_scope=SubjectScope(frozenset({("instrument", "000001.SZ")})))
+
+    service.notify_analysis_progress(
+        run_id="run-600519", subject_kind="instrument", subject_key="600519.SH", status="completed"
+    )
+
+    assert allowed.pop()["analysis_progress"] == [{
+        "run_id": "run-600519", "subject_kind": "instrument", "subject_key": "600519.SH", "status": "completed",
+    }]
+    assert denied.pop()["analysis_progress"] == []
+
+    service._broadcast_quote_updated()
+    assert allowed.pop()["quote_updated"] is True
+    assert denied.pop()["quote_updated"] is True

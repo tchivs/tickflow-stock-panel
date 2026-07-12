@@ -24,6 +24,19 @@ def _get_quote_service(request: Request):
     return getattr(request.app.state, "quote_service", None)
 
 
+def _analysis_scope(request: Request):
+    resolver = getattr(request.app.state, "resolve_analysis_subject_scope", None)
+    if not callable(resolver):
+        raise HTTPException(status_code=503, detail="analysis stream authorization is unavailable")
+    try:
+        scope = resolver(request)
+    except Exception as error:
+        raise HTTPException(status_code=503, detail="analysis stream authorization is unavailable") from error
+    if not callable(getattr(scope, "allows", None)):
+        raise HTTPException(status_code=503, detail="analysis stream authorization is unavailable")
+    return scope
+
+
 def _fallback_index_quotes_from_daily(request: Request, symbols: list[str] | None = None) -> list[dict]:
     """实时指数缓存为空时，从本地指数日 K 取最近收盘价作为兜底。"""
     repo = getattr(request.app.state, "repo", None)
@@ -127,6 +140,7 @@ async def quote_stream(request: Request):
     此前四通道共用服务级 Event + pop 取走语义, 告警只会被先醒的连接消费。
     """
     qs = _get_quote_service(request)
+    analysis_scope = _analysis_scope(request) if qs is not None else None
 
     async def event_generator():
         if qs is None:
@@ -134,7 +148,7 @@ async def quote_stream(request: Request):
             while True:
                 await asyncio.sleep(30)
 
-        sub = qs.subscribe()
+        sub = qs.subscribe(analysis_scope=analysis_scope)
         try:
             while True:
                 # 等待任一通道有新信号 (5s 超时保持循环, 便于断线时尽快退出)
@@ -168,6 +182,12 @@ async def quote_stream(request: Request):
                     yield {
                         "event": "review_progress",
                         "data": evt_json,
+                    }
+
+                for progress in data["analysis_progress"]:
+                    yield {
+                        "event": "analysis_progress",
+                        "data": json.dumps(progress),
                     }
 
                 # 行情更新

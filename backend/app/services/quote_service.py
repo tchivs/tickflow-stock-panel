@@ -29,6 +29,7 @@ import threading
 import time
 from contextlib import contextmanager
 from datetime import date, time as dt_time
+from typing import Any
 
 import polars as pl
 
@@ -48,17 +49,26 @@ class QuoteSubscriber:
     改为每连接独立订阅者后, 事件对所有客户端广播。
     """
 
-    def __init__(self, max_alerts: int = 1000, max_reviews: int = 200) -> None:
+    def __init__(
+        self,
+        max_alerts: int = 1000,
+        max_reviews: int = 200,
+        analysis_scope: Any | None = None,
+        max_analysis_progress: int = 200,
+    ) -> None:
         self._event = threading.Event()
         self._lock = threading.Lock()
         self._max_alerts = max_alerts
         self._max_reviews = max_reviews
+        self._max_analysis_progress = max_analysis_progress
+        self._analysis_scope = analysis_scope
         self._quote_updated = False
         self._strategy_results_updated = False
         self._depth_updated = False
         self._portfolio_account_ids: list[str] = []
         self._alerts: list[dict] = []
         self._reviews: list[str] = []
+        self._analysis_progress: list[dict[str, str]] = []
 
     # ── 消费侧 (SSE generator 线程) ──────────────────────
     def wait(self, timeout: float = 5.0) -> bool:
@@ -76,12 +86,14 @@ class QuoteSubscriber:
                 "portfolio_account_ids": self._portfolio_account_ids,
                 "alerts": self._alerts,
                 "reviews": self._reviews,
+                "analysis_progress": self._analysis_progress,
             }
             self._quote_updated = False
             self._strategy_results_updated = False
             self._depth_updated = False
             self._alerts = []
             self._reviews = []
+            self._analysis_progress = []
             self._portfolio_account_ids = []
             self._event.clear()
             return out
@@ -109,6 +121,7 @@ class QuoteSubscriber:
                 and not self._strategy_results_updated
                 and not self._depth_updated
                 and not self._reviews
+                and not self._analysis_progress
                 and not self._portfolio_account_ids
             ):
                 self._event.clear()
@@ -136,6 +149,17 @@ class QuoteSubscriber:
                     self._portfolio_account_ids.append(normalized)
             if self._portfolio_account_ids:
                 self._event.set()
+
+    def push_analysis_progress(self, progress: dict[str, str]) -> None:
+        """Queue only persisted coarse state for the server-bound subject scope."""
+        scope = self._analysis_scope
+        if scope is None or not scope.allows(progress["subject_kind"], progress["subject_key"]):
+            return
+        with self._lock:
+            self._analysis_progress.append(progress)
+            if len(self._analysis_progress) > self._max_analysis_progress:
+                self._analysis_progress = self._analysis_progress[-self._max_analysis_progress:]
+            self._event.set()
 
 
 
@@ -317,9 +341,9 @@ class QuoteService:
     # SSE 订阅管理 — 每个 /stream 连接一个订阅者, 事件广播
     # ================================================================
 
-    def subscribe(self) -> QuoteSubscriber:
+    def subscribe(self, *, analysis_scope: Any | None = None) -> QuoteSubscriber:
         """注册一个 SSE 订阅者 (连接建立时调用)。"""
-        sub = QuoteSubscriber()
+        sub = QuoteSubscriber(analysis_scope=analysis_scope)
         with self._lock:
             self._subscribers.add(sub)
         return sub
@@ -365,6 +389,19 @@ class QuoteService:
         """Fan out coalesced account changes through the existing SSE subscribers."""
         for sub in self._snapshot_subscribers():
             sub.notify_portfolio_updated(account_ids)
+
+    def notify_analysis_progress(
+        self, *, run_id: str, subject_kind: str, subject_key: str, status: str
+    ) -> None:
+        """Fan out a durable run state only to matching server-authorized scopes."""
+        progress = {
+            "run_id": run_id,
+            "subject_kind": subject_kind,
+            "subject_key": subject_key,
+            "status": status,
+        }
+        for sub in self._snapshot_subscribers():
+            sub.push_analysis_progress(progress)
 
 
     def persist_stream_and_enqueue_alerts(
