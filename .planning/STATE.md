@@ -4,17 +4,17 @@ milestone: v1.0
 milestone_name: milestone
 current_phase: 04
 current_phase_name: advanced-capabilities
-status: executing
-stopped_at: Completed 04-13-PLAN.md
-last_updated: "2026-07-12T19:03:02.461Z"
+status: complete
+stopped_at: Completed 04-14-PLAN.md
+last_updated: "2026-07-12T19:25:02.902Z"
 last_activity: 2026-07-12
 last_activity_desc: Phase 04 execution started
 progress:
   total_phases: 5
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 49
-  completed_plans: 48
-  percent: 98
+  completed_plans: 49
+  percent: 80
 ---
 
 # Project State
@@ -28,12 +28,12 @@ See: .planning/PROJECT.md (updated 2026-07-10)
 
 ## Current Position
 
-Phase: 04 (advanced-capabilities) — EXECUTING
-Plan: 3 of 14
-Status: Ready to execute
-Last activity: 2026-07-12 — Phase 04 execution started
+Phase: 04 (advanced-capabilities) — COMPLETE
+Plan: 14 of 14
+Status: Phase complete
+Last activity: 2026-07-12 — Completed 04-14 real sandbox and host acceptance
 
-Progress: [██████████] 98%
+Progress: [████████░░] 80%
 
 ## Performance Metrics
 
@@ -72,6 +72,7 @@ Progress: [██████████] 98%
 | Phase 03 P12 | 480 | 3 tasks | 5 files |
 | Phase 04 P12 | 21m | 2 tasks | 6 files |
 | Phase 04 P13 | 7m | 2 tasks | 5 files |
+| Phase 04 P14 | 16m | 2 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -115,6 +116,8 @@ No implementation decision was explicitly locked by the architecture intake. Req
 - [Phase 04]: Experiment execution uses a spawned, parent-owned process group and returns only bounded manifest metadata.
 - [Phase 04]: Job-state mutation and its append-only audit fact commit together before scoped SSE publication.
 - [Phase 04]: Production advanced workflows receive only persisted server bindings and remain recovery cursors rather than authority sources.
+- [Phase 04]: Custom strategy source may spawn only after a fresh complete Linux isolation proof; unavailable or stale proof rejects before spawn.
+- [Phase 04]: A root SSE subscriber sends a data-free ready event after scope-bound registration so host acceptance can avoid connection races.
 
 ### Pending Todos
 
@@ -132,6 +135,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-07-12T19:02:31.288Z
-Stopped at: Completed 04-13-PLAN.md
+Last session: 2026-07-12T19:25:02.894Z
+Stopped at: Completed 04-14-PLAN.md
 Resume file: None

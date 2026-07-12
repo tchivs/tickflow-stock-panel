@@ -14,7 +14,7 @@ AthenaQuant first delivers a single-container, data-lake-first market and portfo
 - [x] **Phase 1: Core Merger** - Deliver the self-hosted data, position, monitoring, decision-plan, and real-time notification loop. (completed 2026-07-11)
 - [x] **Phase 2: Factor And Strategy Research** - Let researchers create, validate, evaluate, backtest, and compare factors and strategies. (completed 2026-07-11)
 - [x] **Phase 3: AI Analysis** - Make AI-assisted research evidence-grounded, quality-aware, and traceable over a signal's lifecycle. (completed 2026-07-12)
-- [ ] **Phase 4: Advanced Capabilities** - Provide controlled viewpoint tracking, research automation, strategy evolution, agent access, and sandbox execution.
+- [x] **Phase 4: Advanced Capabilities** - Provide controlled viewpoint tracking, research automation, strategy evolution, agent access, and sandbox execution. (completed 2026-07-12)
 - [ ] **Phase 5: Optional Enhancements** - Add nonessential Shadow Account, thesis-tracking, and forecasting capabilities without blocking v1.
 
 ## Phase Details
@@ -177,7 +177,7 @@ Plans:
   3. Operator can start an authorized agent job for an allowed market and instrument, observe SSE progress, and inspect its audit summary; unauthorized, out-of-allowlist, or rate-limited requests are rejected before work starts.
   4. Researcher can submit a custom strategy only when its machine-readable contract, AST, imports, timeout, and memory constraints pass validation, and can review the constrained run's result or failure record.
 
-**Plans**: 13/14 plans executed
+**Plans**: 14/14 plans complete
 
 - [x] 04-01-PLAN.md
 - [x] 04-02-PLAN.md
@@ -192,7 +192,7 @@ Plans:
 - [x] 04-11-PLAN.md
 - [x] 04-12-PLAN.md
 - [x] 04-13-PLAN.md
-- [ ] 04-14-PLAN.md
+- [x] 04-14-PLAN.md
 
 ### Phase 5: Optional Enhancements
 
@@ -217,5 +217,5 @@ Plans:
 | 1. Core Merger | 15/15 | Complete    | 2026-07-11 |
 | 2. Factor And Strategy Research | 8/8 | Complete    | 2026-07-11 |
 | 3. AI Analysis | 12/12 | Complete    | 2026-07-12 |
-| 4. Advanced Capabilities | 13/14 | In Progress|  |
+| 4. Advanced Capabilities | 14/14 | Complete   | 2026-07-12 |
 | 5. Optional Enhancements | 0/TBD | Optional | - |
