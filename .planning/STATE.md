@@ -3,17 +3,17 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 current_phase: 04
-current_phase_name: Advanced Capabilities
+current_phase_name: advanced-capabilities
 status: executing
-stopped_at: Phase 4 planned and verified
-last_updated: "2026-07-12T14:15:34.321Z"
+stopped_at: Completed 04-12-PLAN.md
+last_updated: "2026-07-12T18:52:45.533Z"
 last_activity: 2026-07-12
 last_activity_desc: Phase 04 execution started
 progress:
   total_phases: 5
   completed_phases: 3
-  total_plans: 46
-  completed_plans: 38
+  total_plans: 49
+  completed_plans: 47
   percent: 60
 ---
 
@@ -24,13 +24,13 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-10)
 
 **Core value:** An investor can turn reliable market data and their own holdings into an auditable, actionable research and monitoring workflow without operating multiple disconnected tools.
-**Current focus:** Phase 04 — Advanced Capabilities
+**Current focus:** Phase 04 — advanced-capabilities
 
 ## Current Position
 
-Phase: 04 (Advanced Capabilities) — EXECUTING
-Plan: 1 of 11
-Status: Executing Phase 04
+Phase: 04 (advanced-capabilities) — EXECUTING
+Plan: 2 of 14
+Status: Ready to execute
 Last activity: 2026-07-12 — Phase 04 execution started
 
 Progress: [##########] implementation complete; verification blocked
@@ -70,6 +70,7 @@ Progress: [##########] implementation complete; verification blocked
 | Phase 03 P10 | 14m | 3 tasks | 7 files |
 | Phase 03 P11 | 527 | 2 tasks | 5 files |
 | Phase 03 P12 | 480 | 3 tasks | 5 files |
+| Phase 04 P12 | 21m | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -109,6 +110,8 @@ No implementation decision was explicitly locked by the architecture intake. Req
 - [Phase 03]: Completed reports receive a server-issued signal only after subject authorization; legacy reports get no lifecycle transition.
 - [Phase 03]: Rejected lifecycle proposals are inferred from append-only rejection records; confirmed events alone determine official state.
 - [Phase 03]: Analysis UI keeps stock/portfolio display subjects separate from instrument/account API request subjects. — This preserves object-local UI semantics while preventing client calls from sending unsupported subject kinds.
+- [Phase 04]: Viewpoint reads select the latest immutable evaluation by `created_at` then stable ID, never response ordering.
+- [Phase 04]: Experiment execution uses a spawned, parent-owned process group and returns only bounded manifest metadata.
 
 ### Pending Todos
 
@@ -126,6 +129,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-07-12T13:48:19.984Z
-Stopped at: Phase 4 planned and verified
-Resume file: .planning/phases/04-advanced-capabilities/04-01-PLAN.md
+Last session: 2026-07-12T18:52:45.522Z
+Stopped at: Completed 04-12-PLAN.md
+Resume file: None
