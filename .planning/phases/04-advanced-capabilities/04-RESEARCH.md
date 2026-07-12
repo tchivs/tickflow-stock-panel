@@ -415,20 +415,17 @@ After schema validation, AST/import validation and a platform-isolation availabi
 
 ## Open Questions
 
-1. **Sandbox launcher 的可验证 Linux 隔离方案**
+1. **Sandbox launcher 的可验证 Linux 隔离方案 — RESOLVED BY PLAN**
    - What we know: 环境发现 `unshare`、`prlimit`、`timeout`，没有 `bwrap`。 [VERIFIED: environment]
-   - What's unclear: 当前 Docker/host 用户是否具有创建 network/mount/user namespace 所需权限，以及受治理输入如何以只读最小集提供给子进程。 [ASSUMED]
-   - Recommendation: Wave 0 先建立只运行无害 probe 的 launcher capability test；未能证明 network/filesystem isolation 时，SAFE-02 运行 API 只返回安全拒绝，绝不回退宿主执行。 [CITED: .planning/phases/04-advanced-capabilities/04-AI-SPEC.md]
+    - Resolution: Plan 04-03 defines the required harmless probe evidence; Plan 04-07 implements and persists affirmative proof of user/mount/network namespaces, blocked network, read-only governed input, temporary writable work area, resource limits, and cleanup. Any missing or inconclusive proof permanently makes every custom-run API reject before spawning until a later affirmative probe exists. [CITED: .planning/phases/04-advanced-capabilities/04-03-PLAN.md] [CITED: .planning/phases/04-advanced-capabilities/04-07-PLAN.md]
 
-2. **权威 allowlist policy 的本地管理来源**
+2. **权威 allowlist policy 的本地管理来源 — RESOLVED BY PLAN**
    - What we know: operator 拥有权威 allowlist；UI-SPEC 明确本期不实现 token/allowlist editor。 [CITED: .planning/phases/04-advanced-capabilities/04-CONTEXT.md] [CITED: .planning/phases/04-advanced-capabilities/04-UI-SPEC.md]
-   - What's unclear: 初始 policy 将由部署配置、SQLite bootstrap record 或受限 CLI 写入。 [ASSUMED]
-   - Recommendation: planner 选择一个 server-only bootstrap path，将 policy revision/fingerprint 固化在授权记录中；浏览器只看摘要，不编辑 policy。 [CITED: .planning/phases/04-advanced-capabilities/04-CONTEXT.md]
+    - Resolution: Plan 04-04 defines strict deployment-owned `advanced_policy_v1`; Plan 04-07 loads it only during server bootstrap, persists canonical revision/fingerprint snapshots, refuses issuance when it is absent or malformed, and provides no browser policy editor or policy-detail endpoint. [CITED: .planning/phases/04-advanced-capabilities/04-04-PLAN.md] [CITED: .planning/phases/04-advanced-capabilities/04-07-PLAN.md]
 
-3. **观点 source-profile 的导入入口和 benchmark catalog**
+3. **观点 source-profile 的导入入口和 benchmark catalog — RESOLVED BY PLAN**
    - What we know: source-profile ingestion、结构差异阈值和 benchmark catalog 被明确保留给 agent discretion。 [CITED: .planning/phases/04-advanced-capabilities/04-CONTEXT.md]
-   - What's unclear: 最小可用 source profile 集、A 股 asset type 到 default benchmark 的映射及最小校准样本阈值。 [ASSUMED]
-   - Recommendation: first plan 定义 versioned server policy + fixture profiles/catalog；未知来源、范围或 benchmark 一律记录为 `unevaluable`，不做猜测默认。 [CITED: .planning/phases/04-advanced-capabilities/04-CONTEXT.md]
+    - Resolution: Plans 04-04 and 04-05 define the initial server-only catalog: `operator-research-v1` accepts `CN-A`; stock/ETF default to `000300.SH`; index defaults to `000001.SH`; explicit overrides are limited to `000300.SH`, `000905.SH`, and `000852.SH`. The policy revision/fingerprint freezes with every viewpoint; absent or mismatched profile/scope/benchmark records an explicit unevaluable condition rather than a guessed default. [CITED: .planning/phases/04-advanced-capabilities/04-04-PLAN.md] [CITED: .planning/phases/04-advanced-capabilities/04-05-PLAN.md]
 
 ## Environment Availability
 
