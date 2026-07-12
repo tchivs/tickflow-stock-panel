@@ -134,7 +134,7 @@ async def lifespan(app: FastAPI):
     from app.advanced.jobs import AdvancedJobService
     from app.advanced.policy import AdvancedPolicy
     from app.advanced.repository import AdvancedRepository
-    from app.advanced.sandbox import CustomStrategySandboxService
+    from app.advanced.sandbox import CustomStrategySandboxService, LinuxIsolationLauncher
     from app.advanced.viewpoints import ViewpointService
 
     advanced_repository = AdvancedRepository(operational.database_path)
@@ -176,6 +176,7 @@ async def lifespan(app: FastAPI):
     app.state.advanced_sandbox_service = CustomStrategySandboxService(
         audit_path=operational.database_path,
         governed_input=store.data_dir,
+        launcher=LinuxIsolationLauncher(),
     )
 
     def resolve_advanced_subject_scope(_request: Request) -> advanced_api.AdvancedSubjectScope:

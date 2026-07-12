@@ -203,6 +203,48 @@ class AdvancedRepository:
             ).fetchone()
         return None if row is None else dict(row)
 
+    def append_sandbox_run(
+        self,
+        *,
+        validation_id: str,
+        runner_manifest: Mapping[str, Any],
+        terminal_reason: str | None,
+        artifact_reference: str | None,
+    ) -> dict[str, Any]:
+        identifier = str(uuid4())
+        with self._connection() as connection, connection:
+            connection.execute(
+                "INSERT INTO advanced_sandbox_runs "
+                "(id, validation_id, runner_manifest_json, terminal_reason, artifact_reference, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    identifier,
+                    validation_id,
+                    _json(runner_manifest, "sandbox runner manifest"),
+                    terminal_reason,
+                    artifact_reference,
+                    self.now(),
+                ),
+            )
+            row = connection.execute("SELECT * FROM advanced_sandbox_runs WHERE id = ?", (identifier,)).fetchone()
+        assert row is not None
+        return self._sandbox_run(dict(row))
+
+    def get_sandbox_run(self, run_id: str) -> dict[str, Any] | None:
+        with self._connection() as connection:
+            row = connection.execute("SELECT * FROM advanced_sandbox_runs WHERE id = ?", (run_id,)).fetchone()
+        return None if row is None else self._sandbox_run(dict(row))
+
+    @staticmethod
+    def _sandbox_run(record: dict[str, Any]) -> dict[str, Any]:
+        try:
+            manifest = json.loads(str(record.pop("runner_manifest_json")))
+        except (TypeError, ValueError, json.JSONDecodeError) as error:
+            raise ValueError("sandbox runner manifest is invalid") from error
+        if not isinstance(manifest, dict):
+            raise ValueError("sandbox runner manifest is invalid")
+        return {**record, "runner_manifest": manifest}
+
     def transition_job(self, *, job_id: str, from_status: str, to_status: str, stage: str, rejection_reason: str | None = None, audit_reference: str | None = None) -> dict[str, Any]:
         """Perform the only legal fact-adjacent update: a guarded job cursor transition."""
         now = self.now()

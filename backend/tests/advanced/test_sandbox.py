@@ -24,8 +24,10 @@ class Spy:
 class Probe:
     user_namespace: bool = True
     mount_namespace: bool = True
+    pid_namespace: bool = True
     network_namespace: bool = True
     network_absent: bool = True
+    private_root: bool = True
     governed_input_read_only: bool = True
     temporary_workdir_only: bool = True
     resource_limits: bool = True
@@ -133,8 +135,10 @@ def test_hostile_submission_is_rejected_before_any_host_execution(tmp_path, payl
     [
         "user_namespace",
         "mount_namespace",
+        "pid_namespace",
         "network_namespace",
         "network_absent",
+        "private_root",
         "governed_input_read_only",
         "temporary_workdir_only",
         "resource_limits",

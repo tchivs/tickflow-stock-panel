@@ -53,6 +53,21 @@ def sandbox_validation(record: Mapping[str, Any]) -> dict[str, object]:
     }
 
 
+def sandbox_run(record: Mapping[str, Any]) -> dict[str, object]:
+    """Expose terminal run facts without source, paths, or runner diagnostics."""
+    manifest = record.get("runner_manifest")
+    if not isinstance(manifest, Mapping):
+        manifest = {}
+    resources = manifest.get("resources")
+    return {
+        "status": str(manifest.get("status", "failed")),
+        "proof_fingerprint": _optional_text(manifest.get("proof_fingerprint")),
+        "resources": _safe_mapping(resources),
+        "audit_reference": _optional_text(manifest.get("audit_reference")),
+        "run_id": str(record["id"]),
+    }
+
+
 def experiment_specification(record: Mapping[str, Any]) -> dict[str, object]:
     """Project immutable specification facts without owner identity or raw criteria objects."""
     return {

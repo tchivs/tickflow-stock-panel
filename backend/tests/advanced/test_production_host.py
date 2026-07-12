@@ -12,6 +12,8 @@ from fastapi.testclient import TestClient
 class _AffirmativeSandboxLauncher:
     """Test-only proven launcher contract; production owns the Linux implementation."""
 
+    terminal_outcome_contract = True
+
     def capability_probe(self, *, governed_input, workdir):
         del governed_input, workdir
         return SimpleNamespace(
@@ -97,6 +99,36 @@ def test_affirmative_isolation_proof_records_one_safe_terminal_sandbox_run(tmp_p
         "run_id": result["run_id"],
     }
     assert service.public_run(result["run_id"]) == result
+
+
+def test_main_host_installs_only_the_fail_closed_linux_isolation_launcher(tmp_path, monkeypatch):
+    from app.advanced.sandbox import LinuxIsolationLauncher
+    from app.config import settings
+    from app.services import auth as auth_service
+    from tests.test_analysis_host_integration import _write_phase1_fixture
+
+    fixture_dir = tmp_path / "phase1-fixtures"
+    data_dir = tmp_path / "governed-data"
+    _write_phase1_fixture(fixture_dir)
+    monkeypatch.setenv("PHASE1_FIXTURE_MODE", "1")
+    monkeypatch.setenv("PHASE1_FIXTURE_DIR", str(fixture_dir))
+    monkeypatch.setattr(settings, "data_dir", data_dir)
+    monkeypatch.setattr(settings, "auth_password", "host-test-password")
+    monkeypatch.setattr(auth_service, "_configured_cache", None)
+    auth_service._sessions.clear()
+
+    from app.main import app
+
+    with TestClient(app):
+        service = app.state.advanced_sandbox_service
+        assert isinstance(service._launcher, LinuxIsolationLauncher)
+        result = service.submit(_sandbox_submission())
+        if result["status"] == "rejected":
+            assert result["reason"] == "isolation_unavailable"
+        else:
+            assert result["status"] in {"completed", "failed"}
+            assert result["run_id"]
+            assert result["proof_fingerprint"]
 
 
 def _viewpoint_payload(*, instrument: str) -> dict[str, object]:
