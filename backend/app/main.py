@@ -87,6 +87,7 @@ async def lifespan(app: FastAPI):
         repository=analysis_repository,
         evidence_preparer=EvidencePreparationService(),
         graph=app.state.analysis_graph,
+        lifecycle_rule_service=app.state.lifecycle_rule_service,
     )
 
     def resolve_analysis_subject_scope(_request: Request) -> SubjectScope:

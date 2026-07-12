@@ -70,6 +70,17 @@ def test_lifecycle_rules_require_independent_contradiction_and_price_event_conte
     assert falsified is not None
     assert priced_in is not None
 
+    recorded_condition = service.propose(
+        subject_key="600519.SH",
+        prior_state="active",
+        next_state="falsified",
+        evidence=[{"id": "condition", "occurred_at": "2026-07-12T00:00:00+00:00"}],
+        invalidation_conditions=["revenue falls below the recorded threshold"],
+    )
+
+    assert recorded_condition is not None
+    assert recorded_condition["invalidation_conditions"] == ["revenue falls below the recorded threshold"]
+
 
 def test_completed_evaluation_requires_new_attributable_frozen_evidence_and_is_idempotent(tmp_path):
     repository, service = _lifecycle(tmp_path)

@@ -262,6 +262,11 @@ class AnalysisRepository:
         identifier = review_id or str(uuid4())
         now = _now()
         with self._connection() as connection, connection:
+            existing = connection.execute(
+                "SELECT * FROM analysis_signal_reviews WHERE id = ?", (identifier,)
+            ).fetchone()
+            if existing is not None:
+                return self._review_record(existing)
             signal = connection.execute(
                 "SELECT * FROM analysis_signals WHERE subject_kind = ? AND subject_key = ?",
                 (subject_kind, subject_key),
@@ -283,6 +288,18 @@ class AnalysisRepository:
             review = connection.execute("SELECT * FROM analysis_signal_reviews WHERE id = ?", (identifier,)).fetchone()
         assert review is not None
         return self._review_record(review)
+
+    def list_lifecycle_reviews(self, *, subject_kind: str, subject_key: str) -> list[dict[str, Any]]:
+        """Return immutable reviews for a scoped subject, newest first."""
+        with self._connection() as connection:
+            rows = connection.execute(
+                """SELECT reviews.* FROM analysis_signal_reviews AS reviews
+                   JOIN analysis_signals AS signals ON signals.id = reviews.signal_id
+                   WHERE signals.subject_kind = ? AND signals.subject_key = ?
+                   ORDER BY reviews.created_at DESC, reviews.id DESC""",
+                (subject_kind, subject_key),
+            ).fetchall()
+        return [self._review_record(row) for row in rows]
 
     def get_lifecycle_review(self, review_id: str) -> dict[str, Any] | None:
         with self._connection() as connection:

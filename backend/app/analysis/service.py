@@ -41,6 +41,7 @@ class AnalysisService:
         evidence_loader: EvidenceLoader | None = None,
         authorize_subject: AuthorizeSubject | None = None,
         lifecycle_snapshot_loader: LifecycleSnapshotLoader | None = None,
+        lifecycle_rule_service: Any | None = None,
     ) -> None:
         self._repository = repository
         self._evidence_preparer = evidence_preparer
@@ -48,6 +49,7 @@ class AnalysisService:
         self._evidence_loader = evidence_loader
         self._authorize_subject = authorize_subject
         self._lifecycle_snapshot_loader = lifecycle_snapshot_loader
+        self._lifecycle_rule_service = lifecycle_rule_service
 
     async def start_run(self, *, subject_kind: str, subject_key: str, focus: str) -> dict[str, Any]:
         self._validate_request(subject_kind=subject_kind, subject_key=subject_key, focus=focus)
@@ -91,18 +93,25 @@ class AnalysisService:
                     snapshot=snapshot, attempts=attempts, elapsed=monotonic() - started
                 ),
             )
-            self._repository.append_validated_report(
+            persisted_report = self._repository.append_validated_report(
                 subject_kind=subject_kind,
                 subject_key=subject_key,
                 report=report,
                 run_id=run["id"],
             )
-            return self._repository.complete_run(
+            completed = self._repository.complete_run(
                 run["id"],
                 audit_metadata=self._generation_metadata(
                     snapshot=snapshot, attempts=attempts, elapsed=monotonic() - started
                 ),
             )
+            self._evaluate_lifecycle_proposal(
+                subject_kind=subject_kind,
+                subject_key=subject_key,
+                run_id=run["id"],
+                report_id=persisted_report["id"],
+            )
+            return completed
         except (ValidationError, ValueError):
             return self._repository.record_run_failure(
                 run["id"],
@@ -149,6 +158,22 @@ class AnalysisService:
         return SignalLifecycleState(
             signal_id=f"{subject_kind}:{subject_key}", current_state="active", history=()
         )
+
+    def _evaluate_lifecycle_proposal(
+        self, *, subject_kind: str, subject_key: str, run_id: str, report_id: str
+    ) -> None:
+        if self._lifecycle_rule_service is None:
+            return
+        try:
+            self._lifecycle_rule_service.evaluate_completed_analysis(
+                subject_kind=subject_kind,
+                subject_key=subject_key,
+                run_id=run_id,
+                report_id=report_id,
+            )
+        except (RuntimeError, TypeError, ValueError):
+            # A proposal is non-authoritative; its failure cannot invalidate a persisted report/run.
+            return
 
     def _generation_metadata(
         self, *, snapshot: FrozenEvidenceSnapshot, attempts: int, elapsed: float

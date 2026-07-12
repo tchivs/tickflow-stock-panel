@@ -147,6 +147,11 @@ async def test_completed_analysis_creates_an_attributable_review_proposal_withou
     assert repository.current_lifecycle_state(subject_kind="stock", subject_key="600519.SH") == "active"
     assert repository.list_events(subject_kind="stock", subject_key="600519.SH") == []
 
+    repeated_run = await service.start_run(subject_kind="stock", subject_key="600519.SH", focus="earnings")
+
+    assert repeated_run["status"] == "completed"
+    assert len(repository.list_lifecycle_reviews(subject_kind="stock", subject_key="600519.SH")) == 1
+
 
 async def test_failed_or_duplicate_analysis_completion_does_not_create_extra_lifecycle_proposals(tmp_path):
     from app.analysis.evidence import EvidencePreparationService
