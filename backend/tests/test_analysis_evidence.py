@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import date, datetime, timezone
 
 import pytest
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 
 class EvidenceFixture(BaseModel):
@@ -104,3 +104,73 @@ def test_analysis_evidence_returns_explicit_context_insufficient_without_governe
     snapshot = EvidencePreparationService().freeze(subject_key="600519.SH", records=[])
 
     assert snapshot.context_status == "context_insufficient"
+
+
+def test_analysis_evidence_freezes_normalized_provenance_without_raw_source_text():
+    from app.analysis.evidence import EvidencePreparationService
+
+    snapshot = EvidencePreparationService().freeze(
+        subject_key="600519.SH",
+        records=[
+            {
+                **_source("filing").model_dump(),
+                "content": "untrusted filing text must not enter the frozen context",
+                "source_locator": "financials/metrics/part.parquet#600519.SH",
+            }
+        ],
+    )
+
+    source = snapshot.sources[0]
+    assert source.unit == "CNY_million"
+    assert source.provenance.truncated is True
+    assert source.provenance.source_locator == "financials/metrics/part.parquet#600519.SH"
+    assert "content" not in source.model_dump()
+    with pytest.raises(ValidationError):
+        source.grade = "C"  # type: ignore[misc]
+
+
+def test_generated_analysis_and_server_report_reject_extra_fields_and_unknown_citations():
+    from app.analysis.schemas import (
+        AnalysisReport,
+        FrozenEvidenceSnapshot,
+        GeneratedAnalysis,
+        ICMemo,
+        Perspective,
+        SignalLifecycleState,
+        ValuationAssessment,
+    )
+
+    generated = GeneratedAnalysis(
+        perspectives=[
+            Perspective(name="fundamental", stance="supports", score=70, rationale="盈利稳定", evidence_ids=["filing"]),
+            Perspective(name="risk", stance="neutral", score=50, rationale="需要跟踪", evidence_ids=["filing"]),
+        ],
+        valuation=ValuationAssessment(applicable=False, method="not_applicable", conclusion="数据不足"),
+        ic_memo=ICMemo(
+            recommendation="research_only_watch",
+            thesis="等待证据完善",
+            risks=["财务数据有限"],
+            invalidation_conditions=["独立来源冲突"],
+            evidence_ids=["filing"],
+        ),
+    )
+    snapshot = FrozenEvidenceSnapshot.model_validate(
+        EvidencePreparationService().freeze(subject_key="600519.SH", records=[_source("filing")]).model_dump()
+    )
+
+    report = AnalysisReport(
+        generated=generated,
+        evidence_snapshot=snapshot,
+        lifecycle=SignalLifecycleState(signal_id="signal-1", current_state="active", history=[]),
+        run_id="run-1",
+        report_version=1,
+        schema_version="analysis-v1",
+    )
+    assert report.generated.ic_memo.recommendation == "research_only_watch"
+    with pytest.raises(ValidationError):
+        GeneratedAnalysis.model_validate({**generated.model_dump(), "source_grade": "A"})
+    with pytest.raises(ValidationError, match="unknown evidence ids"):
+        AnalysisReport.model_validate({
+            **report.model_dump(),
+            "generated": {**generated.model_dump(), "ic_memo": {**generated.ic_memo.model_dump(), "evidence_ids": ["unknown"]}},
+        })
