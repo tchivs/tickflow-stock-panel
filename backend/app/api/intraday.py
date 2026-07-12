@@ -163,6 +163,7 @@ async def quote_stream(request: Request):
 
         sub = qs.subscribe(analysis_scope=analysis_scope, advanced_scope=advanced_scope)
         try:
+            yield {"event": "stream_ready", "data": "{}"}
             while True:
                 # 等待任一通道有新信号 (5s 超时保持循环, 便于断线时尽快退出)
                 await asyncio.to_thread(sub.wait, 5.0)

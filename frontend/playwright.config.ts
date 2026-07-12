@@ -38,5 +38,12 @@ export default defineConfig({
         isMobile: true,
       },
     },
+    {
+      name: 'phase4-fastapi-host',
+      use: {
+        browserName: 'chromium',
+        viewport: { width: 1440, height: 960 },
+      },
+    },
   ],
 })
