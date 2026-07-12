@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+import math
 import sqlite3
 
 import pytest
@@ -105,6 +106,98 @@ def test_analysis_evidence_returns_explicit_context_insufficient_without_governe
     snapshot = EvidencePreparationService().freeze(subject_key="600519.SH", records=[])
 
     assert snapshot.context_status == "context_insufficient"
+
+
+def test_governed_evidence_loader_uses_only_repository_financial_and_operational_boundaries(tmp_path):
+    from app.analysis.evidence_loader import GovernedEvidenceLoader
+
+    class GovernedRepository:
+        store = type("Store", (), {"data_dir": tmp_path})()
+
+        @staticmethod
+        def get_enriched_latest():
+            import polars as pl
+
+            return pl.DataFrame(
+                {
+                    "symbol": ["600519.SH"],
+                    "date": [date(2026, 7, 11)],
+                    "close": [100.0],
+                    "volume": [math.inf],
+                }
+            ), date(2026, 7, 11)
+
+    class OperationalBoundary:
+        @staticmethod
+        def list_positions(*, account_id):
+            assert account_id == 7
+            return [
+                {
+                    "id": 3,
+                    "instrument_symbol": "600519.SH",
+                    "cost_price": 88.0,
+                    "quantity": 10,
+                    "invested_amount": 880.0,
+                    "notes": "client text must not enter evidence",
+                }
+            ]
+
+    def financial_loader(_data_dir, table):
+        import polars as pl
+
+        if table != "metrics":
+            return pl.DataFrame()
+        return pl.DataFrame(
+            {
+                "symbol": ["600519.SH"],
+                "report_date": ["2026-Q1"],
+                "revenue": [100.0],
+                "non_finite": [math.nan],
+            }
+        )
+
+    loader = GovernedEvidenceLoader(
+        repository=GovernedRepository(),
+        operational_repository=OperationalBoundary(),
+        financial_loader=financial_loader,
+        retrieved_at=lambda: datetime(2026, 7, 12, tzinfo=timezone.utc),
+    )
+
+    records = loader("account", "7", "client focus must not change facts")
+    snapshot = __import__("app.analysis.evidence", fromlist=["EvidencePreparationService"]).EvidencePreparationService().freeze(
+        subject_key="7", records=records
+    )
+
+    assert {record["origin"] for record in records} == {
+        "audited-financials",
+        "governed-market-data",
+        "operational-holdings",
+    }
+    assert all(math.isfinite(record["value"]) for record in records)
+    assert all("focus" not in record and "notes" not in record for record in records)
+    assert snapshot.context_status == "ready"
+    assert all(source.provenance.truncated for source in snapshot.sources)
+
+
+def test_governed_evidence_loader_returns_no_records_for_missing_governed_context(tmp_path):
+    from app.analysis.evidence_loader import GovernedEvidenceLoader
+
+    class EmptyRepository:
+        store = type("Store", (), {"data_dir": tmp_path})()
+
+        @staticmethod
+        def get_enriched_latest():
+            import polars as pl
+
+            return pl.DataFrame(), None
+
+    loader = GovernedEvidenceLoader(
+        repository=EmptyRepository(),
+        operational_repository=object(),
+        financial_loader=lambda *_args: __import__("polars").DataFrame(),
+    )
+
+    assert loader("instrument", "600519.SH", "") == []
 
 
 def test_analysis_evidence_freezes_normalized_provenance_without_raw_source_text():

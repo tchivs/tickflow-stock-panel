@@ -53,6 +53,32 @@ async def test_analysis_graph_requires_a_server_generated_thread_id(tmp_path):
         await graph.ainvoke({"frozen_evidence": _snapshot()}, {"configurable": {}})
 
 
+async def test_analysis_graph_executes_the_fixed_nodes_with_async_sqlite_checkpoints(tmp_path):
+    from app.analysis.graph import build_analysis_graph
+
+    async def deterministic_adapter(_messages, **_kwargs):
+        return (
+            '{"perspectives":[{"name":"fundamental","stance":"supports","score":70,'
+            '"rationale":"governed evidence","evidence_ids":["known"]},'
+            '{"name":"risk","stance":"neutral","score":50,"rationale":"watch",'
+            '"evidence_ids":["known"]}],"valuation":{"applicable":false,'
+            '"method":"not_applicable","conclusion":"insufficient"},"ic_memo":'
+            '{"recommendation":"research_only_watch","thesis":"wait","risks":["risk"],'
+            '"invalidation_conditions":["conflict"],"evidence_ids":["known"]}}'
+        )
+
+    graph = build_analysis_graph(
+        checkpoint_path=tmp_path / "analysis_checkpoints.db", generate_text=deterministic_adapter
+    )
+
+    result = await graph.ainvoke(
+        {"frozen_evidence": _snapshot()}, {"configurable": {"thread_id": "server-run-async"}}
+    )
+
+    assert result["generated_body"].ic_memo.recommendation == "research_only_watch"
+    assert (tmp_path / "analysis_checkpoints.db").exists()
+
+
 async def test_analysis_graph_rejects_unvalidated_generated_body_before_it_can_be_reported(tmp_path):
     from app.analysis.graph import build_analysis_graph
 

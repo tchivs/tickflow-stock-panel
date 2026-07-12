@@ -58,7 +58,32 @@ async def test_analysis_service_returns_existing_active_run_for_the_same_subject
     second = await service.start_run(subject_kind="stock", subject_key="600519.SH", focus="earnings")
 
     assert first["id"] == second["id"]
-    assert first["status"] in {"queued", "running"}
+    assert first["status"] == "failed"
+    assert second["status"] == "failed"
+
+
+@pytest.mark.parametrize("missing", ["graph", "preparer", "loader"])
+async def test_analysis_service_records_terminal_failure_when_new_run_lacks_execution_collaborator(
+    tmp_path, missing
+):
+    from app.analysis.evidence import EvidencePreparationService
+    from app.analysis.service import AnalysisService
+
+    class Graph:
+        async def ainvoke(self, *_args, **_kwargs):
+            return {"generated_body": _analysis_body()}
+
+    service = AnalysisService(
+        repository=_repository(tmp_path),
+        evidence_preparer=None if missing == "preparer" else EvidencePreparationService(),
+        graph=None if missing == "graph" else Graph(),
+        evidence_loader=None if missing == "loader" else lambda *_args: _evidence_records(),
+    )
+
+    run = await service.start_run(subject_kind="instrument", subject_key="600519.SH", focus="earnings")
+
+    assert run["status"] == "failed"
+    assert run["failure_reason"] == "analysis execution is unavailable; manual review required"
 
 
 async def test_analysis_service_audits_unknown_citation_without_writing_a_partial_report(tmp_path):
