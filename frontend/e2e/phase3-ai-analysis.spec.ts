@@ -51,11 +51,15 @@ async function installAnalysisFixture(page: import('@playwright/test').Page) {
     const request = route.request()
     const path = new URL(request.url()).pathname
     const json = (body: unknown) => route.fulfill({ contentType: 'application/json', body: JSON.stringify(body) })
-    if (path.endsWith('/reports')) return json({ reports: [report] })
+    if (path.endsWith('/reports') && /\/subjects\/(instrument|account)\//.test(path)) return json({ reports: [report] })
     if (path.endsWith(`/reports/${report.id}`)) return json({ report })
     if (path.endsWith(`/reports/${report.id}/evidence`)) return json(evidence)
     if (path.endsWith(`/signals/${history.signal_id}/history`)) return json(history)
-    if (path.endsWith('/runs') && request.method() === 'POST') return json({ run: { id: 'run-moutai-1', subject, status: 'running' } })
+    if (path.endsWith('/runs') && request.method() === 'POST') {
+      const body = request.postDataJSON() as { subject_kind?: string }
+      if (body.subject_kind !== 'instrument' && body.subject_kind !== 'account') return route.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify({ detail: 'subject kind must be server-owned instrument or account' }) })
+      return json({ run: { id: 'run-moutai-1', subject, status: 'running' } })
+    }
     if (path.endsWith('/confirm') || path.endsWith('/reject')) return json({ review: { id: 'review-server-issued', status: path.endsWith('/confirm') ? 'confirmed' : 'rejected' } })
     return route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ detail: `Unhandled fixture route: ${path}` }) })
   })

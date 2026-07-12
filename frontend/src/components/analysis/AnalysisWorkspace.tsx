@@ -14,17 +14,19 @@ const tabs: Array<{ id: Tab; label: string }> = [{ id: 'report', label: '分析�
 
 export function AnalysisWorkspace({ subject, title }: { subject: AnalysisSubject; title: string }) {
   const storageKey = `analysis-workspace:${subject.kind}:${subject.key}`
+  // UI subjects remain stock/portfolio; the established API authorizes instrument/account.
+  const serverSubject = { kind: subject.kind === 'stock' ? 'instrument' : 'account', key: subject.key } as unknown as AnalysisSubject
   const [selectedReportId, setSelectedReportId] = useState<string | null>(null)
   const [tab, setTab] = useState<Tab>(() => (sessionStorage.getItem(`${storageKey}:tab`) as Tab | null) ?? 'report')
   const scrollPosition = useRef(0)
   const ids = useId()
-  const reportsQuery = useQuery({ queryKey: QK.analysisReports(subject.kind, subject.key), queryFn: () => api.analysisReports(subject), placeholderData: keepPreviousData })
+  const reportsQuery = useQuery({ queryKey: QK.analysisReports(subject.kind, subject.key), queryFn: () => api.analysisReports(serverSubject), placeholderData: keepPreviousData })
   const latestReport = reportsQuery.data?.reports.find(report => report.id === selectedReportId) ?? reportsQuery.data?.reports[0]
   const reportQuery = useQuery({ queryKey: QK.analysisReport(subject.kind, subject.key, latestReport?.id ?? 'none'), queryFn: () => api.analysisReport(latestReport!.id), enabled: !!latestReport, placeholderData: keepPreviousData })
   const evidenceQuery = useQuery({ queryKey: QK.analysisEvidence(subject.kind, subject.key, latestReport?.id ?? 'none'), queryFn: () => api.analysisEvidence(latestReport!.id), enabled: !!latestReport, placeholderData: keepPreviousData })
   const signalId = (reportQuery.data?.report as (AnalysisReport & { signal_id?: string }) | undefined)?.signal_id
   const historyQuery = useQuery({ queryKey: QK.analysisSignalHistory(subject.kind, subject.key, signalId ?? 'none'), queryFn: () => api.analysisSignalHistory(signalId!), enabled: !!signalId, placeholderData: keepPreviousData })
-  const startRun = useMutation({ mutationFn: () => api.analysisStartRun(subject), onSuccess: result => { setSelectedReportId(current => current); sessionStorage.setItem(`${storageKey}:run`, result.run.id) } })
+  const startRun = useMutation({ mutationFn: () => api.analysisStartRun(serverSubject), onSuccess: result => { setSelectedReportId(current => current); sessionStorage.setItem(`${storageKey}:run`, result.run.id) } })
   const activeRun = startRun.data?.run
 
   useEffect(() => { sessionStorage.setItem(`${storageKey}:tab`, tab) }, [storageKey, tab])
