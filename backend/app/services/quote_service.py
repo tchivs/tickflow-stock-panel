@@ -55,13 +55,17 @@ class QuoteSubscriber:
         max_reviews: int = 200,
         analysis_scope: Any | None = None,
         max_analysis_progress: int = 200,
+        advanced_scope: Any | None = None,
+        max_advanced_progress: int = 200,
     ) -> None:
         self._event = threading.Event()
         self._lock = threading.Lock()
         self._max_alerts = max_alerts
         self._max_reviews = max_reviews
         self._max_analysis_progress = max_analysis_progress
+        self._max_advanced_progress = max_advanced_progress
         self._analysis_scope = analysis_scope
+        self._advanced_scope = advanced_scope
         self._quote_updated = False
         self._strategy_results_updated = False
         self._depth_updated = False
@@ -69,6 +73,7 @@ class QuoteSubscriber:
         self._alerts: list[dict] = []
         self._reviews: list[str] = []
         self._analysis_progress: list[dict[str, str]] = []
+        self._advanced_progress: list[dict[str, str]] = []
 
     # ── 消费侧 (SSE generator 线程) ──────────────────────
     def wait(self, timeout: float = 5.0) -> bool:
@@ -87,6 +92,7 @@ class QuoteSubscriber:
                 "alerts": self._alerts,
                 "reviews": self._reviews,
                 "analysis_progress": self._analysis_progress,
+                "advanced_progress": self._advanced_progress,
             }
             self._quote_updated = False
             self._strategy_results_updated = False
@@ -94,6 +100,7 @@ class QuoteSubscriber:
             self._alerts = []
             self._reviews = []
             self._analysis_progress = []
+            self._advanced_progress = []
             self._portfolio_account_ids = []
             self._event.clear()
             return out
@@ -122,6 +129,7 @@ class QuoteSubscriber:
                 and not self._depth_updated
                 and not self._reviews
                 and not self._analysis_progress
+                and not self._advanced_progress
                 and not self._portfolio_account_ids
             ):
                 self._event.clear()
@@ -159,6 +167,17 @@ class QuoteSubscriber:
             self._analysis_progress.append(progress)
             if len(self._analysis_progress) > self._max_analysis_progress:
                 self._analysis_progress = self._analysis_progress[-self._max_analysis_progress:]
+            self._event.set()
+
+    def push_advanced_progress(self, progress: dict[str, str]) -> None:
+        """Queue only committed, allowlisted advanced state for the bound scope."""
+        scope = self._advanced_scope
+        if scope is None or not scope.allows(progress["subject_kind"], progress["subject_key"]):
+            return
+        with self._lock:
+            self._advanced_progress.append(progress)
+            if len(self._advanced_progress) > self._max_advanced_progress:
+                self._advanced_progress = self._advanced_progress[-self._max_advanced_progress:]
             self._event.set()
 
 
@@ -341,9 +360,11 @@ class QuoteService:
     # SSE 订阅管理 — 每个 /stream 连接一个订阅者, 事件广播
     # ================================================================
 
-    def subscribe(self, *, analysis_scope: Any | None = None) -> QuoteSubscriber:
+    def subscribe(
+        self, *, analysis_scope: Any | None = None, advanced_scope: Any | None = None
+    ) -> QuoteSubscriber:
         """注册一个 SSE 订阅者 (连接建立时调用)。"""
-        sub = QuoteSubscriber(analysis_scope=analysis_scope)
+        sub = QuoteSubscriber(analysis_scope=analysis_scope, advanced_scope=advanced_scope)
         with self._lock:
             self._subscribers.add(sub)
         return sub
@@ -402,6 +423,48 @@ class QuoteService:
         }
         for sub in self._snapshot_subscribers():
             sub.push_analysis_progress(progress)
+
+    def notify_advanced_progress(
+        self,
+        *,
+        job_id: str,
+        subject_kind: str,
+        subject_key: str,
+        stage: str,
+        occurred_at: str,
+        committed: bool,
+        human_label: str,
+        audit_reference: str | None,
+    ) -> None:
+        """Publish a committed durable advanced-job stage without graph/provider data."""
+        allowed_stages = {
+            "authorized",
+            "frozen",
+            "drafted",
+            "gates_complete",
+            "awaiting_review",
+            "recorded",
+            "rejected",
+        }
+        if (
+            not committed
+            or stage not in allowed_stages
+            or not all(isinstance(value, str) and value for value in (job_id, subject_kind, subject_key, occurred_at, human_label))
+            or len(human_label) > 256
+            or (audit_reference is not None and (not isinstance(audit_reference, str) or not audit_reference))
+        ):
+            return
+        progress = {
+            "job_id": job_id,
+            "subject_kind": subject_kind,
+            "subject_key": subject_key,
+            "stage": stage,
+            "label": human_label,
+            "occurred_at": occurred_at,
+            "audit_reference": audit_reference,
+        }
+        for sub in self._snapshot_subscribers():
+            sub.push_advanced_progress(progress)
 
 
     def persist_stream_and_enqueue_alerts(

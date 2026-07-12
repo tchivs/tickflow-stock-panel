@@ -37,6 +37,18 @@ def _analysis_scope(request: Request):
     return scope
 
 
+def _advanced_scope(request: Request):
+    """Resolve the advanced stream scope only from server-held policy."""
+    resolver = getattr(request.app.state, "resolve_advanced_subject_scope", None)
+    if not callable(resolver):
+        return None
+    try:
+        scope = resolver(request)
+    except Exception:
+        return None
+    return scope if callable(getattr(scope, "allows", None)) else None
+
+
 def _fallback_index_quotes_from_daily(request: Request, symbols: list[str] | None = None) -> list[dict]:
     """实时指数缓存为空时，从本地指数日 K 取最近收盘价作为兜底。"""
     repo = getattr(request.app.state, "repo", None)
@@ -141,6 +153,7 @@ async def quote_stream(request: Request):
     """
     qs = _get_quote_service(request)
     analysis_scope = _analysis_scope(request) if qs is not None else None
+    advanced_scope = _advanced_scope(request) if qs is not None else None
 
     async def event_generator():
         if qs is None:
@@ -148,7 +161,7 @@ async def quote_stream(request: Request):
             while True:
                 await asyncio.sleep(30)
 
-        sub = qs.subscribe(analysis_scope=analysis_scope)
+        sub = qs.subscribe(analysis_scope=analysis_scope, advanced_scope=advanced_scope)
         try:
             while True:
                 # 等待任一通道有新信号 (5s 超时保持循环, 便于断线时尽快退出)
@@ -187,6 +200,12 @@ async def quote_stream(request: Request):
                 for progress in data["analysis_progress"]:
                     yield {
                         "event": "analysis_progress",
+                        "data": json.dumps(progress),
+                    }
+
+                for progress in data["advanced_progress"]:
+                    yield {
+                        "event": "advanced_progress",
                         "data": json.dumps(progress),
                     }
 
