@@ -26,8 +26,6 @@ key-files:
     - backend/app/advanced/api.py
   modified:
     - backend/app/advanced/repository.py
-    - backend/tests/advanced/test_experiments.py
-    - backend/tests/advanced/test_evolution.py
 key-decisions:
   - "Experiment services persist only governed manifests, fingerprints, bounded metadata, metrics, and managed artifact references; raw market series are discarded."
   - "A constrained or failed run is auditable infrastructure evidence, never a research feedback conclusion."
@@ -87,8 +85,7 @@ status: complete
 - `backend/app/advanced/evolution.py` - Candidate lineage, gate matrix, replay-safe approval, and registered-only strategy projection.
 - `backend/app/advanced/api.py` - Strict server-derived promotion endpoint.
 - `backend/app/advanced/repository.py` - Narrow promotion counting helper for durable replay-safety verification.
-- `backend/tests/advanced/test_experiments.py` - Focused frozen-lineage and constrained-run contracts.
-- `backend/tests/advanced/test_evolution.py` - Focused mutation, gate, principal, replay, and zero-execution contracts.
+- Existing `backend/tests/advanced/test_experiments.py` and `backend/tests/advanced/test_evolution.py` Wave 0 contracts were used unchanged as focused verification.
 
 ## Verification
 
