@@ -390,6 +390,239 @@ MIGRATIONS: tuple[str, ...] = (
     """
     ALTER TABLE analysis_runs ADD COLUMN audit_metadata_json TEXT;
     """,
+    """
+    -- Advanced records share operational.db. All business facts are append-only;
+    -- advanced_jobs is the sole execution cursor with an explicitly guarded update path.
+    CREATE TABLE advanced_policy_revisions (
+        id TEXT PRIMARY KEY,
+        revision TEXT NOT NULL UNIQUE,
+        fingerprint TEXT NOT NULL UNIQUE,
+        snapshot_json TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    );
+    CREATE TABLE advanced_viewpoints (
+        id TEXT PRIMARY KEY,
+        source_profile TEXT NOT NULL,
+        market_scope TEXT NOT NULL CHECK (market_scope = 'CN-A'),
+        instrument TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    );
+    CREATE TABLE advanced_viewpoint_versions (
+        id TEXT PRIMARY KEY,
+        viewpoint_id TEXT NOT NULL REFERENCES advanced_viewpoints(id) ON DELETE RESTRICT,
+        version INTEGER NOT NULL CHECK (version > 0),
+        policy_revision_id TEXT NOT NULL REFERENCES advanced_policy_revisions(id) ON DELETE RESTRICT,
+        asset_type TEXT NOT NULL CHECK (asset_type IN ('stock', 'etf', 'index')),
+        published_at TEXT NOT NULL,
+        direction TEXT NOT NULL CHECK (direction IN ('bullish', 'bearish', 'neutral')),
+        rating TEXT NOT NULL CHECK (rating IN ('overweight', 'neutral', 'underweight')),
+        conclusion TEXT NOT NULL,
+        target_low REAL NOT NULL,
+        target_high REAL NOT NULL CHECK (target_high >= target_low),
+        horizon_days INTEGER NOT NULL CHECK (horizon_days BETWEEN 1 AND 365),
+        confidence TEXT NOT NULL CHECK (confidence IN ('low', 'medium', 'high')),
+        revision_kind TEXT NOT NULL CHECK (revision_kind IN ('initial', 'non_material_revision', 'material_stance_change', 'correction')),
+        correction_reason TEXT,
+        evaluation_window_days INTEGER NOT NULL CHECK (evaluation_window_days IN (20, 60, 120)),
+        benchmark TEXT NOT NULL,
+        metric TEXT NOT NULL CHECK (metric = 'relative_return'),
+        created_at TEXT NOT NULL,
+        UNIQUE(viewpoint_id, version)
+    );
+    CREATE TABLE advanced_viewpoint_evidence (
+        id INTEGER PRIMARY KEY,
+        viewpoint_version_id TEXT NOT NULL REFERENCES advanced_viewpoint_versions(id) ON DELETE RESTRICT,
+        evidence_reference TEXT NOT NULL,
+        evidence_published_at TEXT,
+        created_at TEXT NOT NULL,
+        UNIQUE(viewpoint_version_id, evidence_reference)
+    );
+    CREATE TABLE advanced_viewpoint_evaluations (
+        id TEXT PRIMARY KEY,
+        viewpoint_version_id TEXT NOT NULL UNIQUE REFERENCES advanced_viewpoint_versions(id) ON DELETE RESTRICT,
+        status TEXT NOT NULL CHECK (status IN ('evaluated', 'unevaluable')),
+        reason TEXT,
+        relative_return REAL,
+        coverage_start TEXT,
+        coverage_end TEXT,
+        created_at TEXT NOT NULL
+    );
+    CREATE TABLE advanced_experiment_specs (
+        id TEXT PRIMARY KEY,
+        research_asset_id TEXT NOT NULL,
+        version INTEGER NOT NULL CHECK (version > 0),
+        supersedes_specification_id TEXT REFERENCES advanced_experiment_specs(id) ON DELETE RESTRICT,
+        hypothesis TEXT NOT NULL,
+        data_scope_json TEXT NOT NULL,
+        method TEXT NOT NULL,
+        metrics_json TEXT NOT NULL,
+        success_criteria_json TEXT NOT NULL,
+        failure_criteria_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(research_asset_id, version)
+    );
+    CREATE TABLE advanced_experiment_runs (
+        id TEXT PRIMARY KEY,
+        specification_id TEXT NOT NULL REFERENCES advanced_experiment_specs(id) ON DELETE RESTRICT,
+        status TEXT NOT NULL CHECK (status IN ('queued', 'completed', 'validation_failed', 'timed_out', 'resource_limited')),
+        governed_fingerprint TEXT,
+        asset_version TEXT,
+        run_json TEXT NOT NULL,
+        constraint_reason TEXT,
+        created_at TEXT NOT NULL
+    );
+    CREATE TABLE advanced_experiment_feedback (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL UNIQUE REFERENCES advanced_experiment_runs(id) ON DELETE RESTRICT,
+        conclusion TEXT NOT NULL CHECK (conclusion IN ('supported', 'refuted', 'inconclusive', 'needs_replication')),
+        feedback_json TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    );
+    CREATE TABLE advanced_strategy_candidates (
+        id TEXT PRIMARY KEY,
+        parent_research_asset_id TEXT NOT NULL,
+        parent_version TEXT NOT NULL,
+        mutation_operation TEXT NOT NULL,
+        seed INTEGER NOT NULL,
+        resolved_configuration_json TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    );
+    CREATE TABLE advanced_promotion_gates (
+        id TEXT PRIMARY KEY,
+        candidate_id TEXT NOT NULL REFERENCES advanced_strategy_candidates(id) ON DELETE RESTRICT,
+        gate TEXT NOT NULL CHECK (gate IN ('contract_sandbox_safety', 'provenance', 'in_sample_out_of_sample_evidence', 'robustness', 'cost_feasibility')),
+        status TEXT NOT NULL CHECK (status IN ('passed', 'failed')),
+        evidence_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(candidate_id, gate)
+    );
+    CREATE TABLE advanced_promotions (
+        id TEXT PRIMARY KEY,
+        job_id TEXT UNIQUE REFERENCES advanced_jobs(id) ON DELETE RESTRICT,
+        candidate_id TEXT NOT NULL UNIQUE REFERENCES advanced_strategy_candidates(id) ON DELETE RESTRICT,
+        reviewer_principal TEXT NOT NULL,
+        rationale TEXT NOT NULL,
+        registered_strategy_id TEXT NOT NULL UNIQUE,
+        created_at TEXT NOT NULL
+    );
+    CREATE TABLE advanced_authorizations (
+        id TEXT PRIMARY KEY,
+        principal TEXT NOT NULL,
+        token_hash TEXT NOT NULL UNIQUE,
+        policy_revision_id TEXT NOT NULL REFERENCES advanced_policy_revisions(id) ON DELETE RESTRICT,
+        scope_json TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        revoked_at TEXT,
+        created_at TEXT NOT NULL
+    );
+    CREATE TABLE advanced_rate_windows (
+        id TEXT PRIMARY KEY,
+        principal TEXT NOT NULL,
+        policy_revision_id TEXT NOT NULL REFERENCES advanced_policy_revisions(id) ON DELETE RESTRICT,
+        window_started_at TEXT NOT NULL,
+        consumed INTEGER NOT NULL CHECK (consumed >= 0),
+        created_at TEXT NOT NULL,
+        UNIQUE(principal, policy_revision_id, window_started_at)
+    );
+    CREATE TABLE advanced_jobs (
+        id TEXT PRIMARY KEY,
+        authorization_id TEXT NOT NULL REFERENCES advanced_authorizations(id) ON DELETE RESTRICT,
+        principal TEXT NOT NULL,
+        subject_kind TEXT NOT NULL,
+        subject_key TEXT NOT NULL,
+        task_type TEXT NOT NULL,
+        market TEXT NOT NULL,
+        instrument TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('queued', 'authorized', 'frozen', 'drafted', 'gates_complete', 'awaiting_review', 'recorded', 'rejected')),
+        stage TEXT NOT NULL CHECK (stage IN ('authorized', 'frozen', 'drafted', 'gates_complete', 'awaiting_review', 'recorded', 'rejected')),
+        stage_recorded_at TEXT NOT NULL,
+        rejection_reason TEXT,
+        audit_reference TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(principal, idempotency_key)
+    );
+    CREATE TABLE advanced_security_audit (
+        id TEXT PRIMARY KEY,
+        authorization_id TEXT REFERENCES advanced_authorizations(id) ON DELETE RESTRICT,
+        job_id TEXT REFERENCES advanced_jobs(id) ON DELETE RESTRICT,
+        reference TEXT NOT NULL UNIQUE,
+        decision TEXT NOT NULL CHECK (decision IN ('authorized', 'rejected', 'recorded')),
+        reason TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    );
+    CREATE TABLE advanced_sandbox_validations (
+        id TEXT PRIMARY KEY,
+        contract_fingerprint TEXT NOT NULL,
+        source_sha256 TEXT NOT NULL CHECK (length(source_sha256) = 64),
+        status TEXT NOT NULL CHECK (status IN ('validated', 'rejected', 'constraint_failed')),
+        reason TEXT NOT NULL,
+        audit_reference TEXT NOT NULL REFERENCES advanced_security_audit(reference) ON DELETE RESTRICT,
+        created_at TEXT NOT NULL
+    );
+    CREATE TABLE advanced_sandbox_runs (
+        id TEXT PRIMARY KEY,
+        validation_id TEXT NOT NULL REFERENCES advanced_sandbox_validations(id) ON DELETE RESTRICT,
+        runner_manifest_json TEXT NOT NULL,
+        terminal_reason TEXT,
+        artifact_reference TEXT,
+        created_at TEXT NOT NULL
+    );
+    CREATE UNIQUE INDEX idx_advanced_active_job
+    ON advanced_jobs(principal, task_type, market, instrument)
+    WHERE status IN ('queued', 'authorized', 'frozen', 'drafted', 'gates_complete', 'awaiting_review');
+    CREATE INDEX idx_advanced_viewpoint_versions ON advanced_viewpoint_versions(viewpoint_id, version DESC);
+    CREATE INDEX idx_advanced_experiment_runs ON advanced_experiment_runs(specification_id, created_at DESC);
+    CREATE INDEX idx_advanced_security_audit_job ON advanced_security_audit(job_id, created_at DESC);
+
+    CREATE TRIGGER advanced_jobs_valid_transition BEFORE UPDATE ON advanced_jobs
+    WHEN NOT (
+        OLD.status = 'queued' AND NEW.status IN ('authorized', 'rejected')
+        OR OLD.status = 'authorized' AND NEW.status IN ('frozen', 'rejected')
+        OR OLD.status = 'frozen' AND NEW.status IN ('drafted', 'gates_complete', 'rejected')
+        OR OLD.status = 'drafted' AND NEW.status IN ('gates_complete', 'rejected')
+        OR OLD.status = 'gates_complete' AND NEW.status IN ('awaiting_review', 'recorded', 'rejected')
+        OR OLD.status = 'awaiting_review' AND NEW.status IN ('recorded', 'rejected')
+    )
+    BEGIN SELECT RAISE(ABORT, 'advanced job cannot transition from its current state'); END;
+
+    CREATE TRIGGER advanced_authorizations_update_only_revocation BEFORE UPDATE ON advanced_authorizations
+    WHEN NEW.principal != OLD.principal OR NEW.token_hash != OLD.token_hash OR NEW.policy_revision_id != OLD.policy_revision_id
+      OR NEW.scope_json != OLD.scope_json OR NEW.expires_at != OLD.expires_at OR OLD.revoked_at IS NOT NULL
+    BEGIN SELECT RAISE(ABORT, 'advanced authorization is immutable except first revocation'); END;
+
+    CREATE TRIGGER advanced_viewpoints_no_update BEFORE UPDATE ON advanced_viewpoints BEGIN SELECT RAISE(ABORT, 'advanced facts are immutable'); END;
+    CREATE TRIGGER advanced_viewpoints_no_delete BEFORE DELETE ON advanced_viewpoints BEGIN SELECT RAISE(ABORT, 'advanced facts are immutable'); END;
+    CREATE TRIGGER advanced_viewpoint_versions_no_update BEFORE UPDATE ON advanced_viewpoint_versions BEGIN SELECT RAISE(ABORT, 'advanced facts are immutable'); END;
+    CREATE TRIGGER advanced_viewpoint_versions_no_delete BEFORE DELETE ON advanced_viewpoint_versions BEGIN SELECT RAISE(ABORT, 'advanced facts are immutable'); END;
+    CREATE TRIGGER advanced_viewpoint_evidence_no_update BEFORE UPDATE ON advanced_viewpoint_evidence BEGIN SELECT RAISE(ABORT, 'advanced facts are immutable'); END;
+    CREATE TRIGGER advanced_viewpoint_evidence_no_delete BEFORE DELETE ON advanced_viewpoint_evidence BEGIN SELECT RAISE(ABORT, 'advanced facts are immutable'); END;
+    CREATE TRIGGER advanced_viewpoint_evaluations_no_update BEFORE UPDATE ON advanced_viewpoint_evaluations BEGIN SELECT RAISE(ABORT, 'advanced facts are immutable'); END;
+    CREATE TRIGGER advanced_viewpoint_evaluations_no_delete BEFORE DELETE ON advanced_viewpoint_evaluations BEGIN SELECT RAISE(ABORT, 'advanced facts are immutable'); END;
+    CREATE TRIGGER advanced_experiment_specs_no_update BEFORE UPDATE ON advanced_experiment_specs BEGIN SELECT RAISE(ABORT, 'advanced facts are immutable'); END;
+    CREATE TRIGGER advanced_experiment_specs_no_delete BEFORE DELETE ON advanced_experiment_specs BEGIN SELECT RAISE(ABORT, 'advanced facts are immutable'); END;
+    CREATE TRIGGER advanced_experiment_runs_no_update BEFORE UPDATE ON advanced_experiment_runs BEGIN SELECT RAISE(ABORT, 'advanced facts are immutable'); END;
+    CREATE TRIGGER advanced_experiment_runs_no_delete BEFORE DELETE ON advanced_experiment_runs BEGIN SELECT RAISE(ABORT, 'advanced facts are immutable'); END;
+    CREATE TRIGGER advanced_experiment_feedback_no_update BEFORE UPDATE ON advanced_experiment_feedback BEGIN SELECT RAISE(ABORT, 'advanced facts are immutable'); END;
+    CREATE TRIGGER advanced_experiment_feedback_no_delete BEFORE DELETE ON advanced_experiment_feedback BEGIN SELECT RAISE(ABORT, 'advanced facts are immutable'); END;
+    CREATE TRIGGER advanced_strategy_candidates_no_update BEFORE UPDATE ON advanced_strategy_candidates BEGIN SELECT RAISE(ABORT, 'advanced facts are immutable'); END;
+    CREATE TRIGGER advanced_strategy_candidates_no_delete BEFORE DELETE ON advanced_strategy_candidates BEGIN SELECT RAISE(ABORT, 'advanced facts are immutable'); END;
+    CREATE TRIGGER advanced_promotion_gates_no_update BEFORE UPDATE ON advanced_promotion_gates BEGIN SELECT RAISE(ABORT, 'advanced facts are immutable'); END;
+    CREATE TRIGGER advanced_promotion_gates_no_delete BEFORE DELETE ON advanced_promotion_gates BEGIN SELECT RAISE(ABORT, 'advanced facts are immutable'); END;
+    CREATE TRIGGER advanced_promotions_no_update BEFORE UPDATE ON advanced_promotions BEGIN SELECT RAISE(ABORT, 'advanced facts are immutable'); END;
+    CREATE TRIGGER advanced_promotions_no_delete BEFORE DELETE ON advanced_promotions BEGIN SELECT RAISE(ABORT, 'advanced facts are immutable'); END;
+    CREATE TRIGGER advanced_security_audit_no_update BEFORE UPDATE ON advanced_security_audit BEGIN SELECT RAISE(ABORT, 'advanced facts are immutable'); END;
+    CREATE TRIGGER advanced_security_audit_no_delete BEFORE DELETE ON advanced_security_audit BEGIN SELECT RAISE(ABORT, 'advanced facts are immutable'); END;
+    CREATE TRIGGER advanced_sandbox_validations_no_update BEFORE UPDATE ON advanced_sandbox_validations BEGIN SELECT RAISE(ABORT, 'advanced facts are immutable'); END;
+    CREATE TRIGGER advanced_sandbox_validations_no_delete BEFORE DELETE ON advanced_sandbox_validations BEGIN SELECT RAISE(ABORT, 'advanced facts are immutable'); END;
+    CREATE TRIGGER advanced_sandbox_runs_no_update BEFORE UPDATE ON advanced_sandbox_runs BEGIN SELECT RAISE(ABORT, 'advanced facts are immutable'); END;
+    CREATE TRIGGER advanced_sandbox_runs_no_delete BEFORE DELETE ON advanced_sandbox_runs BEGIN SELECT RAISE(ABORT, 'advanced facts are immutable'); END;
+    CREATE TRIGGER advanced_policy_revisions_no_update BEFORE UPDATE ON advanced_policy_revisions BEGIN SELECT RAISE(ABORT, 'advanced facts are immutable'); END;
+    CREATE TRIGGER advanced_policy_revisions_no_delete BEFORE DELETE ON advanced_policy_revisions BEGIN SELECT RAISE(ABORT, 'advanced facts are immutable'); END;
+    CREATE TRIGGER advanced_rate_windows_no_update BEFORE UPDATE ON advanced_rate_windows BEGIN SELECT RAISE(ABORT, 'advanced facts are immutable'); END;
+    CREATE TRIGGER advanced_rate_windows_no_delete BEFORE DELETE ON advanced_rate_windows BEGIN SELECT RAISE(ABORT, 'advanced facts are immutable'); END;
+    """,
 )
 
 
