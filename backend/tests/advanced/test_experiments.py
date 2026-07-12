@@ -1,0 +1,176 @@
+"""RED contracts for immutable experiment specifications, runs, and feedback."""
+from __future__ import annotations
+
+import sqlite3
+
+import pytest
+
+
+class FakeGovernedBacktest:
+    """Returns compact governed metadata, never a raw market series."""
+
+    def __init__(self, *, terminal_status: str = "completed", constraint_reason: str | None = None):
+        self.terminal_status = terminal_status
+        self.constraint_reason = constraint_reason
+        self.calls: list[dict[str, object]] = []
+
+    def run(self, *, specification: dict[str, object]) -> dict[str, object]:
+        self.calls.append(specification)
+        return {
+            "status": self.terminal_status,
+            "constraint_reason": self.constraint_reason,
+            "governed_input_manifest": {
+                "source": "governed_backtest_engine",
+                "revision": "governed-revision-v1",
+                "fingerprint": "governed-fingerprint-v1",
+                "observed_start": "2025-01-02",
+                "observed_end": "2025-12-31",
+            },
+            "asset_version": "factor-revision-7",
+            "resolved_parameters": {"lookback": 20, "threshold": 1.5},
+            "environment": {"python": "3.11", "runner": "bounded-backtest-v1"},
+            "resources": {"timeout_seconds": 30, "memory_limit_mb": 512},
+            "metrics": {"sharpe": 1.2, "out_of_sample_return": 0.08},
+            "artifacts": [{"reference": "research_artifacts/run-1/metrics.json", "checksum": "a" * 64}],
+            # This sentinel proves persistence stores only metadata, not a price series.
+            "raw_market_series": [{"date": "2025-01-02", "close": 10.0}],
+        }
+
+
+def _service(tmp_path, runner=None):
+    from app.advanced.experiments import ExperimentService
+    from app.advanced.repository import AdvancedRepository
+
+    repository = AdvancedRepository(tmp_path / "operational.db")
+    repository.migrate()
+    return repository, ExperimentService(repository=repository, backtest_runner=runner or FakeGovernedBacktest())
+
+
+def _specification(service, **overrides):
+    payload = {
+        "research_asset_id": "factor-value-v7",
+        "hypothesis": "低估值与盈利质量组合在样本外保持正向超额收益",
+        "data_scope": {"market": "CN-A", "start": "2024-01-01", "end": "2025-12-31"},
+        "method": "cross-sectional-long-short",
+        "metrics": ["sharpe", "out_of_sample_return"],
+        "success_criteria": {"out_of_sample_return_gt": 0.03},
+        "failure_criteria": {"max_drawdown_lt": -0.2},
+    }
+    payload.update(overrides)
+    return service.create_specification(**payload)
+
+
+def test_experiment_specification_freezes_reproducible_research_contract_and_is_immutable(tmp_path):
+    repository, service = _service(tmp_path)
+    specification = _specification(service)
+
+    assert specification["version"] == 1
+    assert specification["hypothesis"].startswith("低估值")
+    assert specification["data_scope"] == {"market": "CN-A", "start": "2024-01-01", "end": "2025-12-31"}
+    assert specification["method"] == "cross-sectional-long-short"
+    assert specification["metrics"] == ["sharpe", "out_of_sample_return"]
+    assert specification["success_criteria"] == {"out_of_sample_return_gt": 0.03}
+    assert specification["failure_criteria"] == {"max_drawdown_lt": -0.2}
+
+    with sqlite3.connect(repository.database_path) as connection:
+        with pytest.raises(sqlite3.DatabaseError, match="immutable"):
+            connection.execute(
+                "UPDATE advanced_experiment_specs SET hypothesis = 'after-the-fact rewrite' WHERE id = ?",
+                (specification["id"],),
+            )
+
+
+def test_completed_run_records_server_derived_manifest_without_raw_market_series(tmp_path):
+    runner = FakeGovernedBacktest()
+    repository, service = _service(tmp_path, runner)
+    specification = _specification(service)
+
+    run = service.run_specification(specification_id=specification["id"])
+
+    assert len(runner.calls) == 1
+    assert run["status"] == "completed"
+    assert run["specification_id"] == specification["id"]
+    assert run["governed_input_manifest"] == {
+        "source": "governed_backtest_engine",
+        "revision": "governed-revision-v1",
+        "fingerprint": "governed-fingerprint-v1",
+        "observed_start": "2025-01-02",
+        "observed_end": "2025-12-31",
+    }
+    assert run["asset_version"] == "factor-revision-7"
+    assert run["resolved_parameters"] == {"lookback": 20, "threshold": 1.5}
+    assert run["environment"] == {"python": "3.11", "runner": "bounded-backtest-v1"}
+    assert run["resources"] == {"timeout_seconds": 30, "memory_limit_mb": 512}
+    assert run["artifacts"] == [{"reference": "research_artifacts/run-1/metrics.json", "checksum": "a" * 64}]
+    with sqlite3.connect(repository.database_path) as connection:
+        stored = connection.execute("SELECT run_json FROM advanced_experiment_runs WHERE id = ?", (run["id"],)).fetchone()[0]
+    assert "raw_market_series" not in stored
+    assert "\"close\":10.0" not in stored
+
+
+@pytest.mark.parametrize(
+    ("status", "constraint_reason"),
+    [
+        ("validation_failed", "contract field is invalid"),
+        ("timed_out", "execution exceeded bounded timeout"),
+        ("resource_limited", "memory ceiling reached"),
+    ],
+)
+def test_constraint_failures_are_auditable_but_ineligible_for_feedback(tmp_path, status, constraint_reason):
+    _repository, service = _service(tmp_path, FakeGovernedBacktest(terminal_status=status, constraint_reason=constraint_reason))
+    specification = _specification(service)
+
+    run = service.run_specification(specification_id=specification["id"])
+
+    assert run["status"] == status
+    assert run["constraint_reason"] == constraint_reason
+    assert run["diagnostic"] == {"summary": constraint_reason, "raw_output": None}
+    with pytest.raises(ValueError, match="completed|eligible"):
+        service.record_feedback(
+            run_id=run["id"],
+            conclusion="refuted",
+            notes="失败是运行约束，不构成研究结论。",
+        )
+    assert service.list_feedback(run_id=run["id"]) == []
+
+
+def test_completed_run_accepts_exactly_one_append_only_structured_feedback(tmp_path):
+    repository, service = _service(tmp_path)
+    run = service.run_specification(specification_id=_specification(service)["id"])
+
+    feedback = service.record_feedback(
+        run_id=run["id"],
+        conclusion="needs_replication",
+        notes="样本外收益达标但需要独立窗口复现。",
+    )
+
+    assert feedback["run_id"] == run["id"]
+    assert feedback["conclusion"] == "needs_replication"
+    assert feedback["metrics"] == {"sharpe": 1.2, "out_of_sample_return": 0.08}
+    assert feedback["artifacts"] == [{"reference": "research_artifacts/run-1/metrics.json", "checksum": "a" * 64}]
+    with pytest.raises(ValueError, match="already|one feedback"):
+        service.record_feedback(run_id=run["id"], conclusion="supported", notes="不得覆盖已有结论")
+    with sqlite3.connect(repository.database_path) as connection:
+        with pytest.raises(sqlite3.DatabaseError, match="immutable"):
+            connection.execute("DELETE FROM advanced_experiment_feedback WHERE id = ?", (feedback["id"],))
+
+
+def test_retry_appends_a_new_run_and_configuration_change_appends_a_new_specification_version(tmp_path):
+    _repository, service = _service(tmp_path, FakeGovernedBacktest(terminal_status="timed_out", constraint_reason="timeout"))
+    original = _specification(service)
+    failed_run = service.run_specification(specification_id=original["id"])
+
+    retry = service.retry_run(run_id=failed_run["id"])
+    changed = service.retry_run(
+        run_id=failed_run["id"],
+        specification_changes={"data_scope": {"market": "CN-A", "start": "2023-01-01", "end": "2025-12-31"}},
+    )
+
+    assert retry["id"] != failed_run["id"]
+    assert retry["specification_id"] == original["id"]
+    assert changed["id"] != failed_run["id"]
+    assert changed["specification_id"] != original["id"]
+    changed_specification = service.get_specification(changed["specification_id"])
+    assert changed_specification["version"] == 2
+    assert changed_specification["supersedes_specification_id"] == original["id"]
+    assert service.get_run(failed_run["id"])["status"] == "timed_out"
