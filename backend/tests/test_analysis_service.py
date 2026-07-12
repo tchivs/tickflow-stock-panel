@@ -54,12 +54,13 @@ async def test_analysis_service_returns_existing_active_run_for_the_same_subject
     repository = _repository(tmp_path)
     service = AnalysisService(repository=repository, evidence_preparer=None, graph=None)
 
-    first = await service.start_run(subject_kind="stock", subject_key="600519.SH", focus="earnings")
+    first = repository.acquire_run(
+        run_id="active-run", subject_kind="stock", subject_key="600519.SH", focus="earnings"
+    )
     second = await service.start_run(subject_kind="stock", subject_key="600519.SH", focus="earnings")
 
     assert first["id"] == second["id"]
-    assert first["status"] == "failed"
-    assert second["status"] == "failed"
+    assert second["status"] == "queued"
 
 
 @pytest.mark.parametrize("missing", ["graph", "preparer", "loader"])

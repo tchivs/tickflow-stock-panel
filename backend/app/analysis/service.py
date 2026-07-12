@@ -23,6 +23,7 @@ _PROMPT_VERSION = "analysis-prompt-v1"
 _MAX_SCHEMA_ATTEMPTS = 3
 _SAFE_VALIDATION_FAILURE = "analysis validation failed; manual review required"
 _SAFE_PROVIDER_FAILURE = "analysis provider unavailable; manual review required"
+_SAFE_CONFIGURATION_FAILURE = "analysis execution is unavailable; manual review required"
 
 EvidenceLoader = Callable[[str, str, str], Sequence[Mapping[str, Any]]]
 AuthorizeSubject = Callable[[str, str], None]
@@ -66,7 +67,16 @@ class AnalysisService:
         if run["id"] != requested_run_id:
             return run
         if self._graph is None or self._evidence_preparer is None or self._evidence_loader is None:
-            return run
+            return self._repository.record_run_failure(
+                run["id"],
+                _SAFE_CONFIGURATION_FAILURE,
+                audit_metadata=self._failure_metadata(
+                    snapshot=None,
+                    attempts=0,
+                    elapsed=0,
+                    category="configuration",
+                ),
+            )
 
         self._repository.mark_run_running(run["id"])
         started = monotonic()

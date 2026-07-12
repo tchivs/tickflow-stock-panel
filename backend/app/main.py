@@ -66,6 +66,7 @@ async def lifespan(app: FastAPI):
     app.state.operational = operational
     from app.analysis.api import SubjectScope
     from app.analysis.evidence import EvidencePreparationService
+    from app.analysis.evidence_loader import GovernedEvidenceLoader
     from app.analysis.graph import build_analysis_graph
     from app.analysis.lifecycle import LifecycleRuleService
     from app.analysis.repository import AnalysisRepository
@@ -87,6 +88,10 @@ async def lifespan(app: FastAPI):
         repository=analysis_repository,
         evidence_preparer=EvidencePreparationService(),
         graph=app.state.analysis_graph,
+        evidence_loader=GovernedEvidenceLoader(
+            repository=repo,
+            operational_repository=operational,
+        ),
         lifecycle_rule_service=app.state.lifecycle_rule_service,
     )
 
