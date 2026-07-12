@@ -46,6 +46,14 @@ class FeedbackRequest(BaseModel):
     notes: str = Field(min_length=1, max_length=4_000)
 
 
+class SessionBoundJobStartRequest(BaseModel):
+    """The browser selects only an allowlisted task type for an existing object."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    task_type: Literal["research_draft", "experiment", "strategy_evaluation"]
+
+
 @dataclass(frozen=True)
 class AdvancedSubjectScope:
     """Immutable server-derived subject allowlist for advanced job projections."""
@@ -187,6 +195,15 @@ def list_viewpoint_versions(viewpoint_id: str, request: Request) -> dict[str, ob
     return {"versions": [projections.viewpoint(record) for record in records if isinstance(record, dict)]}
 
 
+@router.get("/viewpoints")
+def list_viewpoints(instrument: str, request: Request) -> dict[str, object]:
+    """List immutable research facts only after server-side object authorization."""
+
+    _require_instrument(request, instrument)
+    records = _service(request, "viewpoint_service").list_for_instrument(instrument)
+    return {"viewpoints": [projections.viewpoint(record) for record in records if isinstance(record, dict)]}
+
+
 @router.get("/viewpoints/calibration/{source_profile}")
 def viewpoint_calibration(source_profile: str, request: Request) -> dict[str, object]:
     _principal(request)
@@ -246,17 +263,20 @@ def get_job(job_id: str, request: Request) -> dict[str, object]:
     return {"job": projections.job(_owned_job(request, job_id))}
 
 
-@router.post("/jobs")
-def create_job(payload: dict[str, object], request: Request) -> dict[str, object]:
+@router.post("/subjects/{instrument}/jobs")
+def create_session_bound_job(instrument: str, payload: SessionBoundJobStartRequest, request: Request) -> dict[str, object]:
+    """Derive all authorization, scope, market, and idempotency data on the server."""
+
     scope = _scope(request)
-    instrument = payload.get("instrument")
-    if not isinstance(instrument, str) or not scope.allows("instrument", instrument):
+    if not scope.allows("instrument", instrument):
         raise HTTPException(status_code=404, detail="advanced job not found")
     service = getattr(request.app.state, "advanced_job_service", None)
     if service is None:
         raise HTTPException(status_code=503, detail="advanced authorization is unavailable")
     try:
-        return {"job": projections.job(service.create_job(principal=_principal(request), request=payload))}
+        return {"job": projections.job(service.create_session_bound_job(
+            principal=_principal(request), task_type=payload.task_type, instrument=instrument
+        ))}
     except ValueError as error:
         raise HTTPException(status_code=409, detail="advanced job rejected") from error
 

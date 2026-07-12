@@ -45,6 +45,10 @@ class FakeAdvancedService:
         self.create_calls.append({"principal": principal, "request": request})
         return self.jobs["owned-job"]
 
+    def create_session_bound_job(self, *, principal: str, task_type: str, instrument: str):
+        self.create_calls.append({"principal": principal, "task_type": task_type, "instrument": instrument})
+        return self.jobs["owned-job"]
+
     def resume(self, *, principal: str, job_id: str, decision: str):
         self.resume_calls.append({"principal": principal, "job_id": job_id, "decision": decision})
         return self.jobs[job_id]
@@ -133,14 +137,8 @@ def test_rejection_responses_and_audit_projections_are_safe_and_never_attach_sse
     client, service = _client()
 
     rejected = client.post(
-        "/api/advanced/jobs",
-        json={
-            "authorization_token": "opaque-token",
-            "task_type": "research_draft",
-            "market": "CN-A",
-            "instrument": "000001.SZ",
-            "idempotency_key": "denied-request",
-        },
+        "/api/advanced/subjects/000001.SZ/jobs",
+        json={"task_type": "research_draft"},
     )
     audit = client.get("/api/advanced/audits/audit-allowed")
 
@@ -156,6 +154,22 @@ def test_rejection_responses_and_audit_projections_are_safe_and_never_attach_sse
     }
     for forbidden in ("token", "policy", "provider", "source", "path", "diagnostic"):
         assert forbidden not in audit.text.lower()
+
+
+def test_session_bound_job_start_accepts_only_object_identifier_and_task_type():
+    client, service = _client()
+
+    created = client.post("/api/advanced/subjects/600519.SH/jobs", json={"task_type": "research_draft"})
+    injected_scope = client.post(
+        "/api/advanced/subjects/600519.SH/jobs",
+        json={"task_type": "research_draft", "authorization_token": "browser-secret", "market": "CN-A"},
+    )
+
+    assert created.status_code == 200
+    assert injected_scope.status_code == 422
+    assert service.create_calls == [{
+        "principal": "server-principal", "task_type": "research_draft", "instrument": "600519.SH"
+    }]
 
 
 def test_advanced_progress_is_committed_allowlisted_and_filtered_before_subscriber_queueing():

@@ -61,7 +61,7 @@ class AdvancedAuthorizationService:
         policy = self._policy()
         if not principal or expires_in <= timedelta(0):
             raise ValueError("authorization issuance is invalid")
-        if not task_types <= policy.task_types or not markets <= policy.markets or not instruments <= policy.instruments:
+        if not task_types <= policy.task_types or not markets <= policy.markets or not self._instruments_allowed(instruments, policy):
             raise ValueError("authorization scope is not permitted")
         token = secrets.token_urlsafe(32)
         policy_record = self._persist_policy(policy)
@@ -129,7 +129,7 @@ class AdvancedAuthorizationService:
         policy = self._policy()
         if task_type not in policy.task_types:
             raise ValueError("task type denied")
-        if market not in policy.markets or instrument not in policy.instruments:
+        if market not in policy.markets or not self._instruments_allowed({instrument}, policy):
             raise ValueError("scope denied")
         return record
 
@@ -155,3 +155,8 @@ class AdvancedAuthorizationService:
     @staticmethod
     def _token_hash(token: str) -> str:
         return sha256(token.encode()).hexdigest()
+
+    @staticmethod
+    def _instruments_allowed(instruments: set[str], policy: OperatorPolicy) -> bool:
+        """Allow deployment policy to delegate instrument selection to server scope."""
+        return "*" in policy.instruments or instruments <= policy.instruments

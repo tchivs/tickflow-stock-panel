@@ -166,7 +166,10 @@ async def lifespan(app: FastAPI):
             revision=advanced_policy.version,
             task_types=frozenset(advanced_policy.agent_allowlist),
             markets=frozenset({"CN-A"}),
-            instruments=frozenset(),
+            # The request-scoped resolver is the authority for individual instruments.
+            # This wildcard is never exposed to clients and lets that resolver authorize
+            # the server-created short-lived record without a browser token.
+            instruments=frozenset({"*"}),
             quota_per_window=max(advanced_policy.rate_limits.values()),
         )
 

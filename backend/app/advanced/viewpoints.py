@@ -61,6 +61,9 @@ class ViewpointService:
     def list_versions(self, viewpoint_id: str) -> list[dict[str, Any]]:
         return [self._projection(row, evidence=row.pop("evidence")) for row in self.repository.viewpoint_versions(viewpoint_id)]
 
+    def list_for_instrument(self, instrument: str) -> list[dict[str, Any]]:
+        return [self._projection(row, evidence=row.pop("evidence")) for row in self.repository.viewpoint_versions_for_instrument(instrument)]
+
     def evaluate_viewpoint(self, *, viewpoint_version_id: str, market_snapshot: GovernedMarketSnapshot) -> dict[str, Any]:
         version = self.repository.viewpoint_version(viewpoint_version_id)
         if version is None:

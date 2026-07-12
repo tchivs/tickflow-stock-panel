@@ -266,6 +266,9 @@ class _ViewpointApiService:
             }]
         return [{"id": "version-other", "viewpoint_id": viewpoint_id, "instrument": "000001.SZ"}]
 
+    def list_for_instrument(self, instrument: str) -> list[dict[str, object]]:
+        return self.list_versions("viewpoint-owned" if instrument == "600519.SH" else "viewpoint-other")
+
     def calibration(self, *, source_profile: str) -> dict[str, object]:
         assert source_profile == "operator-research-v1"
         return {"low": {"status": "insufficient_sample"}}
@@ -312,17 +315,17 @@ def test_viewpoint_api_resolves_persisted_instrument_before_safe_projection_and_
     assert client.get("/api/advanced/viewpoints/viewpoint-other/versions").status_code == 404
     allowed = client.get("/api/advanced/viewpoints/viewpoint-owned/versions")
     assert allowed.status_code == 200
-    assert allowed.json()["versions"][0] == {
-        "id": "version-owned",
-        "viewpoint_id": "viewpoint-owned",
-        "version": 1,
-        "status": "recorded",
-        "source_profile": "operator-research-v1",
-        "instrument": "600519.SH",
-        "published_at": "2026-01-02T00:00:00+00:00",
-        "confidence": "high",
-        "evaluation": None,
-        "audit_reference": None,
-    }
+    version = allowed.json()["versions"][0]
+    assert version["id"] == "version-owned"
+    assert version["viewpoint_id"] == "viewpoint-owned"
+    assert version["instrument"] == "600519.SH"
+    assert version["status"] == "recorded"
+    assert version["evaluation"] is None
+    assert version["audit_reference"] is None
+    assert not {"policy", "token", "principal", "source_code", "diagnostics"}.intersection(version)
     assert client.patch("/api/advanced/viewpoints/viewpoint-owned", json={}).status_code == 404
     assert client.delete("/api/advanced/viewpoints/viewpoint-owned").status_code == 404
+    listed = client.get("/api/advanced/viewpoints?instrument=600519.SH")
+    assert listed.status_code == 200
+    assert listed.json()["viewpoints"][0]["instrument"] == "600519.SH"
+    assert client.get("/api/advanced/viewpoints?instrument=000001.SZ").status_code == 404

@@ -341,6 +341,72 @@ export interface AnalysisOutcomeSummary {
   outcomes?: AnalysisObservationOutcome[]
 }
 
+// ===== Controlled advanced research =====
+// These DTOs contain only server-projected facts. The browser identifies an
+// existing object and allowed task type; it never sends scope or authorization.
+export type AdvancedTaskType = 'research_draft' | 'experiment' | 'strategy_evaluation'
+export type AdvancedJobStage = 'authorized' | 'frozen' | 'drafted' | 'gates_complete' | 'awaiting_review' | 'recorded' | 'rejected'
+export type AdvancedTerminalStatus = 'unevaluable' | 'insufficient_sample' | 'rejected' | 'constraint_failed' | 'awaiting_review' | 'recorded'
+
+export interface AdvancedViewpointEvaluation {
+  status: 'evaluated' | 'unevaluable' | 'insufficient_sample'
+  reason: string | null
+  window_days: 20 | 60 | 120 | null
+  benchmark: string | null
+  relative_return: number | null
+}
+
+export interface AdvancedViewpoint {
+  id: string
+  viewpoint_id: string
+  version: number
+  status: AdvancedTerminalStatus
+  source_profile: string
+  instrument: string
+  published_at: string
+  direction: 'bullish' | 'bearish' | 'neutral'
+  rating: 'overweight' | 'neutral' | 'underweight'
+  conclusion: string
+  target_range: number[]
+  horizon_days: number | null
+  confidence: 'low' | 'medium' | 'high'
+  revision_kind: 'initial' | 'non_material_revision' | 'material_stance_change' | 'correction'
+  correction_reason: string | null
+  evaluation: AdvancedViewpointEvaluation | null
+  audit_reference: string | null
+}
+
+export interface AdvancedCalibrationBucket {
+  status: 'calibrated' | 'insufficient_sample'
+  sample_count: number
+  hit_rate: number | null
+  mean_relative_return: number | null
+  coverage_start: string | null
+  coverage_end: string | null
+}
+
+export interface AdvancedCalibration {
+  low: AdvancedCalibrationBucket
+  medium: AdvancedCalibrationBucket
+  high: AdvancedCalibrationBucket
+  excluded_unevaluable: number
+}
+
+export interface AdvancedJob {
+  id: string
+  subject: AnalysisRequestSubject
+  status: AdvancedJobStage
+  stage: AdvancedJobStage
+  stage_recorded_at: string
+  audit_reference: string | null
+}
+
+export interface AdvancedAudit {
+  reference: string
+  decision: 'authorized' | 'rejected' | 'recorded'
+  reason: string
+}
+
 // ===== Kline =====
 export interface MinuteKlineRow {
   datetime: string
@@ -2437,6 +2503,23 @@ export const api = {
     request<{ review: { id: string; status: 'rejected' } }>(`/api/analysis/reviews/${encodeURIComponent(reviewId)}/reject`, {
       method: 'POST',
     }),
+
+  // ===== Controlled advanced research =====
+  advancedViewpoints: (subject: AnalysisRequestSubject) =>
+    request<{ viewpoints: AdvancedViewpoint[] }>(`/api/advanced/viewpoints?instrument=${encodeURIComponent(subject.key)}`),
+  advancedViewpointVersions: (viewpointId: string) =>
+    request<{ versions: AdvancedViewpoint[] }>(`/api/advanced/viewpoints/${encodeURIComponent(viewpointId)}/versions`),
+  advancedCalibration: (sourceProfile: string) =>
+    request<{ calibration: AdvancedCalibration }>(`/api/advanced/viewpoints/calibration/${encodeURIComponent(sourceProfile)}`),
+  advancedStartJob: (subject: AnalysisRequestSubject, taskType: AdvancedTaskType) =>
+    request<{ job: AdvancedJob }>(`/api/advanced/subjects/${encodeURIComponent(subject.key)}/jobs`, {
+      method: 'POST',
+      body: JSON.stringify({ task_type: taskType }),
+    }),
+  advancedJob: (jobId: string) =>
+    request<{ job: AdvancedJob }>(`/api/advanced/jobs/${encodeURIComponent(jobId)}`),
+  advancedAudit: (auditReference: string) =>
+    request<{ audit: AdvancedAudit }>(`/api/advanced/audits/${encodeURIComponent(auditReference)}`),
 
   // ===== Decision playbook =====
   decisionGenerate: (payload: DecisionRunInput) =>

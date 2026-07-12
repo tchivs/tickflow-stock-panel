@@ -5,7 +5,38 @@ import { getQueryConfig } from './useQueryConfig'
 import { toast } from '@/components/Toast'
 import { pushAlertToasts } from '@/components/AlertToast'
 import { feedReviewEvent } from './reviewStore'
-import type { StrategyAlertEvent } from './api'
+import type { AdvancedJob, AdvancedJobStage, StrategyAlertEvent } from './api'
+
+export interface AdvancedProgressEvent {
+  job_id: string
+  subject_kind: 'instrument' | 'account'
+  subject_key: string
+  stage: AdvancedJobStage
+  occurred_at: string
+  audit_reference: string
+}
+
+const ADVANCED_PROGRESS_KEYS = new Set(['job_id', 'subject_kind', 'subject_key', 'stage', 'occurred_at', 'audit_reference'])
+const ADVANCED_JOB_STAGES = new Set<AdvancedJobStage>(['authorized', 'frozen', 'drafted', 'gates_complete', 'awaiting_review', 'recorded', 'rejected'])
+const SAFE_REFERENCE = /^[A-Za-z0-9._:-]{1,128}$/
+const SAFE_INSTRUMENT = /^[0-9A-Z.-]{1,32}$/
+
+/** Reject any stream payload that could carry browser scope, policy, or uncommitted data. */
+export function parseAdvancedProgress(raw: string): AdvancedProgressEvent | null {
+  try {
+    const value: unknown = JSON.parse(raw)
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+    const event = value as Record<string, unknown>
+    if (Object.keys(event).length !== ADVANCED_PROGRESS_KEYS.size || Object.keys(event).some(key => !ADVANCED_PROGRESS_KEYS.has(key))) return null
+    if (!SAFE_REFERENCE.test(String(event.job_id)) || !SAFE_REFERENCE.test(String(event.audit_reference))) return null
+    if (event.subject_kind !== 'instrument' && event.subject_kind !== 'account') return null
+    if (!SAFE_INSTRUMENT.test(String(event.subject_key)) || !ADVANCED_JOB_STAGES.has(event.stage as AdvancedJobStage)) return null
+    if (typeof event.occurred_at !== 'string' || Number.isNaN(Date.parse(event.occurred_at))) return null
+    return event as unknown as AdvancedProgressEvent
+  } catch {
+    return null
+  }
+}
 
 // ===== 全局 SSE 连接状态 (模块级 store, 仿 AlertToast.tsx 模式) =====
 // 实时行情 SSE 断开时 UI 无感知 → 会漏掉策略告警。这里暴露连接状态,
@@ -126,6 +157,25 @@ export function useQuoteStream(
       })
     }
 
+    const updateAdvancedProgress = (event: AdvancedProgressEvent) => {
+      const subjectKind = event.subject_kind === 'instrument' ? 'stock' : 'portfolio'
+      const subjectKey = event.subject_key
+      const jobKey = QK.advancedJob(subjectKind, subjectKey, event.job_id)
+      qc.setQueryData<{ job: AdvancedJob }>(jobKey, previous => ({
+        job: {
+          id: event.job_id,
+          subject: { kind: event.subject_kind, key: event.subject_key },
+          ...previous?.job,
+          stage: event.stage,
+          status: event.stage,
+          stage_recorded_at: event.occurred_at,
+          audit_reference: event.audit_reference,
+        },
+      }))
+      qc.invalidateQueries({ queryKey: QK.advancedAudit(subjectKind, subjectKey, event.audit_reference) })
+      qc.invalidateQueries({ queryKey: QK.advancedViewpoints(subjectKind, subjectKey) })
+    }
+
     const connect = () => {
       _setStatus(failCount > 0 ? 'reconnecting' : _streamStatus)
       const es = new EventSource('/api/intraday/stream')
@@ -185,6 +235,11 @@ export function useQuoteStream(
         } catch {
           // Ignore malformed stream payloads without disrupting the shared connection.
         }
+      })
+
+      es.addEventListener('advanced_progress', (e: MessageEvent) => {
+        const event = parseAdvancedProgress(e.data)
+        if (event) updateAdvancedProgress(event)
       })
 
 

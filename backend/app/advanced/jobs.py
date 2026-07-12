@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Protocol
 from uuid import uuid4
 
@@ -76,6 +76,26 @@ class AdvancedJobService:
                 decision="rejected", reason=reason, authorization_id=authorization_id
             )
             raise ValueError(reason.replace("_", " ")) from error
+
+    def create_session_bound_job(self, *, principal: str, task_type: str, instrument: str) -> dict[str, object]:
+        """Start a task from server-held session authority, never a browser token."""
+        authorization = self._authorization.issue(
+            principal=principal,
+            task_types={task_type},
+            markets={"CN-A"},
+            instruments={instrument},
+            expires_in=timedelta(minutes=5),
+        )
+        return self.create_job(
+            principal=principal,
+            request={
+                "authorization_token": authorization["token"],
+                "task_type": task_type,
+                "market": "CN-A",
+                "instrument": instrument,
+                "idempotency_key": str(uuid4()),
+            },
+        )
 
     def run(self, *, job_id: str) -> dict[str, object]:
         job = self._repository.get_job(job_id)

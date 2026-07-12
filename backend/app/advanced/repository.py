@@ -349,6 +349,17 @@ class AdvancedRepository:
                 result.append(value)
         return result
 
+    def viewpoint_versions_for_instrument(self, instrument: str) -> list[dict[str, Any]]:
+        with self._connection() as connection:
+            viewpoint_ids = connection.execute(
+                "SELECT id FROM advanced_viewpoints WHERE instrument = ? ORDER BY created_at DESC", (instrument,)
+            ).fetchall()
+        return [
+            version
+            for row in viewpoint_ids
+            for version in self.viewpoint_versions(str(row["id"]))
+        ]
+
     def viewpoint_version(self, version_id: str) -> dict[str, Any] | None:
         with self._connection() as connection:
             row = connection.execute(
