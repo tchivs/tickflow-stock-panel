@@ -226,3 +226,60 @@ def test_authorized_main_host_job_runs_fixed_workflow_and_persists_audit(tmp_pat
         audit = client.get(f"/api/advanced/audits/{job['audit_reference']}")
         assert audit.status_code == 200
         assert audit.json()["audit"]["decision"] in {"authorized", "recorded"}
+
+
+def test_main_host_publishes_committed_scoped_advanced_progress_only(tmp_path, monkeypatch):
+    from app.advanced import api as advanced_api
+    from app.config import settings
+    from app.services import auth as auth_service
+    from tests.test_analysis_host_integration import _write_phase1_fixture
+
+    fixture_dir = tmp_path / "phase1-fixtures"
+    data_dir = tmp_path / "governed-data"
+    _write_phase1_fixture(fixture_dir)
+    monkeypatch.setenv("PHASE1_FIXTURE_MODE", "1")
+    monkeypatch.setenv("PHASE1_FIXTURE_DIR", str(fixture_dir))
+    monkeypatch.setattr(settings, "data_dir", data_dir)
+    monkeypatch.setattr(settings, "auth_password", "host-test-password")
+    monkeypatch.setattr(auth_service, "_configured_cache", None)
+    auth_service._sessions.clear()
+
+    from app.main import app
+
+    with TestClient(app) as client:
+        assert client.post("/api/auth/login", json={"password": "host-test-password"}).status_code == 200
+        allowed_scope = advanced_api.AdvancedSubjectScope(frozenset({("instrument", "600519.SH")}))
+        denied_scope = advanced_api.AdvancedSubjectScope(frozenset({("instrument", "000001.SZ")}))
+        app.state.resolve_advanced_subject_scope = lambda _request: allowed_scope
+        allowed = app.state.quote_service.subscribe(advanced_scope=allowed_scope)
+        denied = app.state.quote_service.subscribe(advanced_scope=denied_scope)
+        try:
+            started = client.post(
+                "/api/advanced/subjects/600519.SH/jobs", json={"task_type": "research_draft"}
+            )
+            assert started.status_code == 200
+            job = started.json()["job"]
+            events = allowed.pop()["advanced_progress"]
+            assert events and events[-1]["stage"] == job["stage"]
+            assert events[-1]["audit_reference"] == job["audit_reference"]
+            assert denied.pop()["advanced_progress"] == []
+            persisted = client.get(f"/api/advanced/jobs/{job['id']}")
+            audit = client.get(f"/api/advanced/audits/{job['audit_reference']}")
+            assert persisted.status_code == audit.status_code == 200
+            assert persisted.json()["job"]["stage_recorded_at"] == events[-1]["occurred_at"]
+            assert all(set(event) == {
+                "job_id", "subject_kind", "subject_key", "stage", "label", "occurred_at", "audit_reference"
+            } for event in events)
+            for event in events:
+                assert "advanced job" in event["label"].lower()
+
+            app.state.resolve_advanced_subject_scope = lambda _request: denied_scope
+            rejected = client.post(
+                "/api/advanced/subjects/600519.SH/jobs", json={"task_type": "research_draft"}
+            )
+            assert rejected.status_code == 404
+            assert allowed.pop()["advanced_progress"] == []
+            assert denied.pop()["advanced_progress"] == []
+        finally:
+            app.state.quote_service.unsubscribe(allowed)
+            app.state.quote_service.unsubscribe(denied)

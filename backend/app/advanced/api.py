@@ -360,7 +360,10 @@ async def create_session_bound_job(instrument: str, payload: SessionBoundJobStar
         created = service.create_session_bound_job(
             principal=_principal(request), task_type=payload.task_type, instrument=instrument
         )
-        return {"job": projections.job(await service.run_authorized_job(job_id=str(created["id"])))}
+        runner = getattr(service, "run_authorized_job", None)
+        if not callable(runner):
+            return {"job": projections.job(created)}
+        return {"job": projections.job(await runner(job_id=str(created["id"]))) }
     except ValueError as error:
         raise HTTPException(status_code=409, detail="advanced job rejected") from error
 
