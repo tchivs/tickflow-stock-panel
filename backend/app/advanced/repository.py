@@ -247,13 +247,13 @@ class AdvancedRepository:
 
     def append_viewpoint_evaluation(
         self, *, viewpoint_version_id: str, status: str, reason: str | None, relative_return: float | None,
-        coverage_start: str | None, coverage_end: str | None,
+        coverage_start: str | None, coverage_end: str | None, governed_input_fingerprint: str | None,
     ) -> dict[str, Any]:
         identifier = str(uuid4())
         with self._connection() as connection, connection:
             connection.execute(
-                "INSERT INTO advanced_viewpoint_evaluations (id, viewpoint_version_id, status, reason, relative_return, coverage_start, coverage_end, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (identifier, viewpoint_version_id, status, reason, relative_return, coverage_start, coverage_end, self.now()),
+                "INSERT INTO advanced_viewpoint_evaluations (id, viewpoint_version_id, status, reason, relative_return, coverage_start, coverage_end, governed_input_fingerprint, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (identifier, viewpoint_version_id, status, reason, relative_return, coverage_start, coverage_end, governed_input_fingerprint, self.now()),
             )
             row = connection.execute("SELECT * FROM advanced_viewpoint_evaluations WHERE id = ?", (identifier,)).fetchone()
         assert row is not None

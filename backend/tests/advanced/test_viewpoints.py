@@ -1,8 +1,8 @@
 """RED contracts for immutable attributed viewpoints and frozen calibration."""
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
 import sqlite3
+from datetime import UTC, date, datetime
 
 import pytest
 
@@ -38,7 +38,7 @@ def _create(service, **overrides):
         "market_scope": "CN-A",
         "asset_type": "stock",
         "instrument": "600519.SH",
-        "published_at": datetime(2026, 1, 2, tzinfo=timezone.utc),
+        "published_at": datetime(2026, 1, 2, tzinfo=UTC),
         "direction": "bullish",
         "conclusion": "盈利增长支持中期研究观点",
         "rating": "overweight",
@@ -141,7 +141,7 @@ def test_server_policy_rejects_unsupported_profile_scope_and_benchmark_overrides
 
     with pytest.raises(ValueError, match="benchmark"):
         _create(service, benchmark=benchmark)
-    with pytest.raises(ValueError, match="source profile|scope"):
+    with pytest.raises(ValueError, match=r"source profile|scope"):
         _create(service, source_profile="browser-controlled", market_scope="US")
 
 
@@ -165,6 +165,13 @@ def test_evaluation_uses_the_frozen_trading_day_plan_not_a_current_price(tmp_pat
         "relative_return": 0.05,
         "as_of": date(2026, 1, 2),
     }
+    with _repository._connection() as connection:
+        evaluation = connection.execute(
+            "SELECT governed_input_fingerprint FROM advanced_viewpoint_evaluations WHERE viewpoint_version_id = ? AND status = 'evaluated'",
+            (viewpoint["id"],),
+        ).fetchone()
+    assert evaluation is not None
+    assert len(evaluation["governed_input_fingerprint"]) == 64
 
 
 @pytest.mark.parametrize(
@@ -198,7 +205,7 @@ def test_calibration_projects_low_medium_high_buckets_with_coverage_and_insuffic
         ("high", 0.03, date(2026, 4, 2)),
     ]
     for confidence, relative_return, published_at in outcomes:
-        viewpoint = _create(service, confidence=confidence, published_at=datetime.combine(published_at, datetime.min.time(), tzinfo=timezone.utc))
+        viewpoint = _create(service, confidence=confidence, published_at=datetime.combine(published_at, datetime.min.time(), tzinfo=UTC))
         service.record_evaluation(
             viewpoint_version_id=viewpoint["id"],
             status="evaluated",

@@ -1,7 +1,9 @@
 """Immutable attributed viewpoint lineage and frozen outcome calculations."""
 from __future__ import annotations
 
+import json
 from datetime import date
+from hashlib import sha256
 from typing import Any, Protocol
 from uuid import uuid4
 
@@ -68,7 +70,10 @@ class ViewpointService:
         benchmark_price = market_snapshot.benchmark_at_window(version["benchmark"], window)
         if price is None or benchmark_price is None:
             reason = "missing_price" if price is None else "missing_benchmark"
-            self.record_evaluation(viewpoint_version_id=viewpoint_version_id, status="unevaluable", reason=reason)
+            self.record_evaluation(
+                viewpoint_version_id=viewpoint_version_id, status="unevaluable", reason=reason,
+                governed_input_fingerprint=self._input_fingerprint(version, price, benchmark_price),
+            )
             return {"status": "unevaluable", "reason": reason, "relative_return": None}
         instrument_return = round(price / 100.0 - 1.0, 10)
         benchmark_return = round(benchmark_price / 100.0 - 1.0, 10)
@@ -77,13 +82,15 @@ class ViewpointService:
         self.record_evaluation(
             viewpoint_version_id=viewpoint_version_id, status="evaluated", relative_return=relative_return,
             coverage_start=as_of, coverage_end=as_of,
+            governed_input_fingerprint=self._input_fingerprint(version, price, benchmark_price),
         )
         return {"status": "evaluated", "window_days": window, "benchmark": version["benchmark"],
                 "instrument_return": instrument_return, "benchmark_return": benchmark_return,
                 "relative_return": relative_return, "as_of": as_of}
 
     def record_evaluation(self, *, viewpoint_version_id: str, status: str, relative_return: float | None = None,
-                          coverage_start: date | None = None, coverage_end: date | None = None, reason: str | None = None) -> dict[str, Any]:
+                          coverage_start: date | None = None, coverage_end: date | None = None, reason: str | None = None,
+                          governed_input_fingerprint: str | None = None) -> dict[str, Any]:
         if status == "evaluated" and relative_return is None:
             raise ValueError("evaluated outcome requires relative return")
         if status == "unevaluable" and not reason:
@@ -92,6 +99,7 @@ class ViewpointService:
             viewpoint_version_id=viewpoint_version_id, status=status, reason=reason, relative_return=relative_return,
             coverage_start=coverage_start.isoformat() if coverage_start else None,
             coverage_end=coverage_end.isoformat() if coverage_end else None,
+            governed_input_fingerprint=governed_input_fingerprint,
         )
 
     def calibration(self, *, source_profile: str, minimum_sample_count: int = 2) -> dict[str, Any]:
@@ -173,3 +181,8 @@ class ViewpointService:
             {"id": item.id, **({"published_at": item.published_at.isoformat()} if item.published_at else {})}
             for item in items
         ]
+
+    @staticmethod
+    def _input_fingerprint(version: dict[str, Any], price: float | None, benchmark_price: float | None) -> str:
+        payload = {"instrument": version["instrument"], "benchmark": version["benchmark"], "window_days": version["evaluation_window_days"], "price": price, "benchmark_price": benchmark_price}
+        return sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()

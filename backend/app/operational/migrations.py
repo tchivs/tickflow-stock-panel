@@ -445,6 +445,7 @@ MIGRATIONS: tuple[str, ...] = (
         relative_return REAL,
         coverage_start TEXT,
         coverage_end TEXT,
+        governed_input_fingerprint TEXT,
         created_at TEXT NOT NULL
     );
     CREATE TABLE advanced_experiment_specs (
@@ -622,6 +623,31 @@ MIGRATIONS: tuple[str, ...] = (
     CREATE TRIGGER advanced_policy_revisions_no_delete BEFORE DELETE ON advanced_policy_revisions BEGIN SELECT RAISE(ABORT, 'advanced facts are immutable'); END;
     CREATE TRIGGER advanced_rate_windows_no_update BEFORE UPDATE ON advanced_rate_windows BEGIN SELECT RAISE(ABORT, 'advanced facts are immutable'); END;
     CREATE TRIGGER advanced_rate_windows_no_delete BEFORE DELETE ON advanced_rate_windows BEGIN SELECT RAISE(ABORT, 'advanced facts are immutable'); END;
+    """,
+    """
+    -- Earlier advanced databases used one evaluation row per version. Rebuild the
+    -- append-only ledger so a frozen plan and its eventual outcome remain distinct facts.
+    DROP TRIGGER IF EXISTS advanced_viewpoint_evaluations_no_update;
+    DROP TRIGGER IF EXISTS advanced_viewpoint_evaluations_no_delete;
+    ALTER TABLE advanced_viewpoint_evaluations RENAME TO advanced_viewpoint_evaluations_legacy;
+    CREATE TABLE advanced_viewpoint_evaluations (
+        id TEXT PRIMARY KEY,
+        viewpoint_version_id TEXT NOT NULL REFERENCES advanced_viewpoint_versions(id) ON DELETE RESTRICT,
+        status TEXT NOT NULL CHECK (status IN ('evaluated', 'unevaluable')),
+        reason TEXT,
+        relative_return REAL,
+        coverage_start TEXT,
+        coverage_end TEXT,
+        governed_input_fingerprint TEXT,
+        created_at TEXT NOT NULL
+    );
+    INSERT INTO advanced_viewpoint_evaluations
+        (id, viewpoint_version_id, status, reason, relative_return, coverage_start, coverage_end, governed_input_fingerprint, created_at)
+    SELECT id, viewpoint_version_id, status, reason, relative_return, coverage_start, coverage_end, NULL, created_at
+    FROM advanced_viewpoint_evaluations_legacy;
+    DROP TABLE advanced_viewpoint_evaluations_legacy;
+    CREATE TRIGGER advanced_viewpoint_evaluations_no_update BEFORE UPDATE ON advanced_viewpoint_evaluations BEGIN SELECT RAISE(ABORT, 'advanced facts are immutable'); END;
+    CREATE TRIGGER advanced_viewpoint_evaluations_no_delete BEFORE DELETE ON advanced_viewpoint_evaluations BEGIN SELECT RAISE(ABORT, 'advanced facts are immutable'); END;
     """,
 )
 
