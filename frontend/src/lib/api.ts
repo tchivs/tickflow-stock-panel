@@ -206,7 +206,7 @@ export interface AnalysisReportSummary {
   version: number
   status: 'validated' | 'failed'
   generated_at: string
-  evidence_limitations: string[]
+  evidence_limitations?: string[]
 }
 
 export interface AnalysisPerspective {
