@@ -311,6 +311,146 @@ class AnalysisRepository:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def confirm_lifecycle_review(
+        self,
+        *,
+        review_id: str,
+        reviewer_principal: str,
+        window_days: int,
+        benchmark: str,
+        metric: str,
+    ) -> dict[str, Any]:
+        """Atomically append a confirmed official event and its sole observation plan."""
+        self._require_text(reviewer_principal, "reviewer principal")
+        self._validate_observation_plan(window_days=window_days, benchmark=benchmark, metric=metric)
+        now = _now()
+        event_id = str(uuid4())
+        plan_id = str(uuid4())
+        with self._connection() as connection, connection:
+            review = connection.execute("SELECT * FROM analysis_signal_reviews WHERE id = ?", (review_id,)).fetchone()
+            if review is None:
+                raise ValueError("lifecycle review not found")
+            existing = connection.execute(
+                "SELECT id FROM analysis_signal_events WHERE review_id = ?", (review_id,)
+            ).fetchone()
+            if existing is not None:
+                raise ValueError("lifecycle review is already confirmed and immutable")
+            current = connection.execute(
+                """SELECT next_state FROM analysis_signal_events WHERE signal_id = ?
+                   ORDER BY occurred_at DESC, created_at DESC, id DESC LIMIT 1""",
+                (review["signal_id"],),
+            ).fetchone()
+            current_state = "active" if current is None else str(current["next_state"])
+            if current_state != review["prior_state"]:
+                raise ValueError("lifecycle review no longer matches current state")
+            evidence = json.loads(review["evidence_json"])
+            occurred_at = evidence.get("occurred_at") if isinstance(evidence, dict) else None
+            if not isinstance(occurred_at, str) or not occurred_at:
+                raise RuntimeError("stored lifecycle review lacks occurrence time")
+            connection.execute(
+                """INSERT INTO analysis_signal_events
+                   (id, review_id, signal_id, prior_state, next_state, reviewer_principal, occurred_at, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (event_id, review_id, review["signal_id"], review["prior_state"], review["proposed_state"], reviewer_principal, occurred_at, now),
+            )
+            connection.execute(
+                """INSERT INTO analysis_observation_plans
+                   (id, review_id, event_id, window_days, benchmark, metric, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (plan_id, review_id, event_id, window_days, benchmark, metric, now),
+            )
+            event = connection.execute("SELECT * FROM analysis_signal_events WHERE id = ?", (event_id,)).fetchone()
+            plan = connection.execute("SELECT * FROM analysis_observation_plans WHERE id = ?", (plan_id,)).fetchone()
+        assert event is not None and plan is not None
+        return {"event": dict(event), "plan": dict(plan)}
+
+    def append_lifecycle_rejection(self, *, review_id: str, reviewer_principal: str) -> dict[str, Any]:
+        """Append a rejection audit record without modifying the proposed or official state."""
+        self._require_text(reviewer_principal, "reviewer principal")
+        review = self.get_lifecycle_review(review_id)
+        if review is None:
+            raise ValueError("lifecycle review not found")
+        if self._review_has_event(review_id):
+            raise ValueError("confirmed lifecycle review cannot be rejected")
+        return self.append_lifecycle_proposal(
+            subject_kind=self._signal_subject_kind(review["signal_id"]),
+            subject_key=self._signal_subject_key(review["signal_id"]),
+            prior_state=review["prior_state"],
+            proposed_state="rejected",
+            evidence={
+                "disposition": "rejected",
+                "rejected_review_id": review_id,
+                "reviewer_principal": reviewer_principal,
+                "recorded_at": _now(),
+            },
+        )
+
+    def list_observation_plans(self, review_id: str) -> list[dict[str, Any]]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                "SELECT * FROM analysis_observation_plans WHERE review_id = ? ORDER BY created_at, id", (review_id,)
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def append_observation_outcome(self, *, plan_id: str, outcome: Mapping[str, Any]) -> dict[str, Any]:
+        payload = _payload(outcome, "observation outcome")
+        now = _now()
+        identifier = str(uuid4())
+        with self._connection() as connection, connection:
+            plan = connection.execute("SELECT id FROM analysis_observation_plans WHERE id = ?", (plan_id,)).fetchone()
+            if plan is None:
+                raise ValueError("observation plan not found")
+            connection.execute(
+                """INSERT INTO analysis_observation_outcomes (id, plan_id, observed_at, outcome_json, created_at)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (identifier, plan_id, now, _json(payload, "observation outcome"), now),
+            )
+            row = connection.execute("SELECT * FROM analysis_observation_outcomes WHERE id = ?", (identifier,)).fetchone()
+        assert row is not None
+        value = dict(row)
+        value["outcome"] = json.loads(value.pop("outcome_json"))
+        return value
+
+    def list_observation_outcomes(self, plan_id: str) -> list[dict[str, Any]]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                "SELECT * FROM analysis_observation_outcomes WHERE plan_id = ? ORDER BY observed_at, created_at, id",
+                (plan_id,),
+            ).fetchall()
+        return [{**dict(row), "outcome": json.loads(row["outcome_json"])} for row in rows]
+
+    @staticmethod
+    def replace_observation_plan(*, plan_id: str, window_days: int) -> None:
+        del plan_id, window_days
+        raise ValueError("observation plan is immutable")
+
+    def _review_has_event(self, review_id: str) -> bool:
+        with self._connection() as connection:
+            return connection.execute("SELECT 1 FROM analysis_signal_events WHERE review_id = ?", (review_id,)).fetchone() is not None
+
+    def _signal_subject_kind(self, signal_id: str) -> str:
+        with self._connection() as connection:
+            row = connection.execute("SELECT subject_kind FROM analysis_signals WHERE id = ?", (signal_id,)).fetchone()
+        if row is None:
+            raise RuntimeError("lifecycle signal not found")
+        return str(row["subject_kind"])
+
+    def _signal_subject_key(self, signal_id: str) -> str:
+        with self._connection() as connection:
+            row = connection.execute("SELECT subject_key FROM analysis_signals WHERE id = ?", (signal_id,)).fetchone()
+        if row is None:
+            raise RuntimeError("lifecycle signal not found")
+        return str(row["subject_key"])
+
+    @staticmethod
+    def _validate_observation_plan(*, window_days: int, benchmark: str, metric: str) -> None:
+        if window_days not in {20, 60, 120}:
+            raise ValueError("observation window must be 20, 60, or 120 trading days")
+        if not isinstance(benchmark, str) or not benchmark.strip():
+            raise ValueError("observation benchmark is required")
+        if not isinstance(metric, str) or not metric.strip():
+            raise ValueError("observation metric is required")
+
     @staticmethod
     def _snapshot_record(row: sqlite3.Row) -> dict[str, Any]:
         value = dict(row)

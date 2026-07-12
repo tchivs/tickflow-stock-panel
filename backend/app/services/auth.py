@@ -20,6 +20,7 @@ import os
 import secrets as _secrets
 import threading
 import time
+from contextlib import suppress
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -33,8 +34,8 @@ _TOKEN_BYTES = 32
 SESSION_TTL = 30 * 24 * 3600
 
 _lock = threading.Lock()
-# 内存中的有效会话: { token: expire_ts }。进程重启后从磁盘恢复。
-_sessions: dict[str, float] = {}
+# In-memory sessions retain a server-only audit principal and never expose it to browsers.
+_sessions: dict[str, dict[str, float | str]] = {}
 
 # 「是否已设密码」缓存: 每个 /api/ 请求都要判定, auth_middleware 原先每次 read_text
 # 磁盘 (阻塞事件循环)。此处懒加载缓存, set_password 后失效重算 (仍返回最新真值)。
@@ -53,7 +54,7 @@ def _load() -> dict:
     if p.exists():
         try:
             return json.loads(p.read_text(encoding="utf-8"))
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("auth.json malformed: %s", e)
     return {}
 
@@ -61,10 +62,8 @@ def _load() -> dict:
 def _save(data: dict) -> None:
     p = _path()
     p.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-    try:
+    with suppress(OSError):
         os.chmod(p, 0o600)
-    except OSError:
-        pass
 
 
 def _hash_password(password: str, salt: bytes | None = None) -> tuple[str, str]:
@@ -159,7 +158,7 @@ def verify_and_create_session(password: str) -> str | None:
     token = _secrets.token_urlsafe(_TOKEN_BYTES)
     expire = time.time() + SESSION_TTL
     with _lock:
-        _sessions[token] = expire
+        _sessions[token] = {"expires_at": expire, "reviewer_principal": _new_reviewer_principal()}
         _persist_sessions_locked()
     return token
 
@@ -176,9 +175,10 @@ def is_valid_session(token: str) -> bool:
     if not token:
         return False
     with _lock:
-        expire = _sessions.get(token)
-        if expire is None:
+        session = _sessions.get(token)
+        if session is None:
             return False
+        expire = session["expires_at"]
         if time.time() > expire:
             _sessions.pop(token, None)
             _persist_sessions_locked()
@@ -186,10 +186,25 @@ def is_valid_session(token: str) -> bool:
         return True
 
 
+def resolve_authenticated_reviewer(token: str | None) -> str | None:
+    """Resolve the server-stored opaque reviewer identity for one valid session."""
+    if not token:
+        return None
+    with _lock:
+        session = _sessions.get(token)
+        if session is None or time.time() > session["expires_at"]:
+            if session is not None:
+                _sessions.pop(token, None)
+                _persist_sessions_locked()
+            return None
+        principal = session.get("reviewer_principal")
+        return principal if isinstance(principal, str) and principal else None
+
+
 def _persist_sessions_locked() -> None:
     """把当前内存会话写回 auth.json(需持锁调用)。"""
     d = _load()
-    d["sessions"] = {t: exp for t, exp in _sessions.items()}
+    d["sessions"] = {token: dict(session) for token, session in _sessions.items()}
     _save(d)
 
 
@@ -199,16 +214,32 @@ def _restore_sessions() -> None:
         d = _load()
         now = time.time()
         saved = d.get("sessions") or {}
-        for token, expire in saved.items():
-            if isinstance(expire, (int, float)) and expire > now:
-                _sessions[token] = expire
+        for token, persisted in saved.items():
+            if isinstance(persisted, (int, float)):
+                expire = float(persisted)
+                principal = _new_reviewer_principal()
+            elif isinstance(persisted, dict):
+                expire = persisted.get("expires_at")
+                principal = persisted.get("reviewer_principal")
+                if not isinstance(expire, (int, float)):
+                    continue
+                if not isinstance(principal, str) or not principal:
+                    principal = _new_reviewer_principal()
+            else:
+                continue
+            if expire > now:
+                _sessions[token] = {"expires_at": float(expire), "reviewer_principal": principal}
         if len(_sessions) != len(saved):
             # 有过期会话被清理, 落盘一次
             _persist_sessions_locked()
 
 
+def _new_reviewer_principal() -> str:
+    return f"reviewer_{_secrets.token_urlsafe(_TOKEN_BYTES)}"
+
+
 # 模块加载时恢复会话
 try:
     _restore_sessions()
-except Exception as e:  # noqa: BLE001
+except Exception as e:
     logger.warning("restore sessions failed: %s", e)

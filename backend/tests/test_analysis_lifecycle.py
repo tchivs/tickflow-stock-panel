@@ -90,7 +90,7 @@ def test_lifecycle_confirmation_requires_server_resolved_reviewer_and_creates_on
     )
     assert confirmed["official_state"] == "weakened"
     assert len(repository.list_observation_plans(proposal["id"])) == 1
-    with pytest.raises(ValueError, match="immutable|confirmed"):
+    with pytest.raises(ValueError, match=r"immutable|confirmed"):
         service.confirm(
             review_id=proposal["id"], session_token="session-token", window_days=20, benchmark="CSI300", metric="excess_return"
         )
