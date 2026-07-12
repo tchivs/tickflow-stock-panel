@@ -24,6 +24,53 @@ def test_lifecycle_rules_require_attributable_state_specific_evidence(tmp_path):
     ) is None
 
 
+def test_lifecycle_rules_require_independent_contradiction_and_price_event_context(tmp_path):
+    _repository, service = _lifecycle(tmp_path)
+
+    assert service.propose(
+        subject_key="600519.SH",
+        prior_state="active",
+        next_state="strengthened",
+        evidence=[{"id": "repost", "independence_group": "same-publisher", "attributable": False}],
+    ) is None
+    assert service.propose(
+        subject_key="600519.SH",
+        prior_state="active",
+        next_state="falsified",
+        evidence=[{"id": "contradiction", "independent_contradiction": False}],
+    ) is None
+    assert service.propose(
+        subject_key="600519.SH",
+        prior_state="active",
+        next_state="priced_in",
+        evidence=[{"id": "event", "independence_group": "exchange"}],
+    ) is None
+
+    strengthened = service.propose(
+        subject_key="600519.SH",
+        prior_state="active",
+        next_state="strengthened",
+        evidence=[{"id": "filing", "independence_group": "exchange", "occurred_at": "2026-07-12T00:00:00+00:00"}],
+    )
+    falsified = service.propose(
+        subject_key="600519.SH",
+        prior_state="active",
+        next_state="falsified",
+        evidence=[{"id": "cross-checked", "independent_contradiction": True, "occurred_at": "2026-07-12T00:00:00+00:00"}],
+    )
+    priced_in = service.propose(
+        subject_key="600519.SH",
+        prior_state="active",
+        next_state="priced_in",
+        evidence=[{"id": "price-event", "price_context": "close=100", "event_context": "earnings", "occurred_at": "2026-07-12T00:00:00+00:00"}],
+    )
+
+    assert strengthened is not None
+    assert strengthened["evidence_ids"] == ["filing"]
+    assert falsified is not None
+    assert priced_in is not None
+
+
 def test_lifecycle_confirmation_requires_server_resolved_reviewer_and_creates_one_plan(tmp_path):
     repository, service = _lifecycle(tmp_path)
     proposal = service.propose(
