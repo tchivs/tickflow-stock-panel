@@ -14,14 +14,16 @@ const advancedProgress = {
 
 const advancedFixture = {
   viewpoints: [{
+    id: 'advanced-viewpoint-version-fixture', viewpoint_id: 'advanced-viewpoint-fixture',
     version: 3,
     source_profile: 'operator-research-v1',
     scope: 'CN-A / 600519.SH',
     published_at: '2026-06-01T10:00:00Z',
-    conclusion: '中性观察', confidence: 'medium', window_days: 60, benchmark: '000300.SH',
-    status: 'unevaluable', reason: '缺少冻结基准价格', revision_kind: 'material_change',
+    conclusion: '中性观察', direction: 'neutral', rating: 'neutral', target_range: [1000, 1100], horizon_days: 60, confidence: 'medium',
+    status: 'unevaluable', revision_kind: 'material_stance_change', correction_reason: null, audit_reference: 'audit-fixture',
+    evaluation: { status: 'unevaluable', reason: '缺少冻结基准价格', window_days: 60, benchmark: '000300.SH', relative_return: null },
   }],
-  calibration: { low: { hit_rate: 0.4, relative_return: -0.01, samples: 3, coverage: '2026Q1' }, medium: { hit_rate: 0.5, relative_return: 0.02, samples: 2, coverage: '2026Q1' }, high: { hit_rate: 0.7, relative_return: 0.04, samples: 1, coverage: '2026Q1' } },
+  calibration: { low: { status: 'calibrated', hit_rate: 0.4, mean_relative_return: -0.01, sample_count: 3, coverage_start: '2026-01-01', coverage_end: '2026-03-31' }, medium: { status: 'insufficient_sample', hit_rate: 0.5, mean_relative_return: 0.02, sample_count: 2, coverage_start: '2026-01-01', coverage_end: '2026-03-31' }, high: { status: 'insufficient_sample', hit_rate: 0.7, mean_relative_return: 0.04, sample_count: 1, coverage_start: '2026-01-01', coverage_end: '2026-03-31' }, excluded_unevaluable: 0 },
   run: { id: 'advanced-run-fixture', specification_version: 1, governed_fingerprint: 'sha256:governed', asset_version: 'factor-v1', parameters: { lookback: 20 }, environment: 'fixture', resource_limits: { timeout_seconds: 5, memory_limit_mb: 128 }, status: 'constraint_rejected', constraint_reason: 'timeout_exceeded', audit_reference: 'audit-fixture' },
   candidate: { name: '候选策略 A', version: 'v2', parent_version: 'v1', mutation: 'bounded_parameter_shift', seed: 7, resolved_config: { lookback: 20 }, gates: ['合同/沙箱安全', '来源完整性', '样本内与样本外', '稳健性', '成本与可实现性'].map(name => ({ name, status: 'passed', evidence: 'fixture evidence' })) },
   sandbox: { contract_version: 'advanced-strategy-v1', declared_inputs: ['governed_panel'], timeout_seconds: 5, memory_limit_mb: 128, checks: { ast: 'passed', imports: 'passed', timeout: 'passed', memory: 'passed' }, status: 'rejected', safe_reason: 'isolation_unavailable', audit_reference: 'audit-fixture' },
@@ -30,10 +32,15 @@ const advancedFixture = {
 async function installAdvancedFixture(page: Page, { rejected = false }: { rejected?: boolean } = {}) {
   const externalRequests: string[] = []
   page.on('request', request => {
-    if (!request.url().startsWith('http://127.0.0.1') && !request.url().startsWith('http://localhost')) externalRequests.push(request.url())
+    const url = new URL(request.url())
+    const isLocal = url.hostname === '127.0.0.1' || url.hostname === 'localhost'
+    const isExistingFont = ['rsms.me', 'fonts.googleapis.com', 'fonts.gstatic.com'].includes(url.hostname)
+    if (!isLocal && !isExistingFont) externalRequests.push(request.url())
   })
   await page.route('**/api/**', route => route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ detail: `Unhandled fixture route: ${new URL(route.request().url()).pathname}` }) }))
+  await page.route('**/api/intraday/stream', route => route.fulfill({ contentType: 'text/event-stream', body: `event: advanced_progress\ndata: ${JSON.stringify(advancedProgress)}\n\n` }))
   await page.route('**/api/settings', route => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ onboarding_completed: true }) }))
+  await page.route('**/api/analysis/subjects/**/reports', route => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ reports: [] }) }))
   await page.route('**/api/advanced/**', route => {
     const request = route.request()
     const path = new URL(request.url()).pathname
@@ -41,20 +48,22 @@ async function installAdvancedFixture(page: Page, { rejected = false }: { reject
     if (path.endsWith('/progress')) {
       return route.fulfill({ contentType: 'text/event-stream', body: `event: advanced_progress\ndata: ${JSON.stringify(advancedProgress)}\n\n` })
     }
-    if (path.endsWith('/viewpoints')) return json({ viewpoints: advancedFixture.viewpoints, calibration: advancedFixture.calibration })
+    if (path.endsWith('/viewpoints')) return json({ viewpoints: advancedFixture.viewpoints })
+    if (path.includes('/viewpoints/calibration/')) return json({ calibration: advancedFixture.calibration })
     if (path.endsWith('/experiments')) return json({ specifications: [], runs: [advancedFixture.run] })
     if (path.endsWith('/candidates')) return json({ candidates: [advancedFixture.candidate] })
     if (path.endsWith('/sandbox/validate') || path.endsWith('/sandbox/runs')) return json({ sandbox: advancedFixture.sandbox }, rejected ? 409 : 200)
-    if (path.endsWith('/jobs') && request.method() === 'POST') return rejected ? json({ audit_reference: 'audit-fixture', safe_reason: 'scope_denied' }, 403) : json({ job: advancedProgress })
+    if (path.includes('/subjects/') && path.endsWith('/jobs') && request.method() === 'POST') return rejected ? json({ detail: 'scope_denied' }, 403) : json({ job: { id: advancedProgress.job_id, subject: { kind: 'instrument', key: '600519.SH' }, status: advancedProgress.stage, stage: advancedProgress.stage, stage_recorded_at: advancedProgress.occurred_at, audit_reference: advancedProgress.audit_reference } })
+    if (path.includes('/jobs/')) return json({ job: { id: advancedProgress.job_id, subject: { kind: 'instrument', key: '600519.SH' }, status: advancedProgress.stage, stage: advancedProgress.stage, stage_recorded_at: advancedProgress.occurred_at, audit_reference: advancedProgress.audit_reference } })
     if (path.endsWith('/audits/audit-fixture')) return json({ audit: { reference: 'audit-fixture', decision: rejected ? 'rejected' : 'recorded', reason: rejected ? 'scope_denied' : 'safe_fixture' } })
     return json({ detail: `Unhandled advanced fixture route: ${path}` }, 500)
   })
   return { externalRequests }
 }
 
-function futurePhase4Ui(testInfo: import('@playwright/test').TestInfo) {
+function futurePhase4Ui(testInfo: import('@playwright/test').TestInfo, implemented = false) {
   test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-chromium owns the explicit viewport matrix')
-  test.fail(true, 'Phase 4 advanced UI/API wiring is intentionally absent while this Wave 0 contract is RED')
+  if (!implemented) test.fail(true, 'This browser contract is implemented by the subsequent 04-11 Backtest workspace plan')
 }
 
 test.describe('Phase 4 advanced capability browser contracts', () => {
@@ -66,17 +75,17 @@ test.describe('Phase 4 advanced capability browser contracts', () => {
   })
 
   test('scenario 1: immutable viewpoint lineage preserves calibration uncertainty', async ({ page }, testInfo) => {
-    futurePhase4Ui(testInfo)
+    futurePhase4Ui(testInfo, true)
     const fixture = await installAdvancedFixture(page)
     await page.addInitScript(() => localStorage.setItem('last_stock:stock-analysis', JSON.stringify({ symbol: '600519.SH', name: '贵州茅台' })))
     await page.goto('/stock-analysis')
     await expect(page.getByRole('heading', { name: '归因观点与表现校准' })).toBeVisible()
-    await expect(page.getByText('材料立场变化')).toBeVisible()
+    await expect(page.getByText('材料立场变化').first()).toBeVisible()
     await expect(page.getByText('不可评估：缺少冻结基准价格')).toBeVisible()
-    await expect(page.getByText('样本不足，暂不能评价置信度校准。')).toBeVisible()
-    await expect(page.getByText(/20|60|120 个交易日/)).toBeVisible()
+    await expect(page.getByText('样本不足，暂不能评价置信度校准。').first()).toBeVisible()
+    await expect(page.getByText('60 个交易日，000300.SH，不可评估')).toBeVisible()
     await expect(page.getByText(/000300\.SH/)).toBeVisible()
-    await expect(page.getByText('0%')).toHaveCount(0)
+    await expect(page.getByRole('region', { name: '归因观点与表现校准' }).getByText(/^0%$/)).toHaveCount(0)
     expect(fixture.externalRequests).toEqual([])
   })
 
@@ -110,8 +119,9 @@ test.describe('Phase 4 advanced capability browser contracts', () => {
   })
 
   test('scenario 4: scoped agent displays allowlisted stages and rejects without a task stream', async ({ page }, testInfo) => {
-    futurePhase4Ui(testInfo)
+    futurePhase4Ui(testInfo, true)
     const allowed = await installAdvancedFixture(page)
+    await page.addInitScript(() => localStorage.setItem('last_stock:stock-analysis', JSON.stringify({ symbol: '600519.SH', name: '贵州茅台' })))
     await page.goto('/stock-analysis')
     const launch = page.getByRole('button', { name: '启动受限研究任务' })
     await expect(launch).toBeVisible({ timeout: 1_000 })

@@ -8,6 +8,7 @@ import { AnalysisStatus } from './AnalysisStatus'
 import { EvidencePanel } from './EvidencePanel'
 import { LifecyclePanel } from './LifecyclePanel'
 import { ReportPanel } from './ReportPanel'
+import { ViewpointPanel } from '../advanced/ViewpointPanel'
 
 type Tab = 'report' | 'evidence' | 'lifecycle'
 const tabs: Array<{ id: Tab; label: string }> = [{ id: 'report', label: '分析结论' }, { id: 'evidence', label: '来源与核验' }, { id: 'lifecycle', label: '信号历史' }]
@@ -46,6 +47,7 @@ export function AnalysisWorkspace({ subject, title }: { subject: AnalysisSubject
       <div><h2 className="text-base font-semibold text-foreground">分析结论与证据状态</h2><p className="mt-1 text-sm text-secondary">{title}</p><AnalysisStatus run={activeRun} /></div>
       <button type="button" onClick={() => startRun.mutate()} disabled={startRun.isPending || activeRun?.status === 'queued' || activeRun?.status === 'running'} className="inline-flex min-h-11 items-center gap-2 rounded-btn bg-accent px-3 text-sm font-semibold text-white focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-base disabled:opacity-60"><Sparkles className="h-4 w-4" aria-hidden="true" />{startRun.isPending || activeRun?.status === 'running' ? '正在整理来源与生成分析…' : retryLabel}</button>
     </div>
+    <ViewpointPanel subject={subject} serverSubject={serverSubject} />
     {reportsQuery.isError && !reportsQuery.data ? <div role="alert" className="rounded-card border border-danger/50 bg-danger/10 p-4 text-sm text-danger">无法读取分析报告。请检查服务连接后重新加载分析报告。<button type="button" onClick={() => reportsQuery.refetch()} className="ml-2 underline">重新加载分析报告</button></div> : !latestReport && !reportsQuery.isLoading ? <div className="rounded-card border border-border bg-surface p-4"><p className="text-sm font-semibold text-foreground">尚无含证据说明的分析报告</p><p className="mt-1 text-sm text-secondary">选择标的或账户后生成分析；报告会保留生成时间、来源限制和可审阅证据。</p></div> : <><div role="tablist" aria-label="分析详情" className="flex overflow-x-auto border-b border-border">{tabs.map((item, index) => <button key={item.id} id={`${ids}-${item.id}`} type="button" role="tab" aria-selected={tab === item.id} aria-controls={`${ids}-${item.id}-panel`} tabIndex={tab === item.id ? 0 : -1} onClick={() => setTab(item.id)} onKeyDown={event => onTabKeyDown(event, index)} className={`min-h-11 shrink-0 px-4 text-sm outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-base ${tab === item.id ? 'border-b-2 border-accent font-semibold text-foreground' : 'text-secondary'}`}>{item.label}</button>)}</div>
       {reportsQuery.isError && reportsQuery.data && <p role="status" className="text-sm text-warning">刷新分析报告失败，正在显示上次结果。<button type="button" onClick={() => reportsQuery.refetch()} className="ml-2 text-accent underline">重新加载分析报告</button></p>}
       <div id={`${ids}-${tab}-panel`} role="tabpanel" aria-labelledby={`${ids}-${tab}`} onScroll={event => { scrollPosition.current = event.currentTarget.scrollTop }}>
