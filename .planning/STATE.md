@@ -5,15 +5,15 @@ milestone_name: milestone
 current_phase: 03
 current_phase_name: AI Analysis
 status: verifying
-stopped_at: Completed 03-10-PLAN.md
-last_updated: "2026-07-12T05:41:50.876Z"
+stopped_at: Completed 03-11-PLAN.md
+last_updated: "2026-07-12T05:51:24.906Z"
 last_activity: 2026-07-12
 last_activity_desc: Phase 03 execution started
 progress:
   total_phases: 5
   completed_phases: 2
   total_plans: 35
-  completed_plans: 33
+  completed_plans: 34
   percent: 40
 ---
 
@@ -67,6 +67,7 @@ Progress: [##########] implementation complete; verification blocked
 | Phase 03 P09 | 6m | 1 tasks | 6 files |
 | Phase 03 P08 | 11m 22s | 3 tasks | 9 files |
 | Phase 03 P10 | 14m | 3 tasks | 7 files |
+| Phase 03 P11 | 527 | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -102,6 +103,9 @@ No implementation decision was explicitly locked by the architecture intake. Req
 - [Phase 03]: Production analysis evidence is derived only from governed market, financial, and operational repositories; browser focus and notes never become facts.
 - [Phase 03]: Only genuinely active runs are deduplicated; a new run without execution collaborators records a sanitized terminal failure.
 - [Phase 03]: AsyncSqliteSaver is the production graph verification path; synchronous cross-thread SQLite saver checks remain excluded.
+- [Phase 03]: Analysis API responses use explicit allowlisted projections rather than raw SQLite records or nested snapshots.
+- [Phase 03]: Completed reports receive a server-issued signal only after subject authorization; legacy reports get no lifecycle transition.
+- [Phase 03]: Rejected lifecycle proposals are inferred from append-only rejection records; confirmed events alone determine official state.
 
 ### Pending Todos
 
@@ -119,6 +123,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-07-12T05:41:50.771Z
-Stopped at: Completed 03-10-PLAN.md
+Last session: 2026-07-12T05:51:24.899Z
+Stopped at: Completed 03-11-PLAN.md
 Resume file: None
