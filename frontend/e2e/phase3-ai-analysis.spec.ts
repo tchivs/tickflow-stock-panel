@@ -9,7 +9,7 @@ const report = {
   perspectives: [{ name: '基本面', conclusion: '收入增长需要核验', evidence_count: 2, limitations: ['口径不同'] }],
   score: { value: 60, dimensions: [{ name: '盈利质量', contribution: 60, evidence_ids: ['number-revenue'], rationale: '已披露口径不同' }] },
   valuation: { applicable: false, reason: '材料输入不完整' },
-  ic_memo: { thesis: '等待独立来源确认', risks: ['收入数字存在差异'], open_questions: ['确认报告期口径'] },
+  ic_memo: { thesis: '等待独立来源确认', risks: ['收入数字存在差异'], open_questions: ['确认报告期口径'] }, signal_id: 'signal-moutai',
 }
 const evidence = {
   report_id: report.id,
@@ -28,7 +28,7 @@ const history = {
     { state: 'falsified', occurred_at: '2024-03-02T10:00:00Z', evidence_summary: '失效条件触发', source_grade: 'A', cross_check: 'confirmed' },
     { state: 'priced_in', occurred_at: '2024-04-02T10:00:00Z', evidence_summary: '价格已反映事件', source_grade: 'B', cross_check: 'confirmed' },
   ],
-  outcome: { status: 'pending', missing_fields: ['benchmark'] },
+  outcome: { status: 'pending', missing_fields: ['benchmark'] }, pending_review_id: 'review-server-issued',
 }
 
 async function installAnalysisFixture(page: import('@playwright/test').Page) {
@@ -38,6 +38,15 @@ async function installAnalysisFixture(page: import('@playwright/test').Page) {
     body: JSON.stringify({ detail: `Unhandled fixture route: ${new URL(route.request().url()).pathname}` }),
   }))
   await page.route('**/api/settings', route => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ onboarding_completed: true }) }))
+  await page.route('**/api/portfolio/**', route => {
+    const path = new URL(route.request().url()).pathname
+    const json = (body: unknown) => route.fulfill({ contentType: 'application/json', body: JSON.stringify(body) })
+    if (path.endsWith('/accounts')) return json({ accounts: [{ id: 1, name: '测试账户', archived_at: null }] })
+    if (path.endsWith('/summary')) return json({ total_assets: 100000, available_funds: 10000, market_value: 90000, unrealized_pnl: 1000, positions: [] })
+    if (path.endsWith('/positions')) return json({ positions: [] })
+    return route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ detail: `Unhandled portfolio fixture route: ${path}` }) })
+  })
+  await page.route('**/api/monitor/rules**', route => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ rules: [] }) }))
   await page.route('**/api/analysis/**', route => {
     const request = route.request()
     const path = new URL(request.url()).pathname
@@ -47,36 +56,48 @@ async function installAnalysisFixture(page: import('@playwright/test').Page) {
     if (path.endsWith(`/reports/${report.id}/evidence`)) return json(evidence)
     if (path.endsWith(`/signals/${history.signal_id}/history`)) return json(history)
     if (path.endsWith('/runs') && request.method() === 'POST') return json({ run: { id: 'run-moutai-1', subject, status: 'running' } })
-    if (path.endsWith('/confirm') || path.endsWith('/reject')) return json({ review: { id: 'review-1', status: 'confirmed' } })
+    if (path.endsWith('/confirm') || path.endsWith('/reject')) return json({ review: { id: 'review-server-issued', status: path.endsWith('/confirm') ? 'confirmed' : 'rejected' } })
     return route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ detail: `Unhandled fixture route: ${path}` }) })
   })
 }
 
 test.describe('Phase 3 evidence-first analysis contracts', () => {
-  test('stock report exposes source grades and conflict before conclusions', async ({ page }, testInfo) => {
+  test('stock report exposes source grades, material evidence, and conflict before conclusions', async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-chromium only')
-    test.fail(true, '03-08 must implement the stock analysis workspace before this fixture contract turns green')
     await installAnalysisFixture(page)
+    await page.addInitScript(() => localStorage.setItem('last_stock:stock-analysis', JSON.stringify({ symbol: '600519.SH', name: '贵州茅台' })))
     await page.goto('/stock-analysis')
     await expect(page.getByRole('button', { name: '生成含证据说明的分析' })).toBeVisible()
-    await expect(page.getByText('存在未解决差异')).toBeVisible()
+    await expect(page.getByText('存在未解决差异').first()).toBeVisible()
+    await expect(page.getByText('受未解决来源差异影响').first()).toBeVisible()
+    await expect(page.getByText('投资委员会备忘录')).toBeVisible()
+    await expect(page.getByText('AI 结论基于所列证据生成；来源等级和核验状态限制其可采信程度，不构成投资建议。')).toBeVisible()
+    await page.getByRole('tab', { name: '来源与核验' }).click()
     await expect(page.getByText('A=原始或已治理来源')).toBeVisible()
+    await expect(page.getByRole('rowheader', { name: '收入同比' })).toBeVisible()
+    await page.locator('summary', { hasText: '查看收入同比的 2 个来源' }).click()
+    await expect(page.getByText('A 级 公司公告')).toBeVisible()
   })
 
   test('portfolio lifecycle keeps server-owned history and review actions scoped', async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-chromium only')
-    test.fail(true, '03-08 must implement the portfolio lifecycle panel before this fixture contract turns green')
     await installAnalysisFixture(page)
     await page.goto('/portfolio')
+    await page.getByLabel('选择账户').selectOption('1')
+    await page.getByRole('tab', { name: '信号历史' }).click()
     await expect(page.getByRole('heading', { name: '信号生命周期' })).toBeVisible()
-    await expect(page.getByText('信号已计价')).toBeVisible()
+    await expect(page.getByText('信号已计价').first()).toBeVisible()
     await expect(page.getByText('结果记录不完整：benchmark。')).toBeVisible()
+    const confirm = page.getByRole('button', { name: '确认服务端审阅' })
+    await expect(confirm).toBeVisible()
+    await confirm.click()
+    await expect(page.getByText('信号已计价').first()).toBeVisible()
   })
 
   test('responsive keyboard controls retain accessible analysis panels', async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-chromium only')
-    test.fail(true, '03-08 must implement responsive tabs, disclosures, and tables before this fixture contract turns green')
     await installAnalysisFixture(page)
+    await page.addInitScript(() => localStorage.setItem('last_stock:stock-analysis', JSON.stringify({ symbol: '600519.SH', name: '贵州茅台' })))
     for (const viewport of [{ width: 1440, height: 960 }, { width: 1024, height: 900 }, { width: 375, height: 844 }]) {
       await page.setViewportSize(viewport)
       await page.goto('/stock-analysis')
@@ -84,6 +105,11 @@ test.describe('Phase 3 evidence-first analysis contracts', () => {
       await reportTab.focus({ timeout: 1_000 })
       await page.keyboard.press('ArrowRight')
       await expect(page.getByRole('tab', { name: '来源与核验' })).toBeFocused()
+      await page.keyboard.press('Enter')
+      await expect(page.getByRole('table', { name: /材料数字/ })).toBeVisible()
+      const generate = page.getByRole('button', { name: '生成含证据说明的分析' })
+      const box = await generate.boundingBox()
+      expect(box?.height).toBeGreaterThanOrEqual(44)
     }
   })
 })
