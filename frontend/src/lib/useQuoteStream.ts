@@ -114,6 +114,18 @@ export function useQuoteStream(
       })
     }
 
+    const invalidateAnalysis = (event: unknown) => {
+      if (!event || typeof event !== 'object') return
+      const { subject_kind: subjectKind, subject_key: subjectKey } = event as Record<string, unknown>
+      if (typeof subjectKind !== 'string' || typeof subjectKey !== 'string') return
+      qc.invalidateQueries({
+        predicate: (query) =>
+          query.queryKey[0] === 'analysis'
+          && query.queryKey[2] === subjectKind
+          && query.queryKey[3] === subjectKey,
+      })
+    }
+
     const connect = () => {
       _setStatus(failCount > 0 ? 'reconnecting' : _streamStatus)
       const es = new EventSource('/api/intraday/stream')
@@ -160,6 +172,16 @@ export function useQuoteStream(
         try {
           const data = JSON.parse(e.data)
           invalidatePortfolio(data.account_ids)
+        } catch {
+          // Ignore malformed stream payloads without disrupting the shared connection.
+        }
+      })
+
+      es.addEventListener('analysis_progress', (e: MessageEvent) => {
+        try {
+          // Progress is intentionally coarse and persisted server-side before delivery.
+          // Ignore malformed payloads without interrupting the shared connection.
+          invalidateAnalysis(JSON.parse(e.data))
         } catch {
           // Ignore malformed stream payloads without disrupting the shared connection.
         }
