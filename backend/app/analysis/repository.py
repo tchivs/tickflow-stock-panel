@@ -289,6 +289,12 @@ class AnalysisRepository:
             review = connection.execute("SELECT * FROM analysis_signal_reviews WHERE id = ?", (review_id,)).fetchone()
         return None if review is None else self._review_record(review)
 
+    def get_signal(self, signal_id: str) -> dict[str, Any] | None:
+        """Resolve a signal back to its subject before an API exposes its history."""
+        with self._connection() as connection:
+            signal = connection.execute("SELECT * FROM analysis_signals WHERE id = ?", (signal_id,)).fetchone()
+        return None if signal is None else dict(signal)
+
     def current_lifecycle_state(self, *, subject_kind: str, subject_key: str) -> str:
         with self._connection() as connection:
             event = connection.execute(
@@ -409,6 +415,17 @@ class AnalysisRepository:
                 "SELECT * FROM analysis_observation_plans WHERE review_id = ? ORDER BY created_at, id", (review_id,)
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def get_observation_plan_subject(self, plan_id: str) -> dict[str, Any] | None:
+        """Resolve an immutable observation plan to its subject before appending an outcome."""
+        with self._connection() as connection:
+            row = connection.execute(
+                """SELECT signals.subject_kind, signals.subject_key FROM analysis_observation_plans AS plans
+                   JOIN analysis_signal_reviews AS reviews ON reviews.id = plans.review_id
+                   JOIN analysis_signals AS signals ON signals.id = reviews.signal_id WHERE plans.id = ?""",
+                (plan_id,),
+            ).fetchone()
+        return None if row is None else dict(row)
 
     def append_observation_outcome(self, *, plan_id: str, outcome: Mapping[str, Any]) -> dict[str, Any]:
         payload = _payload(outcome, "observation outcome")
