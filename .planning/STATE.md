@@ -5,16 +5,16 @@ milestone_name: milestone
 current_phase: 03
 current_phase_name: AI Analysis
 status: verifying
-stopped_at: Completed 03-11-PLAN.md
-last_updated: "2026-07-12T05:51:24.906Z"
+stopped_at: Completed 03-12-PLAN.md
+last_updated: "2026-07-12T06:01:12.138Z"
 last_activity: 2026-07-12
 last_activity_desc: Phase 03 execution started
 progress:
   total_phases: 5
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 35
-  completed_plans: 34
-  percent: 40
+  completed_plans: 35
+  percent: 60
 ---
 
 # Project State
@@ -68,6 +68,7 @@ Progress: [##########] implementation complete; verification blocked
 | Phase 03 P08 | 11m 22s | 3 tasks | 9 files |
 | Phase 03 P10 | 14m | 3 tasks | 7 files |
 | Phase 03 P11 | 527 | 2 tasks | 5 files |
+| Phase 03 P12 | 480 | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -106,6 +107,7 @@ No implementation decision was explicitly locked by the architecture intake. Req
 - [Phase 03]: Analysis API responses use explicit allowlisted projections rather than raw SQLite records or nested snapshots.
 - [Phase 03]: Completed reports receive a server-issued signal only after subject authorization; legacy reports get no lifecycle transition.
 - [Phase 03]: Rejected lifecycle proposals are inferred from append-only rejection records; confirmed events alone determine official state.
+- [Phase 03]: Analysis UI keeps stock/portfolio display subjects separate from instrument/account API request subjects. — This preserves object-local UI semantics while preventing client calls from sending unsupported subject kinds.
 
 ### Pending Todos
 
@@ -123,6 +125,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-07-12T05:51:24.899Z
-Stopped at: Completed 03-11-PLAN.md
+Last session: 2026-07-12T06:01:12.132Z
+Stopped at: Completed 03-12-PLAN.md
 Resume file: None

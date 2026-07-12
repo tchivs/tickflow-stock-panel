@@ -122,7 +122,7 @@ Plans:
   2. User can inspect a multi-perspective report with visible scoring rationale, applicable valuation analysis, and an investment-committee memo.
   3. User can view a signal's current lifecycle status and its recorded evolution or outcome over time.
 
-**Plans**: 11/12 plans executed
+**Plans**: 12/12 plans complete
 Plans:
 **Wave 1**
 
@@ -161,7 +161,7 @@ Plans:
 
 **Gap Closure Wave 3** *(blocked on Gap Closure Wave 2 completion)*
 
-- [ ] 03-12-PLAN.md — 对齐 typed UI 契约并使真实生命周期历史可达。
+- [x] 03-12-PLAN.md — 对齐 typed UI 契约并使真实生命周期历史可达。
 
 **UI hint**: yes
 
@@ -201,6 +201,6 @@ Plans:
 |-------|----------------|--------|-----------|
 | 1. Core Merger | 15/15 | Complete    | 2026-07-11 |
 | 2. Factor And Strategy Research | 8/8 | Complete    | 2026-07-11 |
-| 3. AI Analysis | 11/12 | In Progress|  |
+| 3. AI Analysis | 12/12 | Complete   | 2026-07-12 |
 | 4. Advanced Capabilities | 0/TBD | Not started | - |
 | 5. Optional Enhancements | 0/TBD | Optional | - |
