@@ -131,6 +131,146 @@ class AdvancedRepository:
         assert row is not None
         return dict(row)
 
+    def append_viewpoint_version(
+        self,
+        *,
+        viewpoint_id: str,
+        source_profile: str,
+        market_scope: str,
+        instrument: str,
+        policy_revision: str,
+        policy_fingerprint: str,
+        policy_snapshot: Mapping[str, Any],
+        asset_type: str,
+        published_at: str,
+        direction: str,
+        rating: str,
+        conclusion: str,
+        target_range: tuple[float, float],
+        horizon_days: int,
+        confidence: str,
+        revision_kind: str,
+        correction_reason: str | None,
+        evaluation_window_days: int,
+        benchmark: str,
+        evidence: list[Mapping[str, Any]],
+    ) -> dict[str, Any]:
+        """Append the next immutable viewpoint version and its evidence atomically."""
+        version_id = str(uuid4())
+        with self._connection() as connection, connection:
+            policy = connection.execute(
+                "SELECT * FROM advanced_policy_revisions WHERE fingerprint = ?", (policy_fingerprint,)
+            ).fetchone()
+            if policy is None:
+                policy_id = str(uuid4())
+                connection.execute(
+                    "INSERT INTO advanced_policy_revisions (id, revision, fingerprint, snapshot_json, created_at) VALUES (?, ?, ?, ?, ?)",
+                    (policy_id, policy_revision, policy_fingerprint, _json(policy_snapshot, "policy snapshot"), self.now()),
+                )
+            else:
+                policy_id = policy["id"]
+            existing = connection.execute(
+                "SELECT source_profile, market_scope, instrument FROM advanced_viewpoints WHERE id = ?", (viewpoint_id,)
+            ).fetchone()
+            if existing is None:
+                connection.execute(
+                    "INSERT INTO advanced_viewpoints (id, source_profile, market_scope, instrument, created_at) VALUES (?, ?, ?, ?, ?)",
+                    (viewpoint_id, source_profile, market_scope, instrument, self.now()),
+                )
+            elif tuple(existing) != (source_profile, market_scope, instrument):
+                raise ValueError("viewpoint identity cannot change")
+            next_version = connection.execute(
+                "SELECT COALESCE(MAX(version), 0) + 1 FROM advanced_viewpoint_versions WHERE viewpoint_id = ?", (viewpoint_id,)
+            ).fetchone()[0]
+            connection.execute(
+                """INSERT INTO advanced_viewpoint_versions
+                   (id, viewpoint_id, version, policy_revision_id, asset_type, published_at, direction, rating, conclusion,
+                    target_low, target_high, horizon_days, confidence, revision_kind, correction_reason,
+                    evaluation_window_days, benchmark, metric, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'relative_return', ?)""",
+                (version_id, viewpoint_id, next_version, policy_id, asset_type, published_at, direction, rating, conclusion,
+                 target_range[0], target_range[1], horizon_days, confidence, revision_kind, correction_reason,
+                 evaluation_window_days, benchmark, self.now()),
+            )
+            for item in evidence:
+                connection.execute(
+                    "INSERT INTO advanced_viewpoint_evidence (viewpoint_version_id, evidence_reference, evidence_published_at, created_at) VALUES (?, ?, ?, ?)",
+                    (version_id, item["id"], item.get("published_at"), self.now()),
+                )
+            connection.execute(
+                """INSERT INTO advanced_viewpoint_evaluations
+                   (id, viewpoint_version_id, status, reason, relative_return, coverage_start, coverage_end, created_at)
+                   VALUES (?, ?, 'unevaluable', 'awaiting_governed_evaluation', NULL, NULL, NULL, ?)""",
+                (str(uuid4()), version_id, self.now()),
+            )
+            row = connection.execute("SELECT * FROM advanced_viewpoint_versions WHERE id = ?", (version_id,)).fetchone()
+        assert row is not None
+        return dict(row)
+
+    def viewpoint_versions(self, viewpoint_id: str) -> list[dict[str, Any]]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                """SELECT version.*, viewpoint.source_profile, viewpoint.market_scope, viewpoint.instrument,
+                          policy.revision AS policy_version, policy.fingerprint AS policy_fingerprint
+                   FROM advanced_viewpoint_versions AS version
+                   JOIN advanced_viewpoints AS viewpoint ON viewpoint.id = version.viewpoint_id
+                   JOIN advanced_policy_revisions AS policy ON policy.id = version.policy_revision_id
+                   WHERE version.viewpoint_id = ? ORDER BY version.version DESC""",
+                (viewpoint_id,),
+            ).fetchall()
+            result: list[dict[str, Any]] = []
+            for row in rows:
+                value = dict(row)
+                evidence = connection.execute(
+                    "SELECT evidence_reference, evidence_published_at FROM advanced_viewpoint_evidence WHERE viewpoint_version_id = ? ORDER BY id",
+                    (value["id"],),
+                ).fetchall()
+                value["evidence"] = [
+                    {"id": evidence_row["evidence_reference"], **({"published_at": evidence_row["evidence_published_at"]} if evidence_row["evidence_published_at"] else {})}
+                    for evidence_row in evidence
+                ]
+                result.append(value)
+        return result
+
+    def viewpoint_version(self, version_id: str) -> dict[str, Any] | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                """SELECT version.*, viewpoint.source_profile, viewpoint.market_scope, viewpoint.instrument,
+                          policy.revision AS policy_version, policy.fingerprint AS policy_fingerprint
+                   FROM advanced_viewpoint_versions AS version
+                   JOIN advanced_viewpoints AS viewpoint ON viewpoint.id = version.viewpoint_id
+                   JOIN advanced_policy_revisions AS policy ON policy.id = version.policy_revision_id
+                   WHERE version.id = ?""",
+                (version_id,),
+            ).fetchone()
+        return None if row is None else dict(row)
+
+    def append_viewpoint_evaluation(
+        self, *, viewpoint_version_id: str, status: str, reason: str | None, relative_return: float | None,
+        coverage_start: str | None, coverage_end: str | None,
+    ) -> dict[str, Any]:
+        identifier = str(uuid4())
+        with self._connection() as connection, connection:
+            connection.execute(
+                "INSERT INTO advanced_viewpoint_evaluations (id, viewpoint_version_id, status, reason, relative_return, coverage_start, coverage_end, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (identifier, viewpoint_version_id, status, reason, relative_return, coverage_start, coverage_end, self.now()),
+            )
+            row = connection.execute("SELECT * FROM advanced_viewpoint_evaluations WHERE id = ?", (identifier,)).fetchone()
+        assert row is not None
+        return dict(row)
+
+    def viewpoint_evaluations(self, source_profile: str) -> list[dict[str, Any]]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                """SELECT evaluation.*, version.confidence
+                   FROM advanced_viewpoint_evaluations AS evaluation
+                   JOIN advanced_viewpoint_versions AS version ON version.id = evaluation.viewpoint_version_id
+                   JOIN advanced_viewpoints AS viewpoint ON viewpoint.id = version.viewpoint_id
+                   WHERE viewpoint.source_profile = ? ORDER BY evaluation.coverage_start""",
+                (source_profile,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     @staticmethod
     def _policy_row(row: sqlite3.Row) -> dict[str, Any]:
         value = dict(row)

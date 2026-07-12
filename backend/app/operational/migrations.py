@@ -439,7 +439,7 @@ MIGRATIONS: tuple[str, ...] = (
     );
     CREATE TABLE advanced_viewpoint_evaluations (
         id TEXT PRIMARY KEY,
-        viewpoint_version_id TEXT NOT NULL UNIQUE REFERENCES advanced_viewpoint_versions(id) ON DELETE RESTRICT,
+        viewpoint_version_id TEXT NOT NULL REFERENCES advanced_viewpoint_versions(id) ON DELETE RESTRICT,
         status TEXT NOT NULL CHECK (status IN ('evaluated', 'unevaluable')),
         reason TEXT,
         relative_return REAL,
