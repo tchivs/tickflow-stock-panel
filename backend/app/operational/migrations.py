@@ -229,6 +229,165 @@ MIGRATIONS: tuple[str, ...] = (
     ALTER TABLE research_experiments
     ADD COLUMN prediction_signal_json TEXT NOT NULL DEFAULT '{}';
     """,
+    """
+    -- Analysis records share operational.db. Immutable facts are append-only;
+    -- only an in-flight run's execution status may transition.
+    CREATE TABLE analysis_runs (
+        id TEXT PRIMARY KEY,
+        subject_kind TEXT NOT NULL,
+        subject_key TEXT NOT NULL,
+        focus TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'completed', 'failed')),
+        failure_reason TEXT,
+        created_at TEXT NOT NULL,
+        started_at TEXT,
+        finished_at TEXT
+    );
+
+    CREATE TABLE analysis_evidence_snapshots (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL UNIQUE REFERENCES analysis_runs(id) ON DELETE RESTRICT,
+        policy_version TEXT NOT NULL,
+        context_status TEXT NOT NULL CHECK (context_status IN ('ready', 'context_insufficient')),
+        fingerprint TEXT NOT NULL,
+        snapshot_json TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE analysis_source_observations (
+        id INTEGER PRIMARY KEY,
+        snapshot_id TEXT NOT NULL REFERENCES analysis_evidence_snapshots(id) ON DELETE RESTRICT,
+        source_id TEXT NOT NULL,
+        grade TEXT NOT NULL CHECK (grade IN ('A', 'B', 'C')),
+        origin TEXT NOT NULL,
+        independence_group TEXT NOT NULL,
+        retrieved_at TEXT NOT NULL,
+        as_of TEXT NOT NULL,
+        period TEXT NOT NULL,
+        unit TEXT NOT NULL,
+        definition TEXT NOT NULL,
+        provenance_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(snapshot_id, source_id)
+    );
+
+    CREATE TABLE analysis_number_observations (
+        id INTEGER PRIMARY KEY,
+        snapshot_id TEXT NOT NULL REFERENCES analysis_evidence_snapshots(id) ON DELETE RESTRICT,
+        number_id TEXT NOT NULL,
+        source_id TEXT NOT NULL,
+        value REAL NOT NULL,
+        unit TEXT NOT NULL,
+        period TEXT NOT NULL,
+        definition TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('confirmed', 'conflicting', 'unresolved', 'not_required')),
+        peer_source_ids_json TEXT NOT NULL,
+        comparison_reason TEXT,
+        created_at TEXT NOT NULL,
+        UNIQUE(snapshot_id, number_id, source_id)
+    );
+
+    CREATE TABLE analysis_reports (
+        id TEXT PRIMARY KEY,
+        run_id TEXT REFERENCES analysis_runs(id) ON DELETE RESTRICT,
+        subject_kind TEXT NOT NULL,
+        subject_key TEXT NOT NULL,
+        version INTEGER NOT NULL CHECK (version > 0),
+        report_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(subject_kind, subject_key, version)
+    );
+
+    CREATE TABLE analysis_signals (
+        id TEXT PRIMARY KEY,
+        subject_kind TEXT NOT NULL,
+        subject_key TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(subject_kind, subject_key)
+    );
+
+    CREATE TABLE analysis_signal_reviews (
+        id TEXT PRIMARY KEY,
+        signal_id TEXT NOT NULL REFERENCES analysis_signals(id) ON DELETE RESTRICT,
+        prior_state TEXT NOT NULL,
+        proposed_state TEXT NOT NULL,
+        evidence_json TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE analysis_signal_events (
+        id TEXT PRIMARY KEY,
+        review_id TEXT NOT NULL UNIQUE REFERENCES analysis_signal_reviews(id) ON DELETE RESTRICT,
+        signal_id TEXT NOT NULL REFERENCES analysis_signals(id) ON DELETE RESTRICT,
+        prior_state TEXT NOT NULL,
+        next_state TEXT NOT NULL,
+        reviewer_principal TEXT NOT NULL,
+        occurred_at TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE analysis_observation_plans (
+        id TEXT PRIMARY KEY,
+        review_id TEXT NOT NULL UNIQUE REFERENCES analysis_signal_reviews(id) ON DELETE RESTRICT,
+        event_id TEXT NOT NULL UNIQUE REFERENCES analysis_signal_events(id) ON DELETE RESTRICT,
+        window_days INTEGER NOT NULL CHECK (window_days IN (20, 60, 120)),
+        benchmark TEXT NOT NULL,
+        metric TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE analysis_observation_outcomes (
+        id TEXT PRIMARY KEY,
+        plan_id TEXT NOT NULL REFERENCES analysis_observation_plans(id) ON DELETE RESTRICT,
+        observed_at TEXT NOT NULL,
+        outcome_json TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    );
+
+    CREATE UNIQUE INDEX idx_analysis_active_run_subject
+    ON analysis_runs(subject_kind, subject_key)
+    WHERE status IN ('queued', 'running');
+    CREATE INDEX idx_analysis_runs_subject_created ON analysis_runs(subject_kind, subject_key, created_at DESC);
+    CREATE INDEX idx_analysis_reports_subject_version ON analysis_reports(subject_kind, subject_key, version DESC);
+    CREATE INDEX idx_analysis_sources_snapshot ON analysis_source_observations(snapshot_id, id);
+    CREATE INDEX idx_analysis_numbers_snapshot ON analysis_number_observations(snapshot_id, id);
+    CREATE INDEX idx_analysis_reviews_signal_created ON analysis_signal_reviews(signal_id, created_at);
+    CREATE INDEX idx_analysis_events_signal_occurred ON analysis_signal_events(signal_id, occurred_at);
+    CREATE INDEX idx_analysis_outcomes_plan_observed ON analysis_observation_outcomes(plan_id, observed_at);
+
+    CREATE TRIGGER analysis_evidence_snapshots_no_update BEFORE UPDATE ON analysis_evidence_snapshots
+    BEGIN SELECT RAISE(ABORT, 'analysis audit records are immutable'); END;
+    CREATE TRIGGER analysis_evidence_snapshots_no_delete BEFORE DELETE ON analysis_evidence_snapshots
+    BEGIN SELECT RAISE(ABORT, 'analysis audit records are immutable'); END;
+    CREATE TRIGGER analysis_source_observations_no_update BEFORE UPDATE ON analysis_source_observations
+    BEGIN SELECT RAISE(ABORT, 'analysis audit records are immutable'); END;
+    CREATE TRIGGER analysis_source_observations_no_delete BEFORE DELETE ON analysis_source_observations
+    BEGIN SELECT RAISE(ABORT, 'analysis audit records are immutable'); END;
+    CREATE TRIGGER analysis_number_observations_no_update BEFORE UPDATE ON analysis_number_observations
+    BEGIN SELECT RAISE(ABORT, 'analysis audit records are immutable'); END;
+    CREATE TRIGGER analysis_number_observations_no_delete BEFORE DELETE ON analysis_number_observations
+    BEGIN SELECT RAISE(ABORT, 'analysis audit records are immutable'); END;
+    CREATE TRIGGER analysis_reports_no_update BEFORE UPDATE ON analysis_reports
+    BEGIN SELECT RAISE(ABORT, 'analysis audit records are immutable'); END;
+    CREATE TRIGGER analysis_reports_no_delete BEFORE DELETE ON analysis_reports
+    BEGIN SELECT RAISE(ABORT, 'analysis audit records are immutable'); END;
+    CREATE TRIGGER analysis_signal_reviews_no_update BEFORE UPDATE ON analysis_signal_reviews
+    BEGIN SELECT RAISE(ABORT, 'analysis audit records are immutable'); END;
+    CREATE TRIGGER analysis_signal_reviews_no_delete BEFORE DELETE ON analysis_signal_reviews
+    BEGIN SELECT RAISE(ABORT, 'analysis audit records are immutable'); END;
+    CREATE TRIGGER analysis_signal_events_no_update BEFORE UPDATE ON analysis_signal_events
+    BEGIN SELECT RAISE(ABORT, 'analysis audit records are immutable'); END;
+    CREATE TRIGGER analysis_signal_events_no_delete BEFORE DELETE ON analysis_signal_events
+    BEGIN SELECT RAISE(ABORT, 'analysis audit records are immutable'); END;
+    CREATE TRIGGER analysis_observation_plans_no_update BEFORE UPDATE ON analysis_observation_plans
+    BEGIN SELECT RAISE(ABORT, 'analysis audit records are immutable'); END;
+    CREATE TRIGGER analysis_observation_plans_no_delete BEFORE DELETE ON analysis_observation_plans
+    BEGIN SELECT RAISE(ABORT, 'analysis audit records are immutable'); END;
+    CREATE TRIGGER analysis_observation_outcomes_no_update BEFORE UPDATE ON analysis_observation_outcomes
+    BEGIN SELECT RAISE(ABORT, 'analysis audit records are immutable'); END;
+    CREATE TRIGGER analysis_observation_outcomes_no_delete BEFORE DELETE ON analysis_observation_outcomes
+    BEGIN SELECT RAISE(ABORT, 'analysis audit records are immutable'); END;
+    """,
 )
 
 
