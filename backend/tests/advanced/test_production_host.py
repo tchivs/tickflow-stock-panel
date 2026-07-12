@@ -3,8 +3,55 @@ from __future__ import annotations
 
 import time
 from datetime import date
+from hashlib import sha256
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
+
+
+class _AffirmativeSandboxLauncher:
+    """Test-only proven launcher contract; production owns the Linux implementation."""
+
+    def capability_probe(self, *, governed_input, workdir):
+        del governed_input, workdir
+        return SimpleNamespace(
+            user_namespace=True,
+            mount_namespace=True,
+            pid_namespace=True,
+            network_namespace=True,
+            network_absent=True,
+            private_root=True,
+            governed_input_read_only=True,
+            temporary_workdir_only=True,
+            resource_limits=True,
+            cleanup_verified=True,
+            proof_fingerprint="proof-fixture",
+        )
+
+    def spawn(self, **kwargs):
+        del kwargs
+        return {
+            "status": "completed",
+            "proof_fingerprint": "proof-fixture",
+            "resources": {"wall_clock_seconds": 5, "memory_limit_mb": 128},
+            "audit_reference": "runner-fixture",
+        }
+
+
+def _sandbox_submission() -> dict[str, object]:
+    source = "def run(panel):\n    return {'signal': 'hold'}\n"
+    return {
+        "contract": {
+            "contract_version": "advanced-strategy-v1",
+            "parent_asset_id": "registered-research-asset-v1",
+            "declared_inputs": ["governed_panel"],
+            "declared_imports": [],
+            "timeout_seconds": 5,
+            "memory_limit_mb": 128,
+            "source_sha256": sha256(source.encode()).hexdigest(),
+        },
+        "source": source,
+    }
 
 
 class _DeterministicGovernedCollaborator:
@@ -29,6 +76,27 @@ class _BlockingGovernedCollaborator:
         del specification
         time.sleep(10)
         return {}
+
+
+def test_affirmative_isolation_proof_records_one_safe_terminal_sandbox_run(tmp_path):
+    from app.advanced.sandbox import CustomStrategySandboxService
+
+    service = CustomStrategySandboxService(
+        audit_path=tmp_path / "operational.db",
+        governed_input=tmp_path / "governed-data",
+        launcher=_AffirmativeSandboxLauncher(),
+    )
+
+    result = service.submit(_sandbox_submission())
+
+    assert result == {
+        "status": "completed",
+        "proof_fingerprint": "proof-fixture",
+        "resources": {"wall_clock_seconds": 5, "memory_limit_mb": 128},
+        "audit_reference": result["audit_reference"],
+        "run_id": result["run_id"],
+    }
+    assert service.public_run(result["run_id"]) == result
 
 
 def _viewpoint_payload(*, instrument: str) -> dict[str, object]:
