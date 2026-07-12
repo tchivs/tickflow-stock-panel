@@ -122,11 +122,11 @@ Plans:
   2. User can inspect a multi-perspective report with visible scoring rationale, applicable valuation analysis, and an investment-committee memo.
   3. User can view a signal's current lifecycle status and its recorded evolution or outcome over time.
 
-**Plans**: 9 plans
+**Plans**: 1/9 plans executed
 Plans:
 **Wave 1**
 
-- [ ] 03-01-PLAN.md — 人工核验 LangGraph 依赖合法性。
+- [x] 03-01-PLAN.md — 人工核验 LangGraph 依赖合法性。
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
@@ -150,6 +150,7 @@ Plans:
 **Wave 6** *(blocked on Wave 5 completion)*
 
 - [ ] 03-08-PLAN.md — 在 stock、Portfolio 和 AI 宿主中完成证据优先 UI。
+
 **UI hint**: yes
 
 ### Phase 4: Advanced Capabilities
@@ -188,6 +189,6 @@ Plans:
 |-------|----------------|--------|-----------|
 | 1. Core Merger | 15/15 | Complete    | 2026-07-11 |
 | 2. Factor And Strategy Research | 8/8 | Complete    | 2026-07-11 |
-| 3. AI Analysis | 0/TBD | Not started | - |
+| 3. AI Analysis | 1/9 | In Progress|  |
 | 4. Advanced Capabilities | 0/TBD | Not started | - |
 | 5. Optional Enhancements | 0/TBD | Optional | - |
