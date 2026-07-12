@@ -367,23 +367,41 @@ class AnalysisRepository:
     def append_lifecycle_rejection(self, *, review_id: str, reviewer_principal: str) -> dict[str, Any]:
         """Append a rejection audit record without modifying the proposed or official state."""
         self._require_text(reviewer_principal, "reviewer principal")
-        review = self.get_lifecycle_review(review_id)
-        if review is None:
-            raise ValueError("lifecycle review not found")
-        if self._review_has_event(review_id):
-            raise ValueError("confirmed lifecycle review cannot be rejected")
-        return self.append_lifecycle_proposal(
-            subject_kind=self._signal_subject_kind(review["signal_id"]),
-            subject_key=self._signal_subject_key(review["signal_id"]),
-            prior_state=review["prior_state"],
-            proposed_state="rejected",
-            evidence={
-                "disposition": "rejected",
-                "rejected_review_id": review_id,
-                "reviewer_principal": reviewer_principal,
-                "recorded_at": _now(),
-            },
-        )
+        now = _now()
+        rejection_id = str(uuid4())
+        with self._connection() as connection, connection:
+            review = connection.execute("SELECT * FROM analysis_signal_reviews WHERE id = ?", (review_id,)).fetchone()
+            if review is None:
+                raise ValueError("lifecycle review not found")
+            if connection.execute(
+                "SELECT 1 FROM analysis_signal_events WHERE review_id = ?", (review_id,)
+            ).fetchone() is not None:
+                raise ValueError("confirmed lifecycle review cannot be rejected")
+            connection.execute(
+                """INSERT INTO analysis_signal_reviews
+                   (id, signal_id, prior_state, proposed_state, evidence_json, created_at)
+                   VALUES (?, ?, ?, 'rejected', ?, ?)""",
+                (
+                    rejection_id,
+                    review["signal_id"],
+                    review["prior_state"],
+                    _json(
+                        {
+                            "disposition": "rejected",
+                            "rejected_review_id": review_id,
+                            "reviewer_principal": reviewer_principal,
+                            "recorded_at": now,
+                        },
+                        "lifecycle rejection",
+                    ),
+                    now,
+                ),
+            )
+            rejected = connection.execute(
+                "SELECT * FROM analysis_signal_reviews WHERE id = ?", (rejection_id,)
+            ).fetchone()
+        assert rejected is not None
+        return self._review_record(rejected)
 
     def list_observation_plans(self, review_id: str) -> list[dict[str, Any]]:
         with self._connection() as connection:
@@ -423,17 +441,6 @@ class AnalysisRepository:
     def replace_observation_plan(*, plan_id: str, window_days: int) -> None:
         del plan_id, window_days
         raise ValueError("observation plan is immutable")
-
-    def _review_has_event(self, review_id: str) -> bool:
-        with self._connection() as connection:
-            return connection.execute("SELECT 1 FROM analysis_signal_events WHERE review_id = ?", (review_id,)).fetchone() is not None
-
-    def _signal_subject_kind(self, signal_id: str) -> str:
-        with self._connection() as connection:
-            row = connection.execute("SELECT subject_kind FROM analysis_signals WHERE id = ?", (signal_id,)).fetchone()
-        if row is None:
-            raise RuntimeError("lifecycle signal not found")
-        return str(row["subject_kind"])
 
     def _signal_subject_key(self, signal_id: str) -> str:
         with self._connection() as connection:

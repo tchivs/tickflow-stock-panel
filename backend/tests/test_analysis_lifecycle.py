@@ -111,6 +111,22 @@ def test_lifecycle_rejection_and_outcomes_append_without_changing_official_state
     assert repository.list_events(subject_key="600519.SH") == []
 
 
+def test_confirmed_review_cannot_be_rejected_after_its_event_is_recorded(tmp_path):
+    _repository, service = _lifecycle(tmp_path, reviewer_resolver=lambda _token: "reviewer-principal-opaque")
+    proposal = service.propose(
+        subject_key="600519.SH",
+        prior_state="active",
+        next_state="weakened",
+        evidence=[{"id": "filing", "independence_group": "exchange"}],
+    )
+    service.confirm(
+        review_id=proposal["id"], session_token="token", window_days=20, benchmark="CSI300", metric="excess_return"
+    )
+
+    with pytest.raises(ValueError, match="confirmed"):
+        service.reject(review_id=proposal["id"], session_token="token")
+
+
 def test_confirm_rechecks_current_state_and_writes_exactly_one_immutable_plan(tmp_path):
     repository, service = _lifecycle(tmp_path, reviewer_resolver=lambda _token: "reviewer-principal-opaque")
     first = service.propose(
