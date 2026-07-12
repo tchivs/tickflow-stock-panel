@@ -54,6 +54,14 @@ export const QK = {
   researchComparisonCandidates: ['research', 'comparison', 'candidates'] as const,
   researchComparison: (experimentIds: string[]) => ['research', 'comparison', ...experimentIds] as const,
 
+  // Evidence-backed analysis — subject remains in every key so one object's
+  // progress event cannot clear another object's independently read panels.
+  analysisReports: (subjectKind: string, subjectKey: string) => ['analysis', 'reports', subjectKind, subjectKey] as const,
+  analysisReport: (subjectKind: string, subjectKey: string, reportId: string) => ['analysis', 'report', subjectKind, subjectKey, reportId] as const,
+  analysisEvidence: (subjectKind: string, subjectKey: string, reportId: string) => ['analysis', 'evidence', subjectKind, subjectKey, reportId] as const,
+  analysisSignalHistory: (subjectKind: string, subjectKey: string, signalId: string) => ['analysis', 'signal-history', subjectKind, subjectKey, signalId] as const,
+  analysisRun: (subjectKind: string, subjectKey: string, runId: string) => ['analysis', 'run', subjectKind, subjectKey, runId] as const,
+
   // Data / Pipeline
   dataStatus:           ['data-status'] as const,
   pipelineJobs:         ['pipeline-jobs'] as const,

@@ -174,6 +174,123 @@ export interface AiStockReport {
   created_at: string
 }
 
+// ===== Evidence-backed analysis =====
+// The browser only identifies a subject and invokes server-issued review references.
+// Provenance, source grades, cross-checks, and lifecycle authority remain server-owned.
+export type AnalysisSubjectKind = 'stock' | 'portfolio'
+
+export interface AnalysisSubject {
+  kind: AnalysisSubjectKind
+  key: string
+}
+
+export interface AnalysisRun {
+  id: string
+  subject: AnalysisSubject
+  status: 'queued' | 'running' | 'completed' | 'failed'
+  report_id?: string | null
+  requested_at?: string | null
+  started_at?: string | null
+  finished_at?: string | null
+}
+
+export interface AnalysisReportSummary {
+  id: string
+  subject: AnalysisSubject
+  version: number
+  status: 'validated' | 'failed'
+  generated_at: string
+  evidence_limitations: string[]
+}
+
+export interface AnalysisPerspective {
+  name: string
+  conclusion: string
+  evidence_count: number
+  limitations: string[]
+}
+
+export interface AnalysisScoreDimension {
+  name: string
+  contribution?: number | null
+  weight?: number | null
+  evidence_ids: string[]
+  rationale: string
+  uncertainty?: string | null
+}
+
+export interface AnalysisValuation {
+  applicable: boolean
+  reason?: string | null
+  method?: string | null
+  inputs?: Record<string, unknown> | null
+  as_of?: string | null
+  range?: string | null
+  limitations?: string[]
+}
+
+export interface AnalysisIcMemo {
+  thesis: string
+  supporting_evidence?: string[]
+  risks: string[]
+  open_questions: string[]
+  valuation_anchor?: string | null
+  invalidation_conditions?: string[]
+  evidence_limitations?: string[]
+}
+
+export interface AnalysisReport extends AnalysisReportSummary {
+  perspectives: AnalysisPerspective[]
+  score?: { value?: number | null; dimensions: AnalysisScoreDimension[] } | null
+  valuation?: AnalysisValuation | null
+  ic_memo: AnalysisIcMemo
+}
+
+export interface AnalysisEvidenceSource {
+  id: string
+  name: string
+  grade: 'A' | 'B' | 'C'
+  source_type: string
+  retrieved_at: string
+  period?: string | null
+  definition?: string | null
+  independence_group?: string | null
+  reference?: string | null
+}
+
+export interface AnalysisMaterialNumber {
+  id: string
+  label: string
+  value: number | string | null
+  unit: string
+  period: string
+  source_count: number
+  cross_check: 'confirmed' | 'unresolved' | 'conflicting' | 'context_insufficient'
+  difference_reason?: string | null
+  affected_conclusion_ids?: string[]
+}
+
+export interface AnalysisEvidence {
+  report_id: string
+  sources: AnalysisEvidenceSource[]
+  material_numbers: AnalysisMaterialNumber[]
+}
+
+export interface AnalysisLifecycleEvent {
+  state: 'strengthened' | 'weakened' | 'falsified' | 'priced_in'
+  occurred_at: string
+  evidence_summary: string
+  source_grade?: 'A' | 'B' | 'C' | null
+  cross_check?: AnalysisMaterialNumber['cross_check'] | null
+}
+
+export interface AnalysisSignalHistory {
+  signal_id: string
+  current_state: AnalysisLifecycleEvent['state'] | null
+  events: AnalysisLifecycleEvent[]
+  outcome?: { status: 'pending' | 'recorded'; missing_fields?: string[]; [key: string]: unknown } | null
+}
+
 // ===== Kline =====
 export interface MinuteKlineRow {
   datetime: string
@@ -2244,6 +2361,32 @@ export const api = {
     if (accountId != null) params.set('account_id', String(accountId))
     return request<PortfolioSummary>(`/api/portfolio/summary?${params}`)
   },
+
+  // ===== Evidence-backed analysis =====
+  analysisStartRun: (subject: AnalysisSubject, focus?: string) =>
+    request<{ run: AnalysisRun }>('/api/analysis/runs', {
+      method: 'POST',
+      body: JSON.stringify({ subject_kind: subject.kind, subject_key: subject.key, focus }),
+    }),
+  analysisReports: (subject: AnalysisSubject) =>
+    request<{ reports: AnalysisReportSummary[] }>(
+      `/api/analysis/subjects/${encodeURIComponent(subject.kind)}/${encodeURIComponent(subject.key)}/reports`,
+    ),
+  analysisReport: (reportId: string) =>
+    request<{ report: AnalysisReport }>(`/api/analysis/reports/${encodeURIComponent(reportId)}`),
+  analysisEvidence: (reportId: string) =>
+    request<AnalysisEvidence>(`/api/analysis/reports/${encodeURIComponent(reportId)}/evidence`),
+  analysisSignalHistory: (signalId: string) =>
+    request<AnalysisSignalHistory>(`/api/analysis/signals/${encodeURIComponent(signalId)}/history`),
+  analysisConfirmReview: (reviewId: string, windowDays: 20 | 60 | 120) =>
+    request<{ review: { id: string; status: 'confirmed' } }>(`/api/analysis/reviews/${encodeURIComponent(reviewId)}/confirm`, {
+      method: 'POST',
+      body: JSON.stringify({ window_days: windowDays }),
+    }),
+  analysisRejectReview: (reviewId: string) =>
+    request<{ review: { id: string; status: 'rejected' } }>(`/api/analysis/reviews/${encodeURIComponent(reviewId)}/reject`, {
+      method: 'POST',
+    }),
 
   // ===== Decision playbook =====
   decisionGenerate: (payload: DecisionRunInput) =>
