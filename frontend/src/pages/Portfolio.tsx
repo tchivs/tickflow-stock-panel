@@ -12,6 +12,7 @@ import { EmptyState } from '@/components/EmptyState'
 import { PageHeader } from '@/components/PageHeader'
 import { Skeleton } from '@/components/data/Skeleton'
 import { toast } from '@/components/Toast'
+import { AnalysisWorkspace } from '@/components/analysis/AnalysisWorkspace'
 
 function money(value: number | null | undefined) {
   return value == null ? '—' : value.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -153,6 +154,9 @@ export function Portfolio() {
                   <div className="space-y-2 md:hidden">{holdings.map(holding => <HoldingCard key={holding.id} holding={holding} accountName={accountNames.get(holding.account_id) ?? `账户 ${holding.account_id}`} activeRuleCount={activeRuleCounts.get(holding.id) ?? 0} onEdit={setHoldingDialog} onArchive={setHoldingDialog} onMonitor={item => navigate(`/monitor?position_id=${item.id}`)} />)}</div>
                 </>
               )}
+            </section>
+            <section aria-label="账户分析" className="space-y-3">
+              {selectedAccount ? <AnalysisWorkspace subject={{ kind: 'portfolio', key: String(selectedAccount.id) }} title={selectedAccount.name} /> : <div className="rounded-card border border-border bg-surface p-4"><h2 className="text-base font-semibold text-foreground">分析结论与证据状态</h2><p className="mt-1 text-sm text-secondary">选择标的或账户后开始证据分析</p><p className="mt-1 text-sm text-muted">分析会显示来源质量、材料数字核验、报告理由与信号历史。</p></div>}
             </section>
           </>
         )}

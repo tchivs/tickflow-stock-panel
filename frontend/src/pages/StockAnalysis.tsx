@@ -11,6 +11,7 @@ import { api } from '@/lib/api'
 import { useLastStock } from '@/lib/useLastStock'
 import { QK } from '@/lib/queryKeys'
 import { toast } from '@/components/Toast'
+import { AnalysisWorkspace } from '@/components/analysis/AnalysisWorkspace'
 import {
   startAnalysis, findTodayReport, useHistoryReports,
   deleteReport, openHistoryReport, loadHistory,
@@ -141,7 +142,12 @@ export function StockAnalysis() {
                 hint="搜索代码或名称,查看日 K 与关键价位,并可让 AI 进行技术面 / 基本面 / 财务面 / 消息面四维综合分析。"
               />
             ) : (
-              <StockAnalysisBoard symbol={symbol} />
+              <>
+                <StockAnalysisBoard symbol={symbol} />
+                <div className="mt-6">
+                  <AnalysisWorkspace subject={{ kind: 'stock', key: symbol }} title={`${name || symbol}（${symbol}）`} />
+                </div>
+              </>
             )}
           </div>
           <HistorySidebar />
