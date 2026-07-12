@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.advanced import projections
-from app.advanced.schemas import ViewpointRequest
+from app.advanced.schemas import CustomStrategySubmission, ViewpointRequest
 
 router = APIRouter(prefix="/api/advanced", tags=["advanced"])
 
@@ -225,6 +225,22 @@ def append_experiment_feedback(run_id: str, payload: FeedbackRequest, request: R
     return {"feedback": record}
 
 
+@router.post("/sandbox/submissions")
+def submit_custom_strategy(payload: CustomStrategySubmission, request: Request) -> dict[str, object]:
+    """Admit only a same-request, hash-bound strategy through the fail-closed sandbox."""
+
+    _require_research_asset(request, payload.contract.parent_asset_id)
+    service = _service(request, "advanced_sandbox_service")
+    try:
+        result = service.submit(payload.model_dump(mode="python"))
+        audit_reference = result.get("audit_reference") if isinstance(result, dict) else None
+        if not isinstance(audit_reference, str):
+            raise ValueError("sandbox did not retain a safe audit reference")
+        return {"validation": projections.sandbox_validation(service.public_validation(audit_reference))}
+    except ValueError as error:
+        raise _safe_value_error(error) from error
+
+
 @router.get("/jobs/{job_id}")
 def get_job(job_id: str, request: Request) -> dict[str, object]:
     return {"job": projections.job(_owned_job(request, job_id))}
@@ -249,8 +265,11 @@ def create_job(payload: dict[str, object], request: Request) -> dict[str, object
 def resume_job(job_id: str, payload: ResumeRequest, request: Request) -> dict[str, object]:
     _owned_job(request, job_id)
     service = request.app.state.advanced_job_service
+    resume = getattr(service, "resume", None)
+    if not callable(resume):
+        raise HTTPException(status_code=503, detail="advanced workflow resume is temporarily unavailable")
     try:
-        return {"job": projections.job(service.resume(principal=_principal(request), job_id=job_id, decision=payload.decision))}
+        return {"job": projections.job(resume(principal=_principal(request), job_id=job_id, decision=payload.decision))}
     except ValueError as error:
         raise HTTPException(status_code=409, detail="advanced job conflict") from error
 
