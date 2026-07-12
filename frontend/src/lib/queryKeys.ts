@@ -69,6 +69,9 @@ export const QK = {
   advancedCalibration: (subjectKind: string, subjectKey: string, sourceProfile: string) => ['advanced', 'calibration', subjectKind, subjectKey, sourceProfile] as const,
   advancedJob: (subjectKind: string, subjectKey: string, jobId: string) => ['advanced', 'job', subjectKind, subjectKey, jobId] as const,
   advancedAudit: (subjectKind: string, subjectKey: string, auditReference: string) => ['advanced', 'audit', subjectKind, subjectKey, auditReference] as const,
+  advancedExperiments: (researchAssetId: string) => ['advanced', 'experiments', researchAssetId] as const,
+  advancedCandidates: ['advanced', 'candidates'] as const,
+  advancedSandboxValidations: ['advanced', 'sandbox', 'validations'] as const,
 
   // Data / Pipeline
   dataStatus:           ['data-status'] as const,

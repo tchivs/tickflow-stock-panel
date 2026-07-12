@@ -151,6 +151,7 @@ def test_promotion_api_derives_principal_from_request_state_and_rejects_client_a
     app = FastAPI()
     app.include_router(advanced_api.router)
     app.state.evolution_service = service
+    app.state.resolve_advanced_research_asset = lambda _request, asset_id: asset_id == "strategy-parent-v4"
 
     @app.middleware("http")
     async def authenticated_researcher(request: Request, call_next):

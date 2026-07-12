@@ -5,6 +5,7 @@ import { StrategyBacktest } from './backtest/StrategyBacktest'
 import { StrategyOptimizer } from './backtest/StrategyOptimizer'
 import { ResearchLibrary } from './backtest/ResearchLibrary'
 import { ExperimentComparison } from './backtest/ExperimentComparison'
+import { AdvancedResearchPanels } from '@/components/advanced/AdvancedResearchPanels'
 import { BarChart3, FlaskConical, SlidersHorizontal } from 'lucide-react'
 
 type Tab = 'factor' | 'strategy' | 'optimizer'
@@ -35,6 +36,7 @@ const TAB_ICONS: Record<Tab, typeof BarChart3> = {
 
 export function Backtest() {
   const [activeTab, setActiveTab] = useState<Tab>('strategy')
+  const [selectedResearchAsset, setSelectedResearchAsset] = useState<string | null>(null)
 
   const handleModeKeyDown = (event: KeyboardEvent<HTMLButtonElement>, tab: Tab) => {
     if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
@@ -92,7 +94,7 @@ export function Backtest() {
 
       <main className="flex-1 min-h-0 px-3 pb-3 pt-3 lg:px-4 lg:pb-4">
         {activeTab === 'factor' && <div id="backtest-mode-panel-factor" role="tabpanel" aria-labelledby="backtest-mode-tab-factor" className="space-y-4"><FactorBacktest /><ResearchLibrary /><ExperimentComparison /></div>}
-        {activeTab === 'strategy' && <div id="backtest-mode-panel-strategy" role="tabpanel" aria-labelledby="backtest-mode-tab-strategy" className="space-y-4"><StrategyBacktest /><ResearchLibrary /><ExperimentComparison /></div>}
+        {activeTab === 'strategy' && <div id="backtest-mode-panel-strategy" role="tabpanel" aria-labelledby="backtest-mode-tab-strategy" className="space-y-4"><StrategyBacktest onResearchAssetChange={setSelectedResearchAsset} /><ResearchLibrary /><ExperimentComparison /><AdvancedResearchPanels researchAssetId={selectedResearchAsset} /></div>}
         {activeTab === 'optimizer' && <div id="backtest-mode-panel-optimizer" role="tabpanel" aria-labelledby="backtest-mode-tab-optimizer"><StrategyOptimizer /></div>}
       </main>
     </div>

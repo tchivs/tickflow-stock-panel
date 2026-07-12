@@ -53,6 +53,69 @@ def sandbox_validation(record: Mapping[str, Any]) -> dict[str, object]:
     }
 
 
+def experiment_specification(record: Mapping[str, Any]) -> dict[str, object]:
+    """Project immutable specification facts without owner identity or raw criteria objects."""
+    return {
+        "id": str(record["id"]),
+        "research_asset_id": str(record["research_asset_id"]),
+        "version": int(record["version"]),
+        "hypothesis": str(record["hypothesis"]),
+        "data_scope": _safe_mapping(record.get("data_scope")),
+        "method": str(record["method"]),
+        "metrics": _safe_strings(record.get("metrics")),
+        "created_at": str(record["created_at"]),
+    }
+
+
+def experiment_run(record: Mapping[str, Any]) -> dict[str, object]:
+    """Return an allowlisted manifest that cannot disclose runner diagnostics."""
+    resources = _safe_mapping(record.get("resources"))
+    return {
+        "id": str(record["id"]),
+        "specification_id": str(record["specification_id"]),
+        "status": str(record["status"]),
+        "governed_fingerprint": str(record["governed_fingerprint"]),
+        "asset_version": _optional_text(record.get("asset_version")),
+        "parameters": _safe_mapping(record.get("resolved_parameters")),
+        "environment": _safe_mapping(record.get("environment")),
+        "resource_limits": resources,
+        "metrics": _safe_mapping(record.get("metrics")),
+        "artifact_count": len(record.get("artifacts", [])) if isinstance(record.get("artifacts"), list) else 0,
+        "constraint_reason": _optional_text(record.get("constraint_reason")),
+        "created_at": str(record["created_at"]),
+    }
+
+
+def experiment_feedback(record: Mapping[str, Any]) -> dict[str, object]:
+    return {
+        "id": str(record["id"]),
+        "run_id": str(record["run_id"]),
+        "conclusion": str(record["conclusion"]),
+        "notes": _optional_text(record.get("notes")) or "已记录受控研究反馈",
+        "created_at": str(record.get("created_at", "")),
+    }
+
+
+def candidate(record: Mapping[str, Any], gates: list[Mapping[str, Any]]) -> dict[str, object]:
+    return {
+        "id": str(record["id"]),
+        "parent_asset_id": str(record["parent_research_asset_id"]),
+        "parent_version": str(record["parent_version"]),
+        "mutation": str(record["mutation_operation"]),
+        "seed": int(record["seed"]),
+        "resolved_config": _safe_mapping(record.get("resolved_configuration")),
+        "created_at": str(record["created_at"]),
+        "gates": [
+            {
+                "name": str(gate["gate"]),
+                "status": str(gate["status"]),
+                "evidence": _optional_text(_safe_mapping(gate.get("evidence")).get("summary")) or "已记录受控证据",
+            }
+            for gate in gates
+        ],
+    }
+
+
 def _safe_evaluation(value: object) -> dict[str, object] | None:
     if not isinstance(value, Mapping):
         return None
@@ -67,3 +130,13 @@ def _safe_evaluation(value: object) -> dict[str, object] | None:
 
 def _optional_text(value: object) -> str | None:
     return value if isinstance(value, str) and value else None
+
+
+def _safe_mapping(value: object) -> dict[str, str | int | float | bool]:
+    if not isinstance(value, Mapping):
+        return {}
+    return {str(key): item for key, item in value.items() if isinstance(item, (str, int, float, bool))}
+
+
+def _safe_strings(value: object) -> list[str]:
+    return [item for item in value if isinstance(item, str)] if isinstance(value, list) else []

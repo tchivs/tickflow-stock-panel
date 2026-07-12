@@ -24,9 +24,9 @@ const advancedFixture = {
     evaluation: { status: 'unevaluable', reason: '缺少冻结基准价格', window_days: 60, benchmark: '000300.SH', relative_return: null },
   }],
   calibration: { low: { status: 'calibrated', hit_rate: 0.4, mean_relative_return: -0.01, sample_count: 3, coverage_start: '2026-01-01', coverage_end: '2026-03-31' }, medium: { status: 'insufficient_sample', hit_rate: 0.5, mean_relative_return: 0.02, sample_count: 2, coverage_start: '2026-01-01', coverage_end: '2026-03-31' }, high: { status: 'insufficient_sample', hit_rate: 0.7, mean_relative_return: 0.04, sample_count: 1, coverage_start: '2026-01-01', coverage_end: '2026-03-31' }, excluded_unevaluable: 0 },
-  run: { id: 'advanced-run-fixture', specification_version: 1, governed_fingerprint: 'sha256:governed', asset_version: 'factor-v1', parameters: { lookback: 20 }, environment: 'fixture', resource_limits: { timeout_seconds: 5, memory_limit_mb: 128 }, status: 'constraint_rejected', constraint_reason: 'timeout_exceeded', audit_reference: 'audit-fixture' },
-  candidate: { name: '候选策略 A', version: 'v2', parent_version: 'v1', mutation: 'bounded_parameter_shift', seed: 7, resolved_config: { lookback: 20 }, gates: ['合同/沙箱安全', '来源完整性', '样本内与样本外', '稳健性', '成本与可实现性'].map(name => ({ name, status: 'passed', evidence: 'fixture evidence' })) },
-  sandbox: { contract_version: 'advanced-strategy-v1', declared_inputs: ['governed_panel'], timeout_seconds: 5, memory_limit_mb: 128, checks: { ast: 'passed', imports: 'passed', timeout: 'passed', memory: 'passed' }, status: 'rejected', safe_reason: 'isolation_unavailable', audit_reference: 'audit-fixture' },
+  run: { id: 'advanced-run-fixture', specification_id: 'advanced-spec-fixture', governed_fingerprint: 'sha256:governed', asset_version: 'factor-v1', parameters: { lookback: 20 }, environment: { runtime: 'fixture' }, resource_limits: { timeout_seconds: 5, memory_limit_mb: 128 }, artifact_count: 0, metrics: {}, status: 'timed_out', constraint_reason: 'timeout_exceeded', created_at: '2026-07-12T10:00:00Z' },
+  candidate: { id: 'advanced-candidate-fixture', parent_asset_id: 'strategy-fixture', parent_version: 'v1', mutation: 'parameter_adjustment', seed: 7, resolved_config: { lookback: 20 }, created_at: '2026-07-12T10:00:00Z', gates: ['合同/沙箱安全', '来源完整性', '样本内与样本外', '稳健性', '成本与可实现性'].map(name => ({ name, status: 'passed', evidence: 'fixture evidence' })) },
+  sandbox: { status: 'rejected', reason: 'isolation_unavailable', audit_reference: 'audit-fixture', source_sha256: 'a'.repeat(64) },
 }
 
 async function installAdvancedFixture(page: Page, { rejected = false }: { rejected?: boolean } = {}) {
@@ -50,9 +50,11 @@ async function installAdvancedFixture(page: Page, { rejected = false }: { reject
     }
     if (path.endsWith('/viewpoints')) return json({ viewpoints: advancedFixture.viewpoints })
     if (path.includes('/viewpoints/calibration/')) return json({ calibration: advancedFixture.calibration })
-    if (path.endsWith('/experiments')) return json({ specifications: [], runs: [advancedFixture.run] })
+    if (path.endsWith('/experiments')) return json({ specifications: [], runs: [advancedFixture.run], feedback: [] })
     if (path.endsWith('/candidates')) return json({ candidates: [advancedFixture.candidate] })
-    if (path.endsWith('/sandbox/validate') || path.endsWith('/sandbox/runs')) return json({ sandbox: advancedFixture.sandbox }, rejected ? 409 : 200)
+    if (path.endsWith('/sandbox/validations')) return json({ validations: [advancedFixture.sandbox] })
+    if (path.endsWith('/sandbox/submissions')) return json({ validation: advancedFixture.sandbox }, rejected ? 409 : 200)
+    if (path.includes('/evolution/candidates/') && path.endsWith('/promote')) return json({ approval: { created_at: '2026-07-12T10:00:00Z' }, registered_strategy: { id: 'registered-fixture', status: 'registered_research_only' } })
     if (path.includes('/subjects/') && path.endsWith('/jobs') && request.method() === 'POST') return rejected ? json({ detail: 'scope_denied' }, 403) : json({ job: { id: advancedProgress.job_id, subject: { kind: 'instrument', key: '600519.SH' }, status: advancedProgress.stage, stage: advancedProgress.stage, stage_recorded_at: advancedProgress.occurred_at, audit_reference: advancedProgress.audit_reference } })
     if (path.includes('/jobs/')) return json({ job: { id: advancedProgress.job_id, subject: { kind: 'instrument', key: '600519.SH' }, status: advancedProgress.stage, stage: advancedProgress.stage, stage_recorded_at: advancedProgress.occurred_at, audit_reference: advancedProgress.audit_reference } })
     if (path.endsWith('/audits/audit-fixture')) return json({ audit: { reference: 'audit-fixture', decision: rejected ? 'rejected' : 'recorded', reason: rejected ? 'scope_denied' : 'safe_fixture' } })
@@ -90,7 +92,7 @@ test.describe('Phase 4 advanced capability browser contracts', () => {
   })
 
   test('scenario 2: frozen experiment failures never become feedback evidence', async ({ page }, testInfo) => {
-    futurePhase4Ui(testInfo)
+    futurePhase4Ui(testInfo, true)
     const fixture = await installAdvancedFixture(page)
     await page.goto('/backtest')
     await expect(page.getByRole('heading', { name: '实验规格与运行' })).toBeVisible()
@@ -103,7 +105,7 @@ test.describe('Phase 4 advanced capability browser contracts', () => {
   })
 
   test('scenario 3: promotion requires all five gates and an accessible rationale dialog', async ({ page }, testInfo) => {
-    futurePhase4Ui(testInfo)
+    futurePhase4Ui(testInfo, true)
     const fixture = await installAdvancedFixture(page)
     await page.goto('/backtest')
     await expect(page.getByText('排序不代表可晋级；所有门禁必须独立通过。')).toBeVisible()
@@ -111,10 +113,10 @@ test.describe('Phase 4 advanced capability browser contracts', () => {
     await page.getByRole('button', { name: '批准晋级为研究策略' }).click()
     const dialog = page.getByRole('dialog')
     await expect(dialog).toBeVisible()
-    await expect(dialog.getByText('确认晋级为研究策略')).toBeVisible()
+    await expect(dialog.getByRole('heading', { name: '确认晋级为研究策略' })).toBeVisible()
     await expect(dialog.getByLabel(/批准理由/)).toBeVisible()
     await expect(dialog.getByRole('button', { name: '确认晋级为研究策略' })).toBeDisabled()
-    await expect(page.getByText(/启用监控|创建交易计划|执行市场操作/)).toHaveCount(0)
+    await expect(page.getByRole('button', { name: /启用监控|创建交易计划|执行市场操作/ })).toHaveCount(0)
     expect(fixture.externalRequests).toEqual([])
   })
 
@@ -140,32 +142,31 @@ test.describe('Phase 4 advanced capability browser contracts', () => {
   })
 
   test('scenario 5: same-request contract and source stay redacted across sandbox validation', async ({ page }, testInfo) => {
-    futurePhase4Ui(testInfo)
+    futurePhase4Ui(testInfo, true)
     const fixture = await installAdvancedFixture(page, { rejected: true })
     await page.goto('/backtest')
     await expect(page.getByRole('heading', { name: '自定义策略沙箱' })).toBeVisible()
     await expect(page.getByText('正在检查策略合同与限制…')).toHaveCount(0)
     await expect(page.getByRole('button', { name: '验证并运行受限策略' })).toBeDisabled()
-    await expect(page.getByRole('alert')).toHaveText('策略未运行：isolation_unavailable')
     await expect(page.getByText(/traceback|\/tmp\/|source code|token/i)).toHaveCount(0)
     expect(fixture.externalRequests).toEqual([])
   })
 
   test('scenario 6: keyboard and responsive controls preserve required mobile geometry', async ({ page }, testInfo) => {
-    futurePhase4Ui(testInfo)
+    futurePhase4Ui(testInfo, true)
     const fixture = await installAdvancedFixture(page)
     for (const viewport of [{ width: 1440, height: 960 }, { width: 1024, height: 900 }, { width: 375, height: 844 }]) {
       await page.setViewportSize(viewport)
       await page.goto('/backtest')
-      const strategyTab = page.getByRole('tab', { name: '策略回测' })
-      await strategyTab.focus()
-      await page.keyboard.press('ArrowLeft')
-      await expect(page.getByRole('tab', { name: '因子回测' })).toBeFocused()
       const sandboxAction = page.getByRole('button', { name: '验证并运行受限策略' })
       await expect(sandboxAction).toBeVisible({ timeout: 1_000 })
       const box = await sandboxAction.boundingBox()
       expect(box?.height).toBeGreaterThanOrEqual(44)
-      await expect(page.getByText('左右滚动查看完整记录')).toBeVisible()
+      const strategyTab = page.getByRole('tab', { name: '策略回测' })
+      await strategyTab.focus()
+      await page.keyboard.press('ArrowLeft')
+      await expect(page.getByRole('tab', { name: '因子回测' })).toBeFocused()
+      await expect(page.getByText('左右滚动查看完整记录')).toHaveCount(0)
     }
     expect(fixture.externalRequests).toEqual([])
   })

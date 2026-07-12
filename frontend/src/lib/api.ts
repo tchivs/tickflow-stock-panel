@@ -407,6 +407,64 @@ export interface AdvancedAudit {
   reason: string
 }
 
+export interface AdvancedExperimentSpecification {
+  id: string
+  research_asset_id: string
+  version: number
+  hypothesis: string
+  data_scope: Record<string, string | number | boolean>
+  method: string
+  metrics: string[]
+  created_at: string
+}
+
+export interface AdvancedExperimentRun {
+  id: string
+  specification_id: string
+  status: 'completed' | 'validation_failed' | 'timed_out' | 'resource_limited'
+  governed_fingerprint: string
+  asset_version: string | null
+  parameters: Record<string, string | number | boolean>
+  environment: Record<string, string | number | boolean>
+  resource_limits: Record<string, string | number | boolean>
+  metrics: Record<string, string | number | boolean>
+  artifact_count: number
+  constraint_reason: string | null
+  created_at: string
+}
+
+export interface AdvancedExperimentFeedback {
+  id: string
+  run_id: string
+  conclusion: 'supported' | 'refuted' | 'inconclusive' | 'needs_replication'
+  notes: string
+  created_at: string
+}
+
+export interface AdvancedPromotionGate {
+  name: string
+  status: 'passed' | 'failed'
+  evidence: string
+}
+
+export interface AdvancedCandidate {
+  id: string
+  parent_asset_id: string
+  parent_version: string
+  mutation: string
+  seed: number
+  resolved_config: Record<string, string | number | boolean>
+  created_at: string
+  gates: AdvancedPromotionGate[]
+}
+
+export interface AdvancedSandboxValidation {
+  status: 'rejected' | 'validated' | 'constraint_failed'
+  reason: string
+  audit_reference: string
+  source_sha256: string
+}
+
 // ===== Kline =====
 export interface MinuteKlineRow {
   datetime: string
@@ -2520,6 +2578,22 @@ export const api = {
     request<{ job: AdvancedJob }>(`/api/advanced/jobs/${encodeURIComponent(jobId)}`),
   advancedAudit: (auditReference: string) =>
     request<{ audit: AdvancedAudit }>(`/api/advanced/audits/${encodeURIComponent(auditReference)}`),
+  advancedExperiments: () =>
+    request<{ specifications: AdvancedExperimentSpecification[]; runs: AdvancedExperimentRun[]; feedback: AdvancedExperimentFeedback[] }>('/api/advanced/experiments'),
+  advancedCreateExperiment: (payload: { research_asset_id: string; hypothesis: string; data_scope: Record<string, string>; method: string; metrics: string[]; success_criteria: Record<string, string>; failure_criteria: Record<string, string> }) =>
+    request<{ specification: AdvancedExperimentSpecification }>('/api/advanced/experiments/specifications', { method: 'POST', body: JSON.stringify(payload) }),
+  advancedRunExperiment: (specificationId: string) =>
+    request<{ run: AdvancedExperimentRun }>(`/api/advanced/experiments/specifications/${encodeURIComponent(specificationId)}/runs`, { method: 'POST' }),
+  advancedRetryExperiment: (runId: string) =>
+    request<{ run: AdvancedExperimentRun }>(`/api/advanced/experiments/runs/${encodeURIComponent(runId)}/retry`, { method: 'POST' }),
+  advancedRecordFeedback: (runId: string, conclusion: AdvancedExperimentFeedback['conclusion'], notes: string) =>
+    request<{ feedback: AdvancedExperimentFeedback }>(`/api/advanced/experiments/runs/${encodeURIComponent(runId)}/feedback`, { method: 'POST', body: JSON.stringify({ conclusion, notes }) }),
+  advancedCandidates: () => request<{ candidates: AdvancedCandidate[] }>('/api/advanced/evolution/candidates'),
+  advancedPromoteCandidate: (candidateId: string, rationale: string) =>
+    request<{ approval: { created_at: string }; registered_strategy: { id: string; status: 'registered_research_only' } }>(`/api/advanced/evolution/candidates/${encodeURIComponent(candidateId)}/promote`, { method: 'POST', body: JSON.stringify({ rationale }) }),
+  advancedSubmitSandbox: (payload: { contract: { contract_version: 'advanced-strategy-v1'; parent_asset_id: string; declared_inputs: ['governed_panel']; declared_imports: string[]; timeout_seconds: number; memory_limit_mb: number; source_sha256: string }; source: string }) =>
+    request<{ validation: AdvancedSandboxValidation }>('/api/advanced/sandbox/submissions', { method: 'POST', body: JSON.stringify(payload) }),
+  advancedSandboxValidations: () => request<{ validations: AdvancedSandboxValidation[] }>('/api/advanced/sandbox/validations'),
 
   // ===== Decision playbook =====
   decisionGenerate: (payload: DecisionRunInput) =>

@@ -132,6 +132,15 @@ def _owned_run(request: Request, run_id: str) -> dict[str, object]:
     return record
 
 
+def _owned_candidate(request: Request, candidate_id: str) -> dict[str, object]:
+    service = _service(request, "evolution_service")
+    candidate = service.get_candidate(candidate_id)
+    if not isinstance(candidate, dict):
+        raise HTTPException(status_code=404, detail="advanced candidate not found")
+    _require_research_asset(request, candidate.get("parent_research_asset_id"))
+    return candidate
+
+
 def _safe_value_error(error: ValueError) -> HTTPException:
     message = str(error).lower()
     if any(token in message for token in ("already", "conflict", "state changed", "replay")):
@@ -168,6 +177,7 @@ def _audit_is_in_scope(request: Request, reference: str) -> bool:
 
 @router.post("/evolution/candidates/{candidate_id}/promote")
 def promote_candidate(candidate_id: str, payload: PromotionRequest, request: Request) -> dict[str, object]:
+    _owned_candidate(request, candidate_id)
     service = _service(request, "evolution_service")
     try:
         return service.approve(candidate_id=candidate_id, principal=_principal(request), rationale=payload.rationale)
@@ -227,7 +237,62 @@ def create_experiment_specification(payload: ExperimentSpecificationRequest, req
 
 @router.get("/experiments/specifications/{specification_id}")
 def experiment_specification(specification_id: str, request: Request) -> dict[str, object]:
-    return {"specification": _owned_specification(request, specification_id)}
+    return {"specification": projections.experiment_specification(_owned_specification(request, specification_id))}
+
+
+@router.get("/experiments")
+def list_experiments(request: Request) -> dict[str, object]:
+    """List only server-owned specifications, runs, and append-only feedback."""
+    service = _service(request, "experiment_service")
+    principal = _principal(request)
+    specifications = getattr(service, "list_specifications", lambda: [])()
+    visible_specs = [
+        record for record in specifications
+        if isinstance(record, dict)
+        and record.get("owner_principal") == principal
+        and _research_asset_allowed(request, record.get("research_asset_id"))
+    ]
+    visible_ids = {str(record["id"]) for record in visible_specs}
+    runs = getattr(service, "list_runs", lambda: [])()
+    visible_runs = [record for record in runs if isinstance(record, dict) and str(record.get("specification_id")) in visible_ids]
+    feedback = [
+        item for run in visible_runs
+        for item in getattr(service, "list_feedback", lambda **_: [])(run_id=str(run["id"]))
+        if isinstance(item, dict)
+    ]
+    return {
+        "specifications": [projections.experiment_specification(record) for record in visible_specs],
+        "runs": [projections.experiment_run(record) for record in visible_runs],
+        "feedback": [projections.experiment_feedback(record) for record in feedback],
+    }
+
+
+def _research_asset_allowed(request: Request, asset_id: object) -> bool:
+    try:
+        _require_research_asset(request, asset_id)
+    except HTTPException:
+        return False
+    return True
+
+
+@router.post("/experiments/specifications/{specification_id}/runs")
+def run_experiment(specification_id: str, request: Request) -> dict[str, object]:
+    _owned_specification(request, specification_id)
+    try:
+        run = _service(request, "experiment_service").run_specification(specification_id=specification_id)
+    except ValueError as error:
+        raise _safe_value_error(error) from error
+    return {"run": projections.experiment_run(run)}
+
+
+@router.post("/experiments/runs/{run_id}/retry")
+def retry_experiment(run_id: str, request: Request) -> dict[str, object]:
+    _owned_run(request, run_id)
+    try:
+        run = _service(request, "experiment_service").retry_run(run_id=run_id)
+    except ValueError as error:
+        raise _safe_value_error(error) from error
+    return {"run": projections.experiment_run(run)}
 
 
 @router.post("/experiments/runs/{run_id}/feedback")
@@ -239,7 +304,17 @@ def append_experiment_feedback(run_id: str, payload: FeedbackRequest, request: R
         )
     except ValueError as error:
         raise _safe_value_error(error) from error
-    return {"feedback": record}
+    return {"feedback": projections.experiment_feedback(record)}
+
+
+@router.get("/evolution/candidates")
+def list_candidates(request: Request) -> dict[str, object]:
+    service = _service(request, "evolution_service")
+    records = [
+        record for record in service.list_candidates()
+        if _research_asset_allowed(request, record.get("parent_research_asset_id"))
+    ]
+    return {"candidates": [projections.candidate(record, service.list_gates(candidate_id=str(record["id"]))) for record in records]}
 
 
 @router.post("/sandbox/submissions")
@@ -256,6 +331,14 @@ def submit_custom_strategy(payload: CustomStrategySubmission, request: Request) 
         return {"validation": projections.sandbox_validation(service.public_validation(audit_reference))}
     except ValueError as error:
         raise _safe_value_error(error) from error
+
+
+@router.get("/sandbox/validations")
+def list_sandbox_validations(request: Request) -> dict[str, object]:
+    """Sandbox records lack reusable browser authority; expose only server-held audit projections."""
+    _principal(request)
+    service = _service(request, "advanced_sandbox_service")
+    return {"validations": [projections.sandbox_validation(record) for record in service.list_audits()]}
 
 
 @router.get("/jobs/{job_id}")

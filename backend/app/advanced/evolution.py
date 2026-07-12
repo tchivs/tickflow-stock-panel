@@ -146,6 +146,23 @@ class EvolutionService:
             for row in rows
         ]
 
+    def list_candidates(self) -> list[dict[str, Any]]:
+        with self.repository._connection() as connection:
+            rows = connection.execute("SELECT * FROM advanced_strategy_candidates ORDER BY created_at DESC, id DESC").fetchall()
+        return [self._candidate_row(row) for row in rows]
+
+    def get_candidate(self, candidate_id: str) -> dict[str, Any] | None:
+        with self.repository._connection() as connection:
+            row = connection.execute("SELECT * FROM advanced_strategy_candidates WHERE id = ?", (candidate_id,)).fetchone()
+        return None if row is None else self._candidate_row(row)
+
+    def list_gates(self, *, candidate_id: str) -> list[dict[str, Any]]:
+        with self.repository._connection() as connection:
+            rows = connection.execute(
+                "SELECT * FROM advanced_promotion_gates WHERE candidate_id = ? ORDER BY created_at, id", (candidate_id,)
+            ).fetchall()
+        return [self._gate_row(row) for row in rows]
+
     @staticmethod
     def _json(value: Mapping[str, object]) -> str:
         return json.dumps(dict(value), ensure_ascii=False, sort_keys=True, separators=(",", ":"))

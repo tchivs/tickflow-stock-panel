@@ -79,6 +79,11 @@ class ExperimentService:
             row = connection.execute("SELECT * FROM advanced_experiment_specs WHERE id = ?", (specification_id,)).fetchone()
         return None if row is None else self._specification_row(row)
 
+    def list_specifications(self) -> list[dict[str, Any]]:
+        with self.repository._connection() as connection:
+            rows = connection.execute("SELECT * FROM advanced_experiment_specs ORDER BY created_at DESC, id DESC").fetchall()
+        return [self._specification_row(row) for row in rows]
+
     def run_specification(self, *, specification_id: str) -> dict[str, Any]:
         specification = self.get_specification(specification_id)
         if specification is None:
@@ -154,6 +159,11 @@ class ExperimentService:
         with self.repository._connection() as connection:
             row = connection.execute("SELECT * FROM advanced_experiment_runs WHERE id = ?", (run_id,)).fetchone()
         return None if row is None else self._run_row(row)
+
+    def list_runs(self) -> list[dict[str, Any]]:
+        with self.repository._connection() as connection:
+            rows = connection.execute("SELECT * FROM advanced_experiment_runs ORDER BY created_at DESC, id DESC").fetchall()
+        return [self._run_row(row) for row in rows]
 
     def record_feedback(self, *, run_id: str, conclusion: str, notes: str) -> dict[str, Any]:
         if conclusion not in _FEEDBACK_CONCLUSIONS or not notes.strip():
