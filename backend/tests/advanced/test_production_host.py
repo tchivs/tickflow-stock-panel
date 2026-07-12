@@ -1,9 +1,34 @@
 """Production-lifespan proofs for advanced research routes."""
 from __future__ import annotations
 
+import time
 from datetime import date
 
 from fastapi.testclient import TestClient
+
+
+class _DeterministicGovernedCollaborator:
+    def run(self, *, specification: dict[str, object]) -> dict[str, object]:
+        del specification
+        return {
+            "governed_input_manifest": {
+                "source": "governed_backtest_engine",
+                "revision": "fixture-revision",
+                "fingerprint": "fixture-fingerprint",
+            },
+            "asset_version": "fixture-asset-v1",
+            "resolved_parameters": {"lookback": 20},
+            "environment": {"runner": "fixture"},
+            "metrics": {"sharpe": 1.2},
+            "artifacts": [{"reference": "fixture-metrics", "checksum": "a" * 64}],
+        }
+
+
+class _BlockingGovernedCollaborator:
+    def run(self, *, specification: dict[str, object]) -> dict[str, object]:
+        del specification
+        time.sleep(10)
+        return {}
 
 
 def _viewpoint_payload(*, instrument: str) -> dict[str, object]:
@@ -26,6 +51,7 @@ def _viewpoint_payload(*, instrument: str) -> dict[str, object]:
 
 def test_authenticated_main_host_projects_latest_immutable_viewpoint_evaluation(tmp_path, monkeypatch):
     from app.advanced import api as advanced_api
+    from app.advanced.governed_runner import GovernedExperimentRunner
     from app.config import settings
     from app.services import auth as auth_service
     from tests.test_analysis_host_integration import _write_phase1_fixture
@@ -43,6 +69,7 @@ def test_authenticated_main_host_projects_latest_immutable_viewpoint_evaluation(
     from app.main import app
 
     with TestClient(app) as client:
+        assert isinstance(app.state.experiment_service.backtest_runner, GovernedExperimentRunner)
         login = client.post("/api/auth/login", json={"password": "host-test-password"})
         assert login.status_code == 200
 
@@ -80,3 +107,84 @@ def test_authenticated_main_host_projects_latest_immutable_viewpoint_evaluation(
             "relative_return": None,
         }
         assert client.get("/api/advanced/viewpoints?instrument=000001.SZ").status_code == 404
+
+
+def test_governed_runner_persists_applied_limits_and_completed_feedback(tmp_path):
+    from app.advanced.experiments import ExperimentService
+    from app.advanced.governed_runner import GovernedExperimentRunner
+    from app.advanced.repository import AdvancedRepository
+
+    repository = AdvancedRepository(tmp_path / "operational.db")
+    repository.migrate()
+    service = ExperimentService(
+        repository=repository,
+        backtest_runner=GovernedExperimentRunner(
+            collaborator=_DeterministicGovernedCollaborator(),
+            wall_clock_seconds=3,
+            cpu_seconds=2,
+            memory_limit_bytes=512 * 1024 * 1024,
+            output_limit_bytes=16 * 1024,
+        ),
+    )
+    specification = service.create_specification(
+        research_asset_id="fixture-asset",
+        hypothesis="固定运行必须留存受治理证据",
+        data_scope={"market": "CN-A"},
+        method="fixture",
+        metrics=["sharpe"],
+        success_criteria={"sharpe_gt": 1},
+        failure_criteria={"drawdown_lt": -0.2},
+    )
+
+    run = service.run_specification(specification_id=specification["id"])
+
+    assert run["status"] == "completed"
+    assert run["resources"] == {
+        "wall_clock_seconds": 3,
+        "cpu_seconds": 2,
+        "memory_limit_bytes": 512 * 1024 * 1024,
+        "output_limit_bytes": 16 * 1024,
+    }
+    feedback = service.record_feedback(
+        run_id=run["id"], conclusion="supported", notes="受治理完成运行可形成研究反馈。"
+    )
+    assert feedback["run_id"] == run["id"]
+
+
+def test_governed_runner_reaps_blocked_work_and_rejects_feedback(tmp_path):
+    from app.advanced.experiments import ExperimentService
+    from app.advanced.governed_runner import GovernedExperimentRunner
+    from app.advanced.repository import AdvancedRepository
+
+    repository = AdvancedRepository(tmp_path / "operational.db")
+    repository.migrate()
+    service = ExperimentService(
+        repository=repository,
+        backtest_runner=GovernedExperimentRunner(
+            collaborator=_BlockingGovernedCollaborator(),
+            wall_clock_seconds=1,
+            cpu_seconds=2,
+            memory_limit_bytes=512 * 1024 * 1024,
+            output_limit_bytes=16 * 1024,
+        ),
+    )
+    specification = service.create_specification(
+        research_asset_id="fixture-asset",
+        hypothesis="阻塞工作必须被父进程终止",
+        data_scope={"market": "CN-A"},
+        method="fixture",
+        metrics=["sharpe"],
+        success_criteria={"sharpe_gt": 1},
+        failure_criteria={"drawdown_lt": -0.2},
+    )
+
+    run = service.run_specification(specification_id=specification["id"])
+
+    assert run["status"] == "timed_out"
+    assert run["constraint_reason"] == "execution exceeded wall-clock budget"
+    try:
+        service.record_feedback(run_id=run["id"], conclusion="refuted", notes="超时不是研究结论。")
+    except ValueError as error:
+        assert "completed eligible" in str(error)
+    else:  # pragma: no cover - the failure path is the contract under test.
+        raise AssertionError("timed-out run accepted feedback")

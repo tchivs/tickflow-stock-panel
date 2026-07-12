@@ -33,14 +33,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-class _UnavailableAdvancedRunner:
-    """Reject execution until a bounded governed-run adapter is configured."""
-
-    def run(self, *, specification: dict[str, object]) -> dict[str, object]:
-        del specification
-        raise RuntimeError("advanced governed runner is temporarily unavailable")
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info(
@@ -138,7 +130,6 @@ async def lifespan(app: FastAPI):
     app.state.research_strategy_handles = {}
 
     from app.advanced.authorization import AdvancedAuthorizationService, OperatorPolicy
-    from app.advanced.experiments import ExperimentService
     from app.advanced.evolution import EvolutionService
     from app.advanced.jobs import AdvancedJobService
     from app.advanced.policy import AdvancedPolicy
@@ -152,10 +143,6 @@ async def lifespan(app: FastAPI):
     app.state.advanced_repository = advanced_repository
     app.state.advanced_policy = advanced_policy
     app.state.viewpoint_service = ViewpointService(repository=advanced_repository, policy=advanced_policy)
-    app.state.experiment_service = ExperimentService(
-        repository=advanced_repository,
-        backtest_runner=_UnavailableAdvancedRunner(),
-    )
     app.state.evolution_service = EvolutionService(
         repository=advanced_repository,
         reviewer_resolver=lambda principal: principal,
@@ -313,6 +300,18 @@ async def lifespan(app: FastAPI):
     )
     app.state.strategy_engine = strategy_engine
     logger.info("strategy engine loaded: %d strategies", len(strategy_engine.list_strategies()))
+    from app.advanced.experiments import ExperimentService
+    from app.advanced.governed_runner import GovernedExperimentRunner, StrategyBacktestExperimentCollaborator
+    from app.backtest.strategy import StrategyBacktestService
+
+    app.state.experiment_service = ExperimentService(
+        repository=advanced_repository,
+        backtest_runner=GovernedExperimentRunner(
+            collaborator=StrategyBacktestExperimentCollaborator(
+                StrategyBacktestService(app.state.backtest_engine, strategy_engine)
+            )
+        ),
+    )
 
     # 通用监控规则引擎: 启动时 reload 规则到内存态 (修复重启后告警失效)
     from app.strategy.monitor import MonitorRuleEngine
