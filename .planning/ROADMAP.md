@@ -122,7 +122,7 @@ Plans:
   2. User can inspect a multi-perspective report with visible scoring rationale, applicable valuation analysis, and an investment-committee memo.
   3. User can view a signal's current lifecycle status and its recorded evolution or outcome over time.
 
-**Plans**: 9/9 plans complete
+**Plans**: 10/12 plans executed
 Plans:
 **Wave 1**
 
@@ -150,6 +150,18 @@ Plans:
 **Wave 6** *(blocked on Wave 5 completion)*
 
 - [x] 03-08-PLAN.md — 在 stock、Portfolio 和 AI 宿主中完成证据优先 UI。
+
+**Gap Closure Wave 1** *(blocked on completed Phase 3 plans)*
+
+- [x] 03-10-PLAN.md — 装配生产受治理证据并证明认证真实主机完成分析。
+
+**Gap Closure Wave 2** *(blocked on Gap Closure Wave 1 completion)*
+
+- [ ] 03-11-PLAN.md — 将报告、证据和生命周期记录映射为授权展示 DTO。
+
+**Gap Closure Wave 3** *(blocked on Gap Closure Wave 2 completion)*
+
+- [ ] 03-12-PLAN.md — 对齐 typed UI 契约并使真实生命周期历史可达。
 
 **UI hint**: yes
 
@@ -189,6 +201,6 @@ Plans:
 |-------|----------------|--------|-----------|
 | 1. Core Merger | 15/15 | Complete    | 2026-07-11 |
 | 2. Factor And Strategy Research | 8/8 | Complete    | 2026-07-11 |
-| 3. AI Analysis | 9/9 | Complete   | 2026-07-12 |
+| 3. AI Analysis | 10/12 | In Progress|  |
 | 4. Advanced Capabilities | 0/TBD | Not started | - |
 | 5. Optional Enhancements | 0/TBD | Optional | - |
