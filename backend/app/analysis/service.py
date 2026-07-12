@@ -173,9 +173,13 @@ class AnalysisService:
         elapsed: float,
         category: str,
     ) -> dict[str, object]:
+        adapter = getattr(self._graph, "adapter", None)
         metadata: dict[str, object] = {
             "error_category": category,
             "attempts": attempts,
+            "adapter": adapter.__class__.__name__ if adapter is not None else self._graph.__class__.__name__,
+            "model": getattr(adapter, "model", None),
+            "provider": getattr(adapter, "provider", None),
             "prompt_version": _PROMPT_VERSION,
             "schema_version": _SCHEMA_VERSION,
             "elapsed_ms": round(elapsed * 1000),

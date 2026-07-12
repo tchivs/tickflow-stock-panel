@@ -1,6 +1,7 @@
 """Wave 0 contracts for server-enveloped analysis generation and immutable versions."""
 from __future__ import annotations
 
+import json
 from datetime import date, datetime
 
 import pytest
@@ -82,6 +83,9 @@ async def test_analysis_service_audits_unknown_citation_without_writing_a_partia
     assert repository.list_reports(subject_kind="stock", subject_key="600519.SH") == []
     assert repository.get_run(run["id"])["status"] == "failed"
     assert "unknown-source" not in repository.get_run(run["id"])["failure_reason"]
+    metadata = json.loads(repository.get_run(run["id"])["audit_metadata_json"])
+    assert metadata["attempts"] == 3
+    assert metadata["evidence_fingerprint"]
 
 
 async def test_analysis_service_persists_only_a_server_enveloped_validated_report(tmp_path):
