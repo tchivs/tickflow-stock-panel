@@ -168,6 +168,7 @@ class ViewpointService:
             "target_range": [row["target_low"], row["target_high"]], "horizon_days": row["horizon_days"], "confidence": row["confidence"],
             "revision_kind": row["revision_kind"], "correction_reason": row["correction_reason"], "evidence": evidence,
             "evaluation_plan": {"window_days": row["evaluation_window_days"], "benchmark": row["benchmark"], "metric": row["metric"]},
+            "evaluation": row.get("evaluation"),
         }
 
     def _policy_snapshot(self) -> dict[str, Any]:

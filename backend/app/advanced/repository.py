@@ -328,10 +328,23 @@ class AdvancedRepository:
         with self._connection() as connection:
             rows = connection.execute(
                 """SELECT version.*, viewpoint.source_profile, viewpoint.market_scope, viewpoint.instrument,
-                          policy.revision AS policy_version, policy.fingerprint AS policy_fingerprint
+                          policy.revision AS policy_version, policy.fingerprint AS policy_fingerprint,
+                          evaluation.id AS evaluation_id, evaluation.status AS evaluation_status,
+                          evaluation.reason AS evaluation_reason,
+                          evaluation.relative_return AS evaluation_relative_return,
+                          evaluation.coverage_start AS evaluation_coverage_start,
+                          evaluation.coverage_end AS evaluation_coverage_end
                    FROM advanced_viewpoint_versions AS version
                    JOIN advanced_viewpoints AS viewpoint ON viewpoint.id = version.viewpoint_id
                    JOIN advanced_policy_revisions AS policy ON policy.id = version.policy_revision_id
+                   LEFT JOIN advanced_viewpoint_evaluations AS evaluation
+                     ON evaluation.id = (
+                        SELECT latest.id
+                        FROM advanced_viewpoint_evaluations AS latest
+                        WHERE latest.viewpoint_version_id = version.id
+                        ORDER BY latest.created_at DESC, latest.id DESC
+                        LIMIT 1
+                     )
                    WHERE version.viewpoint_id = ? ORDER BY version.version DESC""",
                 (viewpoint_id,),
             ).fetchall()
@@ -346,6 +359,15 @@ class AdvancedRepository:
                     {"id": evidence_row["evidence_reference"], **({"published_at": evidence_row["evidence_published_at"]} if evidence_row["evidence_published_at"] else {})}
                     for evidence_row in evidence
                 ]
+                value["evaluation"] = None if value["evaluation_id"] is None else {
+                    "status": value["evaluation_status"],
+                    "reason": value["evaluation_reason"],
+                    "relative_return": value["evaluation_relative_return"],
+                    "coverage_start": value["evaluation_coverage_start"],
+                    "coverage_end": value["evaluation_coverage_end"],
+                    "window_days": value["evaluation_window_days"],
+                    "benchmark": value["benchmark"],
+                }
                 result.append(value)
         return result
 
