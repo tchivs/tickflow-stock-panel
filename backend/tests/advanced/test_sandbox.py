@@ -6,6 +6,8 @@ from hashlib import sha256
 from pathlib import Path
 
 import pytest
+from fastapi import FastAPI, Request
+from fastapi.testclient import TestClient
 
 SOURCE = "def run(panel):\n    return {'signal': 'hold'}\n"
 
@@ -191,3 +193,29 @@ def test_admission_persists_only_source_hash_and_never_projects_source_or_host_e
     assert "sensitive custom code" not in str(audit)
     assert "sensitive custom code" not in str(projection)
     assert {"source", "code", "token", "path", "traceback"}.isdisjoint(projection)
+
+
+def test_sandbox_api_uses_strict_submission_and_returns_only_safe_validation(tmp_path):
+    from app.advanced import api as advanced_api
+
+    service, _launcher, _feedback, _promotion, _broker, _provider, _strategy_engine = _service(tmp_path)
+    app = FastAPI()
+    app.include_router(advanced_api.router)
+    app.state.advanced_sandbox_service = service
+    app.state.resolve_advanced_research_asset = lambda _request, asset_id: asset_id == "registered-research-asset-v1"
+
+    @app.middleware("http")
+    async def authenticated(request: Request, call_next):
+        request.state.reviewer_principal = "server-researcher"
+        return await call_next(request)
+
+    client = TestClient(app)
+    invalid = client.post("/api/advanced/sandbox/submissions", json={**_submission(), "principal": "browser"})
+    response = client.post("/api/advanced/sandbox/submissions", json=_submission())
+
+    assert invalid.status_code == 422
+    assert response.status_code == 200
+    validation = response.json()["validation"]
+    assert validation["status"] == "rejected"
+    assert validation["source_sha256"] == sha256(SOURCE.encode()).hexdigest()
+    assert {"source", "code", "path", "diagnostic", "token"}.isdisjoint(response.text.lower())
