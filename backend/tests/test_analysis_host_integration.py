@@ -114,8 +114,45 @@ def test_authenticated_main_host_completes_governed_analysis_and_persists_immuta
         reports = client.get("/api/analysis/subjects/instrument/600000.SH/reports")
         assert reports.status_code == 200
         report = reports.json()["reports"][0]
-        snapshot = app.state.analysis_repository.get_frozen_snapshot(run["id"])
-        assert snapshot is not None
-        assert snapshot["context_status"] == "ready"
-        assert report["report"]["run_id"] == run["id"]
-        assert report["report"]["evidence_snapshot"]["sources"]
+        assert isinstance(report["id"], str) and report["id"]
+        assert report["status"] == "validated"
+        assert report["evidence_limitations"] == []
+
+        detail = client.get(f"/api/analysis/reports/{report['id']}")
+        evidence = client.get(f"/api/analysis/reports/{report['id']}/evidence")
+        assert detail.status_code == evidence.status_code == 200
+        assert detail.json()["report"]["perspectives"]
+        assert detail.json()["report"]["signal_id"]
+        assert evidence.json()["evidence"]["report_id"] == report["id"]
+        assert evidence.json()["evidence"]["sources"]
+
+        signal_id = detail.json()["report"]["signal_id"]
+        initial_history = client.get(f"/api/analysis/signals/{signal_id}/history")
+        assert initial_history.status_code == 200
+        pending_review_id = initial_history.json()["pending_review_id"]
+        assert pending_review_id
+
+        confirmed = client.post(f"/api/analysis/reviews/{pending_review_id}/confirm", json={"window_days": 60})
+        assert confirmed.status_code == 200
+        plan_id = confirmed.json()["plan"]["id"]
+        appended = client.post(
+            f"/api/analysis/plans/{plan_id}/outcomes",
+            json={"status": "complete", "observed_value": 0.12, "notes": "tracked"},
+        )
+        assert appended.status_code == 200
+
+        rejected = app.state.analysis_repository.append_lifecycle_proposal(
+            subject_kind="instrument", subject_key="600000.SH", prior_state="strengthened", proposed_state="weakened",
+            evidence={"evidence_ids": ["manual-review"], "evidence": [], "occurred_at": "2026-07-12T00:00:00+00:00"},
+        )
+        assert client.post(f"/api/analysis/reviews/{rejected['id']}/reject").status_code == 200
+        history = client.get(f"/api/analysis/signals/{signal_id}/history")
+        assert history.status_code == 200
+        payload = history.json()
+        assert payload["current_state"] == "strengthened"
+        assert payload["pending_review_id"] is None
+        assert {review["proposed_state"] for review in payload["reviews"]} >= {"strengthened", "weakened", "rejected"}
+        assert payload["plans"][0]["window_days"] == 60
+        assert payload["plans"][0]["benchmark"] == "CSI300"
+        assert payload["plans"][0]["metric"] == "excess_return"
+        assert payload["plans"][0]["outcomes"][0]["outcome"]["status"] == "complete"
