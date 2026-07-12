@@ -1,5 +1,6 @@
 import type { Page } from '@playwright/test'
 import { expect, test } from '@playwright/test'
+import { parseAdvancedProgress } from '../src/lib/useQuoteStream'
 
 const DESKTOP_PROJECT = 'desktop-chromium'
 const advancedProgress = {
@@ -57,6 +58,13 @@ function futurePhase4Ui(testInfo: import('@playwright/test').TestInfo) {
 }
 
 test.describe('Phase 4 advanced capability browser contracts', () => {
+  test('strict advanced progress parser rejects browser scope and unknown stages', () => {
+    expect(parseAdvancedProgress(JSON.stringify(advancedProgress))).toEqual(advancedProgress)
+    expect(parseAdvancedProgress(JSON.stringify({ ...advancedProgress, subject_key: 'browser-supplied' }))).toBeNull()
+    expect(parseAdvancedProgress(JSON.stringify({ ...advancedProgress, stage: 'running' }))).toBeNull()
+    expect(parseAdvancedProgress(JSON.stringify({ ...advancedProgress, token: 'browser-secret' }))).toBeNull()
+  })
+
   test('scenario 1: immutable viewpoint lineage preserves calibration uncertainty', async ({ page }, testInfo) => {
     futurePhase4Ui(testInfo)
     const fixture = await installAdvancedFixture(page)
