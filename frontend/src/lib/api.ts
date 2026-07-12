@@ -184,14 +184,20 @@ export interface AnalysisSubject {
   key: string
 }
 
+export interface AnalysisRequestSubject {
+  kind: 'instrument' | 'account'
+  key: string
+}
+
 export interface AnalysisRun {
   id: string
-  subject: AnalysisSubject
+  subject_kind: AnalysisRequestSubject['kind']
+  subject_key: string
+  focus: string
   status: 'queued' | 'running' | 'completed' | 'failed'
   report_id?: string | null
-  requested_at?: string | null
-  started_at?: string | null
-  finished_at?: string | null
+  created_at: string
+  updated_at: string
 }
 
 export interface AnalysisReportSummary {
@@ -240,6 +246,7 @@ export interface AnalysisIcMemo {
 }
 
 export interface AnalysisReport extends AnalysisReportSummary {
+  signal_id: string
   perspectives: AnalysisPerspective[]
   score?: { value?: number | null; dimensions: AnalysisScoreDimension[] } | null
   valuation?: AnalysisValuation | null
@@ -288,7 +295,50 @@ export interface AnalysisSignalHistory {
   signal_id: string
   current_state: AnalysisLifecycleEvent['state'] | null
   events: AnalysisLifecycleEvent[]
-  outcome?: { status: 'pending' | 'recorded'; missing_fields?: string[]; [key: string]: unknown } | null
+  pending_review_id: string | null
+  reviews: AnalysisLifecycleReview[]
+  plans: AnalysisObservationPlan[]
+  outcome: AnalysisOutcomeSummary | null
+}
+
+export type AnalysisReviewStatus = 'pending' | 'confirmed' | 'rejected'
+
+export interface AnalysisLifecycleReview {
+  id: string
+  prior_state: AnalysisLifecycleEvent['state'] | 'active' | null
+  proposed_state: AnalysisLifecycleEvent['state'] | 'rejected'
+  status: AnalysisReviewStatus
+  evidence_ids: string[]
+  rationale: string | null
+  created_at: string | null
+}
+
+export interface AnalysisObservationOutcome {
+  id: string
+  plan_id: string
+  observed_at: string
+  created_at: string
+  outcome: {
+    status: 'complete' | 'incomplete'
+    observed_value?: number | null
+    notes?: string
+  }
+}
+
+export interface AnalysisObservationPlan {
+  id: string
+  review_id: string
+  event_id: string
+  window_days: 20 | 60 | 120
+  benchmark: string
+  metric: string
+  created_at: string
+  outcomes: AnalysisObservationOutcome[]
+}
+
+export interface AnalysisOutcomeSummary {
+  status: 'pending' | 'recorded'
+  outcomes?: AnalysisObservationOutcome[]
 }
 
 // ===== Kline =====
@@ -2363,12 +2413,12 @@ export const api = {
   },
 
   // ===== Evidence-backed analysis =====
-  analysisStartRun: (subject: AnalysisSubject, focus?: string) =>
+  analysisStartRun: (subject: AnalysisRequestSubject, focus?: string) =>
     request<{ run: AnalysisRun }>('/api/analysis/runs', {
       method: 'POST',
       body: JSON.stringify({ subject_kind: subject.kind, subject_key: subject.key, focus }),
     }),
-  analysisReports: (subject: AnalysisSubject) =>
+  analysisReports: (subject: AnalysisRequestSubject) =>
     request<{ reports: AnalysisReportSummary[] }>(
       `/api/analysis/subjects/${encodeURIComponent(subject.kind)}/${encodeURIComponent(subject.key)}/reports`,
     ),
