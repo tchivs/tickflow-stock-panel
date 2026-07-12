@@ -130,6 +130,7 @@ def test_analysis_evidence_freezes_normalized_provenance_without_raw_source_text
 
 
 def test_generated_analysis_and_server_report_reject_extra_fields_and_unknown_citations():
+    from app.analysis.evidence import EvidencePreparationService
     from app.analysis.schemas import (
         AnalysisReport,
         FrozenEvidenceSnapshot,
