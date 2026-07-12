@@ -11,6 +11,13 @@ const report = {
   valuation: { applicable: false, reason: '材料输入不完整' },
   ic_memo: { thesis: '等待独立来源确认', risks: ['收入数字存在差异'], open_questions: ['确认报告期口径'] }, signal_id: 'signal-moutai',
 }
+const portfolioReport = {
+  ...report,
+  id: 'report-portfolio-1',
+  subject: { kind: 'portfolio', key: '1' },
+  evidence_limitations: [],
+  signal_id: 'signal-portfolio',
+}
 const evidence = {
   report_id: report.id,
   sources: [
@@ -21,14 +28,21 @@ const evidence = {
   material_numbers: [{ id: 'number-revenue', label: '收入同比', value: 12.4, unit: '%', period: '2024Q1', source_count: 2, cross_check: 'conflicting', difference_reason: '报告期口径不一致' }],
 }
 const history = {
-  signal_id: 'signal-moutai', current_state: 'priced_in',
+  signal_id: 'signal-portfolio', current_state: 'priced_in',
   events: [
     { state: 'strengthened', occurred_at: '2024-01-02T10:00:00Z', evidence_summary: '新增 A 级来源', source_grade: 'A', cross_check: 'confirmed' },
     { state: 'weakened', occurred_at: '2024-02-02T10:00:00Z', evidence_summary: '增长放缓', source_grade: 'B', cross_check: 'unresolved' },
     { state: 'falsified', occurred_at: '2024-03-02T10:00:00Z', evidence_summary: '失效条件触发', source_grade: 'A', cross_check: 'confirmed' },
     { state: 'priced_in', occurred_at: '2024-04-02T10:00:00Z', evidence_summary: '价格已反映事件', source_grade: 'B', cross_check: 'confirmed' },
   ],
-  outcome: { status: 'pending', missing_fields: ['benchmark'] }, pending_review_id: 'review-server-issued',
+  pending_review_id: 'review-server-issued',
+  reviews: [
+    { id: 'review-server-issued', prior_state: 'active', proposed_state: 'strengthened', status: 'pending', evidence_ids: ['source-filing'], rationale: '新增可归因证据', created_at: '2024-07-01T10:00:00Z' },
+    { id: 'review-confirmed', prior_state: 'active', proposed_state: 'strengthened', status: 'confirmed', evidence_ids: ['source-filing'], rationale: '已确认提案', created_at: '2024-06-01T10:00:00Z' },
+    { id: 'review-rejected', prior_state: 'strengthened', proposed_state: 'weakened', status: 'rejected', evidence_ids: ['source-secondary'], rationale: '已拒绝提案', created_at: '2024-05-01T10:00:00Z' },
+  ],
+  plans: [{ id: 'plan-server-issued', review_id: 'review-confirmed', event_id: 'event-confirmed', window_days: 60, benchmark: 'CSI300', metric: 'excess_return', created_at: '2024-06-01T10:00:00Z', outcomes: [{ id: 'outcome-server-issued', plan_id: 'plan-server-issued', observed_at: '2024-08-30T10:00:00Z', created_at: '2024-08-30T10:00:00Z', outcome: { status: 'complete', observed_value: 0.12, notes: 'tracked' } }] }],
+  outcome: { status: 'recorded', outcomes: [{ id: 'outcome-server-issued', plan_id: 'plan-server-issued', observed_at: '2024-08-30T10:00:00Z', created_at: '2024-08-30T10:00:00Z', outcome: { status: 'complete', observed_value: 0.12, notes: 'tracked' } }] },
 }
 
 async function installAnalysisFixture(page: import('@playwright/test').Page) {
@@ -51,16 +65,26 @@ async function installAnalysisFixture(page: import('@playwright/test').Page) {
     const request = route.request()
     const path = new URL(request.url()).pathname
     const json = (body: unknown) => route.fulfill({ contentType: 'application/json', body: JSON.stringify(body) })
-    if (path.endsWith('/reports') && /\/subjects\/(instrument|account)\//.test(path)) return json({ reports: [report] })
+    const selectedReport = /\/subjects\/account\//.test(path) ? portfolioReport : report
+    if (path.endsWith('/reports') && /\/subjects\/(instrument|account)\//.test(path)) return json({ reports: [selectedReport] })
     if (path.endsWith(`/reports/${report.id}`)) return json({ report })
+    if (path.endsWith(`/reports/${portfolioReport.id}`)) return json({ report: portfolioReport })
     if (path.endsWith(`/reports/${report.id}/evidence`)) return json(evidence)
+    if (path.endsWith(`/reports/${portfolioReport.id}/evidence`)) return json({ ...evidence, report_id: portfolioReport.id })
     if (path.endsWith(`/signals/${history.signal_id}/history`)) return json(history)
     if (path.endsWith('/runs') && request.method() === 'POST') {
       const body = request.postDataJSON() as { subject_kind?: string }
       if (body.subject_kind !== 'instrument' && body.subject_kind !== 'account') return route.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify({ detail: 'subject kind must be server-owned instrument or account' }) })
       return json({ run: { id: 'run-moutai-1', subject, status: 'running' } })
     }
-    if (path.endsWith('/confirm') || path.endsWith('/reject')) return json({ review: { id: 'review-server-issued', status: path.endsWith('/confirm') ? 'confirmed' : 'rejected' } })
+    if (path.endsWith('/confirm')) {
+      expect(request.postDataJSON()).toEqual({ window_days: 60 })
+      return json({ review: { id: 'review-server-issued', status: 'confirmed' } })
+    }
+    if (path.endsWith('/reject')) {
+      expect(request.postData()).toBeNull()
+      return json({ review: { id: 'review-server-issued', status: 'rejected' } })
+    }
     return route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ detail: `Unhandled fixture route: ${path}` }) })
   })
 }
@@ -91,7 +115,10 @@ test.describe('Phase 3 evidence-first analysis contracts', () => {
     await page.getByRole('tab', { name: '信号历史' }).click()
     await expect(page.getByRole('heading', { name: '信号生命周期' })).toBeVisible()
     await expect(page.getByText('信号已计价').first()).toBeVisible()
-    await expect(page.getByText('结果记录不完整：benchmark。')).toBeVisible()
+    await expect(page.getByText('待审生命周期提案：信号已强化')).toBeVisible()
+    await expect(page.getByText('审阅记录')).toBeVisible()
+    await expect(page.getByText('60 个交易日观察计划')).toBeVisible()
+    await expect(page.getByText('已记录结果').first()).toBeVisible()
     const confirm = page.getByRole('button', { name: '确认服务端审阅' })
     await expect(confirm).toBeVisible()
     await confirm.click()
