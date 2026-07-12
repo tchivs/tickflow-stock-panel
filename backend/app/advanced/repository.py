@@ -131,6 +131,14 @@ class AdvancedRepository:
         assert row is not None
         return dict(row)
 
+    def count_promotions(self, *, candidate_id: str) -> int:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT COUNT(*) AS count FROM advanced_promotions WHERE candidate_id = ?", (candidate_id,)
+            ).fetchone()
+        assert row is not None
+        return int(row["count"])
+
     def append_viewpoint_version(
         self,
         *,
