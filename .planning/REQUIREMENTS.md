@@ -25,9 +25,9 @@
 
 ### AI Analysis
 
-- [ ] **ANLY-01**: User can review AI-assisted market or portfolio analysis whose depth reflects A/B/C source-quality grading and whose material numbers are cross-checked across sources.
-- [ ] **ANLY-02**: User can inspect a multi-perspective investment report with its scoring rationale, valuation analysis when applicable, and an investment-committee memo.
-- [ ] **ANLY-03**: User can track a research signal as strengthened, weakened, falsified, or priced in and review its outcome over time.
+- [x] **ANLY-01**: User can review AI-assisted market or portfolio analysis whose depth reflects A/B/C source-quality grading and whose material numbers are cross-checked across sources.
+- [x] **ANLY-02**: User can inspect a multi-perspective investment report with its scoring rationale, valuation analysis when applicable, and an investment-committee memo.
+- [x] **ANLY-03**: User can track a research signal as strengthened, weakened, falsified, or priced in and review its outcome over time.
 
 ### Advanced Capabilities
 
@@ -69,9 +69,9 @@
 | FACT-01 | Phase 2 | Complete |
 | FACT-02 | Phase 2 | Complete |
 | FACT-03 | Phase 2 | Complete |
-| ANLY-01 | Phase 3 | Pending |
-| ANLY-02 | Phase 3 | Pending |
-| ANLY-03 | Phase 3 | Pending |
+| ANLY-01 | Phase 3 | Complete |
+| ANLY-02 | Phase 3 | Complete |
+| ANLY-03 | Phase 3 | Complete |
 | ADV-01 | Phase 4 | Pending |
 | ADV-02 | Phase 4 | Pending |
 | ADV-03 | Phase 4 | Pending |
