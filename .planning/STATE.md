@@ -5,15 +5,15 @@ milestone_name: milestone
 current_phase: 03
 current_phase_name: AI Analysis
 status: executing
-stopped_at: Completed 03-04-PLAN.md
-last_updated: "2026-07-12T04:31:17.278Z"
+stopped_at: Completed 03-05-PLAN.md
+last_updated: "2026-07-12T04:40:49.546Z"
 last_activity: 2026-07-12
 last_activity_desc: Phase 03 execution started
 progress:
   total_phases: 5
   completed_phases: 2
   total_plans: 32
-  completed_plans: 27
+  completed_plans: 28
   percent: 40
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-07-10)
 ## Current Position
 
 Phase: 03 (AI Analysis) — EXECUTING
-Plan: 5 of 9
+Plan: 6 of 9
 Status: Ready to execute
 Last activity: 2026-07-12 — Phase 03 execution started
 
@@ -61,6 +61,7 @@ Progress: [##########] implementation complete; verification blocked
 | Phase 03 P02 | 4min | 2 tasks | 7 files |
 | Phase 03 P03 | 7min | 2 tasks | 4 files |
 | Phase 03 P04 | 301 | 2 tasks | 6 files |
+| Phase 03 P05 | 7m 8s | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -82,6 +83,8 @@ No implementation decision was explicitly locked by the architecture intake. Req
 - [Phase 03]: Phase 3 browser scenarios remain per-case expected failures until 03-08 removes the markers after delivering the UI.
 - [Phase 03]: Analysis evidence is frozen server-side with provenance hashes and independent material-number cross-checks before model generation.
 - [Phase 03]: Analysis audit records use append-only operational.db tables with SQLite immutable triggers; only run execution status may transition.
+- [Phase 03]: Graph execution opens AsyncSqliteSaver per invocation so async ainvoke retains durable thread checkpoints without a process-global connection.
+- [Phase 03]: Lifecycle remains a read-only fallback snapshot; lifecycle mutation integration is intentionally deferred to Plan 03-09.
 
 ### Pending Todos
 
@@ -99,6 +102,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-07-12T04:31:17.272Z
-Stopped at: Completed 03-04-PLAN.md
+Last session: 2026-07-12T04:40:49.539Z
+Stopped at: Completed 03-05-PLAN.md
 Resume file: None
