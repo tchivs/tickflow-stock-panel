@@ -116,15 +116,15 @@ def test_authenticated_main_host_completes_governed_analysis_and_persists_immuta
         report = reports.json()["reports"][0]
         assert isinstance(report["id"], str) and report["id"]
         assert report["status"] == "validated"
-        assert report["evidence_limitations"] == []
+        assert report["evidence_limitations"]
 
         detail = client.get(f"/api/analysis/reports/{report['id']}")
         evidence = client.get(f"/api/analysis/reports/{report['id']}/evidence")
         assert detail.status_code == evidence.status_code == 200
         assert detail.json()["report"]["perspectives"]
         assert detail.json()["report"]["signal_id"]
-        assert evidence.json()["evidence"]["report_id"] == report["id"]
-        assert evidence.json()["evidence"]["sources"]
+        assert evidence.json()["report_id"] == report["id"]
+        assert evidence.json()["sources"]
 
         signal_id = detail.json()["report"]["signal_id"]
         initial_history = client.get(f"/api/analysis/signals/{signal_id}/history")

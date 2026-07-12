@@ -226,6 +226,11 @@ class AnalysisRepository:
                    VALUES (?, ?, ?, ?, ?, ?, ?)""",
                 (identifier, run_id, subject_kind, subject_key, version, _json(payload, "validated report"), now),
             )
+            connection.execute(
+                """INSERT INTO analysis_signals (id, subject_kind, subject_key, created_at)
+                   VALUES (?, ?, ?, ?) ON CONFLICT(subject_kind, subject_key) DO NOTHING""",
+                (str(uuid4()), subject_kind, subject_key, now),
+            )
             row = connection.execute("SELECT * FROM analysis_reports WHERE id = ?", (identifier,)).fetchone()
         assert row is not None
         return self._report_record(row)
@@ -311,6 +316,32 @@ class AnalysisRepository:
         with self._connection() as connection:
             signal = connection.execute("SELECT * FROM analysis_signals WHERE id = ?", (signal_id,)).fetchone()
         return None if signal is None else dict(signal)
+
+    def get_subject_signal(self, *, subject_kind: str, subject_key: str) -> dict[str, Any] | None:
+        """Return the server-issued signal for one authorized persisted subject."""
+        with self._connection() as connection:
+            signal = connection.execute(
+                "SELECT * FROM analysis_signals WHERE subject_kind = ? AND subject_key = ?",
+                (subject_kind, subject_key),
+            ).fetchone()
+        return None if signal is None else dict(signal)
+
+    def get_or_create_subject_signal(self, *, subject_kind: str, subject_key: str) -> dict[str, Any]:
+        """Provide legacy completed reports a stable signal without advancing lifecycle state."""
+        self._require_text(subject_kind, "subject_kind")
+        self._require_text(subject_key, "subject_key")
+        with self._connection() as connection, connection:
+            connection.execute(
+                """INSERT INTO analysis_signals (id, subject_kind, subject_key, created_at)
+                   VALUES (?, ?, ?, ?) ON CONFLICT(subject_kind, subject_key) DO NOTHING""",
+                (str(uuid4()), subject_kind, subject_key, _now()),
+            )
+            signal = connection.execute(
+                "SELECT * FROM analysis_signals WHERE subject_kind = ? AND subject_key = ?",
+                (subject_kind, subject_key),
+            ).fetchone()
+        assert signal is not None
+        return dict(signal)
 
     def current_lifecycle_state(self, *, subject_kind: str, subject_key: str) -> str:
         with self._connection() as connection:

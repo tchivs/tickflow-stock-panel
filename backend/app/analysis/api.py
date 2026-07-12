@@ -7,6 +7,8 @@ from typing import Any, Literal, Protocol
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.analysis import projections
+
 router = APIRouter(prefix="/api/analysis", tags=["analysis"])
 
 
@@ -154,12 +156,16 @@ async def start_run(payload: RunRequest, request: Request) -> dict[str, Any]:
 @router.get("/subjects/{subject_kind}/{subject_key}/reports")
 def list_reports(subject_kind: Literal["instrument", "account"], subject_key: str, request: Request) -> dict[str, Any]:
     _require_subject(request, subject_kind, subject_key)
-    return {"reports": _repository(request).list_reports(subject_kind, subject_key)}
+    return {"reports": [projections.report_summary(report) for report in _repository(request).list_reports(subject_kind, subject_key)]}
 
 
 @router.get("/reports/{report_id}")
 def report_detail(report_id: str, request: Request) -> dict[str, Any]:
-    return {"report": _report_subject(request, report_id)}
+    report = _report_subject(request, report_id)
+    signal = _repository(request).get_or_create_subject_signal(
+        subject_kind=str(report["subject_kind"]), subject_key=str(report["subject_key"])
+    )
+    return {"report": projections.report_detail(report, signal_id=str(signal["id"]))}
 
 
 @router.get("/reports/{report_id}/evidence")
@@ -168,7 +174,7 @@ def report_evidence(report_id: str, request: Request) -> dict[str, Any]:
     snapshot = _repository(request).get_frozen_snapshot(str(report.get("run_id") or ""))
     if snapshot is None:
         raise HTTPException(status_code=404, detail="analysis evidence not found")
-    return {"evidence": snapshot}
+    return projections.evidence(report, snapshot)
 
 
 @router.get("/signals/{signal_id}/history")
@@ -179,10 +185,21 @@ def signal_history(signal_id: str, request: Request) -> dict[str, Any]:
     subject_kind = str(signal["subject_kind"])
     subject_key = str(signal["subject_key"])
     _require_subject(request, subject_kind, subject_key)
-    return {
-        "signal": signal,
-        "events": _repository(request).list_events(subject_kind=subject_kind, subject_key=subject_key),
-    }
+    repository = _repository(request)
+    events = repository.list_events(subject_kind=subject_kind, subject_key=subject_key)
+    reviews = repository.list_lifecycle_reviews(subject_kind=subject_kind, subject_key=subject_key)
+    plans = [
+        {**plan, "outcomes": repository.list_observation_outcomes(str(plan["id"]))}
+        for review in reviews
+        for plan in repository.list_observation_plans(str(review["id"]))
+    ]
+    return projections.signal_history(
+        signal=signal,
+        current_state=repository.current_lifecycle_state(subject_kind=subject_kind, subject_key=subject_key),
+        events=events,
+        reviews=reviews,
+        plans=plans,
+    )
 
 
 @router.post("/reviews/{review_id}/confirm")

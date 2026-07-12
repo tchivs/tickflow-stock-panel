@@ -77,6 +77,20 @@ class _Repository:
     def get_signal(self, signal_id):
         return self.signals.get(signal_id)
 
+    def get_subject_signal(self, *, subject_kind, subject_key):
+        return next(
+            (signal for signal in self.signals.values() if (signal["subject_kind"], signal["subject_key"]) == (subject_kind, subject_key)),
+            None,
+        )
+
+    def get_or_create_subject_signal(self, *, subject_kind, subject_key):
+        signal = self.get_subject_signal(subject_kind=subject_kind, subject_key=subject_key)
+        assert signal is not None
+        return signal
+
+    def current_lifecycle_state(self, *, subject_kind, subject_key):
+        return "strengthened" if (subject_kind, subject_key) == ("instrument", "600519.SH") else "active"
+
     def list_events(self, *, subject_kind, subject_key):
         return [{
             "next_state": "strengthened", "occurred_at": "2026-07-12T00:00:00+00:00",
@@ -207,7 +221,7 @@ def test_analysis_api_returns_allowlisted_report_evidence_and_lifecycle_display_
     assert reports.status_code == detail.status_code == evidence.status_code == history.status_code == 200
     summary = reports.json()["reports"][0]
     assert summary == {
-        "id": "allowed-report", "subject": {"kind": "instrument", "key": "600519.SH"}, "version": 2,
+        "id": "allowed-report", "subject": {"kind": "stock", "key": "600519.SH"}, "version": 2,
         "status": "validated", "generated_at": "2026-07-12T00:00:00+00:00", "evidence_limitations": [],
     }
     displayed_report = detail.json()["report"]
@@ -220,7 +234,7 @@ def test_analysis_api_returns_allowlisted_report_evidence_and_lifecycle_display_
     assert displayed_report["ic_memo"]["thesis"] == "watch evidence"
     assert "report_json" not in detail.text and "snapshot_json" not in detail.text and "prompt" not in detail.text
 
-    displayed_evidence = evidence.json()["evidence"]
+    displayed_evidence = evidence.json()
     assert displayed_evidence["report_id"] == "allowed-report"
     assert displayed_evidence["sources"][0]["reference"] == "source://allowed"
     assert displayed_evidence["material_numbers"][0] == {
