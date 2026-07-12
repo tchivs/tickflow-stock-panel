@@ -188,3 +188,41 @@ def test_governed_runner_reaps_blocked_work_and_rejects_feedback(tmp_path):
         assert "completed eligible" in str(error)
     else:  # pragma: no cover - the failure path is the contract under test.
         raise AssertionError("timed-out run accepted feedback")
+
+
+def test_authorized_main_host_job_runs_fixed_workflow_and_persists_audit(tmp_path, monkeypatch):
+    from app.advanced import api as advanced_api
+    from app.config import settings
+    from app.services import auth as auth_service
+    from tests.test_analysis_host_integration import _write_phase1_fixture
+
+    fixture_dir = tmp_path / "phase1-fixtures"
+    data_dir = tmp_path / "governed-data"
+    _write_phase1_fixture(fixture_dir)
+    monkeypatch.setenv("PHASE1_FIXTURE_MODE", "1")
+    monkeypatch.setenv("PHASE1_FIXTURE_DIR", str(fixture_dir))
+    monkeypatch.setattr(settings, "data_dir", data_dir)
+    monkeypatch.setattr(settings, "auth_password", "host-test-password")
+    monkeypatch.setattr(auth_service, "_configured_cache", None)
+    auth_service._sessions.clear()
+
+    from app.main import app
+
+    with TestClient(app) as client:
+        login = client.post("/api/auth/login", json={"password": "host-test-password"})
+        assert login.status_code == 200
+        app.state.resolve_advanced_subject_scope = lambda _request: advanced_api.AdvancedSubjectScope(
+            frozenset({("instrument", "600519.SH")})
+        )
+
+        response = client.post(
+            "/api/advanced/subjects/600519.SH/jobs",
+            json={"task_type": "research_draft"},
+        )
+
+        assert response.status_code == 200
+        job = response.json()["job"]
+        assert job["status"] in {"awaiting_review", "recorded"}
+        audit = client.get(f"/api/advanced/audits/{job['audit_reference']}")
+        assert audit.status_code == 200
+        assert audit.json()["audit"]["decision"] in {"authorized", "recorded"}
