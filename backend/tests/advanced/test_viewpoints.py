@@ -281,6 +281,9 @@ def test_calibration_projects_low_medium_high_buckets_with_coverage_and_insuffic
 class _ViewpointApiService:
     def __init__(self) -> None:
         self.created: list[dict[str, object]] = []
+        self.revisions: list[dict[str, object]] = []
+        self.corrections: list[dict[str, object]] = []
+        self.evaluations: list[dict[str, object]] = []
 
     def create_viewpoint(self, **payload: object) -> dict[str, object]:
         self.created.append(payload)
@@ -310,6 +313,21 @@ class _ViewpointApiService:
     def list_for_instrument(self, instrument: str) -> list[dict[str, object]]:
         return self.list_versions("viewpoint-owned" if instrument == "600519.SH" else "viewpoint-other")
 
+    def get_viewpoint_version(self, viewpoint_version_id: str) -> dict[str, object] | None:
+        return self.list_versions("viewpoint-owned")[0] if viewpoint_version_id == "version-owned" else None
+
+    def revise_viewpoint(self, *, viewpoint_id: str, **changes: object) -> dict[str, object]:
+        self.revisions.append({"viewpoint_id": viewpoint_id, **changes})
+        return {**self.list_versions(viewpoint_id)[0], "version": 2, "revision_kind": "material_stance_change"}
+
+    def correct_viewpoint(self, *, viewpoint_id: str, correction_reason: str, **changes: object) -> dict[str, object]:
+        self.corrections.append({"viewpoint_id": viewpoint_id, "correction_reason": correction_reason, **changes})
+        return {**self.list_versions(viewpoint_id)[0], "version": 3, "revision_kind": "correction", "correction_reason": correction_reason}
+
+    def evaluate_viewpoint(self, *, viewpoint_version_id: str, market_snapshot: object) -> dict[str, object]:
+        self.evaluations.append({"viewpoint_version_id": viewpoint_version_id, "market_snapshot": market_snapshot})
+        return {**self.list_versions("viewpoint-owned")[0], "evaluation": {"status": "unevaluable", "reason": "missing_benchmark"}}
+
     def calibration(self, *, source_profile: str) -> dict[str, object]:
         assert source_profile == "operator-research-v1"
         return {"low": {"status": "insufficient_sample"}}
@@ -322,6 +340,7 @@ def test_viewpoint_api_resolves_persisted_instrument_before_safe_projection_and_
     app = FastAPI()
     app.include_router(advanced_api.router)
     app.state.viewpoint_service = service
+    app.state.viewpoint_market_snapshot = object()
     app.state.resolve_advanced_subject_scope = lambda _request: advanced_api.AdvancedSubjectScope(
         frozenset({("instrument", "600519.SH")})
     )
@@ -370,3 +389,33 @@ def test_viewpoint_api_resolves_persisted_instrument_before_safe_projection_and_
     assert listed.status_code == 200
     assert listed.json()["viewpoints"][0]["instrument"] == "600519.SH"
     assert client.get("/api/advanced/viewpoints?instrument=000001.SZ").status_code == 404
+
+    revision = client.post(
+        "/api/advanced/viewpoints/viewpoint-owned/revisions",
+        json={"direction": "bearish"},
+    )
+    assert revision.status_code == 200
+    assert service.revisions == [{"viewpoint_id": "viewpoint-owned", "direction": "bearish"}]
+    assert client.post(
+        "/api/advanced/viewpoints/viewpoint-owned/revisions",
+        json={"principal": "browser"},
+    ).status_code == 422
+
+    correction = client.post(
+        "/api/advanced/viewpoints/viewpoint-owned/corrections",
+        json={"correction_reason": "更正结论中的单位", "conclusion": "修正后的受控研究观点"},
+    )
+    assert correction.status_code == 200
+    assert service.corrections == [{
+        "viewpoint_id": "viewpoint-owned",
+        "correction_reason": "更正结论中的单位",
+        "conclusion": "修正后的受控研究观点",
+    }]
+
+    evaluation = client.post("/api/advanced/viewpoints/versions/version-owned/evaluate", json={})
+    assert evaluation.status_code == 200
+    assert service.evaluations == [{"viewpoint_version_id": "version-owned", "market_snapshot": app.state.viewpoint_market_snapshot}]
+    assert client.post(
+        "/api/advanced/viewpoints/versions/version-owned/evaluate",
+        json={"benchmark": "SPX"},
+    ).status_code == 422
