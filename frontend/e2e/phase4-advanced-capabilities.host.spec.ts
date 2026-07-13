@@ -45,6 +45,7 @@ test.beforeAll(async () => {
       rate_limits: { research_draft: 1, experiment: 1, strategy_evaluation: 1 },
     },
     advanced_subjects: ['600000.SH'],
+    runner_wall_clock_seconds: 30,
     revoke_before_run_task_types: ['strategy_evaluation'],
   }))
   await chmod(join(fixtureDir, 'instruments.json'), 0o444)
