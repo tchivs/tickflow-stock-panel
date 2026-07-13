@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from dataclasses import dataclass, field
 from hashlib import sha256
 from pathlib import Path
@@ -179,6 +180,36 @@ def test_linux_probe_rejects_legacy_boolean_claims_without_observable_evidence(t
     proof = launcher.capability_probe(governed_input=tmp_path / "governed-panel", workdir=tmp_path)
 
     assert proof == {field: False for field in _PROBE_FIELDS}
+
+
+def test_sandbox_validation_persists_immutable_parent_asset_lineage(tmp_path):
+    from app.advanced.repository import AdvancedRepository
+
+    repository = AdvancedRepository(tmp_path / "operational.db")
+    repository.migrate()
+    audit = repository.append_security_audit(decision="recorded", reason="sandbox_completed")
+    validation = repository.append_sandbox_validation(
+        parent_asset_id="registered-research-asset-v1",
+        contract_fingerprint="contract-fingerprint",
+        source_sha256="a" * 64,
+        status="validated",
+        reason="completed",
+        audit_reference=audit["reference"],
+    )
+    run = repository.append_sandbox_run(
+        validation_id=validation["id"],
+        runner_manifest={"status": "completed", "resources": {}},
+        terminal_reason=None,
+        artifact_reference=None,
+    )
+
+    assert validation["parent_asset_id"] == "registered-research-asset-v1"
+    assert repository.get_sandbox_run(run["id"])["parent_asset_id"] == "registered-research-asset-v1"
+    with repository._connection() as connection, pytest.raises(sqlite3.IntegrityError):
+        connection.execute(
+            "UPDATE advanced_sandbox_validations SET parent_asset_id = ? WHERE id = ?",
+            ("other-asset", validation["id"]),
+        )
 
 
 @pytest.mark.parametrize(
