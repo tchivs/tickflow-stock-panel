@@ -25,14 +25,14 @@ const advancedFixture = {
   }],
   calibration: { low: { status: 'calibrated', hit_rate: 0.4, mean_relative_return: -0.01, sample_count: 3, coverage_start: '2026-01-01', coverage_end: '2026-03-31' }, medium: { status: 'insufficient_sample', hit_rate: 0.5, mean_relative_return: 0.02, sample_count: 2, coverage_start: '2026-01-01', coverage_end: '2026-03-31' }, high: { status: 'insufficient_sample', hit_rate: 0.7, mean_relative_return: 0.04, sample_count: 1, coverage_start: '2026-01-01', coverage_end: '2026-03-31' }, excluded_unevaluable: 0 },
   run: { id: 'advanced-run-fixture', specification_id: 'advanced-spec-fixture', governed_fingerprint: 'sha256:governed', asset_version: 'factor-v1', parameters: { lookback: 20 }, environment: { runtime: 'fixture' }, resource_limits: { timeout_seconds: 5, memory_limit_mb: 128 }, artifact_count: 0, metrics: {}, status: 'timed_out', constraint_reason: 'timeout_exceeded', created_at: '2026-07-12T10:00:00Z' },
-  completedRun: { id: 'advanced-completed-run-fixture', specification_id: 'advanced-spec-fixture', governed_fingerprint: 'sha256:completed', asset_version: 'strategy-v2', parameters: { lookback: 20 }, environment: { runtime: 'fixture' }, resource_limits: { timeout_seconds: 5, memory_limit_mb: 128 }, artifact_count: 2, metrics: { sharpe: 1.4 }, status: 'completed', constraint_reason: null, created_at: '2026-07-12T11:00:00Z' },
+  completedRun: { id: 'advanced-completed-run-fixture', specification_id: 'advanced-spec-fixture', governed_fingerprint: 'sha256:completed', asset_version: 'strategy-v2', parameters: { lookback: 20 }, environment: { runtime: 'fixture' }, resource_limits: { timeout_seconds: 5, memory_limit_mb: 128 }, artifact_count: 2, metrics: { sharpe: 1.4 }, status: 'completed', constraint_reason: null, created_at: '2026-07-12T11:00:00Z', execution_evidence: { aggregate: { run_id: 'advanced-completed-run-fixture', governed_input_fingerprint: 'sha256:completed', eligible_buy_count: 3, completed_trade_count: 2 }, in_sample: { run_id: 'advanced-completed-run-fixture', governed_input_fingerprint: 'sha256:completed', eligible_buy_count: 2, completed_trade_count: 1 }, out_of_sample: { run_id: 'advanced-completed-run-fixture', governed_input_fingerprint: 'sha256:completed', eligible_buy_count: 1, completed_trade_count: 1 } } },
   candidate: { id: 'advanced-candidate-fixture', parent_asset_id: 'strategy-fixture', parent_version: 'v1', mutation: 'parameter_adjustment', seed: 7, resolved_config: { lookback: 20 }, created_at: '2026-07-12T10:00:00Z', gates: ['合同/沙箱安全', '来源完整性', '样本内与样本外', '稳健性', '成本与可实现性'].map(name => ({ name, status: 'passed', evidence: 'fixture evidence' })) },
   pendingCandidate: { id: 'advanced-pending-candidate-fixture', parent_asset_id: 'strategy-fixture', parent_version: 'v2', mutation: 'adjust_signal_threshold', seed: 9, resolved_config: { lookback: 10 }, created_at: '2026-07-12T11:00:00Z', gates: [] as { name: string; status: string; evidence: string }[] },
   sandbox: { status: 'rejected', reason: 'isolation_unavailable', audit_reference: 'audit-fixture', source_sha256: 'a'.repeat(64) },
   sandboxRun: { run_id: 'sandbox-terminal-fixture', status: 'failed', terminal_reason: 'resource limit reached', proof_fingerprint: 'proof-fixture', resources: { memory_mb: 128, timeout_seconds: 5 }, audit_reference: 'audit-fixture', created_at: '2026-07-12T10:00:00Z' },
 }
 
-async function installAdvancedFixture(page: Page, { rejected = false }: { rejected?: boolean } = {}) {
+async function installAdvancedFixture(page: Page, { rejected = false, bothCandidatesPromotable = false }: { rejected?: boolean; bothCandidatesPromotable?: boolean } = {}) {
   const externalRequests: string[] = []
   page.on('request', request => {
     const url = new URL(request.url())
@@ -44,6 +44,10 @@ async function installAdvancedFixture(page: Page, { rejected = false }: { reject
   await page.route('**/api/intraday/stream', route => route.fulfill({ contentType: 'text/event-stream', body: `event: advanced_progress\ndata: ${JSON.stringify(advancedProgress)}\n\n` }))
   await page.route('**/api/settings', route => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ onboarding_completed: true }) }))
   await page.route('**/api/analysis/subjects/**/reports', route => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ reports: [] }) }))
+  const fixtureStrategy = { id: 'focus-fixture-strategy', name: '焦点测试策略', description: 'Fixture strategy for promotion dialog focus.', source: 'builtin', tags: [], version: '1', basic_filter: {}, params: [], params_defaults: {}, scoring: {}, entry_signals: [], exit_signals: [], stop_loss: null, take_profit: null, trailing_stop: null, trailing_take_profit_activate: null, trailing_take_profit_drawdown: null, max_hold_days: null, alerts: [], order_by: 'score', descending: true, limit: 20 }
+  await page.route('**/api/strategies', route => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ presets: [fixtureStrategy] }) }))
+  await page.route('**/api/screener/strategies**', route => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ presets: [fixtureStrategy] }) }))
+  await page.route('**/api/strategies/**', route => route.fulfill({ contentType: 'application/json', body: JSON.stringify(fixtureStrategy) }))
   await page.route('**/api/advanced/**', route => {
     const request = route.request()
     const path = new URL(request.url()).pathname
@@ -62,8 +66,9 @@ async function installAdvancedFixture(page: Page, { rejected = false }: { reject
     if (path.includes('/viewpoints/versions/') && path.endsWith('/evaluate') && request.method() === 'POST') {
       return json({ viewpoint: { ...advancedFixture.viewpoints[0], evaluation: { status: 'evaluated', reason: null, window_days: 60, benchmark: '000300.SH', relative_return: 0.02 } } })
     }
+    if (path.startsWith('/api/advanced/research-assets/strategies/')) return json({ binding: { strategy_id: fixtureStrategy.id, research_asset_id: 'strategy-fixture', factor_name: 'Focus fixture', provenance: { fixture: 'promotion-focus' } } })
     if (path.endsWith('/experiments')) return json({ specifications: [], runs: [advancedFixture.run, advancedFixture.completedRun], feedback: [] })
-    if (path.endsWith('/candidates')) return json({ candidates: [advancedFixture.candidate, advancedFixture.pendingCandidate] })
+    if (path.endsWith('/candidates')) return json({ candidates: [advancedFixture.candidate, bothCandidatesPromotable ? { ...advancedFixture.pendingCandidate, gates: advancedFixture.candidate.gates } : advancedFixture.pendingCandidate] })
     if (path.endsWith('/sandbox/runs')) return json({ runs: [advancedFixture.sandboxRun] })
     if (path.endsWith('/sandbox/validations')) return json({ validations: [advancedFixture.sandbox] })
     if (path.endsWith('/sandbox/submissions')) return json({ validation: advancedFixture.sandbox }, rejected ? 409 : 200)
@@ -149,6 +154,36 @@ test.describe('Phase 4 advanced capability browser contracts', () => {
     await expect(dialog.getByLabel(/批准理由/)).toBeVisible()
     await expect(dialog.getByRole('button', { name: '确认晋级为研究策略' })).toBeDisabled()
     await expect(page.getByRole('button', { name: /启用监控|创建交易计划|执行市场操作/ })).toHaveCount(0)
+    expect(fixture.externalRequests).toEqual([])
+  })
+
+  test('scenario 3a: promotion dialog restores focus to its originating candidate', async ({ page }, testInfo) => {
+    futurePhase4Ui(testInfo, true)
+    const fixture = await installAdvancedFixture(page, { bothCandidatesPromotable: true })
+    await page.goto('/backtest')
+    await page.getByRole('button', { name: '焦点测试策略' }).click()
+    await expect(page.getByText('服务器解析的研究资产')).toBeVisible()
+
+    const firstTrigger = page.getByText('父策略 v1').locator('..').getByRole('button', { name: '批准晋级为研究策略' })
+    const secondTrigger = page.getByText('父策略 v2').locator('..').getByRole('button', { name: '批准晋级为研究策略' })
+    const dialog = page.getByRole('dialog', { name: '确认晋级为研究策略' })
+    const rationale = dialog.getByLabel('批准理由（至少 10 个字符）')
+    const cancel = dialog.getByRole('button', { name: '返回候选' })
+
+    await firstTrigger.click()
+    await cancel.click()
+    await expect(dialog).toBeHidden()
+    await expect(firstTrigger).toBeFocused()
+
+    await secondTrigger.click()
+    await expect(rationale).toBeFocused()
+    await page.keyboard.press('Shift+Tab')
+    await expect(cancel).toBeFocused()
+    await page.keyboard.press('Tab')
+    await expect(rationale).toBeFocused()
+    await page.keyboard.press('Escape')
+    await expect(dialog).toBeHidden()
+    await expect(secondTrigger).toBeFocused()
     expect(fixture.externalRequests).toEqual([])
   })
 

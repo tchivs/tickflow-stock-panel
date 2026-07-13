@@ -64,7 +64,7 @@ export function AdvancedResearchPanels({ binding, bindingError }: { binding: Adv
   const [source, setSource] = useState('')
   const [sandboxResult, setSandboxResult] = useState<AdvancedSandboxValidation | null>(null)
   const dialogRef = useRef<HTMLDivElement>(null)
-  const promotionTriggerRef = useRef<HTMLButtonElement>(null)
+  const promotionTriggerRef = useRef<HTMLButtonElement | null>(null)
   const promotionReasonRef = useRef<HTMLTextAreaElement>(null)
   const failureRef = useRef<HTMLDivElement>(null)
   const dialogHeadingRef = useRef<HTMLHeadingElement>(null)
@@ -91,6 +91,11 @@ export function AdvancedResearchPanels({ binding, bindingError }: { binding: Adv
     },
     onSuccess: result => { setSandboxResult(result.validation ?? null); setSource(''); queryClient.invalidateQueries({ queryKey: QK.advancedSandboxValidations }); invalidateSandboxRuns() },
   })
+  const openPromotion = (candidateId: string, trigger: HTMLButtonElement) => {
+    promotionTriggerRef.current = trigger
+    setCandidateForPromotion(candidateId)
+  }
+
   const closePromotion = () => {
     setCandidateForPromotion(null)
     requestAnimationFrame(() => promotionTriggerRef.current?.focus())
@@ -172,7 +177,7 @@ export function AdvancedResearchPanels({ binding, bindingError }: { binding: Adv
       </div>
     </section>
 
-    <section aria-labelledby="advanced-evolution-heading" className="border-t border-border pt-6"><h2 id="advanced-evolution-heading" className="text-base font-semibold">演化候选与门禁</h2><p className="mt-1 text-xs text-warning">排序不代表可晋级；所有门禁必须独立通过。</p>{candidateItems.map(candidate => <CandidateCard key={candidate.id} candidate={candidate} onEvaluate={gate => evaluateGate.mutate({ candidateId: candidate.id, gate })} onPromote={() => setCandidateForPromotion(candidate.id)} promotionTriggerRef={promotionTriggerRef} />)}</section>
+    <section aria-labelledby="advanced-evolution-heading" className="border-t border-border pt-6"><h2 id="advanced-evolution-heading" className="text-base font-semibold">演化候选与门禁</h2><p className="mt-1 text-xs text-warning">排序不代表可晋级；所有门禁必须独立通过。</p>{candidateItems.map(candidate => <CandidateCard key={candidate.id} candidate={candidate} onEvaluate={gate => evaluateGate.mutate({ candidateId: candidate.id, gate })} onPromote={trigger => openPromotion(candidate.id, trigger)} />)}</section>
 
     <section aria-labelledby="advanced-sandbox-heading" className="border-t border-border pt-6"><h2 id="advanced-sandbox-heading" className="text-base font-semibold">自定义策略沙箱</h2><p className="mt-1 text-xs text-muted">合同与源码在同一受限请求中提交；提交后浏览器不会保留源码。</p><label className="mt-3 block text-xs text-secondary">受限策略源码<textarea value={source} onChange={event => setSource(event.target.value)} className={`${controlClass} mt-1 min-h-28 w-full font-mono`} /></label><details className="mt-2 text-xs"><summary className="min-h-11 cursor-pointer py-2 text-accent">查看机器可读合同</summary><p>允许输入：governed_panel；超时：5 秒；内存：128 MB。AST、导入、超时和内存均由服务端验证。</p></details><button type="button" disabled={!researchAssetId || !source || submitSandbox.isPending} onClick={() => submitSandbox.mutate()} className={`${primaryClass} mt-3`}>{submitSandbox.isPending ? '正在检查策略合同与限制…' : '验证并运行受限策略'}</button>{sandboxFailure && <div ref={failureRef} tabIndex={-1} role="alert" className="mt-3 text-xs text-danger">{sandboxFailure.status === 'constraint_failed' ? '沙箱已终止' : '策略未运行'}：{sandboxFailure.reason}。审计参考：{sandboxFailure.audit_reference}</div>}<SandboxRunTable runs={sandboxRunItems} /></section>
 
@@ -180,10 +185,9 @@ export function AdvancedResearchPanels({ binding, bindingError }: { binding: Adv
   </div>
 }
 
-function CandidateCard({ candidate, onEvaluate, onPromote, promotionTriggerRef }: { candidate: AdvancedCandidate; onEvaluate: (gate: keyof typeof GATE_LABELS) => void; onPromote: () => void; promotionTriggerRef: React.RefObject<HTMLButtonElement | null> }) {
+function CandidateCard({ candidate, onEvaluate, onPromote }: { candidate: AdvancedCandidate; onEvaluate: (gate: keyof typeof GATE_LABELS) => void; onPromote: (trigger: HTMLButtonElement) => void }) {
   const allPassed = candidate.gates.length === 5 && candidate.gates.every(gate => gate.status === 'passed')
-  return <article className="mt-4 rounded-card border border-border p-3 text-xs"><p>父策略 {candidate.parent_version}；变异 {candidate.mutation}；种子 {candidate.seed}；配置 {serialize(candidate.resolved_config)}</p><div className="mt-3 overflow-x-auto" tabIndex={0} aria-describedby={`gate-scroll-instruction-${candidate.id}`}><p id={`gate-scroll-instruction-${candidate.id}`} className="mb-2 text-xs text-muted">左右滚动查看完整记录</p><table className="min-w-[620px] text-left"><caption className="sr-only">晋级门禁</caption><thead><tr><th scope="col">门禁</th><th scope="col">状态</th><th scope="col">受控证据</th><th scope="col">操作</th></tr></thead><tbody>{Object.entries(GATE_LABELS).map(([key, label]) => { const gate = candidate.gates.find(item => item.name === key || item.name === label); return <tr key={key} className="border-t border-border/60"><th scope="row" className="py-2">{label}</th><td className="py-2">{gate?.status === 'passed' ? '通过' : gate?.status === 'failed' ? '未通过' : '缺少证据'}</td><td className="py-2 break-words">{gate?.evidence ?? '尚无受控证据'}</td><td className="py-2"><button type="button" className={controlClass} disabled={!!gate} onClick={() => onEvaluate(key as keyof typeof GATE_LABELS)}>评估门禁：{label}</button></td></tr> })}</tbody></table></div><button ref={promotionTriggerRef} type="button" disabled={!allPassed} onClick={onPromote} className={`${primaryClass} mt-3`}>批准晋级为研究策略</button></article>
-}
+  return <article className="mt-4 rounded-card border border-border p-3 text-xs"><p>父策略 {candidate.parent_version}；变异 {candidate.mutation}；种子 {candidate.seed}；配置 {serialize(candidate.resolved_config)}</p><div className="mt-3 overflow-x-auto" tabIndex={0} aria-describedby={`gate-scroll-instruction-${candidate.id}`}><p id={`gate-scroll-instruction-${candidate.id}`} className="mb-2 text-xs text-muted">左右滚动查看完整记录</p><table className="min-w-[620px] text-left"><caption className="sr-only">晋级门禁</caption><thead><tr><th scope="col">门禁</th><th scope="col">状态</th><th scope="col">受控证据</th><th scope="col">操作</th></tr></thead><tbody>{Object.entries(GATE_LABELS).map(([key, label]) => { const gate = candidate.gates.find(item => item.name === key || item.name === label); return <tr key={key} className="border-t border-border/60"><th scope="row" className="py-2">{label}</th><td className="py-2">{gate?.status === 'passed' ? '通过' : gate?.status === 'failed' ? '未通过' : '缺少证据'}</td><td className="py-2 break-words">{gate?.evidence ?? '尚无受控证据'}</td><td className="py-2"><button type="button" className={controlClass} disabled={!!gate} onClick={() => onEvaluate(key as keyof typeof GATE_LABELS)}>评估门禁：{label}</button></td></tr> })}</tbody></table></div><button type="button" disabled={!allPassed} onClick={event => onPromote(event.currentTarget)} className={`${primaryClass} mt-3`}>批准晋级为研究策略</button></article> }
 
 function SandboxRunTable({ runs }: { runs: AdvancedSandboxRun[] }) {
   if (!runs.length) return <p className="mt-4 text-xs text-muted">暂无终态沙箱运行记录</p>
