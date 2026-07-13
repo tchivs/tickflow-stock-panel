@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import time
-from datetime import date
 from hashlib import sha256
 from types import SimpleNamespace
 
@@ -170,8 +169,13 @@ def test_main_host_exposes_governed_viewpoint_snapshot_from_the_lifespan(tmp_pat
 
     with TestClient(app):
         snapshot = app.state.viewpoint_market_snapshot
-        assert snapshot.price_at_window("600000.SH", 20) is None
-        assert snapshot.benchmark_at_window("000300.SH", 20) is None
+        assert snapshot.evaluate_viewpoint({
+            "instrument": "600000.SH",
+            "benchmark": "000300.SH",
+            "asset_type": "stock",
+            "published_at": "2024-01-02T00:00:00+00:00",
+            "evaluation_window_days": 20,
+        }) == {"status": "unevaluable", "reason": "missing_price"}
 
 
 def test_authenticated_main_host_projects_latest_immutable_viewpoint_evaluation(tmp_path, monkeypatch):
@@ -201,32 +205,25 @@ def test_authenticated_main_host_projects_latest_immutable_viewpoint_evaluation(
         app.state.resolve_advanced_subject_scope = lambda _request: advanced_api.AdvancedSubjectScope(
             frozenset({("instrument", "600000.SH")})
         )
-        created = client.post("/api/advanced/viewpoints", json=_viewpoint_payload(instrument="600000.SH"))
+        payload = _viewpoint_payload(instrument="600000.SH")
+        payload["published_at"] = "2024-01-02T00:00:00+00:00"
+        created = client.post("/api/advanced/viewpoints", json=payload)
         assert created.status_code == 200
         version_id = created.json()["viewpoint"]["id"]
         viewpoint_id = created.json()["viewpoint"]["viewpoint_id"]
 
-        app.state.viewpoint_service.record_evaluation(
+        outcome = app.state.viewpoint_service.evaluate_viewpoint(
             viewpoint_version_id=version_id,
-            status="evaluated",
-            relative_return=0.02,
-            coverage_start=date(2026, 1, 2),
-            coverage_end=date(2026, 3, 31),
-            governed_input_fingerprint="a" * 64,
+            market_snapshot=app.state.viewpoint_market_snapshot,
         )
-        app.state.viewpoint_service.record_evaluation(
-            viewpoint_version_id=version_id,
-            status="unevaluable",
-            reason="missing_benchmark",
-            governed_input_fingerprint="b" * 64,
-        )
+        assert outcome == {"status": "unevaluable", "reason": "missing_price", "relative_return": None}
 
         listed = client.get(f"/api/advanced/viewpoints/{viewpoint_id}/versions")
         assert listed.status_code == 200
         evaluation = listed.json()["versions"][0]["evaluation"]
         assert evaluation == {
             "status": "unevaluable",
-            "reason": "missing_benchmark",
+            "reason": "missing_price",
             "window_days": 60,
             "benchmark": "000300.SH",
             "relative_return": None,

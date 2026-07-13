@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 import os
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -137,12 +137,59 @@ async def lifespan(app: FastAPI):
     from app.advanced.sandbox import CustomStrategySandboxService, LinuxIsolationLauncher
     from app.advanced.viewpoints import ViewpointService
 
+    class _GovernedViewpointSnapshot:
+        """Read frozen viewpoint inputs exclusively through the governed Kline repository."""
+
+        def __init__(self, governed_repository: KlineRepository) -> None:
+            self._repository = governed_repository
+
+        def evaluate_viewpoint(self, version: dict[str, object]) -> dict[str, object]:
+            published_at = version.get("published_at")
+            instrument = version.get("instrument")
+            benchmark = version.get("benchmark")
+            window_days = version.get("evaluation_window_days")
+            asset_type = version.get("asset_type")
+            if not isinstance(published_at, str) or not isinstance(instrument, str) or not isinstance(benchmark, str):
+                return {"status": "unevaluable", "reason": "unsupported_scope"}
+            if not isinstance(window_days, int) or window_days not in {20, 60, 120} or asset_type not in {"stock", "etf", "index"}:
+                return {"status": "unevaluable", "reason": "unsupported_scope"}
+            publication_date = datetime.fromisoformat(published_at).date()
+            # A threefold calendar range safely covers the frozen trading-day window without a live quote read.
+            end_date = publication_date + timedelta(days=window_days * 3)
+            instrument_rows = self._repository.get_daily_asset(
+                asset_type, instrument, publication_date, end_date, columns=["date", "close"]
+            ).sort("date")
+            if instrument_rows.height <= window_days:
+                return {"status": "unevaluable", "reason": "missing_price"}
+            benchmark_rows = self._repository.get_index_daily(
+                benchmark, publication_date, end_date, columns=["date", "close"]
+            ).sort("date")
+            if benchmark_rows.height <= window_days:
+                return {"status": "unevaluable", "reason": "missing_benchmark"}
+            instrument_start = instrument_rows.row(0, named=True)
+            instrument_end = instrument_rows.row(window_days, named=True)
+            benchmark_start = benchmark_rows.row(0, named=True)
+            benchmark_end = benchmark_rows.row(window_days, named=True)
+            values = (instrument_start["close"], instrument_end["close"], benchmark_start["close"], benchmark_end["close"])
+            if not all(isinstance(value, (int, float)) and value > 0 for value in values):
+                return {"status": "unevaluable", "reason": "missing_price"}
+            return {
+                "status": "evaluated",
+                "instrument_start": float(instrument_start["close"]),
+                "instrument_end": float(instrument_end["close"]),
+                "benchmark_start": float(benchmark_start["close"]),
+                "benchmark_end": float(benchmark_end["close"]),
+                "coverage_start": instrument_start["date"],
+                "coverage_end": instrument_end["date"],
+            }
+
     advanced_repository = AdvancedRepository(operational.database_path)
     advanced_repository.migrate()
     advanced_policy = AdvancedPolicy.bootstrap("advanced_policy_v1")
     app.state.advanced_repository = advanced_repository
     app.state.advanced_policy = advanced_policy
     app.state.viewpoint_service = ViewpointService(repository=advanced_repository, policy=advanced_policy)
+    app.state.viewpoint_market_snapshot = _GovernedViewpointSnapshot(repo)
     app.state.evolution_service = EvolutionService(
         repository=advanced_repository,
         reviewer_resolver=lambda principal: principal,

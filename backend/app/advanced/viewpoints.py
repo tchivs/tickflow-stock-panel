@@ -20,6 +20,12 @@ class GovernedMarketSnapshot(Protocol):
     def benchmark_at_window(self, benchmark: str, trading_days: int) -> float | None: ...
 
 
+class GovernedViewpointEvaluation(Protocol):
+    """Production collaborator returns only frozen, governed evaluation inputs."""
+
+    def evaluate_viewpoint(self, version: dict[str, Any]) -> dict[str, Any]: ...
+
+
 class ViewpointService:
     def __init__(self, *, repository: AdvancedRepository, policy: AdvancedPolicy) -> None:
         self.repository = repository
@@ -68,6 +74,9 @@ class ViewpointService:
         version = self.repository.viewpoint_version(viewpoint_version_id)
         if version is None:
             raise ValueError("viewpoint version not found")
+        governed_evaluator = getattr(market_snapshot, "evaluate_viewpoint", None)
+        if callable(governed_evaluator):
+            return self._record_governed_evaluation(version, governed_evaluator(version))
         window = version["evaluation_window_days"]
         price = market_snapshot.price_at_window(version["instrument"], window)
         benchmark_price = market_snapshot.benchmark_at_window(version["benchmark"], window)
@@ -90,6 +99,43 @@ class ViewpointService:
         return {"status": "evaluated", "window_days": window, "benchmark": version["benchmark"],
                 "instrument_return": instrument_return, "benchmark_return": benchmark_return,
                 "relative_return": relative_return, "as_of": as_of}
+
+    def _record_governed_evaluation(self, version: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
+        status = result.get("status")
+        if status == "unevaluable":
+            reason = result.get("reason")
+            if reason not in {"missing_price", "missing_benchmark", "unsupported_scope"}:
+                raise ValueError("governed evaluator returned an invalid outcome")
+            self.record_evaluation(
+                viewpoint_version_id=version["id"], status="unevaluable", reason=reason,
+                governed_input_fingerprint=self._input_fingerprint(version, result.get("instrument_end"), result.get("benchmark_end")),
+            )
+            return {"status": "unevaluable", "reason": reason, "relative_return": None}
+        if status != "evaluated":
+            raise ValueError("governed evaluator returned an invalid outcome")
+        instrument_start = result.get("instrument_start")
+        instrument_end = result.get("instrument_end")
+        benchmark_start = result.get("benchmark_start")
+        benchmark_end = result.get("benchmark_end")
+        coverage_start = result.get("coverage_start")
+        coverage_end = result.get("coverage_end")
+        if not all(isinstance(value, (int, float)) and value > 0 for value in (
+            instrument_start, instrument_end, benchmark_start, benchmark_end,
+        )) or not isinstance(coverage_start, date) or not isinstance(coverage_end, date):
+            raise ValueError("governed evaluator returned incomplete inputs")
+        instrument_return = round(instrument_end / instrument_start - 1.0, 10)
+        benchmark_return = round(benchmark_end / benchmark_start - 1.0, 10)
+        relative_return = round(instrument_return - benchmark_return, 10)
+        self.record_evaluation(
+            viewpoint_version_id=version["id"], status="evaluated", relative_return=relative_return,
+            coverage_start=coverage_start, coverage_end=coverage_end,
+            governed_input_fingerprint=self._input_fingerprint(version, instrument_end, benchmark_end),
+        )
+        return {
+            "status": "evaluated", "window_days": version["evaluation_window_days"], "benchmark": version["benchmark"],
+            "instrument_return": instrument_return, "benchmark_return": benchmark_return,
+            "relative_return": relative_return, "as_of": coverage_end,
+        }
 
     def record_evaluation(self, *, viewpoint_version_id: str, status: str, relative_return: float | None = None,
                           coverage_start: date | None = None, coverage_end: date | None = None, reason: str | None = None,

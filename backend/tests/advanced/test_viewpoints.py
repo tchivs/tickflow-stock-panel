@@ -23,6 +23,19 @@ class FixedMarketSnapshot:
         return self.benchmarks.get((benchmark, trading_days))
 
 
+class FixedGovernedEvaluation:
+    def evaluate_viewpoint(self, _version: dict[str, object]) -> dict[str, object]:
+        return {
+            "status": "evaluated",
+            "instrument_start": 100.0,
+            "instrument_end": 120.0,
+            "benchmark_start": 100.0,
+            "benchmark_end": 110.0,
+            "coverage_start": date(2026, 1, 2),
+            "coverage_end": date(2026, 3, 31),
+        }
+
+
 def _service(tmp_path):
     from app.advanced.policy import AdvancedPolicy
     from app.advanced.repository import AdvancedRepository
@@ -196,6 +209,34 @@ def test_missing_market_inputs_persist_explicit_unevaluable_outcomes(tmp_path, p
     assert outcome["reason"] == reason
     assert outcome["relative_return"] is None
     assert service.calibration(source_profile="operator-research-v1")["excluded_unevaluable"] == 0
+
+
+def test_governed_collaborator_records_real_returns_and_coverage_dates(tmp_path):
+    _repository, service = _service(tmp_path)
+    viewpoint = _create(service)
+
+    outcome = service.evaluate_viewpoint(
+        viewpoint_version_id=viewpoint["id"], market_snapshot=FixedGovernedEvaluation()
+    )
+
+    assert outcome == {
+        "status": "evaluated",
+        "window_days": 60,
+        "benchmark": "000300.SH",
+        "instrument_return": 0.2,
+        "benchmark_return": 0.1,
+        "relative_return": 0.1,
+        "as_of": date(2026, 3, 31),
+    }
+    assert service.list_versions(viewpoint["viewpoint_id"])[0]["evaluation"] == {
+        "status": "evaluated",
+        "reason": None,
+        "relative_return": 0.1,
+        "coverage_start": "2026-01-02",
+        "coverage_end": "2026-03-31",
+        "window_days": 60,
+        "benchmark": "000300.SH",
+    }
 
 
 def test_calibration_projects_low_medium_high_buckets_with_coverage_and_insufficient_state(tmp_path):
