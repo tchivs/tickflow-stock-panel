@@ -52,7 +52,15 @@ def _specification(service, **overrides):
     payload = {
         "research_asset_id": "factor-value-v7",
         "hypothesis": "低估值与盈利质量组合在样本外保持正向超额收益",
-        "data_scope": {"market": "CN-A", "start": "2024-01-01", "end": "2025-12-31"},
+        "data_scope": {
+            "market": "CN-A",
+            "strategy_id": "momentum_breakout",
+            "start": "2024-01-01",
+            "end": "2025-12-31",
+            "symbols": ["600000.SH"],
+            "asset_type": "stock",
+            "parameters": {"lookback": 20, "enabled": True},
+        },
         "method": "cross-sectional-long-short",
         "metrics": ["sharpe", "out_of_sample_return"],
         "success_criteria": {"out_of_sample_return_gt": 0.03},
@@ -68,7 +76,15 @@ def test_experiment_specification_freezes_reproducible_research_contract_and_is_
 
     assert specification["version"] == 1
     assert specification["hypothesis"].startswith("低估值")
-    assert specification["data_scope"] == {"market": "CN-A", "start": "2024-01-01", "end": "2025-12-31"}
+    assert specification["data_scope"] == {
+        "market": "CN-A",
+        "strategy_id": "momentum_breakout",
+        "start": "2024-01-01",
+        "end": "2025-12-31",
+        "symbols": ["600000.SH"],
+        "asset_type": "stock",
+        "parameters": {"lookback": 20, "enabled": True},
+    }
     assert specification["method"] == "cross-sectional-long-short"
     assert specification["metrics"] == ["sharpe", "out_of_sample_return"]
     assert specification["success_criteria"] == {"out_of_sample_return_gt": 0.03}
@@ -165,7 +181,16 @@ def test_retry_appends_a_new_run_and_configuration_change_appends_a_new_specific
     retry = service.retry_run(run_id=failed_run["id"])
     changed = service.retry_run(
         run_id=failed_run["id"],
-        specification_changes={"data_scope": {"market": "CN-A", "start": "2023-01-01", "end": "2025-12-31"}},
+        specification_changes={
+            "data_scope": {
+                "market": "CN-A",
+                "strategy_id": "momentum_breakout",
+                "start": "2023-01-01",
+                "end": "2025-12-31",
+                "asset_type": "stock",
+                "parameters": {},
+            }
+        },
     )
 
     assert retry["id"] != failed_run["id"]
@@ -202,6 +227,20 @@ class _ExperimentApiService:
         return {"id": "feedback-owned", "run_id": run_id, "conclusion": conclusion}
 
 
+def _strategy_scope(**overrides: object) -> dict[str, object]:
+    scope: dict[str, object] = {
+        "market": "CN-A",
+        "strategy_id": "momentum_breakout",
+        "start": "2024-01-01",
+        "end": "2025-12-31",
+        "symbols": ["600000.SH", "000001.SZ"],
+        "asset_type": "stock",
+        "parameters": {"lookback": 20, "stop_loss": 0.08, "enabled": True},
+    }
+    scope.update(overrides)
+    return scope
+
+
 def test_experiment_api_uses_server_owner_for_append_only_specifications_and_feedback():
     from app.advanced import api as advanced_api
 
@@ -220,7 +259,7 @@ def test_experiment_api_uses_server_owner_for_append_only_specifications_and_fee
     payload = {
         "research_asset_id": "asset-owned",
         "hypothesis": "受控假设",
-        "data_scope": {"market": "CN-A"},
+        "data_scope": _strategy_scope(),
         "method": "bounded-method",
         "metrics": ["sharpe"],
         "success_criteria": {"sharpe_gt": 1},
@@ -239,3 +278,45 @@ def test_experiment_api_uses_server_owner_for_append_only_specifications_and_fee
     assert feedback.status_code == 200
     assert service.feedback == [{"run_id": "run-owned", "conclusion": "supported", "notes": "完整运行可追加研究结论。"}]
     assert client.patch("/api/advanced/experiments/specifications/spec-owned", json={}).status_code == 405
+
+
+@pytest.mark.parametrize(
+    "scope",
+    [
+        _strategy_scope(strategy_id=""),
+        _strategy_scope(start="not-a-date"),
+        _strategy_scope(start="2025-12-31", end="2024-01-01"),
+        _strategy_scope(symbols=["invalid symbol"]),
+        _strategy_scope(asset_type="crypto"),
+        _strategy_scope(parameters={"nested": {"not": "scalar"}}),
+    ],
+)
+def test_experiment_api_rejects_invalid_frozen_strategy_scope_before_service_call(scope):
+    from app.advanced import api as advanced_api
+
+    service = _ExperimentApiService()
+    app = FastAPI()
+    app.include_router(advanced_api.router)
+    app.state.experiment_service = service
+    app.state.resolve_advanced_research_asset = lambda _request, asset_id: asset_id == "asset-owned"
+
+    @app.middleware("http")
+    async def authenticated(request: Request, call_next):
+        request.state.reviewer_principal = "server-researcher"
+        return await call_next(request)
+
+    response = TestClient(app).post(
+        "/api/advanced/experiments/specifications",
+        json={
+            "research_asset_id": "asset-owned",
+            "hypothesis": "受控假设",
+            "data_scope": scope,
+            "method": "bounded-method",
+            "metrics": ["sharpe"],
+            "success_criteria": {"sharpe_gt": 1},
+            "failure_criteria": {"drawdown_lt": -0.2},
+        },
+    )
+
+    assert response.status_code == 422
+    assert service.created == []
