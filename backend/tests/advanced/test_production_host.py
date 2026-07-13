@@ -1,6 +1,7 @@
 """Production-lifespan proofs for advanced research routes."""
 from __future__ import annotations
 
+import json
 import time
 from hashlib import sha256
 from types import SimpleNamespace
@@ -64,6 +65,20 @@ def _strategy_scope() -> dict[str, object]:
         "symbols": ["600000.SH"],
         "asset_type": "stock",
         "parameters": {"lookback": 20},
+    }
+
+
+def _advanced_host_fixture() -> dict[str, object]:
+    return {
+        "policy": {
+            "version": "advanced_policy_v1",
+            "source_profiles": {"operator-research-v1": {"market_scopes": ["CN-A"]}},
+            "benchmark_defaults": {"stock": "000300.SH", "etf": "000300.SH", "index": "000001.SH"},
+            "benchmark_overrides": ["000300.SH", "000905.SH", "000852.SH"],
+            "agent_allowlist": {"research_draft": ["CN-A"], "experiment": ["CN-A"], "strategy_evaluation": ["CN-A"]},
+            "rate_limits": {"research_draft": 1, "experiment": 1, "strategy_evaluation": 1},
+        },
+        "advanced_subjects": ["600000.SH"],
     }
 
 
@@ -204,6 +219,38 @@ def test_main_host_exposes_governed_viewpoint_snapshot_from_the_lifespan(tmp_pat
             "published_at": "2024-01-02T00:00:00+00:00",
             "evaluation_window_days": 20,
         }) == {"status": "unevaluable", "reason": "missing_price"}
+
+
+def test_main_host_loads_and_persists_deployment_owned_advanced_fixture(tmp_path, monkeypatch):
+    from app.config import settings
+    from app.services import auth as auth_service
+    from tests.test_analysis_host_integration import _write_phase1_fixture
+
+    fixture_dir = tmp_path / "phase1-fixtures"
+    data_dir = tmp_path / "governed-data"
+    advanced_fixture = tmp_path / "advanced-host-fixture.json"
+    _write_phase1_fixture(fixture_dir)
+    advanced_fixture.write_text(json.dumps(_advanced_host_fixture()), encoding="utf-8")
+    monkeypatch.setenv("PHASE1_FIXTURE_MODE", "1")
+    monkeypatch.setenv("PHASE1_FIXTURE_DIR", str(fixture_dir))
+    monkeypatch.setenv("ADVANCED_HOST_FIXTURE", str(advanced_fixture))
+    monkeypatch.setattr(settings, "data_dir", data_dir)
+    monkeypatch.setattr(settings, "auth_password", "host-test-password")
+    monkeypatch.setattr(auth_service, "_configured_cache", None)
+    auth_service._sessions.clear()
+
+    from app.main import app
+
+    with TestClient(app) as client:
+        assert client.post("/api/auth/login", json={"password": "host-test-password"}).status_code == 200
+        allowed = client.post("/api/advanced/subjects/600000.SH/jobs", json={"task_type": "research_draft"})
+        denied = client.post("/api/advanced/subjects/000001.SZ/jobs", json={"task_type": "research_draft"})
+
+        assert allowed.status_code == 200
+        assert denied.status_code == 404
+        policy = app.state.advanced_repository.get_policy_revision(app.state.advanced_policy.fingerprint)
+        assert policy is not None
+        assert policy["fingerprint"] == app.state.advanced_policy.fingerprint
 
 
 def test_authenticated_main_host_projects_latest_immutable_viewpoint_evaluation(tmp_path, monkeypatch):
