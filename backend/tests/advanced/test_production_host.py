@@ -151,6 +151,29 @@ def _viewpoint_payload(*, instrument: str) -> dict[str, object]:
     }
 
 
+def test_main_host_exposes_governed_viewpoint_snapshot_from_the_lifespan(tmp_path, monkeypatch):
+    from app.config import settings
+    from app.services import auth as auth_service
+    from tests.test_analysis_host_integration import _write_phase1_fixture
+
+    fixture_dir = tmp_path / "phase1-fixtures"
+    data_dir = tmp_path / "governed-data"
+    _write_phase1_fixture(fixture_dir)
+    monkeypatch.setenv("PHASE1_FIXTURE_MODE", "1")
+    monkeypatch.setenv("PHASE1_FIXTURE_DIR", str(fixture_dir))
+    monkeypatch.setattr(settings, "data_dir", data_dir)
+    monkeypatch.setattr(settings, "auth_password", "host-test-password")
+    monkeypatch.setattr(auth_service, "_configured_cache", None)
+    auth_service._sessions.clear()
+
+    from app.main import app
+
+    with TestClient(app):
+        snapshot = app.state.viewpoint_market_snapshot
+        assert snapshot.price_at_window("600000.SH", 20) is None
+        assert snapshot.benchmark_at_window("000300.SH", 20) is None
+
+
 def test_authenticated_main_host_projects_latest_immutable_viewpoint_evaluation(tmp_path, monkeypatch):
     from app.advanced import api as advanced_api
     from app.advanced.governed_runner import GovernedExperimentRunner
