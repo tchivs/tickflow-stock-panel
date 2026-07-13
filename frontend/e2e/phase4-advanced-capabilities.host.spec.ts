@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { chmod, mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -247,18 +248,45 @@ test('real host visibly resolves the immutable binding, completes research feedb
     await expect(dialog).toBeHidden()
     await expect(promotionTrigger).toBeFocused()
   }
-  await page.getByLabel('受限策略源码').fill("def run(panel):\n    return {'signal': 'hold'}\n")
+  const sandboxSource = "def run(panel):\n    return {'signal': 'hold'}\n"
+  const sandboxSourceHash = createHash('sha256').update(sandboxSource).digest('hex')
+  const sandboxRunsBefore = await sameOriginRequest(page, '/api/advanced/sandbox/runs')
+  expect(sandboxRunsBefore.status).toBe(200)
+  const existingSandboxRunIds = new Set((sandboxRunsBefore.body.runs as Array<{ run_id: string }>).map(run => run.run_id))
+  const submissionResponsePromise = page.waitForResponse(response =>
+    new URL(response.url()).pathname === '/api/advanced/sandbox/submissions' && response.request().method() === 'POST'
+  )
+  await page.getByLabel('受限策略源码').fill(sandboxSource)
   await page.getByRole('button', { name: '验证并运行受限策略' }).click()
-  const unavailable = page.getByRole('alert').filter({ hasText: 'isolation_unavailable' })
-  const terminal = page.getByText('终态沙箱运行')
-  await expect(unavailable.or(terminal)).toBeVisible({ timeout: 60_000 })
-  if (await unavailable.isVisible()) {
+  const submissionResponse = await submissionResponsePromise
+  expect(submissionResponse.status()).toBe(200)
+  const submissionPayload = submissionResponse.request().postDataJSON() as { source: string; contract: { source_sha256: string } }
+  expect(submissionPayload).toMatchObject({ source: sandboxSource, contract: { source_sha256: sandboxSourceHash } })
+  const submission = await submissionResponse.json() as {
+    validation?: { status: string; reason: string; source_sha256: string }
+    run?: { run_id: string }
+  }
+  if (submission.validation) {
     capabilityBranch = 'isolation_unavailable_fail_closed'
-    await expect(page.getByText('暂无终态沙箱运行记录')).toBeVisible()
+    expect(submission.validation).toEqual({
+      status: 'rejected',
+      reason: 'isolation_unavailable',
+      source_sha256: sandboxSourceHash,
+      audit_reference: expect.any(String),
+    })
+    await expect(page.getByRole('alert').filter({ hasText: 'isolation_unavailable' })).toBeVisible()
+    const sandboxRunsAfter = await sameOriginRequest(page, '/api/advanced/sandbox/runs')
+    expect(sandboxRunsAfter.status).toBe(200)
+    expect((sandboxRunsAfter.body.runs as Array<{ run_id: string }>).filter(run => !existingSandboxRunIds.has(run.run_id))).toEqual([])
   } else {
+    const runId = submission.run?.run_id
+    expect(runId).toEqual(expect.any(String))
+    if (!runId) throw new Error('sandbox submission did not return a terminal run identity')
     capabilityBranch = 'affirmative_isolation_proved'
-    await expect(page.getByText('Proof 指纹')).toBeVisible()
-    await expect(page.getByText('资源摘要')).toBeVisible()
+    await expect.poll(async () => {
+      const run = await sameOriginRequest(page, `/api/advanced/sandbox/runs/${encodeURIComponent(runId)}`)
+      return run.status === 200 ? run.body.run : null
+    }, { timeout: 60_000 }).toMatchObject({ run_id: runId, status: 'completed' })
   }
   console.log(`Phase 4 host capability branch: ${capabilityBranch}`)
   await page.getByRole('button', { name: '批准晋级为研究策略' }).click()
