@@ -1,6 +1,7 @@
 """FastAPI 入口。"""
 from __future__ import annotations
 
+import json
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -185,7 +186,22 @@ async def lifespan(app: FastAPI):
 
     advanced_repository = AdvancedRepository(operational.database_path)
     advanced_repository.migrate()
-    advanced_policy = AdvancedPolicy.bootstrap("advanced_policy_v1")
+    advanced_fixture_path = os.environ.get("ADVANCED_HOST_FIXTURE")
+    advanced_subjects: frozenset[str] | None = None
+    if advanced_fixture_path:
+        try:
+            fixture = json.loads(Path(advanced_fixture_path).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise RuntimeError("advanced host fixture is unreadable") from error
+        if not isinstance(fixture, dict) or set(fixture) != {"policy", "advanced_subjects"}:
+            raise RuntimeError("advanced host fixture is malformed")
+        subjects = fixture["advanced_subjects"]
+        if not isinstance(subjects, list) or not subjects or any(not isinstance(subject, str) or not subject for subject in subjects):
+            raise RuntimeError("advanced host fixture subjects are malformed")
+        advanced_policy = AdvancedPolicy.bootstrap(fixture["policy"])
+        advanced_subjects = frozenset(subjects)
+    else:
+        advanced_policy = AdvancedPolicy.bootstrap("advanced_policy_v1")
     app.state.advanced_repository = advanced_repository
     app.state.advanced_policy = advanced_policy
     app.state.viewpoint_service = ViewpointService(repository=advanced_repository, policy=advanced_policy)
@@ -203,7 +219,7 @@ async def lifespan(app: FastAPI):
             # The request-scoped resolver is the authority for individual instruments.
             # This wildcard is never exposed to clients and lets that resolver authorize
             # the server-created short-lived record without a browser token.
-            instruments=frozenset({"*"}),
+            instruments=advanced_subjects or frozenset({"*"}),
             quota_per_window=max(advanced_policy.rate_limits.values()),
         )
 
@@ -229,8 +245,12 @@ async def lifespan(app: FastAPI):
     def resolve_advanced_subject_scope(_request: Request) -> advanced_api.AdvancedSubjectScope:
         # Instruments are authenticated single-user research subjects; account-like
         # records must remain explicit server-side subjects.
+        if advanced_subjects is None:
+            return advanced_api.AdvancedSubjectScope(
+                frozenset(), unrestricted_kinds=frozenset({"instrument"})
+            )
         return advanced_api.AdvancedSubjectScope(
-            frozenset(), unrestricted_kinds=frozenset({"instrument"})
+            frozenset(("instrument", subject) for subject in advanced_subjects)
         )
 
     def resolve_advanced_research_asset(_request: Request, asset_id: str) -> bool:

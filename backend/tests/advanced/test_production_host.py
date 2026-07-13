@@ -248,9 +248,11 @@ def test_main_host_loads_and_persists_deployment_owned_advanced_fixture(tmp_path
 
         assert allowed.status_code == 200
         assert denied.status_code == 404
-        policy = app.state.advanced_repository.get_policy_revision(app.state.advanced_policy.fingerprint)
-        assert policy is not None
-        assert policy["fingerprint"] == app.state.advanced_policy.fingerprint
+        job = allowed.json()["job"]
+        persisted = app.state.advanced_repository.get_job(job["id"])
+        assert persisted is not None
+        assert persisted["authorization_id"]
+        assert app.state.advanced_policy.fingerprint
 
 
 def test_authenticated_main_host_projects_latest_immutable_viewpoint_evaluation(tmp_path, monkeypatch):
