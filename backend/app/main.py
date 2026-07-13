@@ -189,12 +189,13 @@ async def lifespan(app: FastAPI):
     advanced_fixture_path = os.environ.get("ADVANCED_HOST_FIXTURE")
     advanced_subjects: frozenset[str] | None = None
     revoke_before_run_task_types: frozenset[str] = frozenset()
+    runner_wall_clock_seconds = 15
     if advanced_fixture_path:
         try:
             fixture = json.loads(Path(advanced_fixture_path).read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as error:
             raise RuntimeError("advanced host fixture is unreadable") from error
-        if not isinstance(fixture, dict) or set(fixture) - {"policy", "advanced_subjects", "revoke_before_run_task_types"}:
+        if not isinstance(fixture, dict) or set(fixture) - {"policy", "advanced_subjects", "revoke_before_run_task_types", "runner_wall_clock_seconds"}:
             raise RuntimeError("advanced host fixture is malformed")
         subjects = fixture["advanced_subjects"]
         if not isinstance(subjects, list) or not subjects or any(not isinstance(subject, str) or not subject for subject in subjects):
@@ -208,6 +209,10 @@ async def lifespan(app: FastAPI):
             raise RuntimeError("advanced host fixture revoke configuration is malformed")
         advanced_subjects = frozenset(subjects)
         revoke_before_run_task_types = frozenset(revoke_task_types)
+        configured_wall_clock = fixture.get("runner_wall_clock_seconds", runner_wall_clock_seconds)
+        if not isinstance(configured_wall_clock, int) or not 15 <= configured_wall_clock <= 60:
+            raise RuntimeError("advanced host fixture runner wall-clock is malformed")
+        runner_wall_clock_seconds = configured_wall_clock
     else:
         advanced_policy = AdvancedPolicy.bootstrap("advanced_policy_v1")
     app.state.advanced_repository = advanced_repository
@@ -440,7 +445,8 @@ async def lifespan(app: FastAPI):
     app.state.experiment_service = ExperimentService(
         repository=advanced_repository,
         backtest_runner=GovernedExperimentRunner(
-            collaborator=StrategyBacktestExperimentCollaborator(data_dir=store.data_dir)
+            collaborator=StrategyBacktestExperimentCollaborator(data_dir=store.data_dir),
+            wall_clock_seconds=runner_wall_clock_seconds,
         ),
     )
 

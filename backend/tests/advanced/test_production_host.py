@@ -79,6 +79,7 @@ def _advanced_host_fixture() -> dict[str, object]:
             "rate_limits": {"research_draft": 1, "experiment": 1, "strategy_evaluation": 1},
         },
         "advanced_subjects": ["600000.SH"],
+        "runner_wall_clock_seconds": 30,
     }
 
 
@@ -253,6 +254,7 @@ def test_main_host_loads_and_persists_deployment_owned_advanced_fixture(tmp_path
         assert persisted is not None
         assert persisted["authorization_id"]
         assert app.state.advanced_policy.fingerprint
+        assert app.state.experiment_service.backtest_runner._limits["wall_clock_seconds"] == 30
         viewpoint = client.post("/api/advanced/viewpoints", json=_viewpoint_payload(instrument="600000.SH"))
         assert viewpoint.status_code == 200
 
