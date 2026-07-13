@@ -386,7 +386,8 @@ class AdvancedRepository:
         version_id = str(uuid4())
         with self._connection() as connection, connection:
             policy = connection.execute(
-                "SELECT * FROM advanced_policy_revisions WHERE fingerprint = ?", (policy_fingerprint,)
+                "SELECT * FROM advanced_policy_revisions WHERE fingerprint = ? OR revision = ? ORDER BY created_at LIMIT 1",
+                (policy_fingerprint, policy_revision),
             ).fetchone()
             if policy is None:
                 policy_id = str(uuid4())

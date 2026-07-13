@@ -253,6 +253,8 @@ def test_main_host_loads_and_persists_deployment_owned_advanced_fixture(tmp_path
         assert persisted is not None
         assert persisted["authorization_id"]
         assert app.state.advanced_policy.fingerprint
+        viewpoint = client.post("/api/advanced/viewpoints", json=_viewpoint_payload(instrument="600000.SH"))
+        assert viewpoint.status_code == 200
 
 
 def test_main_host_fixture_revokes_selected_job_before_execution(tmp_path, monkeypatch):
