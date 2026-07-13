@@ -81,6 +81,22 @@ class _DeterministicGovernedCollaborator:
             "environment": {"runner": "fixture"},
             "metrics": {"sharpe": 1.2},
             "artifacts": [{"reference": "fixture-metrics", "checksum": "a" * 64}],
+            "evolution_evidence": {
+                "split": {
+                    "in_sample": {"start": "2024-01-02", "end": "2024-06-30", "metrics": {"sharpe": 1.1}},
+                    "out_of_sample": {"start": "2024-07-01", "end": "2024-12-31", "metrics": {"sharpe": 1.2}},
+                },
+                "robustness_trials": [{"reference": "fixture-trial", "status": "completed", "metrics": {"sharpe": 1.1}, "threshold_met": True}],
+                "cost_feasibility": {
+                    "fee_model": "cn-a-v1",
+                    "commission": 0.0003,
+                    "slippage": 0.0005,
+                    "capacity_assumptions": {"participation_rate": 0.1},
+                    "net_metrics": {"sharpe": 1.05},
+                    "capacity_result": "feasible",
+                    "threshold_met": True,
+                },
+            },
         }
 
 
@@ -267,6 +283,7 @@ def test_authenticated_main_host_projects_latest_immutable_viewpoint_evaluation(
 
 
 def test_governed_runner_persists_applied_limits_and_completed_feedback(tmp_path):
+    from app.advanced.evolution import EvolutionService
     from app.advanced.experiments import ExperimentService
     from app.advanced.governed_runner import GovernedExperimentRunner
     from app.advanced.repository import AdvancedRepository
@@ -284,7 +301,7 @@ def test_governed_runner_persists_applied_limits_and_completed_feedback(tmp_path
         ),
     )
     specification = service.create_specification(
-        research_asset_id="fixture-asset",
+        research_asset_id="fixture-asset-v1",
         hypothesis="固定运行必须留存受治理证据",
         data_scope=_strategy_scope(),
         method="fixture",
@@ -307,6 +324,16 @@ def test_governed_runner_persists_applied_limits_and_completed_feedback(tmp_path
         run_id=run["id"], conclusion="supported", notes="受治理完成运行可形成研究反馈。"
     )
     assert feedback["run_id"] == run["id"]
+    evolution = EvolutionService(repository=repository, reviewer_resolver=lambda _token: "server-researcher")
+    candidate = evolution.create_candidate_from_completed_run(
+        completed_run=service.completed_run_evidence(run_id=run["id"]),
+        mutation_operation="parameter_adjustment",
+        seed=23,
+        resolved_configuration={"lookback": 30},
+    )
+    assert {evolution.evaluate_gate(candidate_id=candidate["id"], gate=gate)["status"] for gate in (
+        "contract_sandbox_safety", "provenance", "in_sample_out_of_sample_evidence", "robustness", "cost_feasibility",
+    )} == {"passed"}
 
 
 def test_governed_runner_reaps_blocked_work_and_rejects_feedback(tmp_path):

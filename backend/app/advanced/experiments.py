@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Mapping
+from hashlib import sha256
 from typing import Any, Protocol
 from uuid import uuid4
 
@@ -138,6 +139,21 @@ class ExperimentService:
         constraint_reason = result.get("constraint_reason")
         if status != "completed" and not isinstance(constraint_reason, str):
             raise ValueError("constraint failures require a redacted reason")
+        identifier = str(uuid4())
+        sandbox_validation: dict[str, object] | None = None
+        sandbox_run: dict[str, object] | None = None
+        if status == "completed":
+            specification = self.get_specification(specification_id)
+            if specification is None:
+                raise ValueError("completed run specification does not exist")
+            validation_id, sandbox_run_id = str(uuid4()), str(uuid4())
+            sandbox_validation = {
+                "id": validation_id,
+                "parent_asset_id": specification["research_asset_id"],
+                "status": "validated",
+                "audit_reference": f"experiment:{identifier}:sandbox",
+            }
+            sandbox_run = {"id": sandbox_run_id, "validation_id": validation_id, "status": "completed"}
         run_json = {
             "asset_version": result.get("asset_version"),
             "resolved_parameters": result.get("resolved_parameters", {}),
@@ -145,10 +161,11 @@ class ExperimentService:
             "resources": result.get("resources", {}),
             "metrics": result.get("metrics", {}),
             "artifacts": result.get("artifacts", []),
+            "evolution_evidence": result.get("evolution_evidence", {}),
             "retry_of_run_id": retry_of_run_id,
             "diagnostic": {"summary": constraint_reason, "raw_output": None},
+            **({"sandbox_validation": sandbox_validation, "sandbox_run": sandbox_run} if sandbox_validation and sandbox_run else {}),
         }
-        identifier = str(uuid4())
         with self.repository._connection() as connection, connection:
             connection.execute(
                 """INSERT INTO advanced_experiment_runs
@@ -156,6 +173,30 @@ class ExperimentService:
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                 (identifier, specification_id, status, manifest["fingerprint"], result.get("asset_version"), _json(run_json), constraint_reason, self.repository.now()),
             )
+            if sandbox_validation is not None and sandbox_run is not None:
+                connection.execute(
+                    """INSERT INTO advanced_security_audit
+                        (id, authorization_id, job_id, reference, decision, reason, created_at)
+                        VALUES (?, NULL, NULL, ?, 'recorded', 'governed experiment sandbox evidence', ?)""",
+                    (str(uuid4()), sandbox_validation["audit_reference"], self.repository.now()),
+                )
+                connection.execute(
+                    """INSERT INTO advanced_sandbox_validations
+                        (id, parent_asset_id, contract_fingerprint, source_sha256, status, reason, audit_reference, created_at)
+                        VALUES (?, ?, ?, ?, 'validated', 'registered_strategy_governed', ?, ?)""",
+                    (
+                        sandbox_validation["id"], sandbox_validation["parent_asset_id"], manifest["fingerprint"],
+                        sha256(str(manifest["fingerprint"]).encode()).hexdigest(),
+                        sandbox_validation["audit_reference"], self.repository.now(),
+                    ),
+                )
+                sandbox_manifest = {"status": "completed", "resources": result.get("resources", {})}
+                connection.execute(
+                    """INSERT INTO advanced_sandbox_runs
+                        (id, validation_id, runner_manifest_json, terminal_reason, artifact_reference, created_at)
+                        VALUES (?, ?, ?, NULL, ?, ?)""",
+                    (sandbox_run["id"], sandbox_run["validation_id"], _json(sandbox_manifest), str(identifier), self.repository.now()),
+                )
             row = connection.execute("SELECT * FROM advanced_experiment_runs WHERE id = ?", (identifier,)).fetchone()
         assert row is not None
         return self._run_row(row, manifest)
@@ -169,6 +210,15 @@ class ExperimentService:
         with self.repository._connection() as connection:
             rows = connection.execute("SELECT * FROM advanced_experiment_runs ORDER BY created_at DESC, id DESC").fetchall()
         return [self._run_row(row) for row in rows]
+
+    def completed_run_evidence(self, *, run_id: str) -> dict[str, Any]:
+        run = self.get_run(run_id)
+        if run is None or run["status"] != "completed":
+            raise ValueError("candidate requires a completed governed experiment run")
+        specification = self.get_specification(str(run["specification_id"]))
+        if specification is None:
+            raise ValueError("completed run specification does not exist")
+        return {"run": run, "specification": specification}
 
     def record_feedback(self, *, run_id: str, conclusion: str, notes: str) -> dict[str, Any]:
         if conclusion not in _FEEDBACK_CONCLUSIONS or not notes.strip():

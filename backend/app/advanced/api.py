@@ -9,8 +9,10 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.advanced import projections
 from app.advanced.schemas import (
+    CompletedRunCandidateRequest,
     CustomStrategySubmission,
     ExperimentSpecificationRequest,
+    GateEvaluationRequest,
     ViewpointCorrectionRequest,
     ViewpointRequest,
     ViewpointRevisionRequest,
@@ -190,6 +192,45 @@ def promote_candidate(candidate_id: str, payload: PromotionRequest, request: Req
         return service.approve(candidate_id=candidate_id, principal=_principal(request), rationale=payload.rationale)
     except ValueError as error:
         raise HTTPException(status_code=409, detail="promotion conflict or incomplete gates") from error
+
+
+@router.post("/evolution/candidates")
+def create_evolution_candidate(payload: CompletedRunCandidateRequest, request: Request) -> dict[str, object]:
+    _owned_run(request, payload.completed_run_id)
+    experiments = _service(request, "experiment_service")
+    evolution = _service(request, "evolution_service")
+    try:
+        candidate = evolution.create_candidate_from_completed_run(
+            completed_run=experiments.completed_run_evidence(run_id=payload.completed_run_id),
+            mutation_operation=payload.mutation_operation,
+            seed=payload.seed,
+            resolved_configuration=payload.resolved_configuration,
+        )
+    except ValueError as error:
+        raise _safe_value_error(error) from error
+    return {"candidate": projections.candidate(candidate, [])}
+
+
+@router.post("/evolution/candidates/{candidate_id}/gates/{gate}")
+def evaluate_evolution_gate(
+    candidate_id: str, gate: Literal[
+        "contract_sandbox_safety",
+        "provenance",
+        "in_sample_out_of_sample_evidence",
+        "robustness",
+        "cost_feasibility",
+    ],
+    payload: GateEvaluationRequest,
+    request: Request,
+) -> dict[str, object]:
+    del payload
+    _owned_candidate(request, candidate_id)
+    service = _service(request, "evolution_service")
+    try:
+        recorded = service.evaluate_gate(candidate_id=candidate_id, gate=gate)
+    except ValueError as error:
+        raise _safe_value_error(error) from error
+    return {"gate": projections.gate(recorded)}
 
 
 @router.post("/viewpoints")

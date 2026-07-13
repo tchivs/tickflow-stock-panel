@@ -135,6 +135,17 @@ class StrategyCandidateRequest(StrictAdvancedModel):
     resolved_configuration: dict[str, str | int | float | bool] = Field(min_length=1, max_length=64)
 
 
+class CompletedRunCandidateRequest(StrictAdvancedModel):
+    completed_run_id: Identifier = Field(min_length=1, max_length=128)
+    mutation_operation: Literal["adjust_signal_threshold", "parameter_adjustment", "feature_subset", "signal_threshold", "portfolio_constraint"]
+    seed: int = Field(ge=0, le=2_147_483_647)
+    resolved_configuration: dict[str, str | int | float | bool | None] = Field(min_length=1, max_length=64)
+
+
+class GateEvaluationRequest(StrictAdvancedModel):
+    """Gate verdicts have no browser-provided evidence, status, or authority."""
+
+
 class PromotionGateRequest(StrictAdvancedModel):
     candidate_id: Identifier = Field(min_length=1, max_length=128)
     gate: Literal["contract_sandbox", "provenance", "in_sample_out_of_sample", "robustness", "cost_feasibility"]

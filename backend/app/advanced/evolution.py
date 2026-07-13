@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Callable, Mapping
+from datetime import date
 from typing import Any
 from uuid import uuid4
 
@@ -70,6 +71,67 @@ class EvolutionService:
             row = connection.execute("SELECT * FROM advanced_strategy_candidates WHERE id = ?", (identifier,)).fetchone()
         assert row is not None
         return self._candidate_row(row)
+
+    def create_candidate_from_completed_run(
+        self,
+        *,
+        completed_run: Mapping[str, object],
+        mutation_operation: str,
+        seed: int | None,
+        resolved_configuration: Mapping[str, object],
+    ) -> dict[str, Any]:
+        """Freeze only complete, server-produced experiment evidence into a candidate."""
+        run = completed_run.get("run")
+        specification = completed_run.get("specification")
+        if not isinstance(run, Mapping) or not isinstance(specification, Mapping) or run.get("status") != "completed":
+            raise ValueError("candidate requires a completed governed experiment run")
+        parent_id = specification.get("research_asset_id")
+        parent_version = run.get("asset_version")
+        if not isinstance(parent_id, str) or not parent_id or parent_version != parent_id:
+            raise ValueError("completed run provenance does not match its research asset")
+        if not self._evidence_matrix_is_complete(run=run, specification=specification):
+            raise ValueError("completed run lacks required immutable evolution evidence")
+        candidate = self.create_candidate(
+            parent_research_asset={"id": parent_id, "version": str(parent_version), "validated": True},
+            mutation_operation=mutation_operation,
+            seed=seed,
+            resolved_configuration={
+                **dict(resolved_configuration),
+                "source_run": {
+                    "id": str(run["id"]),
+                    "governed_fingerprint": str(run["governed_fingerprint"]),
+                    "asset_version": str(run["asset_version"]),
+                    "resolved_parameters": dict(run.get("resolved_parameters", {})),
+                    "metrics": dict(run.get("metrics", {})),
+                    "artifacts": list(run.get("artifacts", [])),
+                    "evolution_evidence": dict(run["evolution_evidence"]),
+                    "sandbox_validation": dict(run["sandbox_validation"]),
+                    "sandbox_run": dict(run["sandbox_run"]),
+                },
+                "source_specification": {
+                    "id": str(specification["id"]),
+                    "version": int(specification["version"]),
+                    "research_asset_id": parent_id,
+                    "data_scope": dict(specification["data_scope"]),
+                },
+            },
+        )
+        return candidate
+
+    def evaluate_gate(self, *, candidate_id: str, gate: str) -> dict[str, Any]:
+        """Record exactly one deterministic verdict derived from immutable candidate evidence."""
+        if gate not in _REQUIRED_GATES:
+            raise ValueError("promotion gate is invalid")
+        candidate = self.get_candidate(candidate_id)
+        if candidate is None:
+            raise ValueError("strategy candidate does not exist")
+        status = "passed" if self._gate_passes(candidate=candidate, gate=gate) else "failed"
+        return self.record_gate(
+            candidate_id=candidate_id,
+            gate=gate,
+            status=status,
+            evidence={"summary": f"server-derived {gate} evidence {status}"},
+        )
 
     def record_gate(self, *, candidate_id: str, gate: str, status: str, evidence: Mapping[str, object]) -> dict[str, Any]:
         if gate not in _REQUIRED_GATES or status not in {"passed", "failed"} or not evidence:
@@ -166,6 +228,109 @@ class EvolutionService:
     @staticmethod
     def _json(value: Mapping[str, object]) -> str:
         return json.dumps(dict(value), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+    @staticmethod
+    def _evidence_matrix_is_complete(*, run: Mapping[str, object], specification: Mapping[str, object]) -> bool:
+        evidence = run.get("evolution_evidence")
+        validation = run.get("sandbox_validation")
+        sandbox_run = run.get("sandbox_run")
+        return (
+            all(isinstance(run.get(key), str) and run.get(key) for key in ("id", "governed_fingerprint", "asset_version"))
+            and isinstance(run.get("resolved_parameters"), Mapping)
+            and isinstance(run.get("metrics"), Mapping)
+            and isinstance(run.get("artifacts"), list)
+            and isinstance(evidence, Mapping)
+            and all(key in evidence for key in ("split", "robustness_trials", "cost_feasibility"))
+            and isinstance(validation, Mapping)
+            and validation.get("status") == "validated"
+            and isinstance(sandbox_run, Mapping)
+            and sandbox_run.get("status") in {"completed", "failed"}
+            and sandbox_run.get("validation_id") == validation.get("id")
+            and isinstance(specification.get("id"), str)
+            and isinstance(specification.get("version"), int)
+            and isinstance(specification.get("data_scope"), Mapping)
+        )
+
+    def _gate_passes(self, *, candidate: Mapping[str, object], gate: str) -> bool:
+        configuration = candidate.get("resolved_configuration")
+        if not isinstance(configuration, Mapping):
+            return False
+        run = configuration.get("source_run")
+        specification = configuration.get("source_specification")
+        if not isinstance(run, Mapping) or not isinstance(specification, Mapping):
+            return False
+        if not self._evidence_matrix_is_complete(run=run, specification=specification):
+            return False
+        evidence = run["evolution_evidence"]
+        assert isinstance(evidence, Mapping)
+        if gate == "contract_sandbox_safety":
+            validation = run["sandbox_validation"]
+            sandbox_run = run["sandbox_run"]
+            return (
+                isinstance(validation, Mapping)
+                and validation.get("parent_asset_id") == candidate.get("parent_research_asset_id")
+                and validation.get("status") == "validated"
+                and isinstance(sandbox_run, Mapping)
+                and sandbox_run.get("validation_id") == validation.get("id")
+                and sandbox_run.get("status") in {"completed", "failed"}
+            )
+        if gate == "provenance":
+            return (
+                specification.get("research_asset_id") == candidate.get("parent_research_asset_id")
+                and run.get("asset_version") == candidate.get("parent_version")
+                and bool(run.get("governed_fingerprint"))
+                and bool(run.get("resolved_parameters"))
+                and bool(run.get("artifacts"))
+            )
+        if gate == "in_sample_out_of_sample_evidence":
+            split = evidence.get("split")
+            scope = specification.get("data_scope")
+            return self._valid_split(split=split, scope=scope)
+        if gate == "robustness":
+            trials = evidence.get("robustness_trials")
+            return isinstance(trials, list) and bool(trials) and all(
+                isinstance(trial, Mapping)
+                and trial.get("status") == "completed"
+                and isinstance(trial.get("metrics"), Mapping)
+                and trial.get("threshold_met") is True
+                for trial in trials
+            )
+        if gate == "cost_feasibility":
+            cost = evidence.get("cost_feasibility")
+            return (
+                isinstance(cost, Mapping)
+                and isinstance(cost.get("fee_model"), str)
+                and isinstance(cost.get("commission"), (int, float))
+                and isinstance(cost.get("slippage"), (int, float))
+                and isinstance(cost.get("capacity_assumptions"), Mapping)
+                and isinstance(cost.get("net_metrics"), Mapping)
+                and cost.get("capacity_result") == "feasible"
+                and cost.get("threshold_met") is True
+            )
+        return False
+
+    @staticmethod
+    def _valid_split(*, split: object, scope: object) -> bool:
+        if not isinstance(split, Mapping) or not isinstance(scope, Mapping):
+            return False
+        in_sample = split.get("in_sample")
+        out_sample = split.get("out_of_sample")
+        if not isinstance(in_sample, Mapping) or not isinstance(out_sample, Mapping):
+            return False
+        try:
+            scope_start = date.fromisoformat(str(scope["start"]))
+            scope_end = date.fromisoformat(str(scope["end"]))
+            in_start, in_end = date.fromisoformat(str(in_sample["start"])), date.fromisoformat(str(in_sample["end"]))
+            out_start, out_end = date.fromisoformat(str(out_sample["start"])), date.fromisoformat(str(out_sample["end"]))
+        except (KeyError, TypeError, ValueError):
+            return False
+        return (
+            scope_start <= in_start <= in_end < out_start <= out_end <= scope_end
+            and isinstance(in_sample.get("metrics"), Mapping)
+            and bool(in_sample["metrics"])
+            and isinstance(out_sample.get("metrics"), Mapping)
+            and bool(out_sample["metrics"])
+        )
 
     @staticmethod
     def _candidate_row(row: sqlite3.Row) -> dict[str, Any]:

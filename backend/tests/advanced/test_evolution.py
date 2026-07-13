@@ -178,6 +178,7 @@ def _completed_run_evidence() -> dict[str, object]:
     return {
         "run": {
             "id": "completed-run-1",
+            "specification_id": "specification-1",
             "status": "completed",
             "governed_fingerprint": "f" * 64,
             "asset_version": "strategy-parent-v4",
@@ -230,3 +231,62 @@ def test_completed_run_candidate_reloads_all_server_owned_evidence_and_gate_verd
         assert set(recorded["evidence"]) == {"summary"}
     with pytest.raises(ValueError, match="already"):
         service.evaluate_gate(candidate_id=candidate["id"], gate="provenance")
+
+
+class _ExperimentEvidenceService:
+    def get_run(self, run_id: str) -> dict[str, object] | None:
+        evidence = _completed_run_evidence()
+        return evidence["run"] if run_id == "completed-run-1" else None
+
+    def get_specification(self, specification_id: str) -> dict[str, object] | None:
+        evidence = _completed_run_evidence()
+        specification = evidence["specification"]
+        if specification_id == "specification-1":
+            return {**specification, "owner_principal": "server-researcher"}
+        return None
+
+    def completed_run_evidence(self, *, run_id: str) -> dict[str, object]:
+        if run_id != "completed-run-1":
+            raise ValueError("candidate requires a completed governed experiment run")
+        return _completed_run_evidence()
+
+
+def test_evolution_api_accepts_only_completed_run_input_and_server_derived_gate_actions(tmp_path):
+    from app.advanced import api as advanced_api
+
+    _repository, evolution, spies = _service(tmp_path)
+    app = FastAPI()
+    app.include_router(advanced_api.router)
+    app.state.evolution_service = evolution
+    app.state.experiment_service = _ExperimentEvidenceService()
+    app.state.resolve_advanced_research_asset = lambda _request, asset_id: asset_id == "strategy-parent-v4"
+
+    @app.middleware("http")
+    async def authenticated(request: Request, call_next):
+        request.state.reviewer_principal = "server-researcher"
+        return await call_next(request)
+
+    client = TestClient(app)
+    payload = {
+        "completed_run_id": "completed-run-1",
+        "mutation_operation": "parameter_adjustment",
+        "seed": 23,
+        "resolved_configuration": {"lookback": 30},
+    }
+    assert client.post("/api/advanced/evolution/candidates", json={**payload, "evidence_reference": "browser"}).status_code == 422
+    created = client.post("/api/advanced/evolution/candidates", json=payload)
+    assert created.status_code == 200
+    candidate_id = created.json()["candidate"]["id"]
+    assert "source_run" not in created.json()["candidate"]["resolved_config"]
+    for gate in GATES:
+        assert client.post(f"/api/advanced/evolution/candidates/{candidate_id}/gates/{gate}", json={"status": "passed"}).status_code == 422
+        response = client.post(f"/api/advanced/evolution/candidates/{candidate_id}/gates/{gate}", json={})
+        assert response.status_code == 200
+        assert response.json()["gate"]["status"] == "passed"
+    promoted = client.post(
+        f"/api/advanced/evolution/candidates/{candidate_id}/promote",
+        json={"rationale": "五项服务端证据均已复核，明确批准注册研究策略版本。"},
+    )
+    assert promoted.status_code == 200
+    assert promoted.json()["registered_strategy"]["status"] == "registered_research_only"
+    assert all(not spy.calls for spy in spies)

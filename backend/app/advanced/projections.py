@@ -122,14 +122,15 @@ def candidate(record: Mapping[str, Any], gates: list[Mapping[str, Any]]) -> dict
         "seed": int(record["seed"]),
         "resolved_config": _safe_mapping(record.get("resolved_configuration")),
         "created_at": str(record["created_at"]),
-        "gates": [
-            {
-                "name": str(gate["gate"]),
-                "status": str(gate["status"]),
-                "evidence": _optional_text(_safe_mapping(gate.get("evidence")).get("summary")) or "已记录受控证据",
-            }
-            for gate in gates
-        ],
+        "gates": [gate(gate_record) for gate_record in gates],
+    }
+
+
+def gate(record: Mapping[str, Any]) -> dict[str, object]:
+    return {
+        "name": str(record["gate"]),
+        "status": str(record["status"]),
+        "evidence": _optional_text(_safe_mapping(record.get("evidence")).get("summary")) or "已记录受控证据",
     }
 
 
