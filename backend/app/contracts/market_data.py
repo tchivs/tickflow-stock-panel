@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import date
+import os
 from pathlib import Path
 from typing import ClassVar
 
@@ -99,6 +100,8 @@ class FixtureBundle(_StrictFixtureModel):
 
         instruments = read_model(fixture_dir / cls.INSTRUMENTS_FILENAME, InstrumentsFixtureFile)
         market_data = read_model(fixture_dir / cls.MARKET_DATA_FILENAME, MarketDataFixtureFile)
+        if os.environ.get("ADVANCED_HOST_FIXTURE", "").strip() and not market_data.index_daily:
+            raise FixtureContractError("host fixture requires non-empty benchmark index_daily data")
         return cls(
             instruments=instruments.instruments,
             daily=market_data.daily,
