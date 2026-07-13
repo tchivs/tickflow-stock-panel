@@ -60,11 +60,13 @@ def sandbox_run(record: Mapping[str, Any]) -> dict[str, object]:
         manifest = {}
     resources = manifest.get("resources")
     return {
+        "run_id": str(record["id"]),
         "status": str(manifest.get("status", "failed")),
+        "terminal_reason": _optional_text(record.get("terminal_reason")),
         "proof_fingerprint": _optional_text(manifest.get("proof_fingerprint")),
         "resources": _safe_mapping(resources),
-        "audit_reference": _optional_text(manifest.get("audit_reference")),
-        "run_id": str(record["id"]),
+        "audit_reference": _optional_text(record.get("audit_reference")),
+        "created_at": str(record["created_at"]),
     }
 
 

@@ -325,12 +325,43 @@ def submit_custom_strategy(payload: CustomStrategySubmission, request: Request) 
     service = _service(request, "advanced_sandbox_service")
     try:
         result = service.submit(payload.model_dump(mode="python"))
+        run_id = result.get("run_id") if isinstance(result, dict) else None
+        if isinstance(run_id, str):
+            return {"run": service.public_run(run_id)}
         audit_reference = result.get("audit_reference") if isinstance(result, dict) else None
         if not isinstance(audit_reference, str):
             raise ValueError("sandbox did not retain a safe audit reference")
         return {"validation": projections.sandbox_validation(service.public_validation(audit_reference))}
     except ValueError as error:
         raise _safe_value_error(error) from error
+
+
+def _owned_sandbox_run(request: Request, run_id: str) -> dict[str, object]:
+    service = _service(request, "advanced_sandbox_service")
+    record = service.sandbox_run(run_id)
+    if not isinstance(record, dict):
+        raise HTTPException(status_code=404, detail="advanced sandbox run not found")
+    _require_research_asset(request, record.get("parent_asset_id"))
+    _principal(request)
+    return record
+
+
+@router.get("/sandbox/runs")
+def list_sandbox_runs(request: Request) -> dict[str, object]:
+    """List only terminal runs whose persisted parent asset remains server-authorized."""
+    service = _service(request, "advanced_sandbox_service")
+    _principal(request)
+    records = [
+        record
+        for record in service.sandbox_runs()
+        if isinstance(record, dict) and _research_asset_allowed(request, record.get("parent_asset_id"))
+    ]
+    return {"runs": [projections.sandbox_run(record) for record in records]}
+
+
+@router.get("/sandbox/runs/{run_id}")
+def get_sandbox_run(run_id: str, request: Request) -> dict[str, object]:
+    return {"run": projections.sandbox_run(_owned_sandbox_run(request, run_id))}
 
 
 @router.get("/sandbox/validations")

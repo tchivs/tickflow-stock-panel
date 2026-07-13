@@ -417,6 +417,12 @@ class CustomStrategySandboxService:
 
         return sandbox_run(record)
 
+    def sandbox_run(self, run_id: object) -> dict[str, object] | None:
+        return self._repository.get_sandbox_run(str(run_id))
+
+    def sandbox_runs(self) -> list[dict[str, object]]:
+        return self._repository.list_sandbox_runs()
+
     def temporary_handoffs(self) -> list[Path]:
         return list(self._temporary_handoffs)
 

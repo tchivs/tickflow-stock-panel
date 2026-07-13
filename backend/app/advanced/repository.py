@@ -250,6 +250,17 @@ class AdvancedRepository:
             ).fetchone()
         return None if row is None else self._sandbox_run(dict(row))
 
+    def list_sandbox_runs(self) -> list[dict[str, Any]]:
+        """Return terminal run facts with their persisted validation authorization lineage."""
+        with self._connection() as connection:
+            rows = connection.execute(
+                """SELECT run.*, validation.parent_asset_id, validation.audit_reference
+                   FROM advanced_sandbox_runs AS run
+                   JOIN advanced_sandbox_validations AS validation ON validation.id = run.validation_id
+                   ORDER BY run.created_at DESC, run.id DESC"""
+            ).fetchall()
+        return [self._sandbox_run(dict(row)) for row in rows]
+
     @staticmethod
     def _sandbox_run(record: dict[str, Any]) -> dict[str, Any]:
         try:

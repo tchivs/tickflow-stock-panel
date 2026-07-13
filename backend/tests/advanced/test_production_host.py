@@ -95,8 +95,10 @@ def test_affirmative_isolation_proof_records_one_safe_terminal_sandbox_run(tmp_p
         "status": "completed",
         "proof_fingerprint": "proof-fixture",
         "resources": {"wall_clock_seconds": 5, "memory_limit_mb": 128},
+        "terminal_reason": None,
         "audit_reference": result["audit_reference"],
         "run_id": result["run_id"],
+        "created_at": result["created_at"],
     }
     assert service.public_run(result["run_id"]) == result
 
