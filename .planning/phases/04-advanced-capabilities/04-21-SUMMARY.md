@@ -11,8 +11,8 @@ completed: 2026-07-13
 
 | Command | Exit | Duration | Observed result |
 | --- | ---: | ---: | --- |
-| `cd backend && timeout 120s uv run pytest tests/advanced/test_production_host.py tests/advanced/test_viewpoints.py tests/advanced/test_evolution.py tests/advanced/test_sandbox.py -q` | 0 | 93.77s | 89 passed; 0 failed; 0 skipped; 24 warnings |
-| `cd frontend && timeout 240s pnpm exec playwright test e2e/phase4-advanced-capabilities.host.spec.ts --project=phase4-fastapi-host` | 0 | 21.6s | 3 passed; 0 failed; 0 skipped; 1 worker |
+| `cd backend && timeout 120s uv run pytest tests/advanced/test_production_host.py tests/advanced/test_viewpoints.py tests/advanced/test_evolution.py tests/advanced/test_sandbox.py -q` | 0 | 70.96s | 90 passed; 0 failed; 0 skipped; 29 warnings |
+| `cd frontend && timeout 240s pnpm exec playwright test e2e/phase4-advanced-capabilities.host.spec.ts --project=phase4-fastapi-host` | 0 | 22.1s | 3 passed; 0 failed; 0 skipped; 1 worker |
 
 ## Executed host scenarios
 
