@@ -172,3 +172,61 @@ def test_promotion_api_derives_principal_from_request_state_and_rejects_client_a
     assert approved.status_code == 200
     assert approved.json()["approval"]["researcher_principal"] == "researcher-principal-from-server"
     assert approved.json()["registered_strategy"]["status"] == "registered_research_only"
+
+
+def _completed_run_evidence() -> dict[str, object]:
+    return {
+        "run": {
+            "id": "completed-run-1",
+            "status": "completed",
+            "governed_fingerprint": "f" * 64,
+            "asset_version": "strategy-parent-v4",
+            "resolved_parameters": {"lookback": 20},
+            "metrics": {"sharpe": 1.2, "out_of_sample_return": 0.08},
+            "artifacts": [{"reference": "governed-artifact", "checksum": "a" * 64}],
+            "evolution_evidence": {
+                "split": {
+                    "in_sample": {"start": "2024-01-01", "end": "2024-06-30", "metrics": {"sharpe": 1.1}},
+                    "out_of_sample": {"start": "2024-07-01", "end": "2024-12-31", "metrics": {"sharpe": 1.2}},
+                },
+                "robustness_trials": [{"reference": "trial-1", "status": "completed", "metrics": {"sharpe": 1.1}, "threshold_met": True}],
+                "cost_feasibility": {
+                    "fee_model": "cn-a-v1",
+                    "commission": 0.0003,
+                    "slippage": 0.0005,
+                    "capacity_assumptions": {"max_notional": 1000000},
+                    "net_metrics": {"sharpe": 1.05},
+                    "capacity_result": "feasible",
+                    "threshold_met": True,
+                },
+            },
+            "sandbox_validation": {"id": "validation-1", "parent_asset_id": "strategy-parent-v4", "status": "validated"},
+            "sandbox_run": {"id": "sandbox-run-1", "validation_id": "validation-1", "status": "completed"},
+        },
+        "specification": {
+            "id": "specification-1",
+            "version": 2,
+            "research_asset_id": "strategy-parent-v4",
+            "data_scope": {"start": "2024-01-01", "end": "2024-12-31"},
+        },
+    }
+
+
+def test_completed_run_candidate_reloads_all_server_owned_evidence_and_gate_verdicts(tmp_path):
+    _repository, service, _spies = _service(tmp_path)
+
+    candidate = service.create_candidate_from_completed_run(
+        completed_run=_completed_run_evidence(),
+        mutation_operation="parameter_adjustment",
+        seed=23,
+        resolved_configuration={"lookback": 30},
+    )
+
+    assert candidate["parent_research_asset_id"] == "strategy-parent-v4"
+    assert candidate["resolved_configuration"]["source_run"]["id"] == "completed-run-1"
+    for gate in GATES:
+        recorded = service.evaluate_gate(candidate_id=candidate["id"], gate=gate)
+        assert recorded["status"] == "passed"
+        assert set(recorded["evidence"]) == {"summary"}
+    with pytest.raises(ValueError, match="already"):
+        service.evaluate_gate(candidate_id=candidate["id"], gate="provenance")
