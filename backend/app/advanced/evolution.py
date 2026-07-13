@@ -241,6 +241,7 @@ class EvolutionService:
             and isinstance(run.get("artifacts"), list)
             and isinstance(evidence, Mapping)
             and all(key in evidence for key in ("split", "robustness_trials", "cost_feasibility"))
+            and EvolutionService._valid_split(split=evidence.get("split"), scope=specification.get("data_scope"))
             and isinstance(validation, Mapping)
             and validation.get("status") == "validated"
             and isinstance(sandbox_run, Mapping)
@@ -324,12 +325,36 @@ class EvolutionService:
             out_start, out_end = date.fromisoformat(str(out_sample["start"])), date.fromisoformat(str(out_sample["end"]))
         except (KeyError, TypeError, ValueError):
             return False
+
+        def independent_evaluation(sample: Mapping[str, object]) -> Mapping[str, object] | None:
+            evaluation = sample.get("evaluation")
+            if not isinstance(evaluation, Mapping):
+                return None
+            window = evaluation.get("window")
+            artifact = evaluation.get("artifact")
+            if (
+                not isinstance(window, Mapping)
+                or window.get("start") != sample.get("start")
+                or window.get("end") != sample.get("end")
+                or not isinstance(artifact, Mapping)
+                or not all(isinstance(evaluation.get(key), str) and evaluation[key] for key in ("run_id", "governed_input_fingerprint"))
+                or not all(isinstance(artifact.get(key), str) and artifact[key] for key in ("reference", "checksum"))
+            ):
+                return None
+            return evaluation
+
+        in_evaluation = independent_evaluation(in_sample)
+        out_evaluation = independent_evaluation(out_sample)
         return (
             scope_start <= in_start <= in_end < out_start <= out_end <= scope_end
             and isinstance(in_sample.get("metrics"), Mapping)
             and bool(in_sample["metrics"])
             and isinstance(out_sample.get("metrics"), Mapping)
             and bool(out_sample["metrics"])
+            and in_evaluation is not None
+            and out_evaluation is not None
+            and in_evaluation["run_id"] != out_evaluation["run_id"]
+            and in_evaluation["governed_input_fingerprint"] != out_evaluation["governed_input_fingerprint"]
         )
 
     @staticmethod

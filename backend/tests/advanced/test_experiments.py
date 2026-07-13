@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import sqlite3
 import pickle
+from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI, Request
@@ -56,6 +57,65 @@ def test_strategy_backtest_collaborator_is_spawn_serializable_without_duckdb_con
 
     assert pickle.loads(pickle.dumps(collaborator))._data_dir == str(tmp_path)
 
+
+
+def test_strategy_backtest_collaborator_derives_split_evidence_from_distinct_governed_windows(tmp_path, monkeypatch):
+    from app.advanced.governed_runner import StrategyBacktestExperimentCollaborator
+
+    class RecordingBacktest:
+        def __init__(self) -> None:
+            self.configs: list[object] = []
+
+        def run(self, config):
+            self.configs.append(config)
+            index = len(self.configs)
+            return SimpleNamespace(
+                run_id=f"governed-window-{index}",
+                config={"params": config.params},
+                stats={"sharpe": (99.0, 1.1, 2.2)[index - 1]},
+                error=None,
+                governed_input_manifest={"fingerprint": f"window-fingerprint-{index}"},
+            )
+
+    backtest = RecordingBacktest()
+    collaborator = StrategyBacktestExperimentCollaborator(data_dir=tmp_path)
+    monkeypatch.setattr(collaborator, "_service", lambda: backtest)
+    result = collaborator.run(
+        specification={
+            "research_asset_id": "strategy-parent-v4",
+            "data_scope": {
+                "strategy_id": "momentum_breakout",
+                "start": "2024-01-01",
+                "end": "2024-12-31",
+                "symbols": ["600000.SH"],
+                "asset_type": "stock",
+                "parameters": {"lookback": 20},
+            },
+        }
+    )
+
+    assert [(config.start.isoformat(), config.end.isoformat()) for config in backtest.configs] == [
+        ("2024-01-01", "2024-12-31"),
+        ("2024-01-01", "2024-07-01"),
+        ("2024-07-02", "2024-12-31"),
+    ]
+    split = result["evolution_evidence"]["split"]
+    assert split["in_sample"] == {
+        "start": "2024-01-01",
+        "end": "2024-07-01",
+        "metrics": {"sharpe": 1.1},
+        "evaluation": {
+            "run_id": "governed-window-2",
+            "governed_input_fingerprint": "window-fingerprint-2",
+            "window": {"start": "2024-01-01", "end": "2024-07-01"},
+            "artifact": {
+                "reference": "strategy-backtest:governed-window-2:metrics",
+                "checksum": "bfd12c5dd3cc13eb901a234f260136d154154e9fdafb00b7582a23dac9598cb4",
+            },
+        },
+    }
+    assert split["out_of_sample"]["metrics"] == {"sharpe": 2.2}
+    assert split["out_of_sample"]["evaluation"]["run_id"] == "governed-window-3"
 
 def _specification(service, **overrides):
     payload = {

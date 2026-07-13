@@ -99,8 +99,28 @@ class _DeterministicGovernedCollaborator:
             "artifacts": [{"reference": "fixture-metrics", "checksum": "a" * 64}],
             "evolution_evidence": {
                 "split": {
-                    "in_sample": {"start": "2024-01-02", "end": "2024-06-30", "metrics": {"sharpe": 1.1}},
-                    "out_of_sample": {"start": "2024-07-01", "end": "2024-12-31", "metrics": {"sharpe": 1.2}},
+                    "in_sample": {
+                        "start": "2024-01-02",
+                        "end": "2024-06-30",
+                        "metrics": {"sharpe": 1.1},
+                        "evaluation": {
+                            "run_id": "fixture-in-sample",
+                            "governed_input_fingerprint": "fixture-in-fingerprint",
+                            "window": {"start": "2024-01-02", "end": "2024-06-30"},
+                            "artifact": {"reference": "fixture-in-metrics", "checksum": "b" * 64},
+                        },
+                    },
+                    "out_of_sample": {
+                        "start": "2024-07-01",
+                        "end": "2024-12-31",
+                        "metrics": {"sharpe": 1.2},
+                        "evaluation": {
+                            "run_id": "fixture-out-of-sample",
+                            "governed_input_fingerprint": "fixture-out-fingerprint",
+                            "window": {"start": "2024-07-01", "end": "2024-12-31"},
+                            "artifact": {"reference": "fixture-out-metrics", "checksum": "c" * 64},
+                        },
+                    },
                 },
                 "robustness_trials": [{"reference": "fixture-trial", "status": "completed", "metrics": {"sharpe": 1.1}, "threshold_met": True}],
                 "cost_feasibility": {

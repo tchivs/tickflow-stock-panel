@@ -9,7 +9,7 @@ import signal
 import time
 from collections.abc import Mapping
 from contextlib import redirect_stderr, redirect_stdout, suppress
-from datetime import date
+from datetime import date, timedelta
 from hashlib import sha256
 from queue import Empty
 from typing import Any, Protocol
@@ -56,62 +56,126 @@ class StrategyBacktestExperimentCollaborator:
         return StrategyBacktestService(BacktestEngine(repository), strategy_engine)
 
     def run(self, *, specification: dict[str, object]) -> dict[str, object]:
-        from app.backtest.strategy import StrategyBacktestConfig
-
         scope = specification.get("data_scope")
         if not isinstance(scope, Mapping):
             raise ValueError("frozen data scope is invalid")
+
+        backtest = self._service()
+        aggregate_result = self._run_backtest(backtest=backtest, scope=scope)
+        in_sample_scope, out_of_sample_scope = self._split_scopes(scope)
+        in_sample = self._split_evaluation(
+            result=self._run_backtest(backtest=backtest, scope=in_sample_scope), scope=in_sample_scope
+        )
+        out_of_sample = self._split_evaluation(
+            result=self._run_backtest(backtest=backtest, scope=out_of_sample_scope), scope=out_of_sample_scope
+        )
+
+        metrics = self._compact_metrics(aggregate_result.stats)
+        checksum = sha256(json.dumps(metrics, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        evolution_evidence = _evolution_evidence(
+            scope=scope,
+            metrics=metrics,
+            in_sample=in_sample,
+            out_of_sample=out_of_sample,
+        )
+        return {
+            "governed_input_manifest": aggregate_result.governed_input_manifest,
+            "asset_version": str(specification["research_asset_id"]),
+            "resolved_parameters": dict(aggregate_result.config.get("params") or {}),
+            "environment": {"backtest": "strategy-backtest-service"},
+            "metrics": metrics,
+            "artifacts": [{"reference": f"strategy-backtest:{aggregate_result.run_id}:metrics", "checksum": checksum}],
+            "evolution_evidence": evolution_evidence,
+        }
+
+    @staticmethod
+    def _config(scope: Mapping[str, object]) -> Any:
+        from app.backtest.strategy import StrategyBacktestConfig
+
         strategy_id = scope.get("strategy_id")
         start = scope.get("start")
         end = scope.get("end")
         if not all(isinstance(value, str) and value for value in (strategy_id, start, end)):
             raise ValueError("frozen data scope requires strategy_id, start, and end")
+        start_date, end_date = date.fromisoformat(start), date.fromisoformat(end)
+        if start_date > end_date:
+            raise ValueError("frozen data scope end precedes start")
         symbols = scope.get("symbols")
         if symbols is not None and (not isinstance(symbols, list) or not all(isinstance(item, str) for item in symbols)):
             raise ValueError("frozen symbols are invalid")
-        config = StrategyBacktestConfig(
+        return StrategyBacktestConfig(
             strategy_id=strategy_id,
             symbols=symbols,
-            start=date.fromisoformat(start),
-            end=date.fromisoformat(end),
+            start=start_date,
+            end=end_date,
             params=scope.get("parameters") if isinstance(scope.get("parameters"), dict) else None,
             mode="full",
             asset_type=str(scope.get("asset_type", "stock")),
         )
-        result = self._service().run(config)
+
+    def _run_backtest(self, *, backtest: Any, scope: Mapping[str, object]) -> Any:
+        result = backtest.run(self._config(scope))
         if result.error:
             raise ValueError("governed backtest could not complete")
-        metrics = {
-            key: value
-            for key, value in result.stats.items()
-            if isinstance(value, (str, int, float, bool))
-        }
+        return result
+
+    @staticmethod
+    def _compact_metrics(metrics: Mapping[str, object]) -> dict[str, object]:
+        return {key: value for key, value in metrics.items() if isinstance(value, (str, int, float, bool))}
+
+    @staticmethod
+    def _split_scopes(scope: Mapping[str, object]) -> tuple[dict[str, object], dict[str, object]]:
+        start, end = date.fromisoformat(str(scope["start"])), date.fromisoformat(str(scope["end"]))
+        span_days = (end - start).days + 1
+        if span_days < 2:
+            raise ValueError("governed split evaluation requires at least two calendar days")
+        in_end = start + timedelta(days=span_days // 2 - 1)
+        out_start = in_end + timedelta(days=1)
+        return (
+            {**scope, "start": start.isoformat(), "end": in_end.isoformat()},
+            {**scope, "start": out_start.isoformat(), "end": end.isoformat()},
+        )
+
+    def _split_evaluation(self, *, result: Any, scope: Mapping[str, object]) -> dict[str, object]:
+        metrics = {key: value for key, value in self._compact_metrics(result.stats).items() if isinstance(value, (int, float))}
+        manifest = result.governed_input_manifest
+        run_id = result.run_id
+        fingerprint = manifest.get("fingerprint") if isinstance(manifest, Mapping) else None
+        if not metrics or not isinstance(run_id, str) or not run_id or not isinstance(fingerprint, str) or not fingerprint:
+            raise ValueError("governed split evaluation lacks independent metrics or manifest")
         checksum = sha256(json.dumps(metrics, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-        evolution_evidence = _evolution_evidence(scope=scope, metrics=metrics)
         return {
-            "governed_input_manifest": result.governed_input_manifest,
-            "asset_version": str(specification["research_asset_id"]),
-            "resolved_parameters": dict(config.params or {}),
-            "environment": {"backtest": "strategy-backtest-service"},
             "metrics": metrics,
-            "artifacts": [{"reference": f"strategy-backtest:{result.run_id}:metrics", "checksum": checksum}],
-            "evolution_evidence": evolution_evidence,
+            "evaluation": {
+                "run_id": run_id,
+                "governed_input_fingerprint": fingerprint,
+                "window": {"start": str(scope["start"]), "end": str(scope["end"])},
+                "artifact": {"reference": f"strategy-backtest:{run_id}:metrics", "checksum": checksum},
+            },
         }
 
 
-def _evolution_evidence(*, scope: Mapping[str, object], metrics: Mapping[str, object]) -> dict[str, object]:
-    """Derive compact, server-owned gate inputs without retaining market rows."""
+def _evolution_evidence(
+    *,
+    scope: Mapping[str, object],
+    metrics: Mapping[str, object],
+    in_sample: Mapping[str, object],
+    out_of_sample: Mapping[str, object],
+) -> dict[str, object]:
+    """Derive gate inputs from separately executed, non-overlapping governed windows."""
     start = date.fromisoformat(str(scope["start"]))
     end = date.fromisoformat(str(scope["end"]))
-    midpoint = start + (end - start) / 2
-    in_end = midpoint
-    out_start = midpoint.fromordinal(midpoint.toordinal() + 1)
+    span_days = (end - start).days + 1
+    if span_days < 2:
+        raise ValueError("governed split evaluation requires at least two calendar days")
+    in_end = start + timedelta(days=span_days // 2 - 1)
+    out_start = in_end + timedelta(days=1)
     numeric_metrics = {key: value for key, value in metrics.items() if isinstance(value, (int, float))}
     net_return = numeric_metrics.get("out_of_sample_return", 0.0)
     return {
         "split": {
-            "in_sample": {"start": start.isoformat(), "end": in_end.isoformat(), "metrics": numeric_metrics},
-            "out_of_sample": {"start": out_start.isoformat(), "end": end.isoformat(), "metrics": numeric_metrics},
+            "in_sample": {"start": start.isoformat(), "end": in_end.isoformat(), **dict(in_sample)},
+            "out_of_sample": {"start": out_start.isoformat(), "end": end.isoformat(), **dict(out_of_sample)},
         },
         "robustness_trials": [
             {

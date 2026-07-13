@@ -187,8 +187,28 @@ def _completed_run_evidence() -> dict[str, object]:
             "artifacts": [{"reference": "governed-artifact", "checksum": "a" * 64}],
             "evolution_evidence": {
                 "split": {
-                    "in_sample": {"start": "2024-01-01", "end": "2024-06-30", "metrics": {"sharpe": 1.1}},
-                    "out_of_sample": {"start": "2024-07-01", "end": "2024-12-31", "metrics": {"sharpe": 1.2}},
+                    "in_sample": {
+                        "start": "2024-01-01",
+                        "end": "2024-06-30",
+                        "metrics": {"sharpe": 1.1},
+                        "evaluation": {
+                            "run_id": "in-sample-governed-run",
+                            "governed_input_fingerprint": "in-sample-fingerprint",
+                            "window": {"start": "2024-01-01", "end": "2024-06-30"},
+                            "artifact": {"reference": "in-sample-metrics", "checksum": "b" * 64},
+                        },
+                    },
+                    "out_of_sample": {
+                        "start": "2024-07-01",
+                        "end": "2024-12-31",
+                        "metrics": {"sharpe": 1.2},
+                        "evaluation": {
+                            "run_id": "out-of-sample-governed-run",
+                            "governed_input_fingerprint": "out-of-sample-fingerprint",
+                            "window": {"start": "2024-07-01", "end": "2024-12-31"},
+                            "artifact": {"reference": "out-of-sample-metrics", "checksum": "c" * 64},
+                        },
+                    },
                 },
                 "robustness_trials": [{"reference": "trial-1", "status": "completed", "metrics": {"sharpe": 1.1}, "threshold_met": True}],
                 "cost_feasibility": {
@@ -232,6 +252,25 @@ def test_completed_run_candidate_reloads_all_server_owned_evidence_and_gate_verd
     with pytest.raises(ValueError, match="already"):
         service.evaluate_gate(candidate_id=candidate["id"], gate="provenance")
 
+
+
+def test_completed_run_rejects_duplicated_aggregate_split_metrics_without_independent_evaluations(tmp_path):
+    _repository, service, _spies = _service(tmp_path)
+    completed_run = _completed_run_evidence()
+    aggregate_metrics = completed_run["run"]["metrics"]
+    assert isinstance(aggregate_metrics, dict)
+    completed_run["run"]["evolution_evidence"]["split"] = {
+        "in_sample": {"start": "2024-01-01", "end": "2024-06-30", "metrics": aggregate_metrics},
+        "out_of_sample": {"start": "2024-07-01", "end": "2024-12-31", "metrics": aggregate_metrics},
+    }
+
+    with pytest.raises(ValueError, match="immutable evolution evidence"):
+        service.create_candidate_from_completed_run(
+            completed_run=completed_run,
+            mutation_operation="parameter_adjustment",
+            seed=23,
+            resolved_configuration={"lookback": 30},
+        )
 
 class _ExperimentEvidenceService:
     def get_run(self, run_id: str) -> dict[str, object] | None:
