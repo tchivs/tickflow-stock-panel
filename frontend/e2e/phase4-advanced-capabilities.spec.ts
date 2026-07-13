@@ -50,6 +50,15 @@ async function installAdvancedFixture(page: Page, { rejected = false }: { reject
     }
     if (path.endsWith('/viewpoints')) return json({ viewpoints: advancedFixture.viewpoints })
     if (path.includes('/viewpoints/calibration/')) return json({ calibration: advancedFixture.calibration })
+    if (path.includes('/viewpoints/') && path.endsWith('/revisions') && request.method() === 'POST') {
+      return json({ viewpoint: { ...advancedFixture.viewpoints[0], version: 4, revision_kind: 'non_material_revision' } })
+    }
+    if (path.includes('/viewpoints/') && path.endsWith('/corrections') && request.method() === 'POST') {
+      return json({ viewpoint: { ...advancedFixture.viewpoints[0], version: 5, revision_kind: 'correction', correction_reason: '修正来源日期' } })
+    }
+    if (path.includes('/viewpoints/versions/') && path.endsWith('/evaluate') && request.method() === 'POST') {
+      return json({ viewpoint: { ...advancedFixture.viewpoints[0], evaluation: { status: 'evaluated', reason: null, window_days: 60, benchmark: '000300.SH', relative_return: 0.02 } } })
+    }
     if (path.endsWith('/experiments')) return json({ specifications: [], runs: [advancedFixture.run], feedback: [] })
     if (path.endsWith('/candidates')) return json({ candidates: [advancedFixture.candidate] })
     if (path.endsWith('/sandbox/validations')) return json({ validations: [advancedFixture.sandbox] })
@@ -89,6 +98,24 @@ test.describe('Phase 4 advanced capability browser contracts', () => {
     await expect(page.getByText(/000300\.SH/)).toBeVisible()
     await expect(page.getByRole('region', { name: '归因观点与表现校准' }).getByText(/^0%$/)).toHaveCount(0)
     expect(fixture.externalRequests).toEqual([])
+  })
+
+  test('scenario 1b: viewpoint actions append bounded revisions and render the server evaluation', async ({ page }, testInfo) => {
+    futurePhase4Ui(testInfo, true)
+    await installAdvancedFixture(page)
+    await page.addInitScript(() => localStorage.setItem('last_stock:stock-analysis', JSON.stringify({ symbol: '600519.SH', name: '贵州茅台' })))
+    await page.goto('/stock-analysis')
+
+    const panel = page.getByRole('region', { name: '归因观点与表现校准' })
+    await panel.getByRole('button', { name: '添加修订' }).click()
+    await panel.getByLabel('修订结论').fill('保持中性，但补充已验证证据。')
+    await panel.getByRole('button', { name: '保存修订' }).click()
+    await panel.getByRole('button', { name: '添加更正' }).click()
+    await expect(panel.getByRole('button', { name: '保存更正' })).toBeDisabled()
+    await panel.getByLabel('更正原因').fill('修正来源日期')
+    await panel.getByRole('button', { name: '保存更正' }).click()
+    await panel.getByRole('button', { name: '运行服务端评估' }).click()
+    await expect(panel.getByText('已由服务端完成评估')).toBeVisible()
   })
 
   test('scenario 2: frozen experiment failures never become feedback evidence', async ({ page }, testInfo) => {
