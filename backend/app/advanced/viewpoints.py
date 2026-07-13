@@ -186,7 +186,7 @@ class ViewpointService:
             changed_fields.append("evidence")
         material_fields = {"direction", "rating", "target_range", "horizon_days", "confidence"}
         actual_kind = revision_kind or ("material_stance_change" if material_fields.intersection(changed_fields) else "non_material_revision")
-        historical_policy = self.repository.policy_revision(previous["policy_fingerprint"])
+        historical_policy = self.repository.policy_revision_for_viewpoint_version(previous["id"])
         if historical_policy is None:
             raise ValueError("viewpoint policy revision not found")
         row = self.repository.append_viewpoint_version(

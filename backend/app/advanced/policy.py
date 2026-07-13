@@ -8,6 +8,7 @@ from hashlib import sha256
 from typing import Any
 
 ADVANCED_POLICY_VERSION = "advanced_policy_v1"
+POLICY_FACT_SCHEMA_VERSION = "advanced_policy_snapshot_v2"
 
 
 def _canonical_json(value: object) -> str:

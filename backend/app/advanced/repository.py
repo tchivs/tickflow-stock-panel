@@ -10,7 +10,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
-
+from app.advanced.policy import POLICY_FACT_SCHEMA_VERSION
 from app.operational.migrations import migrate_operational_db
 
 
@@ -68,21 +68,36 @@ class AdvancedRepository:
         identifier = str(uuid4())
         with self._connection() as connection, connection:
             connection.execute(
-                """INSERT INTO advanced_policy_revisions (id, revision, fingerprint, snapshot_json, created_at)
-                   VALUES (?, ?, ?, ?, ?)
-                   ON CONFLICT(fingerprint) DO NOTHING""",
-                (identifier, revision, fingerprint, snapshot_json, self.now()),
+                """INSERT INTO advanced_policy_revisions
+                   (id, revision, fingerprint, fact_schema_version, snapshot_json, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(fingerprint, fact_schema_version) DO NOTHING""",
+                (identifier, revision, fingerprint, POLICY_FACT_SCHEMA_VERSION, snapshot_json, self.now()),
             )
-            row = connection.execute("SELECT * FROM advanced_policy_revisions WHERE fingerprint = ?", (fingerprint,)).fetchone()
+            row = connection.execute(
+                """SELECT * FROM advanced_policy_revisions
+                   WHERE fingerprint = ? AND fact_schema_version = ?""",
+                (fingerprint, POLICY_FACT_SCHEMA_VERSION),
+            ).fetchone()
         assert row is not None
         return self._policy_row(row)
 
-    def policy_revision(self, fingerprint: str) -> dict[str, Any] | None:
+    def policy_revision_for_viewpoint_version(self, viewpoint_version_id: str) -> dict[str, Any] | None:
+        """Return a self-verifying fact only when a historical version can safely reuse it."""
         with self._connection() as connection:
             row = connection.execute(
-                "SELECT * FROM advanced_policy_revisions WHERE fingerprint = ?", (fingerprint,)
+                """SELECT policy.*
+                   FROM advanced_viewpoint_versions AS version
+                   JOIN advanced_policy_revisions AS policy ON policy.id = version.policy_revision_id
+                   WHERE version.id = ?""",
+                (viewpoint_version_id,),
             ).fetchone()
-        return None if row is None else self._policy_row(row)
+        if row is None:
+            return None
+        policy = self._policy_row(row)
+        if policy["fact_schema_version"] != POLICY_FACT_SCHEMA_VERSION:
+            raise ValueError("legacy policy facts cannot be reused for new viewpoint versions")
+        return policy
 
     def acquire_job(self, *, job_id: str, authorization_id: str, principal: str, subject_kind: str, subject_key: str, task_type: str, market: str, instrument: str, idempotency_key: str) -> dict[str, Any]:
         """Return the existing idempotent job or append the one runnable cursor."""
@@ -409,16 +424,19 @@ class AdvancedRepository:
         version_id = str(uuid4())
         with self._connection() as connection, connection:
             connection.execute(
-                """INSERT INTO advanced_policy_revisions (id, revision, fingerprint, snapshot_json, created_at)
-                   VALUES (?, ?, ?, ?, ?)
-                   ON CONFLICT(fingerprint) DO NOTHING""",
-                (str(uuid4()), policy_revision, policy_fingerprint, snapshot_json, self.now()),
+                """INSERT INTO advanced_policy_revisions
+                   (id, revision, fingerprint, fact_schema_version, snapshot_json, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(fingerprint, fact_schema_version) DO NOTHING""",
+                (str(uuid4()), policy_revision, policy_fingerprint, POLICY_FACT_SCHEMA_VERSION, snapshot_json, self.now()),
             )
             policy = connection.execute(
-                "SELECT id FROM advanced_policy_revisions WHERE fingerprint = ?", (policy_fingerprint,)
+                """SELECT * FROM advanced_policy_revisions
+                   WHERE fingerprint = ? AND fact_schema_version = ?""",
+                (policy_fingerprint, POLICY_FACT_SCHEMA_VERSION),
             ).fetchone()
             assert policy is not None
-            policy_id = policy["id"]
+            policy_id = self._policy_row(policy)["id"]
             existing = connection.execute(
                 "SELECT source_profile, market_scope, instrument FROM advanced_viewpoints WHERE id = ?", (viewpoint_id,)
             ).fetchone()
@@ -557,5 +575,12 @@ class AdvancedRepository:
     @staticmethod
     def _policy_row(row: sqlite3.Row) -> dict[str, Any]:
         value = dict(row)
-        value["snapshot"] = json.loads(value.pop("snapshot_json"))
+        try:
+            snapshot = json.loads(value.pop("snapshot_json"))
+        except (TypeError, ValueError, json.JSONDecodeError) as error:
+            raise ValueError("stored policy snapshot is invalid") from error
+        if not isinstance(snapshot, dict):
+            raise ValueError("stored policy snapshot is invalid")
+        _validated_policy_snapshot(fingerprint=str(value["fingerprint"]), snapshot=snapshot)
+        value["snapshot"] = snapshot
         return value

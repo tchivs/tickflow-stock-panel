@@ -693,6 +693,33 @@ MIGRATIONS: tuple[str, ...] = (
     BEGIN SELECT RAISE(ABORT, 'advanced facts are immutable'); END;
     PRAGMA foreign_keys = ON;
     """,
+    """
+    -- Pre-remediation policy facts can contain a partial snapshot whose fingerprint
+    -- was derived from the complete policy. Preserve those immutable bytes and
+    -- foreign-key targets under a legacy schema identity, so a self-verifying
+    -- current fact with the same historical fingerprint mints a distinct row.
+    PRAGMA foreign_keys = OFF;
+    CREATE TABLE advanced_policy_revisions_rebuilt (
+        id TEXT PRIMARY KEY,
+        revision TEXT NOT NULL,
+        fingerprint TEXT NOT NULL,
+        fact_schema_version TEXT NOT NULL DEFAULT 'advanced_policy_snapshot_legacy_v1',
+        snapshot_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(fingerprint, fact_schema_version)
+    );
+    INSERT INTO advanced_policy_revisions_rebuilt
+        (id, revision, fingerprint, fact_schema_version, snapshot_json, created_at)
+    SELECT id, revision, fingerprint, 'advanced_policy_snapshot_legacy_v1', snapshot_json, created_at
+    FROM advanced_policy_revisions;
+    DROP TABLE advanced_policy_revisions;
+    ALTER TABLE advanced_policy_revisions_rebuilt RENAME TO advanced_policy_revisions;
+    CREATE TRIGGER advanced_policy_revisions_no_update BEFORE UPDATE ON advanced_policy_revisions
+    BEGIN SELECT RAISE(ABORT, 'advanced facts are immutable'); END;
+    CREATE TRIGGER advanced_policy_revisions_no_delete BEFORE DELETE ON advanced_policy_revisions
+    BEGIN SELECT RAISE(ABORT, 'advanced facts are immutable'); END;
+    PRAGMA foreign_keys = ON;
+    """,
 )
 
 

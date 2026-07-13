@@ -195,6 +195,96 @@ def test_policy_fingerprint_migration_preserves_existing_viewpoint_attribution(t
     assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
     connection.close()
 
+
+def test_legacy_partial_policy_fact_migration_mints_current_fact_without_relinking(tmp_path):
+    from app.advanced.policy import AdvancedPolicy, POLICY_FACT_SCHEMA_VERSION
+    from app.advanced.repository import AdvancedRepository
+    from app.advanced.viewpoints import ViewpointService
+    from app.operational.migrations import MIGRATIONS
+
+    policy = AdvancedPolicy.bootstrap("advanced_policy_v1")
+    complete_snapshot = policy.snapshot()
+    legacy_snapshot = {
+        key: complete_snapshot[key]
+        for key in ("version", "source_profiles", "benchmark_defaults", "benchmark_overrides")
+    }
+    legacy_snapshot_json = json.dumps(legacy_snapshot, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    assert _canonical_sha256(complete_snapshot) == policy.fingerprint
+    assert _canonical_sha256(legacy_snapshot) != policy.fingerprint
+
+    database = tmp_path / "operational.db"
+    connection = sqlite3.connect(database)
+    connection.execute("PRAGMA foreign_keys = ON")
+    for migration in MIGRATIONS[:-1]:
+        connection.executescript(migration)
+    connection.execute(f"PRAGMA user_version = {len(MIGRATIONS) - 1}")
+    connection.execute(
+        """INSERT INTO advanced_policy_revisions (id, revision, fingerprint, snapshot_json, created_at)
+           VALUES (?, ?, ?, ?, ?)""",
+        ("legacy-policy", policy.version, policy.fingerprint, legacy_snapshot_json, "2026-01-01T00:00:00+00:00"),
+    )
+    connection.executescript(
+        """
+        INSERT INTO advanced_viewpoints (id, source_profile, market_scope, instrument, created_at)
+        VALUES ('legacy-viewpoint', 'operator-research-v1', 'CN-A', '600519.SH', '2026-01-01T00:00:00+00:00');
+        INSERT INTO advanced_viewpoint_versions
+        (id, viewpoint_id, version, policy_revision_id, asset_type, published_at, direction, rating, conclusion,
+         target_low, target_high, horizon_days, confidence, revision_kind, correction_reason,
+         evaluation_window_days, benchmark, metric, created_at)
+        VALUES ('legacy-version', 'legacy-viewpoint', 1, 'legacy-policy', 'stock', '2026-01-01T00:00:00+00:00', 'bullish', 'overweight', 'original',
+                1500, 1650, 60, 'high', 'initial', NULL, 60, '000300.SH', 'relative_return', '2026-01-01T00:00:00+00:00');
+        """
+    )
+    connection.commit()
+    connection.close()
+
+    repository = AdvancedRepository(database)
+    repository.migrate()
+    service = ViewpointService(repository=repository, policy=policy)
+    current = _create(service, instrument="000001.SZ")
+    reused = _create(service, instrument="000333.SZ")
+
+    with repository._connection() as connection:
+        legacy = connection.execute(
+            """SELECT id, fingerprint, fact_schema_version, snapshot_json
+               FROM advanced_policy_revisions WHERE id = 'legacy-policy'"""
+        ).fetchone()
+        legacy_fk = connection.execute(
+            "SELECT policy_revision_id FROM advanced_viewpoint_versions WHERE id = 'legacy-version'"
+        ).fetchone()
+        current_rows = connection.execute(
+            """SELECT version.id, version.policy_revision_id, policy.fingerprint,
+                      policy.fact_schema_version, policy.snapshot_json
+               FROM advanced_viewpoint_versions AS version
+               JOIN advanced_policy_revisions AS policy ON policy.id = version.policy_revision_id
+               WHERE version.id IN (?, ?) ORDER BY version.id""",
+            (current["id"], reused["id"]),
+        ).fetchall()
+        foreign_key_errors = connection.execute("PRAGMA foreign_key_check").fetchall()
+
+    assert dict(legacy) == {
+        "id": "legacy-policy",
+        "fingerprint": policy.fingerprint,
+        "fact_schema_version": "advanced_policy_snapshot_legacy_v1",
+        "snapshot_json": legacy_snapshot_json,
+    }
+    assert legacy_fk["policy_revision_id"] == "legacy-policy"
+    assert foreign_key_errors == []
+    assert {row["policy_revision_id"] for row in current_rows}.isdisjoint({"legacy-policy"})
+    assert len({row["policy_revision_id"] for row in current_rows}) == 1
+    for row in current_rows:
+        snapshot = json.loads(row["snapshot_json"])
+        assert row["fact_schema_version"] == POLICY_FACT_SCHEMA_VERSION
+        assert snapshot == complete_snapshot
+        assert _canonical_sha256(snapshot) == row["fingerprint"] == policy.fingerprint
+
+    with pytest.raises(ValueError, match="canonical snapshot"):
+        service.revise_viewpoint(viewpoint_id="legacy-viewpoint", conclusion="attempted legacy rewrite")
+    with repository._connection() as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM advanced_viewpoint_versions WHERE viewpoint_id = 'legacy-viewpoint'"
+        ).fetchone()[0] == 1
+
 def test_viewpoint_versions_evidence_and_frozen_evaluation_plans_are_append_only(tmp_path):
     repository, service = _service(tmp_path)
     first = _create(service)
