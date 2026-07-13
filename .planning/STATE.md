@@ -4,17 +4,16 @@ milestone: v1.0
 milestone_name: milestone
 current_phase: 04
 current_phase_name: advanced-capabilities
-status: complete
-stopped_at: Completed 04-14-PLAN.md
-last_updated: "2026-07-12T19:25:02.902Z"
-last_activity: 2026-07-12
-last_activity_desc: Phase 04 execution started
+status: executing
+stopped_at: Phase 3 context gathered
+last_updated: "2026-07-13T05:20:11.472Z"
+last_activity: 2026-07-13
+last_activity_desc: Completed 04-17 governed experiment evolution
 progress:
-  total_phases: 5
-  completed_phases: 4
-  total_plans: 49
-  completed_plans: 49
-  percent: 80
+  total_phases: 4
+  completed_phases: 3
+  total_plans: 54
+  completed_plans: 53
 ---
 
 # Project State
@@ -28,12 +27,12 @@ See: .planning/PROJECT.md (updated 2026-07-10)
 
 ## Current Position
 
-Phase: 04 (advanced-capabilities) — COMPLETE
-Plan: 14 of 14
-Status: Phase complete
-Last activity: 2026-07-12 — Completed 04-14 real sandbox and host acceptance
+Phase: 04 (advanced-capabilities) — EXECUTING
+Plan: 5 of 19
+Status: Ready to execute
+Last activity: 2026-07-13 — Completed 04-17 governed experiment evolution
 
-Progress: [████████░░] 80%
+Progress: [██████████] 96%
 
 ## Performance Metrics
 
@@ -73,6 +72,10 @@ Progress: [████████░░] 80%
 | Phase 04 P12 | 21m | 2 tasks | 6 files |
 | Phase 04 P13 | 7m | 2 tasks | 5 files |
 | Phase 04 P14 | 16m | 2 tasks | 10 files |
+| Phase 04 P15 | 11m | 3 tasks | 7 files |
+| Phase 04 P16 | 8m | 2 tasks | 6 files |
+| Phase 04 P17 | 10m 52s | 2 tasks | 9 files |
+| Phase 04 P18 | 12m | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -118,6 +121,12 @@ No implementation decision was explicitly locked by the architecture intake. Req
 - [Phase 04]: Production advanced workflows receive only persisted server bindings and remain recovery cursors rather than authority sources.
 - [Phase 04]: Custom strategy source may spawn only after a fresh complete Linux isolation proof; unavailable or stale proof rejects before spawn.
 - [Phase 04]: A root SSE subscriber sends a data-free ready event after scope-bound registration so host acceptance can avoid connection races.
+- [Phase 04]: Linux sandbox proof accepts only parent/child namespace deltas, mount and write-boundary checks, network denial, rlimit observations, and verified cleanup before source spawn.
+- [Phase 04]: Sandbox run disclosure reauthorizes the persisted opaque parent research asset and returns only an allowlisted terminal DTO.
+- [Phase 04]: Viewpoint evaluation reads frozen historical windows through KlineRepository; revision, correction, and evaluation routes reauthorize the persisted instrument before append. — Preserves governed data boundaries and prevents browser-provided scope or market authority.
+- [Phase 04]: Frozen experiment scopes and five evolution gates reload only immutable server-produced evidence; browser requests cannot supply authority or verdicts.
+- [Phase 04]: Viewpoint mutations invalidate only the active subject's viewpoint version and calibration keys. — Preserves object-local cache ownership for immutable research records.
+- [Phase 04]: Experiment and evolution controls submit bounded scope/configuration while gate verdicts and sandbox details remain server-projected. — Prevents browser-provided authority and sandbox disclosure.
 
 ### Pending Todos
 
@@ -135,6 +144,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-07-12T19:25:02.894Z
-Stopped at: Completed 04-14-PLAN.md
-Resume file: None
+Last session: 2026-07-13T05:20:11.465Z
+Stopped at: Phase 3 context gathered
+Resume file: .planning/phases/03-ai-analysis/03-CONTEXT.md
