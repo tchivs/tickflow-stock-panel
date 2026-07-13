@@ -328,14 +328,13 @@ def test_main_host_loads_and_persists_deployment_owned_advanced_fixture(tmp_path
 def test_main_host_fixture_revokes_selected_job_before_execution(tmp_path, monkeypatch):
     from app.config import settings
     from app.services import auth as auth_service
-    from tests.test_analysis_host_integration import _write_phase1_fixture
 
     fixture_dir = tmp_path / "phase1-fixtures"
     data_dir = tmp_path / "governed-data"
     advanced_fixture = tmp_path / "advanced-host-fixture.json"
     fixture = _advanced_host_fixture()
     fixture["revoke_before_run_task_types"] = ["strategy_evaluation"]
-    _write_phase1_fixture(fixture_dir)
+    _write_governed_backtest_fixture(fixture_dir)
     advanced_fixture.write_text(json.dumps(fixture), encoding="utf-8")
     monkeypatch.setenv("PHASE1_FIXTURE_MODE", "1")
     monkeypatch.setenv("PHASE1_FIXTURE_DIR", str(fixture_dir))
