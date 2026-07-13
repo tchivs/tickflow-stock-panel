@@ -162,7 +162,7 @@ def test_absent_or_inconclusive_launcher_capability_is_a_durable_pre_spawn_rejec
 
 def test_linux_probe_rejects_legacy_boolean_claims_without_observable_evidence(tmp_path, monkeypatch):
     """A report cannot become affirmative merely by claiming every capability is true."""
-    from app.advanced.sandbox import LinuxIsolationLauncher, _PROBE_FIELDS
+    from app.advanced.sandbox import _PROBE_FIELDS, LinuxIsolationLauncher
 
     launcher = LinuxIsolationLauncher()
     monkeypatch.setattr("app.advanced.sandbox.sys.platform", "linux")

@@ -64,15 +64,20 @@ class LinuxIsolationLauncher:
         self._proof: dict[str, object] | None = None
 
     def capability_probe(self, *, governed_input: Path, workdir: Path) -> dict[str, object]:
-        del governed_input
         evidence = {field: False for field in _PROBE_FIELDS}
         if sys.platform != "linux" or shutil.which("unshare") is None or not os.access("/bin/mount", os.X_OK):
             return evidence
         probe_root = workdir / "probe-root"
+        shutil.rmtree(probe_root, ignore_errors=True)
         probe_root.mkdir(mode=0o700, exist_ok=True)
+        parent_namespaces = self._namespace_links()
+        if set(parent_namespaces) != {"user", "mnt", "pid", "net"}:
+            shutil.rmtree(probe_root, ignore_errors=True)
+            return evidence
         command = [
             "unshare", "--user", "--map-root-user", "--mount", "--pid", "--net", "--fork", "--mount-proc",
-            sys.executable, "-c", self._probe_script(), str(probe_root),
+            sys.executable, "-c", self._probe_script(), str(probe_root), str(governed_input),
+            json.dumps(parent_namespaces, sort_keys=True), "3", str(128 * 1024 * 1024), str(16 * 1024),
         ]
         try:
             completed = subprocess.run(
@@ -82,15 +87,71 @@ class LinuxIsolationLauncher:
                 text=True,
                 timeout=self._PROBE_TIMEOUT_SECONDS,
                 env={"PATH": "/usr/bin:/bin", "PYTHONNOUSERSITE": "1"},
+                preexec_fn=self._limits(3, 128),
             )
             reported = json.loads(completed.stdout) if completed.returncode == 0 else {}
         except (OSError, subprocess.SubprocessError, json.JSONDecodeError):
             reported = {}
-        if not isinstance(reported, dict) or not all(reported.get(field) is True for field in _PROBE_FIELDS):
+        finally:
+            shutil.rmtree(probe_root, ignore_errors=True)
+        if not self._probe_evidence_is_affirmative(reported, parent_namespaces, cleanup_verified=not probe_root.exists()):
             return evidence
         fingerprint = sha256(json.dumps(reported, sort_keys=True).encode()).hexdigest()
-        self._proof = {**reported, "proof_fingerprint": fingerprint, "probed_at": time.monotonic()}
+        self._proof = {
+            **{field: True for field in _PROBE_FIELDS},
+            "proof_fingerprint": fingerprint,
+            "probed_at": time.monotonic(),
+        }
         return dict(self._proof)
+
+    @staticmethod
+    def _namespace_links() -> dict[str, str]:
+        try:
+            return {name: os.readlink(f"/proc/self/ns/{name}") for name in ("user", "mnt", "pid", "net")}
+        except OSError:
+            return {}
+
+    @staticmethod
+    def _probe_evidence_is_affirmative(
+        reported: object, parent_namespaces: dict[str, str], *, cleanup_verified: bool
+    ) -> bool:
+        if not isinstance(reported, dict):
+            return False
+        namespaces = reported.get("namespaces")
+        mounts = reported.get("mounts")
+        filesystem = reported.get("filesystem")
+        network = reported.get("network")
+        limits = reported.get("limits")
+        if not all(isinstance(value, dict) for value in (namespaces, mounts, filesystem, network, limits)):
+            return False
+        assert isinstance(namespaces, dict) and isinstance(mounts, dict)
+        assert isinstance(filesystem, dict) and isinstance(network, dict) and isinstance(limits, dict)
+        namespace_checks = {
+            "user_namespace": "user",
+            "mount_namespace": "mnt",
+            "pid_namespace": "pid",
+            "network_namespace": "net",
+        }
+        namespaces_are_distinct = all(
+            isinstance(namespaces.get(name), str)
+            and namespaces[name] != parent_namespaces.get(name)
+            for name in namespace_checks.values()
+        )
+        expected_limits = {"cpu": 3, "address_space": 128 * 1024 * 1024, "file_size": 16 * 1024}
+        limits_are_enforced = all(limits.get(name) == value for name, value in expected_limits.items())
+        checks = {
+            "user_namespace": namespaces_are_distinct,
+            "mount_namespace": namespaces_are_distinct,
+            "pid_namespace": namespaces_are_distinct,
+            "network_namespace": namespaces_are_distinct,
+            "network_absent": network.get("connect_blocked") is True and network.get("only_loopback") is True,
+            "private_root": mounts.get("private_root") is True and mounts.get("mountinfo_contains_root") is True,
+            "governed_input_read_only": filesystem.get("governed_write_blocked") is True,
+            "temporary_workdir_only": filesystem.get("workdir_write_succeeds") is True and filesystem.get("outside_write_blocked") is True,
+            "resource_limits": limits_are_enforced,
+            "cleanup_verified": cleanup_verified,
+        }
+        return all(checks.values())
 
     def spawn(self, **kwargs: object) -> dict[str, object]:
         source_path = Path(str(kwargs["source_path"]))
@@ -154,12 +215,70 @@ class LinuxIsolationLauncher:
 
     @staticmethod
     def _probe_script() -> str:
-        return """import json, os, sys
-root = sys.argv[1]
-os.system('/bin/mount --make-rprivate /')
-os.mkdir(root + '/empty', 0o700)
-os.system('/bin/mount -t tmpfs -o size=1m,nosuid,nodev,noexec tmpfs ' + root + '/empty')
-print(json.dumps({'user_namespace': True, 'mount_namespace': True, 'pid_namespace': True, 'network_namespace': True, 'network_absent': True, 'private_root': os.path.ismount(root + '/empty'), 'governed_input_read_only': True, 'temporary_workdir_only': True, 'resource_limits': True, 'cleanup_verified': True}))
+        return """import json, os, resource, socket, subprocess, sys
+root, governed, parent_json, expected_cpu, expected_as, expected_fsize = sys.argv[1:]
+parent = json.loads(parent_json)
+
+def mount(*args):
+    return subprocess.run(['/bin/mount', *args], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+
+def blocked_write(path, data='x'):
+    try:
+        with open(path, 'w', encoding='utf-8') as handle:
+            handle.write(data)
+    except OSError:
+        return True
+    return False
+
+def namespace(name):
+    try:
+        return os.readlink('/proc/self/ns/' + name)
+    except OSError:
+        return ''
+
+try:
+    mount('--make-rprivate', '/')
+    root_ok = mount('-t', 'tmpfs', '-o', 'size=1m,nosuid,nodev,noexec', 'tmpfs', root)
+    os.makedirs(root + '/input', mode=0o700, exist_ok=True)
+    os.makedirs(root + '/work', mode=0o700, exist_ok=True)
+    input_ok = root_ok and mount('--bind', governed, root + '/input') and mount('-o', 'remount,bind,ro', root + '/input')
+    work_ok = root_ok and mount('-t', 'tmpfs', '-o', 'size=512k,nosuid,nodev,noexec', 'tmpfs', root + '/work')
+    root_read_only = mount('-o', 'remount,ro', root)
+    work_file = root + '/work/probe-write'
+    try:
+        with open(work_file, 'w', encoding='utf-8') as handle:
+            handle.write('ok')
+        workdir_write_succeeds = True
+    except OSError:
+        workdir_write_succeeds = False
+    try:
+        interfaces = [name for _, name in socket.if_nameindex()]
+    except OSError:
+        interfaces = ['unknown']
+    try:
+        socket.create_connection(('203.0.113.1', 9), timeout=0.2).close()
+        connect_blocked = False
+    except OSError:
+        connect_blocked = True
+    cpu = resource.getrlimit(resource.RLIMIT_CPU)[0]
+    address_space = resource.getrlimit(resource.RLIMIT_AS)[0]
+    file_size = resource.getrlimit(resource.RLIMIT_FSIZE)[0]
+    with open('/proc/self/mountinfo', encoding='utf-8') as handle:
+        mountinfo = handle.read()
+    print(json.dumps({
+        'namespaces': {name: namespace(name) for name in ('user', 'mnt', 'pid', 'net')},
+        'mounts': {'private_root': root_ok and root_read_only and os.path.ismount(root), 'mountinfo_contains_root': root in mountinfo},
+        'filesystem': {
+            'governed_write_blocked': input_ok and blocked_write(root + '/input/.sandbox-write'),
+            'workdir_write_succeeds': work_ok and workdir_write_succeeds,
+            'outside_write_blocked': root_read_only and blocked_write(root + '/outside-write'),
+        },
+        'network': {'only_loopback': interfaces == ['lo'], 'connect_blocked': connect_blocked},
+        'limits': {'cpu': cpu, 'address_space': address_space, 'file_size': file_size},
+    }))
+except Exception:
+    print('{}')
+    raise SystemExit(1)
 """
 
     @staticmethod
