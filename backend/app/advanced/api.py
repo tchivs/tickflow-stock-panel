@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.advanced import projections
 from app.advanced.schemas import (
     CustomStrategySubmission,
+    ExperimentSpecificationRequest,
     ViewpointCorrectionRequest,
     ViewpointRequest,
     ViewpointRevisionRequest,
@@ -28,20 +29,6 @@ class ResumeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     decision: str = Field(pattern="^(approve|reject)$")
-
-
-class ExperimentSpecificationRequest(BaseModel):
-    """Browser input excludes identity, eligibility, and execution authority."""
-
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-
-    research_asset_id: str = Field(min_length=1, max_length=128)
-    hypothesis: str = Field(min_length=1, max_length=4_000)
-    data_scope: dict[str, str] = Field(min_length=1, max_length=16)
-    method: str = Field(min_length=1, max_length=256)
-    metrics: list[str] = Field(min_length=1, max_length=16)
-    success_criteria: dict[str, Any] = Field(min_length=1, max_length=16)
-    failure_criteria: dict[str, Any] = Field(min_length=1, max_length=16)
 
 
 class FeedbackRequest(BaseModel):
@@ -305,7 +292,7 @@ def create_experiment_specification(payload: ExperimentSpecificationRequest, req
     _require_research_asset(request, payload.research_asset_id)
     try:
         record = _service(request, "experiment_service").create_specification(
-            **payload.model_dump(), owner_principal=_principal(request)
+            **payload.model_dump(mode="json"), owner_principal=_principal(request)
         )
     except ValueError as error:
         raise _safe_value_error(error) from error

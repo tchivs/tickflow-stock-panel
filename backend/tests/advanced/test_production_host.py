@@ -55,6 +55,18 @@ def _sandbox_submission() -> dict[str, object]:
     }
 
 
+def _strategy_scope() -> dict[str, object]:
+    return {
+        "market": "CN-A",
+        "strategy_id": "fixture_momentum",
+        "start": "2024-01-02",
+        "end": "2024-12-31",
+        "symbols": ["600000.SH"],
+        "asset_type": "stock",
+        "parameters": {"lookback": 20},
+    }
+
+
 class _DeterministicGovernedCollaborator:
     def run(self, *, specification: dict[str, object]) -> dict[str, object]:
         del specification
@@ -274,7 +286,7 @@ def test_governed_runner_persists_applied_limits_and_completed_feedback(tmp_path
     specification = service.create_specification(
         research_asset_id="fixture-asset",
         hypothesis="固定运行必须留存受治理证据",
-        data_scope={"market": "CN-A"},
+        data_scope=_strategy_scope(),
         method="fixture",
         metrics=["sharpe"],
         success_criteria={"sharpe_gt": 1},
@@ -284,6 +296,7 @@ def test_governed_runner_persists_applied_limits_and_completed_feedback(tmp_path
     run = service.run_specification(specification_id=specification["id"])
 
     assert run["status"] == "completed"
+    assert service.get_specification(specification["id"])["data_scope"] == _strategy_scope()
     assert run["resources"] == {
         "wall_clock_seconds": 3,
         "cpu_seconds": 2,
@@ -316,7 +329,7 @@ def test_governed_runner_reaps_blocked_work_and_rejects_feedback(tmp_path):
     specification = service.create_specification(
         research_asset_id="fixture-asset",
         hypothesis="阻塞工作必须被父进程终止",
-        data_scope={"market": "CN-A"},
+        data_scope=_strategy_scope(),
         method="fixture",
         metrics=["sharpe"],
         success_criteria={"sharpe_gt": 1},

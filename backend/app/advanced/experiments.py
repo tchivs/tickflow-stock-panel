@@ -8,6 +8,7 @@ from typing import Any, Protocol
 from uuid import uuid4
 
 from app.advanced.repository import AdvancedRepository
+from app.advanced.schemas import FrozenStrategyScope
 
 
 class GovernedBacktestRunner(Protocol):
@@ -46,6 +47,10 @@ class ExperimentService:
     ) -> dict[str, Any]:
         if not all((research_asset_id, hypothesis, method, owner_principal)) or not data_scope or not metrics:
             raise ValueError("experiment specification requires frozen research inputs")
+        try:
+            frozen_scope = FrozenStrategyScope.model_validate(data_scope).model_dump(mode="json")
+        except ValueError as error:
+            raise ValueError("experiment specification has an invalid frozen strategy scope") from error
         identifier = str(uuid4())
         with self.repository._connection() as connection, connection:
             if supersedes_specification_id is None:
@@ -66,7 +71,7 @@ class ExperimentService:
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     identifier, research_asset_id, version, supersedes_specification_id, hypothesis,
-                    _json(dict(data_scope)), method, _json(metrics), _json(dict(success_criteria)),
+                    _json(frozen_scope), method, _json(metrics), _json(dict(success_criteria)),
                     _json(dict(failure_criteria)), self.repository.now(), owner_principal,
                 ),
             )

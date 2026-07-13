@@ -1,7 +1,7 @@
 """Strict request and public DTO contracts for controlled advanced workflows."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -62,12 +62,54 @@ class ViewpointCorrectionRequest(ViewpointRevisionRequest):
     correction_reason: str = Field(min_length=1, max_length=1_000)
 
 
+class FrozenStrategyScope(StrictAdvancedModel):
+    """The complete immutable input contract for a governed strategy backtest."""
+
+    market: Literal["CN-A"]
+    strategy_id: Identifier = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_.-]+$")
+    start: date
+    end: date
+    symbols: list[Identifier] | None = Field(default=None, max_length=64)
+    asset_type: AssetType
+    parameters: dict[str, str | int | float | bool | None] = Field(default_factory=dict, max_length=32)
+
+    @field_validator("symbols")
+    @classmethod
+    def _symbols_are_supported_identifiers(cls, value: list[Identifier] | None) -> list[Identifier] | None:
+        if value is None:
+            return None
+        if not value or len(set(value)) != len(value):
+            raise ValueError("symbols must be a non-empty unique list")
+        if any(not 1 <= len(symbol) <= 32 or not _instrument_identifier(symbol) for symbol in value):
+            raise ValueError("symbols must be valid instrument identifiers")
+        return value
+
+    @field_validator("parameters")
+    @classmethod
+    def _parameter_names_are_bounded(cls, value: dict[str, str | int | float | bool | None]) -> dict[str, str | int | float | bool | None]:
+        if any(not 1 <= len(key) <= 64 or not key.replace("_", "").isalnum() for key in value):
+            raise ValueError("parameter names must be bounded identifiers")
+        return value
+
+    @model_validator(mode="after")
+    def _date_range_is_ordered(self) -> FrozenStrategyScope:
+        if self.start > self.end:
+            raise ValueError("start must not be after end")
+        return self
+
+
+def _instrument_identifier(value: str) -> bool:
+    return all(character.isalnum() or character in ".-" for character in value)
+
+
 class ExperimentSpecificationRequest(StrictAdvancedModel):
+    research_asset_id: Identifier = Field(min_length=1, max_length=128)
     hypothesis: str = Field(min_length=1, max_length=4_000)
-    data_scope: dict[str, str] = Field(min_length=1, max_length=16)
+    data_scope: FrozenStrategyScope
     method: str = Field(min_length=1, max_length=256)
     metrics: list[str] = Field(min_length=1, max_length=16)
-    success_criteria: list[str] = Field(min_length=1, max_length=16)
+    success_criteria: dict[str, str | int | float | bool | None] = Field(min_length=1, max_length=16)
+    failure_criteria: dict[str, str | int | float | bool | None] = Field(min_length=1, max_length=16)
 
 
 class ExperimentRunRequest(StrictAdvancedModel):
