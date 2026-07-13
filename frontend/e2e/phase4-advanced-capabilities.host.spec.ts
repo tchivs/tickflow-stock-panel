@@ -45,6 +45,7 @@ test.beforeAll(async () => {
       rate_limits: { research_draft: 1, experiment: 1, strategy_evaluation: 1 },
     },
     advanced_subjects: ['600000.SH'],
+    revoke_before_run_task_types: ['strategy_evaluation'],
   }))
   await chmod(join(fixtureDir, 'instruments.json'), 0o444)
   await chmod(join(fixtureDir, 'market-data.json'), 0o444)
@@ -132,4 +133,39 @@ test('real FastAPI host rejects unauthenticated, out-of-scope, and rate-limited 
   })
   expect(rateLimited.status()).toBe(409)
   expect(await rateLimited.json()).toEqual({ detail: 'advanced job rejected' })
+})
+
+test('real FastAPI host revalidates a fixture-revoked authorization before work or SSE publication', async ({ page }) => {
+  const login = await page.request.post(`${hostUrl}/api/auth/login`, { data: { password: 'phase4-host-password' } })
+  expect(login.ok()).toBeTruthy()
+  await page.goto('/stock-analysis')
+
+  const result = await page.evaluate(async () => {
+    const stream = new EventSource('/api/intraday/stream')
+    const payloads: string[] = []
+    const opened = new Promise<void>((resolve, reject) => {
+      stream.addEventListener('stream_ready', () => resolve())
+      stream.addEventListener('error', () => reject(new Error('root SSE did not connect')))
+    })
+    stream.addEventListener('advanced_progress', message => payloads.push(message.data))
+    await opened
+    const response = await fetch('/api/advanced/subjects/600000.SH/jobs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ task_type: 'strategy_evaluation' }),
+    })
+    const body = await response.json()
+    await new Promise(resolve => window.setTimeout(resolve, 250))
+    stream.close()
+    return { status: response.status, body, payloads }
+  })
+
+  expect(result.status).toBe(200)
+  expect(result.body.job).toMatchObject({ status: 'rejected', stage: 'rejected' })
+  expect(result.payloads.map(JSON.parse).filter(event => event.job_id === result.body.job.id)).toEqual([
+    expect.objectContaining({ job_id: result.body.job.id, stage: 'rejected' }),
+  ])
+  const audit = await page.request.get(`${hostUrl}/api/advanced/audits/${result.body.job.audit_reference}`)
+  expect(audit.ok()).toBeTruthy()
+  expect((await audit.json()).audit).toMatchObject({ decision: 'rejected', reason: 'authorization_revoked' })
 })

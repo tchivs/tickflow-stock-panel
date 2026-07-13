@@ -42,12 +42,17 @@ class AdvancedJobService:
         self._clock = clock
         self._workflow = workflow
         self._progress_publisher = progress_publisher
+        self._before_execution_hook: Callable[[dict[str, object]], None] | None = None
 
     def set_workflow(self, workflow: AdvancedWorkflow) -> None:
         self._workflow = workflow
 
     def set_progress_publisher(self, publisher: Callable[..., None]) -> None:
         self._progress_publisher = publisher
+
+    def set_before_execution_hook(self, hook: Callable[[dict[str, object]], None]) -> None:
+        """Install a deployment-owned lifecycle hook before execution-start revalidation."""
+        self._before_execution_hook = hook
 
     def create_job(self, *, principal: str, request: dict[str, object]) -> dict[str, object]:
         authorization_id: str | None = None
@@ -167,6 +172,8 @@ class AdvancedJobService:
             raise ValueError("advanced job is unknown")
         if existing["status"] != "queued":
             return existing
+        if self._before_execution_hook is not None:
+            self._before_execution_hook(existing)
         prepared = self.prepare_to_start(job_id=job_id)
         if prepared["status"] == "rejected":
             return prepared

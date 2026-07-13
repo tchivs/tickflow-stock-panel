@@ -188,18 +188,26 @@ async def lifespan(app: FastAPI):
     advanced_repository.migrate()
     advanced_fixture_path = os.environ.get("ADVANCED_HOST_FIXTURE")
     advanced_subjects: frozenset[str] | None = None
+    revoke_before_run_task_types: frozenset[str] = frozenset()
     if advanced_fixture_path:
         try:
             fixture = json.loads(Path(advanced_fixture_path).read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as error:
             raise RuntimeError("advanced host fixture is unreadable") from error
-        if not isinstance(fixture, dict) or set(fixture) != {"policy", "advanced_subjects"}:
+        if not isinstance(fixture, dict) or set(fixture) - {"policy", "advanced_subjects", "revoke_before_run_task_types"}:
             raise RuntimeError("advanced host fixture is malformed")
         subjects = fixture["advanced_subjects"]
         if not isinstance(subjects, list) or not subjects or any(not isinstance(subject, str) or not subject for subject in subjects):
             raise RuntimeError("advanced host fixture subjects are malformed")
         advanced_policy = AdvancedPolicy.bootstrap(fixture["policy"])
+        revoke_task_types = fixture.get("revoke_before_run_task_types", [])
+        if not isinstance(revoke_task_types, list) or any(
+            not isinstance(task_type, str) or task_type not in advanced_policy.agent_allowlist
+            for task_type in revoke_task_types
+        ):
+            raise RuntimeError("advanced host fixture revoke configuration is malformed")
         advanced_subjects = frozenset(subjects)
+        revoke_before_run_task_types = frozenset(revoke_task_types)
     else:
         advanced_policy = AdvancedPolicy.bootstrap("advanced_policy_v1")
     app.state.advanced_repository = advanced_repository
@@ -236,6 +244,12 @@ async def lifespan(app: FastAPI):
         sandbox=lambda **_kwargs: None,
         clock=lambda: datetime.now(UTC),
     )
+    if revoke_before_run_task_types:
+        def revoke_selected_fixture_job(job: dict[str, object]) -> None:
+            if str(job["task_type"]) in revoke_before_run_task_types:
+                advanced_repository.revoke_authorization(authorization_id=str(job["authorization_id"]))
+
+        app.state.advanced_job_service.set_before_execution_hook(revoke_selected_fixture_job)
     app.state.advanced_sandbox_service = CustomStrategySandboxService(
         audit_path=operational.database_path,
         governed_input=store.data_dir,
