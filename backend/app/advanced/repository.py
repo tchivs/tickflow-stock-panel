@@ -6,6 +6,7 @@ import sqlite3
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from datetime import UTC, datetime
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -18,6 +19,23 @@ def _json(value: object, field: str) -> str:
         return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
     except (TypeError, ValueError) as error:
         raise ValueError(f"{field} must be JSON serializable") from error
+
+
+def _canonical_policy_snapshot(snapshot: Mapping[str, Any]) -> str:
+    if not isinstance(snapshot, Mapping):
+        raise ValueError("policy snapshot must be a mapping")
+    try:
+        return json.dumps(dict(snapshot), ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    except (TypeError, ValueError) as error:
+        raise ValueError("policy snapshot must be JSON serializable") from error
+
+
+def _validated_policy_snapshot(*, fingerprint: str, snapshot: Mapping[str, Any]) -> str:
+    serialized = _canonical_policy_snapshot(snapshot)
+    canonical_fingerprint = sha256(serialized.encode()).hexdigest()
+    if fingerprint != canonical_fingerprint:
+        raise ValueError("policy fingerprint does not match canonical snapshot")
+    return serialized
 
 
 class AdvancedRepository:
@@ -46,17 +64,25 @@ class AdvancedRepository:
         return self._clock().astimezone(UTC).isoformat()
 
     def record_policy_revision(self, *, revision: str, fingerprint: str, snapshot: Mapping[str, Any]) -> dict[str, Any]:
+        snapshot_json = _validated_policy_snapshot(fingerprint=fingerprint, snapshot=snapshot)
         identifier = str(uuid4())
         with self._connection() as connection, connection:
             connection.execute(
                 """INSERT INTO advanced_policy_revisions (id, revision, fingerprint, snapshot_json, created_at)
                    VALUES (?, ?, ?, ?, ?)
                    ON CONFLICT(fingerprint) DO NOTHING""",
-                (identifier, revision, fingerprint, _json(snapshot, "policy snapshot"), self.now()),
+                (identifier, revision, fingerprint, snapshot_json, self.now()),
             )
             row = connection.execute("SELECT * FROM advanced_policy_revisions WHERE fingerprint = ?", (fingerprint,)).fetchone()
         assert row is not None
         return self._policy_row(row)
+
+    def policy_revision(self, fingerprint: str) -> dict[str, Any] | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM advanced_policy_revisions WHERE fingerprint = ?", (fingerprint,)
+            ).fetchone()
+        return None if row is None else self._policy_row(row)
 
     def acquire_job(self, *, job_id: str, authorization_id: str, principal: str, subject_kind: str, subject_key: str, task_type: str, market: str, instrument: str, idempotency_key: str) -> dict[str, Any]:
         """Return the existing idempotent job or append the one runnable cursor."""
@@ -379,13 +405,14 @@ class AdvancedRepository:
         evidence: list[Mapping[str, Any]],
     ) -> dict[str, Any]:
         """Append the next immutable viewpoint version and its evidence atomically."""
+        snapshot_json = _validated_policy_snapshot(fingerprint=policy_fingerprint, snapshot=policy_snapshot)
         version_id = str(uuid4())
         with self._connection() as connection, connection:
             connection.execute(
                 """INSERT INTO advanced_policy_revisions (id, revision, fingerprint, snapshot_json, created_at)
                    VALUES (?, ?, ?, ?, ?)
                    ON CONFLICT(fingerprint) DO NOTHING""",
-                (str(uuid4()), policy_revision, policy_fingerprint, _json(policy_snapshot, "policy snapshot"), self.now()),
+                (str(uuid4()), policy_revision, policy_fingerprint, snapshot_json, self.now()),
             )
             policy = connection.execute(
                 "SELECT id FROM advanced_policy_revisions WHERE fingerprint = ?", (policy_fingerprint,)

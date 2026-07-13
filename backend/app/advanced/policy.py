@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from hashlib import sha256
 from typing import Any
 
@@ -69,15 +69,32 @@ class AdvancedPolicy:
         }
         if len(normalized["agent_allowlist"]) != len(allowlist) or len(normalized["rate_limits"]) != len(limits):
             raise ValueError("advanced policy agent controls are malformed")
-        return cls(
+        policy = cls(
             version=ADVANCED_POLICY_VERSION,
             source_profiles={"operator-research-v1": {"market_scopes": ("CN-A",)}},
             benchmark_defaults=dict(defaults),
             benchmark_overrides=frozenset(overrides),
             agent_allowlist={key: tuple(value) for key, value in normalized["agent_allowlist"].items()},
             rate_limits=dict(normalized["rate_limits"]),
-            fingerprint=sha256(_canonical_json(normalized).encode()).hexdigest(),
+            fingerprint="",
         )
+        return replace(policy, fingerprint=sha256(_canonical_json(policy.snapshot()).encode()).hexdigest())
+
+    def snapshot(self) -> dict[str, object]:
+        """Return the complete normalized policy fact used to derive ``fingerprint``."""
+        return {
+            "version": self.version,
+            "source_profiles": {
+                key: {"market_scopes": sorted(value["market_scopes"])}
+                for key, value in self.source_profiles.items()
+            },
+            "benchmark_defaults": dict(self.benchmark_defaults),
+            "benchmark_overrides": sorted(self.benchmark_overrides),
+            "agent_allowlist": {
+                key: sorted(value) for key, value in self.agent_allowlist.items()
+            },
+            "rate_limits": dict(self.rate_limits),
+        }
 
     def resolve_benchmark(self, *, source_profile: str, market_scope: str, asset_type: str, requested: str | None) -> str:
         profile = self.source_profiles.get(source_profile)

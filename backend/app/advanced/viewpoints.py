@@ -42,7 +42,7 @@ class ViewpointService:
         row = self.repository.append_viewpoint_version(
             viewpoint_id=str(uuid4()), source_profile=request.source_profile, market_scope=request.market_scope,
             instrument=request.instrument, policy_revision=self.policy.version, policy_fingerprint=self.policy.fingerprint,
-            policy_snapshot=self._policy_snapshot(), asset_type=request.asset_type, published_at=request.published_at.isoformat(),
+            policy_snapshot=self.policy.snapshot(), asset_type=request.asset_type, published_at=request.published_at.isoformat(),
             direction=request.direction, rating=request.rating, conclusion=request.conclusion, target_range=request.target_range,
             horizon_days=request.horizon_days, confidence=request.confidence, revision_kind="initial", correction_reason=None,
             evaluation_window_days=request.evaluation_window_days, benchmark=benchmark,
@@ -186,10 +186,14 @@ class ViewpointService:
             changed_fields.append("evidence")
         material_fields = {"direction", "rating", "target_range", "horizon_days", "confidence"}
         actual_kind = revision_kind or ("material_stance_change" if material_fields.intersection(changed_fields) else "non_material_revision")
+        historical_policy = self.repository.policy_revision(previous["policy_fingerprint"])
+        if historical_policy is None:
+            raise ValueError("viewpoint policy revision not found")
         row = self.repository.append_viewpoint_version(
             viewpoint_id=previous["viewpoint_id"], source_profile=previous["source_profile"], market_scope=previous["market_scope"],
-            instrument=previous["instrument"], policy_revision=previous["policy_version"], policy_fingerprint=previous["policy_fingerprint"],
-            policy_snapshot=self._policy_snapshot(), asset_type=previous["asset_type"], published_at=previous["published_at"],
+            instrument=previous["instrument"], policy_revision=historical_policy["revision"],
+            policy_fingerprint=previous["policy_fingerprint"], policy_snapshot=historical_policy["snapshot"],
+            asset_type=previous["asset_type"], published_at=previous["published_at"],
             direction=values["direction"], rating=values["rating"], conclusion=values["conclusion"], target_range=values["target_range"],
             horizon_days=values["horizon_days"], confidence=values["confidence"], revision_kind=actual_kind,
             correction_reason=correction_reason, evaluation_window_days=previous["evaluation_plan"]["window_days"],
@@ -220,13 +224,6 @@ class ViewpointService:
             "evaluation": row.get("evaluation"),
         }
 
-    def _policy_snapshot(self) -> dict[str, Any]:
-        return {
-            "version": self.policy.version,
-            "source_profiles": {key: {"market_scopes": list(value["market_scopes"])} for key, value in self.policy.source_profiles.items()},
-            "benchmark_defaults": dict(self.policy.benchmark_defaults),
-            "benchmark_overrides": sorted(self.policy.benchmark_overrides),
-        }
 
     @staticmethod
     def _evidence(items: Any) -> list[dict[str, Any]]:

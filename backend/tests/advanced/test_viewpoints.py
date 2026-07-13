@@ -1,8 +1,10 @@
 """RED contracts for immutable attributed viewpoints and frozen calibration."""
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import UTC, date, datetime
+from hashlib import sha256
 
 import pytest
 from fastapi import FastAPI, Request
@@ -67,58 +69,90 @@ def _create(service, **overrides):
     return service.create_viewpoint(**payload)
 
 
+def _policy_configuration(**overrides):
+    configuration = {
+        "version": "advanced_policy_v1",
+        "source_profiles": {"operator-research-v1": {"market_scopes": ["CN-A"]}},
+        "benchmark_defaults": {"stock": "000300.SH", "etf": "000300.SH", "index": "000001.SH"},
+        "benchmark_overrides": ["000300.SH", "000905.SH", "000852.SH"],
+        "agent_allowlist": {"research_draft": ["CN-A"], "experiment": ["CN-A"], "strategy_evaluation": ["CN-A"]},
+        "rate_limits": {"research_draft": 10, "experiment": 5, "strategy_evaluation": 5},
+    }
+    configuration.update(overrides)
+    return configuration
+
+
+def _canonical_sha256(snapshot):
+    payload = json.dumps(snapshot, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    return sha256(payload.encode()).hexdigest()
+
+
 def test_policy_facts_reuse_only_identical_content_fingerprints(tmp_path):
+    from app.advanced.policy import AdvancedPolicy
+
     repository, _viewpoint_service = _service(tmp_path)
+    original_policy = AdvancedPolicy.bootstrap("advanced_policy_v1")
+    changed_policy = AdvancedPolicy.bootstrap(_policy_configuration(rate_limits={"research_draft": 11, "experiment": 5, "strategy_evaluation": 5}))
 
     original = repository.record_policy_revision(
-        revision="advanced_policy_v1", fingerprint="a" * 64, snapshot={"quota_per_window": 5}
+        revision=original_policy.version, fingerprint=original_policy.fingerprint, snapshot=original_policy.snapshot()
     )
     changed = repository.record_policy_revision(
-        revision="advanced_policy_v1", fingerprint="b" * 64, snapshot={"quota_per_window": 10}
+        revision=changed_policy.version, fingerprint=changed_policy.fingerprint, snapshot=changed_policy.snapshot()
     )
     reused = repository.record_policy_revision(
-        revision="advanced_policy_v1", fingerprint="b" * 64, snapshot={"quota_per_window": 10}
+        revision=changed_policy.version, fingerprint=changed_policy.fingerprint, snapshot=changed_policy.snapshot()
     )
 
     assert changed["id"] != original["id"]
     assert reused["id"] == changed["id"]
-    assert reused["fingerprint"] == "b" * 64
+    assert reused["fingerprint"] == changed_policy.fingerprint
+    with pytest.raises(ValueError, match="does not match canonical snapshot"):
+        repository.record_policy_revision(
+            revision=original_policy.version,
+            fingerprint=original_policy.fingerprint,
+            snapshot=changed_policy.snapshot(),
+        )
 
 
-def test_viewpoint_versions_link_to_their_exact_policy_fingerprint(tmp_path):
+def test_viewpoint_policy_snapshots_are_complete_and_match_fingerprints(tmp_path):
     from app.advanced.policy import AdvancedPolicy
     from app.advanced.viewpoints import ViewpointService
 
     repository, default_service = _service(tmp_path)
-    original = _create(default_service)
-    changed_policy = AdvancedPolicy.bootstrap(
-        {
-            "version": "advanced_policy_v1",
-            "source_profiles": {"operator-research-v1": {"market_scopes": ["CN-A"]}},
-            "benchmark_defaults": {"stock": "000300.SH", "etf": "000300.SH", "index": "000001.SH"},
-            "benchmark_overrides": ["000300.SH", "000905.SH", "000852.SH"],
-            "agent_allowlist": {"research_draft": ["CN-A"], "experiment": ["CN-A"], "strategy_evaluation": ["CN-A"]},
-            "rate_limits": {"research_draft": 11, "experiment": 5, "strategy_evaluation": 5},
-        }
+    default = _create(default_service)
+    rate_policy = AdvancedPolicy.bootstrap(
+        _policy_configuration(rate_limits={"research_draft": 11, "experiment": 5, "strategy_evaluation": 5})
     )
-    changed_service = ViewpointService(repository=repository, policy=changed_policy)
-    changed = _create(changed_service, instrument="000001.SZ")
-    reused = _create(changed_service, instrument="000333.SZ")
+    rate_service = ViewpointService(repository=repository, policy=rate_policy)
+    rate_changed = _create(rate_service, instrument="000001.SZ")
+    rate_reused = _create(rate_service, instrument="000333.SZ")
+    allowlist_policy = AdvancedPolicy.bootstrap(
+        _policy_configuration(agent_allowlist={"research_draft": ["CN-A", "CN-HK"], "experiment": ["CN-A"], "strategy_evaluation": ["CN-A"]})
+    )
+    allowlist_service = ViewpointService(repository=repository, policy=allowlist_policy)
+    allowlist_changed = _create(allowlist_service, instrument="000858.SZ")
 
     with repository._connection() as connection:
         rows = connection.execute(
-            """SELECT version.id, policy.id AS policy_id, policy.fingerprint
+            """SELECT version.id, policy.id AS policy_id, policy.fingerprint, policy.snapshot_json
                FROM advanced_viewpoint_versions AS version
                JOIN advanced_policy_revisions AS policy ON policy.id = version.policy_revision_id
-               WHERE version.id IN (?, ?, ?)""",
-            (original["id"], changed["id"], reused["id"]),
+               WHERE version.id IN (?, ?, ?, ?)""",
+            (default["id"], rate_changed["id"], rate_reused["id"], allowlist_changed["id"]),
         ).fetchall()
     linked = {row["id"]: dict(row) for row in rows}
 
-    assert linked[original["id"]]["fingerprint"] == default_service.policy.fingerprint
-    assert linked[changed["id"]]["fingerprint"] == changed_policy.fingerprint
-    assert linked[changed["id"]]["policy_id"] != linked[original["id"]]["policy_id"]
-    assert linked[reused["id"]]["policy_id"] == linked[changed["id"]]["policy_id"]
+    for version, policy in ((default, default_service.policy), (rate_changed, rate_policy), (allowlist_changed, allowlist_policy)):
+        fact = linked[version["id"]]
+        snapshot = json.loads(fact["snapshot_json"])
+        assert snapshot == policy.snapshot()
+        assert _canonical_sha256(snapshot) == fact["fingerprint"] == policy.fingerprint
+    assert linked[rate_changed["id"]]["policy_id"] == linked[rate_reused["id"]]["policy_id"]
+    assert linked[rate_changed["id"]]["policy_id"] != linked[default["id"]]["policy_id"]
+    assert linked[allowlist_changed["id"]]["policy_id"] != linked[default["id"]]["policy_id"]
+    assert json.loads(linked[rate_changed["id"]]["snapshot_json"])["rate_limits"] == rate_policy.snapshot()["rate_limits"]
+    assert json.loads(linked[allowlist_changed["id"]]["snapshot_json"])["agent_allowlist"] == allowlist_policy.snapshot()["agent_allowlist"]
 
 
 def test_policy_fingerprint_migration_preserves_existing_viewpoint_attribution(tmp_path):
