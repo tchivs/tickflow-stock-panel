@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import sqlite3
+import pickle
 
 import pytest
 from fastapi import FastAPI, Request
@@ -46,6 +47,14 @@ def _service(tmp_path, runner=None):
     repository = AdvancedRepository(tmp_path / "operational.db")
     repository.migrate()
     return repository, ExperimentService(repository=repository, backtest_runner=runner or FakeGovernedBacktest())
+
+
+def test_strategy_backtest_collaborator_is_spawn_serializable_without_duckdb_connection(tmp_path):
+    from app.advanced.governed_runner import StrategyBacktestExperimentCollaborator
+
+    collaborator = StrategyBacktestExperimentCollaborator(data_dir=tmp_path)
+
+    assert pickle.loads(pickle.dumps(collaborator))._data_dir == str(tmp_path)
 
 
 def _specification(service, **overrides):

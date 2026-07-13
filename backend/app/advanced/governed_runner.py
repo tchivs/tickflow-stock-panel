@@ -13,6 +13,7 @@ from datetime import date
 from hashlib import sha256
 from queue import Empty
 from typing import Any, Protocol
+from pathlib import Path
 
 try:
     import resource
@@ -29,8 +30,30 @@ class ServerOwnedBacktestCollaborator(Protocol):
 class StrategyBacktestExperimentCollaborator:
     """Translate frozen specification metadata into the existing server-owned backtest API."""
 
-    def __init__(self, strategy_backtest_service: Any) -> None:
-        self._service = strategy_backtest_service
+    def __init__(self, *, data_dir: Path) -> None:
+        self._data_dir = str(data_dir)
+
+    def _service(self) -> Any:
+        """Rebuild non-pickleable governed data access inside the spawned worker."""
+        from app.backtest.engine import BacktestEngine
+        from app.backtest.strategy import StrategyBacktestService
+        from app.services.screener import ScreenerService
+        from app.strategy.engine import StrategyEngine
+        from app.tickflow.repository import DataStore, KlineRepository
+
+        store = DataStore(Path(self._data_dir))
+        repository = KlineRepository(store)
+        screener = ScreenerService(repository)
+        strategy_engine = StrategyEngine(
+            enriched_loader=screener._load_enriched_for_date,
+            enriched_history_loader=screener._load_enriched_history,
+            strategy_dirs=[
+                Path(__file__).resolve().parents[1] / "strategy" / "builtin",
+                Path(self._data_dir) / "strategies" / "custom",
+                Path(self._data_dir) / "strategies" / "ai",
+            ],
+        )
+        return StrategyBacktestService(BacktestEngine(repository), strategy_engine)
 
     def run(self, *, specification: dict[str, object]) -> dict[str, object]:
         from app.backtest.strategy import StrategyBacktestConfig
@@ -55,7 +78,7 @@ class StrategyBacktestExperimentCollaborator:
             mode="full",
             asset_type=str(scope.get("asset_type", "stock")),
         )
-        result = self._service.run(config)
+        result = self._service().run(config)
         if result.error:
             raise ValueError("governed backtest could not complete")
         metrics = {

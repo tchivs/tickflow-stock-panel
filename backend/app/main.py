@@ -440,9 +440,7 @@ async def lifespan(app: FastAPI):
     app.state.experiment_service = ExperimentService(
         repository=advanced_repository,
         backtest_runner=GovernedExperimentRunner(
-            collaborator=StrategyBacktestExperimentCollaborator(
-                StrategyBacktestService(app.state.backtest_engine, strategy_engine)
-            )
+            collaborator=StrategyBacktestExperimentCollaborator(data_dir=store.data_dir)
         ),
     )
 
