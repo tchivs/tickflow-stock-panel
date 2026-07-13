@@ -237,8 +237,8 @@ def namespace(name):
         return ''
 
 try:
-    mount('--make-rprivate', '/')
-    root_ok = mount('-t', 'tmpfs', '-o', 'size=1m,nosuid,nodev,noexec', 'tmpfs', root)
+    private_tree = mount('--make-rprivate', '/')
+    root_ok = private_tree and mount('-t', 'tmpfs', '-o', 'size=1m,nosuid,nodev,noexec', 'tmpfs', root)
     os.makedirs(root + '/input', mode=0o700, exist_ok=True)
     os.makedirs(root + '/work', mode=0o700, exist_ok=True)
     input_ok = root_ok and mount('--bind', governed, root + '/input') and mount('-o', 'remount,bind,ro', root + '/input')
@@ -283,22 +283,74 @@ except Exception:
 
     @staticmethod
     def _bootstrap_script() -> str:
-        return """import os, sys
+        return """import os, subprocess, sys
 root, source, governed, work = sys.argv[1:]
-for path in ('/usr', '/lib', '/lib64'):
-    if os.path.exists(path):
-        target = root + path
-        os.makedirs(target, exist_ok=True)
-        os.system('/bin/mount --bind ' + path + ' ' + target)
-        os.system('/bin/mount -o remount,bind,ro ' + target)
-os.makedirs(root + '/input', exist_ok=True); os.makedirs(root + '/work', exist_ok=True)
-os.system('/bin/mount --bind ' + source + ' ' + root + '/input/strategy.py')
-os.system('/bin/mount -o remount,bind,ro ' + root + '/input/strategy.py')
-os.system('/bin/mount --bind ' + governed + ' ' + root + '/input/governed')
-os.system('/bin/mount -o remount,bind,ro ' + root + '/input/governed')
-os.system('/bin/mount --bind ' + work + ' ' + root + '/work')
-os.chroot(root); os.chdir('/work')
-os.execve('/usr/bin/python3', ['/usr/bin/python3', '/input/strategy.py'], {'PATH': '/usr/bin:/bin', 'PYTHONNOUSERSITE': '1', 'PYTHONDONTWRITEBYTECODE': '1'})
+del work
+
+def mount(*args):
+    completed = subprocess.run(['/bin/mount', *args], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if completed.returncode != 0:
+        raise OSError('sandbox mount setup failed')
+
+def make_file(path):
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o400)
+    os.close(descriptor)
+
+def isolated_topology(root):
+    try:
+        with open('/proc/self/mountinfo', encoding='utf-8') as handle:
+            mountinfo = handle.readlines()
+    except OSError:
+        return False
+    entries = {}
+    for line in mountinfo:
+        before, separator, after = line.partition(' - ')
+        fields = before.split()
+        if not separator or len(fields) < 6 or fields[4] not in (root, root + '/input', root + '/strategy.py', root + '/work'):
+            continue
+        entries[fields[4]] = (fields, after.split())
+    if set(entries) != {root, root + '/input', root + '/strategy.py', root + '/work'}:
+        return False
+    root_fields, _ = entries[root]
+    input_fields, _ = entries[root + '/input']
+    source_fields, _ = entries[root + '/strategy.py']
+    work_fields, work_filesystem = entries[root + '/work']
+    propagation = root_fields[6:]
+    return (
+        os.path.ismount(root)
+        and 'ro' in root_fields[5].split(',')
+        and 'ro' in input_fields[5].split(',')
+        and 'ro' in source_fields[5].split(',')
+        and 'rw' in work_fields[5].split(',')
+        and work_filesystem[:1] == ['tmpfs']
+        and not any(value.startswith(('shared:', 'master:', 'propagate_from:')) for value in propagation)
+    )
+
+try:
+    mount('--make-rprivate', '/')
+    mount('-t', 'tmpfs', '-o', 'size=1m,nosuid,nodev,noexec', 'tmpfs', root)
+    os.makedirs(root + '/input', mode=0o700, exist_ok=True)
+    os.makedirs(root + '/work', mode=0o700, exist_ok=True)
+    mount('--bind', governed, root + '/input')
+    mount('-o', 'remount,bind,ro', root + '/input')
+    mount('-t', 'tmpfs', '-o', 'size=512k,nosuid,nodev,noexec', 'tmpfs', root + '/work')
+    make_file(root + '/strategy.py')
+    mount('--bind', source, root + '/strategy.py')
+    mount('-o', 'remount,bind,ro', root + '/strategy.py')
+    for path in ('/usr', '/lib', '/lib64'):
+        if os.path.exists(path):
+            target = root + path
+            os.makedirs(target, exist_ok=True)
+            mount('--bind', path, target)
+            mount('-o', 'remount,bind,ro', target)
+    mount('-o', 'remount,ro', root)
+    if not isolated_topology(root):
+        raise OSError('sandbox root topology verification failed')
+    os.chroot(root)
+    os.chdir('/work')
+    os.execve('/usr/bin/python3', ['/usr/bin/python3', '/strategy.py'], {'PATH': '/usr/bin:/bin', 'PYTHONNOUSERSITE': '1', 'PYTHONDONTWRITEBYTECODE': '1'})
+except Exception:
+    raise SystemExit(126)
 """
 
 

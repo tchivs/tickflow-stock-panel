@@ -203,7 +203,7 @@ class _BootstrapExecveReached(BaseException):
     """Sentinel proving the bootstrap reached execve without running a child."""
 
 
-def _bootstrap_state(monkeypatch, *, failed_mount: int | None = None) -> dict[str, object]:
+def _bootstrap_state(monkeypatch, *, failed_mount: int | None = None, mountinfo: str | None = None) -> dict[str, object]:
     from app.advanced.sandbox import LinuxIsolationLauncher
 
     root = "/sandbox/root"
@@ -219,7 +219,15 @@ def _bootstrap_state(monkeypatch, *, failed_mount: int | None = None) -> dict[st
         execve_calls.append(args)
         raise _BootstrapExecveReached()
 
-    mountinfo = f"42 1 0:42 / {root} ro - tmpfs tmpfs rw\n"
+    if mountinfo is None:
+        mountinfo = "\n".join(
+            (
+                f"42 1 0:42 / {root} ro - tmpfs tmpfs rw",
+                f"43 42 0:43 /governed {root}/input ro - ext4 /dev/loop0 rw",
+                f"44 42 0:44 /source.py {root}/strategy.py ro - ext4 /dev/loop0 rw",
+                f"45 42 0:45 / {root}/work rw - tmpfs tmpfs rw",
+            )
+        )
     monkeypatch.setattr("app.advanced.sandbox.subprocess.run", fake_mount)
     monkeypatch.setattr("app.advanced.sandbox.os.makedirs", lambda *_args, **_kwargs: None)
     monkeypatch.setattr("app.advanced.sandbox.os.open", lambda *_args, **_kwargs: 9)
@@ -287,6 +295,27 @@ def test_linux_bootstrap_executes_only_after_private_read_only_topology_is_verif
             {"PATH": "/usr/bin:/bin", "PYTHONNOUSERSITE": "1", "PYTHONDONTWRITEBYTECODE": "1"},
         )
     ]
+
+
+def test_linux_bootstrap_rejects_shared_or_non_read_only_root_topology_before_execve(monkeypatch):
+    root = "/sandbox/root"
+    shared_root_mountinfo = "\n".join(
+        (
+            f"42 1 0:42 / {root} ro shared:1 - tmpfs tmpfs rw",
+            f"43 42 0:43 /governed {root}/input ro - ext4 /dev/loop0 rw",
+            f"44 42 0:44 /source.py {root}/strategy.py ro - ext4 /dev/loop0 rw",
+            f"45 42 0:45 / {root}/work rw - tmpfs tmpfs rw",
+        )
+    )
+    state = _bootstrap_state(monkeypatch, mountinfo=shared_root_mountinfo)
+    monkeypatch.setattr("app.advanced.sandbox.sys.argv", ["bootstrap", root, "/source.py", "/governed", "/work"])
+
+    with pytest.raises(SystemExit) as failure:
+        exec(state["script"], state["namespace"])
+
+    assert failure.value.code == 126
+    assert state["execve_calls"] == []
+    assert state["chroot_calls"] == []
 
 def test_sandbox_validation_persists_immutable_parent_asset_lineage(tmp_path):
     from app.advanced.repository import AdvancedRepository
