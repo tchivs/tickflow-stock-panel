@@ -227,6 +227,38 @@ def test_sandbox_validation_persists_immutable_parent_asset_lineage(tmp_path):
         )
 
 
+def test_existing_operational_database_upgrades_sandbox_lineage_once_without_losing_rows(tmp_path):
+    from app.operational.migrations import MIGRATIONS, migrate_operational_db
+
+    database = tmp_path / "operational.db"
+    connection = sqlite3.connect(database)
+    connection.execute("PRAGMA foreign_keys = ON")
+    for migration in MIGRATIONS[:-1]:
+        connection.executescript(migration)
+    connection.execute(f"PRAGMA user_version = {len(MIGRATIONS) - 1}")
+    connection.execute(
+        "INSERT INTO advanced_security_audit (id, reference, decision, reason, created_at) VALUES (?, ?, ?, ?, ?)",
+        ("audit-id", "audit-reference", "recorded", "sandbox_completed", "2026-01-01T00:00:00+00:00"),
+    )
+    connection.execute(
+        """INSERT INTO advanced_sandbox_validations
+           (id, contract_fingerprint, source_sha256, status, reason, audit_reference, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        ("validation-id", "contract", "a" * 64, "validated", "completed", "audit-reference", "2026-01-01T00:00:00+00:00"),
+    )
+    connection.commit()
+
+    migrate_operational_db(connection)
+    migrate_operational_db(connection)
+
+    row = connection.execute(
+        "SELECT source_sha256, parent_asset_id FROM advanced_sandbox_validations WHERE id = ?", ("validation-id",)
+    ).fetchone()
+    assert row == ("a" * 64, "")
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == len(MIGRATIONS)
+    connection.close()
+
+
 @pytest.mark.parametrize(
     ("launcher_outcome", "expected_reason"),
     [
