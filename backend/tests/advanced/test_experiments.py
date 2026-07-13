@@ -117,6 +117,58 @@ def test_strategy_backtest_collaborator_derives_split_evidence_from_distinct_gov
     assert split["out_of_sample"]["metrics"] == {"sharpe": 2.2}
     assert split["out_of_sample"]["evaluation"]["run_id"] == "governed-window-3"
 
+
+def test_strategy_backtest_collaborator_prepares_parent_frozen_panels_and_child_consumes_them(tmp_path, monkeypatch):
+    from app.advanced.governed_runner import StrategyBacktestExperimentCollaborator
+
+    class ParentBacktest:
+        def __init__(self) -> None:
+            self.frozen_scopes: list[dict[str, object]] = []
+
+        def freeze_panel_artifact(self, config, store):
+            self.frozen_scopes.append({"start": config.start.isoformat(), "end": config.end.isoformat()})
+            return {"artifact_id": f"artifact-{len(self.frozen_scopes)}", "scope_checksum": "a" * 64}
+
+    class ChildBacktest:
+        def __init__(self) -> None:
+            self.artifact_references: list[object] = []
+
+        def run(self, config):
+            self.artifact_references.append(config.frozen_panel_artifact)
+            index = len(self.artifact_references)
+            return SimpleNamespace(
+                run_id=f"frozen-window-{index}",
+                config={"params": config.params},
+                stats={"sharpe": float(index)},
+                error=None,
+                governed_input_manifest={"fingerprint": f"frozen-fingerprint-{index}"},
+            )
+
+    parent, child = ParentBacktest(), ChildBacktest()
+    collaborator = StrategyBacktestExperimentCollaborator(data_dir=tmp_path)
+    monkeypatch.setattr(collaborator, "_service", lambda: parent)
+    prepared = collaborator.prepare(specification={
+        "research_asset_id": "strategy-parent-v4",
+        "data_scope": {
+            "strategy_id": "momentum_breakout", "start": "2024-01-01", "end": "2024-12-31",
+            "symbols": ["600000.SH"], "asset_type": "stock", "parameters": {"lookback": 20},
+        },
+    })
+    monkeypatch.setattr(collaborator, "_service", lambda: child)
+
+    collaborator.run(specification=prepared)
+
+    assert parent.frozen_scopes == [
+        {"start": "2024-01-01", "end": "2024-12-31"},
+        {"start": "2024-01-01", "end": "2024-07-01"},
+        {"start": "2024-07-02", "end": "2024-12-31"},
+    ]
+    assert child.artifact_references == [
+        {"artifact_id": "artifact-1", "scope_checksum": "a" * 64},
+        {"artifact_id": "artifact-2", "scope_checksum": "a" * 64},
+        {"artifact_id": "artifact-3", "scope_checksum": "a" * 64},
+    ]
+
 def _specification(service, **overrides):
     payload = {
         "research_asset_id": "factor-value-v7",
