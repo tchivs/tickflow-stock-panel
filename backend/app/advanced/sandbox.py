@@ -334,19 +334,19 @@ class CustomStrategySandboxService:
         try:
             contract = self._contract(payload)
         except (TypeError, ValidationError, ValueError):
-            return self._reject("contract_invalid", source_hash=source_hash, contract_fingerprint="invalid")
+            return self._reject("contract_invalid", source_hash=source_hash, contract_fingerprint="invalid", parent_asset_id="")
         if source_hash != contract.source_sha256:
-            return self._reject("source_hash_mismatch", source_hash=source_hash, contract_fingerprint=self._fingerprint(contract))
+            return self._reject("source_hash_mismatch", source_hash=source_hash, contract_fingerprint=self._fingerprint(contract), parent_asset_id=contract.parent_asset_id)
         reason = self._validate_ast(source, contract)
         if reason is not None:
-            return self._reject(reason, source_hash=source_hash, contract_fingerprint=self._fingerprint(contract))
+            return self._reject(reason, source_hash=source_hash, contract_fingerprint=self._fingerprint(contract), parent_asset_id=contract.parent_asset_id)
 
         workdir = Path(tempfile.mkdtemp(prefix="advanced-sandbox-"))
         try:
             if not self._probe_is_affirmative(workdir):
-                return self._reject("isolation_unavailable", source_hash=source_hash, contract_fingerprint=self._fingerprint(contract))
+                return self._reject("isolation_unavailable", source_hash=source_hash, contract_fingerprint=self._fingerprint(contract), parent_asset_id=contract.parent_asset_id)
             if not getattr(self._launcher, "terminal_outcome_contract", False) and not hasattr(self._launcher, "runtime_outcome"):
-                return self._reject("isolation_unavailable", source_hash=source_hash, contract_fingerprint=self._fingerprint(contract))
+                return self._reject("isolation_unavailable", source_hash=source_hash, contract_fingerprint=self._fingerprint(contract), parent_asset_id=contract.parent_asset_id)
             source_path = workdir / "strategy.py"
             source_path.write_text(source, encoding="utf-8")
             source_path.chmod(0o400)
@@ -367,10 +367,12 @@ class CustomStrategySandboxService:
                         self._runtime_reason(reported),
                         source_hash=source_hash,
                         contract_fingerprint=self._fingerprint(contract),
+                        parent_asset_id=contract.parent_asset_id,
                         output=reported.get("output", ""),
                     )
-                return self._reject("isolation_unavailable", source_hash=source_hash, contract_fingerprint=self._fingerprint(contract))
+                return self._reject("isolation_unavailable", source_hash=source_hash, contract_fingerprint=self._fingerprint(contract), parent_asset_id=contract.parent_asset_id)
             validation = self._repository.append_sandbox_validation(
+                parent_asset_id=contract.parent_asset_id,
                 contract_fingerprint=self._fingerprint(contract),
                 source_sha256=source_hash,
                 status="validated" if outcome.get("status") == "completed" else "constraint_failed",
@@ -388,7 +390,7 @@ class CustomStrategySandboxService:
             )
             return self.public_run(str(run["id"]))
         except OSError:
-            return self._reject("isolation_unavailable", source_hash=source_hash, contract_fingerprint=self._fingerprint(contract))
+            return self._reject("isolation_unavailable", source_hash=source_hash, contract_fingerprint=self._fingerprint(contract), parent_asset_id=contract.parent_asset_id)
         finally:
             self._temporary_handoffs.clear()
             shutil.rmtree(workdir, ignore_errors=True)
@@ -418,9 +420,10 @@ class CustomStrategySandboxService:
     def temporary_handoffs(self) -> list[Path]:
         return list(self._temporary_handoffs)
 
-    def _reject(self, reason: str, *, source_hash: str, contract_fingerprint: str, output: object = "") -> dict[str, object]:
+    def _reject(self, reason: str, *, source_hash: str, contract_fingerprint: str, parent_asset_id: str, output: object = "") -> dict[str, object]:
         audit = self._repository.append_security_audit(decision="rejected", reason=reason)
         validation = self._repository.append_sandbox_validation(
+            parent_asset_id=parent_asset_id,
             contract_fingerprint=contract_fingerprint,
             source_sha256=source_hash,
             status="rejected",

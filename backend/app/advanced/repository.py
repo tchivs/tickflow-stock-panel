@@ -180,12 +180,21 @@ class AdvancedRepository:
             rows = connection.execute("SELECT * FROM advanced_security_audit ORDER BY rowid").fetchall()
         return [dict(row) for row in rows]
 
-    def append_sandbox_validation(self, *, contract_fingerprint: str, source_sha256: str, status: str, reason: str, audit_reference: str) -> dict[str, Any]:
+    def append_sandbox_validation(
+        self,
+        *,
+        parent_asset_id: str,
+        contract_fingerprint: str,
+        source_sha256: str,
+        status: str,
+        reason: str,
+        audit_reference: str,
+    ) -> dict[str, Any]:
         identifier = str(uuid4())
         with self._connection() as connection, connection:
             connection.execute(
-                "INSERT INTO advanced_sandbox_validations (id, contract_fingerprint, source_sha256, status, reason, audit_reference, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (identifier, contract_fingerprint, source_sha256, status, reason, audit_reference, self.now()),
+                "INSERT INTO advanced_sandbox_validations (id, parent_asset_id, contract_fingerprint, source_sha256, status, reason, audit_reference, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (identifier, parent_asset_id, contract_fingerprint, source_sha256, status, reason, audit_reference, self.now()),
             )
             row = connection.execute("SELECT * FROM advanced_sandbox_validations WHERE id = ?", (identifier,)).fetchone()
         assert row is not None
@@ -232,7 +241,13 @@ class AdvancedRepository:
 
     def get_sandbox_run(self, run_id: str) -> dict[str, Any] | None:
         with self._connection() as connection:
-            row = connection.execute("SELECT * FROM advanced_sandbox_runs WHERE id = ?", (run_id,)).fetchone()
+            row = connection.execute(
+                """SELECT run.*, validation.parent_asset_id, validation.audit_reference
+                   FROM advanced_sandbox_runs AS run
+                   JOIN advanced_sandbox_validations AS validation ON validation.id = run.validation_id
+                   WHERE run.id = ?""",
+                (run_id,),
+            ).fetchone()
         return None if row is None else self._sandbox_run(dict(row))
 
     @staticmethod

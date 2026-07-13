@@ -663,6 +663,14 @@ MIGRATIONS: tuple[str, ...] = (
     ALTER TABLE advanced_experiment_specs ADD COLUMN owner_principal TEXT NOT NULL DEFAULT '';
     CREATE INDEX idx_advanced_experiment_specs_owner ON advanced_experiment_specs(owner_principal, created_at DESC);
     """,
+    """
+    -- Sandbox validation lineage is immutable. The parent asset remains an opaque
+    -- server-authorized identifier; validation-to-run foreign keys already enforce
+    -- the durable relation between this fact and every terminal run.
+    ALTER TABLE advanced_sandbox_validations ADD COLUMN parent_asset_id TEXT NOT NULL DEFAULT '';
+    CREATE INDEX idx_advanced_sandbox_validations_parent_created
+    ON advanced_sandbox_validations(parent_asset_id, created_at DESC);
+    """,
 )
 
 
