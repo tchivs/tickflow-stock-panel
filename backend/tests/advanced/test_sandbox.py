@@ -49,6 +49,21 @@ class FakeLauncher:
         self.spawned.append(kwargs)
 
 
+class TerminalLauncher(FakeLauncher):
+    terminal_outcome_contract = True
+
+    def spawn(self, **kwargs: object) -> dict[str, object]:
+        self.spawned.append(kwargs)
+        return {
+            "status": "completed",
+            "terminal_reason": None,
+            "proof_fingerprint": "safe-proof",
+            "resources": {"wall_clock_seconds": 5, "memory_limit_mb": 128},
+            "stdout": "must never leave the service",
+            "workdir_path": "/private/sandbox/work",
+        }
+
+
 def _submission(source: str = SOURCE, **contract_overrides: object) -> dict[str, object]:
     source_sha256 = sha256(source.encode()).hexdigest()
     contract = {
@@ -277,3 +292,59 @@ def test_sandbox_api_uses_strict_submission_and_returns_only_safe_validation(tmp
     assert validation["status"] == "rejected"
     assert validation["source_sha256"] == sha256(SOURCE.encode()).hexdigest()
     assert {"source", "code", "path", "diagnostic", "token"}.isdisjoint(response.text.lower())
+
+
+def test_authorized_sandbox_run_api_lists_safe_terminal_records_without_cross_asset_disclosure(tmp_path):
+    from app.advanced import api as advanced_api
+    from app.advanced.sandbox import CustomStrategySandboxService
+
+    launcher = TerminalLauncher()
+    service = CustomStrategySandboxService(
+        audit_path=tmp_path / "operational.db",
+        governed_input=tmp_path / "governed-panel",
+        launcher=launcher,
+    )
+    completed = service.submit(_submission())
+    audit = service._repository.append_security_audit(decision="recorded", reason="sandbox_completed")
+    other_validation = service._repository.append_sandbox_validation(
+        parent_asset_id="other-research-asset",
+        contract_fingerprint="other-contract",
+        source_sha256="b" * 64,
+        status="constraint_failed",
+        reason="timeout_exceeded",
+        audit_reference=audit["reference"],
+    )
+    other_run = service._repository.append_sandbox_run(
+        validation_id=other_validation["id"],
+        runner_manifest={"status": "failed", "resources": {"memory_limit_mb": 128}, "stderr": "secret"},
+        terminal_reason="timeout_exceeded",
+        artifact_reference="internal-artifact",
+    )
+    app = FastAPI()
+    app.include_router(advanced_api.router)
+    app.state.advanced_sandbox_service = service
+    app.state.resolve_advanced_research_asset = lambda _request, asset_id: asset_id == "registered-research-asset-v1"
+
+    @app.middleware("http")
+    async def authenticated(request: Request, call_next):
+        request.state.reviewer_principal = "server-researcher"
+        return await call_next(request)
+
+    client = TestClient(app)
+    listed = client.get("/api/advanced/sandbox/runs")
+    detail = client.get(f"/api/advanced/sandbox/runs/{completed['run_id']}")
+    forbidden = client.get(f"/api/advanced/sandbox/runs/{other_run['id']}")
+
+    assert listed.status_code == detail.status_code == 200
+    assert forbidden.status_code == 404
+    assert listed.json() == {"runs": [detail.json()["run"]]}
+    assert detail.json()["run"] == {
+        "run_id": completed["run_id"],
+        "status": "completed",
+        "terminal_reason": None,
+        "proof_fingerprint": "safe-proof",
+        "resources": {"wall_clock_seconds": 5, "memory_limit_mb": 128},
+        "audit_reference": detail.json()["run"]["audit_reference"],
+        "created_at": detail.json()["run"]["created_at"],
+    }
+    assert {"source", "code", "path", "environment", "stdout", "stderr", "traceback", "token"}.isdisjoint(detail.text.lower())
