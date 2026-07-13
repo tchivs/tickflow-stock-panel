@@ -67,6 +67,100 @@ def _create(service, **overrides):
     return service.create_viewpoint(**payload)
 
 
+def test_policy_facts_reuse_only_identical_content_fingerprints(tmp_path):
+    repository, _viewpoint_service = _service(tmp_path)
+
+    original = repository.record_policy_revision(
+        revision="advanced_policy_v1", fingerprint="a" * 64, snapshot={"quota_per_window": 5}
+    )
+    changed = repository.record_policy_revision(
+        revision="advanced_policy_v1", fingerprint="b" * 64, snapshot={"quota_per_window": 10}
+    )
+    reused = repository.record_policy_revision(
+        revision="advanced_policy_v1", fingerprint="b" * 64, snapshot={"quota_per_window": 10}
+    )
+
+    assert changed["id"] != original["id"]
+    assert reused["id"] == changed["id"]
+    assert reused["fingerprint"] == "b" * 64
+
+
+def test_viewpoint_versions_link_to_their_exact_policy_fingerprint(tmp_path):
+    from app.advanced.policy import AdvancedPolicy
+    from app.advanced.viewpoints import ViewpointService
+
+    repository, default_service = _service(tmp_path)
+    original = _create(default_service)
+    changed_policy = AdvancedPolicy.bootstrap(
+        {
+            "version": "advanced_policy_v1",
+            "source_profiles": {"operator-research-v1": {"market_scopes": ["CN-A"]}},
+            "benchmark_defaults": {"stock": "000300.SH", "etf": "000300.SH", "index": "000001.SH"},
+            "benchmark_overrides": ["000300.SH", "000905.SH", "000852.SH"],
+            "agent_allowlist": {"research_draft": ["CN-A"], "experiment": ["CN-A"], "strategy_evaluation": ["CN-A"]},
+            "rate_limits": {"research_draft": 11, "experiment": 5, "strategy_evaluation": 5},
+        }
+    )
+    changed_service = ViewpointService(repository=repository, policy=changed_policy)
+    changed = _create(changed_service, instrument="000001.SZ")
+    reused = _create(changed_service, instrument="000333.SZ")
+
+    with repository._connection() as connection:
+        rows = connection.execute(
+            """SELECT version.id, policy.id AS policy_id, policy.fingerprint
+               FROM advanced_viewpoint_versions AS version
+               JOIN advanced_policy_revisions AS policy ON policy.id = version.policy_revision_id
+               WHERE version.id IN (?, ?, ?)""",
+            (original["id"], changed["id"], reused["id"]),
+        ).fetchall()
+    linked = {row["id"]: dict(row) for row in rows}
+
+    assert linked[original["id"]]["fingerprint"] == default_service.policy.fingerprint
+    assert linked[changed["id"]]["fingerprint"] == changed_policy.fingerprint
+    assert linked[changed["id"]]["policy_id"] != linked[original["id"]]["policy_id"]
+    assert linked[reused["id"]]["policy_id"] == linked[changed["id"]]["policy_id"]
+
+
+def test_policy_fingerprint_migration_preserves_existing_viewpoint_attribution(tmp_path):
+    from app.operational.migrations import MIGRATIONS, migrate_operational_db
+
+    database = tmp_path / "operational.db"
+    connection = sqlite3.connect(database)
+    connection.execute("PRAGMA foreign_keys = ON")
+    for migration in MIGRATIONS[:-1]:
+        connection.executescript(migration)
+    connection.execute(f"PRAGMA user_version = {len(MIGRATIONS) - 1}")
+    connection.executescript(
+        """
+        INSERT INTO advanced_policy_revisions (id, revision, fingerprint, snapshot_json, created_at)
+        VALUES ('policy-v1', 'advanced_policy_v1', 'a', '{}', '2026-01-01T00:00:00+00:00');
+        INSERT INTO advanced_viewpoints (id, source_profile, market_scope, instrument, created_at)
+        VALUES ('viewpoint-v1', 'operator-research-v1', 'CN-A', '600519.SH', '2026-01-01T00:00:00+00:00');
+        INSERT INTO advanced_viewpoint_versions
+        (id, viewpoint_id, version, policy_revision_id, asset_type, published_at, direction, rating, conclusion,
+         target_low, target_high, horizon_days, confidence, revision_kind, correction_reason,
+         evaluation_window_days, benchmark, metric, created_at)
+        VALUES ('version-v1', 'viewpoint-v1', 1, 'policy-v1', 'stock', '2026-01-01T00:00:00+00:00', 'bullish', 'overweight', 'original',
+                1500, 1650, 60, 'high', 'initial', NULL, 60, '000300.SH', 'relative_return', '2026-01-01T00:00:00+00:00');
+        """
+    )
+    migrate_operational_db(connection)
+
+    linked = connection.execute(
+        """SELECT policy.id, policy.fingerprint
+           FROM advanced_viewpoint_versions AS version
+           JOIN advanced_policy_revisions AS policy ON policy.id = version.policy_revision_id
+           WHERE version.id = 'version-v1'"""
+    ).fetchone()
+    connection.execute(
+        """INSERT INTO advanced_policy_revisions (id, revision, fingerprint, snapshot_json, created_at)
+           VALUES ('policy-v2', 'advanced_policy_v1', 'b', '{"quota_per_window":10}', '2026-01-02T00:00:00+00:00')"""
+    )
+
+    assert linked == ("policy-v1", "a")
+    assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+    connection.close()
+
 def test_viewpoint_versions_evidence_and_frozen_evaluation_plans_are_append_only(tmp_path):
     repository, service = _service(tmp_path)
     first = _create(service)

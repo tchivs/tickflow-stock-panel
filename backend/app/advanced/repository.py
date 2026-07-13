@@ -48,17 +48,13 @@ class AdvancedRepository:
     def record_policy_revision(self, *, revision: str, fingerprint: str, snapshot: Mapping[str, Any]) -> dict[str, Any]:
         identifier = str(uuid4())
         with self._connection() as connection, connection:
-            try:
-                connection.execute(
-                    "INSERT INTO advanced_policy_revisions (id, revision, fingerprint, snapshot_json, created_at) VALUES (?, ?, ?, ?, ?)",
-                    (identifier, revision, fingerprint, _json(snapshot, "policy snapshot"), self.now()),
-                )
-            except sqlite3.IntegrityError as error:
-                row = connection.execute("SELECT * FROM advanced_policy_revisions WHERE fingerprint = ?", (fingerprint,)).fetchone()
-                if row is None:
-                    raise ValueError("advanced policy revision conflict") from error
-                return self._policy_row(row)
-            row = connection.execute("SELECT * FROM advanced_policy_revisions WHERE id = ?", (identifier,)).fetchone()
+            connection.execute(
+                """INSERT INTO advanced_policy_revisions (id, revision, fingerprint, snapshot_json, created_at)
+                   VALUES (?, ?, ?, ?, ?)
+                   ON CONFLICT(fingerprint) DO NOTHING""",
+                (identifier, revision, fingerprint, _json(snapshot, "policy snapshot"), self.now()),
+            )
+            row = connection.execute("SELECT * FROM advanced_policy_revisions WHERE fingerprint = ?", (fingerprint,)).fetchone()
         assert row is not None
         return self._policy_row(row)
 
@@ -385,18 +381,17 @@ class AdvancedRepository:
         """Append the next immutable viewpoint version and its evidence atomically."""
         version_id = str(uuid4())
         with self._connection() as connection, connection:
+            connection.execute(
+                """INSERT INTO advanced_policy_revisions (id, revision, fingerprint, snapshot_json, created_at)
+                   VALUES (?, ?, ?, ?, ?)
+                   ON CONFLICT(fingerprint) DO NOTHING""",
+                (str(uuid4()), policy_revision, policy_fingerprint, _json(policy_snapshot, "policy snapshot"), self.now()),
+            )
             policy = connection.execute(
-                "SELECT * FROM advanced_policy_revisions WHERE fingerprint = ? OR revision = ? ORDER BY created_at LIMIT 1",
-                (policy_fingerprint, policy_revision),
+                "SELECT id FROM advanced_policy_revisions WHERE fingerprint = ?", (policy_fingerprint,)
             ).fetchone()
-            if policy is None:
-                policy_id = str(uuid4())
-                connection.execute(
-                    "INSERT INTO advanced_policy_revisions (id, revision, fingerprint, snapshot_json, created_at) VALUES (?, ?, ?, ?, ?)",
-                    (policy_id, policy_revision, policy_fingerprint, _json(policy_snapshot, "policy snapshot"), self.now()),
-                )
-            else:
-                policy_id = policy["id"]
+            assert policy is not None
+            policy_id = policy["id"]
             existing = connection.execute(
                 "SELECT source_profile, market_scope, instrument FROM advanced_viewpoints WHERE id = ?", (viewpoint_id,)
             ).fetchone()

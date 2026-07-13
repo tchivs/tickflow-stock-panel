@@ -395,7 +395,7 @@ MIGRATIONS: tuple[str, ...] = (
     -- advanced_jobs is the sole execution cursor with an explicitly guarded update path.
     CREATE TABLE advanced_policy_revisions (
         id TEXT PRIMARY KEY,
-        revision TEXT NOT NULL UNIQUE,
+        revision TEXT NOT NULL,
         fingerprint TEXT NOT NULL UNIQUE,
         snapshot_json TEXT NOT NULL,
         created_at TEXT NOT NULL
@@ -670,6 +670,28 @@ MIGRATIONS: tuple[str, ...] = (
     ALTER TABLE advanced_sandbox_validations ADD COLUMN parent_asset_id TEXT NOT NULL DEFAULT '';
     CREATE INDEX idx_advanced_sandbox_validations_parent_created
     ON advanced_sandbox_validations(parent_asset_id, created_at DESC);
+    """,
+    """
+    -- A deployment policy version is descriptive, not a unique fact identity. Rebuild
+    -- the fact table so the immutable content fingerprint is the sole reuse key.
+    PRAGMA foreign_keys = OFF;
+    CREATE TABLE advanced_policy_revisions_rebuilt (
+        id TEXT PRIMARY KEY,
+        revision TEXT NOT NULL,
+        fingerprint TEXT NOT NULL UNIQUE,
+        snapshot_json TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    );
+    INSERT INTO advanced_policy_revisions_rebuilt (id, revision, fingerprint, snapshot_json, created_at)
+    SELECT id, revision, fingerprint, snapshot_json, created_at
+    FROM advanced_policy_revisions;
+    DROP TABLE advanced_policy_revisions;
+    ALTER TABLE advanced_policy_revisions_rebuilt RENAME TO advanced_policy_revisions;
+    CREATE TRIGGER advanced_policy_revisions_no_update BEFORE UPDATE ON advanced_policy_revisions
+    BEGIN SELECT RAISE(ABORT, 'advanced facts are immutable'); END;
+    CREATE TRIGGER advanced_policy_revisions_no_delete BEFORE DELETE ON advanced_policy_revisions
+    BEGIN SELECT RAISE(ABORT, 'advanced facts are immutable'); END;
+    PRAGMA foreign_keys = ON;
     """,
 )
 
