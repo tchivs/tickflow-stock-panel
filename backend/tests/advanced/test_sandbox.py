@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import io
 import sqlite3
 from dataclasses import dataclass, field
 from hashlib import sha256
@@ -197,6 +198,96 @@ def test_linux_probe_rejects_legacy_boolean_claims_without_observable_evidence(t
     assert proof == {field: False for field in _PROBE_FIELDS}
 
 
+
+class _BootstrapExecveReached(BaseException):
+    """Sentinel proving the bootstrap reached execve without running a child."""
+
+
+def _bootstrap_state(monkeypatch, *, failed_mount: int | None = None) -> dict[str, object]:
+    from app.advanced.sandbox import LinuxIsolationLauncher
+
+    root = "/sandbox/root"
+    mount_calls: list[tuple[str, ...]] = []
+    execve_calls: list[tuple[object, ...]] = []
+    chroot_calls: list[str] = []
+
+    def fake_mount(command, **_kwargs):
+        mount_calls.append(tuple(command))
+        return SimpleNamespace(returncode=int(failed_mount == len(mount_calls)))
+
+    def fake_execve(*args):
+        execve_calls.append(args)
+        raise _BootstrapExecveReached()
+
+    mountinfo = f"42 1 0:42 / {root} ro - tmpfs tmpfs rw\n"
+    monkeypatch.setattr("app.advanced.sandbox.subprocess.run", fake_mount)
+    monkeypatch.setattr("app.advanced.sandbox.os.makedirs", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("app.advanced.sandbox.os.open", lambda *_args, **_kwargs: 9)
+    monkeypatch.setattr("app.advanced.sandbox.os.close", lambda _descriptor: None)
+    monkeypatch.setattr("app.advanced.sandbox.os.path.exists", lambda _path: True)
+    monkeypatch.setattr("app.advanced.sandbox.os.path.ismount", lambda path: path == root)
+    monkeypatch.setattr("app.advanced.sandbox.os.chroot", lambda path: chroot_calls.append(path))
+    monkeypatch.setattr("app.advanced.sandbox.os.chdir", lambda _path: None)
+    monkeypatch.setattr("app.advanced.sandbox.os.execve", fake_execve)
+
+    return {
+        "script": LinuxIsolationLauncher._bootstrap_script(),
+        "namespace": {
+            "__name__": "__main__",
+            "open": lambda path, **_kwargs: io.StringIO(mountinfo) if path == "/proc/self/mountinfo" else None,
+        },
+        "mount_calls": mount_calls,
+        "execve_calls": execve_calls,
+        "chroot_calls": chroot_calls,
+    }
+
+
+@pytest.mark.parametrize("failed_mount", range(1, 15))
+def test_linux_bootstrap_rejects_every_failed_mount_before_execve(monkeypatch, failed_mount):
+    state = _bootstrap_state(monkeypatch, failed_mount=failed_mount)
+    monkeypatch.setattr("app.advanced.sandbox.sys.argv", ["bootstrap", "/sandbox/root", "/source.py", "/governed", "/work"])
+
+    with pytest.raises(SystemExit) as failure:
+        exec(state["script"], state["namespace"])
+
+    assert failure.value.code == 126
+    assert len(state["mount_calls"]) == failed_mount
+    assert state["execve_calls"] == []
+    assert state["chroot_calls"] == []
+
+
+def test_linux_bootstrap_executes_only_after_private_read_only_topology_is_verified(monkeypatch):
+    state = _bootstrap_state(monkeypatch)
+    monkeypatch.setattr("app.advanced.sandbox.sys.argv", ["bootstrap", "/sandbox/root", "/source.py", "/governed", "/work"])
+
+    with pytest.raises(_BootstrapExecveReached):
+        exec(state["script"], state["namespace"])
+
+    assert state["mount_calls"] == [
+        ("/bin/mount", "--make-rprivate", "/"),
+        ("/bin/mount", "-t", "tmpfs", "-o", "size=1m,nosuid,nodev,noexec", "tmpfs", "/sandbox/root"),
+        ("/bin/mount", "--bind", "/governed", "/sandbox/root/input"),
+        ("/bin/mount", "-o", "remount,bind,ro", "/sandbox/root/input"),
+        ("/bin/mount", "-t", "tmpfs", "-o", "size=512k,nosuid,nodev,noexec", "tmpfs", "/sandbox/root/work"),
+        ("/bin/mount", "--bind", "/source.py", "/sandbox/root/strategy.py"),
+        ("/bin/mount", "-o", "remount,bind,ro", "/sandbox/root/strategy.py"),
+        ("/bin/mount", "--bind", "/usr", "/sandbox/root/usr"),
+        ("/bin/mount", "-o", "remount,bind,ro", "/sandbox/root/usr"),
+        ("/bin/mount", "--bind", "/lib", "/sandbox/root/lib"),
+        ("/bin/mount", "-o", "remount,bind,ro", "/sandbox/root/lib"),
+        ("/bin/mount", "--bind", "/lib64", "/sandbox/root/lib64"),
+        ("/bin/mount", "-o", "remount,bind,ro", "/sandbox/root/lib64"),
+        ("/bin/mount", "-o", "remount,ro", "/sandbox/root"),
+    ]
+    assert state["chroot_calls"] == ["/sandbox/root"]
+    assert state["execve_calls"] == [
+        (
+            "/usr/bin/python3",
+            ["/usr/bin/python3", "/strategy.py"],
+            {"PATH": "/usr/bin:/bin", "PYTHONNOUSERSITE": "1", "PYTHONDONTWRITEBYTECODE": "1"},
+        )
+    ]
+
 def test_sandbox_validation_persists_immutable_parent_asset_lineage(tmp_path):
     from app.advanced.repository import AdvancedRepository
 
@@ -366,6 +457,7 @@ def test_authorized_sandbox_run_api_lists_safe_terminal_records_without_cross_as
     listed = client.get("/api/advanced/sandbox/runs")
     detail = client.get(f"/api/advanced/sandbox/runs/{completed['run_id']}")
     forbidden = client.get(f"/api/advanced/sandbox/runs/{other_run['id']}")
+    validations = client.get("/api/advanced/sandbox/validations")
 
     assert listed.status_code == detail.status_code == 200
     assert forbidden.status_code == 404
@@ -380,3 +472,18 @@ def test_authorized_sandbox_run_api_lists_safe_terminal_records_without_cross_as
         "created_at": detail.json()["run"]["created_at"],
     }
     assert {"source", "code", "path", "environment", "stdout", "stderr", "traceback", "token"}.isdisjoint(detail.text.lower())
+    assert validations.status_code == 200
+    assert validations.json() == {
+        "validations": [
+            {
+                "status": "validated",
+                "reason": "completed",
+                "audit_reference": completed["audit_reference"],
+                "source_sha256": sha256(SOURCE.encode()).hexdigest(),
+            }
+        ]
+    }
+    assert other_validation["audit_reference"] not in validations.text
+    assert other_validation["source_sha256"] not in validations.text
+    assert other_validation["reason"] not in validations.text
+    assert other_validation["status"] not in validations.text

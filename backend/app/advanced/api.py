@@ -471,10 +471,15 @@ def get_sandbox_run(run_id: str, request: Request) -> dict[str, object]:
 
 @router.get("/sandbox/validations")
 def list_sandbox_validations(request: Request) -> dict[str, object]:
-    """Sandbox records lack reusable browser authority; expose only server-held audit projections."""
+    """List only validation facts whose persisted parent asset remains server-authorized."""
     _principal(request)
     service = _service(request, "advanced_sandbox_service")
-    return {"validations": [projections.sandbox_validation(record) for record in service.list_audits()]}
+    records = [
+        record
+        for record in service.list_audits()
+        if isinstance(record, dict) and _research_asset_allowed(request, record.get("parent_asset_id"))
+    ]
+    return {"validations": [projections.sandbox_validation(record) for record in records]}
 
 
 @router.get("/jobs/{job_id}")
