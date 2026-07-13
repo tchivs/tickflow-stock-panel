@@ -195,6 +195,46 @@ class ResearchRepository:
     def get_revision(self, revision_id: str) -> dict[str, Any] | None:
         with self._connection() as connection:
             return self._revision_row(connection, revision_id)
+    def get_strategy_asset_binding(self, strategy_id: str) -> dict[str, Any] | None:
+        """Return a binding only while its immutable revision exists."""
+        with self._connection() as connection:
+            row = connection.execute(
+                """SELECT binding.strategy_id, binding.research_asset_id,
+                          binding.provenance_json, binding.created_at
+                   FROM research_strategy_asset_bindings AS binding
+                   JOIN research_factor_revisions AS revision ON revision.id = binding.research_asset_id
+                   WHERE binding.strategy_id = ?""",
+                (strategy_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        record = dict(row)
+        record["provenance"] = json.loads(record.pop("provenance_json"))
+        return record
+
+    def bind_strategy_asset(
+        self, *, strategy_id: str, research_asset_id: str, provenance: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        """Create exactly one immutable lifecycle binding or fail closed on conflict."""
+        existing = self.get_strategy_asset_binding(strategy_id)
+        if existing is not None:
+            if existing["research_asset_id"] != research_asset_id or existing["provenance"] != dict(provenance):
+                raise ValueError("strategy research asset binding conflicts with persisted lifecycle binding")
+            return existing
+        with self._connection() as connection, connection:
+            try:
+                connection.execute(
+                    """INSERT INTO research_strategy_asset_bindings
+                       (strategy_id, research_asset_id, provenance_json, created_at)
+                       VALUES (?, ?, ?, ?)""",
+                    (strategy_id, research_asset_id, _json(dict(provenance), "binding provenance"), _now()),
+                )
+            except sqlite3.IntegrityError as error:
+                raise ValueError("strategy research asset binding conflicts with persisted lifecycle binding") from error
+        binding = self.get_strategy_asset_binding(strategy_id)
+        if binding is None:
+            raise ValueError("strategy research asset binding is unavailable")
+        return binding
 
     def get_current_revision(self, factor_id: str) -> dict[str, Any] | None:
         with self._connection() as connection:

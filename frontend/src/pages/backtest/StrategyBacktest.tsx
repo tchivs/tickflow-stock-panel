@@ -707,7 +707,7 @@ function StockPoolPicker({ value, onChange, assetType = 'stock' }: { value: stri
   )
 }
 
-export function StrategyBacktest({ onResearchAssetChange }: { onResearchAssetChange?: (assetId: string | null) => void }) {
+export function StrategyBacktest({ onStrategyChange }: { onStrategyChange?: (strategyId: string | null) => void }) {
   const [saved] = useState(() => storage.strategyBacktestLast.get(null))
   const [selectedStrategy, setSelectedStrategy] = useState<string | null>(saved?.selectedStrategy ?? null)
   const [strategyGroup, setStrategyGroup] = useState<StrategyGroup>('all')
@@ -785,7 +785,7 @@ export function StrategyBacktest({ onResearchAssetChange }: { onResearchAssetCha
     enabled: !!selectedStrategy,
   })
 
-  useEffect(() => { onResearchAssetChange?.(selectedStrategy) }, [onResearchAssetChange, selectedStrategy])
+  useEffect(() => { onStrategyChange?.(selectedStrategy) }, [onStrategyChange, selectedStrategy])
 
   const backtestTask = useBacktestTask()
   const isPending = backtestTask?.isPending ?? false

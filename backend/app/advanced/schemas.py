@@ -202,6 +202,15 @@ class CustomStrategySubmission(StrictAdvancedModel):
         return self
 
 
+class AdvancedResearchAssetBinding(StrictAdvancedModel):
+    """Read-only lifecycle-owned strategy-to-factor-revision projection."""
+
+    strategy_id: Identifier = Field(min_length=1, max_length=128)
+    research_asset_id: Identifier = Field(min_length=1, max_length=128)
+    factor_name: str = Field(min_length=1, max_length=256)
+    provenance: dict[str, object]
+
+
 class SafeStatusDto(StrictAdvancedModel):
     id: Identifier = Field(min_length=1, max_length=128)
     status: TerminalState | JobStage

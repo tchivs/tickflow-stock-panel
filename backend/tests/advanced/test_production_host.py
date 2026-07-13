@@ -112,6 +112,14 @@ def _advanced_host_fixture() -> dict[str, object]:
         },
         "advanced_subjects": ["600000.SH"],
         "runner_wall_clock_seconds": 30,
+        "research_asset_binding": {
+            "strategy_id": "bullish_alignment",
+            "name": "Host bullish alignment asset",
+            "expression": "close",
+            "description": "Lifecycle-owned immutable research asset for the installed strategy.",
+            "hypothesis": "The installed strategy must resolve through the persisted lifecycle binding.",
+            "provenance": {"fixture": "advanced-host", "version": "v1"},
+        },
     }
 
 
@@ -296,6 +304,12 @@ def test_main_host_loads_and_persists_deployment_owned_advanced_fixture(tmp_path
 
     with TestClient(app) as client:
         assert client.post("/api/auth/login", json={"password": "host-test-password"}).status_code == 200
+        binding = client.get("/api/advanced/research-assets/strategies/bullish_alignment")
+        assert binding.status_code == 200
+        projection = binding.json()["binding"]
+        assert projection["strategy_id"] == "bullish_alignment"
+        assert app.state.resolve_advanced_research_asset(None, projection["research_asset_id"]) is True
+        assert client.get("/api/advanced/research-assets/strategies/unknown").status_code == 404
         allowed = client.post("/api/advanced/subjects/600000.SH/jobs", json={"task_type": "research_draft"})
         denied = client.post("/api/advanced/subjects/000001.SZ/jobs", json={"task_type": "research_draft"})
 

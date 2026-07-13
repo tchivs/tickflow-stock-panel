@@ -46,6 +46,20 @@ class FixtureProvider:
         if end_time is not None:
             frame = frame.filter(pl.col("date") <= end_time.date())
         return frame
+    def get_index_daily(
+        self,
+        symbols: list[str],
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
+    ) -> pl.DataFrame:
+        frame = self._bundle.index_daily_frame()
+        if symbols:
+            frame = frame.filter(pl.col("symbol").is_in(symbols))
+        if start_time is not None:
+            frame = frame.filter(pl.col("date") >= start_time.date())
+        if end_time is not None:
+            frame = frame.filter(pl.col("date") <= end_time.date())
+        return frame
 
     def get_adj_factors(
         self,

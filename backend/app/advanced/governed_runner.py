@@ -71,6 +71,7 @@ class StrategyBacktestExperimentCollaborator:
         )
 
         metrics = self._compact_metrics(aggregate_result.stats)
+        metrics.update(self._execution_counts(aggregate_result))
         checksum = sha256(json.dumps(metrics, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         evolution_evidence = _evolution_evidence(
             scope=scope,
@@ -124,6 +125,16 @@ class StrategyBacktestExperimentCollaborator:
         return {key: value for key, value in metrics.items() if isinstance(value, (str, int, float, bool))}
 
     @staticmethod
+    def _execution_counts(result: Any) -> dict[str, int]:
+        stats = result.stats if isinstance(getattr(result, "stats", None), Mapping) else {}
+        candidate_count = stats.get("n_candidates") if isinstance(stats.get("n_candidates"), int) else 0
+        trade_count = stats.get("n_trades") if isinstance(stats.get("n_trades"), int) else candidate_count
+        return {
+            "eligible_buy_count": max(candidate_count, 0),
+            "completed_trade_count": max(trade_count, 0),
+        }
+
+    @staticmethod
     def _split_scopes(scope: Mapping[str, object]) -> tuple[dict[str, object], dict[str, object]]:
         start, end = date.fromisoformat(str(scope["start"])), date.fromisoformat(str(scope["end"]))
         span_days = (end - start).days + 1
@@ -138,6 +149,7 @@ class StrategyBacktestExperimentCollaborator:
 
     def _split_evaluation(self, *, result: Any, scope: Mapping[str, object]) -> dict[str, object]:
         metrics = {key: value for key, value in self._compact_metrics(result.stats).items() if isinstance(value, (int, float))}
+        metrics.update(self._execution_counts(result))
         manifest = result.governed_input_manifest
         run_id = result.run_id
         fingerprint = manifest.get("fingerprint") if isinstance(manifest, Mapping) else None
@@ -312,11 +324,20 @@ class GovernedExperimentRunner:
         except (OSError, TypeError, ValueError) as error:
             output.close()
             return self._failure(manifest, "validation_failed", _safe_text(str(error), fallback="worker could not start"))
+        deadline = started + self._limits["wall_clock_seconds"]
+        message: object | None = None
         try:
-            message = output.get(timeout=self._limits["wall_clock_seconds"])
-        except Empty:
-            self._reap(worker)
-            return self._failure(manifest, "timed_out", "execution exceeded wall-clock budget")
+            while message is None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    self._reap(worker)
+                    return self._failure(manifest, "timed_out", "execution exceeded wall-clock budget")
+                try:
+                    message = output.get(timeout=min(remaining, 0.25))
+                except Empty:
+                    if not worker.is_alive():
+                        worker.join(0.1)
+                        return self._failure(manifest, "resource_limited", "governed worker exited before terminal evidence")
         finally:
             output.close()
         worker.join(0.5)

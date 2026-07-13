@@ -89,6 +89,9 @@ def run_phase1_fixture_sync(data_dir: Path) -> dict:
         daily = provider.get_daily(symbols, None, None, "stock")
         repo.append_daily(daily)
 
+        emit("sync_index_daily", 42, "writing fixture index daily bars")
+        repo.append_index_daily(provider.get_index_daily([], None, None))
+
         emit("sync_adj", 50, "writing fixture adjustment factors")
         factors = provider.get_adj_factors(symbols, None, None, "stock").rename({"adj_factor": "ex_factor"})
         factors_path = store.data_dir / "adj_factor" / "all.parquet"

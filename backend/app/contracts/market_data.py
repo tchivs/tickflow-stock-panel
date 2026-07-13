@@ -54,6 +54,7 @@ class InstrumentsFixtureFile(_StrictFixtureModel):
 
 class MarketDataFixtureFile(_StrictFixtureModel):
     daily: list[FixtureDailyBar] = Field(min_length=1)
+    index_daily: list[FixtureDailyBar] = Field(default_factory=list)
     adjustment_factors: list[FixtureAdjustmentFactor] = Field(min_length=1)
     financials: list[FixtureFinancialRecord] = Field(min_length=1)
 
@@ -63,6 +64,7 @@ class FixtureBundle(_StrictFixtureModel):
 
     instruments: list[FixtureInstrument]
     daily: list[FixtureDailyBar]
+    index_daily: list[FixtureDailyBar]
     adjustment_factors: list[FixtureAdjustmentFactor]
     financials: list[FixtureFinancialRecord]
 
@@ -100,6 +102,7 @@ class FixtureBundle(_StrictFixtureModel):
         return cls(
             instruments=instruments.instruments,
             daily=market_data.daily,
+            index_daily=market_data.index_daily,
             adjustment_factors=market_data.adjustment_factors,
             financials=market_data.financials,
         )
@@ -110,6 +113,21 @@ class FixtureBundle(_StrictFixtureModel):
     def daily_frame(self) -> pl.DataFrame:
         return pl.DataFrame(
             [item.model_dump() for item in self.daily],
+            schema={
+                "symbol": pl.String,
+                "date": pl.Date,
+                "open": pl.Float64,
+                "high": pl.Float64,
+                "low": pl.Float64,
+                "close": pl.Float64,
+                "volume": pl.Float64,
+                "amount": pl.Float64,
+                "quote_ts": pl.Int64,
+            },
+        )
+    def index_daily_frame(self) -> pl.DataFrame:
+        return pl.DataFrame(
+            [item.model_dump() for item in self.index_daily],
             schema={
                 "symbol": pl.String,
                 "date": pl.Date,

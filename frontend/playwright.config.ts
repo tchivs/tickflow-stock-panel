@@ -14,6 +14,9 @@ export default defineConfig({
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',
     trace: 'retain-on-failure',
+    launchOptions: {
+      args: ['--disable-features=HttpsFirstBalancedModeAutoEnable,HttpsUpgrades'],
+    },
   },
   webServer: process.env.PHASE1_BASE_URL ? undefined : {
     command: 'pnpm exec vite --host 127.0.0.1 --port 4173',
@@ -41,6 +44,7 @@ export default defineConfig({
     {
       name: 'phase4-fastapi-host',
       use: {
+        baseURL: 'http://127.0.0.1:4173',
         browserName: 'chromium',
         viewport: { width: 1440, height: 960 },
       },

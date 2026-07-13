@@ -720,6 +720,20 @@ MIGRATIONS: tuple[str, ...] = (
     BEGIN SELECT RAISE(ABORT, 'advanced facts are immutable'); END;
     PRAGMA foreign_keys = ON;
     """,
+    """
+    -- A lifecycle-selected installed strategy resolves to exactly one immutable
+    -- factor revision. The binding never accepts a browser-selected revision.
+    CREATE TABLE research_strategy_asset_bindings (
+        strategy_id TEXT PRIMARY KEY,
+        research_asset_id TEXT NOT NULL UNIQUE REFERENCES research_factor_revisions(id) ON DELETE RESTRICT,
+        provenance_json TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    );
+    CREATE TRIGGER research_strategy_asset_bindings_no_update BEFORE UPDATE ON research_strategy_asset_bindings
+    BEGIN SELECT RAISE(ABORT, 'research strategy asset bindings are immutable'); END;
+    CREATE TRIGGER research_strategy_asset_bindings_no_delete BEFORE DELETE ON research_strategy_asset_bindings
+    BEGIN SELECT RAISE(ABORT, 'research strategy asset bindings are immutable'); END;
+    """,
 )
 
 

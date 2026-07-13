@@ -190,17 +190,32 @@ async def lifespan(app: FastAPI):
     advanced_subjects: frozenset[str] | None = None
     revoke_before_run_task_types: frozenset[str] = frozenset()
     runner_wall_clock_seconds = 15
+    research_asset_binding: dict[str, object] | None = None
     if advanced_fixture_path:
         try:
             fixture = json.loads(Path(advanced_fixture_path).read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as error:
             raise RuntimeError("advanced host fixture is unreadable") from error
-        if not isinstance(fixture, dict) or set(fixture) - {"policy", "advanced_subjects", "revoke_before_run_task_types", "runner_wall_clock_seconds"}:
+        if not isinstance(fixture, dict) or set(fixture) - {
+            "policy", "advanced_subjects", "revoke_before_run_task_types",
+            "runner_wall_clock_seconds", "research_asset_binding",
+        }:
             raise RuntimeError("advanced host fixture is malformed")
         subjects = fixture["advanced_subjects"]
         if not isinstance(subjects, list) or not subjects or any(not isinstance(subject, str) or not subject for subject in subjects):
             raise RuntimeError("advanced host fixture subjects are malformed")
         advanced_policy = AdvancedPolicy.bootstrap(fixture["policy"])
+        raw_binding = fixture.get("research_asset_binding")
+        if raw_binding is not None:
+            expected_binding = {"strategy_id", "name", "expression", "description", "hypothesis", "provenance"}
+            if not isinstance(raw_binding, dict) or set(raw_binding) != expected_binding:
+                raise RuntimeError("advanced host fixture research asset binding is malformed")
+            if raw_binding.get("strategy_id") != "bullish_alignment" or not all(
+                isinstance(raw_binding.get(field), str) and raw_binding[field].strip()
+                for field in ("name", "expression", "description", "hypothesis")
+            ) or not isinstance(raw_binding.get("provenance"), dict):
+                raise RuntimeError("advanced host fixture research asset binding is malformed")
+            research_asset_binding = dict(raw_binding)
         revoke_task_types = fixture.get("revoke_before_run_task_types", [])
         if not isinstance(revoke_task_types, list) or any(
             not isinstance(task_type, str) or task_type not in advanced_policy.agent_allowlist
@@ -210,7 +225,7 @@ async def lifespan(app: FastAPI):
         advanced_subjects = frozenset(subjects)
         revoke_before_run_task_types = frozenset(revoke_task_types)
         configured_wall_clock = fixture.get("runner_wall_clock_seconds", runner_wall_clock_seconds)
-        if not isinstance(configured_wall_clock, int) or not 15 <= configured_wall_clock <= 60:
+        if not isinstance(configured_wall_clock, int) or not 15 <= configured_wall_clock <= 120:
             raise RuntimeError("advanced host fixture runner wall-clock is malformed")
         runner_wall_clock_seconds = configured_wall_clock
     else:
@@ -273,9 +288,14 @@ async def lifespan(app: FastAPI):
         )
 
     def resolve_advanced_research_asset(_request: Request, asset_id: str) -> bool:
-        # A browser identifier is only a lookup key. The persisted factor registry
-        # remains the authority for whether it identifies a governed research asset.
-        return isinstance(asset_id, str) and app.state.factor_registry.get_revision(asset_id) is not None
+        """Accept only the exact persisted lifecycle binding target, never a strategy ID."""
+        binding = research_repository.get_strategy_asset_binding("bullish_alignment")
+        return (
+            isinstance(asset_id, str)
+            and isinstance(binding, dict)
+            and binding.get("research_asset_id") == asset_id
+            and app.state.factor_registry.get_revision(asset_id) is not None
+        )
 
     app.state.resolve_advanced_subject_scope = resolve_advanced_subject_scope
     app.state.resolve_advanced_research_asset = resolve_advanced_research_asset
@@ -438,6 +458,29 @@ async def lifespan(app: FastAPI):
     )
     app.state.strategy_engine = strategy_engine
     logger.info("strategy engine loaded: %d strategies", len(strategy_engine.list_strategies()))
+    if research_asset_binding is not None:
+        strategy_id = str(research_asset_binding["strategy_id"])
+        try:
+            strategy_engine.get(strategy_id)
+        except ValueError as error:
+            raise RuntimeError("advanced host fixture selects an unknown installed strategy") from error
+        provenance = dict(research_asset_binding["provenance"])
+        existing_binding = research_repository.get_strategy_asset_binding(strategy_id)
+        if existing_binding is None:
+            revision = app.state.factor_registry.create_factor(
+                name=str(research_asset_binding["name"]),
+                expression=str(research_asset_binding["expression"]),
+                description=str(research_asset_binding["description"]),
+                hypothesis=str(research_asset_binding["hypothesis"]),
+                provenance=provenance,
+            )
+            existing_binding = research_repository.bind_strategy_asset(
+                strategy_id=strategy_id, research_asset_id=revision.id, provenance=provenance
+            )
+        revision = app.state.factor_registry.get_revision(str(existing_binding["research_asset_id"]))
+        if revision is None or existing_binding.get("provenance") != provenance:
+            raise RuntimeError("advanced host fixture research asset binding conflicts with persisted lifecycle binding")
+        app.state.advanced_research_asset_binding = existing_binding
     from app.advanced.experiments import ExperimentService
     from app.advanced.governed_runner import GovernedExperimentRunner, StrategyBacktestExperimentCollaborator
     from app.backtest.strategy import StrategyBacktestService
@@ -447,6 +490,8 @@ async def lifespan(app: FastAPI):
         backtest_runner=GovernedExperimentRunner(
             collaborator=StrategyBacktestExperimentCollaborator(data_dir=store.data_dir),
             wall_clock_seconds=runner_wall_clock_seconds,
+            memory_limit_bytes=2 * 1_024 * 1_024 * 1_024,
+            cpu_seconds=60,
         ),
     )
 

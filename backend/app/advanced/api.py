@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.advanced import projections
 from app.advanced.schemas import (
+    AdvancedResearchAssetBinding,
     CompletedRunCandidateRequest,
     CustomStrategySubmission,
     ExperimentSpecificationRequest,
@@ -109,6 +110,30 @@ def _require_research_asset(request: Request, research_asset_id: object) -> str:
     if allowed is not True:
         raise HTTPException(status_code=404, detail="advanced experiment not found")
     return research_asset_id
+
+
+@router.get("/research-assets/strategies/{strategy_id}")
+def strategy_research_asset_binding(strategy_id: str, request: Request) -> dict[str, object]:
+    """Expose only the persisted lifecycle binding for an installed strategy."""
+    _principal(request)
+    repository = getattr(request.app.state, "research_repository", None)
+    registry = getattr(request.app.state, "factor_registry", None)
+    lookup = getattr(repository, "get_strategy_asset_binding", None)
+    binding = lookup(strategy_id) if callable(lookup) else None
+    revision_id = binding.get("research_asset_id") if isinstance(binding, dict) else None
+    revision = registry.get_revision(revision_id) if isinstance(revision_id, str) and registry is not None else None
+    if not isinstance(binding, dict) or revision is None:
+        raise HTTPException(status_code=404, detail="advanced research asset not found")
+    try:
+        projection = AdvancedResearchAssetBinding(
+            strategy_id=strategy_id,
+            research_asset_id=revision.id,
+            factor_name=revision.name,
+            provenance=dict(binding["provenance"]),
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        raise HTTPException(status_code=404, detail="advanced research asset not found") from error
+    return {"binding": projection.model_dump(mode="json")}
 
 
 def _owned_specification(request: Request, specification_id: str) -> dict[str, object]:

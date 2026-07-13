@@ -84,6 +84,45 @@ def experiment_specification(record: Mapping[str, Any]) -> dict[str, object]:
     }
 
 
+def _execution_counts(metrics: object) -> dict[str, int]:
+    if not isinstance(metrics, Mapping):
+        return {"eligible_buy_count": 0, "completed_trade_count": 0}
+    counts: dict[str, int] = {}
+    for field in ("eligible_buy_count", "completed_trade_count"):
+        value = metrics.get(field)
+        counts[field] = value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
+    return counts
+
+
+def _split_execution_evidence(section: object) -> dict[str, object]:
+    if not isinstance(section, Mapping):
+        return {"run_id": None, "governed_input_fingerprint": None, "window": {}, **_execution_counts({})}
+    evaluation = section.get("evaluation")
+    if not isinstance(evaluation, Mapping):
+        evaluation = {}
+    window = evaluation.get("window")
+    return {
+        "run_id": _optional_text(evaluation.get("run_id")),
+        "governed_input_fingerprint": _optional_text(evaluation.get("governed_input_fingerprint")),
+        "window": _safe_mapping(window),
+        **_execution_counts(section.get("metrics")),
+    }
+
+
+def _execution_evidence(record: Mapping[str, Any]) -> dict[str, object]:
+    evolution = record.get("evolution_evidence")
+    split = evolution.get("split") if isinstance(evolution, Mapping) else None
+    return {
+        "aggregate": {
+            "run_id": str(record["id"]),
+            "governed_input_fingerprint": str(record["governed_fingerprint"]),
+            **_execution_counts(record.get("metrics")),
+        },
+        "in_sample": _split_execution_evidence(split.get("in_sample") if isinstance(split, Mapping) else None),
+        "out_of_sample": _split_execution_evidence(split.get("out_of_sample") if isinstance(split, Mapping) else None),
+    }
+
+
 def experiment_run(record: Mapping[str, Any]) -> dict[str, object]:
     """Return an allowlisted manifest that cannot disclose runner diagnostics."""
     resources = _safe_mapping(record.get("resources"))
@@ -97,6 +136,7 @@ def experiment_run(record: Mapping[str, Any]) -> dict[str, object]:
         "environment": _safe_mapping(record.get("environment")),
         "resource_limits": resources,
         "metrics": _safe_mapping(record.get("metrics")),
+        "execution_evidence": _execution_evidence(record),
         "artifact_count": len(record.get("artifacts", [])) if isinstance(record.get("artifacts"), list) else 0,
         "constraint_reason": _optional_text(record.get("constraint_reason")),
         "created_at": str(record["created_at"]),

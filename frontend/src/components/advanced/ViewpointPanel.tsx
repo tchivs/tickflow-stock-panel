@@ -1,7 +1,7 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ShieldCheck } from 'lucide-react'
 import { useState } from 'react'
-import type { AnalysisRequestSubject, AnalysisSubject, AdvancedJobStage, AdvancedViewpoint } from '@/lib/api'
+import type { AnalysisRequestSubject, AnalysisSubject, AdvancedCalibration, AdvancedJobStage, AdvancedViewpoint } from '@/lib/api'
 import { api } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 
@@ -28,6 +28,7 @@ export function ViewpointPanel({ subject, serverSubject }: { subject: AnalysisSu
   const [editMode, setEditMode] = useState<'revision' | 'correction' | null>(null)
   const [conclusion, setConclusion] = useState('')
   const [correctionReason, setCorrectionReason] = useState('')
+  const [revisionDirection, setRevisionDirection] = useState<AdvancedViewpoint['direction']>('bearish')
   const viewpointsQuery = useQuery({
     queryKey: QK.advancedViewpoints(subject.kind, subject.key),
     queryFn: () => api.advancedViewpoints(serverSubject),
@@ -65,7 +66,7 @@ export function ViewpointPanel({ subject, serverSubject }: { subject: AnalysisSu
     queryClient.invalidateQueries({ queryKey: QK.advancedCalibration(subject.kind, subject.key, viewpoint.source_profile) })
   }
   const revise = useMutation({
-    mutationFn: () => api.advancedReviseViewpoint(latest!.viewpoint_id, { conclusion: conclusion.trim() }),
+    mutationFn: () => api.advancedReviseViewpoint(latest!.viewpoint_id, { conclusion: conclusion.trim(), direction: revisionDirection }),
     onSuccess: ({ viewpoint }) => { invalidateViewpoint(viewpoint); setConclusion(''); setEditMode(null) },
   })
   const correct = useMutation({
@@ -100,10 +101,11 @@ export function ViewpointPanel({ subject, serverSubject }: { subject: AnalysisSu
       {(revise.isError || correct.isError || evaluate.isError) && <p role="alert" className="text-sm text-danger">无法更新观点：{(revise.error ?? correct.error ?? evaluate.error)?.message}</p>}
       {editMode && <form className="grid gap-3 rounded-card border border-border bg-elevated p-4" onSubmit={event => { event.preventDefault(); if (editMode === 'revision') revise.mutate(); else correct.mutate() }}>
         <label className="text-sm text-secondary">修订结论<textarea aria-label="修订结论" required={editMode === 'revision'} value={conclusion} onChange={event => setConclusion(event.target.value)} className="mt-1 min-h-24 w-full rounded-input border border-border bg-base p-2 text-foreground" /></label>
+        {editMode === 'revision' && <label className="text-sm text-secondary">修订方向<select aria-label="修订方向" value={revisionDirection} onChange={event => setRevisionDirection(event.target.value as AdvancedViewpoint['direction'])} className="mt-1 min-h-11 w-full rounded-input border border-border bg-base p-2 text-foreground"><option value="bullish">看多</option><option value="bearish">看空</option><option value="neutral">中性</option></select></label>}
         {editMode === 'correction' && <label className="text-sm text-secondary">更正原因<textarea aria-label="更正原因" required value={correctionReason} onChange={event => setCorrectionReason(event.target.value)} className="mt-1 min-h-20 w-full rounded-input border border-border bg-base p-2 text-foreground" /></label>}
         <div className="flex flex-wrap gap-2"><button type="submit" disabled={editMode === 'correction' && !correctionReason.trim()} className="min-h-11 rounded-btn bg-accent px-3 text-sm font-semibold text-white disabled:opacity-60">{editMode === 'revision' ? '保存修订' : '保存更正'}</button><button type="button" className="min-h-11 rounded-btn border border-border px-3 text-sm" onClick={() => setEditMode(null)}>返回版本记录</button></div>
       </form>}
-      <div className="overflow-x-auto"><table className="min-w-[680px] text-left text-sm"><caption className="mb-2 text-left text-sm font-semibold text-foreground">版本谱系</caption><thead className="border-b border-border text-secondary"><tr><th scope="col" className="p-2">版本</th><th scope="col" className="p-2">发布时间</th><th scope="col" className="p-2">变化</th><th scope="col" className="p-2">结论</th><th scope="col" className="p-2">证据</th></tr></thead><tbody>{viewpointsQuery.data!.viewpoints.map(item => <tr key={item.id} className="border-b border-border/70"><td className="p-2 font-mono">版本 {item.version}</td><td className="p-2">{item.published_at}</td><td className="p-2">{revisionLabel(item)}</td><td className="p-2">{item.conclusion}</td><td className="p-2"><details><summary className="cursor-pointer text-accent">查看此版本证据</summary><p className="mt-2 text-secondary">来源档案：{item.source_profile}</p></details></td></tr>)}</tbody></table><p className="mt-2 text-xs text-muted">左右滚动查看完整记录</p></div>
+      <div className="overflow-x-auto" tabIndex={0} aria-describedby="viewpoint-lineage-scroll-instruction"><p id="viewpoint-lineage-scroll-instruction" className="mb-2 text-xs text-muted">左右滚动查看完整记录</p><table className="min-w-[680px] text-left text-sm"><caption className="mb-2 text-left text-sm font-semibold text-foreground">版本谱系</caption><thead className="border-b border-border text-secondary"><tr><th scope="col" className="p-2">版本</th><th scope="col" className="p-2">发布时间</th><th scope="col" className="p-2">变化</th><th scope="col" className="p-2">结论</th><th scope="col" className="p-2">证据</th></tr></thead><tbody>{viewpointsQuery.data!.viewpoints.map(item => <tr key={item.id} className="border-b border-border/70"><td className="p-2 font-mono">版本 {item.version}</td><td className="p-2">{item.published_at}</td><td className="p-2">{revisionLabel(item)}</td><td className="p-2">{item.conclusion}</td><td className="p-2"><details><summary className="cursor-pointer text-accent">查看此版本证据</summary><p className="mt-2 text-secondary">来源档案：{item.source_profile}</p></details></td></tr>)}</tbody></table></div>
       <Calibration calibration={calibrationQuery.data?.calibration} loading={calibrationQuery.isLoading} />
     </>}
   </section>
@@ -118,8 +120,11 @@ function ViewpointSummary({ viewpoint }: { viewpoint: AdvancedViewpoint }) {
   </div>
 }
 
-function Calibration({ calibration, loading }: { calibration: Awaited<ReturnType<typeof api.advancedCalibration>>['calibration'] | undefined; loading: boolean }) {
+function Calibration({ calibration, loading }: { calibration: AdvancedCalibration | undefined; loading: boolean }) {
   if (loading) return <p role="status" className="text-sm text-muted">正在读取表现校准…</p>
   if (!calibration) return null
-  return <div className="overflow-x-auto"><table className="min-w-[640px] text-left text-sm"><caption className="mb-2 text-left text-sm font-semibold text-foreground">置信度校准</caption><thead className="border-b border-border text-secondary"><tr><th scope="col" className="p-2">置信度</th><th scope="col" className="p-2">命中率</th><th scope="col" className="p-2">相对收益</th><th scope="col" className="p-2">样本数</th><th scope="col" className="p-2">覆盖期</th></tr></thead><tbody>{(['low', 'medium', 'high'] as const).map(bucket => { const item = calibration[bucket]; return <tr key={bucket} className="border-b border-border/70"><th scope="row" className="p-2">{bucket === 'low' ? '低' : bucket === 'medium' ? '中' : '高'}</th><td className="p-2">{item.hit_rate == null ? '无' : `${(item.hit_rate * 100).toFixed(0)}%`}</td><td className="p-2">{item.mean_relative_return == null ? '无' : `${(item.mean_relative_return * 100).toFixed(2)}%`}</td><td className="p-2">{item.sample_count}</td><td className="p-2">{item.coverage_start ?? '无'} 至 {item.coverage_end ?? '无'}{item.status === 'insufficient_sample' && <span className="ml-2 text-warning">样本不足，暂不能评价置信度校准。</span>}</td></tr> })}</tbody></table></div>
+  return <div className="overflow-x-auto" tabIndex={0} aria-describedby="viewpoint-calibration-scroll-instruction">
+    <p id="viewpoint-calibration-scroll-instruction" className="mb-2 text-xs text-muted">左右滚动查看完整记录</p>
+    <table className="min-w-[640px] text-left text-sm"><caption className="mb-2 text-left text-sm font-semibold text-foreground">置信度校准</caption><thead className="border-b border-border text-secondary"><tr><th scope="col" className="p-2">置信度</th><th scope="col" className="p-2">命中率</th><th scope="col" className="p-2">相对收益</th><th scope="col" className="p-2">样本数</th><th scope="col" className="p-2">覆盖期</th></tr></thead><tbody>{(['low', 'medium', 'high'] as const).map(bucket => { const item = calibration[bucket]; return <tr key={bucket} className="border-b border-border/70"><th scope="row" className="p-2">{bucket === 'low' ? '低' : bucket === 'medium' ? '中' : '高'}</th><td className="p-2">{item.hit_rate == null ? '无' : `${(item.hit_rate * 100).toFixed(0)}%`}</td><td className="p-2">{item.mean_relative_return == null ? '无' : `${(item.mean_relative_return * 100).toFixed(2)}%`}</td><td className="p-2">{item.sample_count}</td><td className="p-2">{item.coverage_start ?? '无'} 至 {item.coverage_end ?? '无'}{item.status === 'insufficient_sample' && <span className="ml-2 text-warning">样本不足，暂不能评价置信度校准。</span>}</td></tr> })}</tbody></table>
+  </div>
 }

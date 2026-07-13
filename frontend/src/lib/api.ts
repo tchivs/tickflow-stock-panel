@@ -421,6 +421,13 @@ export interface AdvancedAudit {
   reason: string
 }
 
+
+export interface AdvancedResearchAssetBinding {
+  strategy_id: string
+  research_asset_id: string
+  factor_name: string
+  provenance: Record<string, unknown>
+}
 export interface AdvancedExperimentSpecification {
   id: string
   research_asset_id: string
@@ -430,6 +437,20 @@ export interface AdvancedExperimentSpecification {
   method: string
   metrics: string[]
   created_at: string
+}
+
+export interface AdvancedExecutionEvidenceWindow {
+  run_id: string | null
+  governed_input_fingerprint: string | null
+  window?: Record<string, string>
+  eligible_buy_count: number
+  completed_trade_count: number
+}
+
+export interface AdvancedExecutionEvidence {
+  aggregate: AdvancedExecutionEvidenceWindow
+  in_sample: AdvancedExecutionEvidenceWindow
+  out_of_sample: AdvancedExecutionEvidenceWindow
 }
 
 export interface AdvancedExperimentRun {
@@ -445,6 +466,7 @@ export interface AdvancedExperimentRun {
   artifact_count: number
   constraint_reason: string | null
   created_at: string
+  execution_evidence: AdvancedExecutionEvidence
 }
 
 export interface AdvancedFrozenStrategyScope {
@@ -507,6 +529,11 @@ export interface AdvancedSandboxRun {
   resources: Record<string, string | number | boolean>
   audit_reference: string | null
   created_at: string
+}
+
+export interface AdvancedSandboxSubmissionResult {
+  validation?: AdvancedSandboxValidation
+  run?: AdvancedSandboxRun
 }
 
 // ===== Kline =====
@@ -2637,6 +2664,8 @@ export const api = {
     request<{ job: AdvancedJob }>(`/api/advanced/jobs/${encodeURIComponent(jobId)}`),
   advancedAudit: (auditReference: string) =>
     request<{ audit: AdvancedAudit }>(`/api/advanced/audits/${encodeURIComponent(auditReference)}`),
+  advancedResearchAssetBinding: (strategyId: string) =>
+    request<{ binding: AdvancedResearchAssetBinding }>(`/api/advanced/research-assets/strategies/${encodeURIComponent(strategyId)}`),
   advancedExperiments: () =>
     request<{ specifications: AdvancedExperimentSpecification[]; runs: AdvancedExperimentRun[]; feedback: AdvancedExperimentFeedback[] }>('/api/advanced/experiments'),
   advancedCreateExperiment: (payload: AdvancedExperimentInput) =>
@@ -2655,7 +2684,7 @@ export const api = {
   advancedPromoteCandidate: (candidateId: string, rationale: string) =>
     request<{ approval: { created_at: string }; registered_strategy: { id: string; status: 'registered_research_only' } }>(`/api/advanced/evolution/candidates/${encodeURIComponent(candidateId)}/promote`, { method: 'POST', body: JSON.stringify({ rationale }) }),
   advancedSubmitSandbox: (payload: { contract: { contract_version: 'advanced-strategy-v1'; parent_asset_id: string; declared_inputs: ['governed_panel']; declared_imports: string[]; timeout_seconds: number; memory_limit_mb: number; source_sha256: string }; source: string }) =>
-    request<{ validation: AdvancedSandboxValidation }>('/api/advanced/sandbox/submissions', { method: 'POST', body: JSON.stringify(payload) }),
+    request<AdvancedSandboxSubmissionResult>('/api/advanced/sandbox/submissions', { method: 'POST', body: JSON.stringify(payload) }),
   advancedSandboxValidations: () => request<{ validations: AdvancedSandboxValidation[] }>('/api/advanced/sandbox/validations'),
   advancedSandboxRuns: () => request<{ runs: AdvancedSandboxRun[] }>('/api/advanced/sandbox/runs'),
   advancedSandboxRun: (runId: string) => request<{ run: AdvancedSandboxRun }>(`/api/advanced/sandbox/runs/${encodeURIComponent(runId)}`),
