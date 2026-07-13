@@ -1,4 +1,4 @@
-import { keepPreviousData, useMutation, useQuery } from '@tanstack/react-query'
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ShieldCheck } from 'lucide-react'
 import { useState } from 'react'
 import type { AnalysisRequestSubject, AnalysisSubject, AdvancedJobStage, AdvancedViewpoint } from '@/lib/api'
@@ -23,7 +23,11 @@ function revisionLabel(viewpoint: AdvancedViewpoint) {
 }
 
 export function ViewpointPanel({ subject, serverSubject }: { subject: AnalysisSubject; serverSubject: AnalysisRequestSubject }) {
+  const queryClient = useQueryClient()
   const [jobId, setJobId] = useState<string | null>(null)
+  const [editMode, setEditMode] = useState<'revision' | 'correction' | null>(null)
+  const [conclusion, setConclusion] = useState('')
+  const [correctionReason, setCorrectionReason] = useState('')
   const viewpointsQuery = useQuery({
     queryKey: QK.advancedViewpoints(subject.kind, subject.key),
     queryFn: () => api.advancedViewpoints(serverSubject),
@@ -54,6 +58,24 @@ export function ViewpointPanel({ subject, serverSubject }: { subject: AnalysisSu
     placeholderData: keepPreviousData,
   })
   const rejectionReason = startJob.isError ? startJob.error.message : job?.stage === 'rejected' ? auditQuery.data?.audit.reason : null
+  const invalidateViewpoint = (viewpoint: AdvancedViewpoint) => {
+    queryClient.invalidateQueries({ queryKey: QK.advancedViewpoints(subject.kind, subject.key) })
+    queryClient.invalidateQueries({ queryKey: QK.advancedViewpointVersions(subject.kind, subject.key, viewpoint.viewpoint_id) })
+    queryClient.invalidateQueries({ queryKey: QK.advancedViewpoint(subject.kind, subject.key, viewpoint.viewpoint_id, viewpoint.version) })
+    queryClient.invalidateQueries({ queryKey: QK.advancedCalibration(subject.kind, subject.key, viewpoint.source_profile) })
+  }
+  const revise = useMutation({
+    mutationFn: () => api.advancedReviseViewpoint(latest!.viewpoint_id, { conclusion: conclusion.trim() }),
+    onSuccess: ({ viewpoint }) => { invalidateViewpoint(viewpoint); setConclusion(''); setEditMode(null) },
+  })
+  const correct = useMutation({
+    mutationFn: () => api.advancedCorrectViewpoint(latest!.viewpoint_id, { conclusion: conclusion.trim() || undefined, correction_reason: correctionReason.trim() }),
+    onSuccess: ({ viewpoint }) => { invalidateViewpoint(viewpoint); setConclusion(''); setCorrectionReason(''); setEditMode(null) },
+  })
+  const evaluate = useMutation({
+    mutationFn: () => api.advancedEvaluateViewpoint(latest!.id),
+    onSuccess: ({ viewpoint }) => invalidateViewpoint(viewpoint),
+  })
 
   return <section aria-labelledby="advanced-viewpoints-heading" className="space-y-4 rounded-card border border-border bg-surface p-4">
     <div className="flex flex-wrap items-start justify-between gap-3">
@@ -67,7 +89,20 @@ export function ViewpointPanel({ subject, serverSubject }: { subject: AnalysisSu
     {viewpointsQuery.isError && !viewpointsQuery.data && <div role="alert" className="rounded-card border border-danger/50 bg-danger/10 p-4 text-sm text-danger">无法读取归因观点。<button type="button" onClick={() => viewpointsQuery.refetch()} className="ml-2 underline">重新加载</button></div>}
     {!viewpointsQuery.isLoading && !viewpointsQuery.isError && !latest && <div className="rounded-card border border-border bg-elevated p-4"><p className="text-sm font-semibold text-foreground">暂无可归因的市场观点</p><p className="mt-1 text-sm text-secondary">在支持的分析对象中导入或生成带来源档案、范围和发布时间的观点后，版本、变化和表现会在这里保留。</p></div>}
     {latest && <>
-      <ViewpointSummary viewpoint={latest} />
+      <ViewpointSummary viewpoint={evaluate.data?.viewpoint ?? latest} />
+      <div className="flex flex-wrap gap-2" aria-label="不可变观点操作">
+        <button type="button" className="min-h-11 rounded-btn border border-border px-3 text-sm text-foreground focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-base" onClick={() => setEditMode('revision')}>添加修订</button>
+        <button type="button" className="min-h-11 rounded-btn border border-border px-3 text-sm text-foreground focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-base" onClick={() => setEditMode('correction')}>添加更正</button>
+        <button type="button" className="min-h-11 rounded-btn bg-accent px-3 text-sm font-semibold text-white focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-base disabled:opacity-60" disabled={evaluate.isPending} onClick={() => evaluate.mutate()}>运行服务端评估</button>
+      </div>
+      {evaluate.isPending && <p role="status" className="text-sm text-secondary">正在请求服务端评估…</p>}
+      {evaluate.isSuccess && <p role="status" className="text-sm text-secondary">已由服务端完成评估</p>}
+      {(revise.isError || correct.isError || evaluate.isError) && <p role="alert" className="text-sm text-danger">无法更新观点：{(revise.error ?? correct.error ?? evaluate.error)?.message}</p>}
+      {editMode && <form className="grid gap-3 rounded-card border border-border bg-elevated p-4" onSubmit={event => { event.preventDefault(); if (editMode === 'revision') revise.mutate(); else correct.mutate() }}>
+        <label className="text-sm text-secondary">修订结论<textarea aria-label="修订结论" required={editMode === 'revision'} value={conclusion} onChange={event => setConclusion(event.target.value)} className="mt-1 min-h-24 w-full rounded-input border border-border bg-base p-2 text-foreground" /></label>
+        {editMode === 'correction' && <label className="text-sm text-secondary">更正原因<textarea aria-label="更正原因" required value={correctionReason} onChange={event => setCorrectionReason(event.target.value)} className="mt-1 min-h-20 w-full rounded-input border border-border bg-base p-2 text-foreground" /></label>}
+        <div className="flex flex-wrap gap-2"><button type="submit" disabled={editMode === 'correction' && !correctionReason.trim()} className="min-h-11 rounded-btn bg-accent px-3 text-sm font-semibold text-white disabled:opacity-60">{editMode === 'revision' ? '保存修订' : '保存更正'}</button><button type="button" className="min-h-11 rounded-btn border border-border px-3 text-sm" onClick={() => setEditMode(null)}>返回版本记录</button></div>
+      </form>}
       <div className="overflow-x-auto"><table className="min-w-[680px] text-left text-sm"><caption className="mb-2 text-left text-sm font-semibold text-foreground">版本谱系</caption><thead className="border-b border-border text-secondary"><tr><th scope="col" className="p-2">版本</th><th scope="col" className="p-2">发布时间</th><th scope="col" className="p-2">变化</th><th scope="col" className="p-2">结论</th><th scope="col" className="p-2">证据</th></tr></thead><tbody>{viewpointsQuery.data!.viewpoints.map(item => <tr key={item.id} className="border-b border-border/70"><td className="p-2 font-mono">版本 {item.version}</td><td className="p-2">{item.published_at}</td><td className="p-2">{revisionLabel(item)}</td><td className="p-2">{item.conclusion}</td><td className="p-2"><details><summary className="cursor-pointer text-accent">查看此版本证据</summary><p className="mt-2 text-secondary">来源档案：{item.source_profile}</p></details></td></tr>)}</tbody></table><p className="mt-2 text-xs text-muted">左右滚动查看完整记录</p></div>
       <Calibration calibration={calibrationQuery.data?.calibration} loading={calibrationQuery.isLoading} />
     </>}

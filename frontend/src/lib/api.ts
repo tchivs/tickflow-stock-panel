@@ -356,6 +356,20 @@ export interface AdvancedViewpointEvaluation {
   relative_return: number | null
 }
 
+export interface AdvancedViewpointRevisionInput {
+  conclusion?: string
+  direction?: AdvancedViewpoint['direction']
+  rating?: AdvancedViewpoint['rating']
+  target_range?: [number, number]
+  horizon_days?: number
+  confidence?: AdvancedViewpoint['confidence']
+  evidence?: { id: string; published_at?: string }[]
+}
+
+export interface AdvancedViewpointCorrectionInput extends AdvancedViewpointRevisionInput {
+  correction_reason: string
+}
+
 export interface AdvancedViewpoint {
   id: string
   viewpoint_id: string
@@ -2567,6 +2581,21 @@ export const api = {
     request<{ viewpoints: AdvancedViewpoint[] }>(`/api/advanced/viewpoints?instrument=${encodeURIComponent(subject.key)}`),
   advancedViewpointVersions: (viewpointId: string) =>
     request<{ versions: AdvancedViewpoint[] }>(`/api/advanced/viewpoints/${encodeURIComponent(viewpointId)}/versions`),
+  advancedReviseViewpoint: (viewpointId: string, payload: AdvancedViewpointRevisionInput) =>
+    request<{ viewpoint: AdvancedViewpoint }>(`/api/advanced/viewpoints/${encodeURIComponent(viewpointId)}/revisions`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  advancedCorrectViewpoint: (viewpointId: string, payload: AdvancedViewpointCorrectionInput) =>
+    request<{ viewpoint: AdvancedViewpoint }>(`/api/advanced/viewpoints/${encodeURIComponent(viewpointId)}/corrections`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  advancedEvaluateViewpoint: (viewpointVersionId: string) =>
+    request<{ viewpoint: AdvancedViewpoint }>(`/api/advanced/viewpoints/versions/${encodeURIComponent(viewpointVersionId)}/evaluate`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    }),
   advancedCalibration: (sourceProfile: string) =>
     request<{ calibration: AdvancedCalibration }>(`/api/advanced/viewpoints/calibration/${encodeURIComponent(sourceProfile)}`),
   advancedStartJob: (subject: AnalysisRequestSubject, taskType: AdvancedTaskType) =>

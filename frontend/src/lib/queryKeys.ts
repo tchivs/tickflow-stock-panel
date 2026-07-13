@@ -66,6 +66,7 @@ export const QK = {
   // display subject plus immutable version, job, and audit references.
   advancedViewpoints: (subjectKind: string, subjectKey: string) => ['advanced', 'viewpoints', subjectKind, subjectKey] as const,
   advancedViewpoint: (subjectKind: string, subjectKey: string, viewpointId: string, version: number) => ['advanced', 'viewpoint', subjectKind, subjectKey, viewpointId, version] as const,
+  advancedViewpointVersions: (subjectKind: string, subjectKey: string, viewpointId: string) => ['advanced', 'viewpoint-versions', subjectKind, subjectKey, viewpointId] as const,
   advancedCalibration: (subjectKind: string, subjectKey: string, sourceProfile: string) => ['advanced', 'calibration', subjectKind, subjectKey, sourceProfile] as const,
   advancedJob: (subjectKind: string, subjectKey: string, jobId: string) => ['advanced', 'job', subjectKind, subjectKey, jobId] as const,
   advancedAudit: (subjectKind: string, subjectKey: string, auditReference: string) => ['advanced', 'audit', subjectKind, subjectKey, auditReference] as const,
