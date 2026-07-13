@@ -58,6 +58,10 @@ class ViewpointRevisionRequest(StrictAdvancedModel):
     evidence: list[EvidenceReference] | None = Field(default=None, min_length=1, max_length=32)
 
 
+class ViewpointCorrectionRequest(ViewpointRevisionRequest):
+    correction_reason: str = Field(min_length=1, max_length=1_000)
+
+
 class ExperimentSpecificationRequest(StrictAdvancedModel):
     hypothesis: str = Field(min_length=1, max_length=4_000)
     data_scope: dict[str, str] = Field(min_length=1, max_length=16)

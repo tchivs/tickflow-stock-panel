@@ -212,15 +212,38 @@ def test_authenticated_main_host_projects_latest_immutable_viewpoint_evaluation(
         version_id = created.json()["viewpoint"]["id"]
         viewpoint_id = created.json()["viewpoint"]["viewpoint_id"]
 
-        outcome = app.state.viewpoint_service.evaluate_viewpoint(
-            viewpoint_version_id=version_id,
-            market_snapshot=app.state.viewpoint_market_snapshot,
+        revised = client.post(
+            f"/api/advanced/viewpoints/{viewpoint_id}/revisions",
+            json={"direction": "bearish", "rating": "underweight"},
         )
-        assert outcome == {"status": "unevaluable", "reason": "missing_price", "relative_return": None}
+        assert revised.status_code == 200
+        assert revised.json()["viewpoint"]["revision_kind"] == "material_stance_change"
+        corrected = client.post(
+            f"/api/advanced/viewpoints/{viewpoint_id}/corrections",
+            json={"correction_reason": "更正结论中的单位", "conclusion": "修正后的受控研究观点"},
+        )
+        assert corrected.status_code == 200
+        assert corrected.json()["viewpoint"]["revision_kind"] == "correction"
+
+        evaluation_response = client.post(
+            f"/api/advanced/viewpoints/versions/{version_id}/evaluate", json={}
+        )
+        assert evaluation_response.status_code == 200
+        assert evaluation_response.json()["viewpoint"]["evaluation"] == {
+            "status": "unevaluable",
+            "reason": "missing_price",
+            "window_days": 60,
+            "benchmark": "000300.SH",
+            "relative_return": None,
+        }
 
         listed = client.get(f"/api/advanced/viewpoints/{viewpoint_id}/versions")
         assert listed.status_code == 200
-        evaluation = listed.json()["versions"][0]["evaluation"]
+        versions = listed.json()["versions"]
+        assert [version["revision_kind"] for version in versions] == [
+            "correction", "material_stance_change", "initial",
+        ]
+        evaluation = next(version for version in versions if version["id"] == version_id)["evaluation"]
         assert evaluation == {
             "status": "unevaluable",
             "reason": "missing_price",

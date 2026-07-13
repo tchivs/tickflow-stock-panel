@@ -8,7 +8,12 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.advanced import projections
-from app.advanced.schemas import CustomStrategySubmission, ViewpointRequest
+from app.advanced.schemas import (
+    CustomStrategySubmission,
+    ViewpointCorrectionRequest,
+    ViewpointRequest,
+    ViewpointRevisionRequest,
+)
 
 router = APIRouter(prefix="/api/advanced", tags=["advanced"])
 
@@ -52,6 +57,12 @@ class SessionBoundJobStartRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     task_type: Literal["research_draft", "experiment", "strategy_evaluation"]
+
+
+class ViewpointEvaluationRequest(BaseModel):
+    """Evaluation authority is fully lifecycle-owned; the browser sends no inputs."""
+
+    model_config = ConfigDict(extra="forbid")
 
 
 @dataclass(frozen=True)
@@ -148,6 +159,15 @@ def _safe_value_error(error: ValueError) -> HTTPException:
     return HTTPException(status_code=400, detail="advanced request cannot be completed")
 
 
+def _owned_viewpoint_version(request: Request, viewpoint_version_id: str) -> dict[str, object]:
+    service = _service(request, "viewpoint_service")
+    record = service.get_viewpoint_version(viewpoint_version_id)
+    if not isinstance(record, dict):
+        raise HTTPException(status_code=404, detail="advanced viewpoint not found")
+    _require_instrument(request, record.get("instrument"))
+    return record
+
+
 def _owned_job(request: Request, job_id: str) -> dict[str, object]:
     service = getattr(request.app.state, "advanced_job_service", None)
     record = service.get_job(job_id) if service is not None else None
@@ -203,6 +223,63 @@ def list_viewpoint_versions(viewpoint_id: str, request: Request) -> dict[str, ob
         raise HTTPException(status_code=404, detail="advanced viewpoint not found")
     _require_instrument(request, records[0].get("instrument") if isinstance(records[0], dict) else None)
     return {"versions": [projections.viewpoint(record) for record in records if isinstance(record, dict)]}
+
+
+@router.post("/viewpoints/{viewpoint_id}/revisions")
+def revise_viewpoint(viewpoint_id: str, payload: ViewpointRevisionRequest, request: Request) -> dict[str, object]:
+    service = _service(request, "viewpoint_service")
+    records = service.list_versions(viewpoint_id)
+    if not isinstance(records, list) or not records:
+        raise HTTPException(status_code=404, detail="advanced viewpoint not found")
+    _require_instrument(request, records[0].get("instrument") if isinstance(records[0], dict) else None)
+    try:
+        record = service.revise_viewpoint(
+            viewpoint_id=viewpoint_id, **payload.model_dump(mode="json", exclude_none=True)
+        )
+    except ValueError as error:
+        raise _safe_value_error(error) from error
+    return {"viewpoint": projections.viewpoint(record)}
+
+
+@router.post("/viewpoints/{viewpoint_id}/corrections")
+def correct_viewpoint(viewpoint_id: str, payload: ViewpointCorrectionRequest, request: Request) -> dict[str, object]:
+    service = _service(request, "viewpoint_service")
+    records = service.list_versions(viewpoint_id)
+    if not isinstance(records, list) or not records:
+        raise HTTPException(status_code=404, detail="advanced viewpoint not found")
+    _require_instrument(request, records[0].get("instrument") if isinstance(records[0], dict) else None)
+    changes = payload.model_dump(mode="json", exclude_none=True, exclude={"correction_reason"})
+    try:
+        record = service.correct_viewpoint(
+            viewpoint_id=viewpoint_id, correction_reason=payload.correction_reason, **changes
+        )
+    except ValueError as error:
+        raise _safe_value_error(error) from error
+    return {"viewpoint": projections.viewpoint(record)}
+
+
+@router.post("/viewpoints/versions/{viewpoint_version_id}/evaluate")
+def evaluate_viewpoint(
+    viewpoint_version_id: str, payload: ViewpointEvaluationRequest, request: Request
+) -> dict[str, object]:
+    del payload
+    version = _owned_viewpoint_version(request, viewpoint_version_id)
+    service = _service(request, "viewpoint_service")
+    try:
+        service.evaluate_viewpoint(
+            viewpoint_version_id=viewpoint_version_id,
+            market_snapshot=_service(request, "viewpoint_market_snapshot"),
+        )
+    except ValueError as error:
+        raise _safe_value_error(error) from error
+    records = service.list_versions(str(version["viewpoint_id"]))
+    record = next(
+        (item for item in records if isinstance(item, dict) and item.get("id") == viewpoint_version_id),
+        None,
+    )
+    if record is None:
+        raise HTTPException(status_code=409, detail="advanced state changed; refresh and retry")
+    return {"viewpoint": projections.viewpoint(record)}
 
 
 @router.get("/viewpoints")
