@@ -222,9 +222,12 @@ def _manifest(specification: Mapping[str, object]) -> dict[str, object]:
 def _install_limits(limits: Mapping[str, int]) -> dict[str, int]:
     if resource is None or os.name != "posix":
         raise RuntimeError("resource limits are unavailable")
+    # RLIMIT_AS rejects Polars' sparse mmap reservations before they consume
+    # resident memory. RLIMIT_DATA bounds allocator-backed worker memory while
+    # allowing governed parquet reads to retain their file-backed mappings.
     pairs = (
         (resource.RLIMIT_CPU, "cpu_seconds", limits["cpu_seconds"]),
-        (resource.RLIMIT_AS, "memory_limit_bytes", limits["memory_limit_bytes"]),
+        (resource.RLIMIT_DATA, "memory_limit_bytes", limits["memory_limit_bytes"]),
     )
     for limit_kind, name, requested in pairs:
         _soft, hard = resource.getrlimit(limit_kind)
@@ -237,6 +240,15 @@ def _install_limits(limits: Mapping[str, int]) -> dict[str, int]:
     return dict(limits)
 
 
+def _configure_worker_runtime() -> None:
+    """Keep native data libraries within the governed process budget before import."""
+    # A forked child inherits native thread-pool state from the ASGI host, while an
+    # uncapped spawned child can reserve more address space than RLIMIT_AS permits.
+    # These libraries are only imported by the backtest collaborator below.
+    os.environ["POLARS_MAX_THREADS"] = "1"
+    os.environ["MALLOC_CONF"] = "narenas:1,background_thread:false"
+
+
 def _worker(
     collaborator: ServerOwnedBacktestCollaborator,
     specification: dict[str, object],
@@ -245,6 +257,7 @@ def _worker(
 ) -> None:
     """Execute in a fresh session; only compact, capped metadata crosses the boundary."""
     try:
+        _configure_worker_runtime()
         os.setsid()
         applied = _install_limits(limits)
         captured = io.StringIO()
@@ -286,8 +299,10 @@ class GovernedExperimentRunner:
     def run(self, *, specification: dict[str, object]) -> dict[str, object]:
         manifest = _manifest(specification)
         if resource is None or os.name != "posix" or "spawn" not in multiprocessing.get_all_start_methods():
-            return self._failure(manifest, "resource_limited", "governed process limits are unavailable")
+            return self._failure(manifest, "resource_limited", "governed spawned process limits are unavailable")
 
+        # Native data libraries create thread pools; fork would inherit a possibly
+        # locked ASGI-host pool. A fresh interpreter is the safe isolation boundary.
         context = multiprocessing.get_context("spawn")
         output = context.Queue(maxsize=1)
         worker = context.Process(target=_worker, args=(self.collaborator, specification, self._limits, output))

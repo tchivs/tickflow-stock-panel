@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import time
+from datetime import date, datetime, time as clock, timedelta, timezone
 from hashlib import sha256
 from types import SimpleNamespace
 
@@ -66,6 +67,37 @@ def _strategy_scope() -> dict[str, object]:
         "asset_type": "stock",
         "parameters": {"lookback": 20},
     }
+
+def _write_governed_backtest_fixture(fixtures_dir) -> None:  # type: ignore[no-untyped-def]
+    fixtures_dir.mkdir()
+    bars: list[dict[str, object]] = []
+    cursor = date(2023, 7, 3)
+    final_date = date(2024, 7, 15)
+    business_day = 0
+    while cursor <= final_date:
+        if cursor.weekday() < 5:
+            phase = business_day % 43
+            close = 7 + (16 - phase * 0.72 if phase < 20 else 2 + (phase - 20) * 0.96)
+            volume = 3_000_000 + business_day * 1_000
+            bars.append({
+                "symbol": "600000.SH", "date": cursor.isoformat(), "open": close - 0.15,
+                "high": close + 0.35, "low": close - 0.4, "close": close, "volume": volume,
+                "amount": volume * close, "quote_ts": int(datetime.combine(cursor, clock(1, 30), timezone.utc).timestamp() * 1000),
+            })
+            business_day += 1
+        cursor += timedelta(days=1)
+    (fixtures_dir / "instruments.json").write_text(json.dumps({"instruments": [
+        {"symbol": "600000.SH", "name": "浦发银行", "code": "600000", "exchange": "SH"}
+    ]}), encoding="utf-8")
+    (fixtures_dir / "market-data.json").write_text(json.dumps({
+        "daily": bars,
+        "index_daily": [{**bar, "symbol": "000300.SH", "close": float(bar["close"]) * 500} for bar in bars],
+        "adjustment_factors": [{"symbol": "600000.SH", "trade_date": bar["date"], "adj_factor": 1} for bar in bars],
+        "financials": [{"symbol": "600000.SH", "report_date": "2023-09-30", "roe": 0.09}],
+    }), encoding="utf-8")
+    for fixture_file in fixtures_dir.iterdir():
+        fixture_file.chmod(0o444)
+    fixtures_dir.chmod(0o555)
 
 
 def _advanced_host_fixture() -> dict[str, object]:
@@ -443,6 +475,40 @@ def test_governed_runner_persists_applied_limits_and_completed_feedback(tmp_path
     assert {evolution.evaluate_gate(candidate_id=candidate["id"], gate=gate)["status"] for gate in (
         "contract_sandbox_safety", "provenance", "in_sample_out_of_sample_evidence", "robustness", "cost_feasibility",
     )} == {"passed"}
+
+
+def test_spawned_governed_backtest_completes_split_evidence_within_budget(tmp_path, monkeypatch):
+    from app.advanced.governed_runner import GovernedExperimentRunner, StrategyBacktestExperimentCollaborator
+    from app.jobs.daily_pipeline import run_phase1_fixture_sync
+
+    fixture_dir = tmp_path / "phase1-fixtures"
+    data_dir = tmp_path / "governed-data"
+    _write_governed_backtest_fixture(fixture_dir)
+    monkeypatch.setenv("PHASE1_FIXTURE_MODE", "1")
+    monkeypatch.setenv("PHASE1_FIXTURE_DIR", str(fixture_dir))
+    run_phase1_fixture_sync(data_dir)
+    result = GovernedExperimentRunner(
+        collaborator=StrategyBacktestExperimentCollaborator(data_dir=data_dir),
+        wall_clock_seconds=15,
+        cpu_seconds=15,
+        memory_limit_bytes=2 * 1024 * 1024 * 1024,
+    ).run(specification={
+        "research_asset_id": "fixture-asset", "version": 1, "method": "bounded-backtest",
+        "data_scope": {
+            "market": "CN-A", "strategy_id": "bullish_alignment", "start": "2024-01-02", "end": "2024-06-28",
+            "symbols": ["600000.SH"], "asset_type": "stock", "parameters": {"require_ma_alignment": True},
+        },
+    })
+
+    assert result["status"] == "completed"
+    assert result["environment"]["elapsed_ms"] < 15_000  # type: ignore[index]
+    assert result["metrics"]["eligible_buy_count"] > 0  # type: ignore[index]
+    assert result["resolved_parameters"] == {"require_ma_alignment": True}
+    split = result["evolution_evidence"]["split"]  # type: ignore[index]
+    in_sample, out_of_sample = split["in_sample"], split["out_of_sample"]
+    assert in_sample["end"] < out_of_sample["start"]
+    assert in_sample["evaluation"]["run_id"] != out_of_sample["evaluation"]["run_id"]
+    assert in_sample["evaluation"]["governed_input_fingerprint"] != out_of_sample["evaluation"]["governed_input_fingerprint"]
 
 
 def test_governed_runner_reaps_blocked_work_and_rejects_feedback(tmp_path):

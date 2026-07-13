@@ -71,7 +71,7 @@ export function AdvancedResearchPanels({ researchAssetId }: { researchAssetId: s
   const runExperiment = useMutation({ mutationFn: api.advancedRunExperiment, onSuccess: invalidateExperiments })
   const retryExperiment = useMutation({ mutationFn: api.advancedRetryExperiment, onSuccess: invalidateExperiments })
   const recordFeedback = useMutation({ mutationFn: ({ runId, conclusion, comment }: { runId: string; conclusion: AdvancedExperimentFeedback['conclusion']; comment: string }) => api.advancedRecordFeedback(runId, conclusion, comment), onSuccess: invalidateExperiments })
-  const createCandidate = useMutation({ mutationFn: (runId: string) => api.advancedCreateCandidate({ completed_run_id: runId, mutation_operation: 'adjust_signal_threshold', seed: 0, resolved_configuration: {} }), onSuccess: invalidateCandidates })
+  const createCandidate = useMutation({ mutationFn: (runId: string) => api.advancedCreateCandidate({ completed_run_id: runId, mutation_operation: 'adjust_signal_threshold', seed: 0, resolved_configuration: { entry_signal_threshold: 1 } }), onSuccess: invalidateCandidates })
   const evaluateGate = useMutation({ mutationFn: ({ candidateId, gate }: { candidateId: string; gate: keyof typeof GATE_LABELS }) => api.advancedEvaluateCandidateGate(candidateId, gate), onSuccess: (_, { candidateId }) => { queryClient.invalidateQueries({ queryKey: QK.advancedCandidate(assetKey, candidateId) }); invalidateCandidates() } })
   const promote = useMutation({ mutationFn: ({ candidateId, reason }: { candidateId: string; reason: string }) => api.advancedPromoteCandidate(candidateId, reason), onSuccess: () => { invalidateCandidates(); setCandidateForPromotion(null); setRationale('') } })
   const submitSandbox = useMutation({
