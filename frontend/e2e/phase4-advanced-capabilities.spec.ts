@@ -25,8 +25,11 @@ const advancedFixture = {
   }],
   calibration: { low: { status: 'calibrated', hit_rate: 0.4, mean_relative_return: -0.01, sample_count: 3, coverage_start: '2026-01-01', coverage_end: '2026-03-31' }, medium: { status: 'insufficient_sample', hit_rate: 0.5, mean_relative_return: 0.02, sample_count: 2, coverage_start: '2026-01-01', coverage_end: '2026-03-31' }, high: { status: 'insufficient_sample', hit_rate: 0.7, mean_relative_return: 0.04, sample_count: 1, coverage_start: '2026-01-01', coverage_end: '2026-03-31' }, excluded_unevaluable: 0 },
   run: { id: 'advanced-run-fixture', specification_id: 'advanced-spec-fixture', governed_fingerprint: 'sha256:governed', asset_version: 'factor-v1', parameters: { lookback: 20 }, environment: { runtime: 'fixture' }, resource_limits: { timeout_seconds: 5, memory_limit_mb: 128 }, artifact_count: 0, metrics: {}, status: 'timed_out', constraint_reason: 'timeout_exceeded', created_at: '2026-07-12T10:00:00Z' },
+  completedRun: { id: 'advanced-completed-run-fixture', specification_id: 'advanced-spec-fixture', governed_fingerprint: 'sha256:completed', asset_version: 'strategy-v2', parameters: { lookback: 20 }, environment: { runtime: 'fixture' }, resource_limits: { timeout_seconds: 5, memory_limit_mb: 128 }, artifact_count: 2, metrics: { sharpe: 1.4 }, status: 'completed', constraint_reason: null, created_at: '2026-07-12T11:00:00Z' },
   candidate: { id: 'advanced-candidate-fixture', parent_asset_id: 'strategy-fixture', parent_version: 'v1', mutation: 'parameter_adjustment', seed: 7, resolved_config: { lookback: 20 }, created_at: '2026-07-12T10:00:00Z', gates: ['合同/沙箱安全', '来源完整性', '样本内与样本外', '稳健性', '成本与可实现性'].map(name => ({ name, status: 'passed', evidence: 'fixture evidence' })) },
+  pendingCandidate: { id: 'advanced-pending-candidate-fixture', parent_asset_id: 'strategy-fixture', parent_version: 'v2', mutation: 'adjust_signal_threshold', seed: 9, resolved_config: { lookback: 10 }, created_at: '2026-07-12T11:00:00Z', gates: [] as { name: string; status: string; evidence: string }[] },
   sandbox: { status: 'rejected', reason: 'isolation_unavailable', audit_reference: 'audit-fixture', source_sha256: 'a'.repeat(64) },
+  sandboxRun: { run_id: 'sandbox-terminal-fixture', status: 'failed', terminal_reason: 'resource limit reached', proof_fingerprint: 'proof-fixture', resources: { memory_mb: 128, timeout_seconds: 5 }, audit_reference: 'audit-fixture', created_at: '2026-07-12T10:00:00Z' },
 }
 
 async function installAdvancedFixture(page: Page, { rejected = false }: { rejected?: boolean } = {}) {
@@ -59,8 +62,9 @@ async function installAdvancedFixture(page: Page, { rejected = false }: { reject
     if (path.includes('/viewpoints/versions/') && path.endsWith('/evaluate') && request.method() === 'POST') {
       return json({ viewpoint: { ...advancedFixture.viewpoints[0], evaluation: { status: 'evaluated', reason: null, window_days: 60, benchmark: '000300.SH', relative_return: 0.02 } } })
     }
-    if (path.endsWith('/experiments')) return json({ specifications: [], runs: [advancedFixture.run], feedback: [] })
-    if (path.endsWith('/candidates')) return json({ candidates: [advancedFixture.candidate] })
+    if (path.endsWith('/experiments')) return json({ specifications: [], runs: [advancedFixture.run, advancedFixture.completedRun], feedback: [] })
+    if (path.endsWith('/candidates')) return json({ candidates: [advancedFixture.candidate, advancedFixture.pendingCandidate] })
+    if (path.endsWith('/sandbox/runs')) return json({ runs: [advancedFixture.sandboxRun] })
     if (path.endsWith('/sandbox/validations')) return json({ validations: [advancedFixture.sandbox] })
     if (path.endsWith('/sandbox/submissions')) return json({ validation: advancedFixture.sandbox }, rejected ? 409 : 200)
     if (path.includes('/evolution/candidates/') && path.endsWith('/promote')) return json({ approval: { created_at: '2026-07-12T10:00:00Z' }, registered_strategy: { id: 'registered-fixture', status: 'registered_research_only' } })
@@ -145,6 +149,28 @@ test.describe('Phase 4 advanced capability browser contracts', () => {
     await expect(dialog.getByRole('button', { name: '确认晋级为研究策略' })).toBeDisabled()
     await expect(page.getByRole('button', { name: /启用监控|创建交易计划|执行市场操作/ })).toHaveCount(0)
     expect(fixture.externalRequests).toEqual([])
+  })
+
+  test('scenario 3b: frozen runner scope, gate actions, and terminal sandbox runs remain bounded', async ({ page }, testInfo) => {
+    futurePhase4Ui(testInfo, true)
+    await installAdvancedFixture(page)
+    await page.goto('/backtest')
+
+    await page.getByLabel('策略 ID').fill('strategy-fixture')
+    await page.getByLabel('开始日期').fill('2026-01-01')
+    await page.getByLabel('结束日期').fill('2026-06-30')
+    await page.getByLabel('标的代码（可选，逗号分隔）').fill('600519.SH')
+    await page.getByLabel('资产类型').selectOption('stock')
+    await page.getByLabel('参数（可选 JSON）').fill('{"lookback":20}')
+    await expect(page.getByRole('button', { name: '新建实验规格' })).toBeEnabled()
+
+    const pendingCandidate = page.getByText('父策略 v2').locator('..')
+    for (const label of ['合同/沙箱安全', '来源完整性', '样本内与样本外', '稳健性', '成本与可实现性']) {
+      await expect(pendingCandidate.getByRole('button', { name: `评估门禁：${label}` })).toBeVisible()
+    }
+    await expect(page.getByText('resource limit reached')).toBeVisible()
+    await expect(page.getByText('proof-fixture')).toBeVisible()
+    await expect(page.getByText(/\/tmp\/|traceback|source code|token|PATH=/i)).toHaveCount(0)
   })
 
   test('scenario 4: scoped agent displays allowlisted stages and rejects without a task stream', async ({ page }, testInfo) => {
