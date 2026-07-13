@@ -25,6 +25,8 @@ test.beforeAll(async () => {
   const root = resolve(import.meta.dirname, '../..')
   const fixtureDir = await mkdtemp(join(tmpdir(), 'phase4-fastapi-fixture-'))
   const dataDir = await mkdtemp(join(tmpdir(), 'phase4-fastapi-data-'))
+  const advancedFixtureDir = await mkdtemp(join(tmpdir(), 'phase4-advanced-fixture-'))
+  const advancedFixture = join(advancedFixtureDir, 'advanced-host-fixture.json')
   await writeFile(join(fixtureDir, 'instruments.json'), JSON.stringify({
     instruments: [{ symbol: '600000.SH', name: '浦发银行', code: '600000', exchange: 'SH' }],
   }))
@@ -33,8 +35,20 @@ test.beforeAll(async () => {
     adjustment_factors: [{ symbol: '600000.SH', trade_date: '2024-01-02', adj_factor: 1 }],
     financials: [{ symbol: '600000.SH', report_date: '2023-09-30', roe: 0.09 }],
   }))
+  await writeFile(advancedFixture, JSON.stringify({
+    policy: {
+      version: 'advanced_policy_v1',
+      source_profiles: { 'operator-research-v1': { market_scopes: ['CN-A'] } },
+      benchmark_defaults: { stock: '000300.SH', etf: '000300.SH', index: '000001.SH' },
+      benchmark_overrides: ['000300.SH', '000905.SH', '000852.SH'],
+      agent_allowlist: { research_draft: ['CN-A'], experiment: ['CN-A'], strategy_evaluation: ['CN-A'] },
+      rate_limits: { research_draft: 1, experiment: 1, strategy_evaluation: 1 },
+    },
+    advanced_subjects: ['600000.SH'],
+  }))
   await chmod(join(fixtureDir, 'instruments.json'), 0o444)
   await chmod(join(fixtureDir, 'market-data.json'), 0o444)
+  await chmod(advancedFixture, 0o444)
   await chmod(fixtureDir, 0o555)
   host = spawn('uv', ['run', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', '3018'], {
     cwd: join(root, 'backend'),
@@ -44,6 +58,7 @@ test.beforeAll(async () => {
       DATA_DIR: dataDir,
       PHASE1_FIXTURE_MODE: '1',
       PHASE1_FIXTURE_DIR: fixtureDir,
+      ADVANCED_HOST_FIXTURE: advancedFixture,
     },
     stdio: 'pipe',
   })
