@@ -93,3 +93,28 @@ test('real FastAPI host accepts an authorized advanced job and emits root SSE pr
     audit_reference: result.body.job.audit_reference,
   })
 })
+
+test('real FastAPI host rejects unauthenticated, out-of-scope, and rate-limited advanced jobs before work', async ({ page }) => {
+  const unauthenticated = await page.request.post(`${hostUrl}/api/advanced/subjects/600000.SH/jobs`, {
+    data: { task_type: 'research_draft' },
+  })
+  expect(unauthenticated.status()).toBe(401)
+
+  const login = await page.request.post(`${hostUrl}/api/auth/login`, { data: { password: 'phase4-host-password' } })
+  expect(login.ok()).toBeTruthy()
+
+  const outOfScope = await page.request.post(`${hostUrl}/api/advanced/subjects/000001.SZ/jobs`, {
+    data: { task_type: 'research_draft' },
+  })
+  expect(outOfScope.status()).toBe(404)
+
+  const allowed = await page.request.post(`${hostUrl}/api/advanced/subjects/600000.SH/jobs`, {
+    data: { task_type: 'research_draft' },
+  })
+  expect(allowed.ok()).toBeTruthy()
+  const rateLimited = await page.request.post(`${hostUrl}/api/advanced/subjects/600000.SH/jobs`, {
+    data: { task_type: 'research_draft' },
+  })
+  expect(rateLimited.status()).toBe(409)
+  expect(await rateLimited.json()).toEqual({ detail: 'advanced job rejected' })
+})
