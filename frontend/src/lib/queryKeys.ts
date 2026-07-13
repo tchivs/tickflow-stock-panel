@@ -71,8 +71,12 @@ export const QK = {
   advancedJob: (subjectKind: string, subjectKey: string, jobId: string) => ['advanced', 'job', subjectKind, subjectKey, jobId] as const,
   advancedAudit: (subjectKind: string, subjectKey: string, auditReference: string) => ['advanced', 'audit', subjectKind, subjectKey, auditReference] as const,
   advancedExperiments: (researchAssetId: string) => ['advanced', 'experiments', researchAssetId] as const,
-  advancedCandidates: ['advanced', 'candidates'] as const,
+  advancedExperimentRun: (researchAssetId: string, runId: string) => ['advanced', 'experiment-run', researchAssetId, runId] as const,
+  advancedCandidates: (researchAssetId: string) => ['advanced', 'candidates', researchAssetId] as const,
+  advancedCandidate: (researchAssetId: string, candidateId: string) => ['advanced', 'candidate', researchAssetId, candidateId] as const,
   advancedSandboxValidations: ['advanced', 'sandbox', 'validations'] as const,
+  advancedSandboxRuns: (researchAssetId: string) => ['advanced', 'sandbox-runs', researchAssetId] as const,
+  advancedSandboxRun: (researchAssetId: string, runId: string) => ['advanced', 'sandbox-run', researchAssetId, runId] as const,
 
   // Data / Pipeline
   dataStatus:           ['data-status'] as const,

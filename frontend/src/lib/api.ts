@@ -426,7 +426,7 @@ export interface AdvancedExperimentSpecification {
   research_asset_id: string
   version: number
   hypothesis: string
-  data_scope: Record<string, string | number | boolean>
+  data_scope: AdvancedFrozenStrategyScope
   method: string
   metrics: string[]
   created_at: string
@@ -438,13 +438,33 @@ export interface AdvancedExperimentRun {
   status: 'completed' | 'validation_failed' | 'timed_out' | 'resource_limited'
   governed_fingerprint: string
   asset_version: string | null
-  parameters: Record<string, string | number | boolean>
-  environment: Record<string, string | number | boolean>
-  resource_limits: Record<string, string | number | boolean>
-  metrics: Record<string, string | number | boolean>
+  parameters: Record<string, string | number | boolean | null>
+  environment: Record<string, string | number | boolean | null>
+  resource_limits: Record<string, string | number | boolean | null>
+  metrics: Record<string, string | number | boolean | null>
   artifact_count: number
   constraint_reason: string | null
   created_at: string
+}
+
+export interface AdvancedFrozenStrategyScope {
+  market: 'CN-A'
+  strategy_id: string
+  start: string
+  end: string
+  symbols?: string[]
+  asset_type: 'stock' | 'etf' | 'index'
+  parameters: Record<string, string | number | boolean | null>
+}
+
+export interface AdvancedExperimentInput {
+  research_asset_id: string
+  hypothesis: string
+  data_scope: AdvancedFrozenStrategyScope
+  method: string
+  metrics: string[]
+  success_criteria: Record<string, string | number | boolean | null>
+  failure_criteria: Record<string, string | number | boolean | null>
 }
 
 export interface AdvancedExperimentFeedback {
@@ -477,6 +497,16 @@ export interface AdvancedSandboxValidation {
   reason: string
   audit_reference: string
   source_sha256: string
+}
+
+export interface AdvancedSandboxRun {
+  run_id: string
+  status: 'completed' | 'failed'
+  terminal_reason: string | null
+  proof_fingerprint: string | null
+  resources: Record<string, string | number | boolean>
+  audit_reference: string | null
+  created_at: string
 }
 
 // ===== Kline =====
@@ -2609,7 +2639,7 @@ export const api = {
     request<{ audit: AdvancedAudit }>(`/api/advanced/audits/${encodeURIComponent(auditReference)}`),
   advancedExperiments: () =>
     request<{ specifications: AdvancedExperimentSpecification[]; runs: AdvancedExperimentRun[]; feedback: AdvancedExperimentFeedback[] }>('/api/advanced/experiments'),
-  advancedCreateExperiment: (payload: { research_asset_id: string; hypothesis: string; data_scope: Record<string, string>; method: string; metrics: string[]; success_criteria: Record<string, string>; failure_criteria: Record<string, string> }) =>
+  advancedCreateExperiment: (payload: AdvancedExperimentInput) =>
     request<{ specification: AdvancedExperimentSpecification }>('/api/advanced/experiments/specifications', { method: 'POST', body: JSON.stringify(payload) }),
   advancedRunExperiment: (specificationId: string) =>
     request<{ run: AdvancedExperimentRun }>(`/api/advanced/experiments/specifications/${encodeURIComponent(specificationId)}/runs`, { method: 'POST' }),
@@ -2618,11 +2648,17 @@ export const api = {
   advancedRecordFeedback: (runId: string, conclusion: AdvancedExperimentFeedback['conclusion'], notes: string) =>
     request<{ feedback: AdvancedExperimentFeedback }>(`/api/advanced/experiments/runs/${encodeURIComponent(runId)}/feedback`, { method: 'POST', body: JSON.stringify({ conclusion, notes }) }),
   advancedCandidates: () => request<{ candidates: AdvancedCandidate[] }>('/api/advanced/evolution/candidates'),
+  advancedCreateCandidate: (payload: { completed_run_id: string; mutation_operation: 'adjust_signal_threshold' | 'parameter_adjustment' | 'feature_subset' | 'signal_threshold' | 'portfolio_constraint'; seed: number; resolved_configuration: Record<string, string | number | boolean | null> }) =>
+    request<{ candidate: AdvancedCandidate }>('/api/advanced/evolution/candidates', { method: 'POST', body: JSON.stringify(payload) }),
+  advancedEvaluateCandidateGate: (candidateId: string, gate: 'contract_sandbox_safety' | 'provenance' | 'in_sample_out_of_sample_evidence' | 'robustness' | 'cost_feasibility') =>
+    request<{ gate: AdvancedPromotionGate }>(`/api/advanced/evolution/candidates/${encodeURIComponent(candidateId)}/gates/${encodeURIComponent(gate)}`, { method: 'POST', body: JSON.stringify({}) }),
   advancedPromoteCandidate: (candidateId: string, rationale: string) =>
     request<{ approval: { created_at: string }; registered_strategy: { id: string; status: 'registered_research_only' } }>(`/api/advanced/evolution/candidates/${encodeURIComponent(candidateId)}/promote`, { method: 'POST', body: JSON.stringify({ rationale }) }),
   advancedSubmitSandbox: (payload: { contract: { contract_version: 'advanced-strategy-v1'; parent_asset_id: string; declared_inputs: ['governed_panel']; declared_imports: string[]; timeout_seconds: number; memory_limit_mb: number; source_sha256: string }; source: string }) =>
     request<{ validation: AdvancedSandboxValidation }>('/api/advanced/sandbox/submissions', { method: 'POST', body: JSON.stringify(payload) }),
   advancedSandboxValidations: () => request<{ validations: AdvancedSandboxValidation[] }>('/api/advanced/sandbox/validations'),
+  advancedSandboxRuns: () => request<{ runs: AdvancedSandboxRun[] }>('/api/advanced/sandbox/runs'),
+  advancedSandboxRun: (runId: string) => request<{ run: AdvancedSandboxRun }>(`/api/advanced/sandbox/runs/${encodeURIComponent(runId)}`),
 
   // ===== Decision playbook =====
   decisionGenerate: (payload: DecisionRunInput) =>
