@@ -1,9 +1,11 @@
 """RED contracts for fail-closed custom-strategy admission and isolation."""
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from hashlib import sha256
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI, Request
@@ -156,6 +158,27 @@ def test_absent_or_inconclusive_launcher_capability_is_a_durable_pre_spawn_rejec
     assert result["reason"] == "isolation_unavailable"
     assert result["audit_reference"]
     assert service.list_audits()[-1]["reason"] == "isolation_unavailable"
+
+
+def test_linux_probe_rejects_legacy_boolean_claims_without_observable_evidence(tmp_path, monkeypatch):
+    """A report cannot become affirmative merely by claiming every capability is true."""
+    from app.advanced.sandbox import LinuxIsolationLauncher, _PROBE_FIELDS
+
+    launcher = LinuxIsolationLauncher()
+    monkeypatch.setattr("app.advanced.sandbox.sys.platform", "linux")
+    monkeypatch.setattr("app.advanced.sandbox.shutil.which", lambda _name: "/usr/bin/unshare")
+    monkeypatch.setattr("app.advanced.sandbox.os.access", lambda _path, _mode: True)
+    monkeypatch.setattr(
+        "app.advanced.sandbox.subprocess.run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({field: True for field in _PROBE_FIELDS}),
+        ),
+    )
+
+    proof = launcher.capability_probe(governed_input=tmp_path / "governed-panel", workdir=tmp_path)
+
+    assert proof == {field: False for field in _PROBE_FIELDS}
 
 
 @pytest.mark.parametrize(
