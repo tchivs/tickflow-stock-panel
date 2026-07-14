@@ -212,6 +212,26 @@ class ResearchRepository:
         record["provenance"] = json.loads(record.pop("provenance_json"))
         return record
 
+    def resolve_bound_strategy(self, research_asset_id: str) -> dict[str, str] | None:
+        """Resolve exactly one extant installed strategy for an immutable research asset."""
+        with self._connection() as connection:
+            rows = connection.execute(
+                """SELECT binding.strategy_id, binding.research_asset_id, revision.id AS revision
+                   FROM research_strategy_asset_bindings AS binding
+                   JOIN research_factor_revisions AS revision ON revision.id = binding.research_asset_id
+                   WHERE binding.research_asset_id = ?""",
+                (research_asset_id,),
+            ).fetchall()
+        if len(rows) != 1:
+            return None
+        row = rows[0]
+        strategy_id = row["strategy_id"]
+        asset_id = row["research_asset_id"]
+        revision = row["revision"]
+        if not all(isinstance(value, str) and value for value in (strategy_id, asset_id, revision)):
+            return None
+        return {"strategy_id": strategy_id, "research_asset_id": asset_id, "revision": revision}
+
     def bind_strategy_asset(
         self, *, strategy_id: str, research_asset_id: str, provenance: Mapping[str, Any]
     ) -> dict[str, Any]:

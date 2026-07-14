@@ -734,6 +734,13 @@ MIGRATIONS: tuple[str, ...] = (
     CREATE TRIGGER research_strategy_asset_bindings_no_delete BEFORE DELETE ON research_strategy_asset_bindings
     BEGIN SELECT RAISE(ABORT, 'research strategy asset bindings are immutable'); END;
     """,
+    """
+    -- New specifications preserve the server-resolved installed strategy that owns
+    -- their immutable research asset. Existing facts retain the empty legacy value.
+    ALTER TABLE advanced_experiment_specs ADD COLUMN bound_strategy_id TEXT NOT NULL DEFAULT '';
+    CREATE INDEX idx_advanced_experiment_specs_bound_strategy
+    ON advanced_experiment_specs(bound_strategy_id, created_at DESC);
+    """,
 )
 
 

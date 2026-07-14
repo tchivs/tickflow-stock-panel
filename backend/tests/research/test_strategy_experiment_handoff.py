@@ -135,3 +135,37 @@ def test_failed_cancelled_and_sse_strategy_runs_never_bypass_handoff_gates(tmp_p
     assert streamed.status_code == 200
     assert streamed.json()["input_manifest"]["revision"] == "governed-revision-v1"
     assert streamed.json()["input_manifest"]["fingerprint"] == "governed-fingerprint-v1"
+
+
+def test_reverse_strategy_asset_binding_resolver_is_exact_and_fails_closed(tmp_path: Path) -> None:
+    repository = ResearchRepository(tmp_path / "operational.db")
+    repository.migrate()
+    repository.create_factor_with_revision(
+        factor_id="factor-owned",
+        revision_id="revision-owned",
+        name="Owned factor",
+        description="immutable asset",
+        hypothesis="server-owned lifecycle asset",
+        canonical_expression="close",
+        dsl_version="factor-dsl-v1",
+        ast_signature="a" * 64,
+        shape_signature="b" * 64,
+        fields=frozenset({"close"}),
+        operators=frozenset(),
+        functions=frozenset(),
+        provenance={"source": "test"},
+    )
+    repository.bind_strategy_asset(
+        strategy_id="installed-owned-strategy",
+        research_asset_id="revision-owned",
+        provenance={"source": "test"},
+    )
+
+    resolved = repository.resolve_bound_strategy("revision-owned")
+
+    assert resolved == {
+        "strategy_id": "installed-owned-strategy",
+        "research_asset_id": "revision-owned",
+        "revision": "revision-owned",
+    }
+    assert repository.resolve_bound_strategy("unknown-revision") is None

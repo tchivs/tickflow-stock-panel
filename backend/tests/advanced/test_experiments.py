@@ -41,13 +41,24 @@ class FakeGovernedBacktest:
         }
 
 
-def _service(tmp_path, runner=None):
+def _service(tmp_path, runner=None, binding_resolver=None):
     from app.advanced.experiments import ExperimentService
     from app.advanced.repository import AdvancedRepository
 
     repository = AdvancedRepository(tmp_path / "operational.db")
     repository.migrate()
-    return repository, ExperimentService(repository=repository, backtest_runner=runner or FakeGovernedBacktest())
+    resolver = binding_resolver or (
+        lambda research_asset_id: {
+            "strategy_id": "momentum_breakout",
+            "research_asset_id": research_asset_id,
+            "revision": research_asset_id,
+        }
+    )
+    return repository, ExperimentService(
+        repository=repository,
+        backtest_runner=runner or FakeGovernedBacktest(),
+        binding_resolver=resolver,
+    )
 
 
 def test_strategy_backtest_collaborator_is_spawn_serializable_without_duckdb_connection(tmp_path):
@@ -83,6 +94,7 @@ def test_strategy_backtest_collaborator_derives_split_evidence_from_distinct_gov
     result = collaborator.run(
         specification={
             "research_asset_id": "strategy-parent-v4",
+            "bound_strategy_id": "momentum_breakout",
             "data_scope": {
                 "strategy_id": "momentum_breakout",
                 "start": "2024-01-01",
@@ -149,6 +161,7 @@ def test_strategy_backtest_collaborator_prepares_parent_frozen_panels_and_child_
     monkeypatch.setattr(collaborator, "_service", lambda: parent)
     prepared = collaborator.prepare(specification={
         "research_asset_id": "strategy-parent-v4",
+        "bound_strategy_id": "momentum_breakout",
         "data_scope": {
             "strategy_id": "momentum_breakout", "start": "2024-01-01", "end": "2024-12-31",
             "symbols": ["600000.SH"], "asset_type": "stock", "parameters": {"lookback": 20},
@@ -218,6 +231,94 @@ def test_experiment_specification_freezes_reproducible_research_contract_and_is_
                 (specification["id"],),
             )
 
+
+
+def _experiment_evidence_counts(repository):
+    tables = (
+        "advanced_experiment_specs",
+        "advanced_experiment_runs",
+        "advanced_sandbox_validations",
+        "advanced_sandbox_runs",
+        "advanced_experiment_feedback",
+        "advanced_strategy_candidates",
+        "advanced_promotion_gates",
+        "advanced_promotions",
+        "advanced_jobs",
+    )
+    with sqlite3.connect(repository.database_path) as connection:
+        return {table: connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] for table in tables}
+
+
+def test_server_resolved_binding_is_immutable_and_denials_precede_all_experiment_evidence(tmp_path):
+    runner = FakeGovernedBacktest()
+    repository, service = _service(tmp_path, runner)
+
+    specification = _specification(service)
+
+    assert specification["bound_strategy_id"] == "momentum_breakout"
+    assert specification["data_scope"]["strategy_id"] == "momentum_breakout"
+    assert _experiment_evidence_counts(repository)["advanced_experiment_specs"] == 1
+
+    baseline = _experiment_evidence_counts(repository)
+    with pytest.raises(ValueError, match="binding|bound strategy"):
+        _specification(service, data_scope=_strategy_scope(strategy_id="different_installed_strategy"))
+    assert _experiment_evidence_counts(repository) == baseline
+    assert runner.calls == []
+
+    unbound_repository, unbound_service = _service(tmp_path / "unbound", FakeGovernedBacktest(), lambda _asset_id: None)
+    with pytest.raises(ValueError, match="binding|bound strategy"):
+        _specification(unbound_service)
+    assert _experiment_evidence_counts(unbound_repository) == {
+        table: 0 for table in _experiment_evidence_counts(unbound_repository)
+    }
+
+
+def test_legacy_specifications_remain_readable_but_lack_executable_binding(tmp_path):
+    repository, service = _service(tmp_path)
+    with sqlite3.connect(repository.database_path) as connection:
+        connection.execute(
+            """INSERT INTO advanced_experiment_specs (
+                id, research_asset_id, version, supersedes_specification_id, hypothesis,
+                data_scope_json, method, metrics_json, success_criteria_json,
+                failure_criteria_json, created_at, owner_principal
+            ) VALUES (?, ?, 1, NULL, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                "legacy-spec", "legacy-asset", "legacy", '{"asset_type":"stock","end":"2024-12-31","market":"CN-A","parameters":{},"start":"2024-01-01","strategy_id":"momentum_breakout","symbols":null}',
+                "bounded", '["sharpe"]', '{"sharpe_gt":1}', '{"drawdown_lt":-0.2}', repository.now(), "legacy-owner",
+            ),
+        )
+
+    legacy = service.get_specification("legacy-spec")
+
+    assert legacy is not None
+    assert legacy["bound_strategy_id"] is None
+    with pytest.raises(ValueError, match="binding|bound strategy"):
+        service.run_specification(specification_id="legacy-spec")
+
+
+def test_runner_rejects_divergent_persisted_binding_before_loading_or_spawning(tmp_path, monkeypatch):
+    from app.advanced import governed_runner
+
+    collaborator = governed_runner.StrategyBacktestExperimentCollaborator(data_dir=tmp_path)
+    service_calls: list[object] = []
+    monkeypatch.setattr(collaborator, "_service", lambda: service_calls.append(object()))
+    divergent = {
+        "research_asset_id": "asset-owned",
+        "bound_strategy_id": "server-owned-strategy",
+        "data_scope": _strategy_scope(strategy_id="browser-selected-strategy"),
+    }
+
+    with pytest.raises(ValueError, match="bound strategy"):
+        collaborator.run(specification=divergent)
+    assert service_calls == []
+
+    spawned: list[object] = []
+    monkeypatch.setattr(governed_runner.multiprocessing, "get_context", lambda *_args: spawned.append(object()))
+    terminal = governed_runner.GovernedExperimentRunner(collaborator=collaborator).run(specification=divergent)
+
+    assert terminal["status"] == "validation_failed"
+    assert spawned == []
+    assert service_calls == []
 
 def test_completed_run_records_server_derived_manifest_without_raw_market_series(tmp_path):
     runner = FakeGovernedBacktest()

@@ -98,6 +98,14 @@ class FrozenStrategyScope(StrictAdvancedModel):
         return self
 
 
+
+class BoundStrategyBinding(StrictAdvancedModel):
+    """Server-owned reverse binding attached to a persisted experiment specification."""
+
+    strategy_id: Identifier = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_.-]+$")
+    research_asset_id: Identifier = Field(min_length=1, max_length=128)
+    revision: Identifier = Field(min_length=1, max_length=128)
+
 def _instrument_identifier(value: str) -> bool:
     return all(character.isalnum() or character in ".-" for character in value)
 

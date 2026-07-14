@@ -9,7 +9,7 @@ from typing import Any, Protocol
 from uuid import uuid4
 
 from app.advanced.repository import AdvancedRepository
-from app.advanced.schemas import FrozenStrategyScope
+from app.advanced.schemas import BoundStrategyBinding, FrozenStrategyScope
 
 
 class GovernedBacktestRunner(Protocol):
@@ -26,12 +26,25 @@ def _json(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
+class BoundStrategyResolver(Protocol):
+    """Resolve only the lifecycle-owned installed strategy for a research asset."""
+
+    def __call__(self, research_asset_id: str) -> Mapping[str, object] | None: ...
+
+
 class ExperimentService:
     """Append-only research records backed by governed execution evidence."""
 
-    def __init__(self, *, repository: AdvancedRepository, backtest_runner: GovernedBacktestRunner) -> None:
+    def __init__(
+        self,
+        *,
+        repository: AdvancedRepository,
+        backtest_runner: GovernedBacktestRunner,
+        binding_resolver: BoundStrategyResolver,
+    ) -> None:
         self.repository = repository
         self.backtest_runner = backtest_runner
+        self._binding_resolver = binding_resolver
 
     def create_specification(
         self,
@@ -52,6 +65,10 @@ class ExperimentService:
             frozen_scope = FrozenStrategyScope.model_validate(data_scope).model_dump(mode="json")
         except ValueError as error:
             raise ValueError("experiment specification has an invalid frozen strategy scope") from error
+        bound_strategy_id = self._resolve_bound_strategy(research_asset_id)
+        if frozen_scope["strategy_id"] != bound_strategy_id:
+            raise ValueError("frozen strategy scope does not match the server-bound strategy")
+        frozen_scope["strategy_id"] = bound_strategy_id
         identifier = str(uuid4())
         with self.repository._connection() as connection, connection:
             if supersedes_specification_id is None:
@@ -66,12 +83,12 @@ class ExperimentService:
                 version = int(parent["version"]) + 1
             connection.execute(
                 """INSERT INTO advanced_experiment_specs (
-                    id, research_asset_id, version, supersedes_specification_id, hypothesis,
+                    id, research_asset_id, bound_strategy_id, version, supersedes_specification_id, hypothesis,
                     data_scope_json, method, metrics_json, success_criteria_json,
                     failure_criteria_json, created_at, owner_principal
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
-                    identifier, research_asset_id, version, supersedes_specification_id, hypothesis,
+                    identifier, research_asset_id, bound_strategy_id, version, supersedes_specification_id, hypothesis,
                     _json(frozen_scope), method, _json(metrics), _json(dict(success_criteria)),
                     _json(dict(failure_criteria)), self.repository.now(), owner_principal,
                 ),
@@ -94,6 +111,7 @@ class ExperimentService:
         specification = self.get_specification(specification_id)
         if specification is None:
             raise ValueError("experiment specification does not exist")
+        self._assert_specification_binding(specification)
         result = self.backtest_runner.run(specification=specification)
         status = result.get("status")
         if status not in _TERMINAL_STATUSES:
@@ -110,6 +128,7 @@ class ExperimentService:
         if specification_changes:
             source = self.get_specification(specification_id)
             assert source is not None
+            self._assert_specification_binding(source)
             changed = {**source, **dict(specification_changes)}
             specification_id = self.create_specification(
                 research_asset_id=source["research_asset_id"],
@@ -124,6 +143,7 @@ class ExperimentService:
             )["id"]
         specification = self.get_specification(specification_id)
         assert specification is not None
+        self._assert_specification_binding(specification)
         result = self.backtest_runner.run(specification=specification)
         if result.get("status") not in _TERMINAL_STATUSES:
             raise ValueError("governed runner returned an invalid terminal status")
@@ -140,12 +160,13 @@ class ExperimentService:
         if status != "completed" and not isinstance(constraint_reason, str):
             raise ValueError("constraint failures require a redacted reason")
         identifier = str(uuid4())
+        specification = self.get_specification(specification_id)
+        if specification is None:
+            raise ValueError("experiment run specification does not exist")
+        self._assert_specification_binding(specification)
         sandbox_validation: dict[str, object] | None = None
         sandbox_run: dict[str, object] | None = None
         if status == "completed":
-            specification = self.get_specification(specification_id)
-            if specification is None:
-                raise ValueError("completed run specification does not exist")
             validation_id, sandbox_run_id = str(uuid4()), str(uuid4())
             sandbox_validation = {
                 "id": validation_id,
@@ -245,9 +266,33 @@ class ExperimentService:
             rows = connection.execute("SELECT * FROM advanced_experiment_feedback WHERE run_id = ? ORDER BY created_at", (run_id,)).fetchall()
         return [self._feedback_row(row) for row in rows]
 
+    def _resolve_bound_strategy(self, research_asset_id: str) -> str:
+        binding = self._binding_resolver(research_asset_id)
+        if binding is None:
+            raise ValueError("research asset has no server-bound strategy binding")
+        try:
+            resolved = BoundStrategyBinding.model_validate(binding)
+        except ValueError as error:
+            raise ValueError("research asset binding is invalid") from error
+        if resolved.research_asset_id != research_asset_id or resolved.revision != research_asset_id:
+            raise ValueError("research asset binding does not match the requested immutable revision")
+        return resolved.strategy_id
+
+    def _assert_specification_binding(self, specification: Mapping[str, object]) -> None:
+        research_asset_id = specification.get("research_asset_id")
+        bound_strategy_id = specification.get("bound_strategy_id")
+        scope = specification.get("data_scope")
+        if not isinstance(research_asset_id, str) or not isinstance(bound_strategy_id, str) or not bound_strategy_id:
+            raise ValueError("experiment specification lacks a server-bound strategy")
+        if not isinstance(scope, Mapping) or scope.get("strategy_id") != bound_strategy_id:
+            raise ValueError("experiment specification frozen scope diverges from its bound strategy")
+        if self._resolve_bound_strategy(research_asset_id) != bound_strategy_id:
+            raise ValueError("experiment specification bound strategy no longer matches its research asset")
+
     @staticmethod
     def _specification_row(row: sqlite3.Row) -> dict[str, Any]:
         value = dict(row)
+        value["bound_strategy_id"] = value.get("bound_strategy_id") or None
         for source, target in (("data_scope_json", "data_scope"), ("metrics_json", "metrics"), ("success_criteria_json", "success_criteria"), ("failure_criteria_json", "failure_criteria")):
             value[target] = json.loads(value.pop(source))
         return value
