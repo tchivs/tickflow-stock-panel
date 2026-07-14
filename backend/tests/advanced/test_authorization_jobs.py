@@ -32,6 +32,7 @@ def _services(
     quota: int = 2,
     rate_limits: dict[str, int] | None = None,
     instruments: frozenset[str] = frozenset({"600519.SH"}),
+    policy_holder: dict[str, object] | None = None,
 ):
     from app.advanced.authorization import AdvancedAuthorizationService, OperatorPolicy
     from app.advanced.jobs import AdvancedJobService
@@ -48,9 +49,11 @@ def _services(
         instruments=instruments,
         rate_limits=configured_rate_limits,
     )
+    if policy_holder is not None:
+        policy_holder["policy"] = policy
     authorization = AdvancedAuthorizationService(
         repository=repository,
-        policy_loader=lambda: policy,
+        policy_loader=lambda: policy_holder["policy"] if policy_holder is not None else policy,
         clock=clock,
     )
     provider = Spy()
@@ -217,6 +220,108 @@ def test_worker_revalidates_revocation_and_current_policy_before_provider_or_san
     assert repository.list_security_audits()[-1]["reason"] == "scope_denied"
     assert provider.calls == []
     assert sandbox.calls == []
+
+def test_policy_transition_denies_authorization_before_quota_acquisition(tmp_path):
+    from app.advanced.authorization import OperatorPolicy
+
+    policy_holder: dict[str, object] = {}
+    repository, authorization, jobs, provider, sandbox, clock, policy_a = _services(
+        tmp_path, quota=2, policy_holder=policy_holder
+    )
+    progress = Spy()
+    workflow = AsyncSpy()
+    jobs.set_progress_publisher(progress)
+    jobs.set_workflow(workflow)
+    record = _authorization(authorization)
+    policy_holder["policy"] = OperatorPolicy(
+        revision="operator-policy-v2",
+        task_types=frozenset({"research_draft"}),
+        markets=frozenset({"CN-A"}),
+        instruments=frozenset({"600519.SH"}),
+        rate_limits={"research_draft": 1},
+    )
+
+    with pytest.raises(ValueError, match="policy transition"):
+        jobs.create_job(principal="server-operator-principal", request=_request(record["token"]))
+
+    authorization_policy = repository.get_authorization(str(record["id"]))
+    current_policy = policy_holder["policy"]
+    assert authorization_policy is not None
+    assert repository.count_rate_consumptions(
+        principal="server-operator-principal",
+        policy_revision_id=str(authorization_policy["policy_revision_id"]),
+        task_type="research_draft",
+        now=clock.now.isoformat(),
+    ) == 0
+    assert repository.count_rate_consumptions(
+        principal="server-operator-principal",
+        policy_revision_id=str(repository.record_policy_revision(
+            revision=current_policy.revision,
+            fingerprint=current_policy.fingerprint,
+            snapshot=current_policy.snapshot(),
+        )["id"]),
+        task_type="research_draft",
+        now=clock.now.isoformat(),
+    ) == 0
+    assert repository.list_runnable_jobs() == []
+    assert repository.list_security_audits()[-1]["reason"] == "policy_transition_denied"
+    assert provider.calls == sandbox.calls == workflow.calls == progress.calls == []
+
+
+def test_policy_transition_rejects_queued_job_before_current_policy_quota_or_work(tmp_path):
+    import asyncio
+
+    from app.advanced.authorization import OperatorPolicy
+
+    policy_holder: dict[str, object] = {}
+    repository, authorization, jobs, provider, sandbox, clock, policy_a = _services(
+        tmp_path, quota=2, policy_holder=policy_holder
+    )
+    progress = Spy()
+    workflow = AsyncSpy()
+    jobs.set_progress_publisher(progress)
+    jobs.set_workflow(workflow)
+    record = _authorization(authorization)
+    queued = jobs.create_job(principal="server-operator-principal", request=_request(record["token"]))
+    authorization_policy = repository.get_authorization(str(record["id"]))
+    assert authorization_policy is not None
+    policy_a_consumption = repository.count_rate_consumptions(
+        principal="server-operator-principal",
+        policy_revision_id=str(authorization_policy["policy_revision_id"]),
+        task_type="research_draft",
+        now=clock.now.isoformat(),
+    )
+    policy_holder["policy"] = OperatorPolicy(
+        revision="operator-policy-v2",
+        task_types=frozenset({"research_draft"}),
+        markets=frozenset({"CN-A"}),
+        instruments=frozenset({"600519.SH"}),
+        rate_limits={"research_draft": 1},
+    )
+
+    rejected = asyncio.run(jobs.run_authorized_job(job_id=queued["id"]))
+
+    current_policy = policy_holder["policy"]
+    assert rejected["status"] == "rejected"
+    assert rejected["rejection_reason"] == "policy_transition_denied"
+    assert repository.count_rate_consumptions(
+        principal="server-operator-principal",
+        policy_revision_id=str(authorization_policy["policy_revision_id"]),
+        task_type="research_draft",
+        now=clock.now.isoformat(),
+    ) == policy_a_consumption == 1
+    assert repository.count_rate_consumptions(
+        principal="server-operator-principal",
+        policy_revision_id=str(repository.record_policy_revision(
+            revision=current_policy.revision,
+            fingerprint=current_policy.fingerprint,
+            snapshot=current_policy.snapshot(),
+        )["id"]),
+        task_type="research_draft",
+        now=clock.now.isoformat(),
+    ) == 0
+    assert repository.list_security_audits()[-1]["reason"] == "policy_transition_denied"
+    assert provider.calls == sandbox.calls == workflow.calls == progress.calls == []
 
 
 def test_rate_window_migration_preserves_legacy_accounting_under_unrunnable_identity(tmp_path):
