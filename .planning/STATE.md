@@ -5,15 +5,15 @@ milestone_name: milestone
 current_phase: 04
 current_phase_name: advanced-capabilities
 status: executing
-stopped_at: Completed 04-22-PLAN.md
-last_updated: "2026-07-14T05:57:36.016Z"
+stopped_at: Completed 04-24-PLAN.md
+last_updated: "2026-07-14T06:13:57.511Z"
 last_activity: 2026-07-13
 last_activity_desc: Completed 04-17 governed experiment evolution
 progress:
   total_phases: 4
   completed_phases: 3
   total_plans: 61
-  completed_plans: 57
+  completed_plans: 58
 ---
 
 # Project State
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-07-10)
 ## Current Position
 
 Phase: 04 (advanced-capabilities) — EXECUTING
-Plan: 6 of 19
+Plan: 7 of 19
 Status: Ready to execute
 Last activity: 2026-07-13 — Completed 04-17 governed experiment evolution
 
@@ -77,6 +77,7 @@ Progress: [█████████░] 93%
 | Phase 04 P17 | 10m 52s | 2 tasks | 9 files |
 | Phase 04 P18 | 12m | 2 tasks | 5 files |
 | Phase 04-advanced-capabilities P22 | 521 | 2 tasks | 9 files |
+| Phase 04-advanced-capabilities P24 | 773 | 2 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -130,6 +131,8 @@ No implementation decision was explicitly locked by the architecture intake. Req
 - [Phase 04]: Experiment and evolution controls submit bounded scope/configuration while gate verdicts and sandbox details remain server-projected. — Prevents browser-provided authority and sandbox disclosure.
 - [Phase ?]: ResearchRepository exclusively resolves immutable research assets to installed strategies; advanced workflows receive an injected resolver.
 - [Phase ?]: Legacy experiment specifications remain readable but fail closed for execution without frozen server-bound strategy provenance.
+- [Phase ?]: Advanced-host readiness is deployment-owned and validates 000300.SH, fixed evaluation windows, coverage, splits, and bullish_alignment warmup before any governed-lake write.
+- [Phase ?]: Host fixture eligibility derives bounded MA and momentum inputs from raw bars and reuses the production bullish_alignment expression rather than copying strategy logic.
 
 ### Pending Todos
 
@@ -147,6 +150,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-07-14T05:57:36.008Z
-Stopped at: Completed 04-22-PLAN.md
+Last session: 2026-07-14T06:13:57.504Z
+Stopped at: Completed 04-24-PLAN.md
 Resume file: None

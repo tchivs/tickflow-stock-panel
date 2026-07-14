@@ -177,13 +177,13 @@ Plans:
   3. Operator can start an authorized agent job for an allowed market and instrument, observe SSE progress, and inspect its audit summary; unauthorized, out-of-allowlist, or rate-limited requests are rejected before work starts.
   4. Researcher can submit a custom strategy only when its machine-readable contract, AST, imports, timeout, and memory constraints pass validation, and can review the constrained run's result or failure record.
 
-**Plans**: 22/26 plans executed
+**Plans**: 23/26 plans executed
 
 - [x] 04-20-PLAN.md
 - [x] 04-21-PLAN.md
 - [x] 04-22-PLAN.md
 - [ ] 04-23-PLAN.md
-- [ ] 04-24-PLAN.md
+- [x] 04-24-PLAN.md
 - [ ] 04-25-PLAN.md
 - [ ] 04-26-PLAN.md
 
@@ -256,5 +256,5 @@ Plans:
 | 1. Core Merger | 15/15 | Complete    | 2026-07-11 |
 | 2. Factor And Strategy Research | 8/8 | Complete    | 2026-07-11 |
 | 3. AI Analysis | 12/12 | Complete    | 2026-07-12 |
-| 4. Advanced Capabilities | 22/26 | In Progress|  |
+| 4. Advanced Capabilities | 23/26 | In Progress|  |
 | 5. Optional Enhancements | 0/TBD | Optional | - |
