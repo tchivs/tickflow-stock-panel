@@ -5,15 +5,15 @@ milestone_name: milestone
 current_phase: 04
 current_phase_name: advanced-capabilities
 status: executing
-stopped_at: Completed 04-23-PLAN.md
-last_updated: "2026-07-14T06:26:31.250Z"
+stopped_at: Completed 04-25-PLAN.md
+last_updated: "2026-07-14T06:34:57.262Z"
 last_activity: 2026-07-13
 last_activity_desc: Completed 04-17 governed experiment evolution
 progress:
   total_phases: 4
   completed_phases: 3
   total_plans: 61
-  completed_plans: 59
+  completed_plans: 60
 ---
 
 # Project State
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-07-10)
 ## Current Position
 
 Phase: 04 (advanced-capabilities) — EXECUTING
-Plan: 8 of 19
+Plan: 9 of 19
 Status: Ready to execute
 Last activity: 2026-07-13 — Completed 04-17 governed experiment evolution
 
@@ -79,6 +79,7 @@ Progress: [█████████░] 93%
 | Phase 04-advanced-capabilities P22 | 521 | 2 tasks | 9 files |
 | Phase 04-advanced-capabilities P24 | 773 | 2 tasks | 9 files |
 | Phase 04-advanced-capabilities P23 | 9m 37s | 2 tasks | 6 files |
+| Phase 04 P25 | 314 | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -136,6 +137,8 @@ No implementation decision was explicitly locked by the architecture intake. Req
 - [Phase ?]: Host fixture eligibility derives bounded MA and momentum inputs from raw bars and reuses the production bullish_alignment expression rather than copying strategy logic.
 - [Phase ?]: Historical aggregate rate windows use reserved __legacy_rate_window__ identity and cannot be consumed by live policy.
 - [Phase ?]: Rejected task quota checks persist audit state without emitting advanced-progress SSE.
+- [Phase ?]: Viewpoint calibration selects the first terminal immutable fact by created-at and stable ID, excluding the awaiting fact.
+- [Phase ?]: Terminal viewpoint evaluation retries reuse the frozen ledger fact and cannot invoke governed evaluation or alter calibration.
 
 ### Pending Todos
 
@@ -153,6 +156,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-07-14T06:26:31.243Z
-Stopped at: Completed 04-23-PLAN.md
+Last session: 2026-07-14T06:34:57.253Z
+Stopped at: Completed 04-25-PLAN.md
 Resume file: None
