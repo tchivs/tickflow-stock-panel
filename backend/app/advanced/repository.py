@@ -156,6 +156,19 @@ class AdvancedRepository:
             row = connection.execute("SELECT * FROM advanced_authorizations WHERE id = ?", (authorization_id,)).fetchone()
         return None if row is None else dict(row)
 
+    def policy_revision_for_job(self, job_id: str) -> dict[str, Any] | None:
+        """Resolve the immutable authorization policy provenance for one queued job."""
+        with self._connection() as connection:
+            row = connection.execute(
+                """SELECT policy.*
+                   FROM advanced_jobs AS job
+                   JOIN advanced_authorizations AS authorization ON authorization.id = job.authorization_id
+                   JOIN advanced_policy_revisions AS policy ON policy.id = authorization.policy_revision_id
+                   WHERE job.id = ?""",
+                (job_id,),
+            ).fetchone()
+        return None if row is None else self._policy_row(row)
+
     def revoke_authorization(self, *, authorization_id: str) -> None:
         with self._connection() as connection, connection:
             changed = connection.execute(
@@ -166,7 +179,7 @@ class AdvancedRepository:
             raise ValueError("authorization cannot be revoked")
 
     def acquire_authorized_job(self, *, job_id: str, authorization_id: str, principal: str, subject_kind: str, subject_key: str, task_type: str, market: str, instrument: str, idempotency_key: str, policy_revision_id: str, quota: int, now: str) -> dict[str, Any] | None:
-        """Atomically return an idempotent job or consume its task-specific quota slot."""
+        """Atomically acquire only when authorization and current policy facts agree."""
         window_started_at = _rate_window_started_at(now)
         with self._connection() as connection, connection:
             existing = connection.execute(
@@ -174,10 +187,22 @@ class AdvancedRepository:
             ).fetchone()
             if existing is not None:
                 return dict(existing)
+            provenance = connection.execute(
+                """SELECT authorization.policy_revision_id AS authorization_policy_revision_id
+                   FROM advanced_authorizations AS authorization
+                   JOIN advanced_policy_revisions AS policy ON policy.id = authorization.policy_revision_id
+                   WHERE authorization.id = ?
+                     AND authorization.principal = ?
+                     AND authorization.policy_revision_id = ?""",
+                (authorization_id, principal, policy_revision_id),
+            ).fetchone()
+            if provenance is None:
+                raise ValueError("policy transition denied")
+            authorization_policy_revision_id = str(provenance["authorization_policy_revision_id"])
             rate = connection.execute(
                 """SELECT * FROM advanced_rate_windows
                    WHERE principal = ? AND policy_revision_id = ? AND task_type = ? AND window_started_at = ?""",
-                (principal, policy_revision_id, task_type, window_started_at),
+                (principal, authorization_policy_revision_id, task_type, window_started_at),
             ).fetchone()
             consumed = 0 if rate is None else int(rate["consumed"])
             if consumed >= quota:
@@ -187,7 +212,7 @@ class AdvancedRepository:
                     """INSERT INTO advanced_rate_windows
                        (id, principal, policy_revision_id, task_type, window_started_at, consumed, created_at)
                        VALUES (?, ?, ?, ?, ?, 1, ?)""",
-                    (str(uuid4()), principal, policy_revision_id, task_type, window_started_at, now),
+                    (str(uuid4()), principal, authorization_policy_revision_id, task_type, window_started_at, now),
                 )
             else:
                 connection.execute("UPDATE advanced_rate_windows SET consumed = consumed + 1 WHERE id = ?", (rate["id"],))

@@ -134,6 +134,12 @@ class AdvancedJobService:
                 fingerprint=policy.fingerprint,
                 snapshot=policy.snapshot(),
             )
+            authorization_policy = self._repository.policy_revision_for_job(job_id)
+            if (
+                authorization_policy is None
+                or str(authorization_policy["id"]) != str(policy_record["id"])
+            ):
+                raise ValueError("policy transition denied")
             if not self._repository.quota_is_current(
                 principal=str(job["principal"]),
                 policy_revision_id=str(policy_record["id"]),
@@ -274,6 +280,8 @@ class AdvancedJobService:
             if fields - {"authorization_token", "idempotency_key"}:
                 return "client_authority_denied"
         message = str(error).lower()
+        if "policy transition" in message:
+            return "policy_transition_denied"
         if "revoked" in message:
             return "authorization_revoked"
         if "expired" in message:
