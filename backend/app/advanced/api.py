@@ -112,6 +112,29 @@ def _require_research_asset(request: Request, research_asset_id: object) -> str:
     return research_asset_id
 
 
+def _require_research_asset_binding(
+    request: Request, research_asset_id: object, strategy_id: object
+) -> dict[str, object]:
+    """Resolve one server-owned binding before creating immutable experiment facts."""
+
+    asset_id = _require_research_asset(request, research_asset_id)
+    if not isinstance(strategy_id, str):
+        raise HTTPException(status_code=404, detail="advanced experiment not found")
+    resolver = getattr(request.app.state, "resolve_advanced_research_asset_binding", None)
+    try:
+        binding = resolver(request, asset_id) if callable(resolver) else None
+    except Exception as error:
+        raise HTTPException(status_code=503, detail="advanced authorization is unavailable") from error
+    if (
+        not isinstance(binding, dict)
+        or binding.get("research_asset_id") != asset_id
+        or binding.get("strategy_id") != strategy_id
+        or not isinstance(binding.get("revision"), str)
+    ):
+        raise HTTPException(status_code=404, detail="advanced experiment not found")
+    return binding
+
+
 @router.get("/research-assets/strategies/{strategy_id}")
 def strategy_research_asset_binding(strategy_id: str, request: Request) -> dict[str, object]:
     """Expose only the persisted lifecycle binding for an installed strategy."""
@@ -355,7 +378,9 @@ def viewpoint_calibration(source_profile: str, request: Request) -> dict[str, ob
 
 @router.post("/experiments/specifications")
 def create_experiment_specification(payload: ExperimentSpecificationRequest, request: Request) -> dict[str, object]:
-    _require_research_asset(request, payload.research_asset_id)
+    _require_research_asset_binding(
+        request, payload.research_asset_id, payload.data_scope.strategy_id
+    )
     try:
         record = _service(request, "experiment_service").create_specification(
             **payload.model_dump(mode="json"), owner_principal=_principal(request)

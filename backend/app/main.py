@@ -312,18 +312,35 @@ async def lifespan(app: FastAPI):
             frozenset(("instrument", subject) for subject in advanced_subjects)
         )
 
-    def resolve_advanced_research_asset(_request: Request, asset_id: str) -> bool:
+    def resolve_advanced_research_asset_binding(_request: Request, asset_id: str) -> dict[str, str] | None:
+        """Resolve only an extant immutable installed-strategy binding for public work."""
+
+        binding = research_repository.resolve_bound_strategy(asset_id)
+        if not isinstance(binding, dict):
+            return None
+        strategy_id = binding.get("strategy_id")
+        revision_id = binding.get("revision")
+        if (
+            binding.get("research_asset_id") != asset_id
+            or not isinstance(strategy_id, str)
+            or not isinstance(revision_id, str)
+            or app.state.factor_registry.get_revision(revision_id) is None
+        ):
+            return None
+        try:
+            app.state.strategy_engine.get(strategy_id)
+        except (AttributeError, ValueError):
+            return None
+        return binding
+
+    def resolve_advanced_research_asset(request: Request, asset_id: str) -> bool:
         """Accept only the exact persisted lifecycle binding target, never a strategy ID."""
-        binding = research_repository.get_strategy_asset_binding("bullish_alignment")
-        return (
-            isinstance(asset_id, str)
-            and isinstance(binding, dict)
-            and binding.get("research_asset_id") == asset_id
-            and app.state.factor_registry.get_revision(asset_id) is not None
-        )
+
+        return resolve_advanced_research_asset_binding(request, asset_id) is not None
 
     app.state.resolve_advanced_subject_scope = resolve_advanced_subject_scope
     app.state.resolve_advanced_research_asset = resolve_advanced_research_asset
+    app.state.resolve_advanced_research_asset_binding = resolve_advanced_research_asset_binding
     # 指标异步预热标志: enriched 缓存在后台线程构建, 完成后置 True
     app.state.indicators_ready = False
     repo._on_warmup_done = lambda: setattr(app.state, "indicators_ready", True)  # noqa: SLF001

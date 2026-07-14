@@ -490,6 +490,10 @@ def test_experiment_api_uses_server_owner_for_append_only_specifications_and_fee
     app.include_router(advanced_api.router)
     app.state.experiment_service = service
     app.state.resolve_advanced_research_asset = lambda _request, asset_id: asset_id == "asset-owned"
+    app.state.resolve_advanced_research_asset_binding = lambda _request, asset_id: (
+        {"research_asset_id": asset_id, "strategy_id": "momentum_breakout", "revision": asset_id}
+        if asset_id == "asset-owned" else None
+    )
 
     @app.middleware("http")
     async def authenticated(request: Request, call_next):
@@ -519,6 +523,92 @@ def test_experiment_api_uses_server_owner_for_append_only_specifications_and_fee
     assert feedback.status_code == 200
     assert service.feedback == [{"run_id": "run-owned", "conclusion": "supported", "notes": "完整运行可追加研究结论。"}]
     assert client.patch("/api/advanced/experiments/specifications/spec-owned", json={}).status_code == 405
+
+
+def test_experiment_api_denies_mismatched_persisted_binding_before_service_creation():
+    from app.advanced import api as advanced_api
+
+    service = _ExperimentApiService()
+    app = FastAPI()
+    app.include_router(advanced_api.router)
+    app.state.experiment_service = service
+    app.state.resolve_advanced_research_asset = lambda _request, asset_id: asset_id == "asset-owned"
+    app.state.resolve_advanced_research_asset_binding = lambda _request, asset_id: (
+        {"research_asset_id": asset_id, "strategy_id": "momentum_breakout", "revision": asset_id}
+        if asset_id == "asset-owned" else None
+    )
+
+    @app.middleware("http")
+    async def authenticated(request: Request, call_next):
+        request.state.reviewer_principal = "server-researcher"
+        return await call_next(request)
+
+    payload = {
+        "research_asset_id": "asset-owned",
+        "hypothesis": "受控假设",
+        "data_scope": _strategy_scope(strategy_id="different_installed_strategy"),
+        "method": "bounded-method",
+        "metrics": ["sharpe"],
+        "success_criteria": {"sharpe_gt": 1},
+        "failure_criteria": {"drawdown_lt": -0.2},
+    }
+    client = TestClient(app)
+
+    denied = client.post("/api/advanced/experiments/specifications", json=payload)
+
+    assert denied.status_code == 404
+    assert denied.json() == {"detail": "advanced experiment not found"}
+    assert service.created == []
+
+    matching = client.post(
+        "/api/advanced/experiments/specifications",
+        json={**payload, "data_scope": _strategy_scope()},
+    )
+
+    assert matching.status_code == 200
+    assert service.created == [{**payload, "data_scope": _strategy_scope(), "owner_principal": "server-researcher"}]
+
+
+def test_experiment_api_mismatch_creates_no_immutable_or_governed_side_effects(tmp_path):
+    from app.advanced import api as advanced_api
+
+    runner = FakeGovernedBacktest()
+    repository, service = _service(tmp_path, runner)
+    app = FastAPI()
+    app.include_router(advanced_api.router)
+    app.state.experiment_service = service
+    app.state.resolve_advanced_research_asset = lambda _request, asset_id: asset_id == "asset-owned"
+    app.state.resolve_advanced_research_asset_binding = lambda _request, asset_id: (
+        {"research_asset_id": asset_id, "strategy_id": "momentum_breakout", "revision": asset_id}
+        if asset_id == "asset-owned" else None
+    )
+
+    @app.middleware("http")
+    async def authenticated(request: Request, call_next):
+        request.state.reviewer_principal = "server-researcher"
+        return await call_next(request)
+
+    denied = TestClient(app).post(
+        "/api/advanced/experiments/specifications",
+        json={
+            "research_asset_id": "asset-owned",
+            "hypothesis": "受控假设",
+            "data_scope": _strategy_scope(strategy_id="different_installed_strategy"),
+            "method": "bounded-method",
+            "metrics": ["sharpe"],
+            "success_criteria": {"sharpe_gt": 1},
+            "failure_criteria": {"drawdown_lt": -0.2},
+        },
+    )
+
+    assert denied.status_code == 404
+    assert _experiment_evidence_counts(repository) == {
+        table: 0 for table in _experiment_evidence_counts(repository)
+    }
+    assert runner.calls == []
+    assert repository.list_runnable_jobs() == []
+    assert repository.list_sandbox_validations() == []
+    assert repository.list_sandbox_runs() == []
 
 
 @pytest.mark.parametrize(
