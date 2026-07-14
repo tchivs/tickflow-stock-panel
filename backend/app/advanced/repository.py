@@ -583,6 +583,40 @@ class AdvancedRepository:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def canonical_terminal_viewpoint_evaluation(self, viewpoint_version_id: str) -> dict[str, Any] | None:
+        """Return the first immutable terminal fact, excluding the awaiting-plan fact."""
+        with self._connection() as connection:
+            row = connection.execute(
+                """SELECT * FROM advanced_viewpoint_evaluations
+                   WHERE viewpoint_version_id = ?
+                     AND (status = 'evaluated' OR (status = 'unevaluable' AND reason != 'awaiting_governed_evaluation'))
+                   ORDER BY created_at ASC, id ASC LIMIT 1""",
+                (viewpoint_version_id,),
+            ).fetchone()
+        return None if row is None else dict(row)
+
+    def calibration_viewpoint_evaluations(self, source_profile: str) -> list[dict[str, Any]]:
+        """Return one deterministic terminal calibration candidate per immutable version."""
+        with self._connection() as connection:
+            rows = connection.execute(
+                """SELECT evaluation.*, version.confidence
+                   FROM advanced_viewpoint_versions AS version
+                   JOIN advanced_viewpoints AS viewpoint ON viewpoint.id = version.viewpoint_id
+                   JOIN advanced_viewpoint_evaluations AS evaluation ON evaluation.id = (
+                       SELECT terminal.id
+                       FROM advanced_viewpoint_evaluations AS terminal
+                       WHERE terminal.viewpoint_version_id = version.id
+                         AND (terminal.status = 'evaluated'
+                              OR (terminal.status = 'unevaluable' AND terminal.reason != 'awaiting_governed_evaluation'))
+                       ORDER BY terminal.created_at ASC, terminal.id ASC
+                       LIMIT 1
+                   )
+                   WHERE viewpoint.source_profile = ?
+                   ORDER BY evaluation.coverage_start ASC, evaluation.created_at ASC, evaluation.id ASC""",
+                (source_profile,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     @staticmethod
     def _policy_row(row: sqlite3.Row) -> dict[str, Any]:
         value = dict(row)
