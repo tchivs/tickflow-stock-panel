@@ -306,7 +306,7 @@ def test_main_host_exposes_governed_viewpoint_snapshot_from_the_lifespan(tmp_pat
         }) == {"status": "unevaluable", "reason": "missing_price"}
 
 
-def test_main_host_loads_and_persists_deployment_owned_advanced_fixture(tmp_path, monkeypatch):
+def test_main_host_accepts_valid_fixture_readiness_before_public_work(tmp_path, monkeypatch):
     from app.config import settings
     from app.services import auth as auth_service
 
@@ -351,7 +351,7 @@ def test_main_host_loads_and_persists_deployment_owned_advanced_fixture(tmp_path
 
 
 
-def test_main_host_rejects_invalid_readiness_before_governed_lake_creation(tmp_path, monkeypatch):
+def test_main_host_rejects_invalid_fixture_readiness_before_lake_sync(tmp_path, monkeypatch):
     from app.config import settings
     from app.services import auth as auth_service
 
@@ -454,7 +454,7 @@ def test_main_host_fixture_revokes_selected_job_before_execution(tmp_path, monke
         assert audit.json()["audit"]["reason"] == "authorization_revoked"
 
 
-def test_authenticated_main_host_projects_latest_immutable_viewpoint_evaluation(tmp_path, monkeypatch):
+def test_authenticated_main_host_repeated_viewpoint_evaluation_is_canonical(tmp_path, monkeypatch):
     from app.advanced import api as advanced_api
     from app.advanced.governed_runner import GovernedExperimentRunner
     from app.config import settings
@@ -512,6 +512,18 @@ def test_authenticated_main_host_projects_latest_immutable_viewpoint_evaluation(
             "benchmark": "000300.SH",
             "relative_return": None,
         }
+
+        repeated_evaluation_response = client.post(
+            f"/api/advanced/viewpoints/versions/{version_id}/evaluate", json={}
+        )
+        assert repeated_evaluation_response.status_code == 200
+        assert repeated_evaluation_response.json() == evaluation_response.json()
+        terminal = app.state.advanced_repository.canonical_terminal_viewpoint_evaluation(version_id)
+        assert terminal is not None and terminal["reason"] == "missing_price"
+        assert [
+            row["id"]
+            for row in app.state.advanced_repository.calibration_viewpoint_evaluations("operator-research-v1")
+        ] == [terminal["id"]]
 
         listed = client.get(f"/api/advanced/viewpoints/{viewpoint_id}/versions")
         assert listed.status_code == 200
@@ -750,3 +762,125 @@ def test_main_host_publishes_committed_scoped_advanced_progress_only(tmp_path, m
         finally:
             app.state.quote_service.unsubscribe(allowed)
             app.state.quote_service.unsubscribe(denied)
+
+
+def test_main_host_enforces_public_binding_and_task_specific_quota_boundaries(tmp_path, monkeypatch):
+    import sqlite3
+
+    from app.advanced import api as advanced_api
+    from app.config import settings
+    from app.services import auth as auth_service
+
+    fixture_dir = tmp_path / "phase1-fixtures"
+    data_dir = tmp_path / "governed-data"
+    advanced_fixture = tmp_path / "advanced-host-fixture.json"
+    fixture = _advanced_host_fixture()
+    policy = fixture["policy"]
+    assert isinstance(policy, dict)
+    policy["rate_limits"] = {
+        "research_draft": 2,
+        "experiment": 1,
+        "strategy_evaluation": 1,
+    }
+    _write_governed_backtest_fixture(fixture_dir)
+    advanced_fixture.write_text(json.dumps(fixture), encoding="utf-8")
+    monkeypatch.setenv("PHASE1_FIXTURE_MODE", "1")
+    monkeypatch.setenv("PHASE1_FIXTURE_DIR", str(fixture_dir))
+    monkeypatch.setenv("ADVANCED_HOST_FIXTURE", str(advanced_fixture))
+    monkeypatch.setattr(settings, "data_dir", data_dir)
+    monkeypatch.setattr(settings, "auth_password", "host-test-password")
+    monkeypatch.setattr(auth_service, "_configured_cache", None)
+    auth_service._sessions.clear()
+
+    from app.main import app
+
+    def experiment_evidence_counts() -> dict[str, int]:
+        tables = (
+            "advanced_experiment_specs",
+            "advanced_experiment_runs",
+            "advanced_sandbox_validations",
+            "advanced_sandbox_runs",
+            "advanced_experiment_feedback",
+            "advanced_strategy_candidates",
+            "advanced_promotion_gates",
+            "advanced_promotions",
+        )
+        with sqlite3.connect(app.state.advanced_repository.database_path) as connection:
+            return {
+                table: connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                for table in tables
+            }
+
+    with TestClient(app) as client:
+        assert client.post("/api/auth/login", json={"password": "host-test-password"}).status_code == 200
+        allowed_scope = advanced_api.AdvancedSubjectScope(frozenset({("instrument", "600000.SH")}))
+        app.state.resolve_advanced_subject_scope = lambda _request: allowed_scope
+        subscriber = app.state.quote_service.subscribe(advanced_scope=allowed_scope)
+        binding = client.get("/api/advanced/research-assets/strategies/bullish_alignment").json()["binding"]
+        assert binding["strategy_id"] == "bullish_alignment"
+        baseline_evidence = experiment_evidence_counts()
+        lake_before = sorted(data_dir.rglob("*.parquet"))
+        try:
+            mismatched = client.post(
+                "/api/advanced/experiments/specifications",
+                json={
+                    "research_asset_id": binding["research_asset_id"],
+                    "hypothesis": "不同已安装策略不得借用研究资产。",
+                    "data_scope": {
+                        "market": "CN-A",
+                        "strategy_id": "fixture_momentum",
+                        "start": "2024-01-02",
+                        "end": "2024-07-15",
+                        "symbols": ["600000.SH"],
+                        "asset_type": "stock",
+                        "parameters": {"lookback": 20},
+                    },
+                    "method": "bounded-method",
+                    "metrics": ["sharpe"],
+                    "success_criteria": {"sharpe_gt": 1},
+                    "failure_criteria": {"drawdown_lt": -0.2},
+                },
+            )
+            assert mismatched.status_code == 404
+            assert experiment_evidence_counts() == baseline_evidence
+            assert app.state.advanced_repository.list_runnable_jobs() == []
+            assert app.state.advanced_repository.list_sandbox_validations() == []
+            assert app.state.advanced_repository.list_sandbox_runs() == []
+            assert sorted(data_dir.rglob("*.parquet")) == lake_before
+            assert subscriber.pop()["advanced_progress"] == []
+
+            first_experiment = client.post(
+                "/api/advanced/subjects/600000.SH/jobs", json={"task_type": "experiment"}
+            )
+            first_strategy = client.post(
+                "/api/advanced/subjects/600000.SH/jobs", json={"task_type": "strategy_evaluation"}
+            )
+            assert first_experiment.status_code == first_strategy.status_code == 200
+            experiment_events = subscriber.pop()["advanced_progress"]
+            assert {first_experiment.json()["job"]["id"], first_strategy.json()["job"]["id"]} <= {
+                event["job_id"] for event in experiment_events
+            }
+
+            baseline_evidence = experiment_evidence_counts()
+            runnable_before = app.state.advanced_repository.list_runnable_jobs()
+            denied_experiment = client.post(
+                "/api/advanced/subjects/600000.SH/jobs", json={"task_type": "experiment"}
+            )
+            denied_strategy = client.post(
+                "/api/advanced/subjects/600000.SH/jobs", json={"task_type": "strategy_evaluation"}
+            )
+            assert denied_experiment.status_code == denied_strategy.status_code == 409
+            assert experiment_evidence_counts() == baseline_evidence
+            assert app.state.advanced_repository.list_runnable_jobs() == runnable_before
+            assert subscriber.pop()["advanced_progress"] == []
+            audits = app.state.advanced_repository.list_security_audits()
+            assert [audit["reason"] for audit in audits[-2:]] == ["quota_exhausted", "quota_exhausted"]
+
+            permitted_research = client.post(
+                "/api/advanced/subjects/600000.SH/jobs", json={"task_type": "research_draft"}
+            )
+            assert permitted_research.status_code == 200
+            research_events = subscriber.pop()["advanced_progress"]
+            assert any(event["job_id"] == permitted_research.json()["job"]["id"] for event in research_events)
+        finally:
+            app.state.quote_service.unsubscribe(subscriber)
