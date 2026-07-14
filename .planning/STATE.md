@@ -5,15 +5,15 @@ milestone_name: milestone
 current_phase: 04
 current_phase_name: advanced-capabilities
 status: executing
-stopped_at: Completed 04-24-PLAN.md
-last_updated: "2026-07-14T06:13:57.511Z"
+stopped_at: Completed 04-23-PLAN.md
+last_updated: "2026-07-14T06:26:31.250Z"
 last_activity: 2026-07-13
 last_activity_desc: Completed 04-17 governed experiment evolution
 progress:
   total_phases: 4
   completed_phases: 3
   total_plans: 61
-  completed_plans: 58
+  completed_plans: 59
 ---
 
 # Project State
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-07-10)
 ## Current Position
 
 Phase: 04 (advanced-capabilities) — EXECUTING
-Plan: 7 of 19
+Plan: 8 of 19
 Status: Ready to execute
 Last activity: 2026-07-13 — Completed 04-17 governed experiment evolution
 
@@ -78,6 +78,7 @@ Progress: [█████████░] 93%
 | Phase 04 P18 | 12m | 2 tasks | 5 files |
 | Phase 04-advanced-capabilities P22 | 521 | 2 tasks | 9 files |
 | Phase 04-advanced-capabilities P24 | 773 | 2 tasks | 9 files |
+| Phase 04-advanced-capabilities P23 | 9m 37s | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -133,6 +134,8 @@ No implementation decision was explicitly locked by the architecture intake. Req
 - [Phase ?]: Legacy experiment specifications remain readable but fail closed for execution without frozen server-bound strategy provenance.
 - [Phase ?]: Advanced-host readiness is deployment-owned and validates 000300.SH, fixed evaluation windows, coverage, splits, and bullish_alignment warmup before any governed-lake write.
 - [Phase ?]: Host fixture eligibility derives bounded MA and momentum inputs from raw bars and reuses the production bullish_alignment expression rather than copying strategy logic.
+- [Phase ?]: Historical aggregate rate windows use reserved __legacy_rate_window__ identity and cannot be consumed by live policy.
+- [Phase ?]: Rejected task quota checks persist audit state without emitting advanced-progress SSE.
 
 ### Pending Todos
 
@@ -150,6 +153,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-07-14T06:13:57.504Z
-Stopped at: Completed 04-24-PLAN.md
+Last session: 2026-07-14T06:26:31.243Z
+Stopped at: Completed 04-23-PLAN.md
 Resume file: None
