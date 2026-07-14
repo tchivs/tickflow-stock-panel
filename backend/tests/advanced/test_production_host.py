@@ -884,3 +884,110 @@ def test_main_host_enforces_public_binding_and_task_specific_quota_boundaries(tm
             assert any(event["job_id"] == permitted_research.json()["job"]["id"] for event in research_events)
         finally:
             app.state.quote_service.unsubscribe(subscriber)
+
+
+def test_main_host_policy_transition_rejects_preserved_queued_job_without_progress(tmp_path, monkeypatch):
+    import asyncio
+
+    from app.advanced import api as advanced_api
+    from app.config import settings
+    from app.services import auth as auth_service
+
+    fixture_dir = tmp_path / "phase1-fixtures"
+    data_dir = tmp_path / "governed-data"
+    advanced_fixture = tmp_path / "advanced-host-fixture.json"
+    fixture = _advanced_host_fixture()
+    policy = fixture["policy"]
+    assert isinstance(policy, dict)
+    rate_limits = policy["rate_limits"]
+    assert isinstance(rate_limits, dict)
+    rate_limits["research_draft"] = 2
+    _write_governed_backtest_fixture(fixture_dir)
+    advanced_fixture.write_text(json.dumps(fixture), encoding="utf-8")
+    monkeypatch.setenv("PHASE1_FIXTURE_MODE", "1")
+    monkeypatch.setenv("PHASE1_FIXTURE_DIR", str(fixture_dir))
+    monkeypatch.setenv("ADVANCED_HOST_FIXTURE", str(advanced_fixture))
+    monkeypatch.setattr(settings, "data_dir", data_dir)
+    monkeypatch.setattr(settings, "auth_password", "host-test-password")
+    monkeypatch.setattr(auth_service, "_configured_cache", None)
+    auth_service._sessions.clear()
+
+    from app.main import app
+
+    with TestClient(app):
+        service = app.state.advanced_job_service
+        queued = service.create_session_bound_job(
+            principal="server-operator-principal",
+            task_type="research_draft",
+            instrument="600000.SH",
+        )
+        authorization = app.state.advanced_repository.get_authorization(str(queued["authorization_id"]))
+        assert authorization is not None
+        policy_a_id = str(authorization["policy_revision_id"])
+        assert app.state.advanced_repository.count_rate_consumptions(
+            principal="server-operator-principal",
+            policy_revision_id=policy_a_id,
+            task_type="research_draft",
+            now=app.state.advanced_repository.now(),
+        ) == 1
+
+    rate_limits["research_draft"] = 1
+    advanced_fixture.write_text(json.dumps(fixture), encoding="utf-8")
+
+    class WorkflowSpy:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        async def ainvoke(self, state: dict[str, object], config: dict[str, object]) -> dict[str, object]:
+            self.calls.append({"state": state, "config": config})
+            return {}
+
+    with TestClient(app):
+        service = app.state.advanced_job_service
+        scope = advanced_api.AdvancedSubjectScope(frozenset({("instrument", "600000.SH")}))
+        subscriber = app.state.quote_service.subscribe(advanced_scope=scope)
+        provider_calls: list[dict[str, object]] = []
+        sandbox_calls: list[dict[str, object]] = []
+        workflow = WorkflowSpy()
+        service._provider = lambda **kwargs: provider_calls.append(kwargs)
+        service._sandbox = lambda **kwargs: sandbox_calls.append(kwargs)
+        service.set_workflow(workflow)
+        lake_before = sorted(data_dir.rglob("*.parquet"))
+        sandbox_before = (
+            app.state.advanced_repository.list_sandbox_validations(),
+            app.state.advanced_repository.list_sandbox_runs(),
+        )
+        try:
+            rejected = asyncio.run(service.run_authorized_job(job_id=queued["id"]))
+            current_policy = app.state.advanced_policy
+            policy_b_id = str(app.state.advanced_repository.record_policy_revision(
+                revision=current_policy.version,
+                fingerprint=current_policy.fingerprint,
+                snapshot=current_policy.snapshot(),
+            )["id"])
+
+            assert rejected["status"] == "rejected"
+            assert rejected["rejection_reason"] == "policy_transition_denied"
+            assert app.state.advanced_repository.count_rate_consumptions(
+                principal="server-operator-principal",
+                policy_revision_id=policy_a_id,
+                task_type="research_draft",
+                now=app.state.advanced_repository.now(),
+            ) == 1
+            assert app.state.advanced_repository.count_rate_consumptions(
+                principal="server-operator-principal",
+                policy_revision_id=policy_b_id,
+                task_type="research_draft",
+                now=app.state.advanced_repository.now(),
+            ) == 0
+            assert app.state.advanced_repository.list_runnable_jobs() == []
+            assert app.state.advanced_repository.list_security_audits()[-1]["reason"] == "policy_transition_denied"
+            assert provider_calls == sandbox_calls == workflow.calls == []
+            assert sorted(data_dir.rglob("*.parquet")) == lake_before
+            assert (
+                app.state.advanced_repository.list_sandbox_validations(),
+                app.state.advanced_repository.list_sandbox_runs(),
+            ) == sandbox_before
+            assert subscriber.pop()["advanced_progress"] == []
+        finally:
+            app.state.quote_service.unsubscribe(subscriber)
