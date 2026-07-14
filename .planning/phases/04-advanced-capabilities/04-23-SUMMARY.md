@@ -57,7 +57,7 @@ coverage:
         status: pass
     human_judgment: false
 metrics:
-  duration: 9m 37s
+  duration: 13m 55s
   completed: 2026-07-14
 ---
 
@@ -67,9 +67,9 @@ metrics:
 
 ## Performance
 
-- **Duration:** 9m 37s
+- **Duration:** 13m 55s
 - **Started:** 2026-07-14T06:15:29Z
-- **Completed:** 2026-07-14T06:25:06Z
+- **Completed:** 2026-07-14T06:29:24Z
 - **Tasks:** 2/2
 - **Files modified:** 6
 
@@ -78,12 +78,13 @@ metrics:
 - Rebuilt durable rate-window identity to include immutable task type, preserving historical aggregate rows as the reserved non-runnable `__legacy_rate_window__` identity.
 - Replaced the collapsed scalar quota with immutable per-task positive quotas, retaining the configured `AdvancedPolicy.rate_limits` map when wiring server authorization.
 - Applied the exact task quota and full principal/policy/task/hour identity at both atomic creation and pre-execution revalidation gates.
-- Added migration, idempotency, asymmetric-bucket, and no-worker/no-SSE regressions for exhausted creation and start-time denial.
+- Added migration, idempotency, asymmetric-bucket, successful independent research execution, and no-worker/no-SSE regressions for exhausted creation and start-time denial.
 
 ## Task Commits
 
 1. **Task 1: Migrate SQLite rate-window identity and acquisition to include task type** — `6648ff6` (`feat`)
 2. **Task 2: Carry exact AdvancedPolicy quotas through both authorization gates** — `49433b7` (`fix`)
+3. **Task 2 regression completion: Prove research capacity runs independently** — `2cfaebf` (`test`)
 
 ## Files Created/Modified
 
@@ -109,7 +110,7 @@ None - plan executed exactly as written.
 
 ## Verification
 
-- `cd backend && timeout 30s uv run pytest tests/advanced/test_authorization_jobs.py tests/advanced/test_api_sse.py -q` — **16 passed in 5.45s**
+- `cd backend && timeout 30s uv run pytest tests/advanced/test_authorization_jobs.py tests/advanced/test_api_sse.py -q` — **16 passed in 9.19s**
 
 ## User Setup Required
 
@@ -121,7 +122,7 @@ SAFE-01 task limits now retain deployment-policy asymmetry throughout durable cr
 
 ## Self-Check: PASSED
 
-- Task commits `6648ff6` and `49433b7` exist in repository history.
+- Task commits `6648ff6`, `49433b7`, and `2cfaebf` exist in repository history.
 - All six modified runtime and test files exist.
 
 ---
