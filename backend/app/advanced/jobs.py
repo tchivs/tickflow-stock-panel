@@ -83,7 +83,7 @@ class AdvancedJobService:
                 instrument=parsed.instrument,
                 idempotency_key=parsed.idempotency_key,
                 policy_revision_id=str(policy_record["id"]),
-                quota=policy.quota_per_window,
+                quota=policy.quota_for(parsed.task_type),
                 now=self._now().isoformat(),
             )
             if job is None:
@@ -129,8 +129,17 @@ class AdvancedJobService:
                 instrument=str(job["instrument"]),
             )
             policy = self._authorization.current_policy()
+            policy_record = self._repository.record_policy_revision(
+                revision=policy.revision,
+                fingerprint=policy.fingerprint,
+                snapshot=policy.snapshot(),
+            )
             if not self._repository.quota_is_current(
-                principal=str(job["principal"]), quota=policy.quota_per_window, now=self._now().isoformat()
+                principal=str(job["principal"]),
+                policy_revision_id=str(policy_record["id"]),
+                task_type=str(job["task_type"]),
+                quota=policy.quota_for(str(job["task_type"])),
+                now=self._now().isoformat(),
             ):
                 raise ValueError("quota exhausted")
         except ValueError as error:
@@ -145,7 +154,6 @@ class AdvancedJobService:
                 authorization_id=str(job["authorization_id"]),
                 rejection_reason=reason,
             )
-            self._publish(rejected)
             return rejected
 
         transitioned = self._advance(

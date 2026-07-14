@@ -273,7 +273,7 @@ async def lifespan(app: FastAPI):
             # This wildcard is never exposed to clients and lets that resolver authorize
             # the server-created short-lived record without a browser token.
             instruments=advanced_subjects or frozenset({"*"}),
-            quota_per_window=max(advanced_policy.rate_limits.values()),
+            rate_limits=advanced_policy.rate_limits,
         )
 
     advanced_authorization = AdvancedAuthorizationService(

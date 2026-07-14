@@ -26,7 +26,13 @@ class Spy:
         self.calls.append(kwargs)
 
 
-def _services(tmp_path, *, quota: int = 2):
+def _services(
+    tmp_path,
+    *,
+    quota: int = 2,
+    rate_limits: dict[str, int] | None = None,
+    instruments: frozenset[str] = frozenset({"600519.SH"}),
+):
     from app.advanced.authorization import AdvancedAuthorizationService, OperatorPolicy
     from app.advanced.jobs import AdvancedJobService
     from app.advanced.repository import AdvancedRepository
@@ -34,12 +40,13 @@ def _services(tmp_path, *, quota: int = 2):
     clock = FakeClock(datetime(2026, 7, 12, tzinfo=UTC))
     repository = AdvancedRepository(tmp_path / "operational.db", clock=clock)
     repository.migrate()
+    configured_rate_limits = rate_limits or {"research_draft": quota}
     policy = OperatorPolicy(
         revision="operator-policy-v1",
-        task_types=frozenset({"research_draft"}),
+        task_types=frozenset(configured_rate_limits),
         markets=frozenset({"CN-A"}),
-        instruments=frozenset({"600519.SH"}),
-        quota_per_window=quota,
+        instruments=instruments,
+        rate_limits=configured_rate_limits,
     )
     authorization = AdvancedAuthorizationService(
         repository=repository,
@@ -58,12 +65,18 @@ def _services(tmp_path, *, quota: int = 2):
     return repository, authorization, jobs, provider, sandbox, clock, policy
 
 
-def _authorization(authorization, *, expires_in: timedelta = timedelta(minutes=5)):
+def _authorization(
+    authorization,
+    *,
+    expires_in: timedelta = timedelta(minutes=5),
+    task_types: set[str] | None = None,
+    instruments: set[str] | None = None,
+):
     return authorization.issue(
         principal="server-operator-principal",
-        task_types={"research_draft"},
+        task_types=task_types or {"research_draft"},
         markets={"CN-A"},
-        instruments={"600519.SH"},
+        instruments=instruments or {"600519.SH"},
         expires_in=expires_in,
     )
 
@@ -290,3 +303,79 @@ def test_task_type_rate_windows_are_independent_and_charge_once(tmp_path):
         "experiment-job",
         "strategy_evaluation-job",
     }
+
+
+def test_asymmetric_task_quotas_reject_without_work_or_progress_and_leave_research_capacity(tmp_path):
+    import asyncio
+
+    rate_limits = {"research_draft": 2, "experiment": 1, "strategy_evaluation": 1}
+    instruments = frozenset({"600519.SH", "000001.SZ"})
+    repository, authorization, jobs, provider, sandbox, _clock, _policy = _services(
+        tmp_path, rate_limits=rate_limits, instruments=instruments
+    )
+    record = _authorization(
+        authorization, task_types=set(rate_limits), instruments=set(instruments)
+    )
+    progress = Spy()
+    workflow = AsyncSpy()
+    jobs.set_progress_publisher(progress)
+    jobs.set_workflow(workflow)
+
+    experiment = jobs.create_job(
+        principal="server-operator-principal",
+        request=_request(record["token"], task_type="experiment"),
+    )
+    strategy = jobs.create_job(
+        principal="server-operator-principal",
+        request=_request(record["token"], task_type="strategy_evaluation", idempotency_key="strategy-initial"),
+    )
+    with pytest.raises(ValueError, match="quota|rate"):
+        jobs.create_job(
+            principal="server-operator-principal",
+            request=_request(
+                record["token"], task_type="experiment", instrument="000001.SZ", idempotency_key="experiment-exhausted"
+            ),
+        )
+    with pytest.raises(ValueError, match="quota|rate"):
+        jobs.create_job(
+            principal="server-operator-principal",
+            request=_request(
+                record["token"], task_type="strategy_evaluation", instrument="000001.SZ", idempotency_key="strategy-exhausted"
+            ),
+        )
+
+    research = jobs.create_job(
+        principal="server-operator-principal",
+        request=_request(record["token"], idempotency_key="research-still-available"),
+    )
+    with repository._connection() as connection, connection:
+        connection.execute(
+            "UPDATE advanced_rate_windows SET consumed = consumed + 2 WHERE principal = ? AND task_type = ?",
+            ("server-operator-principal", "research_draft"),
+        )
+
+    rejected = asyncio.run(jobs.run_authorized_job(job_id=research["id"]))
+
+    assert rejected["status"] == "rejected"
+    assert rejected["rejection_reason"] == "quota_exhausted"
+    assert repository.get_job(experiment["id"])["status"] == "queued"
+    assert repository.get_job(strategy["id"])["status"] == "queued"
+    assert repository.list_runnable_jobs() == [experiment, strategy]
+    assert provider.calls == []
+    assert sandbox.calls == []
+    assert workflow.calls == []
+    assert progress.calls == []
+    assert [audit["reason"] for audit in repository.list_security_audits()] == [
+        "quota_exhausted",
+        "quota_exhausted",
+        "quota_exhausted",
+    ]
+
+
+class AsyncSpy:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    async def ainvoke(self, state: dict[str, object], config: dict[str, object]) -> dict[str, object]:
+        self.calls.append({"state": state, "config": config})
+        return {}

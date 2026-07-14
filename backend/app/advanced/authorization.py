@@ -3,10 +3,11 @@ from __future__ import annotations
 
 import json
 import secrets
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
+from types import MappingProxyType
 
 from app.advanced.repository import AdvancedRepository
 
@@ -19,13 +20,34 @@ class OperatorPolicy:
     task_types: frozenset[str]
     markets: frozenset[str]
     instruments: frozenset[str]
-    quota_per_window: int
+    rate_limits: Mapping[str, int]
+
+    def __post_init__(self) -> None:
+        limits = dict(self.rate_limits)
+        if set(limits) != set(self.task_types) or any(
+            not isinstance(task_type, str)
+            or not task_type
+            or task_type == "__legacy_rate_window__"
+            or type(quota) is not int
+            or quota <= 0
+            for task_type, quota in limits.items()
+        ):
+            raise ValueError("advanced policy task quotas are invalid")
+        self.rate_limits = MappingProxyType(limits)
+
+    def quota_for(self, task_type: str) -> int:
+        if not isinstance(task_type, str) or task_type not in self.task_types:
+            raise ValueError("task type denied")
+        try:
+            return self.rate_limits[task_type]
+        except KeyError as error:
+            raise ValueError("task type denied") from error
 
     def snapshot(self) -> dict[str, object]:
         return {
             "instruments": sorted(self.instruments),
             "markets": sorted(self.markets),
-            "quota_per_window": self.quota_per_window,
+            "rate_limits": dict(self.rate_limits),
             "task_types": sorted(self.task_types),
         }
 
@@ -127,8 +149,7 @@ class AdvancedAuthorizationService:
         if market not in scope["markets"] or instrument not in scope["instruments"]:
             raise ValueError("authorization scope denied")
         policy = self._policy()
-        if task_type not in policy.task_types:
-            raise ValueError("task type denied")
+        policy.quota_for(task_type)
         if market not in policy.markets or not self._instruments_allowed({instrument}, policy):
             raise ValueError("scope denied")
         return record
@@ -144,10 +165,7 @@ class AdvancedAuthorizationService:
         )
 
     def _policy(self) -> OperatorPolicy:
-        policy = self._policy_loader()
-        if policy.quota_per_window <= 0:
-            raise ValueError("advanced policy quota is invalid")
-        return policy
+        return self._policy_loader()
 
     def _now(self) -> datetime:
         return self._clock().astimezone(UTC)
