@@ -1,147 +1,114 @@
 ---
 phase: 04-advanced-capabilities
-verified: 2026-07-14T03:39:01Z
-status: gaps_found
-score: 2/5 must-haves verified
+verified: 2026-07-14T07:29:15Z
+status: passed
+score: 5/5 must-haves verified
 behavior_unverified: 0
 overrides_applied: 0
-next_action: "Plan and implement the three server-side safeguard fixes below, add boundary regressions, then re-run Phase 04 verification."
-gaps:
-  - truth: "Researcher can progress a hypothesis through a sandboxed experiment and recorded feedback, then evaluate an evolved strategy for promotion through explicit gates."
-    status: failed
-    reason: "The authorized research asset is not server-bound to the strategy executed by the experiment runner; a caller can submit a different installed strategy_id."
-    artifacts:
-      - path: backend/app/advanced/api.py
-        issue: "The specification route authorizes research_asset_id only and forwards the caller's complete data_scope unchanged."
-      - path: backend/app/advanced/experiments.py
-        issue: "The service validates scope shape but never verifies strategy_id against the persisted asset binding."
-      - path: backend/app/advanced/governed_runner.py
-        issue: "The runner passes the unverified strategy_id directly into StrategyBacktestConfig."
-    missing:
-      - "Resolve the persisted strategy-to-research-asset binding on the server and derive or require the matching strategy_id before any specification is created."
-      - "Defend the invariant in ExperimentService or the runner and add a public-route regression proving a mismatched strategy creates no specification, worker, or sandbox evidence."
-  - truth: "Operator can start an authorized agent job for an allowed market and instrument while rate-limited requests are rejected before work starts."
-    status: failed
-    reason: "Task-specific AdvancedPolicy.rate_limits are collapsed to max(...) and durable rate windows omit task_type, so lower-quota task classes can exceed their configured limit."
-    artifacts:
-      - path: backend/app/main.py
-        issue: "advanced_operator_policy sets quota_per_window=max(advanced_policy.rate_limits.values())."
-      - path: backend/app/advanced/repository.py
-        issue: "Rate-window acquisition and start-time revalidation key only by principal/policy/window, not task_type."
-      - path: backend/app/advanced/jobs.py
-        issue: "Creation and prepare_to_start both use the collapsed policy quota."
-    missing:
-      - "Carry a task-specific quota through authorization, job acquisition, and execution-start revalidation."
-      - "Add task_type to the durable rate-window identity/query and migration trigger, then prove experiment and strategy-evaluation buckets exhaust independently of research_draft."
-  - truth: "The real-host fixture rejects malformed bars, absent required benchmark history, insufficient coverage, and no eligible signal before readiness."
-    status: failed
-    reason: "FixtureDailyBar and FixtureBundle validate only structure/read-only files and non-empty index_daily; invalid OHLC, finite/positive values, timestamp, chronological coverage, and configured benchmark are accepted and written to the governed lake."
-    artifacts:
-      - path: backend/app/contracts/market_data.py
-        issue: "FixtureDailyBar has unconstrained floats/quote_ts and MarketDataFixtureFile accepts arbitrary index_daily contents."
-      - path: backend/app/jobs/daily_pipeline.py
-        issue: "The fixture pipeline appends daily/index bars without an advanced-host preflight."
-      - path: backend/app/contracts/validator.py
-        issue: "The fixture validation checks schema, primary keys, and market time, not OHLC/value/order/benchmark/readiness invariants."
-    missing:
-      - "Add an advanced-host fixture preflight that requires the configured benchmark, chronological unique coverage, finite positive values, valid OHLC ordering, positive in-session timestamps, and required history/window coverage before any lake write."
-      - "Add startup regressions for every rejected shape, including missing 000300.SH and no eligible required signal."
+re_verification:
+  previous_status: gaps_found
+  previous_score: 4/5
+  gaps_closed:
+    - "Operator task quotas remain durably enforced at creation and execution-start revalidation, including when the deployment policy revision changes."
+  gaps_remaining: []
+  regressions: []
 ---
 
 # Phase 04: Advanced Capabilities Verification Report
 
 **Phase Goal:** Researchers and operators can use advanced research and automation workflows within explicit promotion, authorization, audit, and execution safeguards.
 
-**Verified:** 2026-07-14T03:39:01Z  
-**Status:** `gaps_found`  
-**Re-verification:** No — prior report contained no structured gaps; this is an independent goal-backward verification against committed `HEAD` and the current `04-REVIEW.md`.
+**Verified:** 2026-07-14T07:29:15Z  
+**Status:** `passed`  
+**Re-verification:** Yes — after Plan 04-27 policy-transition remediation
 
 ## Goal Achievement
+
+The roadmap supplies four success criteria. This re-verification retains the prior report's five concrete observable truths so that the repaired SAFE-01 boundary and the already-passed provenance, calibration, sandbox, and fixture safeguards are each checked independently.
 
 ### Observable Truths
 
 | # | Truth | Status | Evidence |
 | --- | --- | --- | --- |
-| 1 | User can review an attributed market viewpoint, identify a material stance change, and inspect its confidence-aware performance result. | ✓ VERIFIED | The focused host Playwright scenario created an initial viewpoint, used visible revision/correction/evaluation controls, rendered `材料立场变化`, server evaluation, and calibration; it passed. `ViewpointPanel` receives server projections rather than calculating return values in the browser. |
-| 2 | Researcher can progress a hypothesis through a sandboxed experiment and recorded feedback, then evaluate an evolved strategy for promotion through explicit gates. | ✗ FAILED | The happy-path host scenario passed, but `api.py:356-365` authorizes only `research_asset_id`; `experiments.py:36-81` persists an arbitrary schema-valid `strategy_id`; `governed_runner.py:93-118` executes it. This bypasses the persisted asset-to-strategy binding on direct API calls. |
-| 3 | Operator can start an authorized agent job for an allowed market and instrument, observe SSE progress, and inspect its audit summary; unauthorized, out-of-allowlist, or rate-limited requests are rejected before work starts. | ✗ FAILED | The host scenario covers the configured one-per-hour fixture branch, but `main.py:243-253` converts the per-task policy to `max(...)`; `repository.py:164-205` has no task_type in rate-window identity or revalidation. The configured lower task limits are not enforced. |
-| 4 | Researcher can submit a custom strategy only when its machine-readable contract, AST, imports, timeout, and memory constraints pass validation, and can review the constrained run's result or failure record. | ✓ VERIFIED | The host Playwright scenario submitted the hash-bound source to the real endpoint and observed `affirmative_isolation_proved`; the focused backend gate includes production-host and hostile sandbox contracts. The normal lifespan wires `LinuxIsolationLauncher` in `main.py:274-278`. |
-| 5 | Real-host acceptance starts only after its governed fixture satisfies the documented market-data, benchmark, coverage, and eligible-signal safeguards. | ✗ FAILED | `market_data.py:28-60` has no numeric/order/timestamp validators; `FixtureBundle.load()` only requires a non-empty index_daily list in advanced-host mode; `daily_pipeline.py:88-93` writes it without a preflight. Invalid data can reach readiness. |
+| 1 | User can review an attributed market viewpoint, identify a material stance change, and inspect one confidence-aware performance result per immutable version. | ✓ VERIFIED | `ViewpointService._append_revision()` classifies direction/rating/target/horizon/confidence changes as `material_stance_change` (`backend/app/advanced/viewpoints.py:199-227`). `evaluate_viewpoint()` returns the first terminal fact before querying data again (`:76-85`); repository canonical selection and calibration each select one deterministic terminal fact per immutable version (`repository.py:611-642`). Focused regression: 5 passed. |
+| 2 | A researcher can create and run an experiment only for the exact persisted research-asset strategy binding; divergent lineage cannot create run, sandbox, feedback, candidate, gate, or promotion evidence. | ✓ VERIFIED | The public API resolves the server-owned binding before specification creation (`backend/app/advanced/api.py:115-135,379-390`). `ExperimentService` persists and rechecks `bound_strategy_id` on create/run/retry (`experiments.py:49-98,110-150,269-290`); `_bound_scope()` stops divergent records before backtest-service construction (`governed_runner.py:30-41,72-76`). Focused provenance and promotion-gate regression: 12 passed. |
+| 3 | Operator agent jobs use task-specific durable quotas at creation and execution-start revalidation; denial occurs before work or advanced-progress SSE, including an A-to-B deployment policy transition. | ✓ VERIFIED | Creation records the current immutable policy fact and passes it to `acquire_authorized_job()` (`jobs.py:57-91`). The acquisition transaction joins the authorization's immutable policy revision and requires equality before a rate-window write or job insert, then charges only the joined authorization revision (`repository.py:181-227`). At execution start, the durable job→authorization→policy lineage is compared to the current policy before `quota_is_current()` or `_advance()` (`jobs.py:119-172`; `repository.py:159-170`). The rejection branch uses `transition_job_with_audit()` and returns before either work path (`jobs.py:174-216`) or progress publishing (`:238-267`). Focused unit plus two-real-lifespan host regression: 5 passed. |
+| 4 | A researcher can submit a custom strategy only through a hash-bound contract, AST/import checks, affirmative isolation probe, resource limits, and a safe terminal record. | ✓ VERIFIED | The authenticated API requires a server-authorized parent asset and returns safe projections only (`api.py:475-532`). `CustomStrategySandboxService.submit()` validates contract/hash/AST before probe or spawn and records safe terminal facts (`sandbox.py:384-495,497-550`). `LinuxIsolationLauncher` requires fresh affirmative namespace, filesystem, network, cleanup, and resource-limit evidence before spawn (`sandbox.py:57-214`). Focused sandbox suite: 44 passed. |
+| 5 | Advanced-host fixture readiness rejects malformed bars, missing benchmark history, inadequate ordered coverage, and no eligible required signal before any governed-lake mutation; valid fixtures remain viable. | ✓ VERIFIED | Lifespan loads and validates the deployment-owned readiness descriptor before fixture synchronization and `DataStore` construction (`main.py:37-94`). The pipeline invokes provider preflight before it constructs a datastore or writes a lake file (`daily_pipeline.py:58-85`). Preflight validates finite positive OHLCV/amount, session timestamps, ordered unique histories, `000300.SH`, required coverage/warmup, and a real bullish-alignment signal (`market_data.py:213-301`). Fixture pipeline regression: 20 passed; real-host readiness/public-boundary regression: 4 passed. |
 
-**Score:** **2/5** truths verified (0 present-but-behavior-unverified).
+**Score:** **5/5** truths verified (0 present, behavior-unverified).
 
 ### Required Artifacts
 
 | Artifact | Expected | Status | Details |
 | --- | --- | --- | --- |
-| `backend/app/advanced/api.py` + `experiments.py` + `governed_runner.py` | Authorized immutable experiment lineage drives only the bound strategy. | ✗ WIRED BUT UNSAFE | The route, service, and runner are substantive and connected, but their data flow preserves a caller-controlled strategy ID rather than the server binding. |
-| `backend/app/main.py` + `authorization.py` + `jobs.py` + `repository.py` | Policy-derived, task-specific quota is durable at creation and rechecked before work. | ✗ WIRED BUT UNSAFE | Durable acquisition, start-time revalidation, audit, and SSE paths exist; task quota identity is collapsed and cross-task. |
-| `backend/app/contracts/market_data.py` + `jobs/daily_pipeline.py` | Advanced-host fixture input fails closed before lake ingestion. | ✗ INSUFFICIENT | The artifacts load and write fixture data, but required semantic market-data validation is missing. |
-| `backend/app/advanced/sandbox.py` + `api.py` + `projections.py` | Strict custom-source admission and terminal safe run review. | ✓ VERIFIED | Substantive AST/hash/proof path is registered by lifespan; focused backend and real-host browser execution exercised its affirmative branch and safe projection. |
-| `frontend/e2e/phase4-advanced-capabilities.host.spec.ts` | Non-intercepted real-host workflow coverage. | ✓ VERIFIED | Three serial scenarios passed against spawned FastAPI/Uvicorn through the Vite proxy and root SSE. Source inspection found no `page.route`, `context.route`, or `route.fulfill` handler. |
+| `backend/app/advanced/repository.py` | Immutable policy provenance, atomic authorization/current-policy acquisition, task windows, and canonical calibration facts. | ✓ VERIFIED | Substantive SQLite joins and transactions enforce revision equality before rate writes (`181-227`); durable job provenance resolves through foreign-key lineage (`159-170`); terminal calibration query is deterministic (`611-642`). |
+| `backend/app/advanced/jobs.py` | Fail-closed job creation and execution-start policy transition denial. | ✓ VERIFIED | Creation invokes atomic acquisition; `prepare_to_start()` rejects a mismatched durable/current revision before quota inspection, `_advance()`, workflow, provider, sandbox, or SSE. |
+| `backend/tests/advanced/test_authorization_jobs.py` | Unit proof of A-to-B acquisition and execution denial plus stable task buckets. | ✓ VERIFIED | The transition tests assert zero A/B consumption on acquisition denial, preserved A/empty B consumption on start denial, audited safe reason, no runnable work, and no collaborator/progress calls (`224-324`); asymmetric quota test covers independent stable buckets (`413-492`). |
+| `backend/tests/advanced/test_production_host.py` | Real-lifespan A-to-B denial without advanced progress. | ✓ VERIFIED | Two actual FastAPI lifespans share SQLite while fixture policy changes from A to B; the test observes preserved A accounting, empty B, no lake/sandbox mutation, no work calls, audited denial, and empty scoped SSE (`889-993`). |
+| `backend/app/advanced/api.py`, `experiments.py`, `governed_runner.py` | Server-owned experiment binding from public route through runner. | ✓ VERIFIED | Public, service, persisted, and runner boundaries independently enforce the same binding and are covered by focused tests. |
+| `backend/app/advanced/sandbox.py` | Fail-closed custom-source validation and proven Linux isolation. | ✓ VERIFIED | No default permissive launcher exists; malformed, absent, or stale proof rejects before spawn, and terminal records use safe projections. |
+| `backend/app/main.py`, `contracts/market_data.py`, `jobs/daily_pipeline.py` | Read-only advanced-host fixture preflight before governed writes. | ✓ VERIFIED | Lifecycle → pipeline → provider preflight is ordered before `DataStore` construction and all governed output paths. |
 
 ### Key Link Verification
 
 | From | To | Via | Status | Details |
 | --- | --- | --- | --- | --- |
-| Advanced experiment specification route | `ExperimentService.create_specification` | `payload.model_dump()` at `api.py:360-362` | ✗ UNSAFE | The link forwards the browser-supplied `data_scope.strategy_id` rather than a server-resolved binding. |
-| `ExperimentService` | `StrategyBacktestConfig` | Frozen scope → governed runner `_config()` | ✗ UNSAFE | `governed_runner.py:96-108` accepts and uses the unverified ID. |
-| `AdvancedPolicy.rate_limits` | Durable rate window and start-time revalidation | `main.py` → `jobs.py` → `repository.py` | ✗ UNSAFE | `max(...)` and a window key without task_type defeat policy-specific limits at both endpoints. |
-| Fixture bundle | Governed data lake | `FixtureProvider` → `run_phase1_fixture_sync` → `append_daily`/`append_index_daily` | ✗ UNSAFE | The path is active but no semantic fixture preflight protects it. |
-| Sandbox form/API | `LinuxIsolationLauncher` terminal record | Same-origin host request to `/api/advanced/sandbox/submissions` | ✓ WIRED | The actual host test reached the terminal affirmative-isolation branch; unavailable capability remains an explicit pre-spawn branch in the scenario. |
-| Job state/audit | Root scoped SSE | Job lifecycle → `QuoteService.notify_advanced_progress` → `/api/intraday/stream` | ✓ WIRED | The first and third host scenarios passed and observed authorized SSE/audit plus rejected-path non-delivery. This does not repair the independent quota-policy flaw. |
+| `AdvancedJobService.create_job` | `AdvancedRepository.acquire_authorized_job` | Current persisted policy revision is supplied to the one acquisition transaction. | ✓ WIRED | `jobs.py:69-87` → `repository.py:181-227`; the SQL equality predicate executes before a rate-window insert or job insert. |
+| `AdvancedRepository.policy_revision_for_job` | `AdvancedJobService.prepare_to_start` | Durable queued job authorization provenance is compared to the current persisted policy. | ✓ WIRED | `repository.py:159-170` → `jobs.py:131-150`; mismatch returns through audited rejection before quota inspection or `_advance()`. |
+| Job lifecycle | scoped advanced-progress SSE | Only `_advance()` publishes; transition denial does not call it. | ✓ WIRED | `jobs.py:151-172` returns the rejected cursor before `_advance()`; `_publish()` is reached only from `_advance()` (`238-267`). Unit and real-host tests assert an empty progress queue. |
+| Public experiment route | experiment service and governed runner | Request binding equality → persisted bound ID → runner scope equality. | ✓ WIRED | API check precedes service call; service and runner duplicate the fail-closed guard before construction/execution. |
+| Advanced-host fixture | governed data lake | Lifespan descriptor → pipeline preflight → `DataStore` / lake writes. | ✓ WIRED | `main.py:80-94` and `daily_pipeline.py:75-85` place preflight before store construction. |
+| Viewpoint evaluation | calibration projection | Canonical terminal lookup → one terminal candidate per immutable version. | ✓ WIRED | `viewpoints.py:76-85,160-183` consumes repository's deterministic terminal query. |
 
 ### Data-Flow Trace (Level 4)
 
 | Artifact | Data Variable | Source | Produces Real Data | Status |
 | --- | --- | --- | --- | --- |
-| `ViewpointPanel` | Immutable viewpoints/evaluations/calibration | Real advanced API and governed snapshot route in host test | Yes | ✓ FLOWING |
-| `AdvancedResearchPanels` experiment flow | `research_asset_id` and `strategy_id` | Server binding endpoint plus browser request scope | Partially — binding is displayed, but API accepts mismatched strategy_id | ✗ HOLLOW SAFEGUARD |
-| Job/SSE flow | Job/audit/stage projection | Operational SQLite and real root SSE | Yes | ✓ FLOWING, with unsafe per-task quota enforcement |
-| Advanced-host governed fixture | Daily/index bars | Read-only JSON → fixture pipeline → Parquet lake | Yes, but invalid source values are not rejected | ✗ UNSAFE INPUT FLOW |
+| Policy-transition quota guard | authorization policy revision, current policy revision, and `consumed` task window | Immutable SQLite `advanced_authorizations` / `advanced_policy_revisions` / `advanced_rate_windows` rows | Yes | ✓ FLOWING — acquisition uses the authorization-linked revision only after equality; execution resolves the same durable lineage before any new-policy window lookup. |
+| Experiment binding | `bound_strategy_id` | Server-owned research-asset binding, persisted in `advanced_experiment_specs` | Yes | ✓ FLOWING — the client cannot replace it at route, service, or runner boundaries. |
+| Fixture readiness | descriptor plus raw fixture bars | Deployment JSON → typed readiness → read-only provider preflight | Yes | ✓ FLOWING — valid fixtures reach the existing governed pipeline only after semantic checks. |
+| Calibration | terminal evaluation candidate | Immutable evaluation ledger | Yes | ✓ FLOWING — one first terminal observation per immutable version. |
+| Sandbox review | validation/run terminal projection | SQLite sandbox validation/run and security-audit facts | Yes | ✓ FLOWING — the API returns redacted projections, not raw source or host diagnostics. |
 
-### Focused Behavioral Spot-Checks
+### Behavioral Spot-Checks
 
 | Behavior | Command | Result | Status |
 | --- | --- | --- | --- |
-| Phase 04 backend contracts and host integration | `cd backend && timeout 120s uv run pytest tests/advanced/test_production_host.py tests/advanced/test_viewpoints.py tests/advanced/test_evolution.py tests/advanced/test_sandbox.py -q` | `90 passed, 29 warnings in 50.97s` | ✓ PASS |
-| Real FastAPI/Vite host workflows | `cd frontend && timeout 240s pnpm exec playwright test e2e/phase4-advanced-capabilities.host.spec.ts --project=phase4-fastapi-host` | `3 passed (18.3s)`; actual sandbox branch printed `affirmative_isolation_proved` | ✓ PASS |
+| A-to-B acquisition denial, queued A-to-B execution denial, stable independent task buckets, and worker revalidation | `cd backend && timeout 30s uv run pytest tests/advanced/test_authorization_jobs.py tests/advanced/test_production_host.py -q -k 'policy_transition or policy_acquisition or asymmetric_task_quotas or worker_revalidates'` | 5 passed, 23 deselected | ✓ PASS |
+| Server-bound experiment provenance and explicit promotion gates | `cd backend && timeout 30s uv run pytest tests/advanced/test_experiments.py tests/advanced/test_evolution.py -q -k 'server_resolved_binding or runner_rejects_divergent or service_rechecks_persisted or experiment_api_mismatch or experiment_specification_freezes_reproducible or completed_run_records_server_derived or every_independent_gate or approval_requires_server_resolved'` | 12 passed, 23 deselected | ✓ PASS |
+| Material stance, governed performance, repeat-evaluation idempotence, and calibration candidate selection | `cd backend && timeout 30s uv run pytest tests/advanced/test_viewpoints.py -q -k 'structured_stance_deltas or governed_collaborator_records or calibration_projects or calibration_candidates or repeated_empty_body'` | 5 passed, 19 deselected | ✓ PASS |
+| AST/import/contract/isolation/resource custom-strategy controls | `cd backend && timeout 30s uv run pytest tests/advanced/test_sandbox.py -q` | 44 passed | ✓ PASS |
+| Fixture contract/preflight and valid governed synchronization | `cd backend && timeout 30s uv run pytest tests/test_market_data_fixture_contract.py tests/test_phase1_fixture_sync.py -q` | 20 passed, 6 existing Polars warnings | ✓ PASS |
+| Actual lifespan readiness, public binding/quota boundary, and canonical host evaluation | `cd backend && timeout 30s uv run pytest tests/advanced/test_production_host.py -q -k 'accepts_valid_fixture_readiness or rejects_invalid_fixture_readiness or enforces_public_binding_and_task_specific_quota_boundaries or repeated_viewpoint_evaluation_is_canonical'` | 4 passed, 11 deselected, 9 existing Polars warnings | ✓ PASS |
 
-These focused passes prove the exercised happy paths and denial scenarios, but do not override the directly observed server-side provenance, quota, and fixture-input violations above. The existing host quota fixture assigns every task type a quota of `1`, so it cannot distinguish the collapsed production policy buckets.
+The warnings are existing Polars deprecation/sortedness warnings in indicator-pipeline calls; no focused check failed.
+
+### Probe Execution
+
+Step 7c: **SKIPPED** — Phase 04 plans declare pytest checks, no phase-declared probe is present, and `scripts/**/tests/probe-*.sh` does not exist in this repository.
 
 ### Requirements Coverage
 
-| Requirement | Source plans | Description | Status | Evidence |
+| Requirement | Source Plans | Description | Status | Evidence |
 | --- | --- | --- | --- | --- |
-| **ADV-01** | 04-01, 04-05, 04-09, 04-10, 04-12, 04-16, 04-18, 04-21 | Attributed immutable viewpoints, material changes, and confidence-aware outcome review. | ✓ SATISFIED (warning below) | Focused host scenario 1 passed from revision/correction through governed evaluation/calibration. |
-| **ADV-02** | 04-01, 04-06, 04-09, 04-11, 04-12, 04-17, 04-18, 04-21 | Frozen experiment specification, sandboxed governed run, and recorded feedback cycle. | ✗ BLOCKED | A valid asset authorization can be paired with a different strategy identifier and executed by the runner. |
-| **ADV-03** | 04-01, 04-06, 04-08, 04-09, 04-11, 04-12, 04-13, 04-17, 04-18, 04-21 | Completed research evidence evolves through five explicit gates to research-only promotion. | ✗ BLOCKED | Candidate/gate evidence can originate from the mismatched strategy run described under CR-01. |
-| **SAFE-01** | 04-02, 04-04, 04-07, 04-08, 04-09, 04-10, 04-13, 04-19, 04-21 | Scoped authorization, allowlists, rate limits, idempotent jobs, audit, and SSE progress. | ✗ BLOCKED | The authorization/SSE mechanisms work, but per-task deployment rate limits are not enforced. |
-| **SAFE-02** | 04-03, 04-04, 04-07, 04-09, 04-14, 04-15, 04-18, 04-21 | Hash-bound contract, AST/import/resource validation, fail-closed sandbox, and safe result review. | ✓ SATISFIED | Host run used the real Linux launcher and terminal review; backend contracts passed. |
+| **ADV-01** | 04-25, 04-26 | Attributed viewpoints, material changes, confidence-aware performance, and honest calibration. | ✓ SATISFIED | Immutable stance/evaluation code and five focused viewpoint tests pass; host canonical-evaluation regression passes. |
+| **ADV-02** | 04-22, 04-24, 04-26 | Frozen experiment specification, sandboxed governed run, and feedback cycle. | ✓ SATISFIED | Binding is enforced route/service/runner-side before an experiment can produce evidence; focused regression passes. |
+| **ADV-03** | 04-22, 04-24, 04-26 | Evolved strategy evidence and explicit promotion gates. | ✓ SATISFIED | Selected evolution tests pass; every independent gate is required and server-resolved approval is checked. |
+| **SAFE-01** | 04-23, 04-24, 04-26, 04-27 | Scoped authorization, allowlists, durable task quotas, idempotent jobs, audit, and SSE progress. | ✓ SATISFIED | Plan 04-27 closes both policy-transition boundaries with direct source inspection plus unit and two-lifespan behavioral proof; denial is audited and emits no advanced progress. |
+| **SAFE-02** | 04-22, 04-24, 04-26 | Machine-readable custom-strategy contract and fail-closed controlled execution. | ✓ SATISFIED | Full focused sandbox suite passes and current source requires affirmative isolation proof before spawn. |
 
-All five Phase 04 requirements are declared by at least one plan; no orphaned requirement was found.
+All five Phase 04 requirements are declared by one or more Phase 04 plans. No Phase 04 requirement is orphaned.
 
 ### Anti-Patterns Found
 
 | File | Line | Pattern | Severity | Impact |
 | --- | --- | --- | --- | --- |
-| `backend/app/advanced/api.py` / `viewpoints.py` / `repository.py` | Review CR-04 trace | Repeated evaluation appends duplicate facts which calibration aggregates as independent samples. | ⚠️ Warning | Confidence buckets can be inflated by repeat evaluation of one immutable viewpoint version. Add idempotency or aggregate one deterministic terminal outcome per version. |
+| — | — | No `TBD`, `FIXME`, or `XXX` marker in Plan 04-27's modified runtime and test files. | ℹ️ Info | No unresolved completion-debt marker found. |
 
-No `TBD`, `FIXME`, or `XXX` debt marker was found in the inspected Phase 04 runtime, UI, and host-test files. The limited `return {}`/`return null` matches are defensive helpers, graph node empty updates, optional query display, or blank optional form parsing; they are not user-visible stubs on an exercised Phase 04 flow.
-
-## Gaps Summary
-
-Phase 04's visible happy paths and its focused host suite work, but the phase goal is **not achieved** because three safeguard boundaries are observably violated in committed code:
-
-1. **Provenance bypass:** research-asset authorization does not constrain the strategy that actually runs.
-2. **Quota bypass:** task-specific limits become one highest shared quota bucket.
-3. **Unsafe host readiness:** malformed or benchmark-inadequate fixture data can be ingested and served.
-
-The Phase 4 `ROADMAP.md` still shows stale plan-count/status bookkeeping (`18/19`) despite plans 20 and 21 artifacts. This is informational and not used to defer any gap; Phase 5 does not explicitly schedule these safety fixes.
-
-**Next action:** implement the three structured gaps above with public-boundary regressions, then re-run this verification. The calibration-duplicate warning should be fixed in the same remediation wave or explicitly accepted by the developer; it must not be silently treated as independent confidence evidence.
+**Disconfirmation checks:** The former bypass was tested against its two temporal boundaries rather than inferred from symbol presence: an authorization issued under A is denied at B acquisition, and a correctly queued A job is denied across a real host restart under B. The denial checks inspect the exact potential false-positive paths—B window remains empty, A accounting remains unchanged, collaborators remain uncalled, and the scoped SSE queue remains empty. No unresolved partial implementation, misleading passing regression, or untested required error branch was found for the five retained truths.
 
 ---
 
-_Verified: 2026-07-14T03:39:01Z_  
+_Verified: 2026-07-14T07:29:15Z_  
 _Verifier: Claude (gsd-verifier)_
