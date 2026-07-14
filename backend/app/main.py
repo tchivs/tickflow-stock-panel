@@ -111,6 +111,7 @@ async def lifespan(app: FastAPI):
     from app.research.artifacts import EvaluationArtifactService
     from app.research.catalog import ExperimentCatalog
     from app.research.evaluation import FactorEvaluationService
+    from app.research.factor_dsl import parse_factor
     from app.research.factor_registry import FactorRegistry
     from app.research.hypotheses import ConfiguredFactorHypothesisGateway, FactorHypothesisService
     from app.research.repository import ResearchRepository
@@ -478,7 +479,23 @@ async def lifespan(app: FastAPI):
                 strategy_id=strategy_id, research_asset_id=revision.id, provenance=provenance
             )
         revision = app.state.factor_registry.get_revision(str(existing_binding["research_asset_id"]))
-        if revision is None or existing_binding.get("provenance") != provenance:
+        declared_revision = (
+            str(research_asset_binding["name"]).strip(),
+            parse_factor(str(research_asset_binding["expression"])).canonical_expression,
+            str(research_asset_binding["description"]).strip(),
+            str(research_asset_binding["hypothesis"]).strip(),
+        )
+        persisted_revision = None if revision is None else (
+            revision.name,
+            revision.canonical_expression,
+            revision.description,
+            revision.hypothesis,
+        )
+        if (
+            revision is None
+            or existing_binding.get("provenance") != provenance
+            or persisted_revision != declared_revision
+        ):
             raise RuntimeError("advanced host fixture research asset binding conflicts with persisted lifecycle binding")
         app.state.advanced_research_asset_binding = existing_binding
     from app.advanced.experiments import ExperimentService
@@ -493,6 +510,7 @@ async def lifespan(app: FastAPI):
             memory_limit_bytes=2 * 1_024 * 1_024 * 1_024,
             cpu_seconds=60,
         ),
+        binding_resolver=research_repository.resolve_bound_strategy,
     )
 
     # 通用监控规则引擎: 启动时 reload 规则到内存态 (修复重启后告警失效)

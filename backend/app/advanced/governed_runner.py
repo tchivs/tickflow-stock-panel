@@ -27,6 +27,20 @@ class ServerOwnedBacktestCollaborator(Protocol):
     def run(self, *, specification: dict[str, object]) -> dict[str, object]: ...
 
 
+def _bound_scope(specification: Mapping[str, object]) -> Mapping[str, object]:
+    """Reject unbound or divergent records before any strategy service is constructed."""
+    scope = specification.get("data_scope")
+    bound_strategy_id = specification.get("bound_strategy_id")
+    if not isinstance(scope, Mapping):
+        raise ValueError("frozen data scope is invalid")
+    strategy_id = scope.get("strategy_id")
+    if not all(isinstance(value, str) and value for value in (bound_strategy_id, strategy_id)):
+        raise ValueError("experiment specification lacks a bound strategy")
+    if strategy_id != bound_strategy_id:
+        raise ValueError("frozen strategy scope diverges from its bound strategy")
+    return scope
+
+
 class StrategyBacktestExperimentCollaborator:
     """Translate frozen specification metadata into the existing server-owned backtest API."""
 
@@ -56,9 +70,7 @@ class StrategyBacktestExperimentCollaborator:
         return StrategyBacktestService(BacktestEngine(repository), strategy_engine)
 
     def run(self, *, specification: dict[str, object]) -> dict[str, object]:
-        scope = specification.get("data_scope")
-        if not isinstance(scope, Mapping):
-            raise ValueError("frozen data scope is invalid")
+        scope = _bound_scope(specification)
 
         backtest = self._service()
         aggregate_result = self._run_backtest(backtest=backtest, scope=scope)
@@ -220,6 +232,7 @@ def _manifest(specification: Mapping[str, object]) -> dict[str, object]:
     frozen = {
         "research_asset_id": specification.get("research_asset_id"),
         "version": specification.get("version"),
+        "bound_strategy_id": specification.get("bound_strategy_id"),
         "data_scope": specification.get("data_scope"),
         "method": specification.get("method"),
     }
@@ -310,6 +323,10 @@ class GovernedExperimentRunner:
 
     def run(self, *, specification: dict[str, object]) -> dict[str, object]:
         manifest = _manifest(specification)
+        try:
+            _bound_scope(specification)
+        except ValueError as error:
+            return self._failure(manifest, "validation_failed", _safe_text(str(error), fallback="invalid bound strategy"))
         if resource is None or os.name != "posix" or "spawn" not in multiprocessing.get_all_start_methods():
             return self._failure(manifest, "resource_limited", "governed spawned process limits are unavailable")
 

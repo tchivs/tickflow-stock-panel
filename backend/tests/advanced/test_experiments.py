@@ -320,6 +320,25 @@ def test_runner_rejects_divergent_persisted_binding_before_loading_or_spawning(t
     assert spawned == []
     assert service_calls == []
 
+
+def test_service_rechecks_persisted_binding_before_runner_or_terminal_evidence(tmp_path):
+    runner = FakeGovernedBacktest()
+    binding = {"strategy_id": "momentum_breakout"}
+    repository, service = _service(
+        tmp_path,
+        runner,
+        lambda asset_id: {**binding, "research_asset_id": asset_id, "revision": asset_id},
+    )
+    specification = _specification(service)
+    baseline = _experiment_evidence_counts(repository)
+    binding["strategy_id"] = "replacement-strategy"
+
+    with pytest.raises(ValueError, match="binding|bound strategy"):
+        service.run_specification(specification_id=specification["id"])
+
+    assert runner.calls == []
+    assert _experiment_evidence_counts(repository) == baseline
+
 def test_completed_run_records_server_derived_manifest_without_raw_market_series(tmp_path):
     runner = FakeGovernedBacktest()
     repository, service = _service(tmp_path, runner)
