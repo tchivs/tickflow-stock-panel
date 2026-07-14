@@ -6,6 +6,7 @@ import socket
 from pathlib import Path
 
 import polars as pl
+import pytest
 
 
 def _write_fixture_bundle(fixtures_dir: Path) -> None:
@@ -41,6 +42,19 @@ def _write_fixture_bundle(fixtures_dir: Path) -> None:
                         "close": 7.25,
                         "volume": 1000.0,
                         "amount": 7250.0,
+                        "quote_ts": 1704180600000,
+                    }
+                ],
+                "index_daily": [
+                    {
+                        "symbol": "000300.SH",
+                        "date": "2024-01-02",
+                        "open": 3500.0,
+                        "high": 3520.0,
+                        "low": 3490.0,
+                        "close": 3510.0,
+                        "volume": 1000.0,
+                        "amount": 3_510_000.0,
                         "quote_ts": 1704180600000,
                     }
                 ],
@@ -124,3 +138,20 @@ def test_d13_fixture_mode_requires_an_explicit_test_only_environment_switch(tmp_
     assert fixture_provider_enabled() is True
     monkeypatch.setenv("PHASE1_FIXTURE_MODE", "true")
     assert fixture_provider_enabled() is True
+
+
+def test_advanced_host_sync_requires_readiness_before_constructing_datastore(tmp_path, monkeypatch):
+    fixture_dir = tmp_path / "fixtures"
+    lake_dir = tmp_path / "isolated-governed-lake"
+    _write_fixture_bundle(fixture_dir)
+    monkeypatch.setenv("PHASE1_FIXTURE_MODE", "1")
+    monkeypatch.setenv("PHASE1_FIXTURE_DIR", str(fixture_dir))
+    monkeypatch.setenv("ADVANCED_HOST_FIXTURE", str(tmp_path / "advanced-host-fixture.json"))
+
+    from app.contracts.market_data import FixtureContractError
+    from app.jobs.daily_pipeline import run_phase1_fixture_sync
+
+    with pytest.raises(FixtureContractError, match="validated fixture_readiness"):
+        run_phase1_fixture_sync(data_dir=lake_dir)
+
+    assert not lake_dir.exists()
