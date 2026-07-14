@@ -7,6 +7,8 @@ from datetime import date, datetime, time as clock, timedelta, timezone
 from hashlib import sha256
 from types import SimpleNamespace
 
+import pytest
+
 from fastapi.testclient import TestClient
 
 
@@ -89,9 +91,21 @@ def _write_governed_backtest_fixture(fixtures_dir) -> None:  # type: ignore[no-u
     (fixtures_dir / "instruments.json").write_text(json.dumps({"instruments": [
         {"symbol": "600000.SH", "name": "浦发银行", "code": "600000", "exchange": "SH"}
     ]}), encoding="utf-8")
+    index_daily = [
+        {
+            **bar,
+            "symbol": "000300.SH",
+            "open": float(bar["open"]) * 500,
+            "high": float(bar["high"]) * 500,
+            "low": float(bar["low"]) * 500,
+            "close": float(bar["close"]) * 500,
+            "amount": float(bar["amount"]) * 500,
+        }
+        for bar in bars
+    ]
     (fixtures_dir / "market-data.json").write_text(json.dumps({
         "daily": bars,
-        "index_daily": [{**bar, "symbol": "000300.SH", "close": float(bar["close"]) * 500} for bar in bars],
+        "index_daily": index_daily,
         "adjustment_factors": [{"symbol": "600000.SH", "trade_date": bar["date"], "adj_factor": 1} for bar in bars],
         "financials": [{"symbol": "600000.SH", "report_date": "2023-09-30", "roe": 0.09}],
     }), encoding="utf-8")
@@ -112,6 +126,16 @@ def _advanced_host_fixture() -> dict[str, object]:
         },
         "advanced_subjects": ["600000.SH"],
         "runner_wall_clock_seconds": 30,
+        "fixture_readiness": {
+            "benchmark_symbol": "000300.SH",
+            "symbols": ["600000.SH"],
+            "required_coverage": {"start": "2023-07-03", "end": "2024-07-15"},
+            "evaluation_windows": [20, 60, 120],
+            "strategy": {"id": "bullish_alignment", "warmup_trading_days": 60},
+            "aggregate_coverage": {"start": "2023-07-03", "end": "2024-07-15"},
+            "in_sample": {"start": "2024-01-02", "end": "2024-03-29"},
+            "out_of_sample": {"start": "2024-04-01", "end": "2024-06-28"},
+        },
         "research_asset_binding": {
             "strategy_id": "bullish_alignment",
             "name": "Host bullish alignment asset",
@@ -285,12 +309,11 @@ def test_main_host_exposes_governed_viewpoint_snapshot_from_the_lifespan(tmp_pat
 def test_main_host_loads_and_persists_deployment_owned_advanced_fixture(tmp_path, monkeypatch):
     from app.config import settings
     from app.services import auth as auth_service
-    from tests.test_analysis_host_integration import _write_phase1_fixture
 
     fixture_dir = tmp_path / "phase1-fixtures"
     data_dir = tmp_path / "governed-data"
     advanced_fixture = tmp_path / "advanced-host-fixture.json"
-    _write_phase1_fixture(fixture_dir)
+    _write_governed_backtest_fixture(fixture_dir)
     advanced_fixture.write_text(json.dumps(_advanced_host_fixture()), encoding="utf-8")
     monkeypatch.setenv("PHASE1_FIXTURE_MODE", "1")
     monkeypatch.setenv("PHASE1_FIXTURE_DIR", str(fixture_dir))
@@ -303,6 +326,8 @@ def test_main_host_loads_and_persists_deployment_owned_advanced_fixture(tmp_path
     from app.main import app
 
     with TestClient(app) as client:
+        assert app.state.advanced_fixture_readiness.benchmark_symbol == "000300.SH"
+        assert app.state.advanced_fixture_readiness.evaluation_windows == [20, 60, 120]
         assert client.post("/api/auth/login", json={"password": "host-test-password"}).status_code == 200
         binding = client.get("/api/advanced/research-assets/strategies/bullish_alignment")
         assert binding.status_code == 200
@@ -324,6 +349,75 @@ def test_main_host_loads_and_persists_deployment_owned_advanced_fixture(tmp_path
         viewpoint = client.post("/api/advanced/viewpoints", json=_viewpoint_payload(instrument="600000.SH"))
         assert viewpoint.status_code == 200
 
+
+
+def test_main_host_rejects_invalid_readiness_before_governed_lake_creation(tmp_path, monkeypatch):
+    from app.config import settings
+    from app.services import auth as auth_service
+
+    fixture_dir = tmp_path / "phase1-fixtures"
+    data_dir = tmp_path / "governed-data"
+    advanced_fixture = tmp_path / "advanced-host-fixture.json"
+    fixture = _advanced_host_fixture()
+    readiness = fixture["fixture_readiness"]
+    assert isinstance(readiness, dict)
+    readiness["benchmark_symbol"] = "000905.SH"
+    _write_governed_backtest_fixture(fixture_dir)
+    advanced_fixture.write_text(json.dumps(fixture), encoding="utf-8")
+    monkeypatch.setenv("PHASE1_FIXTURE_MODE", "1")
+    monkeypatch.setenv("PHASE1_FIXTURE_DIR", str(fixture_dir))
+    monkeypatch.setenv("ADVANCED_HOST_FIXTURE", str(advanced_fixture))
+    monkeypatch.setattr(settings, "data_dir", data_dir)
+    monkeypatch.setattr(settings, "auth_password", "host-test-password")
+    monkeypatch.setattr(auth_service, "_configured_cache", None)
+    auth_service._sessions.clear()
+
+    from app.main import app
+
+    with pytest.raises(RuntimeError, match="fixture readiness is malformed"):
+        with TestClient(app):
+            pass
+
+    assert not list(data_dir.rglob("*.parquet"))
+    assert not (data_dir / "operational.db").exists()
+
+
+def test_main_host_rejects_same_provenance_stale_research_asset_binding(tmp_path, monkeypatch):
+    from app.config import settings
+    from app.services import auth as auth_service
+
+    fixture_dir = tmp_path / "phase1-fixtures"
+    data_dir = tmp_path / "governed-data"
+    advanced_fixture = tmp_path / "advanced-host-fixture.json"
+    _write_governed_backtest_fixture(fixture_dir)
+    advanced_fixture.write_text(json.dumps(_advanced_host_fixture()), encoding="utf-8")
+    monkeypatch.setenv("PHASE1_FIXTURE_MODE", "1")
+    monkeypatch.setenv("PHASE1_FIXTURE_DIR", str(fixture_dir))
+    monkeypatch.setenv("ADVANCED_HOST_FIXTURE", str(advanced_fixture))
+    monkeypatch.setattr(settings, "data_dir", data_dir)
+    monkeypatch.setattr(settings, "auth_password", "host-test-password")
+    monkeypatch.setattr(auth_service, "_configured_cache", None)
+    auth_service._sessions.clear()
+
+    from app.main import app
+
+    with TestClient(app):
+        pass
+
+    conflicting_fixture = _advanced_host_fixture()
+    binding = conflicting_fixture["research_asset_binding"]
+    assert isinstance(binding, dict)
+    binding.update({
+        "name": "Conflicting host bullish alignment asset",
+        "expression": "open",
+        "description": "A stale fixture must never reuse an unrelated immutable revision.",
+        "hypothesis": "Conflicting declarations must fail lifecycle startup.",
+    })
+    advanced_fixture.write_text(json.dumps(conflicting_fixture), encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="research asset binding conflicts with persisted lifecycle binding"):
+        with TestClient(app):
+            pass
 
 def test_main_host_fixture_revokes_selected_job_before_execution(tmp_path, monkeypatch):
     from app.config import settings

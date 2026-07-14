@@ -6,7 +6,12 @@ from pathlib import Path
 
 import polars as pl
 
-from app.contracts.market_data import FixtureBundle, FixtureContractError
+from app.contracts.market_data import (
+    AdvancedFixtureReadiness,
+    FixtureBundle,
+    FixtureContractError,
+    preflight_advanced_host_fixture,
+)
 from app.data_providers.base import AssetType, ProviderCapabilities
 
 
@@ -27,6 +32,10 @@ class FixtureProvider:
     @property
     def bundle(self) -> FixtureBundle:
         return self._bundle
+
+    def preflight_advanced_host(self, readiness: AdvancedFixtureReadiness) -> None:
+        """Validate loaded fixture semantics without exposing a writable provider path."""
+        preflight_advanced_host_fixture(self._bundle, readiness)
 
     def get_instruments(self, asset_type: AssetType) -> pl.DataFrame:  # noqa: ARG002
         return self._bundle.instruments_frame()

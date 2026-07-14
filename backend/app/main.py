@@ -34,6 +34,34 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _load_advanced_host_fixture() -> tuple[dict[str, object], "AdvancedFixtureReadiness"] | None:
+    """Load deployment-owned host configuration before any fixture synchronization can write."""
+    from pydantic import ValidationError
+
+    from app.contracts.market_data import AdvancedFixtureReadiness
+
+    advanced_fixture_path = os.environ.get("ADVANCED_HOST_FIXTURE", "").strip()
+    if not advanced_fixture_path:
+        return None
+    try:
+        fixture = json.loads(Path(advanced_fixture_path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise RuntimeError("advanced host fixture is unreadable") from error
+    allowed_fields = {
+        "policy", "advanced_subjects", "revoke_before_run_task_types",
+        "runner_wall_clock_seconds", "research_asset_binding", "fixture_readiness",
+    }
+    if not isinstance(fixture, dict) or set(fixture) - allowed_fields:
+        raise RuntimeError("advanced host fixture is malformed")
+    try:
+        readiness = AdvancedFixtureReadiness.model_validate_json(
+            json.dumps(fixture.get("fixture_readiness"))
+        )
+    except ValidationError as error:
+        raise RuntimeError("advanced host fixture readiness is malformed") from error
+    return fixture, readiness
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info(
@@ -49,19 +77,21 @@ async def lifespan(app: FastAPI):
     except Exception as e:  # noqa: BLE001
         logger.warning("auth bootstrap failed: %s", e)
 
-    # 数据层
-    store = DataStore()
-    repo = KlineRepository(store)
+    advanced_host_fixture = _load_advanced_host_fixture()
+
+    # DataStore construction is deferred until advanced fixture readiness has failed closed.
     fixture_mode = os.environ.get("PHASE1_FIXTURE_MODE", "").strip().lower() in {"1", "true", "yes"}
     if fixture_mode:
-        app.state.phase1_fixture_sync = daily_pipeline.run_phase1_fixture_sync(store.data_dir)
-        store.db.close()
-        store = DataStore()
-        repo = KlineRepository(store)
+        readiness = None if advanced_host_fixture is None else advanced_host_fixture[1]
+        app.state.phase1_fixture_sync = daily_pipeline.run_phase1_fixture_sync(
+            settings.data_dir, readiness=readiness
+        )
         from app.services import preferences
         preferences.save({"onboarding_completed": True})
     else:
         app.state.phase1_fixture_sync = None
+    store = DataStore()
+    repo = KlineRepository(store)
     app.state.datastore = store
     app.state.repo = repo
     operational = OperationalRepository(store.data_dir / "operational.db")
@@ -187,25 +217,16 @@ async def lifespan(app: FastAPI):
 
     advanced_repository = AdvancedRepository(operational.database_path)
     advanced_repository.migrate()
-    advanced_fixture_path = os.environ.get("ADVANCED_HOST_FIXTURE")
     advanced_subjects: frozenset[str] | None = None
     revoke_before_run_task_types: frozenset[str] = frozenset()
     runner_wall_clock_seconds = 15
     research_asset_binding: dict[str, object] | None = None
-    if advanced_fixture_path:
-        try:
-            fixture = json.loads(Path(advanced_fixture_path).read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as error:
-            raise RuntimeError("advanced host fixture is unreadable") from error
-        if not isinstance(fixture, dict) or set(fixture) - {
-            "policy", "advanced_subjects", "revoke_before_run_task_types",
-            "runner_wall_clock_seconds", "research_asset_binding",
-        }:
-            raise RuntimeError("advanced host fixture is malformed")
-        subjects = fixture["advanced_subjects"]
+    if advanced_host_fixture is not None:
+        fixture, fixture_readiness = advanced_host_fixture
+        subjects = fixture.get("advanced_subjects")
         if not isinstance(subjects, list) or not subjects or any(not isinstance(subject, str) or not subject for subject in subjects):
             raise RuntimeError("advanced host fixture subjects are malformed")
-        advanced_policy = AdvancedPolicy.bootstrap(fixture["policy"])
+        advanced_policy = AdvancedPolicy.bootstrap(fixture.get("policy"))
         raw_binding = fixture.get("research_asset_binding")
         if raw_binding is not None:
             expected_binding = {"strategy_id", "name", "expression", "description", "hypothesis", "provenance"}
@@ -231,6 +252,9 @@ async def lifespan(app: FastAPI):
         runner_wall_clock_seconds = configured_wall_clock
     else:
         advanced_policy = AdvancedPolicy.bootstrap("advanced_policy_v1")
+    app.state.advanced_fixture_readiness = (
+        None if advanced_host_fixture is None else advanced_host_fixture[1]
+    )
     app.state.advanced_repository = advanced_repository
     app.state.advanced_policy = advanced_policy
     app.state.viewpoint_service = ViewpointService(repository=advanced_repository, policy=advanced_policy)

@@ -55,10 +55,13 @@ def fixture_provider_enabled() -> bool:
     return os.environ.get("PHASE1_FIXTURE_MODE", "").strip().lower() in {"1", "true", "yes"}
 
 
-def run_phase1_fixture_sync(data_dir: Path) -> dict:
+def run_phase1_fixture_sync(
+    data_dir: Path, *, readiness: "AdvancedFixtureReadiness | None" = None
+) -> dict:
     """Write the read-only acceptance fixture through the normal governed lake path."""
     import os
 
+    from app.contracts.market_data import AdvancedFixtureReadiness, FixtureContractError
     from app.contracts.validator import validate_market_data_contract
     from app.data_providers.fixture_provider import FixtureProvider
     from app.tickflow.repository import DataStore
@@ -70,6 +73,14 @@ def run_phase1_fixture_sync(data_dir: Path) -> dict:
         raise RuntimeError("D-13 fixture mode requires PHASE1_FIXTURE_DIR")
 
     provider = FixtureProvider(Path(fixture_dir))
+    if readiness is not None and not isinstance(readiness, AdvancedFixtureReadiness):
+        raise FixtureContractError("fixture_readiness has an invalid descriptor type")
+    if os.environ.get("ADVANCED_HOST_FIXTURE", "").strip():
+        if readiness is None:
+            raise FixtureContractError("advanced host requires a validated fixture_readiness descriptor")
+        provider.preflight_advanced_host(readiness)
+    elif readiness is not None:
+        raise FixtureContractError("fixture_readiness is only valid for advanced host fixtures")
     store = DataStore(Path(data_dir))
     repo = KlineRepository(store)
     stages: list[str] = []

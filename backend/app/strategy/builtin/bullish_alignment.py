@@ -25,7 +25,8 @@ MAX_HOLD_DAYS = 20
 ALERTS = []
 
 
-def filter(df: pl.DataFrame, params: dict) -> pl.Expr:
+def eligibility_expression(params: dict) -> pl.Expr:
+    """Return the production entry predicate for bounded readiness and strategy evaluation."""
     expr = pl.col("symbol").is_not_null() | pl.col("symbol").is_null()
     if params.get("require_ma_alignment", True):
         expr = (
@@ -37,3 +38,7 @@ def filter(df: pl.DataFrame, params: dict) -> pl.Expr:
     if params.get("require_positive_momentum", True):
         expr = expr & (pl.col("momentum_20d") > 0)
     return expr
+
+
+def filter(df: pl.DataFrame, params: dict) -> pl.Expr:  # noqa: ARG001
+    return eligibility_expression(params)

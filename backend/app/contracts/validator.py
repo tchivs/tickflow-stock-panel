@@ -88,25 +88,34 @@ def _validate_primary_key(frame: pl.DataFrame, columns: list[str], name: str) ->
         raise _violation("primary-key", f"{name} contains duplicate {columns}")
 
 
+
+def is_market_session_timestamp(trade_date: date, quote_ts: int, *, timezone_name: str = "Asia/Shanghai") -> bool:
+    """Return whether a positive epoch-millisecond quote belongs to its market session date."""
+    if not isinstance(quote_ts, int) or isinstance(quote_ts, bool) or quote_ts <= 0:
+        return False
+    try:
+        market_time = datetime.fromtimestamp(quote_ts / 1000, tz=timezone.utc).astimezone(
+            ZoneInfo(timezone_name)
+        )
+    except (OverflowError, OSError, ValueError):
+        return False
+    return market_time.date() == trade_date and time(9, 0) <= market_time.timetz().replace(tzinfo=None) <= time(15, 30)
+
 def _validate_market_time(frame: pl.DataFrame, dataset: dict[str, Any], name: str) -> None:
     time_column = dataset.get("time_column")
     if not time_column:
         return
     if time_column not in frame.columns or "date" not in frame.columns:
         raise _violation("market-time", f"{name} requires {time_column} and date")
-    timezone_name = dataset.get("market_timezone", "Asia/Shanghai")
+    timezone_name = str(dataset.get("market_timezone", "Asia/Shanghai"))
     try:
-        market_timezone = ZoneInfo(timezone_name)
+        ZoneInfo(timezone_name)
     except Exception as exc:  # noqa: BLE001
         raise _violation("market-time", f"invalid timezone {timezone_name}") from exc
     for record in frame.select(["date", time_column]).iter_rows(named=True):
         timestamp = record[time_column]
-        try:
-            market_time = datetime.fromtimestamp(int(timestamp) / 1000, tz=timezone.utc).astimezone(market_timezone)
-        except (TypeError, ValueError, OSError) as exc:
-            raise _violation("market-time", f"{name} has invalid {time_column}={timestamp!r}") from exc
-        if market_time.date() != record["date"] or not (time(9, 0) <= market_time.timetz().replace(tzinfo=None) <= time(15, 30)):
-            raise _violation("market-time", f"{name} has out-of-session {time_column}={timestamp!r}")
+        if not is_market_session_timestamp(record["date"], timestamp, timezone_name=timezone_name):
+            raise _violation("market-time", f"{name} has invalid or out-of-session {time_column}={timestamp!r}")
 
 
 def _validate_repair_window(frame: pl.DataFrame, dataset: dict[str, Any], name: str) -> None:
