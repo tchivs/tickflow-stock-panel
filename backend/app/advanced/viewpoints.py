@@ -77,6 +77,9 @@ class ViewpointService:
         version = self.repository.viewpoint_version(viewpoint_version_id)
         if version is None:
             raise ValueError("viewpoint version not found")
+        terminal = self.repository.canonical_terminal_viewpoint_evaluation(viewpoint_version_id)
+        if terminal is not None:
+            return self._terminal_outcome(version, terminal)
         governed_evaluator = getattr(market_snapshot, "evaluate_viewpoint", None)
         if callable(governed_evaluator):
             return self._record_governed_evaluation(version, governed_evaluator(version))
@@ -158,9 +161,12 @@ class ViewpointService:
         if source_profile not in self.policy.source_profiles:
             raise ValueError("source profile is not permitted")
         grouped: dict[str, list[dict[str, Any]]] = {"low": [], "medium": [], "high": []}
-        for item in self.repository.viewpoint_evaluations(source_profile):
+        excluded_unevaluable = 0
+        for item in self.repository.calibration_viewpoint_evaluations(source_profile):
             if item["status"] == "evaluated":
                 grouped[item["confidence"]].append(item)
+            else:
+                excluded_unevaluable += 1
         result: dict[str, Any] = {}
         for confidence, items in grouped.items():
             returns = [item["relative_return"] for item in items]
@@ -173,8 +179,22 @@ class ViewpointService:
                 "coverage_start": min((item["coverage_start"] for item in items if item["coverage_start"]), default=None),
                 "coverage_end": max((item["coverage_end"] for item in items if item["coverage_end"]), default=None),
             }
-        result["excluded_unevaluable"] = 0
+        result["excluded_unevaluable"] = excluded_unevaluable
         return result
+
+    @staticmethod
+    def _terminal_outcome(version: dict[str, Any], evaluation: dict[str, Any]) -> dict[str, Any]:
+        """Project a persisted terminal fact without revisiting governed market inputs."""
+        if evaluation["status"] == "unevaluable":
+            return {"status": "unevaluable", "reason": evaluation["reason"], "relative_return": None}
+        coverage_end = evaluation["coverage_end"]
+        return {
+            "status": "evaluated",
+            "window_days": version["evaluation_window_days"],
+            "benchmark": version["benchmark"],
+            "relative_return": evaluation["relative_return"],
+            "as_of": date.fromisoformat(coverage_end) if coverage_end else None,
+        }
 
     def _append_revision(self, previous: dict[str, Any], request: ViewpointRevisionRequest, *, revision_kind: str | None,
                          correction_reason: str | None) -> dict[str, Any]:

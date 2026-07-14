@@ -589,7 +589,7 @@ class AdvancedRepository:
             row = connection.execute(
                 """SELECT * FROM advanced_viewpoint_evaluations
                    WHERE viewpoint_version_id = ?
-                     AND (status = 'evaluated' OR (status = 'unevaluable' AND reason != 'awaiting_governed_evaluation'))
+                     AND (status = 'evaluated' OR (status = 'unevaluable' AND (reason IS NULL OR reason != 'awaiting_governed_evaluation')))
                    ORDER BY created_at ASC, id ASC LIMIT 1""",
                 (viewpoint_version_id,),
             ).fetchone()
@@ -607,7 +607,7 @@ class AdvancedRepository:
                        FROM advanced_viewpoint_evaluations AS terminal
                        WHERE terminal.viewpoint_version_id = version.id
                          AND (terminal.status = 'evaluated'
-                              OR (terminal.status = 'unevaluable' AND terminal.reason != 'awaiting_governed_evaluation'))
+                              OR (terminal.status = 'unevaluable' AND (terminal.reason IS NULL OR terminal.reason != 'awaiting_governed_evaluation')))
                        ORDER BY terminal.created_at ASC, terminal.id ASC
                        LIMIT 1
                    )

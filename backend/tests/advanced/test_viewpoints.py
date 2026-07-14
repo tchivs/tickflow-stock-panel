@@ -435,7 +435,7 @@ def test_missing_market_inputs_persist_explicit_unevaluable_outcomes(tmp_path, p
     assert outcome["status"] == "unevaluable"
     assert outcome["reason"] == reason
     assert outcome["relative_return"] is None
-    assert service.calibration(source_profile="operator-research-v1")["excluded_unevaluable"] == 0
+    assert service.calibration(source_profile="operator-research-v1")["excluded_unevaluable"] == 1
 
 
 def test_governed_collaborator_records_real_returns_and_coverage_dates(tmp_path):
@@ -535,6 +535,16 @@ def test_calibration_candidates_choose_one_first_terminal_fact_per_immutable_ver
         (unevaluable["id"], "unevaluable"),
     }
     assert next(candidate for candidate in candidates if candidate["viewpoint_version_id"] == duplicated["id"])["relative_return"] == 0.1
+    calibration = service.calibration(source_profile="operator-research-v1", minimum_sample_count=2)
+    assert calibration["high"] == {
+        "status": "calibrated",
+        "sample_count": 2,
+        "hit_rate": 1.0,
+        "mean_relative_return": 0.065,
+        "coverage_start": "2026-01-02",
+        "coverage_end": "2026-02-28",
+    }
+    assert calibration["excluded_unevaluable"] == 1
     with repository._connection() as connection:
         assert connection.execute(
             "SELECT COUNT(*) FROM advanced_viewpoint_evaluations WHERE viewpoint_version_id = ?",
