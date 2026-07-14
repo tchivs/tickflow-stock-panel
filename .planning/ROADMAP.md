@@ -177,27 +177,51 @@ Plans:
   3. Operator can start an authorized agent job for an allowed market and instrument, observe SSE progress, and inspect its audit summary; unauthorized, out-of-allowlist, or rate-limited requests are rejected before work starts.
   4. Researcher can submit a custom strategy only when its machine-readable contract, AST, imports, timeout, and memory constraints pass validation, and can review the constrained run's result or failure record.
 
-**Plans**: 15/19 plans executed
+**Plans**: 18/19 plans executed
+**Wave 1**
 
 - [x] 04-15-PLAN.md
-- [ ] 04-16-PLAN.md
-- [ ] 04-17-PLAN.md
-- [ ] 04-18-PLAN.md
-- [ ] 04-19-PLAN.md
-
 - [x] 04-01-PLAN.md
 - [x] 04-02-PLAN.md
 - [x] 04-03-PLAN.md
 - [x] 04-04-PLAN.md
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 04-16-PLAN.md
 - [x] 04-05-PLAN.md
 - [x] 04-06-PLAN.md
 - [x] 04-07-PLAN.md
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 04-17-PLAN.md
 - [x] 04-08-PLAN.md
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [x] 04-18-PLAN.md
 - [x] 04-09-PLAN.md
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [ ] 04-19-PLAN.md
 - [x] 04-10-PLAN.md
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
 - [x] 04-11-PLAN.md
+
+**Wave 7** *(blocked on Wave 6 completion)*
+
 - [x] 04-12-PLAN.md
+
+**Wave 8** *(blocked on Wave 7 completion)*
+
 - [x] 04-13-PLAN.md
+
+**Wave 9** *(blocked on Wave 8 completion)*
+
 - [x] 04-14-PLAN.md
 
 ### Phase 5: Optional Enhancements
@@ -223,5 +247,5 @@ Plans:
 | 1. Core Merger | 15/15 | Complete    | 2026-07-11 |
 | 2. Factor And Strategy Research | 8/8 | Complete    | 2026-07-11 |
 | 3. AI Analysis | 12/12 | Complete    | 2026-07-12 |
-| 4. Advanced Capabilities | 15/19 | In Progress|  |
+| 4. Advanced Capabilities | 18/19 | In Progress|  |
 | 5. Optional Enhancements | 0/TBD | Optional | - |
