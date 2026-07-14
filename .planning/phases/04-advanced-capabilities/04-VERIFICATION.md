@@ -1,89 +1,147 @@
 ---
 phase: 04-advanced-capabilities
-verified: 2026-07-13
-status: passed
-score: 4/4 roadmap truths verified; 5/5 requirements traced
-plans_reviewed: 21/21
-verification_scope:
-  source_and_contracts: reviewed
-  recorded_plan_21_backend_gate: 90 passed; 0 failed; 0 skipped
-  recorded_plan_21_host_gate: 3 passed; 0 failed; 0 skipped
-  recorded_plan_21_isolation_branch: affirmative_isolation_proved
-  reported_api_coverage_gate: passed (18 capabilities; 8 integrate; 10 opt-out)
-  commands_run_by_this_verification: none (per request)
-re_verification:
-  previous_status: gaps_found
-  gaps_closed:
-    - non_intercepted_host_full_workflows
-    - host_execution_evidence_unknown
-    - deployment_linux_private_root_proof
-    - real_host_viewport_accessibility_evidence
+verified: 2026-07-14T03:39:01Z
+status: gaps_found
+score: 2/5 must-haves verified
+behavior_unverified: 0
+overrides_applied: 0
+next_action: "Plan and implement the three server-side safeguard fixes below, add boundary regressions, then re-run Phase 04 verification."
+gaps:
+  - truth: "Researcher can progress a hypothesis through a sandboxed experiment and recorded feedback, then evaluate an evolved strategy for promotion through explicit gates."
+    status: failed
+    reason: "The authorized research asset is not server-bound to the strategy executed by the experiment runner; a caller can submit a different installed strategy_id."
+    artifacts:
+      - path: backend/app/advanced/api.py
+        issue: "The specification route authorizes research_asset_id only and forwards the caller's complete data_scope unchanged."
+      - path: backend/app/advanced/experiments.py
+        issue: "The service validates scope shape but never verifies strategy_id against the persisted asset binding."
+      - path: backend/app/advanced/governed_runner.py
+        issue: "The runner passes the unverified strategy_id directly into StrategyBacktestConfig."
+    missing:
+      - "Resolve the persisted strategy-to-research-asset binding on the server and derive or require the matching strategy_id before any specification is created."
+      - "Defend the invariant in ExperimentService or the runner and add a public-route regression proving a mismatched strategy creates no specification, worker, or sandbox evidence."
+  - truth: "Operator can start an authorized agent job for an allowed market and instrument while rate-limited requests are rejected before work starts."
+    status: failed
+    reason: "Task-specific AdvancedPolicy.rate_limits are collapsed to max(...) and durable rate windows omit task_type, so lower-quota task classes can exceed their configured limit."
+    artifacts:
+      - path: backend/app/main.py
+        issue: "advanced_operator_policy sets quota_per_window=max(advanced_policy.rate_limits.values())."
+      - path: backend/app/advanced/repository.py
+        issue: "Rate-window acquisition and start-time revalidation key only by principal/policy/window, not task_type."
+      - path: backend/app/advanced/jobs.py
+        issue: "Creation and prepare_to_start both use the collapsed policy quota."
+    missing:
+      - "Carry a task-specific quota through authorization, job acquisition, and execution-start revalidation."
+      - "Add task_type to the durable rate-window identity/query and migration trigger, then prove experiment and strategy-evaluation buckets exhaust independently of research_draft."
+  - truth: "The real-host fixture rejects malformed bars, absent required benchmark history, insufficient coverage, and no eligible signal before readiness."
+    status: failed
+    reason: "FixtureDailyBar and FixtureBundle validate only structure/read-only files and non-empty index_daily; invalid OHLC, finite/positive values, timestamp, chronological coverage, and configured benchmark are accepted and written to the governed lake."
+    artifacts:
+      - path: backend/app/contracts/market_data.py
+        issue: "FixtureDailyBar has unconstrained floats/quote_ts and MarketDataFixtureFile accepts arbitrary index_daily contents."
+      - path: backend/app/jobs/daily_pipeline.py
+        issue: "The fixture pipeline appends daily/index bars without an advanced-host preflight."
+      - path: backend/app/contracts/validator.py
+        issue: "The fixture validation checks schema, primary keys, and market time, not OHLC/value/order/benchmark/readiness invariants."
+    missing:
+      - "Add an advanced-host fixture preflight that requires the configured benchmark, chronological unique coverage, finite positive values, valid OHLC ordering, positive in-session timestamps, and required history/window coverage before any lake write."
+      - "Add startup regressions for every rejected shape, including missing 000300.SH and no eligible required signal."
 ---
 
+# Phase 04: Advanced Capabilities Verification Report
 
-# Phase 4: Advanced Capabilities Verification Report
+**Phase Goal:** Researchers and operators can use advanced research and automation workflows within explicit promotion, authorization, audit, and execution safeguards.
 
-**Phase goal:** Researchers and operators can use advanced research and automation workflows within explicit promotion, authorization, audit, and execution safeguards.
+**Verified:** 2026-07-14T03:39:01Z  
+**Status:** `gaps_found`  
+**Re-verification:** No — prior report contained no structured gaps; this is an independent goal-backward verification against committed `HEAD` and the current `04-REVIEW.md`.
 
-**Status: `passed`**
+## Goal Achievement
 
-This goal-backward re-verification reads Plans and summaries 04-01 through 04-21, the roadmap, validation/coverage/review artifacts, current host acceptance source, and current advanced backend/frontend focused contracts. It supersedes the earlier `gaps_found` result: its Plan 19 blockers were accurate, but Plan 21 supplied later recorded execution evidence and the current three-scenario host suite.
+### Observable Truths
 
-No formatter, linter, build, or test command was run for this report. Test outcomes below are recorded Plan 21 evidence and the final backend-gate result supplied to this verifier, not newly executed results.
-
-## Decision
-
-**All four roadmap truths have current non-intercepted real-host evidence.** Plan 21's serial `phase4-fastapi-host` project passed all three scenarios against the spawned FastAPI lifespan, Vite same-origin reverse proxy, rendered authenticated session cookie, production API routes, operational SQLite state, governed fixture data, and root SSE. Its recorded deployment capability is `affirmative_isolation_proved`, not an inferred, unavailable, or unknown branch.
-
-## Evidence Inventory
-
-| Evidence | Recorded/observed result | Verification use and limit |
-| --- | --- | --- |
-| Plan 21 focused backend gate | **90 passed; 0 failed; 0 skipped; 29 warnings** in 70.96s | Exact final backend contract gate: production-host, viewpoints, evolution, and sandbox tests. Not rerun by this verifier. |
-| Plan 21 real-host browser gate | **3 passed; 0 failed; 0 skipped** in 22.1s | Serial non-intercepted `phase4-fastapi-host` evidence for every roadmap workflow and rejection boundary. Not rerun by this verifier. |
-| Current host acceptance source | **3 scenario contracts** | It starts real Uvicorn and uses browser-origin `/api` plus root `EventSource('/api/intraday/stream')`. Inspection found no `page.route`, `context.route`, or `route.fulfill` interception. |
-| Plan 21 host capability classification | **`affirmative_isolation_proved`** | A real harmless sandbox submission reached a terminal record with a proof fingerprint and resource summary; the current spec also asserts the fail-closed alternative. |
-| `04-REVIEW.md` | **clean; 0 active findings** | Static final-remediation review only; not runtime proof. |
-| Plan 20 API-coverage gate | **passed** | `COVERAGE.md` records 18 LangGraph/checkpointer capabilities: 8 `INTEGRATE`, 10 `OPT-OUT`. |
-
-## Roadmap Success Criteria
-
-| # | Required truth | Current source/contract and recorded host evidence | Result |
+| # | Truth | Status | Evidence |
 | --- | --- | --- | --- |
-| 1 | User can review an attributed viewpoint, material stance change, and confidence-aware performance. | Host scenario 1 uses the real Analysis UI for a material revision, correction, and server-owned evaluation; it renders immutable lineage, `材料立场变化`, correction reason, frozen `60`-day/`000300.SH` evaluation, and calibration. Current viewpoint contracts cover append-only facts, canonical policy provenance, governed/unevaluable outcomes, and low/medium/high calibration. | **VERIFIED** |
-| 2 | Researcher can progress a hypothesis through a sandboxed experiment and recorded feedback, then evaluate an evolved strategy for promotion through explicit gates. | Host scenario 2 resolves the lifecycle-owned immutable `bullish_alignment` asset, creates and completes a frozen experiment, records feedback, creates a candidate, invokes five server-owned gates, and promotes with rationale to `registered_research_only`. Governed-run contracts require distinct aggregate/in-sample/out-of-sample executions; evolution contracts reject copied evidence and client gate authority. | **VERIFIED** |
-| 3 | Operator can start an authorized agent job, observe scoped SSE/audit, while unauthorized, out-of-allowlist, or rate-limited work is rejected before start. | Host scenario 1 observes authorized root-SSE/audit state. Scenario 3 records unauthenticated `401`, out-of-scope `404`, revoked-before-execution rejection, rate-limit `409`, no non-rejected unauthorized SSE event, and safe audit projection. Current authorization/workflow/SSE contracts cover revalidation, durable stage-and-audit-before-publication, and scoped allowlisted projection. | **VERIFIED** |
-| 4 | Researcher can submit a contract-bound strategy only after validation and inspect its constrained result or failure record. | Host scenario 2 submits a hash-bound harmless source through the actual sandbox UI. Plan 21 records a terminal affirmative proof record; the same scenario asserts the exact pre-spawn `isolation_unavailable` alternative with no new terminal run. Current sandbox contracts cover hostile-input rejection, observable proof, immutable terminal lineage, redaction, and cross-asset denial. | **VERIFIED** |
+| 1 | User can review an attributed market viewpoint, identify a material stance change, and inspect its confidence-aware performance result. | ✓ VERIFIED | The focused host Playwright scenario created an initial viewpoint, used visible revision/correction/evaluation controls, rendered `材料立场变化`, server evaluation, and calibration; it passed. `ViewpointPanel` receives server projections rather than calculating return values in the browser. |
+| 2 | Researcher can progress a hypothesis through a sandboxed experiment and recorded feedback, then evaluate an evolved strategy for promotion through explicit gates. | ✗ FAILED | The happy-path host scenario passed, but `api.py:356-365` authorizes only `research_asset_id`; `experiments.py:36-81` persists an arbitrary schema-valid `strategy_id`; `governed_runner.py:93-118` executes it. This bypasses the persisted asset-to-strategy binding on direct API calls. |
+| 3 | Operator can start an authorized agent job for an allowed market and instrument, observe SSE progress, and inspect its audit summary; unauthorized, out-of-allowlist, or rate-limited requests are rejected before work starts. | ✗ FAILED | The host scenario covers the configured one-per-hour fixture branch, but `main.py:243-253` converts the per-task policy to `max(...)`; `repository.py:164-205` has no task_type in rate-window identity or revalidation. The configured lower task limits are not enforced. |
+| 4 | Researcher can submit a custom strategy only when its machine-readable contract, AST, imports, timeout, and memory constraints pass validation, and can review the constrained run's result or failure record. | ✓ VERIFIED | The host Playwright scenario submitted the hash-bound source to the real endpoint and observed `affirmative_isolation_proved`; the focused backend gate includes production-host and hostile sandbox contracts. The normal lifespan wires `LinuxIsolationLauncher` in `main.py:274-278`. |
+| 5 | Real-host acceptance starts only after its governed fixture satisfies the documented market-data, benchmark, coverage, and eligible-signal safeguards. | ✗ FAILED | `market_data.py:28-60` has no numeric/order/timestamp validators; `FixtureBundle.load()` only requires a non-empty index_daily list in advanced-host mode; `daily_pipeline.py:88-93` writes it without a preflight. Invalid data can reach readiness. |
 
-**Roadmap score: 4/4 fully verified.**
+**Score:** **2/5** truths verified (0 present-but-behavior-unverified).
 
-## Requirement Traceability
+### Required Artifacts
 
-| Requirement | Current behavior verified | Evidence |
-| --- | --- | --- |
-| **ADV-01** | Immutable attributed lineage, material-change classification, correction, governed evaluation, and confidence-aware calibration are available from Analysis. | Plans 01/05/09/10/12/16/18/21; viewpoint/API contracts; host scenario 1. |
-| **ADV-02** | Frozen runner scope produces a bounded completed governed experiment; feedback is append-only and completion-gated. | Plans 01/06/09/11/12/17/18/21; governed-run contracts; host scenario 2. |
-| **ADV-03** | Candidate creation uses completed immutable evidence; five server-owned gates plus explicit rationale produce research-only registration without market action. | Plans 01/06/08/09/11/12/13/17/18/21; evolution contracts; host scenario 2. |
-| **SAFE-01** | Server-derived authorization, rate enforcement, start-time revocation, durable audit/stage ordering, and root-SSE scope filtering reject prohibited work before execution. | Plans 02/04/07/08/09/10/13/19/21; API/SSE/host contracts; host scenarios 1 and 3. |
-| **SAFE-02** | Same-request hash-bound admission, observable private-root isolation proof, resource limits, immutable terminal lineage, and authorized redacted run review are enforced. | Plans 03/04/07/09/14/15/18/21; sandbox/host contracts; host scenario 2 and recorded affirmative branch. |
+| Artifact | Expected | Status | Details |
+| --- | --- | --- | --- |
+| `backend/app/advanced/api.py` + `experiments.py` + `governed_runner.py` | Authorized immutable experiment lineage drives only the bound strategy. | ✗ WIRED BUT UNSAFE | The route, service, and runner are substantive and connected, but their data flow preserves a caller-controlled strategy ID rather than the server binding. |
+| `backend/app/main.py` + `authorization.py` + `jobs.py` + `repository.py` | Policy-derived, task-specific quota is durable at creation and rechecked before work. | ✗ WIRED BUT UNSAFE | Durable acquisition, start-time revalidation, audit, and SSE paths exist; task quota identity is collapsed and cross-task. |
+| `backend/app/contracts/market_data.py` + `jobs/daily_pipeline.py` | Advanced-host fixture input fails closed before lake ingestion. | ✗ INSUFFICIENT | The artifacts load and write fixture data, but required semantic market-data validation is missing. |
+| `backend/app/advanced/sandbox.py` + `api.py` + `projections.py` | Strict custom-source admission and terminal safe run review. | ✓ VERIFIED | Substantive AST/hash/proof path is registered by lifespan; focused backend and real-host browser execution exercised its affirmative branch and safe projection. |
+| `frontend/e2e/phase4-advanced-capabilities.host.spec.ts` | Non-intercepted real-host workflow coverage. | ✓ VERIFIED | Three serial scenarios passed against spawned FastAPI/Uvicorn through the Vite proxy and root SSE. Source inspection found no `page.route`, `context.route`, or `route.fulfill` handler. |
 
-Every Phase 4 requirement is traced to a current implementation contract and final real-host acceptance evidence.
+### Key Link Verification
 
-## Prior-Gap Closure
+| From | To | Via | Status | Details |
+| --- | --- | --- | --- | --- |
+| Advanced experiment specification route | `ExperimentService.create_specification` | `payload.model_dump()` at `api.py:360-362` | ✗ UNSAFE | The link forwards the browser-supplied `data_scope.strategy_id` rather than a server-resolved binding. |
+| `ExperimentService` | `StrategyBacktestConfig` | Frozen scope → governed runner `_config()` | ✗ UNSAFE | `governed_runner.py:96-108` accepts and uses the unverified ID. |
+| `AdvancedPolicy.rate_limits` | Durable rate window and start-time revalidation | `main.py` → `jobs.py` → `repository.py` | ✗ UNSAFE | `max(...)` and a window key without task_type defeat policy-specific limits at both endpoints. |
+| Fixture bundle | Governed data lake | `FixtureProvider` → `run_phase1_fixture_sync` → `append_daily`/`append_index_daily` | ✗ UNSAFE | The path is active but no semantic fixture preflight protects it. |
+| Sandbox form/API | `LinuxIsolationLauncher` terminal record | Same-origin host request to `/api/advanced/sandbox/submissions` | ✓ WIRED | The actual host test reached the terminal affirmative-isolation branch; unavailable capability remains an explicit pre-spawn branch in the scenario. |
+| Job state/audit | Root scoped SSE | Job lifecycle → `QuoteService.notify_advanced_progress` → `/api/intraday/stream` | ✓ WIRED | The first and third host scenarios passed and observed authorized SSE/audit plus rejected-path non-delivery. This does not repair the independent quota-policy flaw. |
 
-| Prior gap | Closure evidence |
-| --- | --- |
-| Host suite covered only jobs/SSE and denials | The current host spec has three serial scenarios: viewpoint lifecycle plus job/SSE; immutable binding through experiment/feedback/five gates/promotion plus sandbox; and denial boundaries. Plan 21 records all three passed. |
-| Plan 19 execution was `unknown` | `04-21-SUMMARY.md` records the exact focused backend and host commands, exit codes, elapsed times, pass/fail/skip counts, scenario coverage, and capability branch. |
-| Positive Linux private-root proof was human-needed | Plan 21 records `affirmative_isolation_proved` from the real sandbox terminal branch. The implementation remains fail-closed if any host cannot establish the required observations. |
-| Real-host viewport/accessibility evidence was human-needed | The current host scenarios exercise 1440×960, 1024×900, and 375×844 overflow instructions, 44px controls, tab keyboard navigation, alert/status states, and promotion-dialog focus containment/restoration; Plan 21 records this matrix as passed. |
+### Data-Flow Trace (Level 4)
 
-## Non-Blocking Note
+| Artifact | Data Variable | Source | Produces Real Data | Status |
+| --- | --- | --- | --- | --- |
+| `ViewpointPanel` | Immutable viewpoints/evaluations/calibration | Real advanced API and governed snapshot route in host test | Yes | ✓ FLOWING |
+| `AdvancedResearchPanels` experiment flow | `research_asset_id` and `strategy_id` | Server binding endpoint plus browser request scope | Partially — binding is displayed, but API accepts mismatched strategy_id | ✗ HOLLOW SAFEGUARD |
+| Job/SSE flow | Job/audit/stage projection | Operational SQLite and real root SSE | Yes | ✓ FLOWING, with unsafe per-task quota enforcement |
+| Advanced-host governed fixture | Daily/index bars | Read-only JSON → fixture pipeline → Parquet lake | Yes, but invalid source values are not rejected | ✗ UNSAFE INPUT FLOW |
 
-`ROADMAP.md` still has stale Phase 4 plan-count bookkeeping (`18/19`) despite the later Plan 20 and Plan 21 artifacts. It does not negate the observed roadmap truths; reconcile it through the planning workflow rather than in this verification report.
+### Focused Behavioral Spot-Checks
 
-## VERIFICATION PASSED
+| Behavior | Command | Result | Status |
+| --- | --- | --- | --- |
+| Phase 04 backend contracts and host integration | `cd backend && timeout 120s uv run pytest tests/advanced/test_production_host.py tests/advanced/test_viewpoints.py tests/advanced/test_evolution.py tests/advanced/test_sandbox.py -q` | `90 passed, 29 warnings in 50.97s` | ✓ PASS |
+| Real FastAPI/Vite host workflows | `cd frontend && timeout 240s pnpm exec playwright test e2e/phase4-advanced-capabilities.host.spec.ts --project=phase4-fastapi-host` | `3 passed (18.3s)`; actual sandbox branch printed `affirmative_isolation_proved` | ✓ PASS |
+
+These focused passes prove the exercised happy paths and denial scenarios, but do not override the directly observed server-side provenance, quota, and fixture-input violations above. The existing host quota fixture assigns every task type a quota of `1`, so it cannot distinguish the collapsed production policy buckets.
+
+### Requirements Coverage
+
+| Requirement | Source plans | Description | Status | Evidence |
+| --- | --- | --- | --- | --- |
+| **ADV-01** | 04-01, 04-05, 04-09, 04-10, 04-12, 04-16, 04-18, 04-21 | Attributed immutable viewpoints, material changes, and confidence-aware outcome review. | ✓ SATISFIED (warning below) | Focused host scenario 1 passed from revision/correction through governed evaluation/calibration. |
+| **ADV-02** | 04-01, 04-06, 04-09, 04-11, 04-12, 04-17, 04-18, 04-21 | Frozen experiment specification, sandboxed governed run, and recorded feedback cycle. | ✗ BLOCKED | A valid asset authorization can be paired with a different strategy identifier and executed by the runner. |
+| **ADV-03** | 04-01, 04-06, 04-08, 04-09, 04-11, 04-12, 04-13, 04-17, 04-18, 04-21 | Completed research evidence evolves through five explicit gates to research-only promotion. | ✗ BLOCKED | Candidate/gate evidence can originate from the mismatched strategy run described under CR-01. |
+| **SAFE-01** | 04-02, 04-04, 04-07, 04-08, 04-09, 04-10, 04-13, 04-19, 04-21 | Scoped authorization, allowlists, rate limits, idempotent jobs, audit, and SSE progress. | ✗ BLOCKED | The authorization/SSE mechanisms work, but per-task deployment rate limits are not enforced. |
+| **SAFE-02** | 04-03, 04-04, 04-07, 04-09, 04-14, 04-15, 04-18, 04-21 | Hash-bound contract, AST/import/resource validation, fail-closed sandbox, and safe result review. | ✓ SATISFIED | Host run used the real Linux launcher and terminal review; backend contracts passed. |
+
+All five Phase 04 requirements are declared by at least one plan; no orphaned requirement was found.
+
+### Anti-Patterns Found
+
+| File | Line | Pattern | Severity | Impact |
+| --- | --- | --- | --- | --- |
+| `backend/app/advanced/api.py` / `viewpoints.py` / `repository.py` | Review CR-04 trace | Repeated evaluation appends duplicate facts which calibration aggregates as independent samples. | ⚠️ Warning | Confidence buckets can be inflated by repeat evaluation of one immutable viewpoint version. Add idempotency or aggregate one deterministic terminal outcome per version. |
+
+No `TBD`, `FIXME`, or `XXX` debt marker was found in the inspected Phase 04 runtime, UI, and host-test files. The limited `return {}`/`return null` matches are defensive helpers, graph node empty updates, optional query display, or blank optional form parsing; they are not user-visible stubs on an exercised Phase 04 flow.
+
+## Gaps Summary
+
+Phase 04's visible happy paths and its focused host suite work, but the phase goal is **not achieved** because three safeguard boundaries are observably violated in committed code:
+
+1. **Provenance bypass:** research-asset authorization does not constrain the strategy that actually runs.
+2. **Quota bypass:** task-specific limits become one highest shared quota bucket.
+3. **Unsafe host readiness:** malformed or benchmark-inadequate fixture data can be ingested and served.
+
+The Phase 4 `ROADMAP.md` still shows stale plan-count/status bookkeeping (`18/19`) despite plans 20 and 21 artifacts. This is informational and not used to defer any gap; Phase 5 does not explicitly schedule these safety fixes.
+
+**Next action:** implement the three structured gaps above with public-boundary regressions, then re-run this verification. The calibration-duplicate warning should be fixed in the same remediation wave or explicitly accepted by the developer; it must not be silently treated as independent confidence evidence.
 
 ---
-_Verified: 2026-07-13_
-_Verifier: Goal-backward phase verifier_
+
+_Verified: 2026-07-14T03:39:01Z_  
+_Verifier: Claude (gsd-verifier)_
