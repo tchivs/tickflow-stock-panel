@@ -5,15 +5,15 @@ milestone_name: milestone
 current_phase: 04
 current_phase_name: advanced-capabilities
 status: executing
-stopped_at: Completed 04-25-PLAN.md
-last_updated: "2026-07-14T06:34:57.262Z"
+stopped_at: Completed 04-26-PLAN.md
+last_updated: "2026-07-14T06:49:37.740Z"
 last_activity: 2026-07-13
 last_activity_desc: Completed 04-17 governed experiment evolution
 progress:
   total_phases: 4
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 61
-  completed_plans: 60
+  completed_plans: 61
 ---
 
 # Project State
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-07-10)
 ## Current Position
 
 Phase: 04 (advanced-capabilities) — EXECUTING
-Plan: 9 of 19
+Plan: 10 of 19
 Status: Ready to execute
 Last activity: 2026-07-13 — Completed 04-17 governed experiment evolution
 
@@ -80,6 +80,7 @@ Progress: [█████████░] 93%
 | Phase 04-advanced-capabilities P24 | 773 | 2 tasks | 9 files |
 | Phase 04-advanced-capabilities P23 | 9m 37s | 2 tasks | 6 files |
 | Phase 04 P25 | 314 | 2 tasks | 3 files |
+| Phase 04 P26 | 11m 20s | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -139,6 +140,8 @@ No implementation decision was explicitly locked by the architecture intake. Req
 - [Phase ?]: Rejected task quota checks persist audit state without emitting advanced-progress SSE.
 - [Phase ?]: Viewpoint calibration selects the first terminal immutable fact by created-at and stable ID, excluding the awaiting fact.
 - [Phase ?]: Terminal viewpoint evaluation retries reuse the frozen ledger fact and cannot invoke governed evaluation or alter calibration.
+- [Phase ?]: Public experiment creation resolves an extant persisted asset-to-installed-strategy binding before service invocation and returns safe 404 on mismatch.
+- [Phase ?]: Authenticated real-lifespan tests prove task-specific quota denials produce no advanced SSE event while independent research capacity remains available.
 
 ### Pending Todos
 
@@ -156,6 +159,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-07-14T06:34:57.253Z
-Stopped at: Completed 04-25-PLAN.md
+Last session: 2026-07-14T06:49:37.732Z
+Stopped at: Completed 04-26-PLAN.md
 Resume file: None

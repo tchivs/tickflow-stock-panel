@@ -11,3 +11,8 @@ The focused Plan 04-22 command continues to fail on two pre-existing assertions 
 ## 2026-07-14 - Existing Viewpoint Ruff Findings
 
 `cd backend && uv run ruff check app/advanced/repository.py app/advanced/viewpoints.py tests/advanced/test_viewpoints.py` reports pre-existing import-order violations in `repository.py` and an earlier test-local import block. The Plan 04-25 implementation did not alter either import block; focused viewpoint regression coverage passes.
+
+
+## 2026-07-14 - Existing Advanced Runner Host Failures
+
+The Plan 04-26 aggregate and final-host gates continue to expose five pre-existing runner test failures outside the public-boundary changes: the two existing experiment assertions retain obsolete split metrics/checksum expectations and call a missing `prepare()` method; two host tests construct `ExperimentService` without the Plan 04-22-required `binding_resolver`; and one runner-host test omits the persisted `bound_strategy_id`, so the Plan 04-22 fail-closed runner correctly returns `validation_failed`. These failures were present in prerequisite execution summaries or are direct stale expectations for the already-established provenance contract. The Plan 04-26 focused boundary regressions pass.
