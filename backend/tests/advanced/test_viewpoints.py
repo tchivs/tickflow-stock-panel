@@ -38,6 +38,15 @@ class FixedGovernedEvaluation:
         }
 
 
+class CountingGovernedEvaluation(FixedGovernedEvaluation):
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def evaluate_viewpoint(self, version: dict[str, object]) -> dict[str, object]:
+        self.calls += 1
+        return super().evaluate_viewpoint(version)
+
+
 def _service(tmp_path):
     from app.advanced.policy import AdvancedPolicy
     from app.advanced.repository import AdvancedRepository
@@ -674,3 +683,51 @@ def test_viewpoint_api_resolves_persisted_instrument_before_safe_projection_and_
         "/api/advanced/viewpoints/versions/version-owned/evaluate",
         json={"benchmark": "SPX"},
     ).status_code == 422
+
+
+def test_repeated_empty_body_evaluation_route_reuses_terminal_fact_and_stable_calibration(tmp_path):
+    from app.advanced import api as advanced_api
+
+    repository, service = _service(tmp_path)
+    viewpoint = _create(service)
+    market_snapshot = CountingGovernedEvaluation()
+    app = FastAPI()
+    app.include_router(advanced_api.router)
+    app.state.viewpoint_service = service
+    app.state.viewpoint_market_snapshot = market_snapshot
+    app.state.resolve_advanced_subject_scope = lambda _request: advanced_api.AdvancedSubjectScope(
+        frozenset({("instrument", "600519.SH")})
+    )
+
+    @app.middleware("http")
+    async def authenticated(request: Request, call_next):
+        request.state.reviewer_principal = "server-researcher"
+        return await call_next(request)
+
+    client = TestClient(app)
+    path = f"/api/advanced/viewpoints/versions/{viewpoint['id']}/evaluate"
+    first = client.post(path, json={})
+    calibration_after_first = service.calibration(source_profile="operator-research-v1", minimum_sample_count=2)
+    second = client.post(path, json={})
+
+    assert first.status_code == second.status_code == 200
+    assert first.json() == second.json()
+    assert market_snapshot.calls == 1
+    assert service.calibration(source_profile="operator-research-v1", minimum_sample_count=2) == calibration_after_first
+    assert calibration_after_first["high"] == {
+        "status": "insufficient_sample",
+        "sample_count": 1,
+        "hit_rate": 1.0,
+        "mean_relative_return": 0.1,
+        "coverage_start": "2026-01-02",
+        "coverage_end": "2026-03-31",
+    }
+    with repository._connection() as connection:
+        evaluations = connection.execute(
+            "SELECT status, reason FROM advanced_viewpoint_evaluations WHERE viewpoint_version_id = ?",
+            (viewpoint["id"],),
+        ).fetchall()
+    assert [tuple(row) for row in evaluations] == [
+        ("unevaluable", "awaiting_governed_evaluation"),
+        ("evaluated", None),
+    ]
