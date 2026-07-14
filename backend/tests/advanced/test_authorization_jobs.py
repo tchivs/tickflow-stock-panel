@@ -344,13 +344,25 @@ def test_asymmetric_task_quotas_reject_without_work_or_progress_and_leave_resear
             ),
         )
 
+    research_that_runs = jobs.create_job(
+        principal="server-operator-principal",
+        request=_request(
+            record["token"], instrument="000001.SZ", idempotency_key="research-runs-with-independent-capacity"
+        ),
+    )
+    completed = asyncio.run(jobs.run_authorized_job(job_id=research_that_runs["id"]))
+    assert completed["status"] == "authorized"
+    assert len(workflow.calls) == 1
+    assert progress.calls
+    progress.calls.clear()
+
     research = jobs.create_job(
         principal="server-operator-principal",
-        request=_request(record["token"], idempotency_key="research-still-available"),
+        request=_request(record["token"], idempotency_key="research-revalidation-denied"),
     )
     with repository._connection() as connection, connection:
         connection.execute(
-            "UPDATE advanced_rate_windows SET consumed = consumed + 2 WHERE principal = ? AND task_type = ?",
+            "UPDATE advanced_rate_windows SET consumed = consumed + 1 WHERE principal = ? AND task_type = ?",
             ("server-operator-principal", "research_draft"),
         )
 
@@ -358,16 +370,19 @@ def test_asymmetric_task_quotas_reject_without_work_or_progress_and_leave_resear
 
     assert rejected["status"] == "rejected"
     assert rejected["rejection_reason"] == "quota_exhausted"
-    assert repository.get_job(experiment["id"])["status"] == "queued"
-    assert repository.get_job(strategy["id"])["status"] == "queued"
-    assert repository.list_runnable_jobs() == [experiment, strategy]
+    assert {job["id"] for job in repository.list_runnable_jobs()} == {
+        experiment["id"],
+        strategy["id"],
+        research_that_runs["id"],
+    }
     assert provider.calls == []
     assert sandbox.calls == []
-    assert workflow.calls == []
+    assert len(workflow.calls) == 1
     assert progress.calls == []
     assert [audit["reason"] for audit in repository.list_security_audits()] == [
         "quota_exhausted",
         "quota_exhausted",
+        "workflow_authorized",
         "quota_exhausted",
     ]
 
