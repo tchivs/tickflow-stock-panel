@@ -496,6 +496,53 @@ def test_calibration_projects_low_medium_high_buckets_with_coverage_and_insuffic
     }
 
 
+def test_calibration_candidates_choose_one_first_terminal_fact_per_immutable_version(tmp_path):
+    repository, service = _service(tmp_path)
+    duplicated = _create(service, published_at=datetime(2026, 1, 2, tzinfo=UTC))
+    independent = _create(service, published_at=datetime(2026, 2, 2, tzinfo=UTC))
+    unevaluable = _create(service, published_at=datetime(2026, 3, 2, tzinfo=UTC))
+
+    service.record_evaluation(
+        viewpoint_version_id=duplicated["id"], status="evaluated", relative_return=0.1,
+        coverage_start=date(2026, 1, 2), coverage_end=date(2026, 1, 31),
+    )
+    service.record_evaluation(
+        viewpoint_version_id=duplicated["id"], status="evaluated", relative_return=-0.9,
+        coverage_start=date(2026, 4, 2), coverage_end=date(2026, 4, 30),
+    )
+    service.record_evaluation(
+        viewpoint_version_id=independent["id"], status="evaluated", relative_return=0.03,
+        coverage_start=date(2026, 2, 2), coverage_end=date(2026, 2, 28),
+    )
+    service.record_evaluation(
+        viewpoint_version_id=unevaluable["id"], status="unevaluable", reason="missing_benchmark",
+    )
+
+    candidates = repository.calibration_viewpoint_evaluations("operator-research-v1")
+
+    assert {(candidate["viewpoint_version_id"], candidate["status"]) for candidate in candidates} == {
+        (duplicated["id"], "evaluated"),
+        (independent["id"], "evaluated"),
+        (unevaluable["id"], "unevaluable"),
+    }
+    assert next(candidate for candidate in candidates if candidate["viewpoint_version_id"] == duplicated["id"])["relative_return"] == 0.1
+    calibration = service.calibration(source_profile="operator-research-v1", minimum_sample_count=2)
+    assert calibration["high"] == {
+        "status": "calibrated",
+        "sample_count": 2,
+        "hit_rate": 1.0,
+        "mean_relative_return": 0.065,
+        "coverage_start": "2026-01-02",
+        "coverage_end": "2026-02-28",
+    }
+    assert calibration["excluded_unevaluable"] == 1
+    with repository._connection() as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM advanced_viewpoint_evaluations WHERE viewpoint_version_id = ?",
+            (duplicated["id"],),
+        ).fetchone()[0] == 3
+
+
 class _ViewpointApiService:
     def __init__(self) -> None:
         self.created: list[dict[str, object]] = []
