@@ -5,15 +5,15 @@ milestone_name: milestone
 current_phase: 04
 current_phase_name: advanced-capabilities
 status: executing
-stopped_at: Completed 04-26-PLAN.md
-last_updated: "2026-07-14T06:49:37.740Z"
+stopped_at: Completed 04-27-PLAN.md
+last_updated: "2026-07-14T07:25:55.601Z"
 last_activity: 2026-07-13
 last_activity_desc: Completed 04-17 governed experiment evolution
 progress:
   total_phases: 4
   completed_phases: 4
-  total_plans: 61
-  completed_plans: 61
+  total_plans: 62
+  completed_plans: 62
 ---
 
 # Project State
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-07-10)
 ## Current Position
 
 Phase: 04 (advanced-capabilities) — EXECUTING
-Plan: 10 of 19
+Plan: 11 of 19
 Status: Ready to execute
 Last activity: 2026-07-13 — Completed 04-17 governed experiment evolution
 
@@ -81,6 +81,7 @@ Progress: [█████████░] 93%
 | Phase 04-advanced-capabilities P23 | 9m 37s | 2 tasks | 6 files |
 | Phase 04 P25 | 314 | 2 tasks | 3 files |
 | Phase 04 P26 | 11m 20s | 2 tasks | 4 files |
+| Phase 04 P27 | 7m 18s | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -142,6 +143,8 @@ No implementation decision was explicitly locked by the architecture intake. Req
 - [Phase ?]: Terminal viewpoint evaluation retries reuse the frozen ledger fact and cannot invoke governed evaluation or alter calibration.
 - [Phase ?]: Public experiment creation resolves an extant persisted asset-to-installed-strategy binding before service invocation and returns safe 404 on mismatch.
 - [Phase ?]: Authenticated real-lifespan tests prove task-specific quota denials produce no advanced SSE event while independent research capacity remains available.
+- [Phase ?]: Queue acquisition requires immutable authorization policy provenance to equal the current persisted policy in the same transaction; mismatches never charge or create work.
+- [Phase ?]: Queued jobs compare durable authorization policy provenance with the current revision before quota inspection, workflow work, or advanced-progress publication.
 
 ### Pending Todos
 
@@ -159,6 +162,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-07-14T06:49:37.732Z
-Stopped at: Completed 04-26-PLAN.md
+Last session: 2026-07-14T07:25:55.593Z
+Stopped at: Completed 04-27-PLAN.md
 Resume file: None
