@@ -149,14 +149,19 @@ def test_client_authority_fields_are_rejected_before_any_runnable_job_or_sse_wor
 
 
 def test_quota_rejection_is_audited_without_creating_work_and_idempotency_consumes_once(tmp_path):
-    repository, authorization, jobs, provider, sandbox, _clock, _policy = _services(tmp_path, quota=1)
+    repository, authorization, jobs, provider, sandbox, clock, _policy = _services(tmp_path, quota=1)
     record = _authorization(authorization)
 
     first = jobs.create_job(principal="server-operator-principal", request=_request(record["token"]))
     duplicate = jobs.create_job(principal="server-operator-principal", request=_request(record["token"]))
 
     assert duplicate["id"] == first["id"]
-    assert repository.count_rate_consumptions(principal="server-operator-principal") == 1
+    assert repository.count_rate_consumptions(
+        principal="server-operator-principal",
+        policy_revision_id=str(repository.get_authorization(str(record["id"]))["policy_revision_id"]),
+        task_type="research_draft",
+        now=clock.now.isoformat(),
+    ) == 1
     assert len(repository.list_runnable_jobs()) == 1
     with pytest.raises(ValueError, match=r"quota|rate"):
         jobs.create_job(
@@ -199,3 +204,89 @@ def test_worker_revalidates_revocation_and_current_policy_before_provider_or_san
     assert repository.list_security_audits()[-1]["reason"] == "scope_denied"
     assert provider.calls == []
     assert sandbox.calls == []
+
+
+def test_rate_window_migration_preserves_legacy_accounting_under_unrunnable_identity(tmp_path):
+    import sqlite3
+
+    from app.operational.migrations import MIGRATIONS, migrate_operational_db
+
+    database = tmp_path / "legacy-operational.db"
+    connection = sqlite3.connect(database)
+    try:
+        for migration in MIGRATIONS[:-1]:
+            connection.executescript(migration)
+        connection.execute(f"PRAGMA user_version = {len(MIGRATIONS) - 1}")
+        connection.execute(
+            """INSERT INTO advanced_policy_revisions
+               (id, revision, fingerprint, fact_schema_version, snapshot_json, created_at)
+               VALUES ('legacy-policy', 'legacy', 'legacy-fingerprint', 'advanced_policy_snapshot_legacy_v1', '{}', '2026-07-12T00:00:00+00:00')"""
+        )
+        connection.execute(
+            """INSERT INTO advanced_rate_windows
+               (id, principal, policy_revision_id, window_started_at, consumed, created_at)
+               VALUES ('legacy-rate-window', 'operator', 'legacy-policy', '2026-07-12T00:00:00+00:00', 4, '2026-07-12T00:00:00+00:00')"""
+        )
+        connection.commit()
+
+        migrate_operational_db(connection)
+
+        row = connection.execute(
+            "SELECT task_type, consumed FROM advanced_rate_windows WHERE id = 'legacy-rate-window'"
+        ).fetchone()
+        assert row == ("__legacy_rate_window__", 4)
+        with pytest.raises(sqlite3.IntegrityError, match="immutable window"):
+            connection.execute(
+                "UPDATE advanced_rate_windows SET task_type = 'experiment' WHERE id = 'legacy-rate-window'"
+            )
+    finally:
+        connection.close()
+
+
+def test_task_type_rate_windows_are_independent_and_charge_once(tmp_path):
+    repository, authorization, _jobs, _provider, _sandbox, clock, _policy = _services(tmp_path, quota=1)
+    record = _authorization(authorization)
+    policy_revision_id = str(repository.get_authorization(str(record["id"]))["policy_revision_id"])
+
+    for task_type in ("research_draft", "experiment", "strategy_evaluation"):
+        job = repository.acquire_authorized_job(
+            job_id=f"{task_type}-job",
+            authorization_id=str(record["id"]),
+            principal="server-operator-principal",
+            subject_kind="instrument",
+            subject_key="600519.SH",
+            task_type=task_type,
+            market="CN-A",
+            instrument="600519.SH",
+            idempotency_key=f"{task_type}-request",
+            policy_revision_id=policy_revision_id,
+            quota=1,
+            now=clock.now.isoformat(),
+        )
+        assert job is not None
+        assert repository.count_rate_consumptions(
+            principal="server-operator-principal",
+            policy_revision_id=policy_revision_id,
+            task_type=task_type,
+            now=clock.now.isoformat(),
+        ) == 1
+
+    assert repository.acquire_authorized_job(
+        job_id="exhausted-experiment-job",
+        authorization_id=str(record["id"]),
+        principal="server-operator-principal",
+        subject_kind="instrument",
+        subject_key="600519.SH",
+        task_type="experiment",
+        market="CN-A",
+        instrument="600519.SH",
+        idempotency_key="exhausted-experiment-request",
+        policy_revision_id=policy_revision_id,
+        quota=1,
+        now=clock.now.isoformat(),
+    ) is None
+    assert {job["id"] for job in repository.list_runnable_jobs()} == {
+        "research_draft-job",
+        "experiment-job",
+        "strategy_evaluation-job",
+    }

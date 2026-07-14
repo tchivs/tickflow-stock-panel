@@ -21,6 +21,10 @@ def _json(value: object, field: str) -> str:
         raise ValueError(f"{field} must be JSON serializable") from error
 
 
+def _rate_window_started_at(now: str) -> str:
+    return datetime.fromisoformat(now).astimezone(UTC).replace(minute=0, second=0, microsecond=0).isoformat()
+
+
 def _canonical_policy_snapshot(snapshot: Mapping[str, Any]) -> str:
     if not isinstance(snapshot, Mapping):
         raise ValueError("policy snapshot must be a mapping")
@@ -162,8 +166,8 @@ class AdvancedRepository:
             raise ValueError("authorization cannot be revoked")
 
     def acquire_authorized_job(self, *, job_id: str, authorization_id: str, principal: str, subject_kind: str, subject_key: str, task_type: str, market: str, instrument: str, idempotency_key: str, policy_revision_id: str, quota: int, now: str) -> dict[str, Any] | None:
-        """Atomically return an idempotent job or consume one current policy quota slot."""
-        window_started_at = datetime.fromisoformat(now).astimezone(UTC).replace(minute=0, second=0, microsecond=0).isoformat()
+        """Atomically return an idempotent job or consume its task-specific quota slot."""
+        window_started_at = _rate_window_started_at(now)
         with self._connection() as connection, connection:
             existing = connection.execute(
                 "SELECT * FROM advanced_jobs WHERE principal = ? AND idempotency_key = ?", (principal, idempotency_key)
@@ -171,16 +175,19 @@ class AdvancedRepository:
             if existing is not None:
                 return dict(existing)
             rate = connection.execute(
-                "SELECT * FROM advanced_rate_windows WHERE principal = ? AND policy_revision_id = ? AND window_started_at = ?",
-                (principal, policy_revision_id, window_started_at),
+                """SELECT * FROM advanced_rate_windows
+                   WHERE principal = ? AND policy_revision_id = ? AND task_type = ? AND window_started_at = ?""",
+                (principal, policy_revision_id, task_type, window_started_at),
             ).fetchone()
             consumed = 0 if rate is None else int(rate["consumed"])
             if consumed >= quota:
                 return None
             if rate is None:
                 connection.execute(
-                    "INSERT INTO advanced_rate_windows (id, principal, policy_revision_id, window_started_at, consumed, created_at) VALUES (?, ?, ?, ?, 1, ?)",
-                    (str(uuid4()), principal, policy_revision_id, window_started_at, now),
+                    """INSERT INTO advanced_rate_windows
+                       (id, principal, policy_revision_id, task_type, window_started_at, consumed, created_at)
+                       VALUES (?, ?, ?, ?, ?, 1, ?)""",
+                    (str(uuid4()), principal, policy_revision_id, task_type, window_started_at, now),
                 )
             else:
                 connection.execute("UPDATE advanced_rate_windows SET consumed = consumed + 1 WHERE id = ?", (rate["id"],))
@@ -194,20 +201,24 @@ class AdvancedRepository:
         assert row is not None
         return dict(row)
 
-    def quota_is_current(self, *, principal: str, quota: int, now: str) -> bool:
-        window_started_at = datetime.fromisoformat(now).astimezone(UTC).replace(minute=0, second=0, microsecond=0).isoformat()
+    def quota_is_current(self, *, principal: str, policy_revision_id: str, task_type: str, quota: int, now: str) -> bool:
+        window_started_at = _rate_window_started_at(now)
         with self._connection() as connection:
             row = connection.execute(
-                "SELECT COALESCE(SUM(consumed), 0) AS consumed FROM advanced_rate_windows WHERE principal = ? AND window_started_at = ?",
-                (principal, window_started_at),
+                """SELECT COALESCE(SUM(consumed), 0) AS consumed FROM advanced_rate_windows
+                   WHERE principal = ? AND policy_revision_id = ? AND task_type = ? AND window_started_at = ?""",
+                (principal, policy_revision_id, task_type, window_started_at),
             ).fetchone()
         assert row is not None
         return int(row["consumed"]) <= quota
 
-    def count_rate_consumptions(self, *, principal: str) -> int:
+    def count_rate_consumptions(self, *, principal: str, policy_revision_id: str, task_type: str, now: str) -> int:
+        window_started_at = _rate_window_started_at(now)
         with self._connection() as connection:
             row = connection.execute(
-                "SELECT COALESCE(SUM(consumed), 0) AS consumed FROM advanced_rate_windows WHERE principal = ?", (principal,)
+                """SELECT COALESCE(SUM(consumed), 0) AS consumed FROM advanced_rate_windows
+                   WHERE principal = ? AND policy_revision_id = ? AND task_type = ? AND window_started_at = ?""",
+                (principal, policy_revision_id, task_type, window_started_at),
             ).fetchone()
         assert row is not None
         return int(row["consumed"])

@@ -741,6 +741,32 @@ MIGRATIONS: tuple[str, ...] = (
     CREATE INDEX idx_advanced_experiment_specs_bound_strategy
     ON advanced_experiment_specs(bound_strategy_id, created_at DESC);
     """,
+    """
+    -- Task type is an immutable part of durable rate-window identity. Historical
+    -- aggregate rows retain their evidence under a reserved identity that current
+    -- authorization can never validate or consume.
+    ALTER TABLE advanced_rate_windows RENAME TO advanced_rate_windows_legacy;
+    CREATE TABLE advanced_rate_windows (
+        id TEXT PRIMARY KEY,
+        principal TEXT NOT NULL,
+        policy_revision_id TEXT NOT NULL REFERENCES advanced_policy_revisions(id) ON DELETE RESTRICT,
+        task_type TEXT NOT NULL CHECK (length(trim(task_type)) > 0),
+        window_started_at TEXT NOT NULL,
+        consumed INTEGER NOT NULL CHECK (consumed >= 0),
+        created_at TEXT NOT NULL,
+        UNIQUE(principal, policy_revision_id, task_type, window_started_at)
+    );
+    INSERT INTO advanced_rate_windows
+        (id, principal, policy_revision_id, task_type, window_started_at, consumed, created_at)
+    SELECT id, principal, policy_revision_id, '__legacy_rate_window__', window_started_at, consumed, created_at
+    FROM advanced_rate_windows_legacy;
+    DROP TABLE advanced_rate_windows_legacy;
+    CREATE TRIGGER advanced_rate_windows_monotonic_consumption BEFORE UPDATE ON advanced_rate_windows
+    WHEN NEW.id != OLD.id OR NEW.principal != OLD.principal OR NEW.policy_revision_id != OLD.policy_revision_id
+      OR NEW.task_type != OLD.task_type OR NEW.window_started_at != OLD.window_started_at OR NEW.created_at != OLD.created_at
+      OR NEW.consumed <= OLD.consumed
+    BEGIN SELECT RAISE(ABORT, 'advanced rate consumption must increase within its immutable window'); END;
+    """,
 )
 
 
