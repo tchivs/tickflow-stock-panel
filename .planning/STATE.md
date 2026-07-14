@@ -5,15 +5,15 @@ milestone_name: milestone
 current_phase: 04
 current_phase_name: advanced-capabilities
 status: executing
-stopped_at: Phase 3 context gathered
-last_updated: "2026-07-13T05:20:11.472Z"
+stopped_at: Completed 04-22-PLAN.md
+last_updated: "2026-07-14T05:57:36.016Z"
 last_activity: 2026-07-13
 last_activity_desc: Completed 04-17 governed experiment evolution
 progress:
   total_phases: 4
   completed_phases: 3
-  total_plans: 54
-  completed_plans: 53
+  total_plans: 61
+  completed_plans: 57
 ---
 
 # Project State
@@ -28,11 +28,11 @@ See: .planning/PROJECT.md (updated 2026-07-10)
 ## Current Position
 
 Phase: 04 (advanced-capabilities) — EXECUTING
-Plan: 5 of 19
+Plan: 6 of 19
 Status: Ready to execute
 Last activity: 2026-07-13 — Completed 04-17 governed experiment evolution
 
-Progress: [██████████] 96%
+Progress: [█████████░] 93%
 
 ## Performance Metrics
 
@@ -76,6 +76,7 @@ Progress: [██████████] 96%
 | Phase 04 P16 | 8m | 2 tasks | 6 files |
 | Phase 04 P17 | 10m 52s | 2 tasks | 9 files |
 | Phase 04 P18 | 12m | 2 tasks | 5 files |
+| Phase 04-advanced-capabilities P22 | 521 | 2 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -127,6 +128,8 @@ No implementation decision was explicitly locked by the architecture intake. Req
 - [Phase 04]: Frozen experiment scopes and five evolution gates reload only immutable server-produced evidence; browser requests cannot supply authority or verdicts.
 - [Phase 04]: Viewpoint mutations invalidate only the active subject's viewpoint version and calibration keys. — Preserves object-local cache ownership for immutable research records.
 - [Phase 04]: Experiment and evolution controls submit bounded scope/configuration while gate verdicts and sandbox details remain server-projected. — Prevents browser-provided authority and sandbox disclosure.
+- [Phase ?]: ResearchRepository exclusively resolves immutable research assets to installed strategies; advanced workflows receive an injected resolver.
+- [Phase ?]: Legacy experiment specifications remain readable but fail closed for execution without frozen server-bound strategy provenance.
 
 ### Pending Todos
 
@@ -144,6 +147,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-07-13T05:20:11.465Z
-Stopped at: Phase 3 context gathered
-Resume file: .planning/phases/03-ai-analysis/03-CONTEXT.md
+Last session: 2026-07-14T05:57:36.008Z
+Stopped at: Completed 04-22-PLAN.md
+Resume file: None
