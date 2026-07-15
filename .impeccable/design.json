@@ -1,0 +1,114 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-07-15T07:39:25Z",
+  "title": "Design System: AthenaQuant",
+  "extensions": {
+    "colorMeta": {
+      "base-dark": { "role": "neutral", "displayName": "墨黑底层", "canonical": "#0A0A0B", "tonalRamp": ["#0A0A0B", "#18181B", "#27272A", "#3F3F46", "#71717A", "#A1A1AA", "#D4D4D8", "#FAFAFA"] },
+      "surface-dark": { "role": "neutral", "displayName": "石墨表面", "canonical": "#18181B", "tonalRamp": ["#09090B", "#18181B", "#27272A", "#3F3F46", "#71717A", "#A1A1AA", "#E4E4E7", "#FFFFFF"] },
+      "elevated-dark": { "role": "neutral", "displayName": "抬升石墨", "canonical": "#212126", "tonalRamp": ["#0A0A0B", "#212126", "#353539", "#52525B", "#71717A", "#A1A1AA", "#D4D4D8", "#FAFAFA"] },
+      "accent": { "role": "primary", "displayName": "电光蓝", "canonical": "#3B82F6", "tonalRamp": ["#172554", "#1E3A8A", "#1D4ED8", "#2563EB", "#3B82F6", "#60A5FA", "#93C5FD", "#DBEAFE"] },
+      "bull": { "role": "market", "displayName": "A股上涨红", "canonical": "#F04438", "tonalRamp": ["#450A0A", "#7F1D1D", "#B91C1C", "#DC2626", "#F04438", "#F87171", "#FCA5A5", "#FEE2E2"] },
+      "bear": { "role": "market", "displayName": "A股下跌绿", "canonical": "#12B76A", "tonalRamp": ["#052E16", "#14532D", "#166534", "#15803D", "#12B76A", "#4ADE80", "#86EFAC", "#DCFCE7"] },
+      "warning": { "role": "semantic", "displayName": "约束警示橙", "canonical": "#F79009", "tonalRamp": ["#431407", "#78350F", "#B45309", "#D97706", "#F79009", "#FBBF24", "#FCD34D", "#FEF3C7"] }
+    },
+    "typographyMeta": {
+      "headline": { "displayName": "工作区标题", "purpose": "页面和对象工作区标题，不用于巨型营销标题。" },
+      "title": { "displayName": "章节标题", "purpose": "面板、记录和证据章节。" },
+      "body": { "displayName": "研究正文", "purpose": "结论、证据摘要与帮助文本。" },
+      "label": { "displayName": "控件标签", "purpose": "字段、按钮、tab、表头和状态。" },
+      "numeric": { "displayName": "证据等宽", "purpose": "价格、标的、日期、版本、参数和指纹。" }
+    },
+    "shadows": [
+      { "name": "overlay", "value": "0 8px 30px rgba(0,0,0,0.4)", "purpose": "Popover、日期选择器与上下文浮层。" },
+      { "name": "dialog", "value": "0 12px 24px rgba(0,0,0,0.35)", "purpose": "模态、抽屉和大尺寸预览。" },
+      { "name": "focus", "value": "0 0 0 2px hsl(var(--accent))", "purpose": "键盘焦点结构反馈。" }
+    ],
+    "motion": [
+      { "name": "ease-smooth", "value": "cubic-bezier(0.16, 1, 0.3, 1)", "purpose": "150–200ms 状态变化。" },
+      { "name": "reduced-motion", "value": "0ms", "purpose": "prefers-reduced-motion 下即时完成。" }
+    ],
+    "breakpoints": [
+      { "name": "sm", "value": "640px" },
+      { "name": "md", "value": "768px" },
+      { "name": "lg", "value": "1024px" },
+      { "name": "xl", "value": "1280px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "每个局部流程唯一的主操作。",
+      "html": "<button class=\"ds-btn-primary\">运行研究</button>",
+      "css": ".ds-btn-primary { min-height:44px; padding:8px 12px; border:1px solid hsl(var(--accent)); border-radius:6px; background:hsl(var(--accent)); color:#fff; font:500 12px/1.4 Inter,system-ui,sans-serif; transition:background-color 150ms cubic-bezier(.16,1,.3,1); } .ds-btn-primary:hover { background:hsl(var(--accent)/.9); } .ds-btn-primary:focus-visible { outline:2px solid hsl(var(--accent)); outline-offset:2px; } .ds-btn-primary:disabled { opacity:.45; cursor:not-allowed; }"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "次级、取消和渐进披露操作。",
+      "html": "<button class=\"ds-btn-secondary\">查看证据</button>",
+      "css": ".ds-btn-secondary { min-height:44px; padding:8px 12px; border:1px solid hsl(var(--border)); border-radius:6px; background:hsl(var(--elevated)); color:hsl(var(--fg-primary)); font:500 12px/1.4 Inter,system-ui,sans-serif; transition:background-color 150ms cubic-bezier(.16,1,.3,1); } .ds-btn-secondary:hover { background:hsl(var(--elevated)/.8); } .ds-btn-secondary:focus-visible { outline:2px solid hsl(var(--accent)); outline-offset:2px; }"
+    },
+    {
+      "name": "Research Input",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "带可见标签的紧凑研究参数输入。",
+      "html": "<label class=\"ds-field\"><span>标的代码</span><input value=\"600000.SH\" aria-label=\"标的代码\"></label>",
+      "css": ".ds-field { display:grid; gap:4px; color:hsl(var(--fg-secondary)); font:500 12px/1.4 Inter,system-ui,sans-serif; } .ds-field input { min-height:44px; padding:8px 12px; border:1px solid hsl(var(--border)); border-radius:6px; background:hsl(var(--base)); color:hsl(var(--fg-primary)); font:500 12px/1.4 JetBrains Mono,monospace; } .ds-field input:focus-visible { outline:2px solid hsl(var(--accent)); outline-offset:2px; }"
+    },
+    {
+      "name": "Navigation Item",
+      "kind": "nav",
+      "description": "侧栏当前项使用色阶而非大面积强调色。",
+      "html": "<nav><a class=\"ds-nav-item ds-active\" href=\"#\">分析工作区</a><a class=\"ds-nav-item\" href=\"#\">回测研究</a></nav>",
+      "css": ".ds-nav-item { display:flex; align-items:center; min-height:40px; padding:8px 12px; border-radius:6px; color:hsl(var(--fg-secondary)); font:500 14px/1.4 Inter,system-ui,sans-serif; text-decoration:none; transition:background-color 150ms cubic-bezier(.16,1,.3,1); } .ds-nav-item:hover,.ds-nav-item.ds-active { background:hsl(var(--elevated)); color:hsl(var(--fg-primary)); } .ds-nav-item:focus-visible { outline:2px solid hsl(var(--accent)); outline-offset:2px; }"
+    },
+    {
+      "name": "Evidence Chip",
+      "kind": "chip",
+      "description": "范围、版本与待确认状态的紧凑标签。",
+      "html": "<span class=\"ds-chip\">不可变 · v3</span>",
+      "css": ".ds-chip { display:inline-flex; align-items:center; min-height:24px; padding:3px 8px; border:1px solid hsl(var(--border)); border-radius:999px; background:hsl(var(--elevated)); color:hsl(var(--fg-secondary)); font:500 11px/1.4 JetBrains Mono,monospace; }"
+    },
+    {
+      "name": "Evidence Record",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "不可变研究记录的标准容器。",
+      "html": "<article class=\"ds-record\"><header><strong>预测记录 v1</strong><span>已完成</span></header><p>P10 / P50 / P90 与 32 条样本路径已冻结。</p><code>sha256:29f1…</code></article>",
+      "css": ".ds-record { padding:16px; border:1px solid hsl(var(--border)); border-radius:8px; background:hsl(var(--surface)); color:hsl(var(--fg-primary)); font:400 14px/1.6 Inter,system-ui,sans-serif; } .ds-record header { display:flex; justify-content:space-between; gap:12px; margin-bottom:8px; } .ds-record header span { color:hsl(var(--fg-secondary)); font-size:12px; } .ds-record p { margin:0 0 8px; color:hsl(var(--fg-secondary)); } .ds-record code { color:hsl(var(--fg-muted)); font:500 11px/1.4 JetBrains Mono,monospace; overflow-wrap:anywhere; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "研究账本",
+    "overview": "AthenaQuant 的界面是一册可操作的研究账本：每个对象都有明确身份，每条结论都能回到来源、版本、状态与时间，每次修正都作为新事实追加。视觉层级服务于证据阅读与操作确认，不以装饰制造专业感。系统默认暗色并保留完整亮色主题；信息可以密集，但必须通过结论、证据、参数、历史和审计形成清晰层级。",
+    "keyCharacteristics": [
+      "暗色优先、亮色完整，使用无彩中性色和单一电光蓝操作强调。",
+      "证据、版本、范围、时间与不确定性比装饰性摘要更重要。",
+      "紧凑但不拥挤；标准控件、清晰焦点、稳定布局。",
+      "市场涨跌色只表达行情，绝不兼任成功/失败状态。",
+      "动效只解释状态变化，150–200ms；减少动态时即时完成。"
+    ],
+    "rules": [
+      { "name": "The One Voice Rule", "body": "电光蓝只说‘这里可操作、已选择或正聚焦’；它不装饰每张卡，也不表示成功。", "section": "colors" },
+      { "name": "The Market Color Rule", "body": "bull/bear 只用于市场方向；成功、完成、批准、验证通过必须由文字、图标和独立状态语义表达。", "section": "colors" },
+      { "name": "The Numeric Honesty Rule", "body": "只有真正需要逐位比较的内容使用等宽字体。", "section": "typography" },
+      { "name": "The Tonal-First Rule", "body": "静止表面靠色阶、间距和边界分层；阴影只属于浮层。", "section": "elevation" }
+    ],
+    "dos": [
+      "Do 使用 base/surface/elevated、1px border 和 4px 间距基数建立研究层级。",
+      "Do 让证据、范围、版本、时间、不确定性和待确认状态先于自动化操作。",
+      "Do 为 loading、empty、error、unavailable、partial、stale、pending confirmation 和 terminal 状态提供明确文案与恢复路径。"
+    ],
+    "donts": [
+      "Don't 做‘炫技型金融科技’：禁止霓虹渐变、渐变文字、发光卡片、赌场式行情能量和无意义动效。",
+      "Don't 做‘终端式信息过载’：禁止把证据、参数、历史和操作无层级地铺满一屏。",
+      "Don't 做‘娱乐化投资应用’：禁止卡通插图、游戏化、庆祝交易反馈和轻率财务文案。",
+      "Don't 用 bull/bear 代替成功/失败，也不要只靠颜色表达状态。"
+    ]
+  }
+}
