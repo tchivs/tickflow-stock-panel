@@ -651,27 +651,23 @@ OPS = {
 | A2 | [ASSUMED] CSV + XLSX 覆盖第一版实际本地 broker 日志。 | Pattern 1 | 若用户日志为 DBF/PDF/专有格式，需要新增 importer adapter；不可通过手工 entry 缩 scope。 |
 | A3 | [ASSUMED] close 的 MAE、interval coverage、pinball loss 足以构成第一版 calibration evidence。 | Pattern 9 | 研究者可能需要 return-space 或 directional metrics；schema 应版本化并允许后续追加，不能改旧事实。 |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **具体 broker 导出样例尚未在仓库中出现**
-   - What we know: D-01 锁定 local execution logs；现有依赖能读 CSV/XLSX。
-   - What's unclear: 实际列名、成交 ID、时区、费用与撤单记录。
-   - Recommendation: Wave 0 定义 canonical fill contract + mapping fixture；实现可配置列映射，缺字段 fail closed，不等待 broker connectivity。
+1. **具体 broker 导出样例尚未在仓库中出现 — RESOLVED by Plans 05-02, 05-08, and 05-17**
+   - Resolution: D-01 is implemented through a canonical fill contract rather than a broker-specific hidden assumption. Plan 05-02 Task 1 creates UTF-8/GB18030 CSV and XLSX fixtures spanning fill IDs, missing IDs, source timezone, fees, duplicate groups, partial fills, corrections, long/hostile cells, and a strict mapping-preview contract. Plan 05-08 Task 1 implements configurable source-column mapping into required `symbol/side/executed_at/quantity/price` plus explicit optional `fees/currency/account_alias/fill_id`, preserves original values and row ordinal, fails closed on missing/incompatible fields, and never substitutes broker connectivity or manual entry. Plan 05-17 browser scenario 2 is the final real-surface owner.
+   - Decision boundary: Additional proprietary formats require a new explicit importer adapter; they cannot silently weaken the canonical immutable-batch/evidence contract.
 
-2. **当前代码库没有 governed future CN-A trading calendar**
-   - What we know: Forecast 必须生成未来 timestamp，D-09 使用 trading-day horizon；weekday 近似不正确。
-   - What's unclear: TickFlow 上游最终采用哪个 calendar provider。
-   - Recommendation: Wave 0 建 `GovernedTradingCalendar` protocol 和 Parquet contract，接入现有同步/provider boundary；60 个未来 session 不足时明确拒绝。不要新增第二湖或运行时外部 API。
+2. **当前代码库没有 governed future CN-A trading calendar — RESOLVED by Plans 05-04, 05-10, and 05-14**
+   - Resolution: Plan 05-04 Task 1 fixes the `GovernedTradingCalendar` protocol and versioned Parquet fixture contract, including exact historical/future CN-A session IDs and insufficiency cases. Plan 05-10 Task 1 implements the production calendar under the existing governed lake/provider synchronization boundary and freezes calendar revision/session IDs into every input fingerprint; it never uses weekday approximation or a runtime external API. Plan 05-14 Task 1 reuses the original frozen calendar identity for maturity/calibration and fails closed when exact sessions or actuals are unavailable.
+   - Decision boundary: The upstream provider adapter may change later, but the governed Parquet/session/revision contract is authoritative and no second lake is permitted.
 
-3. **Optional dependency gate 全部为 SUS**
-   - What we know: PyPI 与官方项目都存在，但 legitimacy seam 无下载量或将最新版本判为过新。
-   - What's unclear: 最终 CPU wheel index/锁文件组合。
-   - Recommendation: planner 加一次 human checkpoint，核对官方 owner/source、wheel hashes、许可证和无 postinstall，再更新 lock；不得绕过 gate。
+3. **Optional dependency gate 全部为 SUS — RESOLVED by Plans 05-01 and 05-07**
+   - Resolution: Plan 05-01 is a blocking human legitimacy checkpoint covering official owner/source/license, Python 3.11/Linux CPU wheel availability, reviewed versions, fixed Kronos source, model/tokenizer pairings, immutable revisions/digests, safetensors-only format, and local-only policy. Plan 05-07 re-validates the complete approved 05-01 summary before any dependency lock, vendor source, provisioner, checkpoint, image, or catalog mutation; missing/partial/rejected/stale approval blocks without mutation. Its three focused automated suites separately verify optional lock selection, pinned vendor sync, and provisioning.
+   - Decision boundary: No SUS item may be inferred approved, and no SLOP package may enter the plan.
 
-4. **Kronos 实际 CPU budget 未在本会话测量**
-   - What we know: 当前没有 GPU、checkpoint 或 forecast extra；用户禁止本次运行测试。
-   - What's unclear: mini × 32 paths × 60 steps 在目标容器的延迟/内存。
-   - Recommendation: 实现 bounded config 与真实 pinned-model smoke；性能不足时降低并发/可见路径数或调整 timeout，不得降低保存 sample_count 到无法形成 P10/P90 的程度。
+4. **Kronos 实际 CPU budget 未在本会话测量 — RESOLVED by Plans 05-10, 05-13, and Plan 05-17 human-check**
+   - Resolution: Production uses deployment-configured defaults of global concurrency 1, spawned worker, wall clock 120s, address-space 2 GiB, CPU threads 2, capped output/queue, mini maximum lookback 512, and exactly 32 retained paths. Plan 05-13 makes admission, lease, timeout, kill/reap, resource terminalization, and restart behavior green with hostile deterministic workers. Plan 05-17 runs the optional human-approved pinned local Kronos-mini/tokenizer regression with network denied and records observed wall/memory/thread behavior for the deployment policy human-check.
+   - Decision boundary: Resource observations may tune timeout, memory, threads, lookback within the approved model context, or deployment availability; they may not reduce the 32 persisted paths, P10/P50/P90 contract, provenance, local-only policy, or single-container boundary. If the approved local pair is absent, Forecast remains explicitly unavailable rather than being reported as model-accepted.
 
 ## Sources
 

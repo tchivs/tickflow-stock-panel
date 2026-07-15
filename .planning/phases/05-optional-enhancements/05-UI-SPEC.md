@@ -1,10 +1,11 @@
 ---
 phase: 05
 slug: optional-enhancements
-status: draft
+status: approved
 shadcn_initialized: false
 preset: none
 created: 2026-07-15
+approval_date: 2026-07-15
 ---
 
 # Phase 05 — UI Design Contract
@@ -449,11 +450,11 @@ Applicable state considerations resolved: **40 covered, 0 backstop, 0 unresolved
 
 ## Checker Sign-Off
 
-- [ ] Dimension 1 Copywriting: 三模块操作、边界、空/不可用/stale/partial/error/pending/terminal 文案与确认后果已精确定义
-- [ ] Dimension 2 Visuals: 既有 Backtest/Stock Analysis 放置、研究账本层级、Forecast chart/table/path、响应式与无平行壳已定义
-- [ ] Dimension 3 Color: 既有 60/30/10、受限 accent、warning/danger、Forecast 线型和市场色职责已定义
-- [ ] Dimension 4 Typography: Phase 05 完整规范严格为 PageHeader 24px/600、Title 16px/600、Body 14px/400、Metadata/Numeric 12px/400；Workspace module heading 映射 Title，不新增全局字体 token；mono/tabular、65–75ch 和长标识规则已定义
-- [ ] Dimension 5 Spacing: 4px 基数、标准 panel 节奏、表格密度、44px 小屏触区和 1440/1024/375 布局已定义
-- [ ] Dimension 6 Registry Safety: shadcn/第三方 registry 均未使用，缺席证据与日期已记录
+- [x] Dimension 1 Copywriting: 三模块操作、边界、空/不可用/stale/partial/error/pending/terminal 文案与确认后果已精确定义
+- [x] Dimension 2 Visuals: 既有 Backtest/Stock Analysis 放置、研究账本层级、Forecast chart/table/path、响应式与无平行壳已定义
+- [x] Dimension 3 Color: 既有 60/30/10、受限 accent、warning/danger、Forecast 线型和市场色职责已定义
+- [x] Dimension 4 Typography: Phase 05 完整规范严格为 PageHeader 24px/600、Title 16px/600、Body 14px/400、Metadata/Numeric 12px/400；Workspace module heading 映射 Title，不新增全局字体 token；mono/tabular、65–75ch 和长标识规则已定义
+- [x] Dimension 5 Spacing: 4px 基数、标准 panel 节奏、表格密度、44px 小屏触区和 1440/1024/375 布局已定义
+- [x] Dimension 6 Registry Safety: shadcn/第三方 registry 均未使用，缺席证据与日期已记录
 
-**Approval:** pending
+**Approval:** approved — verified 2026-07-15; all exact contracts above remain binding for Plans 05-15 through 05-17.
