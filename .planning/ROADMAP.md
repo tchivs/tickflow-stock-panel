@@ -246,7 +246,7 @@ Plans:
   2. User can view an investment thesis with its valuation anchor, invalidation conditions, and periodic evidence checks.
   3. Researcher can request and inspect a time-series forecast that includes quantiles, sampled paths, and the associated model checkpoint.
 
-**Plans**: 15/17 plans executed
+**Plans**: 16/17 plans executed
 
 Plans:
 
@@ -285,7 +285,7 @@ Plans:
 
 **Wave 6 — Thesis and Forecast UI**
 
-- [ ] 05-16-PLAN.md — Add stock-only ThesisPanel and ForecastPanel in AnalysisWorkspace.
+- [x] 05-16-PLAN.md — Add stock-only ThesisPanel and ForecastPanel in AnalysisWorkspace.
 
 **Wave 7 — final acceptance**
 
@@ -303,4 +303,4 @@ Plans:
 | 2. Factor And Strategy Research | 8/8 | Complete    | 2026-07-11 |
 | 3. AI Analysis | 12/12 | Complete    | 2026-07-12 |
 | 4. Advanced Capabilities | 27/27 | Complete    | 2026-07-15 |
-| 5. Optional Enhancements | 15/17 | In Progress|  |
+| 5. Optional Enhancements | 16/17 | In Progress|  |
