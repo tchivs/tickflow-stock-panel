@@ -138,6 +138,16 @@ test.beforeAll(async ({}, testInfo) => {
       hypothesis: 'The installed strategy resolves only through its persisted immutable lifecycle binding.',
       provenance: { fixture: 'phase4-host', version: 'v1' },
     },
+    fixture_readiness: {
+      benchmark_symbol: '000300.SH',
+      symbols: ['600000.SH'],
+      required_coverage: { start: '2023-07-03', end: '2024-07-15' },
+      evaluation_windows: [20, 60, 120],
+      strategy: { id: 'bullish_alignment', warmup_trading_days: 60 },
+      aggregate_coverage: { start: '2023-07-03', end: '2024-07-15' },
+      in_sample: { start: '2024-01-02', end: '2024-03-29' },
+      out_of_sample: { start: '2024-04-01', end: '2024-06-28' },
+    },
   }))
   await chmod(join(fixtureDir, 'instruments.json'), 0o444)
   await chmod(join(fixtureDir, 'market-data.json'), 0o444)
@@ -231,7 +241,7 @@ test('real host visibly resolves the immutable binding, completes research feedb
       const box = await page.getByRole('button', { name: '新建实验规格' }).boundingBox()
       expect(box?.height).toBeGreaterThanOrEqual(44)
     }
-    await expect(page.getByRole('status')).toBeVisible()
+    await expect(page.getByRole('status').filter({ hasText: '已完成' })).toBeVisible()
     await expect(page.getByRole('alert')).toHaveCount(0)
     await promotionTrigger.click()
     const dialog = page.getByRole('dialog', { name: '确认晋级为研究策略' })
@@ -313,14 +323,16 @@ test('real host denies unauthenticated, out-of-scope, rate-limited, and revoked 
   await startRootSse(page)
   const outOfScope = await sameOriginRequest(page, '/api/advanced/subjects/000001.SZ/jobs', 'POST', { task_type: 'research_draft' })
   expect(outOfScope.status).toBe(404)
-  // Revocation occurs after server-side enqueue and before execution, consuming the one-job quota.
+  // Revocation consumes only the strategy-evaluation quota; it must not emit work.
   const revoked = await sameOriginRequest(page, '/api/advanced/subjects/600000.SH/jobs', 'POST', { task_type: 'strategy_evaluation' })
   expect(revoked.status).toBe(200)
   expect(revoked.body.job).toMatchObject({ status: 'rejected', stage: 'rejected' })
-  const rateLimited = await sameOriginRequest(page, '/api/advanced/subjects/600000.SH/jobs', 'POST', { task_type: 'research_draft' })
-  expect(rateLimited.status).toBe(409)
   const payloads = (await stopRootSse(page)).map(JSON.parse)
   expect(payloads.filter(event => event.stage !== 'rejected')).toEqual([])
+  const independent = await sameOriginRequest(page, '/api/advanced/subjects/600000.SH/jobs', 'POST', { task_type: 'research_draft' })
+  expect(independent.status).toBe(200)
+  const rateLimited = await sameOriginRequest(page, '/api/advanced/subjects/600000.SH/jobs', 'POST', { task_type: 'research_draft' })
+  expect(rateLimited.status).toBe(409)
   const audit = await sameOriginRequest(page, `/api/advanced/audits/${revoked.body.job.audit_reference}`)
   expect(audit.body.audit).toMatchObject({ decision: 'rejected', reason: 'authorization_revoked' })
 })
