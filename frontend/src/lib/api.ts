@@ -7,7 +7,19 @@ import { toast } from '@/components/Toast'
 
 const BASE = ''
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+export class ApiRequestError extends Error {
+  readonly status: number
+  readonly detail: unknown
+
+  constructor(status: number, message: string, detail: unknown) {
+    super(message)
+    this.name = 'ApiRequestError'
+    this.status = status
+    this.detail = detail
+  }
+}
+
+export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const isFormData = init?.body instanceof FormData
   const headers: Record<string, string> = {}
   if (!isFormData) headers['Content-Type'] = 'application/json'
@@ -15,23 +27,26 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   Object.assign(headers, init?.headers as Record<string, string> | undefined)
   const res = await fetch(`${BASE}${path}`, { ...init, headers })
   if (!res.ok) {
-    let detail = ''
+    let detail: unknown = ''
+    let message = ''
     try {
-      const j = JSON.parse(await res.text())
-      const raw = j.detail ?? j.message ?? ''
-      if (Array.isArray(raw)) {
-        // FastAPI 422 校验错误: [{type, loc, msg, input}, ...] → 取 msg 拼接
-        detail = raw.map((e: any) => e?.msg || String(e)).join('; ')
-      } else if (typeof raw === 'string') {
-        detail = raw
-      } else if (raw && typeof raw === 'object') {
-        detail = JSON.stringify(raw)
+      const payload: unknown = JSON.parse(await res.text())
+      if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
+        const record = payload as Record<string, unknown>
+        detail = record.detail ?? record.message ?? ''
+      }
+      if (Array.isArray(detail)) {
+        message = detail.map(item => item && typeof item === 'object' && 'msg' in item ? String(item.msg) : String(item)).join('; ')
+      } else if (typeof detail === 'string') {
+        message = detail
+      } else if (detail && typeof detail === 'object') {
+        message = JSON.stringify(detail)
       }
     } catch { /* ignore */ }
-    const msg = detail || `${res.status} ${res.statusText}`
+    const safeMessage = message || `${res.status} ${res.statusText}`
     // 401 (未登录/会话过期) 不弹 toast — 由全局认证拦截器统一跳登录页, 避免刷屏
-    if (res.status !== 401) toast(msg, 'error')
-    throw new Error(msg)
+    if (res.status !== 401) toast(safeMessage, 'error')
+    throw new ApiRequestError(res.status, safeMessage, detail)
   }
   return res.json() as Promise<T>
 }

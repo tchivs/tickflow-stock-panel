@@ -79,6 +79,43 @@ export const QK = {
   advancedSandboxRuns: (researchAssetId: string) => ['advanced', 'sandbox-runs', researchAssetId] as const,
   advancedSandboxRun: (researchAssetId: string, runId: string) => ['advanced', 'sandbox-run', researchAssetId, runId] as const,
 
+  // Optional Phase 05 modules — every key owns its module, research object,
+  // immutable record identity, and bounded page. No module shares a broad cache.
+  phase5Capabilities: ['phase5', 'capabilities'] as const,
+  shadow: {
+    all: ['phase5', 'shadow'] as const,
+    batches: (offset = 0, limit = 50) => ['phase5', 'shadow', 'batches', offset, limit] as const,
+    batch: (batchId: string) => ['phase5', 'shadow', 'batch', batchId] as const,
+    evidenceSets: (offset = 0, limit = 50) => ['phase5', 'shadow', 'evidence-sets', offset, limit] as const,
+    evidenceSet: (evidenceSetId: string) => ['phase5', 'shadow', 'evidence-set', evidenceSetId] as const,
+    candidates: (offset = 0, limit = 50) => ['phase5', 'shadow', 'candidates', offset, limit] as const,
+    candidate: (candidateId: string) => ['phase5', 'shadow', 'candidate', candidateId] as const,
+    evaluations: (candidateId: string | null, offset = 0, limit = 50) => ['phase5', 'shadow', 'evaluations', candidateId ?? 'all', offset, limit] as const,
+    evaluation: (evaluationId: string) => ['phase5', 'shadow', 'evaluation', evaluationId] as const,
+    retentions: (candidateId: string | null, offset = 0, limit = 50) => ['phase5', 'shadow', 'retentions', candidateId ?? 'all', offset, limit] as const,
+    retention: (retentionId: string) => ['phase5', 'shadow', 'retention', retentionId] as const,
+  },
+  thesis: {
+    all: ['phase5', 'thesis'] as const,
+    versions: (instrument: string, page = 1, pageSize = 25) => ['phase5', 'thesis', instrument, 'versions', page, pageSize] as const,
+    version: (instrument: string, versionId: string) => ['phase5', 'thesis', instrument, 'version', versionId] as const,
+    conditions: (instrument: string, versionId: string) => ['phase5', 'thesis', instrument, 'conditions', versionId] as const,
+    condition: (instrument: string, versionId: string, conditionId: string) => ['phase5', 'thesis', instrument, 'condition', versionId, conditionId] as const,
+    checks: (instrument: string, page = 1, pageSize = 50) => ['phase5', 'thesis', instrument, 'checks', page, pageSize] as const,
+    pending: (instrument: string, page = 1, pageSize = 50) => ['phase5', 'thesis', instrument, 'pending', page, pageSize] as const,
+    history: (instrument: string) => ['phase5', 'thesis', instrument, 'history'] as const,
+  },
+  forecast: {
+    all: ['phase5', 'forecast'] as const,
+    catalog: ['phase5', 'forecast', 'catalog'] as const,
+    jobs: (instrument: string, offset = 0, limit = 25) => ['phase5', 'forecast', instrument, 'jobs', offset, limit] as const,
+    job: (instrument: string, jobId: string) => ['phase5', 'forecast', instrument, 'job', jobId] as const,
+    records: (instrument: string, offset = 0, limit = 25) => ['phase5', 'forecast', instrument, 'records', offset, limit] as const,
+    record: (instrument: string, recordId: string) => ['phase5', 'forecast', instrument, 'record', recordId] as const,
+    paths: (instrument: string, recordId: string, offset = 0, limit = 100) => ['phase5', 'forecast', instrument, 'record', recordId, 'paths', offset, limit] as const,
+    calibration: (instrument: string, recordId: string) => ['phase5', 'forecast', instrument, 'record', recordId, 'calibration'] as const,
+  },
+
   // Data / Pipeline
   dataStatus:           ['data-status'] as const,
   pipelineJobs:         ['pipeline-jobs'] as const,
