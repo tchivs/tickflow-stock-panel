@@ -276,7 +276,7 @@ export function ForecastPanel({ instrument, title }: ForecastPanelProps) {
   const [pathsOpen, setPathsOpen] = useState(false)
   const [copied, setCopied] = useState<string | null>(null)
 
-  const capabilityQuery = useQuery({ queryKey: QK.capabilities, queryFn: phase5Api.capabilities, staleTime: 60_000 })
+  const capabilityQuery = useQuery({ queryKey: QK.phase5Capabilities, queryFn: phase5Api.capabilities, staleTime: 60_000 })
   const catalogQuery = useQuery({ queryKey: QK.forecast.catalog, queryFn: phase5Api.forecastCatalog, placeholderData: keepPreviousData })
   const recordsQuery = useQuery({ queryKey: QK.forecast.records(instrument), queryFn: () => phase5Api.forecastRecords(instrument), placeholderData: keepPreviousData })
   const jobsQuery = useQuery({ queryKey: QK.forecast.jobs(instrument), queryFn: () => phase5Api.forecastJobs(instrument), placeholderData: keepPreviousData })
@@ -373,9 +373,11 @@ export function ForecastPanel({ instrument, title }: ForecastPanelProps) {
       </section>
 
       <details className="rounded-card border border-border p-3"><summary className={`min-h-11 cursor-pointer py-2 font-semibold ${FOCUS}`}>查看检查点与输入谱系</summary><Provenance recordValue={selectedRecord} copied={copied} onCopy={value => { void navigator.clipboard.writeText(value); setCopied(value) }} /></details>
+      {calibrationQuery.isError && <LocalError title="受治理实际值不可用" detail={`暂不可评估：${errorReason(calibrationQuery.error)}。原始 P10/P50/P90、采样路径和检查点谱系保持不变。`} action="重新加载校准证据" onRetry={() => calibrationQuery.refetch()} compact />}
       <CalibrationTable rows={calibration} />
     </article>}
 
+    {jobsQuery.isError && <LocalError title="预测状态连接中断" detail={`预测状态连接中断：${errorReason(jobsQuery.error)}。已显示的历史和最后已知任务阶段将保留；连接中断不代表推理失败，也不会重复启动任务。`} action="重新连接并刷新任务状态" onRetry={() => jobsQuery.refetch()} compact />}
     <ForecastHistory records={records} jobs={jobsQuery.data?.jobs ?? []} selectedRecordId={selectedRecord?.id ?? null} onSelect={id => { setSelectedRecordId(id); setPathPage(0); setSelectedPathIds([]) }} />
   </section>
 }
@@ -432,7 +434,7 @@ function ForecastChart({ rows, paths }: { rows: QuantileRow[]; paths: PathView[]
     }
   }, [paths, rows, theme])
   const chartRef = useECharts(option, [rows, paths, theme])
-  return <div ref={chartRef} role="img" aria-label="历史 close、P10、P90、P10–P90 不确定区间、P50、actual 与选中采样路径概率图" className="h-[280px] w-full md:h-[320px] xl:h-[360px]" />
+  return <div ref={chartRef} role="img" aria-label="历史 close、P10、P90、P10–P90 不确定区间、P50、actual 与选中采样路径概率图；表格顺序 P10、P50、P90" className="h-[280px] w-full md:h-[320px] xl:h-[360px]" />
 }
 
 function QuantileTable({ rows }: { rows: QuantileRow[] }) {

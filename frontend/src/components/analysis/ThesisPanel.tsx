@@ -46,7 +46,9 @@ interface AnchorDraft {
   asOf: string
   low: string
   high: string
-  assumption: string
+  assumptionName: string
+  assumptionValue: string
+  assumptionUnit: string
   limitation: string
 }
 
@@ -116,16 +118,26 @@ function conditionSchedule(condition: ThesisCondition): LooseRecord {
   return record(source.schedule ?? { next_due_at: source.next_due_at, active: true })
 }
 
+function normalizeOperator(value: unknown): ThesisConditionInput['operator'] {
+  if (value === '<') return 'lt'
+  if (value === '<=') return 'lte'
+  if (value === '>') return 'gt'
+  if (value === '>=') return 'gte'
+  if (value === '=') return 'eq'
+  return value === 'lt' || value === 'lte' || value === 'gt' || value === 'gte' || value === 'eq' || value === 'between' ? value : 'lt'
+}
+
 function draftFromVersion(version?: ThesisVersion): VersionDraft {
   const anchor = version?.anchors[0]
-  const assumption = version ? versionAssumptions(version)[0] ?? '' : ''
+  const rawAssumption = anchor?.assumptions[0] as unknown
+  const assumption = record(rawAssumption)
   const conditions = version?.conditions.length ? version.conditions.map(item => {
     const source = record(item)
     const rawThreshold = source.threshold
     return {
       sourceKind: item.source_kind,
       field: item.field,
-      operator: item.operator,
+      operator: normalizeOperator(source.operator),
       threshold: Array.isArray(rawThreshold) ? rawThreshold.join(',') : String(rawThreshold ?? ''),
       unit: item.unit,
       lookbackDays: String(item.lookback_days ?? source.lookback ?? 1),
@@ -143,7 +155,9 @@ function draftFromVersion(version?: ThesisVersion): VersionDraft {
       asOf: anchor?.as_of ?? new Date().toISOString().slice(0, 10),
       low: anchor ? String(anchor.low) : '',
       high: anchor ? String(anchor.high) : '',
-      assumption,
+      assumptionName: typeof rawAssumption === 'string' ? rawAssumption : text(assumption.name, ''),
+      assumptionValue: assumption.value == null ? '' : String(assumption.value),
+      assumptionUnit: text(assumption.unit, ''),
       limitation: anchor?.limitations[0] ?? '',
     },
     conditions,
@@ -172,7 +186,7 @@ function toAnchorInput(draft: AnchorDraft): ThesisValuationAnchorInput {
     as_of: draft.asOf,
     low: Number(draft.low),
     high: Number(draft.high),
-    assumptions: [{ name: draft.assumption.trim(), value: 1, unit: 'reviewed' }],
+    assumptions: [{ name: draft.assumptionName.trim(), value: Number(draft.assumptionValue), unit: draft.assumptionUnit.trim() }],
     limitations: draft.limitation.trim() ? [draft.limitation.trim()] : [],
   }
 }
@@ -193,7 +207,7 @@ export function ThesisPanel({ instrument, title }: ThesisPanelProps) {
   const lowRef = useRef<HTMLInputElement>(null)
   const firstFieldRef = useRef<HTMLTextAreaElement>(null)
 
-  const capabilityQuery = useQuery({ queryKey: QK.capabilities, queryFn: phase5Api.capabilities, staleTime: 60_000 })
+  const capabilityQuery = useQuery({ queryKey: QK.phase5Capabilities, queryFn: phase5Api.capabilities, staleTime: 60_000 })
   const versionsQuery = useQuery({ queryKey: QK.thesis.versions(instrument), queryFn: () => phase5Api.thesisVersions(instrument), placeholderData: keepPreviousData })
   const checksQuery = useQuery({ queryKey: QK.thesis.checks(instrument), queryFn: () => phase5Api.thesisChecks(instrument), placeholderData: keepPreviousData })
   const pendingQuery = useQuery({ queryKey: QK.thesis.pending(instrument), queryFn: () => phase5Api.thesisPending(instrument), placeholderData: keepPreviousData })
@@ -282,12 +296,12 @@ export function ThesisPanel({ instrument, title }: ThesisPanelProps) {
       firstFieldRef.current?.focus()
       return
     }
-    if (!draft.anchor.method.trim() || !draft.anchor.currency.trim() || !draft.anchor.asOf || !draft.anchor.assumption.trim()) {
+    if (!draft.anchor.method.trim() || !draft.anchor.currency.trim() || !draft.anchor.asOf || !draft.anchor.assumptionName.trim() || !draft.anchor.assumptionValue.trim() || !Number.isFinite(Number(draft.anchor.assumptionValue)) || !draft.anchor.assumptionUnit.trim()) {
       setDraftError('估值方法、币种、截至日和至少一条估值假设均为必填。')
       lowRef.current?.focus()
       return
     }
-    if (!Number.isFinite(Number(draft.anchor.low)) || !Number.isFinite(Number(draft.anchor.high))) {
+    if (!draft.anchor.low.trim() || !draft.anchor.high.trim() || !Number.isFinite(Number(draft.anchor.low)) || !Number.isFinite(Number(draft.anchor.high))) {
       setDraftError('估值下限和上限必须是有效数字。')
       lowRef.current?.focus()
       return
@@ -297,7 +311,7 @@ export function ThesisPanel({ instrument, title }: ThesisPanelProps) {
       lowRef.current?.focus()
       return
     }
-    if (draft.conditions.some(item => !item.field.trim() || !item.unit.trim() || !item.description.trim() || !Number.isFinite(Number(item.lookbackDays)) || item.threshold.split(',').some(value => !Number.isFinite(Number(value.trim()))))) {
+    if (draft.conditions.some(item => !item.field.trim() || !item.unit.trim() || !item.description.trim() || !item.lookbackDays.trim() || !Number.isFinite(Number(item.lookbackDays)) || item.threshold.split(',').some(value => !value.trim() || !Number.isFinite(Number(value.trim()))))) {
       setDraftError('每个失效条件都必须包含结构字段、阈值、单位、lookback、说明和独立检查周期。')
       return
     }
@@ -317,6 +331,7 @@ export function ThesisPanel({ instrument, title }: ThesisPanelProps) {
     </header>
 
     {pendingItems.map(item => <PendingConclusion key={item.id} pending={item} version={versions.find(version => version.id === item.version_id)} checks={checksQuery.data?.checks ?? []} onReview={action => { setConflict(false); setReviewTarget({ pending: item, action }) }} />)}
+    {pendingQuery.isError && <LocalError title="无法读取投资论点" detail={`无法读取投资论点：${errorReason(pendingQuery.error)}。已显示的版本、待确认结论和检查历史将保留，当前官方状态不会改变。`} action="重新加载投资论点" onRetry={() => pendingQuery.refetch()} compact />}
     {conflict && <div role="alert" className="rounded-card border border-danger/50 bg-danger/10 p-4 text-danger">结论未记录：状态已变化，请重新查看当前论点。</div>}
 
     {versionsQuery.isError && <LocalError title="无法读取投资论点" detail={`无法读取投资论点：${errorReason(versionsQuery.error)}。已显示的版本、待确认结论和检查历史将保留，当前官方状态不会改变。`} action="重新加载投资论点" onRetry={() => versionsQuery.refetch()} compact />}
@@ -397,7 +412,7 @@ function ChecksTable({ checks, versions }: { checks: Array<{ id: string; conditi
 
 function VersionsTable({ versions, currentVersionId, selectedVersionId, onSelect }: { versions: ThesisVersion[]; currentVersionId: string | null; selectedVersionId: string | null; onSelect: (id: string) => void }) {
   const descriptionId = useId()
-  return <section aria-labelledby={`${descriptionId}-heading`} className="space-y-2"><h3 id={`${descriptionId}-heading`} className="text-base font-semibold">不可变版本时间线</h3><p id={descriptionId} className="text-xs text-secondary">左右滚动查看完整记录</p><div tabIndex={0} aria-describedby={descriptionId} className={`overflow-x-auto ${FOCUS}`}><table className="min-w-[800px] w-full text-left text-xs"><caption className="sr-only">投资论点版本历史</caption><thead className="bg-elevated text-secondary"><tr><th scope="col" className="p-2">版本</th><th scope="col" className="p-2">前序版本</th><th scope="col" className="p-2">创建时间</th><th scope="col" className="p-2">变更理由</th><th scope="col" className="p-2">估值锚 / 条件</th><th scope="col" className="p-2">当时官方状态</th><th scope="col" className="p-2">详情</th></tr></thead><tbody>{versions.map(version => <tr key={version.id} className={`border-t border-border ${version.id === selectedVersionId ? 'bg-accent/5' : ''}`}><th scope="row" className="p-2 font-normal">版本 {version.version}{version.id === currentVersionId ? '（当前）' : ''}</th><td className="p-2 font-mono">{version.predecessor_id ?? '首版'}</td><td className="p-2">{dateTime(version.created_at)}</td><td className="max-w-[40ch] break-words p-2">{version.change_reason}</td><td className="p-2">{version.anchors.length} / {version.conditions.length}</td><td className="p-2">{officialState(version)}</td><td className="p-2"><button type="button" onClick={() => onSelect(version.id)} className={`${BUTTON} min-h-0 py-2 text-accent underline`}>查看完整版本</button></td></tr>)}</tbody></table></div></section>
+  return <section aria-labelledby={`${descriptionId}-heading`} className="space-y-2"><h3 id={`${descriptionId}-heading`} className="text-base font-semibold">不可变版本时间线</h3><p id={descriptionId} className="text-xs text-secondary">左右滚动查看完整记录</p><div tabIndex={0} aria-describedby={descriptionId} className={`overflow-x-auto ${FOCUS}`}><table className="min-w-[800px] w-full text-left text-xs"><caption className="sr-only">投资论点版本历史</caption><thead className="bg-elevated text-secondary"><tr><th scope="col" className="p-2">编号</th><th scope="col" className="p-2">前序记录</th><th scope="col" className="p-2">创建时间</th><th scope="col" className="p-2">变更理由</th><th scope="col" className="p-2">估值锚 / 条件</th><th scope="col" className="p-2">当时官方状态</th><th scope="col" className="p-2">详情</th></tr></thead><tbody>{versions.map(version => <tr key={version.id} className={`border-t border-border ${version.id === selectedVersionId ? 'bg-accent/5' : ''}`}><th scope="row" className="p-2 font-normal">版本 {version.version}{version.id === currentVersionId ? '（当前）' : ''}</th><td className="p-2 font-mono">{version.predecessor_id ?? '首版'}</td><td className="p-2">{dateTime(version.created_at)}</td><td className="max-w-[40ch] break-words p-2">{version.change_reason}</td><td className="p-2">{version.anchors.length} / {version.conditions.length}</td><td className="p-2">{officialState(version)}</td><td className="p-2"><button type="button" onClick={() => onSelect(version.id)} className={`${BUTTON} min-h-0 py-2 text-accent underline`}>查看完整版本</button></td></tr>)}</tbody></table></div></section>
 }
 
 function VersionForm({ draft, setDraft, error, reviewing, lowRef, firstFieldRef, onReview, onCancel, onConfirm }: { draft: VersionDraft; setDraft: React.Dispatch<React.SetStateAction<VersionDraft>>; error: string | null; reviewing: boolean; lowRef: React.RefObject<HTMLInputElement>; firstFieldRef: React.RefObject<HTMLTextAreaElement>; onReview: () => void; onCancel: () => void; onConfirm: () => void }) {
@@ -405,7 +420,7 @@ function VersionForm({ draft, setDraft, error, reviewing, lowRef, firstFieldRef,
   const updateCondition = (index: number, field: keyof ConditionDraft, value: string) => setDraft(current => ({ ...current, conditions: current.conditions.map((item, itemIndex) => itemIndex === index ? { ...item, [field]: value } : item) }))
   return <section aria-labelledby="thesis-version-form" className="space-y-4 rounded-card border border-border bg-elevated p-4"><h3 id="thesis-version-form" className="text-base font-semibold">创建下一版不可变论点</h3>{error && <div role="alert" className="rounded-input bg-danger/10 p-3 text-danger">{error}</div>}
     <div className="grid gap-4 lg:grid-cols-2"><label>核心判断<textarea ref={firstFieldRef} value={draft.coreJudgment} onChange={event => setDraft(current => ({ ...current, coreJudgment: event.target.value }))} className={`${INPUT} mt-1 min-h-28`} /></label><label>判断理由<textarea value={draft.rationale} onChange={event => setDraft(current => ({ ...current, rationale: event.target.value }))} className={`${INPUT} mt-1 min-h-28`} /></label></div>
-    <fieldset className="grid gap-3 rounded-card border border-border p-3 sm:grid-cols-2 lg:grid-cols-4"><legend className="px-1 font-semibold">估值锚</legend><label>估值方法<input value={draft.anchor.method} onChange={event => updateAnchor('method', event.target.value)} className={`${INPUT} mt-1`} /></label><label>估值币种<input value={draft.anchor.currency} onChange={event => updateAnchor('currency', event.target.value)} className={`${INPUT} mt-1`} /></label><label>估值截至日<input type="date" value={draft.anchor.asOf} onChange={event => updateAnchor('asOf', event.target.value)} className={`${INPUT} mt-1`} /></label><span /><label>估值下限<input ref={lowRef} type="number" value={draft.anchor.low} onChange={event => updateAnchor('low', event.target.value)} className={`${INPUT} mt-1`} /></label><label>估值上限<input type="number" value={draft.anchor.high} onChange={event => updateAnchor('high', event.target.value)} className={`${INPUT} mt-1`} /></label><label className="sm:col-span-2">估值假设（至少一条）<input value={draft.anchor.assumption} onChange={event => updateAnchor('assumption', event.target.value)} className={`${INPUT} mt-1`} /></label><label className="sm:col-span-2 lg:col-span-4">估值限制<input value={draft.anchor.limitation} onChange={event => updateAnchor('limitation', event.target.value)} className={`${INPUT} mt-1`} /></label></fieldset>
+    <fieldset className="grid gap-3 rounded-card border border-border p-3 sm:grid-cols-2 lg:grid-cols-4"><legend className="px-1 font-semibold">估值锚</legend><label>估值方法<input value={draft.anchor.method} onChange={event => updateAnchor('method', event.target.value)} className={`${INPUT} mt-1`} /></label><label>估值币种<input value={draft.anchor.currency} onChange={event => updateAnchor('currency', event.target.value)} className={`${INPUT} mt-1`} /></label><label>估值截至日<input type="date" value={draft.anchor.asOf} onChange={event => updateAnchor('asOf', event.target.value)} className={`${INPUT} mt-1`} /></label><span /><label>估值下限<input ref={lowRef} type="number" value={draft.anchor.low} onChange={event => updateAnchor('low', event.target.value)} className={`${INPUT} mt-1`} /></label><label>估值上限<input type="number" value={draft.anchor.high} onChange={event => updateAnchor('high', event.target.value)} className={`${INPUT} mt-1`} /></label><label className="sm:col-span-2">估值假设（至少一条）<input value={draft.anchor.assumptionName} onChange={event => updateAnchor('assumptionName', event.target.value)} className={`${INPUT} mt-1`} /></label><label>假设数值<input type="number" value={draft.anchor.assumptionValue} onChange={event => updateAnchor('assumptionValue', event.target.value)} className={`${INPUT} mt-1`} /></label><label>假设单位<input value={draft.anchor.assumptionUnit} onChange={event => updateAnchor('assumptionUnit', event.target.value)} className={`${INPUT} mt-1`} /></label><label className="sm:col-span-2">估值限制<input value={draft.anchor.limitation} onChange={event => updateAnchor('limitation', event.target.value)} className={`${INPUT} mt-1`} /></label></fieldset>
     <fieldset className="space-y-3 rounded-card border border-border p-3"><legend className="px-1 font-semibold">结构化失效条件与独立检查周期</legend>{draft.conditions.map((condition, index) => <div key={index} className="grid gap-3 border-t border-border pt-3 first:border-t-0 first:pt-0 sm:grid-cols-2 lg:grid-cols-4"><label>条件 {index + 1} 说明<input value={condition.description} onChange={event => updateCondition(index, 'description', event.target.value)} className={`${INPUT} mt-1`} /></label><label>字段<input value={condition.field} onChange={event => updateCondition(index, 'field', event.target.value)} className={`${INPUT} mt-1`} /></label><label>阈值<input value={condition.threshold} onChange={event => updateCondition(index, 'threshold', event.target.value)} className={`${INPUT} mt-1`} /></label><label>单位<input value={condition.unit} onChange={event => updateCondition(index, 'unit', event.target.value)} className={`${INPUT} mt-1`} /></label><label>条件 {index + 1} 检查周期<select value={condition.cadence} onChange={event => updateCondition(index, 'cadence', event.target.value)} className={`${INPUT} mt-1`}>{CADENCES.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label><label>lookback（日）<input type="number" min="1" value={condition.lookbackDays} onChange={event => updateCondition(index, 'lookbackDays', event.target.value)} className={`${INPUT} mt-1`} /></label><label>来源类型<select value={condition.sourceKind} onChange={event => updateCondition(index, 'sourceKind', event.target.value)} className={`${INPUT} mt-1`}><option value="market">市场</option><option value="financial">财务</option><option value="analysis">分析</option></select></label><label>运算符<select value={condition.operator} onChange={event => updateCondition(index, 'operator', event.target.value)} className={`${INPUT} mt-1`}><option value="lt">小于</option><option value="lte">小于等于</option><option value="gt">大于</option><option value="gte">大于等于</option><option value="eq">等于</option><option value="between">区间</option></select></label></div>)}</fieldset>
     <label>版本变更理由<textarea value={draft.changeReason} onChange={event => setDraft(current => ({ ...current, changeReason: event.target.value }))} className={`${INPUT} mt-1 min-h-20`} /></label>
     {reviewing && <div className="rounded-card border border-accent/40 bg-accent/5 p-3"><h4 className="font-semibold">创建前审阅摘要</h4><p className="mt-1">核心判断、1 个估值区间、{draft.conditions.length} 个结构化条件与各自检查周期将写入新版本；旧版本和检查历史保持不变。</p></div>}
@@ -418,7 +433,7 @@ function ReviewDialog({ target, instrumentTitle, versions, rationale, setRationa
   const title = target.action === 'confirm' ? '确认论点失效' : '驳回待确认结论'
   const normalizedTitle = instrumentTitle.replace(/（([^）]+)）/, '（$1）')
   return <FocusDialog title={title} initialFocus="textarea" onClose={onClose}>
-    <p>{target.action === 'confirm' ? `确认将 ${normalizedTitle} 的论点版本 ${version?.version ?? target.pending.version_id} 记录为已失效？命中条件与证据会永久保留；此操作不会执行交易或修改其他研究对象。` : '驳回后，当前官方状态保持不变；条件、检查记录和证据仍会永久保留。'}</p>
+    <p>{target.action === 'confirm' ? `确认将 ${normalizedTitle}的论点版本 ${version?.version ?? target.pending.version_id} 记录为已失效？命中条件与证据会永久保留；此操作不会执行交易或修改其他研究对象。` : '驳回后，当前官方状态保持不变；条件、检查记录和证据仍会永久保留。'}</p>
     <label className="mt-4 block">{target.action === 'confirm' ? '确认理由（至少 10 个字符）' : '驳回理由（至少 10 个字符）'}<textarea data-dialog-textarea value={rationale} onChange={event => setRationale(event.target.value)} className={`${INPUT} mt-1 min-h-28`} /></label>
     {mutation.isError && !(mutation.error instanceof ApiRequestError && mutation.error.status === 409) && <div role="alert" className="mt-3 rounded-input bg-danger/10 p-3 text-danger"><strong>无法确认论点操作结果</strong><p>确认或驳回请求的传输状态不确定：{errorReason(mutation.error)}。已填写的理由保留。</p><p>不得假定服务端未处理本次请求；重试前必须重新读取当前论点及待确认结论，并以服务端当前记录为准。</p></div>}
     <div className="mt-4 flex flex-wrap justify-end gap-2"><button type="button" onClick={onClose} className={`${BUTTON} border border-border`}>暂不处理</button><button type="button" onClick={() => mutation.mutate(target)} disabled={rationale.trim().length < 10 || mutation.isPending} className={`${BUTTON} ${target.action === 'confirm' ? 'bg-danger text-white' : 'bg-accent text-white'} font-semibold disabled:opacity-50`}>{mutation.isPending ? '正在记录人工决定…' : title}</button></div>

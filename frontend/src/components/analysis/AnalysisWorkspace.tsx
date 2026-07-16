@@ -8,18 +8,25 @@ import { AnalysisStatus } from './AnalysisStatus'
 import { EvidencePanel } from './EvidencePanel'
 import { LifecyclePanel } from './LifecyclePanel'
 import { ReportPanel } from './ReportPanel'
+import { ForecastPanel } from './ForecastPanel'
+import { ThesisPanel } from './ThesisPanel'
 import { ViewpointPanel } from '../advanced/ViewpointPanel'
 
-type Tab = 'report' | 'evidence' | 'lifecycle'
-const tabs: Array<{ id: Tab; label: string }> = [{ id: 'report', label: '分析结论' }, { id: 'evidence', label: '来源与核验' }, { id: 'lifecycle', label: '信号历史' }]
+type Tab = 'report' | 'evidence' | 'lifecycle' | 'thesis' | 'forecast'
+const coreTabs: Array<{ id: Tab; label: string }> = [{ id: 'report', label: '分析结论' }, { id: 'evidence', label: '来源与核验' }, { id: 'lifecycle', label: '信号历史' }]
+const stockTabs: Array<{ id: Tab; label: string }> = [...coreTabs, { id: 'thesis', label: '投资论点' }, { id: 'forecast', label: '概率预测' }]
 
 export function AnalysisWorkspace({ subject, title }: { subject: AnalysisSubject; title: string }) {
   const storageKey = `analysis-workspace:${subject.kind}:${subject.key}`
+  const workspaceTabs = subject.kind === 'stock' ? stockTabs : coreTabs
   // UI subjects remain stock/portfolio; the established API authorizes instrument/account.
   const serverSubject: AnalysisRequestSubject = { kind: subject.kind === 'stock' ? 'instrument' : 'account', key: subject.key }
   const [selectedReportId, setSelectedReportId] = useState<string | null>(null)
-  const [tab, setTab] = useState<Tab>(() => (sessionStorage.getItem(`${storageKey}:tab`) as Tab | null) ?? 'report')
-  const scrollPosition = useRef(0)
+  const [tab, setTab] = useState<Tab>(() => {
+    const stored = sessionStorage.getItem(`${storageKey}:tab`) as Tab | null
+    return stored && workspaceTabs.some(item => item.id === stored) ? stored : 'report'
+  })
+  const scrollPositions = useRef<Partial<Record<Tab, number>>>({})
   const ids = useId()
   const reportsQuery = useQuery({ queryKey: QK.analysisReports(subject.kind, subject.key), queryFn: () => api.analysisReports(serverSubject), placeholderData: keepPreviousData })
   const latestReport = reportsQuery.data?.reports.find(report => report.id === selectedReportId) ?? reportsQuery.data?.reports[0]
@@ -31,14 +38,24 @@ export function AnalysisWorkspace({ subject, title }: { subject: AnalysisSubject
   const activeRun = startRun.data?.run
 
   useEffect(() => { sessionStorage.setItem(`${storageKey}:tab`, tab) }, [storageKey, tab])
-  useEffect(() => () => sessionStorage.setItem(`${storageKey}:scroll`, String(scrollPosition.current)), [storageKey])
+  useEffect(() => {
+    if (workspaceTabs.some(item => item.id === tab)) return
+    setTab('report')
+  }, [tab, workspaceTabs])
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => {
+      const panel = document.getElementById(`${ids}-${tab}-panel`)
+      if (panel) panel.scrollTop = scrollPositions.current[tab] ?? (Number(sessionStorage.getItem(`${storageKey}:scroll:${tab}`)) || 0)
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [ids, storageKey, tab])
 
   function onTabKeyDown(event: React.KeyboardEvent<HTMLButtonElement>, index: number) {
     if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
     event.preventDefault()
-    const next = (index + (event.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length
-    setTab(tabs[next].id)
-    document.getElementById(`${ids}-${tabs[next].id}`)?.focus()
+    const next = (index + (event.key === 'ArrowRight' ? 1 : workspaceTabs.length - 1)) % workspaceTabs.length
+    setTab(workspaceTabs[next].id)
+    document.getElementById(`${ids}-${workspaceTabs[next].id}`)?.focus()
   }
 
   const retryLabel = reportsQuery.isError ? '重新加载分析报告' : '重新生成含证据说明的分析'
@@ -48,13 +65,22 @@ export function AnalysisWorkspace({ subject, title }: { subject: AnalysisSubject
       <button type="button" onClick={() => startRun.mutate()} disabled={startRun.isPending || activeRun?.status === 'queued' || activeRun?.status === 'running'} className="inline-flex min-h-11 items-center gap-2 rounded-btn bg-accent px-3 text-sm font-semibold text-white focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-base disabled:opacity-60"><Sparkles className="h-4 w-4" aria-hidden="true" />{startRun.isPending || activeRun?.status === 'running' ? '正在整理来源与生成分析…' : retryLabel}</button>
     </div>
     <ViewpointPanel subject={subject} serverSubject={serverSubject} />
-    {reportsQuery.isError && !reportsQuery.data ? <div role="alert" className="rounded-card border border-danger/50 bg-danger/10 p-4 text-sm text-danger">无法读取分析报告。请检查服务连接后重新加载分析报告。<button type="button" onClick={() => reportsQuery.refetch()} className="ml-2 underline">重新加载分析报告</button></div> : !latestReport && !reportsQuery.isLoading ? <div className="rounded-card border border-border bg-surface p-4"><p className="text-sm font-semibold text-foreground">尚无含证据说明的分析报告</p><p className="mt-1 text-sm text-secondary">选择标的或账户后生成分析；报告会保留生成时间、来源限制和可审阅证据。</p></div> : <><div role="tablist" aria-label="分析详情" className="flex overflow-x-auto border-b border-border">{tabs.map((item, index) => <button key={item.id} id={`${ids}-${item.id}`} type="button" role="tab" aria-selected={tab === item.id} aria-controls={`${ids}-${item.id}-panel`} tabIndex={tab === item.id ? 0 : -1} onClick={() => setTab(item.id)} onKeyDown={event => onTabKeyDown(event, index)} className={`min-h-11 shrink-0 px-4 text-sm outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-base ${tab === item.id ? 'border-b-2 border-accent font-semibold text-foreground' : 'text-secondary'}`}>{item.label}</button>)}</div>
+    {subject.kind !== 'stock' && reportsQuery.isError && !reportsQuery.data ? <div role="alert" className="rounded-card border border-danger/50 bg-danger/10 p-4 text-sm text-danger">无法读取分析报告。请检查服务连接后重新加载分析报告。<button type="button" onClick={() => reportsQuery.refetch()} className="ml-2 underline">重新加载分析报告</button></div> : subject.kind !== 'stock' && !latestReport && !reportsQuery.isLoading ? <div className="rounded-card border border-border bg-surface p-4"><p className="text-sm font-semibold text-foreground">尚无含证据说明的分析报告</p><p className="mt-1 text-sm text-secondary">选择标的或账户后生成分析；报告会保留生成时间、来源限制和可审阅证据。</p></div> : <>
+      {subject.kind === 'stock' && !latestReport && !reportsQuery.isLoading && <div className="rounded-card border border-border bg-surface p-4"><p className="text-sm font-semibold text-foreground">尚无含证据说明的分析报告</p><p className="mt-1 text-sm text-secondary">既有报告为空不会阻止读取独立的投资论点或概率预测记录。</p></div>}
+      <div role="tablist" aria-label="分析详情" className="flex overflow-x-auto border-b border-border">{workspaceTabs.map((item, index) => <button key={item.id} id={`${ids}-${item.id}`} type="button" role="tab" aria-selected={tab === item.id} aria-controls={`${ids}-${item.id}-panel`} tabIndex={tab === item.id ? 0 : -1} onClick={() => setTab(item.id)} onKeyDown={event => onTabKeyDown(event, index)} className={`min-h-11 shrink-0 whitespace-nowrap px-4 text-sm outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-base ${tab === item.id ? 'border-b-2 border-accent font-semibold text-foreground' : 'text-secondary'}`}>{item.label}</button>)}</div>
       {reportsQuery.isError && reportsQuery.data && <p role="status" className="text-sm text-warning">刷新分析报告失败，正在显示上次结果。<button type="button" onClick={() => reportsQuery.refetch()} className="ml-2 text-accent underline">重新加载分析报告</button></p>}
-      <div id={`${ids}-${tab}-panel`} role="tabpanel" aria-labelledby={`${ids}-${tab}`} onScroll={event => { scrollPosition.current = event.currentTarget.scrollTop }}>
-        {tab === 'report' && (reportQuery.data?.report ? <ReportPanel report={reportQuery.data.report} evidence={evidenceQuery.data} /> : <PanelState loading={reportQuery.isLoading} error={reportQuery.isError} onRetry={() => reportQuery.refetch()} label="分析报告" />)}
-        {tab === 'evidence' && (evidenceQuery.data ? <EvidencePanel evidence={evidenceQuery.data} /> : <PanelState loading={evidenceQuery.isLoading} error={evidenceQuery.isError} onRetry={() => evidenceQuery.refetch()} label="来源与核验记录" />)}
-        {tab === 'lifecycle' && (historyQuery.data ? <LifecyclePanel subject={subject} history={historyQuery.data} /> : <PanelState loading={historyQuery.isLoading} error={historyQuery.isError} onRetry={() => historyQuery.refetch()} label="信号历史" />)}
-      </div></>}
+      <div id={`${ids}-report-panel`} role="tabpanel" aria-labelledby={`${ids}-report`} hidden={tab !== 'report'} onScroll={event => { scrollPositions.current.report = event.currentTarget.scrollTop; sessionStorage.setItem(`${storageKey}:scroll:report`, String(event.currentTarget.scrollTop)) }}>
+        {reportQuery.data?.report ? <ReportPanel report={reportQuery.data.report} evidence={evidenceQuery.data} /> : <PanelState loading={reportQuery.isLoading || reportsQuery.isLoading} error={reportQuery.isError || reportsQuery.isError} onRetry={() => { void reportsQuery.refetch(); void reportQuery.refetch() }} label="分析报告" />}
+      </div>
+      <div id={`${ids}-evidence-panel`} role="tabpanel" aria-labelledby={`${ids}-evidence`} hidden={tab !== 'evidence'} onScroll={event => { scrollPositions.current.evidence = event.currentTarget.scrollTop; sessionStorage.setItem(`${storageKey}:scroll:evidence`, String(event.currentTarget.scrollTop)) }}>
+        {evidenceQuery.data ? <EvidencePanel evidence={evidenceQuery.data} /> : <PanelState loading={evidenceQuery.isLoading || reportsQuery.isLoading} error={evidenceQuery.isError || reportsQuery.isError} onRetry={() => { void reportsQuery.refetch(); void evidenceQuery.refetch() }} label="来源与核验记录" />}
+      </div>
+      <div id={`${ids}-lifecycle-panel`} role="tabpanel" aria-labelledby={`${ids}-lifecycle`} hidden={tab !== 'lifecycle'} onScroll={event => { scrollPositions.current.lifecycle = event.currentTarget.scrollTop; sessionStorage.setItem(`${storageKey}:scroll:lifecycle`, String(event.currentTarget.scrollTop)) }}>
+        {historyQuery.data ? <LifecyclePanel subject={subject} history={historyQuery.data} /> : <PanelState loading={historyQuery.isLoading || reportsQuery.isLoading} error={historyQuery.isError || reportsQuery.isError} onRetry={() => { void reportsQuery.refetch(); void historyQuery.refetch() }} label="信号历史" />}
+      </div>
+      {subject.kind === 'stock' && <div id={`${ids}-thesis-panel`} role="tabpanel" aria-labelledby={`${ids}-thesis`} hidden={tab !== 'thesis'} onScroll={event => { scrollPositions.current.thesis = event.currentTarget.scrollTop; sessionStorage.setItem(`${storageKey}:scroll:thesis`, String(event.currentTarget.scrollTop)) }}><ThesisPanel instrument={subject.key} title={title} /></div>}
+      {subject.kind === 'stock' && <div id={`${ids}-forecast-panel`} role="tabpanel" aria-labelledby={`${ids}-forecast`} hidden={tab !== 'forecast'} onScroll={event => { scrollPositions.current.forecast = event.currentTarget.scrollTop; sessionStorage.setItem(`${storageKey}:scroll:forecast`, String(event.currentTarget.scrollTop)) }}><ForecastPanel instrument={subject.key} title={title} /></div>}
+    </>}
   </section>
 }
 
