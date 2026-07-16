@@ -178,6 +178,9 @@ def _resolve_entry(
     tokenizer_revision = _immutable_revision(raw.get("tokenizer_revision"), "tokenizer revision")
     if source_revision != _SOURCE_REVISION:
         raise ForecastCatalogError("checkpoint source revision is not approved")
+    source_repository = raw.get("source_repository", _SOURCE_REPOSITORY)
+    if source_repository != _SOURCE_REPOSITORY:
+        raise ForecastCatalogError("checkpoint source repository is not approved")
 
     pairing = _text(raw.get("pairing"), "checkpoint pairing")
     if pairing != expected_pair:
@@ -258,11 +261,14 @@ def _resolve_entry(
 
 
 def _existing_directory(path: Path, field: str) -> Path:
+    configured = Path(path)
+    if configured.is_symlink():
+        raise ForecastCatalogError(f"{field} must not be a symlink")
     try:
-        resolved = Path(path).resolve(strict=True)
+        resolved = configured.resolve(strict=True)
     except OSError as error:
         raise ForecastCatalogError(f"{field} is unavailable") from error
-    if resolved.is_symlink() or not resolved.is_dir():
+    if not resolved.is_dir():
         raise ForecastCatalogError(f"{field} is invalid")
     return resolved
 
