@@ -246,7 +246,7 @@ Plans:
   2. User can view an investment thesis with its valuation anchor, invalidation conditions, and periodic evidence checks.
   3. Researcher can request and inspect a time-series forecast that includes quantiles, sampled paths, and the associated model checkpoint.
 
-**Plans**: 17/17 plans executed
+**Plans**: 27 plans (17 executed, 10 gap-closure plans pending)
 
 Plans:
 
@@ -291,6 +291,31 @@ Plans:
 
 - [x] 05-17-PLAN.md — Make all backend real-host and 13 browser scenarios green, plus optional pinned-model human-check.
 
+**Gap Closure Wave 1** *(blocked on completed 05-17)*
+
+- [ ] 05-18-PLAN.md — Trace the exact production Shadow browser request through complete distillation and IS/OOS evaluation.
+- [ ] 05-26-PLAN.md — Bind checkpoint config/weight bytes and serialize concurrency-safe provisioning.
+
+**Gap Closure Wave 2** *(blocked on relevant Wave 1 plans)*
+
+- [ ] 05-19-PLAN.md — Make Shadow candidate, paired evaluation, and retention replay conflict-safe and restart-idempotent.
+- [ ] 05-21-PLAN.md — Correct Thesis resolver/timezone/pending/history and wire complete governed production readiness.
+- [ ] 05-27-PLAN.md — Bind Kronos runtime imports/bytes and harden pre-IPC bounds plus process cleanup.
+
+**Gap Closure Wave 3** *(blocked on relevant Wave 2 plans)*
+
+- [ ] 05-20-PLAN.md — Bind Shadow confirmation to preview identity and enforce principal-scoped bounded histories.
+- [ ] 05-22-PLAN.md — Compose the full Forecast production workflow and strict byte/calendar/commit identity.
+
+**Gap Closure Wave 4** *(blocked on relevant Wave 3 plans)*
+
+- [ ] 05-23-PLAN.md — Page complete sampled paths and add fair durable calibration cursors and repair.
+- [ ] 05-25-PLAN.md — Make migrations atomic and secure the local principal/Origin/readiness boundary.
+
+**Gap Closure Wave 5** *(blocked on relevant Wave 4 plans)*
+
+- [ ] 05-24-PLAN.md — Align subject-bound frontend state, retries, validation, paths, and immutable history paging.
+
 **UI hint**: yes
 
 ## Progress
@@ -303,4 +328,4 @@ Plans:
 | 2. Factor And Strategy Research | 8/8 | Complete    | 2026-07-11 |
 | 3. AI Analysis | 12/12 | Complete    | 2026-07-12 |
 | 4. Advanced Capabilities | 27/27 | Complete    | 2026-07-15 |
-| 5. Optional Enhancements | 17/17 | In Progress|  |
+| 5. Optional Enhancements | 17/27 | Gap Closure Planned |  |

@@ -4,6 +4,51 @@
 
 **Policy:** Every official capability starts as **INTEGRATE**. An **OPT-OUT** is permitted only with a Phase 05 scope or safety reason. INTEGRATE means AthenaQuant implements or preserves the capability through its governed, local-only boundary; it does not mean copying upstream demos or granting downstream authority.
 
+```coverage
+[
+  {"capability":"KronosTokenizer and Kronos loading","decision":"INTEGRATE","reason":""},
+  {"capability":"Model/tokenizer matching","decision":"INTEGRATE","reason":""},
+  {"capability":"Kronos-mini and Tokenizer-2k","decision":"INTEGRATE","reason":""},
+  {"capability":"Kronos-small and Tokenizer-base","decision":"INTEGRATE","reason":""},
+  {"capability":"Kronos-base and Tokenizer-base","decision":"INTEGRATE","reason":""},
+  {"capability":"Kronos-large","decision":"OPT-OUT","reason":"Official checkpoint is not open-source, so it cannot be integrity-pinned or provisioned."},
+  {"capability":"Single-series prediction","decision":"INTEGRATE","reason":""},
+  {"capability":"Batch prediction predict_batch","decision":"OPT-OUT","reason":"D-09 excludes portfolio and multi-series batch forecasting."},
+  {"capability":"Temperature T","decision":"INTEGRATE","reason":""},
+  {"capability":"Top-k sampling","decision":"INTEGRATE","reason":""},
+  {"capability":"Top-p sampling","decision":"INTEGRATE","reason":""},
+  {"capability":"sample_count","decision":"INTEGRATE","reason":""},
+  {"capability":"Upstream averaging across samples","decision":"OPT-OUT","reason":"The public upstream mean would violate D-10 and FORE-01."},
+  {"capability":"Retained per-sample paths before averaging","decision":"INTEGRATE","reason":""},
+  {"capability":"P10 P50 P90 derivation","decision":"INTEGRATE","reason":""},
+  {"capability":"Required OHLC input","decision":"INTEGRATE","reason":""},
+  {"capability":"Volume input and output","decision":"INTEGRATE","reason":""},
+  {"capability":"Amount input and output variant","decision":"INTEGRATE","reason":""},
+  {"capability":"Prediction without volume or amount example","decision":"OPT-OUT","reason":"D-09 requires governed daily OHLCV."},
+  {"capability":"Input normalization and inverse normalization","decision":"INTEGRATE","reason":""},
+  {"capability":"Max-context truncation","decision":"INTEGRATE","reason":""},
+  {"capability":"Historical and future timestamps","decision":"INTEGRATE","reason":""},
+  {"capability":"Checkpoint download and provisioning","decision":"INTEGRATE","reason":""},
+  {"capability":"Local-only model loading","decision":"INTEGRATE","reason":""},
+  {"capability":"Safetensors checkpoint handling","decision":"INTEGRATE","reason":""},
+  {"capability":"Pinned official regression smoke","decision":"INTEGRATE","reason":""},
+  {"capability":"Multi-GPU tokenizer fine-tuning","decision":"OPT-OUT","reason":"Training is outside FORE-01 and single-container bounded inference."},
+  {"capability":"Multi-GPU predictor fine-tuning","decision":"OPT-OUT","reason":"Training would add mutable unapproved checkpoint authority."},
+  {"capability":"Qlib preprocessing integration","decision":"OPT-OUT","reason":"Governed Parquet DuckDB Polars remains the sole market-data boundary."},
+  {"capability":"Qlib top-K backtest example","decision":"OPT-OUT","reason":"D-12 forbids forecast-driven strategy or plan authority."},
+  {"capability":"Standalone plotting example","decision":"OPT-OUT","reason":"Existing ECharts plus equivalent tables is the approved presentation path."},
+  {"capability":"Official live web demo","decision":"OPT-OUT","reason":"External demo state is not local governed object-authorized AthenaQuant state."},
+  {"capability":"Upstream GUI example","decision":"OPT-OUT","reason":"Existing Backtest and Analysis workspaces are binding; no second shell is allowed."},
+  {"capability":"Upstream backtest examples","decision":"OPT-OUT","reason":"Forecast remains immutable evidence and never an automatic action."},
+  {"capability":"AKShare acquisition examples","decision":"OPT-OUT","reason":"Runtime input comes only from AthenaQuant governed repository and synchronization boundaries."},
+  {"capability":"Reviewed source synchronization","decision":"INTEGRATE","reason":""},
+  {"capability":"CPU inference","decision":"INTEGRATE","reason":""},
+  {"capability":"GPU inference","decision":"INTEGRATE","reason":""},
+  {"capability":"GPU-parallel batch acceleration","decision":"OPT-OUT","reason":"It belongs to the D-09-excluded multi-series path."},
+  {"capability":"Verbose autoregressive progress","decision":"OPT-OUT","reason":"Raw progress and logs can disclose internals; only allowlisted committed stages are exposed."}
+]
+```
+
 ## Capability-surface matrix
 
 Only an existing PLAN task plus its named acceptance command is evidence. Plan creation is not execution: rows below are **planned executable coverage**, and remain pending until their commands pass.
