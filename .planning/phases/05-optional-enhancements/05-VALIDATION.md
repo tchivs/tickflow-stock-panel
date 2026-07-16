@@ -106,53 +106,56 @@ No sequence contains three implementation tasks without an automated sample. No 
 
 ---
 
-## Gap Closure Validation — Additive Plans 05-18–05-29 (Pending)
+## Gap Closure Validation — Additive Plans 05-18–05-32 (Pending)
 
 This section is additive. The `approved`, `nyquist_compliant`, `wave_0_complete`, and green sign-off above describe the executed 05-01–05-17 baseline only. They are not evidence that the gap-closure plans have executed. Every row below remains **⬜ pending** until its named command is observed on the post-gap revision; only Plan 05-29 may record the integrated result.
 
 | Task ID | Plan | Wave / dependencies | Requirement | Threat refs | Automated command | Status |
 |---|---|---|---|---|---|---|
-| 05-GC-18-1 | 05-18 Task 1 | 1 / 05-17 | SHDW-01 | T-05-18-01..05 | `pytest tests/shadow/test_distillation.py -k "bounded_assumption_schema or assumption_byte_ceiling or direct_boundary_rejects_oversize" -x`; production host test; Shadow production Playwright scenario | ⬜ pending |
-| 05-GC-19-1 | 05-19 Task 1 | 2 / 05-18 | SHDW-01 | T-05-19-01..02 | `pytest tests/shadow/test_distillation.py::test_candidate_replay_digest_covers_all_identity_defining_content tests/shadow/test_evaluation_retention.py::test_retention_replay_requires_exact_principal_and_rationale -x` | ⬜ pending |
-| 05-GC-19-2 | 05-19 Task 2 | 2 / 05-18 | SHDW-01 | T-05-19-03..04 | `pytest tests/shadow/test_evaluation_retention.py -k "paired_operation or interrupted_attempt or parallel_pair" -x` | ⬜ pending |
-| 05-GC-20-1 | 05-20 Task 1 | 3 / 05-19 | SHDW-01 | T-05-20-01 | import preview-identity pytest plus `--grep "Shadow preview identity"` Playwright | ⬜ pending |
-| 05-GC-20-2 | 05-20 Task 2 | 3 / 05-19 | SHDW-01 | T-05-20-02..04 | principal-lineage and aggregate-member/repository-pagination pytest | ⬜ pending |
-| 05-GC-20-3 | 05-20 Task 3 | 3 / 05-19 | SHDW-01 | T-05-20-05..06 | cleanup fault-injection pytest plus `--grep "Shadow retention dialog validates rationale and contains errors"` | ⬜ pending |
-| 05-GC-21-1 | 05-21 Task 1 | 2 / 05-18 | THES-01 | T-05-21-01..04 | lifecycle strict/timezone/pending/history pytest plus Thesis API versions/checks/pending/history/ownership pagination pytest | ⬜ pending |
-| 05-GC-21-2 | 05-21 Task 2 | 2 / 05-18 | THES-01 | T-05-21-04..05 | scheduler poison/reader/readiness pytest plus production Thesis host test | ⬜ pending |
-| 05-GC-22-1 | 05-22 Task 1 | 3 / 05-21 | FORE-01 | T-05-22-01/05 | production Forecast host completion/independence and service-revalidation pytest | ⬜ pending |
-| 05-GC-22-2 | 05-22 Task 2 | 3 / 05-21 | FORE-01 | T-05-22-02..04 | input frame/artifact/calendar/amount and immutable commit/path containment pytest | ⬜ pending |
-| 05-GC-25-1 | 05-25 Task 1 | 4 / 05-19, 05-22 | SHDW-01, THES-01, FORE-01 | T-05-25-01 | `pytest tests/test_operational_migrations.py -k "atomic_version_and_user_version or restart_after_mid_script_failure" -x` | ⬜ pending |
-| 05-GC-25-2 | 05-25 Task 2 | 4 / 05-19, 05-22 | SHDW-01, THES-01, FORE-01 | T-05-25-02..05 | trusted/hostile Origin/Host, readiness, eight-combination, no-action host pytest | ⬜ pending |
-| 05-GC-23-1 | 05-23 Task 1 | 5 / 05-22, 05-25 | FORE-01 | T-05-23-01 | Forecast API distinct-path/corrupt-relation/path-quantile consistency pytest | ⬜ pending |
-| 05-GC-23-2 | 05-23 Task 2 | 5 / 05-22, 05-25 | FORE-01 | T-05-23-02..04 | maturity-cursor migration rollback/upgrade, calibration cursor/restart/repair/parallel, record-scoped API pytest | ⬜ pending |
-| 05-GC-23-3 | 05-23 Task 3 | 5 / 05-22, 05-25 | FORE-01 | T-05-23-05 | Forecast API persisted event ID, Last-Event-ID resume, subscription limit, and slow-consumer cleanup pytest | ⬜ pending |
-| 05-GC-24-1 | 05-24 Task 1 | 6 / 05-20, 05-21, 05-23 | SHDW-01, THES-01, FORE-01 | T-05-24-01/03/06 | `--grep "rapid stock switch keeps Phase 05 object authority local|StockAnalysis narrow dialog focus contract"` Playwright | ⬜ pending |
-| 05-GC-24-2 | 05-24 Task 2 | 6 / 05-20, 05-21, 05-23 | THES-01, FORE-01 | T-05-24-02/04/05 | complete page/retry, Thesis pagination/validation, Forecast persisted SSE/flapping Playwright | ⬜ pending |
+| 05-GC-30-1 | 05-30 Task 1 | 1 / 05-17 | SHDW-01 | T-05-30-01..04 | bounded schema/depth/key/list/string/byte and direct-boundary Shadow pytest | ⬜ pending |
 | 05-GC-28-1 | 05-28 Task 1 | 1 / 05-17 | FORE-01 | T-05-28-01..03 | blocking human gate; 05-26 automated precondition rejects incomplete approval | ⬜ pending / blocking-human |
-| 05-GC-26-1 | 05-26 Task 1 | 2 / 05-28 | FORE-01 | T-05-26-01 | approved-summary/config/Torch provisioner tests, optional-dependency pin/isolation tests, `uv lock --check` | ⬜ pending |
+| 05-GC-18-1 | 05-18 Task 1 | 2 / 05-17, 05-30 | SHDW-01 | T-05-18-01..04 | production Shadow host node and `--grep "Shadow production distillation contract"` Playwright | ⬜ pending |
+| 05-GC-26-1 | 05-26 Task 1 | 2 / 05-28 | FORE-01 | T-05-26-01 | approved-summary/config/Torch provisioner tests; exact CPU pin/index/hash, base-extra isolation and no-match failure tests; `uv lock --check` | ⬜ pending |
 | 05-GC-26-2 | 05-26 Task 2 | 2 / 05-28 | FORE-01 | T-05-26-02..04 | parallel catalog/CAS/shared rollback/crash provisioner pytest | ⬜ pending |
-| 05-GC-27-1 | 05-27 Task 1 | 3 / 05-26 | FORE-01 | T-05-27-01..02 | source/config tamper and verified import-origin catalog/adapter pytest | ⬜ pending |
-| 05-GC-27-2 | 05-27 Task 2 | 3 / 05-26 | FORE-01 | T-05-27-03..05 | pre-allocation output cap, byte IPC, ready race, fallback and descendant cleanup pytest | ⬜ pending |
-| 05-GC-29-1 | 05-29 Task 1 | 7 / terminal backend plans | all | T-05-29-01..03 | complete focused Phase 05 backend/domain/migration/artifact/dependency/vendor/provisioner/host command with `ATHENA_ALLOW_NETWORK=0` | ⬜ pending / final gate |
-| 05-GC-29-2 | 05-29 Task 2 | 7 / terminal UI/runtime plans | all | T-05-29-01..03 | full unfiltered Phase 05 desktop-chromium Playwright spec with `ATHENA_ALLOW_NETWORK=0` | ⬜ pending / final gate |
+| 05-GC-19-1 | 05-19 Task 1 | 3 / 05-18 | SHDW-01 | T-05-19-01..02 | candidate replay-digest and exact principal/rationale retention pytest | ⬜ pending |
+| 05-GC-19-2 | 05-19 Task 2 | 3 / 05-18 | SHDW-01 | T-05-19-03..04 | paired operation, interrupted attempt, and parallel pair pytest | ⬜ pending |
+| 05-GC-21-1 | 05-21 Task 1 | 3 / 05-18 | THES-01 | T-05-21-01..04 | lifecycle strict/timezone/pending/history pytest plus API versions/checks/pending/history/ownership pagination pytest | ⬜ pending |
+| 05-GC-20-1 | 05-20 Task 1 | 4 / 05-19 | SHDW-01 | T-05-20-01 | import preview-identity pytest plus `--grep "Shadow preview identity"` Playwright | ⬜ pending |
+| 05-GC-20-2 | 05-20 Task 2 | 4 / 05-19 | SHDW-01 | T-05-20-02..04 | principal-lineage and aggregate-member/repository-pagination pytest | ⬜ pending |
+| 05-GC-32-1 | 05-32 Task 1 | 4 / 05-21 | THES-01 | T-05-32-01..04 | scheduler poison/reader/readiness pytest plus production Thesis host node | ⬜ pending |
+| 05-GC-22-1 | 05-22 Task 1 | 5 / 05-21, 05-32 | FORE-01 | T-05-22-01/05 | standalone production Forecast host node, then only `test_runner.py -k production_service_revalidation` | ⬜ pending |
+| 05-GC-22-2 | 05-22 Task 2 | 5 / 05-21, 05-32 | FORE-01 | T-05-22-02..04 | input frame/artifact/calendar/amount and immutable commit/path containment pytest | ⬜ pending |
+| 05-GC-31-1 | 05-31 Task 1 | 5 / 05-20 | SHDW-01 | T-05-31-01..03 | cleanup fault-injection pytest plus `--grep "Shadow retention dialog validates rationale and contains errors"` | ⬜ pending |
+| 05-GC-25-1 | 05-25 Task 1 | 6 / 05-19, 05-22, 05-32 | SHDW-01, THES-01, FORE-01 | T-05-25-01 | atomic migration rollback/restart pytest | ⬜ pending |
+| 05-GC-25-2 | 05-25 Task 2 | 6 / 05-19, 05-22, 05-32 | SHDW-01, THES-01, FORE-01 | T-05-25-02..05 | trusted/hostile Origin/Host, readiness, eight-combination, no-action host pytest | ⬜ pending |
+| 05-GC-27-1 | 05-27 Task 1 | 6 / 05-22, 05-26 | FORE-01 | T-05-27-01..02 | source/config tamper and verified import-origin catalog/adapter pytest | ⬜ pending |
+| 05-GC-27-2 | 05-27 Task 2 | 6 / 05-22, 05-26 | FORE-01 | T-05-27-03..05 | pre-allocation output cap, byte IPC, ready race, fallback and descendant cleanup pytest | ⬜ pending |
+| 05-GC-23-1 | 05-23 Task 1 | 7 / 05-22, 05-25 | FORE-01 | T-05-23-01 | Forecast distinct-path/corrupt-relation/path-quantile consistency pytest | ⬜ pending |
+| 05-GC-23-2 | 05-23 Task 2 | 7 / 05-22, 05-25 | FORE-01 | T-05-23-02..04 | maturity-cursor migration rollback/upgrade, calibration cursor/restart/repair/parallel, record-scoped API pytest | ⬜ pending |
+| 05-GC-23-3 | 05-23 Task 3 | 7 / 05-22, 05-25 | FORE-01 | T-05-23-05 | persisted event ID, Last-Event-ID resume, subscription limit, and slow-consumer cleanup pytest | ⬜ pending |
+| 05-GC-24-1 | 05-24 Task 1 | 8 / 05-20, 05-21, 05-23, 05-31 | SHDW-01, THES-01, FORE-01 | T-05-24-01/03/06 | rapid stock switch and StockAnalysis narrow dialog Playwright | ⬜ pending |
+| 05-GC-24-2 | 05-24 Task 2 | 8 / 05-20, 05-21, 05-23, 05-31 | THES-01, FORE-01 | T-05-24-02/04/05 | complete page/retry, Thesis pagination/validation, Forecast persisted SSE/flapping Playwright | ⬜ pending |
+| 05-GC-29-1 | 05-29 Task 1 | 9 / every terminal gap plan | all | T-05-29-01..03 | complete focused backend/domain/migration/artifact/dependency/vendor/provisioner/host command with `ATHENA_ALLOW_NETWORK=0` | ⬜ pending / final gate |
+| 05-GC-29-2 | 05-29 Task 2 | 9 / every terminal gap plan | all | T-05-29-01..03 | full unfiltered Phase 05 desktop-chromium Playwright with `ATHENA_ALLOW_NETWORK=0` | ⬜ pending / final gate |
 
 ### Gap Closure Sampling Continuity
 
 | Wave | Required sample before advancing | Current state |
 |---|---|---|
-| 1 | 05-18 bounded production Shadow tracer and explicit 05-28 human supply decision | pending |
-| 2 | 05-19 replay/pair, 05-21 Thesis API/readiness, and 05-26 approved supply/pin/provisioning checks | pending |
-| 3 | 05-20 import/cleanup/dialog, 05-22 production Forecast, and 05-27 runtime-byte/process checks | pending |
-| 4 | 05-25 atomic migration and trusted host/readiness/no-action checks | pending |
-| 5 | 05-23 cursor migration, path/quantile, calibration, and SSE checks | pending |
-| 6 | 05-24 complete browser object/paging/narrow/dialog/SSE scenarios | pending |
-| 7 | 05-29 complete focused backend plus full unfiltered Phase 05 browser gate | pending |
+| 1 | 05-30 bounded assumption boundary and explicit 05-28 human supply decision | pending |
+| 2 | 05-18 production Shadow tracer and 05-26 approved supply/pin/provisioning checks | pending |
+| 3 | 05-19 replay/pair and 05-21 resolver/API pagination checks | pending |
+| 4 | 05-20 preview/history and 05-32 governed Thesis reader/scanner/readiness checks | pending |
+| 5 | 05-22 production Forecast and 05-31 cleanup/dialog checks | pending |
+| 6 | 05-25 atomic migration/host and 05-27 runtime-byte/process checks | pending |
+| 7 | 05-23 cursor migration, path/quantile, calibration, and SSE checks | pending |
+| 8 | 05-24 complete browser object/paging/narrow/dialog/SSE scenarios | pending |
+| 9 | 05-29 complete focused backend plus full unfiltered Phase 05 browser gate | pending |
 
 ### Gap Closure Sign-Off
 
 - [ ] Every 05-GC row has an observed zero exit or an explicit approved blocking-human record.
-- [ ] The 05-28 summary contains all five config identities and exact PyTorch CPU build/index/wheel hash; 05-26 proves the precondition and exact lock.
-- [ ] 05-29 backend acceptance has no required failure/unexpected skip, external request, live-action call, or temporary artifact residue.
+- [ ] The 05-28 summary contains all five config identities and exact PyTorch CPU build/index/wheel hash; 05-26 owns and proves exact pin/index/hash, base-extra isolation, named selector collection, and the lock precondition.
+- [ ] 05-29 depends directly or transitively on every terminal plan through 05-32 and backend acceptance has no required failure/unexpected skip, external request, live-action call, or temporary artifact residue.
 - [ ] 05-29 browser acceptance runs every currently discovered Phase 05 scenario without grep filtering and reports zero unexpected external/action requests.
 - [ ] Only after these checks may gap-closure evidence be called green; the historical 05-01–05-17 sign-off remains unchanged.
