@@ -1,0 +1,41 @@
+{
+  "commit": "67b630e67f6a18c9e9be918d9b4337c960db1e9a",
+  "files": {
+    "LICENSE": {
+      "approved_modifications": [],
+      "destination": "LICENSE",
+      "source_blob_sha1": "88b04125e828241d8aada64bfe7f700bb03bcef8",
+      "source_sha256": "acb2d194d378204e5f2be4dcd24d39ecac437903620c790c3315a96dab388fdc",
+      "vendored_sha256": "acb2d194d378204e5f2be4dcd24d39ecac437903620c790c3315a96dab388fdc"
+    },
+    "model/__init__.py": {
+      "approved_modifications": [
+        "Restricted package exports to Kronos and KronosTokenizer; model_dict, get_model_class, and KronosPredictor export were omitted."
+      ],
+      "destination": "__init__.py",
+      "source_blob_sha1": "718d07a21b53b7eff4a6564e6dfcae8ee7e8c6b1",
+      "source_sha256": "f8f856ca3fedadcaac97e196be23d1aeda1c3c9ffe8903d66d43ea3bcac6240c",
+      "vendored_sha256": "c953ae293af8b789effd503f3f268b4bb4d1f66dd4cab73506548c104a9f8a0e"
+    },
+    "model/kronos.py": {
+      "approved_modifications": [
+        "Removed the sys.path mutation used by the upstream repository layout.",
+        "Changed the model.module wildcard import to the package-relative .module import."
+      ],
+      "destination": "kronos.py",
+      "source_blob_sha1": "ce4494ee0b3ec8751b09d5488c93bde995e008e0",
+      "source_sha256": "0a5f90282e2039c2de0771473419715c845def154896dbd0f5747837e6241032",
+      "vendored_sha256": "53c8907fa05dd88e59ff6a22c365320134df88d3d05e861959bbaf1aeb9022f4"
+    },
+    "model/module.py": {
+      "approved_modifications": [],
+      "destination": "module.py",
+      "source_blob_sha1": "f2a05158b48a56e9235426f6583e384360d761f9",
+      "source_sha256": "a07edbadc0e96804c8158c021bbc6063bb7cc43b34d7fc470d5c8ff2005a409f",
+      "vendored_sha256": "a07edbadc0e96804c8158c021bbc6063bb7cc43b34d7fc470d5c8ff2005a409f"
+    }
+  },
+  "license": "MIT",
+  "repository": "https://github.com/shiyu-coder/Kronos",
+  "reviewed_at": "2026-07-16"
+}
