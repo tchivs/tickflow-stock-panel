@@ -5,15 +5,15 @@ milestone_name: milestone
 current_phase: 05
 current_phase_name: Optional Enhancements
 status: executing
-stopped_at: Phase 05 context gathered
-last_updated: "2026-07-15T10:03:19.764Z"
-last_activity: 2026-07-15
-last_activity_desc: Phase 04 complete, transitioned to Phase 05
+stopped_at: Completed 05-05-PLAN.md
+last_updated: "2026-07-16T04:02:11.333Z"
+last_activity: 2026-07-16
+last_activity_desc: Plan 05-05 strict host and browser RED contracts completed
 progress:
   total_phases: 5
   completed_phases: 4
-  total_plans: 62
-  completed_plans: 62
+  total_plans: 79
+  completed_plans: 65
 ---
 
 # Project State
@@ -23,16 +23,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-10)
 
 **Core value:** An investor can turn reliable market data and their own holdings into an auditable, actionable research and monitoring workflow without operating multiple disconnected tools.
-**Current focus:** Phase 04 — advanced-capabilities
+**Current focus:** Phase 05 — optional-enhancements
 
 ## Current Position
 
 Phase: 05 — Optional Enhancements
-Plan: Not started
-Status: Ready to execute
-Last activity: 2026-07-15 — Phase 04 complete, transitioned to Phase 05
+Plan: 05 of 17
+Status: Executing — Wave 0 contracts
+Last activity: 2026-07-16 — Plan 05-05 strict host and browser RED contracts completed
 
-Progress: [█████████░] 93%
+Progress: [████████░░] 82%
 
 ## Performance Metrics
 
@@ -83,6 +83,11 @@ Progress: [█████████░] 93%
 | Phase 04 P25 | 314 | 2 tasks | 3 files |
 | Phase 04 P26 | 11m 20s | 2 tasks | 4 files |
 | Phase 04 P27 | 7m 18s | 2 tasks | 4 files |
+**Per-Plan Metrics:**
+
+| Plan | Duration | Tasks | Files |
+|------|----------|-------|-------|
+| Phase 05 P05 | 920 | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -146,6 +151,9 @@ No implementation decision was explicitly locked by the architecture intake. Req
 - [Phase ?]: Authenticated real-lifespan tests prove task-specific quota denials produce no advanced SSE event while independent research capacity remains available.
 - [Phase ?]: Queue acquisition requires immutable authorization policy provenance to equal the current persisted policy in the same transaction; mismatches never charge or create work.
 - [Phase ?]: Queued jobs compare durable authorization policy provenance with the current revision before quota inspection, workflow work, or advanced-progress publication.
+- [Phase ?]: Phase 05 optional-host contracts start the single production FastAPI lifespan and limit test overrides to independent deployment probes and failure injection.
+- [Phase ?]: Phase 05 browser RED accepts exactly one scenario-specific missing production locator per UI-SPEC scenario; all fixture, syntax, launch, skip, retry, timeout, external-request, and unexpected-pass failures remain fatal.
+- [Phase ?]: Descriptor-less SHDW-01 and THES-01 edges remain flagged-unverified until final named green host/browser scenarios; no probe descriptor is invented in Wave 0.
 
 ### Pending Todos
 
@@ -163,6 +171,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-07-15T07:09:31.516Z
-Stopped at: Phase 05 context gathered
-Resume file: .planning/phases/05-optional-enhancements/05-CONTEXT.md
+Last session: 2026-07-16T04:02:11.325Z
+Stopped at: Completed 05-05-PLAN.md
+Resume file: None

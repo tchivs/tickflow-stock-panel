@@ -246,42 +246,51 @@ Plans:
   2. User can view an investment thesis with its valuation anchor, invalidation conditions, and periodic evidence checks.
   3. Researcher can request and inspect a time-series forecast that includes quantiles, sampled paths, and the associated model checkpoint.
 
-**Plans**: 17 plans
+**Plans**: 3/17 plans executed
 
 Plans:
 
 **Wave 0 — executable contracts and blocking supply-chain gate**
-- [ ] 05-01-PLAN.md — Human-approve optional packages, pinned Kronos source, and local checkpoint policy.
+
+- [x] 05-01-PLAN.md — Human-approve optional packages, pinned Kronos source, and local checkpoint policy.
 - [ ] 05-02-PLAN.md — Create strict Shadow RED contracts and exact-failure harness.
 - [ ] 05-03-PLAN.md — Create strict Thesis RED contracts and exact-failure harness.
-- [ ] 05-04-PLAN.md — Create focused Forecast catalog/input, adapter/runner, and calibration RED contracts/harness.
-- [ ] 05-05-PLAN.md — Create strict eight-host-combination and 13-scenario browser contracts/harnesses.
+- [x] 05-04-PLAN.md — Create focused Forecast catalog/input, adapter/runner, and calibration RED contracts/harness.
+- [x] 05-05-PLAN.md — Create strict eight-host-combination and 13-scenario browser contracts/harnesses.
 
 **Wave 1 — shared and dependency foundations**
+
 - [ ] 05-06-PLAN.md — Add focused migration, immutable artifact, and optional capability foundation.
 - [ ] 05-07-PLAN.md — Add approved optional lock, pinned vendor sync, and explicit checkpoint provisioner.
 
 **Wave 2 — parallel immutable domain foundations**
+
 - [ ] 05-08-PLAN.md — Implement Shadow immutable import, evidence, and explainable distillation.
 - [ ] 05-09-PLAN.md — Implement Thesis immutable versions, anchors, evidence, and restricted conditions.
 - [ ] 05-10-PLAN.md — Implement Forecast approved catalog, governed calendar/input, pre-mean paths, and artifacts.
 
 **Wave 3 — parallel backend vertical flows**
+
 - [ ] 05-11-PLAN.md — Complete Shadow IS/OOS, retention, safe projection, and API.
 - [ ] 05-12-PLAN.md — Complete Thesis due scanner, pending/confirm/reject, safe projection, and API.
 - [ ] 05-13-PLAN.md — Complete Forecast CAS/idempotency/lease/retry/restart runner and immutable commit.
 
 **Wave 4 — calibration, API/SSE, and real host registration**
+
 - [ ] 05-14-PLAN.md — Complete Forecast calibration/API/SSE and register all modules/recovery in one lifespan.
 
 **Wave 5 — shared typed frontend and Shadow UI**
+
 - [ ] 05-15-PLAN.md — Add typed Phase 05 API/QK/SSE and the Backtest ShadowAccount panel.
 
 **Wave 6 — Thesis and Forecast UI**
+
 - [ ] 05-16-PLAN.md — Add stock-only ThesisPanel and ForecastPanel in AnalysisWorkspace.
 
 **Wave 7 — final acceptance**
+
 - [ ] 05-17-PLAN.md — Make all backend real-host and 13 browser scenarios green, plus optional pinned-model human-check.
+
 **UI hint**: yes
 
 ## Progress
@@ -294,4 +303,4 @@ Plans:
 | 2. Factor And Strategy Research | 8/8 | Complete    | 2026-07-11 |
 | 3. AI Analysis | 12/12 | Complete    | 2026-07-12 |
 | 4. Advanced Capabilities | 27/27 | Complete    | 2026-07-15 |
-| 5. Optional Enhancements | 0/17 | Planned | - |
+| 5. Optional Enhancements | 3/17 | In Progress|  |

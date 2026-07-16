@@ -41,9 +41,9 @@
 
 ### Optional Enhancements
 
-- [ ] **SHDW-01**: User can derive and evaluate strategies from a Shadow Account built from actual trading logs.
-- [ ] **THES-01**: User can track investment theses, valuation anchors, invalidation conditions, and periodic evidence checks.
-- [ ] **FORE-01**: Researcher can request Kronos time-series forecasts with quantiles, sampled paths, and model checkpoints.
+- [x] **SHDW-01**: User can derive and evaluate strategies from a Shadow Account built from actual trading logs.
+- [x] **THES-01**: User can track investment theses, valuation anchors, invalidation conditions, and periodic evidence checks.
+- [x] **FORE-01**: Researcher can request Kronos time-series forecasts with quantiles, sampled paths, and model checkpoints.
 
 ## Out of Scope
 
