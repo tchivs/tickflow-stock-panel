@@ -240,10 +240,10 @@ class ShadowRepository:
         batch_ids = sorted(self._unique_nonempty(included_batch_ids, "batch"))
         if not batch_ids:
             raise ShadowEvidenceError("evidence requires at least one completed batch")
-        trade_ids = sorted(self._unique_nonempty(included_trade_ids, "trade"))
+        requested_trade_ids = self._unique_nonempty(included_trade_ids, "trade")
         exclusion_items = self._normalize_exclusions(exclusions)
         excluded_ids = [item["trade_id"] for item in exclusion_items]
-        if set(trade_ids) & set(excluded_ids):
+        if set(requested_trade_ids) & set(excluded_ids):
             raise ShadowEvidenceError("included and excluded trades must be disjoint")
 
         with self._connection() as connection:
@@ -259,16 +259,22 @@ class ShadowRepository:
                 raise ShadowEvidenceError("evidence requires an attributable completed batch")
             all_trade_rows = connection.execute(
                 f"""SELECT * FROM shadow_trade_facts WHERE batch_id IN ({placeholders})
-                    ORDER BY id""",
+                    ORDER BY batch_id, source_row_ordinal, id""",
                 batch_ids,
             ).fetchall()
 
         available_ids = {str(row["id"]) for row in all_trade_rows}
-        selected_ids = set(trade_ids) | set(excluded_ids)
+        selected_ids = set(requested_trade_ids) | set(excluded_ids)
         if selected_ids != available_ids:
             raise ShadowEvidenceError(
                 "every trade in an included batch must be explicitly included or excluded"
             )
+        included_id_set = set(requested_trade_ids)
+        trade_ids = [
+            str(row["id"])
+            for row in all_trade_rows
+            if str(row["id"]) in included_id_set
+        ]
         if self._artifact_verifier is not None:
             for row in batch_rows:
                 descriptor = _json_object(

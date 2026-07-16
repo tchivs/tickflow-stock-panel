@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -75,13 +76,23 @@ def test_evidence_set_freezes_exact_batch_trade_manifest_and_stable_fingerprint(
     )
 
     assert first["included_batch_ids"] == [batch["id"]]
-    assert first["included_trade_ids"] == sorted(trade_ids)
+    assert first["included_trade_ids"] == trade_ids
     assert first["fingerprint"] == replay["fingerprint"]
     assert len(first["fingerprint"]) == 64
     assert repository.get_evidence_set(first["id"]) == first
 
 
-def test_evidence_set_preserves_partial_fills_duplicate_groups_and_row_identity(tmp_path):
+def test_evidence_set_preserves_partial_fills_duplicate_groups_and_row_identity(
+    tmp_path, monkeypatch
+):
+    next_identifier = 100
+
+    def descending_identifier():
+        nonlocal next_identifier
+        next_identifier -= 1
+        return SimpleNamespace(hex=f"{next_identifier:032x}")
+
+    monkeypatch.setattr("app.shadow.importer.uuid4", descending_identifier)
     repository, importer = _stack(tmp_path)
     batch = _confirm(importer)
     trades = repository.list_trade_facts(batch_id=batch["id"])
@@ -144,7 +155,7 @@ def test_evidence_exclusions_name_exact_trade_and_nonempty_reason(tmp_path):
         exclusions=[{"trade_id": excluded, "reason": "hostile note excluded after review"}],
     )
 
-    assert evidence["included_trade_ids"] == sorted(included)
+    assert evidence["included_trade_ids"] == included
     assert evidence["exclusions"] == [
         {"trade_id": excluded, "reason": "hostile note excluded after review"}
     ]
