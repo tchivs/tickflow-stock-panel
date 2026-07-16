@@ -5,15 +5,15 @@ milestone_name: milestone
 current_phase: 05
 current_phase_name: Optional Enhancements
 status: executing
-stopped_at: Completed 05-16-PLAN.md
-last_updated: "2026-07-16T08:25:15.689Z"
+stopped_at: Completed 05-17-PLAN.md
+last_updated: "2026-07-16T09:28:43.829Z"
 last_activity: 2026-07-16
 last_activity_desc: Plan 05-14 Forecast calibration API SSE and optional host completed
 progress:
   total_phases: 5
   completed_phases: 4
   total_plans: 79
-  completed_plans: 77
+  completed_plans: 78
 ---
 
 # Project State
@@ -32,7 +32,7 @@ Plan: 17 of 17
 Status: Executing — optional integration
 Last activity: 2026-07-16 — Plan 05-14 Forecast calibration API SSE and optional host completed
 
-Progress: [██████████] 97%
+Progress: [██████████] 99%
 
 ## Performance Metrics
 
@@ -94,6 +94,7 @@ Progress: [██████████] 97%
 | Phase 05 P14 | 20m | 2 tasks | 7 files |
 | Phase 05-optional-enhancements P15 | 18m30s | 2 tasks | 6 files |
 | Phase 05-optional-enhancements P16 | 25m33s | 3 tasks | 3 files |
+| Phase 05 P17 | 14m25s | 2 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -180,6 +181,9 @@ No implementation decision was explicitly locked by the architecture intake. Req
 - [Phase ?]: Optional panels stay mounted behind semantic tabpanels so object-local selection and scroll state survive tab switches without a global store.
 - [Phase ?]: Phase 05 capability probes use QK.phase5Capabilities and never share the unrelated global capabilities cache identity.
 - [Phase ?]: Forecast charts remain progressive enhancement; captioned quantile, path, provenance, history, and calibration tables are the accessible evidence surface.
+- [Phase ?]: Lazy optional imports are checked against the process baseline so full-suite order cannot invalidate the real lifespan no-new-heavy-runtime guarantee.
+- [Phase ?]: Forecast freshness is projected from the existing governed Kline repository; no second calendar, store, or browser-authored as-of authority is introduced.
+- [Phase ?]: Real Kronos acceptance stays opt-in and local-only: absent approved assets report unavailable, while provisioned assets must pass exact provenance, network denial, and resource observation.
 
 ### Pending Todos
 
@@ -197,6 +201,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-07-16T08:25:15.681Z
-Stopped at: Completed 05-16-PLAN.md
+Last session: 2026-07-16T09:28:43.820Z
+Stopped at: Completed 05-17-PLAN.md
 Resume file: None
