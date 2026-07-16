@@ -143,3 +143,58 @@ Only an existing PLAN task plus its named acceptance command is evidence. Plan c
 | COVERAGE | every OPT-OUT row | Explicit scope/safety rejection plus enforcement/absence test. | Row-specific evidence above | COVERED |
 
 **Audit result:** all GOAL, REQ, RESEARCH, and CONTEXT source items are mapped to existing plan tasks and executable acceptance. No item is silently dropped. Descriptor-less SHDW-01/THES-01 assumptions remain flagged until Plan 05-17's named green host/browser scenarios. FORE-01 concurrency is resolved by Plan 05-13's concrete CAS state/idempotency/global-lease/retry/commit/restart semantics and Plan 05-14's unique calibration append; coverage remains planned—not executed—until those commands pass.
+
+---
+
+## Additive Gap Closure Coverage — Plans 05-18–05-29 (Pending)
+
+Historical capability and source mappings above remain the executed 05-01–05-17 baseline. The rows below map the additive contracts only; plan text is not execution evidence, and every row stays **PENDING** until 05-29 records the integrated post-gap result.
+
+| Coverage item | Additive plan/task ownership | Automated acceptance | Status |
+|---|---|---|---|
+| Strict bounded Shadow exit/holding assumptions at API/service/repository/projection | 05-18 T1 | bounded schema/depth/key/list/string/byte and direct-boundary pytest plus production tracer | PENDING |
+| Exact Shadow production DTO/factory/governed evaluation/no action (D-01–D-04) | 05-18 T1 | real host plus production browser tracer | PENDING |
+| Candidate/retention canonical replay and paired restart identity | 05-19 T1/T2 | replay, retention, interruption, parallel-pair pytest | PENDING |
+| Preview-bound principal-safe bounded Shadow history | 05-20 T1/T2 | preview/principal/aggregate/pagination pytest and browser | PENDING |
+| Temporary artifact cleanup and accessible retention rationale/error | 05-20 T3 | Polars/import cleanup fault tests and retention-dialog browser scenario | PENDING |
+| Strict timezone/instrument Thesis resolution and actionable current pending (D-05–D-08) | 05-21 T1 | lifecycle tests | PENDING |
+| Public Thesis versions/checks/pending/all-history pagination ownership | 05-21 T1 | API page-two/ownership/count tests | PENDING |
+| Governed Thesis readers, scanner isolation, complete readiness | 05-21 T2 | scheduler and production host tests | PENDING |
+| Complete Forecast production composition and strict input/calendar/commit identities (D-09–D-12) | 05-22 T1/T2 | production host, input, and runner commit tests | PENDING |
+| Atomic shared migration runner before Forecast cursor schema | 05-25 T1 → 05-23 T2 | rollback/restart followed by cursor upgrade/mid-migration rollback tests | PENDING |
+| Trusted local principal/Origin/CORS, truthful independent readiness, one DB/lake/container/no action | 05-25 T2 | hostile/trusted host, eight-combination, readiness, no-action tests | PENDING |
+| Exactly 32 complete paths and numerically consistent P10/P50/P90 | 05-23 T1 | distinct path, corrupt relation, path/quantile consistency tests | PENDING |
+| Durable fair repairable maturity cursor and record-scoped refresh | 05-23 T2 | migration, starvation/restart/repair/parallel, authorization tests | PENDING |
+| Persisted SSE IDs, Last-Event-ID, principal/job/global/queue limits | 05-23 T3 | SSE resume/capacity/race/cleanup tests | PENDING |
+| Subject-bound UI, 375px StockAnalysis, dialog focus, complete pages, finite SSE flapping | 05-24 T1/T2 | focused Playwright scenarios | PENDING |
+| Five independently approved config digests plus exact PyTorch CPU build/index/wheel hash | 05-28 T1 → 05-26 T1 | blocking human summary precondition, exact supply tests, `uv lock --check` | PENDING / BLOCKING-HUMAN |
+| Concurrency-safe provisioning and shared-asset-safe rollback | 05-26 T2 | parallel/CAS/crash/rollback tests | PENDING |
+| Executed vendored/config/weight bytes, verified import origin, bounded IPC/process cleanup | 05-27 T1/T2 | catalog/adapter/runner hostile-boundary tests | PENDING |
+| Complete post-gap acceptance and zero external/live-action authority | 05-29 T1/T2 | full focused backend and unfiltered Phase 05 Playwright commands | PENDING / FINAL GATE |
+
+### Additive Multi-Source Audit
+
+| Source | ID / section | Required item | Additive mapping | Status |
+|---|---|---|---|---|
+| GOAL | Phase 05 goal | Optional Shadow/Thesis/Forecast work without changing completed v1 | 05-18–05-27 implementation; 05-29 integrated gate | COVERED / PENDING EXECUTION |
+| REQ | SHDW-01 | Actual-log derivation/evaluation, strict bounded request, immutable audit, safe UI | 05-18–05-20, 05-24, 05-25, 05-29 | COVERED / descriptor-less flag retained |
+| REQ | THES-01 | Immutable versions/anchors/conditions/checks/human review with bounded public history | 05-21, 05-24, 05-25, 05-29 | COVERED / descriptor-less flag retained |
+| REQ | FORE-01 | Local approved Kronos, exact paths/quantiles/provenance, durable runner/calibration/SSE/UI | 05-22–05-29 | COVERED / concurrency flag retained |
+| CONTEXT | D-01–D-04 | Local logs, append-only imports, explainable candidate, frozen IS/OOS/no activation | 05-18–05-20, 05-29 | COVERED |
+| CONTEXT | D-05–D-08 | Immutable thesis, valuation, pending-only automation, per-condition cadence | 05-21, 05-24, 05-29 | COVERED |
+| CONTEXT | D-09–D-10 | One governed daily stock, 5/20/60, exactly 32 paths and fixed P10/P50/P90 | 05-22–05-24, 05-29 | COVERED |
+| CONTEXT | D-11 | Approved pinned local source/checkpoint/config/Torch bytes; no latest | 05-28 → 05-26 → 05-27 → 05-29 | COVERED / blocking approval retained |
+| CONTEXT | D-12 | Immutable forecast, append-only repair/calibration, bounded SSE, zero action | 05-22–05-24, 05-27, 05-29 | COVERED |
+| RESEARCH | shared architecture | One operational.db/lake/scheduler/container; separate optional modules | 05-23 T2, 05-25, 05-29 | COVERED |
+| RESEARCH | security/ASVS L1 | Each new threat has control/task/criterion/automated verification and executable mitigation | 05-18–05-29 threat tables | COVERED / PENDING EXECUTION |
+| REVIEW | all blocker/warning gaps in revision report | assumptions, Thesis API, cursor migration, supply approval/Torch, cleanup, quantiles, SSE, accessibility, final gate | 05-18–05-29 | COVERED |
+| VALIDATION | additive Nyquist map | Every new/modified task plus final gate is pending and wave-sampled | 05-VALIDATION.md Gap Closure section | COVERED / PENDING EXECUTION |
+
+### Additive Capability Decisions Preserved
+
+- All original `INTEGRATE` and `OPT-OUT` decisions remain unchanged. No gap task broadens to batch forecasting, training, Qlib, external demos, broker/provider action, or a second UI shell.
+- Runtime remains local-only. Network is permitted only for explicit operator provisioning after 05-28 approval; routine startup, workers, backend acceptance, and browser acceptance run with network denied.
+- The exact PyTorch CPU artifact is an additional approved supply identity, not a new capability. Base dependencies remain independent of Forecast/Torch.
+- Descriptor-less SHDW-01/THES-01 and unresolved FORE-01 concurrency flags remain explicitly unverified until the named 05-29 integrated commands pass.
+
+**Additive audit result:** GOAL, SHDW-01, THES-01, FORE-01, D-01–D-12, research constraints, checker blockers/warnings, and final acceptance all have executable owners. No historical green evidence has been relabeled; current gap-closure status is pending.

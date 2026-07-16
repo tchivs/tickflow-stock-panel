@@ -246,7 +246,7 @@ Plans:
   2. User can view an investment thesis with its valuation anchor, invalidation conditions, and periodic evidence checks.
   3. Researcher can request and inspect a time-series forecast that includes quantiles, sampled paths, and the associated model checkpoint.
 
-**Plans**: 27 plans (17 executed, 10 gap-closure plans pending)
+**Plans**: 29 plans (17 executed, 12 gap-closure plans pending)
 
 Plans:
 
@@ -293,28 +293,36 @@ Plans:
 
 **Gap Closure Wave 1** *(blocked on completed 05-17)*
 
-- [ ] 05-18-PLAN.md — Trace the exact production Shadow browser request through complete distillation and IS/OOS evaluation.
-- [ ] 05-26-PLAN.md — Bind checkpoint config/weight bytes and serialize concurrency-safe provisioning.
+- [ ] 05-18-PLAN.md — Trace a strict bounded production Shadow browser request through complete distillation and IS/OOS evaluation.
+- [ ] 05-28-PLAN.md — Independently human-approve five config digests and the exact PyTorch CPU build/index/hash before supply mutation.
 
 **Gap Closure Wave 2** *(blocked on relevant Wave 1 plans)*
 
 - [ ] 05-19-PLAN.md — Make Shadow candidate, paired evaluation, and retention replay conflict-safe and restart-idempotent.
-- [ ] 05-21-PLAN.md — Correct Thesis resolver/timezone/pending/history and wire complete governed production readiness.
-- [ ] 05-27-PLAN.md — Bind Kronos runtime imports/bytes and harden pre-IPC bounds plus process cleanup.
+- [ ] 05-21-PLAN.md — Correct Thesis resolver/timezone/pending/history, public pagination, and governed production readiness.
+- [ ] 05-26-PLAN.md — Consume approved config/Torch identities and serialize concurrency-safe provisioning.
 
 **Gap Closure Wave 3** *(blocked on relevant Wave 2 plans)*
 
-- [ ] 05-20-PLAN.md — Bind Shadow confirmation to preview identity and enforce principal-scoped bounded histories.
+- [ ] 05-20-PLAN.md — Bind Shadow preview/confirmation, bounded histories, temporary cleanup, and accessible retention errors.
 - [ ] 05-22-PLAN.md — Compose the full Forecast production workflow and strict byte/calendar/commit identity.
+- [ ] 05-27-PLAN.md — Bind Kronos runtime imports/bytes and harden pre-IPC bounds plus process cleanup.
 
 **Gap Closure Wave 4** *(blocked on relevant Wave 3 plans)*
 
-- [ ] 05-23-PLAN.md — Page complete sampled paths and add fair durable calibration cursors and repair.
 - [ ] 05-25-PLAN.md — Make migrations atomic and secure the local principal/Origin/readiness boundary.
 
-**Gap Closure Wave 5** *(blocked on relevant Wave 4 plans)*
+**Gap Closure Wave 5** *(blocked on Wave 4 migration ownership)*
 
-- [ ] 05-24-PLAN.md — Align subject-bound frontend state, retries, validation, paths, and immutable history paging.
+- [ ] 05-23-PLAN.md — Add the forward maturity cursor migration, complete path/quantile validation, durable calibration, and bounded resumable SSE.
+
+**Gap Closure Wave 6** *(blocked on relevant Wave 5 plans)*
+
+- [ ] 05-24-PLAN.md — Align subject-bound/narrow accessible frontend state, paging, retries, validation, and finite SSE reconnect.
+
+**Gap Closure Wave 7 — final post-gap acceptance** *(blocked on every terminal gap plan)*
+
+- [ ] 05-29-PLAN.md — Run complete focused backend/host/migration/supply and all Phase 05 browser acceptance with zero action/external requests.
 
 **UI hint**: yes
 
@@ -328,4 +336,4 @@ Plans:
 | 2. Factor And Strategy Research | 8/8 | Complete    | 2026-07-11 |
 | 3. AI Analysis | 12/12 | Complete    | 2026-07-12 |
 | 4. Advanced Capabilities | 27/27 | Complete    | 2026-07-15 |
-| 5. Optional Enhancements | 17/27 | Gap Closure Planned |  |
+| 5. Optional Enhancements | 17/29 | Gap Closure Planned |  |
