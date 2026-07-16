@@ -23,9 +23,17 @@ from app.theses.schemas import (
 class ThesisRepository:
     """Own short-lived connections and append-only Thesis transactions."""
 
-    def __init__(self, database_path: Path, *, clock: Callable[[], datetime] | None = None) -> None:
+    def __init__(
+        self,
+        database_path: Path,
+        *,
+        clock: Callable[[], datetime | str] | None = None,
+        now: Callable[[], datetime | str] | None = None,
+    ) -> None:
+        if clock is not None and now is not None:
+            raise ValueError("provide only one Thesis repository clock")
         self.database_path = Path(database_path)
-        self._clock = clock or (lambda: datetime.now(UTC))
+        self._clock = clock or now or (lambda: datetime.now(UTC))
         self.migrate()
 
     @contextmanager
@@ -44,7 +52,7 @@ class ThesisRepository:
             migrate_operational_db(connection)
 
     def now(self) -> str:
-        return self._clock().astimezone(UTC).isoformat()
+        return _timestamp(self._clock(), "clock")
 
     def create_version(self, *, request: ThesisVersionRequest, created_by: str) -> dict[str, Any]:
         """Atomically create one identity, version, anchors, conditions, and schedules."""
@@ -203,6 +211,133 @@ class ThesisRepository:
         value["active"] = bool(value["active"])
         return value
 
+    def get_condition(self, condition_id: str) -> dict[str, Any] | None:
+        """Return one persisted condition with its immutable version and instrument scope."""
+        with self._connection() as connection:
+            row = connection.execute(
+                """SELECT condition.*, version.thesis_id, thesis.instrument
+                   FROM thesis_conditions AS condition
+                   JOIN thesis_versions AS version ON version.id = condition.version_id
+                   JOIN theses AS thesis ON thesis.id = version.thesis_id
+                   WHERE condition.id = ?""",
+                (_required_identifier(condition_id, "condition_id"),),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            **self._condition_projection(row),
+            "version_id": row["version_id"],
+            "thesis_id": row["thesis_id"],
+            "instrument": row["instrument"],
+        }
+
+    def acquire_due_conditions(
+        self,
+        *,
+        now: datetime,
+        owner: str,
+        lease_until: datetime,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        """Lease a stable bounded batch of due current-version conditions."""
+        owner_value = _required_text(owner, "owner", maximum=128)
+        now_value = _timestamp(now, "now")
+        lease_value = _timestamp(lease_until, "lease_until")
+        if lease_value <= now_value:
+            raise ValueError("lease_until must be later than now")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 256:
+            raise ValueError("limit must be between 1 and 256")
+        acquired: list[dict[str, Any]] = []
+        with self._connection() as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
+            # Expiry recovery is a separate guarded transition because lease ownership
+            # cannot be transferred directly by the schedule trigger.
+            connection.execute(
+                """UPDATE thesis_condition_schedules
+                   SET lease_owner = NULL, lease_until = NULL,
+                       transition_version = transition_version + 1, updated_at = ?
+                   WHERE active = 1 AND lease_until IS NOT NULL AND lease_until <= ?""",
+                (now_value, now_value),
+            )
+            rows = connection.execute(
+                """SELECT schedule.condition_id, schedule.next_due_at,
+                          schedule.transition_version
+                   FROM thesis_condition_schedules AS schedule
+                   JOIN thesis_conditions AS condition ON condition.id = schedule.condition_id
+                   JOIN thesis_versions AS version ON version.id = condition.version_id
+                   WHERE schedule.active = 1
+                     AND schedule.next_due_at <= ?
+                     AND schedule.lease_owner IS NULL
+                     AND NOT EXISTS (
+                         SELECT 1 FROM thesis_versions AS successor
+                         WHERE successor.thesis_id = version.thesis_id
+                           AND successor.predecessor_id = version.id
+                     )
+                   ORDER BY schedule.next_due_at ASC, schedule.condition_id ASC
+                   LIMIT ?""",
+                (now_value, limit),
+            ).fetchall()
+            for row in rows:
+                changed = connection.execute(
+                    """UPDATE thesis_condition_schedules
+                       SET lease_owner = ?, lease_until = ?, last_attempt_at = ?,
+                           transition_version = transition_version + 1, updated_at = ?
+                       WHERE condition_id = ? AND active = 1 AND next_due_at = ?
+                         AND lease_owner IS NULL AND transition_version = ?""",
+                    (
+                        owner_value,
+                        lease_value,
+                        now_value,
+                        now_value,
+                        row["condition_id"],
+                        row["next_due_at"],
+                        row["transition_version"],
+                    ),
+                ).rowcount
+                if changed == 1:
+                    acquired.append(
+                        {
+                            "condition_id": row["condition_id"],
+                            "due_at": row["next_due_at"],
+                            "lease_owner": owner_value,
+                            "lease_until": lease_value,
+                        }
+                    )
+        return acquired
+
+    def complete_due_condition(
+        self,
+        *,
+        condition_id: str,
+        due_at: str,
+        owner: str,
+        next_due_at: str,
+        completed_at: str,
+    ) -> bool:
+        """Advance exactly the lease that produced a canonical due check."""
+        condition_value = _required_identifier(condition_id, "condition_id")
+        due_value = _timestamp(due_at, "due_at")
+        next_value = _timestamp(next_due_at, "next_due_at")
+        completed_value = _timestamp(completed_at, "completed_at")
+        if next_value <= due_value:
+            raise ValueError("next_due_at must advance monotonically")
+        with self._connection() as connection, connection:
+            changed = connection.execute(
+                """UPDATE thesis_condition_schedules
+                   SET next_due_at = ?, lease_owner = NULL, lease_until = NULL,
+                       transition_version = transition_version + 1, updated_at = ?
+                   WHERE condition_id = ? AND active = 1 AND next_due_at = ?
+                     AND lease_owner = ?""",
+                (
+                    next_value,
+                    completed_value,
+                    condition_value,
+                    due_value,
+                    _required_text(owner, "owner", maximum=128),
+                ),
+            ).rowcount
+        return changed == 1
+
     def append_condition_check(
         self,
         *,
@@ -216,7 +351,7 @@ class ThesisRepository:
         observed_value: object | None = None,
         safe_reason: str | None = None,
     ) -> dict[str, Any]:
-        """Append one immutable check tied to the exact condition/version pair."""
+        """Append one immutable check or return the canonical due identity."""
         result_value = result.value if isinstance(result, ConditionCheckResult) else result
         try:
             ConditionCheckResult(result_value)
@@ -224,31 +359,46 @@ class ThesisRepository:
             raise ValueError("condition check result is invalid") from error
         _fingerprint(evidence_fingerprint)
         evidence_json = _canonical_json(list(evidence), "evidence", maximum=64_000)
-        observed_json = None if observed_value is None else _canonical_json(observed_value, "observed_value", maximum=4_000)
+        observed_json = (
+            None
+            if observed_value is None
+            else _canonical_json(observed_value, "observed_value", maximum=4_000)
+        )
         identifier = uuid4().hex
         reason = None if safe_reason is None else _required_text(safe_reason, "safe_reason", maximum=500)
-        with self._connection() as connection, connection:
-            connection.execute(
-                """INSERT INTO thesis_condition_checks
-                   (id, version_id, condition_id, due_at, result, observed_value_json,
-                    evidence_fingerprint, evidence_json, safe_reason, checked_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    identifier,
-                    version_id,
-                    condition_id,
-                    _timestamp(due_at, "due_at"),
-                    result_value,
-                    observed_json,
-                    evidence_fingerprint,
-                    evidence_json,
-                    reason,
-                    _timestamp(checked_at, "checked_at"),
-                ),
-            )
-            row = connection.execute(
-                "SELECT * FROM thesis_condition_checks WHERE id = ?", (identifier,)
-            ).fetchone()
+        due_value = _timestamp(due_at, "due_at")
+        try:
+            with self._connection() as connection, connection:
+                connection.execute(
+                    """INSERT INTO thesis_condition_checks
+                       (id, version_id, condition_id, due_at, result, observed_value_json,
+                        evidence_fingerprint, evidence_json, safe_reason, checked_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        identifier,
+                        version_id,
+                        condition_id,
+                        due_value,
+                        result_value,
+                        observed_json,
+                        evidence_fingerprint,
+                        evidence_json,
+                        reason,
+                        _timestamp(checked_at, "checked_at"),
+                    ),
+                )
+                row = connection.execute(
+                    "SELECT * FROM thesis_condition_checks WHERE id = ?", (identifier,)
+                ).fetchone()
+        except sqlite3.IntegrityError as error:
+            with self._connection() as connection:
+                row = connection.execute(
+                    """SELECT * FROM thesis_condition_checks
+                       WHERE condition_id = ? AND due_at = ?""",
+                    (condition_id, due_value),
+                ).fetchone()
+            if row is None:
+                raise error
         assert row is not None
         return self._check_projection(row)
 
@@ -260,6 +410,263 @@ class ThesisRepository:
                 (condition_id,),
             ).fetchall()
         return [self._check_projection(row) for row in rows]
+
+    def condition_outcome(self, condition_id: str, due_at: str) -> dict[str, Any] | None:
+        """Return the canonical check and optional pending fact for one due identity."""
+        with self._connection() as connection:
+            check = connection.execute(
+                """SELECT * FROM thesis_condition_checks
+                   WHERE condition_id = ? AND due_at = ?""",
+                (
+                    _required_identifier(condition_id, "condition_id"),
+                    _timestamp(due_at, "due_at"),
+                ),
+            ).fetchone()
+            if check is None:
+                return None
+            pending = connection.execute(
+                "SELECT * FROM thesis_pending_conclusions WHERE check_id = ?",
+                (check["id"],),
+            ).fetchone()
+        return {
+            "check": self._check_projection(check),
+            "pending": None if pending is None else self._pending_projection(pending),
+        }
+
+    def append_condition_outcome(
+        self,
+        *,
+        condition_id: str,
+        due_at: str,
+        result: str | ConditionCheckResult,
+        evidence_fingerprint: str,
+        evidence: Sequence[Mapping[str, Any]],
+        checked_at: str,
+        observed_value: object | None = None,
+        safe_reason: str | None = None,
+    ) -> dict[str, Any]:
+        """Atomically append one check and its sole matched pending conclusion."""
+        result_value = result.value if isinstance(result, ConditionCheckResult) else result
+        try:
+            result_value = ConditionCheckResult(result_value).value
+        except ValueError as error:
+            raise ValueError("condition check result is invalid") from error
+        condition_value = _required_identifier(condition_id, "condition_id")
+        due_value = _timestamp(due_at, "due_at")
+        fingerprint = _fingerprint(evidence_fingerprint)
+        checked_value = _timestamp(checked_at, "checked_at")
+        evidence_json = _canonical_json(list(evidence), "evidence", maximum=64_000)
+        observed_json = (
+            None
+            if observed_value is None
+            else _canonical_json(observed_value, "observed_value", maximum=4_000)
+        )
+        reason = None if safe_reason is None else _required_text(safe_reason, "safe_reason", maximum=500)
+        with self._connection() as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                """SELECT * FROM thesis_condition_checks
+                   WHERE condition_id = ? AND due_at = ?""",
+                (condition_value, due_value),
+            ).fetchone()
+            if existing is not None:
+                pending = connection.execute(
+                    "SELECT * FROM thesis_pending_conclusions WHERE check_id = ?",
+                    (existing["id"],),
+                ).fetchone()
+                return {
+                    "check": self._check_projection(existing),
+                    "pending": None if pending is None else self._pending_projection(pending),
+                }
+            condition = connection.execute(
+                """SELECT condition.version_id, version.thesis_id
+                   FROM thesis_conditions AS condition
+                   JOIN thesis_versions AS version ON version.id = condition.version_id
+                   WHERE condition.id = ?""",
+                (condition_value,),
+            ).fetchone()
+            if condition is None:
+                raise ValueError("thesis condition not found")
+            current = self._current_row(connection, condition["thesis_id"])
+            if current is None or current["id"] != condition["version_id"]:
+                raise ValueError("old thesis version condition conflict")
+            check_id = uuid4().hex
+            connection.execute(
+                """INSERT INTO thesis_condition_checks
+                   (id, version_id, condition_id, due_at, result, observed_value_json,
+                    evidence_fingerprint, evidence_json, safe_reason, checked_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    check_id,
+                    condition["version_id"],
+                    condition_value,
+                    due_value,
+                    result_value,
+                    observed_json,
+                    fingerprint,
+                    evidence_json,
+                    reason,
+                    checked_value,
+                ),
+            )
+            pending_row = None
+            if result_value == ConditionCheckResult.MATCHED.value:
+                pending_id = uuid4().hex
+                connection.execute(
+                    """INSERT INTO thesis_pending_conclusions
+                       (id, thesis_id, version_id, condition_id, check_id,
+                        evidence_fingerprint, proposed_state, reason, status, created_at)
+                       VALUES (?, ?, ?, ?, ?, ?, 'invalidated', ?, 'pending', ?)""",
+                    (
+                        pending_id,
+                        condition["thesis_id"],
+                        condition["version_id"],
+                        condition_value,
+                        check_id,
+                        fingerprint,
+                        "Structured condition matched governed evidence.",
+                        checked_value,
+                    ),
+                )
+                pending_row = connection.execute(
+                    "SELECT * FROM thesis_pending_conclusions WHERE id = ?",
+                    (pending_id,),
+                ).fetchone()
+            check_row = connection.execute(
+                "SELECT * FROM thesis_condition_checks WHERE id = ?",
+                (check_id,),
+            ).fetchone()
+        assert check_row is not None
+        return {
+            "check": self._check_projection(check_row),
+            "pending": None if pending_row is None else self._pending_projection(pending_row),
+        }
+
+    def list_pending(self, thesis_id: str) -> list[dict[str, Any]]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                """SELECT * FROM thesis_pending_conclusions WHERE thesis_id = ?
+                   ORDER BY created_at DESC, id DESC""",
+                (_required_identifier(thesis_id, "thesis_id"),),
+            ).fetchall()
+        return [self._pending_projection(row) for row in rows]
+
+    def get_pending(self, pending_id: str) -> dict[str, Any] | None:
+        """Return one pending fact with the exact persisted check and condition."""
+        with self._connection() as connection:
+            row = connection.execute(
+                """SELECT pending.*, thesis.instrument,
+                          condition_check.due_at, condition_check.result,
+                          condition_check.observed_value_json,
+                          condition_check.evidence_json, condition_check.safe_reason,
+                          condition.copied_from_condition_id, condition.source_kind,
+                          condition.field, condition.operator, condition.threshold_json,
+                          condition.unit, condition.lookback_days, condition.cadence,
+                          condition.timezone, condition.description
+                   FROM thesis_pending_conclusions AS pending
+                   JOIN theses AS thesis ON thesis.id = pending.thesis_id
+                   JOIN thesis_condition_checks AS condition_check
+                     ON condition_check.id = pending.check_id
+                   JOIN thesis_conditions AS condition ON condition.id = pending.condition_id
+                   WHERE pending.id = ?""",
+                (_required_identifier(pending_id, "pending_id"),),
+            ).fetchone()
+        if row is None:
+            return None
+        pending = self._pending_projection(row)
+        pending["instrument"] = row["instrument"]
+        pending["due_at"] = row["due_at"]
+        pending["result"] = row["result"]
+        pending["observed_value"] = (
+            None if row["observed_value_json"] is None else json.loads(row["observed_value_json"])
+        )
+        pending["evidence"] = json.loads(row["evidence_json"])
+        pending["safe_reason"] = row["safe_reason"]
+        pending["condition"] = {
+            **self._condition_projection(row),
+            "version_id": row["version_id"],
+            "thesis_id": row["thesis_id"],
+            "instrument": row["instrument"],
+        }
+        return pending
+
+    def append_review_event(
+        self,
+        *,
+        pending_id: str,
+        decision: str,
+        reviewer_principal: str,
+        rationale: str,
+    ) -> dict[str, Any]:
+        """Append one typed human decision after transactional current-state checks."""
+        if decision not in {"confirmed", "rejected"}:
+            raise ValueError("review decision is invalid")
+        pending_value = _required_identifier(pending_id, "pending_id")
+        principal = _required_text(reviewer_principal, "reviewer_principal", maximum=256)
+        reason = _required_text(rationale, "rationale", maximum=4_000)
+        created_at = self.now()
+        with self._connection() as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
+            pending = connection.execute(
+                "SELECT * FROM thesis_pending_conclusions WHERE id = ?",
+                (pending_value,),
+            ).fetchone()
+            if pending is None:
+                raise ValueError("pending thesis conclusion not found")
+            if connection.execute(
+                "SELECT 1 FROM thesis_review_events WHERE pending_id = ?", (pending_value,)
+            ).fetchone() is not None:
+                raise ValueError("pending thesis conclusion already processed conflict")
+            current = self._current_row(connection, pending["thesis_id"])
+            if current is None or current["id"] != pending["version_id"]:
+                raise ValueError("old thesis version pending conflict")
+            if self._official_state(connection, pending["thesis_id"], pending["version_id"]) != "active":
+                raise ValueError("thesis official state changed conflict")
+            event_id = uuid4().hex
+            connection.execute(
+                """INSERT INTO thesis_review_events
+                   (id, pending_id, decision, reviewer_principal, rationale, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (event_id, pending_value, decision, principal, reason, created_at),
+            )
+            row = connection.execute(
+                """SELECT review.*, pending.thesis_id, pending.version_id,
+                          pending.condition_id, pending.check_id,
+                          pending.evidence_fingerprint
+                   FROM thesis_review_events AS review
+                   JOIN thesis_pending_conclusions AS pending ON pending.id = review.pending_id
+                   WHERE review.id = ?""",
+                (event_id,),
+            ).fetchone()
+        assert row is not None
+        return self._review_projection(row)
+
+    def list_review_events(self, pending_id: str) -> list[dict[str, Any]]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                """SELECT review.*, pending.thesis_id, pending.version_id,
+                          pending.condition_id, pending.check_id,
+                          pending.evidence_fingerprint
+                   FROM thesis_review_events AS review
+                   JOIN thesis_pending_conclusions AS pending ON pending.id = review.pending_id
+                   WHERE review.pending_id = ? ORDER BY review.created_at ASC, review.id ASC""",
+                (_required_identifier(pending_id, "pending_id"),),
+            ).fetchall()
+        return [self._review_projection(row) for row in rows]
+
+    def list_official_events(self, thesis_id: str) -> list[dict[str, Any]]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                """SELECT review.*, pending.thesis_id, pending.version_id,
+                          pending.condition_id, pending.check_id,
+                          pending.evidence_fingerprint
+                   FROM thesis_review_events AS review
+                   JOIN thesis_pending_conclusions AS pending ON pending.id = review.pending_id
+                   WHERE pending.thesis_id = ? AND review.decision = 'confirmed'
+                   ORDER BY review.created_at ASC, review.id ASC""",
+                (_required_identifier(thesis_id, "thesis_id"),),
+            ).fetchall()
+        return [self._review_projection(row) for row in rows]
 
     @staticmethod
     def _current_row(connection: sqlite3.Connection, thesis_id: str) -> sqlite3.Row | None:
@@ -461,6 +868,37 @@ class ThesisRepository:
             "checked_at": row["checked_at"],
         }
 
+    @staticmethod
+    def _pending_projection(row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "id": row["id"],
+            "thesis_id": row["thesis_id"],
+            "version_id": row["version_id"],
+            "condition_id": row["condition_id"],
+            "check_id": row["check_id"],
+            "evidence_fingerprint": row["evidence_fingerprint"],
+            "proposed_state": row["proposed_state"],
+            "reason": row["reason"],
+            "status": row["status"],
+            "created_at": row["created_at"],
+        }
+
+    @staticmethod
+    def _review_projection(row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "id": row["id"],
+            "pending_id": row["pending_id"],
+            "thesis_id": row["thesis_id"],
+            "version_id": row["version_id"],
+            "condition_id": row["condition_id"],
+            "check_id": row["check_id"],
+            "evidence_fingerprint": row["evidence_fingerprint"],
+            "decision": row["decision"],
+            "reviewer_principal": row["reviewer_principal"],
+            "rationale": row["rationale"],
+            "created_at": row["created_at"],
+        }
+
 
 def _required_identifier(value: str, field: str) -> str:
     return _required_text(value, field, maximum=128)
@@ -488,13 +926,16 @@ def _fingerprint(value: str) -> str:
     return value
 
 
-def _timestamp(value: str, field: str) -> str:
-    if not isinstance(value, str):
+def _timestamp(value: datetime | str, field: str) -> str:
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError as error:
+            raise ValueError(f"{field} must be an ISO timestamp") from error
+    else:
         raise ValueError(f"{field} must be an ISO timestamp")
-    try:
-        parsed = datetime.fromisoformat(value)
-    except ValueError as error:
-        raise ValueError(f"{field} must be an ISO timestamp") from error
     if parsed.tzinfo is None:
         raise ValueError(f"{field} must include a timezone")
     return parsed.astimezone(UTC).isoformat()
