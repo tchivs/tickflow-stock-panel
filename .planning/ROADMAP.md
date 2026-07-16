@@ -246,7 +246,7 @@ Plans:
   2. User can view an investment thesis with its valuation anchor, invalidation conditions, and periodic evidence checks.
   3. Researcher can request and inspect a time-series forecast that includes quantiles, sampled paths, and the associated model checkpoint.
 
-**Plans**: 7/17 plans executed
+**Plans**: 8/17 plans executed
 
 Plans:
 
@@ -265,7 +265,7 @@ Plans:
 
 **Wave 2 — parallel immutable domain foundations**
 
-- [ ] 05-08-PLAN.md — Implement Shadow immutable import, evidence, and explainable distillation.
+- [x] 05-08-PLAN.md — Implement Shadow immutable import, evidence, and explainable distillation.
 - [ ] 05-09-PLAN.md — Implement Thesis immutable versions, anchors, evidence, and restricted conditions.
 - [ ] 05-10-PLAN.md — Implement Forecast approved catalog, governed calendar/input, pre-mean paths, and artifacts.
 
@@ -303,4 +303,4 @@ Plans:
 | 2. Factor And Strategy Research | 8/8 | Complete    | 2026-07-11 |
 | 3. AI Analysis | 12/12 | Complete    | 2026-07-12 |
 | 4. Advanced Capabilities | 27/27 | Complete    | 2026-07-15 |
-| 5. Optional Enhancements | 7/17 | In Progress|  |
+| 5. Optional Enhancements | 8/17 | In Progress|  |
