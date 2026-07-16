@@ -5,15 +5,15 @@ milestone_name: milestone
 current_phase: 05
 current_phase_name: Optional Enhancements
 status: executing
-stopped_at: Completed 05-15-PLAN.md
-last_updated: "2026-07-16T07:48:09.372Z"
+stopped_at: Completed 05-16-PLAN.md
+last_updated: "2026-07-16T08:25:15.689Z"
 last_activity: 2026-07-16
 last_activity_desc: Plan 05-14 Forecast calibration API SSE and optional host completed
 progress:
   total_phases: 5
   completed_phases: 4
   total_plans: 79
-  completed_plans: 76
+  completed_plans: 77
 ---
 
 # Project State
@@ -28,11 +28,11 @@ See: .planning/PROJECT.md (updated 2026-07-10)
 ## Current Position
 
 Phase: 05 — Optional Enhancements
-Plan: 16 of 17
+Plan: 17 of 17
 Status: Executing — optional integration
 Last activity: 2026-07-16 — Plan 05-14 Forecast calibration API SSE and optional host completed
 
-Progress: [██████████] 96%
+Progress: [██████████] 97%
 
 ## Performance Metrics
 
@@ -93,6 +93,7 @@ Progress: [██████████] 96%
 | Phase 05 P11 | 15m 17s | 2 tasks | 5 files |
 | Phase 05 P14 | 20m | 2 tasks | 7 files |
 | Phase 05-optional-enhancements P15 | 18m30s | 2 tasks | 6 files |
+| Phase 05-optional-enhancements P16 | 25m33s | 3 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -175,6 +176,10 @@ No implementation decision was explicitly locked by the architecture intake. Req
 - [Phase ?]: Forecast SSE is hook-local transport only; terminal state is refreshed from persisted job status before object-local invalidation.
 - [Phase ?]: Shadow retainability is derived only from two persisted passing IS/OOS evaluations; browser verdict and activation authority remain absent.
 - [Phase ?]: Shadow normalizes bounded safe Wave 0 fixture fields but keeps production /evaluations authoritative and does not fabricate legacy /runs facts or a SHDW descriptor.
+- [Phase ?]: Thesis and Forecast mount only for stock subjects; Portfolio keeps the original three-tab behavior and no optional requests.
+- [Phase ?]: Optional panels stay mounted behind semantic tabpanels so object-local selection and scroll state survive tab switches without a global store.
+- [Phase ?]: Phase 05 capability probes use QK.phase5Capabilities and never share the unrelated global capabilities cache identity.
+- [Phase ?]: Forecast charts remain progressive enhancement; captioned quantile, path, provenance, history, and calibration tables are the accessible evidence surface.
 
 ### Pending Todos
 
@@ -192,6 +197,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-07-16T07:48:09.363Z
-Stopped at: Completed 05-15-PLAN.md
+Last session: 2026-07-16T08:25:15.681Z
+Stopped at: Completed 05-16-PLAN.md
 Resume file: None
