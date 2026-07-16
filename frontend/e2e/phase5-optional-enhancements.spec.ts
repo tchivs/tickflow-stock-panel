@@ -1,7 +1,6 @@
 import type { Locator, Page, Route } from '@playwright/test'
 import { expect, test } from '@playwright/test'
 
-const DESKTOP_PROJECT = 'desktop-chromium'
 const SHADOW_HEADING = 'Shadow 成交证据与策略候选'
 const THESIS_TAB = '投资论点'
 const FORECAST_TAB = '概率预测'
@@ -38,6 +37,7 @@ type FixtureOptions = {
 type Telemetry = {
   apiRequests: string[]
   externalRequests: string[]
+  unexpectedRequests: string[]
   mutationBodies: Array<{ method: string; path: string; body: unknown }>
   requestsFor(pathPrefix: string): number
 }
@@ -88,6 +88,20 @@ const candidate = {
   in_sample: { run_id: 'is-run-1', start: '2024-01-02', end: '2024-06-28', status: 'passed', precision: 0.72, recall: 0.64, coverage: 0.58, trades: 24, return: 0.12, drawdown: -0.05, after_cost: 0.09, actual_consistency: 0.68 },
   out_of_sample: { run_id: 'oos-run-1', start: '2024-07-01', end: '2024-12-31', status: 'passed', precision: 0.66, recall: 0.57, coverage: 0.49, trades: 18, return: 0.07, drawdown: -0.04, after_cost: 0.05, actual_consistency: 0.61 },
 }
+const terminalEvaluations = [
+  {
+    id: 'evaluation-timeout', candidate_id: candidate.id, evidence_set_id: candidate.evidence_set_id,
+    split_kind: 'in_sample', window: { start: '2024-01-02', end: '2024-06-28' },
+    governed_fingerprint: LONG_ID, artifact: { artifact_id: 'artifact-timeout' }, status: 'timeout',
+    metrics: {}, terminal_reason: 'timeout', adjustment_policy: 'forward_adjusted', cost_policy: {}, created_at: '2026-07-15T09:20:00Z',
+  },
+  {
+    id: 'evaluation-resource', candidate_id: candidate.id, evidence_set_id: candidate.evidence_set_id,
+    split_kind: 'out_of_sample', window: { start: '2024-07-01', end: '2024-12-31' },
+    governed_fingerprint: LONG_ID, artifact: { artifact_id: 'artifact-resource' }, status: 'resource_terminated',
+    metrics: {}, terminal_reason: 'resource_terminated', adjustment_policy: 'forward_adjusted', cost_policy: {}, created_at: '2026-07-15T09:21:00Z',
+  },
+]
 
 const thesisVersion = (version: number, overrides: Record<string, unknown> = {}) => ({
   id: `thesis-version-${version}`,
@@ -101,7 +115,7 @@ const thesisVersion = (version: number, overrides: Record<string, unknown> = {})
   created_by: 'server-session-user',
   created_at: `2026-07-${10 + version}T09:00:00Z`,
   effective_at: `2026-07-${10 + version}T09:00:00Z`,
-  anchors: [{ method: 'DCF', currency: 'CNY', as_of: '2026-07-15', low: 1380, high: 1720, assumptions: ['收入复合增长 8%', '终值增长 3%'], limitations: ['未计入极端渠道库存冲击'] }],
+  anchors: [{ method: 'DCF', currency: 'CNY', as_of: '2026-07-15', low: 1380, high: 1720, assumptions: [{ name: '收入复合增长', value: 8, unit: '%' }, { name: '终值增长', value: 3, unit: '%' }], limitations: ['未计入极端渠道库存冲击'] }],
   conditions: [
     { id: `condition-${version}-1`, name: '核心单品批价跌破阈值', source_kind: 'market', field: 'wholesale_price', operator: '<', threshold: 850, unit: 'CNY', lookback: 20, cadence: 'weekly', timezone: 'Asia/Shanghai', next_due_at: '2026-07-22T01:00:00Z' },
     { id: `condition-${version}-2`, name: '经营现金流恶化', source_kind: 'financial', field: 'operating_cash_flow_yoy', operator: '<', threshold: -0.2, unit: 'ratio', lookback: 4, cadence: 'quarterly', timezone: 'Asia/Shanghai', next_due_at: '2026-10-01T01:00:00Z' },
@@ -181,6 +195,7 @@ async function installPhase5Fixture(page: Page, options: FixtureOptions = {}): P
   const availability = { ...defaultAvailability, ...options.availability }
   const apiRequests: string[] = []
   const externalRequests: string[] = []
+  const unexpectedRequests: string[] = []
   const mutationBodies: Array<{ method: string; path: string; body: unknown }> = []
   let batchCounter = 3
   let forecastCounter = 1
@@ -207,8 +222,37 @@ async function installPhase5Fixture(page: Page, options: FixtureOptions = {}): P
     }
   })
 
-  await page.route('**/api/**', route => json(route, { detail: `Unhandled fixture route: ${new URL(route.request().url()).pathname}` }, 500))
+  await page.route('**/api/**', route => {
+    const request = route.request()
+    unexpectedRequests.push(`${request.method()} ${new URL(request.url()).pathname}`)
+    return json(route, { detail: `Unhandled fixture route: ${new URL(request.url()).pathname}` }, 500)
+  })
   await page.route('**/api/settings', route => json(route, { onboarding_completed: true, theme: 'dark' }))
+  await page.route('**/api/capabilities', route => json(route, { label: 'Free+', capabilities: {} }))
+  await page.route('**/api/data/version', route => json(route, { version: 'phase5-browser' }))
+  await page.route('**/api/settings/preferences', route => json(route, {
+    realtime_quotes_enabled: false,
+    indices_nav_pinned: false,
+    minute_sync_enabled: false,
+    minute_sync_days: 5,
+    pipeline_pull_a_share: true,
+    pipeline_pull_etf: true,
+    pipeline_pull_index: true,
+    pipeline_index_symbols: '',
+    pipeline_schedule: { hour: 15, minute: 30 },
+    instruments_schedule: { hour: 9, minute: 10 },
+  }))
+  await page.route('**/api/settings/data-sources', route => json(route, { builtin: [], plugins: [], custom: [], errors: [], config_dir: 'deployment-config' }))
+  await page.route('**/api/intraday/status', route => json(route, { enabled: false, running: false, interval_s: 5, symbol_count: 0, quote_age_ms: null, is_trading_hours: false, last_fetch_ms: null }))
+  await page.route('**/api/analysis-menus', route => json(route, { items: [] }))
+  await page.route('**/api/pipeline/jobs**', route => json(route, { active_id: null, jobs: [] }))
+  await page.route('**/api/intraday/indices**', route => json(route, { rows: [], count: 0 }))
+  await page.route('**/api/alerts**', route => json(route, { alerts: [], total: 0 }))
+  await page.route('**/api/data/status', route => json(route, { daily: null, enriched: null, index_daily: null, index_enriched: null, index_instruments: null, etf_daily: null, etf_enriched: null, etf_instruments: null, minute: null, adj_factor: null, instruments: null, financials: null, storage: {} }))
+  await page.route('**/api/stock-analysis/reports', route => json(route, { reports: [] }))
+  await page.route('**/api/kline/daily**', route => json(route, { symbol: STOCK.symbol, name: STOCK.name, rows: [] }))
+  await page.route('**/api/stock-analysis/levels**', route => json(route, { symbol: STOCK.symbol, levels: {}, close: null, summary: '浏览器验收无行情档位' }))
+  await page.route('**/api/advanced/viewpoints**', route => json(route, { viewpoints: [] }))
   await page.route('**/api/analysis/subjects/**/reports', route => json(route, { reports: [{ id: 'existing-report', subject: { kind: 'stock', key: STOCK.symbol }, version: 1, status: 'validated', generated_at: '2026-07-10T00:00:00Z', evidence_limitations: [] }] }))
   await page.route('**/api/analysis/reports/existing-report', route => json(route, { report: { id: 'existing-report', signal_id: 'existing-signal', subject: { kind: 'stock', key: STOCK.symbol }, version: 1, status: 'validated', generated_at: '2026-07-10T00:00:00Z', perspectives: [], score: null, valuation: null, ic_memo: { thesis: '既有分析仍可读取', risks: [], open_questions: [] } } }))
   await page.route('**/api/analysis/reports/existing-report/evidence', route => json(route, { report_id: 'existing-report', sources: [], material_numbers: [] }))
@@ -236,8 +280,13 @@ async function installPhase5Fixture(page: Page, options: FixtureOptions = {}): P
     if (path.endsWith('/imports/confirm')) { batchCounter += 1; return json(route, { batch: shadowBatch(`batch-server-${batchCounter}`, `不可变批次 ${batchCounter}`) }, 201) }
     if (path.endsWith('/evidence-sets')) return request.method() === 'POST' ? json(route, { evidence_set: { id: 'evidence-server-1', included_batch_ids: ['batch-server-1'], excluded_trade_ids: [], trade_count: 4, duplicate_groups: 1, partial_fills: 2, fingerprint: LONG_ID, created_at: '2026-07-15T09:10:00Z' } }, 201) : json(route, { evidence_sets: [{ id: 'evidence-server-1', fingerprint: LONG_ID, batch_count: 1, trade_count: 4 }] })
     if (path.includes('/candidates') && path.endsWith('/retain')) return json(route, { retention: { id: 'retention-server-1', candidate_id: candidate.id, status: 'retained_research_only', created_at: '2026-07-15T09:30:00Z' } }, 201)
+    if (path.endsWith('/candidates') && request.method() === 'POST') return options.shadowState === 'terminal'
+      ? json(route, { detail: 'bounded distillation timeout' }, 409)
+      : json(route, { candidate }, 201)
     if (path.endsWith('/candidates')) return json(route, { candidates: options.shadowState === 'empty' ? [] : [candidate] })
-    if (path.endsWith('/runs')) return json(route, { runs: options.shadowState === 'terminal' ? [{ id: 'run-timeout', status: 'timeout', reason: 'time limit reached' }, { id: 'run-resource', status: 'resource_terminated', reason: 'memory limit reached' }] : [] })
+    if (path.endsWith('/evaluations')) return json(route, { evaluations: options.shadowState === 'terminal' ? terminalEvaluations : [] })
+    if (path.endsWith('/retentions')) return json(route, { retentions: [] })
+    unexpectedRequests.push(`${request.method()} ${path}`)
     return json(route, { detail: `Unhandled Shadow fixture route: ${path}` }, 500)
   })
 
@@ -254,6 +303,7 @@ async function installPhase5Fixture(page: Page, options: FixtureOptions = {}): P
       if (options.thesisState === 'conflict') return json(route, { detail: 'state changed' }, 409)
       return json(route, { review: { id: 'review-server-1', decision: path.endsWith('/confirm') ? 'confirmed' : 'rejected', principal: 'server-session-user', reason: '人工理由完整保留', created_at: '2026-07-15T10:00:00Z' }, official_status: path.endsWith('/confirm') ? 'invalidated' : 'active' })
     }
+    unexpectedRequests.push(`${request.method()} ${path}`)
     return json(route, { detail: `Unhandled Thesis fixture route: ${path}` }, 500)
   })
 
@@ -266,31 +316,47 @@ async function installPhase5Fixture(page: Page, options: FixtureOptions = {}): P
       const gate = options.forecastGate ?? 'verified'
       return json(route, { entries: gate === 'missing' ? [] : [{ ...forecastRecord.checkpoint, integrity: gate, available: gate === 'verified', reason: gate === 'verified' ? null : gate }] })
     }
-    if (path.endsWith('/records') && request.method() === 'GET') return json(route, { records: options.forecastState === 'empty' ? [] : records })
-    if (path.endsWith('/jobs') && request.method() === 'POST') { forecastCounter += 1; return json(route, { job: { id: `forecast-job-${forecastCounter}`, status: 'completed', stage: '已完成', record_id: `forecast-record-${forecastCounter}`, created_at: '2026-07-15T10:00:00Z' } }, 201) }
+    if (path.endsWith('/records') && request.method() === 'GET') return json(route, {
+      records: options.forecastState && options.forecastState !== 'empty' ? records : [],
+      latest_governed_session_id: options.forecastState === 'terminal' ? '2026-07-16' : '2026-07-15',
+    })
+    if (path.endsWith('/jobs') && request.method() === 'GET') return json(route, {
+      jobs: options.forecastState === 'terminal' ? [
+        { id: 'job-timeout', status: 'timeout', stage: 'timeout', safe_reason: 'timeout', record_id: null, created_at: '2026-07-15T10:01:00Z' },
+        { id: 'job-oom', status: 'resource_terminated', stage: 'resource_terminated', safe_reason: 'OOM', record_id: null, created_at: '2026-07-15T10:02:00Z' },
+        { id: 'job-shape', status: 'validation_failed', stage: 'validation_failed', safe_reason: 'shape failure', record_id: null, created_at: '2026-07-15T10:03:00Z' },
+        { id: 'job-artifact', status: 'artifact_failed', stage: 'artifact_failed', safe_reason: 'artifact failure', record_id: null, created_at: '2026-07-15T10:04:00Z' },
+      ] : [],
+      page: { offset: 0, limit: 25, total: options.forecastState === 'terminal' ? 4 : 0, has_more: false },
+    })
+    if (path.endsWith('/jobs') && request.method() === 'POST') {
+      forecastCounter += 1
+      const terminal = options.forecastState === 'terminal'
+      return json(route, { job: { id: `forecast-job-${forecastCounter}`, status: terminal ? 'running' : 'completed', stage: terminal ? 'generating_paths' : '已完成', record_id: terminal ? null : `forecast-record-${forecastCounter}`, created_at: '2026-07-15T10:00:00Z' } }, 201)
+    }
     if (path.includes('/records/') && path.endsWith('/paths')) return json(route, { paths: forecastPaths, total: 32, page: 1, page_size: 12 })
     if (path.includes('/records/') && path.endsWith('/calibration')) return json(route, { calibration: forecastRecord.calibration })
     if (path.includes('/records/')) return json(route, { record: forecastRecord })
-    if (path.includes('/jobs/')) return json(route, { job: { id: 'forecast-job-1', status: options.forecastState === 'terminal' ? 'timeout' : 'completed', stage: options.forecastState === 'terminal' ? 'resource_terminated' : '已完成', safe_reason: options.forecastState === 'terminal' ? 'time limit reached' : null, record_id: options.forecastState === 'terminal' ? null : forecastRecord.id } })
+    if (path.includes('/jobs/')) return json(route, { job: { id: path.split('/').at(-1), status: options.forecastState === 'terminal' ? 'running' : 'completed', stage: options.forecastState === 'terminal' ? 'generating_paths' : '已完成', safe_reason: null, record_id: options.forecastState === 'terminal' ? null : forecastRecord.id } })
+    unexpectedRequests.push(`${request.method()} ${path}`)
     return json(route, { detail: `Unhandled Forecast fixture route: ${path}` }, 500)
   })
-  await page.route('**/api/forecast/jobs/**/stream', route => route.fulfill({ contentType: 'text/event-stream', body: options.forecastState === 'terminal' ? 'event: forecast_progress\ndata: {"job_id":"forecast-job-1","stage":"resource_terminated","status":"timeout"}\n\n' : 'event: forecast_progress\ndata: {"job_id":"forecast-job-1","stage":"completed","status":"completed","record_id":"forecast-record-1"}\n\n' }))
+  await page.route('**/api/forecast/jobs/**/stream', route => options.forecastState === 'terminal'
+    ? route.abort('connectionreset')
+    : route.fulfill({ contentType: 'text/event-stream', body: 'event: forecast_progress\ndata: {"job_id":"forecast-job-1","stage":"completed","status":"completed","record_id":"forecast-record-1"}\n\n' }))
 
   return {
     apiRequests,
     externalRequests,
+    unexpectedRequests,
     mutationBodies,
     requestsFor: pathPrefix => apiRequests.filter(value => value.includes(pathPrefix)).length,
   }
 }
 
-function futurePhase5Ui(testInfo: import('@playwright/test').TestInfo) {
-  test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-chromium owns the explicit viewport/theme matrix')
-  test.fail(true, 'Phase 05 production panels are delivered by Plans 05-15 and 05-16')
-}
 
 async function requireSurface(locator: Locator) {
-  await expect(locator).toBeVisible({ timeout: 750 })
+  await expect(locator).toBeVisible()
 }
 
 async function selectStock(page: Page) {
@@ -325,7 +391,47 @@ async function expectTouchTarget(locator: Locator) {
 
 async function contrastRatio(locator: Locator): Promise<number> {
   return locator.evaluate(element => {
-    const parse = (color: string) => color.match(/[\d.]+/g)!.slice(0, 3).map(Number)
+    const gamma = (value: number) => {
+      const channel = Math.min(1, Math.max(0, value))
+      return (channel <= 0.0031308 ? 12.92 * channel : 1.055 * channel ** (1 / 2.4) - 0.055) * 255
+    }
+    const parseAlpha = (value: string | undefined) => {
+      if (!value) return 1
+      return value.trim().endsWith('%') ? Number.parseFloat(value) / 100 : Number.parseFloat(value)
+    }
+    const oklabToRgb = (lightness: number, a: number, b: number) => {
+      const l = (lightness + 0.3963377774 * a + 0.2158037573 * b) ** 3
+      const m = (lightness - 0.1055613458 * a - 0.0638541728 * b) ** 3
+      const s = (lightness - 0.0894841775 * a - 1.291485548 * b) ** 3
+      return [
+        gamma(4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s),
+        gamma(-1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s),
+        gamma(-0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s),
+      ]
+    }
+    const parse = (color: string) => {
+      if (color.startsWith('oklab(') || color.startsWith('oklch(')) {
+        const functionNameLength = color.startsWith('oklab(') ? 6 : 6
+        const [components, alphaValue] = color.slice(functionNameLength, -1).split('/')
+        const [lightnessValue, secondValue, thirdValue] = components.trim().split(/\s+/)
+        const lightness = lightnessValue.endsWith('%') ? Number.parseFloat(lightnessValue) / 100 : Number.parseFloat(lightnessValue)
+        let a = Number.parseFloat(secondValue)
+        let b = Number.parseFloat(thirdValue)
+        if (color.startsWith('oklch(')) {
+          const chroma = a
+          const hue = b * Math.PI / 180
+          a = chroma * Math.cos(hue)
+          b = chroma * Math.sin(hue)
+        }
+        return { rgb: oklabToRgb(lightness, a, b), alpha: parseAlpha(alphaValue) }
+      }
+      if (color.startsWith('color(srgb ')) {
+        const [components, alphaValue] = color.slice(11, -1).split('/')
+        return { rgb: components.trim().split(/\s+/).map(value => Number.parseFloat(value) * 255), alpha: parseAlpha(alphaValue) }
+      }
+      const values = color.match(/[\d.]+/g)?.map(Number) ?? []
+      return { rgb: values.slice(0, 3), alpha: values[3] ?? 1 }
+    }
     const luminance = (rgb: number[]) => {
       const linear = rgb.map(channel => {
         const value = channel / 255
@@ -333,18 +439,24 @@ async function contrastRatio(locator: Locator): Promise<number> {
       })
       return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
     }
-    const style = getComputedStyle(element)
-    const foreground = luminance(parse(style.color))
+
+    const layers: Array<{ rgb: number[]; alpha: number }> = []
     let parent: Element | null = element
-    let background = [0, 0, 0]
     while (parent) {
-      const candidate = getComputedStyle(parent).backgroundColor
-      const values = candidate.match(/[\d.]+/g)?.map(Number) ?? []
-      if (values.length >= 3 && (values[3] ?? 1) > 0) { background = values.slice(0, 3); break }
+      const layer = parse(getComputedStyle(parent).backgroundColor)
+      if (layer.rgb.length === 3 && layer.alpha > 0) layers.push(layer)
+      if (layer.alpha === 1) break
       parent = parent.parentElement
     }
+    let background = [255, 255, 255]
+    for (const layer of layers.reverse()) {
+      background = layer.rgb.map((channel, index) => channel * layer.alpha + background[index] * (1 - layer.alpha))
+    }
+    const foregroundLayer = parse(getComputedStyle(element).color)
+    const foreground = foregroundLayer.rgb.map((channel, index) => channel * foregroundLayer.alpha + background[index] * (1 - foregroundLayer.alpha))
+    const foregroundLuminance = luminance(foreground)
     const backgroundLuminance = luminance(background)
-    return (Math.max(foreground, backgroundLuminance) + 0.05) / (Math.min(foreground, backgroundLuminance) + 0.05)
+    return (Math.max(foregroundLuminance, backgroundLuminance) + 0.05) / (Math.min(foregroundLuminance, backgroundLuminance) + 0.05)
   })
 }
 
@@ -355,11 +467,11 @@ function expectNoAuthorityRequests(telemetry: Telemetry) {
   }
   expect(telemetry.apiRequests.filter(path => /broker|market-action|positions\/sync|monitor-rules|decision\/runs|strategies\/install/.test(path))).toEqual([])
   expect(telemetry.externalRequests).toEqual([])
+  expect(telemetry.unexpectedRequests).toEqual([])
 }
 
 test.describe('Phase 05 optional enhancement browser contracts', () => {
-  test(SCENARIO_TITLES[0], async ({ page }, testInfo) => {
-    futurePhase5Ui(testInfo)
+  test(SCENARIO_TITLES[0], async ({ page }) => {
     for (const availability of [
       { shadow: true, thesis: true, forecast: true },
       { shadow: false, thesis: true, forecast: true },
@@ -389,8 +501,7 @@ test.describe('Phase 05 optional enhancement browser contracts', () => {
     }
   })
 
-  test(SCENARIO_TITLES[1], async ({ page }, testInfo) => {
-    futurePhase5Ui(testInfo)
+  test(SCENARIO_TITLES[1], async ({ page }) => {
     const telemetry = await installPhase5Fixture(page, { shadowState: 'populated' })
     await page.goto('/backtest')
     const panel = page.getByRole('region', { name: SHADOW_HEADING })
@@ -399,28 +510,28 @@ test.describe('Phase 05 optional enhancement browser contracts', () => {
     await expect(panel.getByText(/支持.*CSV.*XLSX.*大小.*行数.*Asia\/Shanghai/)).toBeVisible()
     const file = panel.getByLabel('选择本地成交日志')
     await file.setInputFiles({ name: 'executions.csv', mimeType: 'text/csv', buffer: Buffer.from('symbol,side,time,quantity,price\n600519.SH,buy,2026-07-15 09:31,100,1450') })
-    await expect(panel.getByRole('status')).toContainText(/executions\.csv|正在解析日志/)
+    await expect(panel.getByRole('status').filter({ hasText: /executions\.csv|正在解析日志/ })).toBeVisible()
     await expectSemanticTable(panel, 'Shadow 字段映射预览')
-    await expect(panel.getByText('仅为预览')).toBeVisible()
-    await expect(panel.getByText(/重复组/)).toBeVisible()
-    await expect(panel.getByText(/partial fill|部分成交/i)).toBeVisible()
+    await expect(panel.getByText(/^仅为预览；/)).toBeVisible()
+    const previewNotice = panel.getByText(/^仅为预览；重复组和 partial fill/)
+    await expect(previewNotice).toContainText('重复组')
+    await expect(previewNotice).toContainText(/partial fill|部分成交/i)
     await panel.getByRole('button', { name: '确认不可变导入' }).click()
     const dialog = page.getByRole('dialog', { name: '确认不可变导入' })
     await expect(dialog).toContainText(/原文件名|来源标签|时区|映射|行数|不可覆写/)
     await dialog.getByRole('button', { name: '确认不可变导入' }).click()
     await expectSemanticTable(panel, 'Shadow 不可变导入批次')
     for (const text of ['原始批次 1', '同内容批次 2', '修正批次 3', 'same content', '修正自']) await expect(panel.getByText(text).first()).toBeVisible()
-    await expect(panel.getByText(/1 行未纳入/)).toBeVisible()
+    await expect(panel.getByText(/1 行未纳入/).first()).toBeVisible()
     await expect(panel.getByText(/\/tmp\/|C:\\|account_secret|broker_token|raw_path/i)).toHaveCount(0)
     const evidence = await panel.getByRole('button', { name: '创建新证据集' })
     await evidence.click()
-    await expect(panel.getByText(LONG_ID)).toBeVisible()
+    await expect(panel.getByText(LONG_ID).first()).toBeVisible()
     expect(telemetry.mutationBodies.some(entry => entry.path.endsWith('/imports/confirm'))).toBeTruthy()
     expectNoAuthorityRequests(telemetry)
   })
 
-  test(SCENARIO_TITLES[2], async ({ page }, testInfo) => {
-    futurePhase5Ui(testInfo)
+  test(SCENARIO_TITLES[2], async ({ page }) => {
     const telemetry = await installPhase5Fixture(page, { shadowState: 'populated' })
     await page.goto('/backtest')
     const panel = page.getByRole('region', { name: SHADOW_HEADING })
@@ -436,27 +547,31 @@ test.describe('Phase 05 optional enhancement browser contracts', () => {
     const dialog = page.getByRole('dialog', { name: '保留为 Shadow 研究候选' })
     await expect(dialog).toContainText('不会注册或启用策略，也不会创建监控、计划或市场动作。')
     await dialog.getByRole('button', { name: '保留为 Shadow 研究候选' }).click()
-    await expect(panel.getByRole('status')).toContainText(/研究候选|已保留/)
+    await expect(panel.getByText('Shadow 研究候选已保留；未注册或启用策略。')).toBeVisible()
     await expect(page.getByRole('button', { name: /启用策略|同步持仓|添加监控|生成交易计划|据此交易/ })).toHaveCount(0)
     expect(telemetry.mutationBodies.filter(entry => entry.path.endsWith('/retain'))).toHaveLength(1)
     expectNoAuthorityRequests(telemetry)
   })
 
-  test(SCENARIO_TITLES[3], async ({ page }, testInfo) => {
-    futurePhase5Ui(testInfo)
+  test(SCENARIO_TITLES[3], async ({ page }) => {
     const telemetry = await installPhase5Fixture(page, { shadowState: 'terminal' })
     await page.setViewportSize({ width: 375, height: 844 })
     await page.goto('/backtest')
     const panel = page.getByRole('region', { name: SHADOW_HEADING })
     await requireSurface(panel.getByRole('heading', { name: SHADOW_HEADING, exact: true }))
     await expect(panel.getByText('存在较新成交批次；当前候选仍基于已冻结证据。')).toBeVisible()
-    await expect(panel.getByText('Shadow 候选蒸馏失败')).toBeVisible()
-    await expect(panel.getByText('Shadow 样本内/样本外评估失败')).toBeVisible()
-    await expect(panel.getByText(/timeout|resource_terminated/)).toHaveCount(2)
-    await expect(panel.getByRole('button', { name: '基于相同证据集创建新蒸馏运行' })).toBeVisible()
-    await expect(panel.getByRole('button', { name: '创建新评估运行' })).toBeVisible()
-    await expect(panel.getByText(new RegExp('a{40}'))).toBeVisible()
-    const identifier = panel.getByText(LONG_ID).first()
+    await panel.getByRole('button', { name: '基于相同证据集创建新蒸馏运行' }).click()
+    await expect(panel.getByRole('heading', { name: 'Shadow 候选蒸馏失败', exact: true })).toBeVisible()
+    await expect(panel.getByRole('heading', { name: 'Shadow 样本内/样本外评估失败', exact: true }).first()).toBeVisible()
+    const evaluationFailures = panel.getByRole('heading', { name: 'Shadow 样本内/样本外评估失败', exact: true })
+    await expect(evaluationFailures).toHaveCount(2)
+    await expect(evaluationFailures.nth(0).locator('..')).toContainText('timeout')
+    await expect(evaluationFailures.nth(1).locator('..')).toContainText('resource_terminated')
+    await expect(panel.getByRole('button', { name: '基于相同证据集创建新蒸馏运行' }).first()).toBeVisible()
+    await expect(panel.getByRole('button', { name: '创建新评估运行' }).first()).toBeVisible()
+    await panel.getByText('查看规则与限制').click()
+    await expect(panel.getByText(new RegExp('a{40}')).first()).toBeVisible()
+    const identifier = panel.getByText(LONG_ID).filter({ visible: true }).last()
     expect(await identifier.evaluate(element => getComputedStyle(element).overflowWrap)).toMatch(/anywhere|break-word/)
     const table = panel.getByRole('table').first()
     const wrapper = table.locator('xpath=..')
@@ -468,8 +583,7 @@ test.describe('Phase 05 optional enhancement browser contracts', () => {
     expectNoAuthorityRequests(telemetry)
   })
 
-  test(SCENARIO_TITLES[4], async ({ page }, testInfo) => {
-    futurePhase5Ui(testInfo)
+  test(SCENARIO_TITLES[4], async ({ page }) => {
     const telemetry = await installPhase5Fixture(page, { thesisState: 'populated' })
     await selectStock(page)
     await page.goto('/stock-analysis')
@@ -478,6 +592,7 @@ test.describe('Phase 05 optional enhancement browser contracts', () => {
     await expect(panel.getByText(`${STOCK.name} ${STOCK.symbol}`)).toBeVisible()
     await expect(panel.getByText('自动检查只能提出待确认结论，不能替你改变论点状态。')).toBeVisible()
     await panel.getByRole('button', { name: '基于此版本创建新版本' }).click()
+    await panel.getByLabel('版本变更理由').fill('追加年度报告证据并调整估值区间')
     await panel.getByLabel('估值下限').fill('1720')
     await panel.getByLabel('估值上限').fill('1380')
     await panel.getByRole('button', { name: '进入审阅' }).click()
@@ -491,14 +606,14 @@ test.describe('Phase 05 optional enhancement browser contracts', () => {
     await expect(panel.getByLabel('条件 1 检查周期')).toHaveValue('weekly')
     await expect(panel.getByLabel('条件 2 检查周期')).toHaveValue('quarterly')
     await expect(panel.getByLabel(/统一检查周期|全局 cadence/i)).toHaveCount(0)
+    await panel.getByRole('row', { name: /^版本 1 / }).getByRole('button', { name: '查看完整版本' }).click()
     await expect(panel.getByText('历史版本，不再执行定期检查')).toBeVisible()
     await expectSemanticTable(panel, '投资论点版本历史')
     await expect(panel.getByText(/目标价|自由文本条件/)).toHaveCount(0)
     expectNoAuthorityRequests(telemetry)
   })
 
-  test(SCENARIO_TITLES[5], async ({ page }, testInfo) => {
-    futurePhase5Ui(testInfo)
+  test(SCENARIO_TITLES[5], async ({ page }) => {
     const telemetry = await installPhase5Fixture(page, { thesisState: 'pending' })
     await selectStock(page)
     await page.goto('/stock-analysis')
@@ -508,15 +623,14 @@ test.describe('Phase 05 optional enhancement browser contracts', () => {
     const insufficient = panel.getByRole('row', { name: /证据不足/ })
     await expect(insufficient).toContainText(/缺少已披露季度值/)
     await expect(insufficient.getByText(/^0(?:\.0+)?$/)).toHaveCount(0)
-    for (const label of ['到期时间', '检查时间', '观测值', '证据', '版本', '检查周期']) await expect(panel.getByRole('columnheader', { name: label })).toBeVisible()
+    for (const label of ['到期时间', '检查时间', '观测值', '证据', '版本', '检查周期']) await expect(panel.getByRole('columnheader', { name: label, exact: true })).toBeVisible()
     await expect(panel.getByRole('heading', { name: '待确认失效结论' })).toHaveCount(1)
     await expect(panel.getByText('当前官方状态未改变，等待你的确认。')).toBeVisible()
     expect(telemetry.mutationBodies).toEqual([])
     expectNoAuthorityRequests(telemetry)
   })
 
-  test(SCENARIO_TITLES[6], async ({ page }, testInfo) => {
-    futurePhase5Ui(testInfo)
+  test(SCENARIO_TITLES[6], async ({ page }) => {
     const telemetry = await installPhase5Fixture(page, { thesisState: 'conflict' })
     await selectStock(page)
     await page.goto('/stock-analysis')
@@ -550,8 +664,7 @@ test.describe('Phase 05 optional enhancement browser contracts', () => {
     expectNoAuthorityRequests(telemetry)
   })
 
-  test(SCENARIO_TITLES[7], async ({ page }, testInfo) => {
-    futurePhase5Ui(testInfo)
+  test(SCENARIO_TITLES[7], async ({ page }) => {
     const telemetry = await installPhase5Fixture(page, { forecastGate: 'digest_mismatch' })
     await selectStock(page)
     await page.goto('/stock-analysis')
@@ -559,9 +672,9 @@ test.describe('Phase 05 optional enhancement browser contracts', () => {
     await expect(panel.getByRole('heading', { name: 'Kronos 概率预测' })).toBeVisible()
     await expect(panel.getByText('预测是不确定性研究记录，不会自动改变论点、策略、计划、监控或市场动作。')).toBeVisible()
     const horizon = panel.getByRole('radiogroup', { name: '预测范围' })
-    expect(await horizon.getByRole('radio').allTextContents()).toEqual(expect.arrayContaining(['5', '20', '60']))
+    for (const value of [5, 20, 60]) await expect(horizon.getByRole('radio', { name: `${value} 个交易日`, exact: true })).toBeVisible()
     expect(await horizon.getByRole('radio').count()).toBe(3)
-    for (const text of ['Kronos-mini', 'Kronos-Tokenizer-2k', 'f4e6869', '26966d0', LONG_ID, '完整性校验']) await expect(panel.getByText(new RegExp(text))).toBeVisible()
+    for (const text of ['Kronos-mini', 'Kronos-Tokenizer-2k', 'f4e6869', '26966d0', LONG_ID, '完整性校验']) await expect(panel.getByText(new RegExp(text)).filter({ visible: true }).first()).toBeVisible()
     await expect(panel.getByRole('button', { name: '生成概率预测' })).toBeDisabled()
     await expect(panel.getByRole('alert')).toContainText(/digest mismatch|完整性/)
     await expect(panel.getByRole('button', { name: /下载|latest|绕过|远程/ })).toHaveCount(0)
@@ -570,15 +683,14 @@ test.describe('Phase 05 optional enhancement browser contracts', () => {
     expectNoAuthorityRequests(telemetry)
   })
 
-  test(SCENARIO_TITLES[8], async ({ page }, testInfo) => {
-    futurePhase5Ui(testInfo)
+  test(SCENARIO_TITLES[8], async ({ page }) => {
     const telemetry = await installPhase5Fixture(page, { forecastState: 'populated' })
     await selectStock(page)
     await page.goto('/stock-analysis')
     const panel = await openAnalysisTab(page, FORECAST_TAB)
     for (const quantile of ['P10', 'P50', 'P90']) await expect(panel.getByText(quantile, { exact: true }).first()).toBeVisible()
     await expect(panel.getByText('32 条采样路径')).toBeVisible()
-    await expect(panel.getByText('20 个交易日')).toBeVisible()
+    await expect(panel.getByRole('radio', { name: '20 个交易日', exact: true })).toBeChecked()
     await expectSemanticTable(panel, '逐日 P10 P50 P90 分位数')
     await expect(panel.getByRole('img', { name: /历史 close.*P10.*P90.*P50.*actual/i })).toBeVisible()
     const pathChoices = panel.getByRole('checkbox', { name: /采样路径/ })
@@ -588,15 +700,14 @@ test.describe('Phase 05 optional enhancement browser contracts', () => {
     await expectSemanticTable(panel, '选中采样路径 OHLCV')
     await panel.getByText('查看检查点与输入谱系').click()
     for (const text of ['67b630e', 'f4e6869', '26966d0', 'mini/2k', LONG_ID, 'daily OHLCV']) await expect(panel.getByText(new RegExp(text)).first()).toBeVisible()
-    await expect(panel.getByText(/local_model_dir|\/tmp\/|worker command|token/i)).toHaveCount(0)
+    await expect(panel.getByText(/local_model_dir|\/tmp\/|worker command|raw token|broker_token|account_secret/i)).toHaveCount(0)
     await page.evaluate(() => document.querySelectorAll('canvas').forEach(canvas => canvas.remove()))
     await expect(panel.getByRole('table', { name: '逐日 P10 P50 P90 分位数' })).toBeVisible()
     await expect(panel.getByRole('table', { name: '选中采样路径 OHLCV' })).toBeVisible()
     expectNoAuthorityRequests(telemetry)
   })
 
-  test(SCENARIO_TITLES[9], async ({ page }, testInfo) => {
-    futurePhase5Ui(testInfo)
+  test(SCENARIO_TITLES[9], async ({ page }) => {
     const telemetry = await installPhase5Fixture(page, { forecastState: 'terminal' })
     await selectStock(page)
     await page.goto('/stock-analysis')
@@ -604,13 +715,15 @@ test.describe('Phase 05 optional enhancement browser contracts', () => {
     await expect(panel.getByText('已有更新行情；此预测仍保留其原始数据截至日。')).toBeVisible()
     const immutableBefore = await panel.getByRole('table', { name: '逐日 P10 P50 P90 分位数' }).textContent()
     await panel.getByRole('button', { name: '基于相同配置创建新预测' }).click()
-    await expect(panel.getByText(/预测 F-001/)).toBeVisible()
+    await expect(panel.getByRole('heading', { name: '预测 F-001', exact: true })).toBeVisible()
     expect(await panel.getByRole('table', { name: '逐日 P10 P50 P90 分位数' }).textContent()).toBe(immutableBefore)
     await expect(panel.getByText('进度连接已中断，正在按记录状态重新连接。')).toBeVisible()
-    for (const terminal of ['timeout', 'OOM', 'shape failure', 'artifact failure']) await expect(panel.getByText(new RegExp(terminal, 'i'))).toBeVisible()
-    await expect(panel.getByText('预测未完成')).toBeVisible()
+    await expect(panel.getByText('预测未完成', { exact: true })).toBeVisible()
     const terminalRows = panel.getByRole('row', { name: /timeout|OOM|shape failure|artifact failure/i })
     expect(await terminalRows.count()).toBe(4)
+    for (const terminal of ['timeout', 'OOM', 'shape failure', 'artifact failure']) {
+      await expect(terminalRows.filter({ hasText: new RegExp(terminal, 'i') })).toHaveCount(1)
+    }
     for (let index = 0; index < await terminalRows.count(); index += 1) {
       await expect(terminalRows.nth(index).getByText(/P10|P50|P90/)).toHaveCount(0)
     }
@@ -618,32 +731,32 @@ test.describe('Phase 05 optional enhancement browser contracts', () => {
     expectNoAuthorityRequests(telemetry)
   })
 
-  test(SCENARIO_TITLES[10], async ({ page }, testInfo) => {
-    futurePhase5Ui(testInfo)
+  test(SCENARIO_TITLES[10], async ({ page }) => {
     const telemetry = await installPhase5Fixture(page, { forecastState: 'partial' })
     await selectStock(page)
     await page.goto('/stock-analysis')
     const panel = await openAnalysisTab(page, FORECAST_TAB)
     await expectSemanticTable(panel, '预测校准证据')
     const evaluated = panel.getByRole('row', { name: /5 个交易日.*已评估/ })
-    for (const text of ['1492', '12.4', '100%', '2.1', '4.2', '1.7', '1', '2026-07-22']) await expect(evaluated.getByText(new RegExp(text))).toBeVisible()
+    for (const text of ['1492', '12.4', '100%', '2.1', '4.2', '1.7', '1', '2026-07-22']) await expect(evaluated).toContainText(text)
     await expect(panel.getByText('尚未到达目标交易日，校准将在受治理实际值可用后追加。')).toBeVisible()
     const missing = panel.getByRole('row', { name: /60 个交易日/ })
     await expect(missing).toContainText('暂不可评估：缺少受治理实际值。')
     await expect(missing.getByText(/^0(?:\.0+)?$/)).toHaveCount(0)
     await expect(panel.getByText(LONG_ID).first()).toBeVisible()
-    await expect(panel.getByText(/f4e6869/)).toBeVisible()
+    await panel.getByText('查看检查点与输入谱系').click()
+    await expect(panel.getByText('f4e6869', { exact: true })).toBeVisible()
     expect(telemetry.mutationBodies).toEqual([])
     expectNoAuthorityRequests(telemetry)
   })
 
-  test(SCENARIO_TITLES[11], async ({ page }, testInfo) => {
-    futurePhase5Ui(testInfo)
+  test(SCENARIO_TITLES[11], async ({ page }) => {
     const telemetry = await installPhase5Fixture(page, { thesisState: 'pending', forecastState: 'populated' })
     for (const viewport of [{ width: 1440, height: 960 }, { width: 1024, height: 900 }, { width: 375, height: 844 }]) {
       await page.setViewportSize(viewport)
       await page.emulateMedia({ reducedMotion: 'reduce', colorScheme: 'dark' })
       await page.goto('/backtest')
+      await page.evaluate(() => document.documentElement.classList.add('dark'))
       const shadow = page.getByRole('region', { name: SHADOW_HEADING })
       await requireSurface(shadow.getByRole('heading', { name: SHADOW_HEADING, exact: true }))
       const file = shadow.getByLabel('选择本地成交日志')
@@ -681,7 +794,7 @@ test.describe('Phase 05 optional enhancement browser contracts', () => {
       expect(await contrastRatio(forecast.getByRole('heading', { name: 'Kronos 概率预测' }))).toBeGreaterThanOrEqual(4.5)
       await page.emulateMedia({ reducedMotion: 'no-preference', colorScheme: 'light' })
       await page.evaluate(() => document.documentElement.classList.remove('dark'))
-      expect(await contrastRatio(forecast.getByText('P50', { exact: true }).first())).toBeGreaterThanOrEqual(4.5)
+      await expect.poll(() => contrastRatio(forecast.getByText('P50', { exact: true }).first())).toBeGreaterThanOrEqual(4.5)
       const fontContracts = await page.locator('[data-phase5-typography]').evaluateAll(elements => elements.map(element => ({ size: getComputedStyle(element).fontSize, weight: getComputedStyle(element).fontWeight })))
       expect(new Set(fontContracts.map(item => item.size))).toEqual(new Set(['24px', '16px', '14px', '12px']))
       expect(new Set(fontContracts.map(item => item.weight))).toEqual(new Set(['400', '600']))
@@ -690,8 +803,7 @@ test.describe('Phase 05 optional enhancement browser contracts', () => {
     expectNoAuthorityRequests(telemetry)
   })
 
-  test(SCENARIO_TITLES[12], async ({ page }, testInfo) => {
-    futurePhase5Ui(testInfo)
+  test(SCENARIO_TITLES[12], async ({ page }) => {
     const telemetry = await installPhase5Fixture(page, { shadowState: 'populated', thesisState: 'pending', forecastState: 'populated' })
     await page.goto('/backtest')
     const shadow = page.getByRole('region', { name: SHADOW_HEADING })

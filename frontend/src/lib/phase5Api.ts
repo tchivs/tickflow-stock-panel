@@ -764,7 +764,7 @@ export const phase5Api = {
   forecastJobs: (instrument: string, offset = 0, limit = 25) =>
     request<{ jobs: ForecastJob[]; page: PageMeta }>(`/api/forecast/instruments/${encodeURIComponent(instrument)}/jobs?${pageParams(offset, limit)}`),
   forecastRecords: (instrument: string, offset = 0, limit = 25) =>
-    request<{ records: ForecastRecord[]; page?: PageMeta }>(`/api/forecast/instruments/${encodeURIComponent(instrument)}/records?${pageParams(offset, limit)}`),
+    request<{ records: ForecastRecord[]; page?: PageMeta; latest_governed_session_id?: string | null }>(`/api/forecast/instruments/${encodeURIComponent(instrument)}/records?${pageParams(offset, limit)}`),
   forecastRecord: (recordId: string) =>
     request<{ record: ForecastRecord }>(`/api/forecast/records/${encodeURIComponent(recordId)}`),
   forecastPaths: async (recordId: string, offset = 0, limit = 100) => {

@@ -323,11 +323,17 @@ export function ForecastPanel({ instrument, title }: ForecastPanelProps) {
   const pathForTable = visibleSelectedPaths[0] ?? selectedPathsPage[0]
   const quantiles = selectedRecord ? quantileRows(selectedRecord) : []
   const calibration = selectedRecord ? calibrationViews(selectedRecord, calibrationQuery.data?.calibration ?? []) : []
+  const latestGovernedSession = recordsQuery.data?.latest_governed_session_id
+  const selectedRecordAsOf = selectedRecord ? recordAsOf(selectedRecord) : null
+  const latestGovernedTime = latestGovernedSession ? Date.parse(latestGovernedSession) : Number.NaN
+  const selectedRecordTime = selectedRecordAsOf ? Date.parse(selectedRecordAsOf) : Number.NaN
+  const staleRecord = Number.isFinite(latestGovernedTime) && Number.isFinite(selectedRecordTime) && latestGovernedTime > selectedRecordTime
 
 
   const taskJob = task.terminalJob ?? createJob.data?.job ?? null
   const progressStage = task.progress?.stage ?? taskJob?.stage
   const showReconnect = task.connection === 'reconnecting' || task.transportError != null
+  const historicalTerminalJob = jobsQuery.data?.jobs.find(job => !['queued', 'running', 'completed'].includes(job.status)) ?? null
   const pageCount = Math.max(1, Math.ceil(totalPaths / PATH_PAGE_SIZE))
 
   function togglePath(id: string) {
@@ -362,6 +368,7 @@ export function ForecastPanel({ instrument, title }: ForecastPanelProps) {
     {selectedRecord && <article className="space-y-5" aria-labelledby={`${headingId}-result`}>
       <div className="flex flex-wrap items-start justify-between gap-3"><div><h3 id={`${headingId}-result`} className="text-base font-semibold">{recordLabel(selectedRecord)}</h3><p className="mt-1 text-xs text-secondary">completed · 数据截至 {recordAsOf(selectedRecord)} · {selectedRecord.horizon} 个交易日 · {selectedRecord.sample_count} 个样本</p></div><button type="button" onClick={() => { setHorizon(selectedRecord.horizon); setCatalogId(selectedRecord.catalog_id); createJob.mutate() }} disabled={!gateVerified || createJob.isPending} className={`${BUTTON} border border-border bg-elevated disabled:opacity-50`}>基于相同配置创建新预测</button></div>
       {recordWarnings(selectedRecord).map(warning => <p key={warning} role="alert" className="rounded-input bg-warning/10 p-3 text-warning">validation warning：{warning}</p>)}
+      {staleRecord && <p role="status" className="rounded-input border border-warning/50 bg-warning/10 p-3 text-warning">已有更新行情；此预测仍保留其原始数据截至日。</p>}
       <QuantileSummary rows={quantiles} asOf={recordAsOf(selectedRecord)} />
       <ForecastChart rows={quantiles} paths={visibleSelectedPaths} />
       <QuantileTable rows={quantiles} />
@@ -377,6 +384,7 @@ export function ForecastPanel({ instrument, title }: ForecastPanelProps) {
       <CalibrationTable rows={calibration} />
     </article>}
 
+    {historicalTerminalJob && historicalTerminalJob.id !== taskJob?.id ? <TerminalError job={historicalTerminalJob} /> : null}
     {jobsQuery.isError && <LocalError title="预测状态连接中断" detail={`预测状态连接中断：${errorReason(jobsQuery.error)}。已显示的历史和最后已知任务阶段将保留；连接中断不代表推理失败，也不会重复启动任务。`} action="重新连接并刷新任务状态" onRetry={() => jobsQuery.refetch()} compact />}
     <ForecastHistory records={records} jobs={jobsQuery.data?.jobs ?? []} selectedRecordId={selectedRecord?.id ?? null} onSelect={id => { setSelectedRecordId(id); setPathPage(0); setSelectedPathIds([]) }} />
   </section>
@@ -384,7 +392,7 @@ export function ForecastPanel({ instrument, title }: ForecastPanelProps) {
 
 
 function PanelHeading({ id, status }: { id: string; status: '可用' | '不可用' }) {
-  return <div className="flex flex-wrap items-center gap-3"><h2 id={id} data-phase5-typography className="text-base font-semibold">Kronos 概率预测</h2><span className={`rounded-full px-2 py-1 text-xs ${status === '可用' ? 'bg-accent/10 text-accent' : 'bg-warning/10 text-warning'}`}>{status}</span></div>
+  return <div className="flex flex-wrap items-center gap-3"><h2 id={id} data-phase5-typography className="text-base font-semibold">Kronos 概率预测</h2><span data-phase5-typography className={`rounded-full px-2 py-1 text-xs font-normal ${status === '可用' ? 'bg-accent/10 text-accent' : 'bg-warning/10 text-warning'}`}>{status}</span></div>
 }
 
 function PanelLoading({ label }: { label: string }) {
@@ -406,7 +414,21 @@ function TerminalError({ job }: { job: ForecastJob }) {
 function QuantileSummary({ rows, asOf }: { rows: QuantileRow[]; asOf: string }) {
   const last = rows.at(-1)
   const first = rows[0]
-  return <section aria-labelledby="forecast-quantile-summary"><h3 id="forecast-quantile-summary" className="text-base font-semibold">终点分位数摘要</h3><p className="mt-1 text-xs text-secondary">相对数据截至日 {asOf}；P50 是分位数中位路径，不是确定结果。</p><div className="mt-3 grid gap-2 sm:grid-cols-3">{(['p10', 'p50', 'p90'] as const).map(key => <div key={key} className="rounded-input border border-border p-3"><p className={`font-semibold ${key === 'p50' ? 'text-accent' : 'text-foreground'}`}>{key.toUpperCase()}</p><p className="mt-1 font-mono text-base tabular-nums">{last?.[key] ?? '—'} {last?.unit ?? 'CNY'}</p><p className="text-xs text-secondary">目标交易日 {last?.session ?? '—'} · 首日 {first?.[key] ?? '—'}</p></div>)}</div></section>
+  return (
+    <section aria-labelledby="forecast-quantile-summary">
+      <h3 id="forecast-quantile-summary" className="text-base font-semibold">终点分位数摘要</h3>
+      <p className="mt-1 text-xs text-secondary">相对数据截至日 {asOf}；P50 是分位数中位路径，不是确定结果。</p>
+      <div className="mt-3 grid gap-2 sm:grid-cols-3">
+        {(['p10', 'p50', 'p90'] as const).map(key => (
+          <div key={key} className="rounded-input border border-border p-3">
+            <p className="font-semibold text-foreground">{key.toUpperCase()}</p>
+            <p className="mt-1 font-mono text-base tabular-nums">{last?.[key] ?? '—'} {last?.unit ?? 'CNY'}</p>
+            <p className="text-xs text-secondary">目标交易日 {last?.session ?? '—'} · 首日 {first?.[key] ?? '—'}</p>
+          </div>
+        ))}
+      </div>
+    </section>
+  )
 }
 
 function ForecastChart({ rows, paths }: { rows: QuantileRow[]; paths: PathView[] }) {

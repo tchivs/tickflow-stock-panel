@@ -437,7 +437,7 @@ export function ShadowAccount() {
 
           <section aria-labelledby="shadow-import-heading">
             <h3 id="shadow-import-heading" className="text-base font-semibold">1 选择日志 → 2 映射与预览 → 3 确认不可变导入</h3>
-            <p className="mt-2 max-w-[70ch] text-sm text-secondary">支持 CSV 与 XLSX；单文件上限 8 MB、预览最多 50 行，源时区固定审阅为 Asia/Shanghai。文件仅发送到当前自托管服务，不提供手工逐笔录入。</p>
+            <p className="mt-2 max-w-[70ch] text-sm text-secondary">支持 CSV 与 XLSX；文件大小上限 8 MB、预览行数最多 50 行，源时区固定审阅为 Asia/Shanghai。文件仅发送到当前自托管服务，不提供手工逐笔录入。</p>
             <div className="mt-4 grid gap-4 lg:grid-cols-2">
               <label className="text-sm text-secondary">选择本地成交日志
                 <input aria-label="选择本地成交日志" type="file" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" className={`${CONTROL_CLASS} mt-1 block w-full cursor-pointer file:mr-3 file:rounded-btn file:border-0 file:bg-accent file:px-3 file:py-2 file:text-sm file:font-semibold file:text-white`} onChange={event => chooseFile(event.target.files?.[0] ?? null)} />
@@ -540,6 +540,7 @@ export function ShadowAccount() {
               {currentCandidate ? (
                 <article className="mt-4 space-y-5">
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between"><label className="text-sm text-secondary">当前只读候选<select value={currentCandidate.id} className={`${CONTROL_CLASS} mt-1 w-full min-w-64`} onChange={event => setSelectedCandidateId(event.target.value)}>{candidates.map(item => <option key={item.id} value={item.id}>{item.label ?? item.id}</option>)}</select></label><p className="text-xs text-secondary">资格：{retainable ? '服务端证据满足保留前提' : '尚不具备保留资格'}</p></div>
+                  {!distillCandidate.isError ? <button type="button" className={BUTTON_CLASS} disabled={distillCandidate.isPending} onClick={() => distillCandidate.mutate({ evidenceSetId: currentEvidence.id })}>{distillCandidate.isPending ? '正在蒸馏候选…' : '基于相同证据集创建新蒸馏运行'}</button> : null}
                   <OverflowTable instructionId="shadow-rules-scroll-instruction">
                     <table className="min-w-[980px] w-full">
                       <caption className="sr-only">Shadow 候选规则与限制</caption>

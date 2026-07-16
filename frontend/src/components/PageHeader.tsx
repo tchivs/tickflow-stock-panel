@@ -18,7 +18,7 @@ export function PageHeader({ title, subtitle, titleExtra, right, className }: Pr
       )}
     >
       <div className="flex items-center gap-2">
-        <h1 className="text-lg font-semibold tracking-tight">{title}</h1>
+        <h1 data-phase5-typography className="text-[24px] font-semibold leading-[1.25] tracking-tight text-foreground">{title}</h1>
         {titleExtra}
         {subtitle && <span className="text-xs text-muted">{subtitle}</span>}
       </div>

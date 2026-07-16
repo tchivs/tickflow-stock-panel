@@ -133,7 +133,7 @@ export function StockAnalysis() {
         </div>
 
         {/* 主体:左侧当前个股看板 + 右侧常驻历史报告 */}
-        <div className="grid grid-cols-[1fr_288px] gap-6 items-start">
+        <div className="grid grid-cols-1 items-start gap-6 xl:grid-cols-[minmax(0,1fr)_288px]">
           <div className="min-w-0">
             {!symbol ? (
               <EmptyState
@@ -255,7 +255,7 @@ function HistorySidebar() {
   const { reports, loaded } = useHistoryReports()
 
   return (
-    <aside className="self-start sticky top-0">
+    <aside className="self-start xl:sticky xl:top-0">
       <div className="rounded-card border border-border/60 bg-surface/40 overflow-hidden">
         <div className="px-3 py-2.5 border-b border-border/40 flex items-center gap-2">
           <HistoryIcon className="h-3.5 w-3.5 text-sky-400 shrink-0" />
