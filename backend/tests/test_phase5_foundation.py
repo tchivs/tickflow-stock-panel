@@ -334,6 +334,7 @@ def test_migration_enforces_forecast_job_state_machine_and_column_guard(tmp_path
 def test_artifact_bytes_are_atomic_root_contained_and_descriptor_verified(
     tmp_path: Path,
 ) -> None:
+    import stat
     from app.optional_artifacts import ManagedImmutableArtifactStore
 
     store = ManagedImmutableArtifactStore(tmp_path / "managed")
@@ -349,6 +350,10 @@ def test_artifact_bytes_are_atomic_root_contained_and_descriptor_verified(
     assert descriptor == store.descriptor(descriptor.artifact_id)
     assert store.load_bytes(descriptor) == b"immutable phase 05 payload"
     assert (store.root / descriptor.relative_path).resolve().is_relative_to(store.root)
+    payload_path = store.root / descriptor.relative_path
+    assert stat.S_IMODE(store.root.stat().st_mode) == 0o700
+    assert stat.S_IMODE(payload_path.stat().st_mode) == 0o600
+    assert stat.S_IMODE((payload_path.parent / "metadata.json").stat().st_mode) == 0o600
     assert not list(store.root.glob(".*.tmp"))
 
 
