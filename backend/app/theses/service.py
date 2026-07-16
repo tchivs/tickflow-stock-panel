@@ -6,7 +6,8 @@ from hashlib import sha256
 import json
 from typing import Any
 
-from app.theses.schemas import ConditionCheckResult
+from app.theses import projections
+from app.theses.schemas import ConditionCheckResult, ThesisRevisionRequest, ThesisVersionRequest
 
 
 class ThesisConflictError(ValueError):
@@ -19,6 +20,70 @@ class ThesisService:
     def __init__(self, *, repository: Any, evidence_resolver: Any) -> None:
         self._repository = repository
         self._evidence_resolver = evidence_resolver
+
+    def create_version(
+        self, *, request: ThesisVersionRequest, created_by: str
+    ) -> dict[str, Any]:
+        return self._repository.create_version(request=request, created_by=created_by)
+
+    def revise_version(
+        self,
+        *,
+        thesis_id: str,
+        request: ThesisRevisionRequest,
+        created_by: str,
+    ) -> dict[str, Any]:
+        return self._repository.revise_version(
+            thesis_id=thesis_id,
+            request=request,
+            created_by=created_by,
+        )
+
+    def get_version(self, version_id: str) -> dict[str, Any] | None:
+        return self._repository.get_version(version_id)
+
+    def get_pending(self, pending_id: str) -> dict[str, Any] | None:
+        return self._repository.get_pending(pending_id)
+
+    def versions_for_instrument(self, instrument: str) -> list[dict[str, Any]]:
+        current = self._repository.current_version_for_instrument(instrument)
+        if current is None:
+            return []
+        return self._repository.list_versions(current["thesis_id"])
+
+    def version_projection(self, record: Mapping[str, Any]) -> dict[str, Any]:
+        schedules: dict[str, Mapping[str, Any] | None] = {}
+        checks: dict[str, Sequence[Mapping[str, Any]]] = {}
+        for condition in record["conditions"]:
+            condition_id = str(condition["id"])
+            schedules[condition_id] = self._repository.get_schedule(condition_id)
+            checks[condition_id] = self._repository.list_checks(condition_id)
+        return projections.version(record, schedules=schedules, checks=checks)
+
+    def checks_for_instrument(self, instrument: str) -> list[dict[str, Any]]:
+        checks = [
+            projections.check(item)
+            for version in self.versions_for_instrument(instrument)
+            for condition in version["conditions"]
+            for item in self._repository.list_checks(condition["id"])
+        ]
+        return sorted(checks, key=lambda item: (item["due_at"], item["id"]), reverse=True)
+
+    def pending_for_instrument(self, instrument: str) -> list[dict[str, Any]]:
+        current = self._repository.current_version_for_instrument(instrument)
+        if current is None:
+            return []
+        return [
+            projections.pending(
+                item,
+                review=(reviews[0] if (reviews := self._repository.list_review_events(item["id"])) else None),
+            )
+            for item in self._repository.list_pending(current["thesis_id"])
+        ]
+
+    def history_for_instrument(self, instrument: str) -> dict[str, Any] | None:
+        current = self._repository.current_version_for_instrument(instrument)
+        return None if current is None else self.history(current["thesis_id"])
 
     def evaluate_due_condition(self, *, condition_id: str, due_at: str) -> dict[str, Any]:
         """Append one canonical due check and only a matched pending conclusion."""
@@ -99,52 +164,29 @@ class ThesisService:
 
     def history(self, thesis_id: str) -> dict[str, Any]:
         """Return a complete allowlisted immutable audit projection."""
-        versions: list[dict[str, Any]] = []
-        for version in self._repository.list_versions(thesis_id):
-            conditions: list[dict[str, Any]] = []
+        versions = self._repository.list_versions(thesis_id)
+        schedules: dict[str, Mapping[str, Any] | None] = {}
+        checks: dict[str, Sequence[Mapping[str, Any]]] = {}
+        for version in versions:
             for condition in version["conditions"]:
-                conditions.append(
-                    {
-                        **condition,
-                        "schedule": self._safe_schedule(self._repository.get_schedule(condition["id"])),
-                        "checks": self._repository.list_checks(condition["id"]),
-                    }
-                )
-            versions.append({**version, "conditions": conditions})
-        pending_history: list[dict[str, Any]] = []
-        for pending in self._repository.list_pending(thesis_id):
-            reviews = self._repository.list_review_events(pending["id"])
-            review = None
-            if reviews:
-                item = reviews[0]
-                review = {
-                    "id": item["id"],
-                    "decision": item["decision"],
-                    "rationale": item["rationale"],
-                    "created_at": item["created_at"],
-                }
-            pending_history.append({**pending, "review": review})
-        official_events = [
-            {
-                "id": event["id"],
-                "pending_id": event["pending_id"],
-                "version_id": event["version_id"],
-                "condition_id": event["condition_id"],
-                "check_id": event["check_id"],
-                "evidence_fingerprint": event["evidence_fingerprint"],
-                "decision": event["decision"],
-                "rationale": event["rationale"],
-                "created_at": event["created_at"],
-            }
-            for event in self._repository.list_official_events(thesis_id)
-        ]
-        return {
-            "thesis_id": thesis_id,
-            "official_state": self.official_state(thesis_id),
-            "versions": versions,
-            "pending": pending_history,
-            "official_events": official_events,
+                condition_id = str(condition["id"])
+                schedules[condition_id] = self._repository.get_schedule(condition_id)
+                checks[condition_id] = self._repository.list_checks(condition_id)
+        pending_records = self._repository.list_pending(thesis_id)
+        reviews = {
+            str(item["id"]): self._repository.list_review_events(item["id"])
+            for item in pending_records
         }
+        return projections.history(
+            thesis_id=thesis_id,
+            official_state=self.official_state(thesis_id),
+            versions=versions,
+            schedules=schedules,
+            checks=checks,
+            pending_records=pending_records,
+            reviews=reviews,
+            official_events=self._repository.list_official_events(thesis_id),
+        )
 
     def _reviewable_pending(self, pending_id: str) -> dict[str, Any]:
         pending = self._repository.get_pending(pending_id)
@@ -199,15 +241,6 @@ class ThesisService:
                 "safe_reason": "governed_evidence_check_error",
             }
 
-    @staticmethod
-    def _safe_schedule(schedule: Mapping[str, Any] | None) -> dict[str, Any] | None:
-        if schedule is None:
-            return None
-        return {
-            "active": bool(schedule["active"]),
-            "next_due_at": schedule["next_due_at"],
-            "last_attempt_at": schedule["last_attempt_at"],
-        }
 
 
 def _principal(value: str | None) -> str:

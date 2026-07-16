@@ -203,7 +203,7 @@ class ThesisRevisionRequest(StrictThesisModel):
 
 class ReviewDecisionRequest(StrictThesisModel):
     pending_id: str = Field(min_length=1, max_length=128)
-    rationale: str = Field(min_length=1, max_length=4000)
+    rationale: str = Field(min_length=10, max_length=4000)
 
 
 class EvidenceFact(StrictThesisModel):
