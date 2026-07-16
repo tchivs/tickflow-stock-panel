@@ -104,3 +104,6 @@ ignore = ["E501"]   # 长行交给 fmt
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+markers = [
+    "kronos_model: opt-in smoke requiring human-approved pinned local Kronos assets",
+]

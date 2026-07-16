@@ -193,7 +193,12 @@ def list_records(
         for row in _repository(request).list_forecasts_for_instrument(canonical)
     ]
     page = projections.page(rows, offset=offset, limit=limit)
-    return {"records": page.pop("items"), "page": page}
+    latest_governed_session_id = _latest_governed_session_id(request)
+    return {
+        "records": page.pop("items"),
+        "page": page,
+        "latest_governed_session_id": latest_governed_session_id,
+    }
 
 
 @router.get("/records/{record_id}")
@@ -340,6 +345,24 @@ async def _event_stream(
 
 def _sse(event: str, payload: Mapping[str, str], *, event_id: str) -> str:
     return f"id: {event_id}\nevent: {event}\ndata: {json.dumps(dict(payload), separators=(',', ':'))}\n\n"
+
+
+def _latest_governed_session_id(request: Request) -> str | None:
+    repository = getattr(request.app.state, "repo", None)
+    resolve_latest = getattr(repository, "latest_daily_date", None)
+    if not callable(resolve_latest):
+        return None
+    try:
+        latest = resolve_latest()
+    except (OSError, RuntimeError, ValueError):
+        return None
+    if latest is None:
+        return None
+    strftime = getattr(latest, "strftime", None)
+    if callable(strftime):
+        return strftime("CNA-%Y%m%d")
+    text = str(latest)
+    return f"CNA-{text.replace('-', '')}" if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text) else None
 
 
 def _calibration_payload(request: Request, record: Mapping[str, object]) -> dict[str, object]:

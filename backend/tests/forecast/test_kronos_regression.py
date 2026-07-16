@@ -5,6 +5,8 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import resource
+import time
 
 import pytest
 
@@ -36,12 +38,29 @@ def test_pinned_local_kronos_mini_regression_denies_network_and_proves_exact_pro
     assert hashlib.sha256((model_dir / "model.safetensors").read_bytes()).hexdigest() == MINI_SHA256
     assert hashlib.sha256((tokenizer_dir / "model.safetensors").read_bytes()).hexdigest() == TOKENIZER_SHA256
 
+    from app.forecast.runner import ForecastLimits
+
+    limits = ForecastLimits()
+    for name in (
+        "OMP_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+        "POLARS_MAX_THREADS",
+        "TORCH_NUM_THREADS",
+    ):
+        monkeypatch.setenv(name, str(limits.thread_count))
+    thread_root = Path("/proc/self/task")
+    threads_before = len(tuple(thread_root.iterdir())) if thread_root.is_dir() else 0
+    rss_before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024
+    started_at = time.perf_counter()
+
     def denied(*_args, **_kwargs):
         raise AssertionError("real-model regression attempted network access")
     monkeypatch.setattr("socket.create_connection", denied)
 
     from app.forecast.kronos_adapter import ApprovedLocalKronosRegression
-    result = ApprovedLocalKronosRegression(
+    regression = ApprovedLocalKronosRegression(
         source_dir=source_dir,
         source_revision=SOURCE_REVISION,
         model_dir=model_dir,
@@ -51,7 +70,29 @@ def test_pinned_local_kronos_mini_regression_denies_network_and_proves_exact_pro
         tokenizer_revision=TOKENIZER_REVISION,
         tokenizer_sha256=TOKENIZER_SHA256,
         device="cpu",
-    ).run(seed=20250715, horizon=5, lookback=64, sample_count=32)
+    )
+    result = regression.run(seed=20250715, horizon=5, lookback=64, sample_count=32)
+    observed_wall_seconds = time.perf_counter() - started_at
+    observed_peak_rss_bytes = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024
+    observed_threads = len(tuple(thread_root.iterdir())) if thread_root.is_dir() else 0
+
+    import torch
+
+    resource_observation = {
+        "wall_seconds": round(observed_wall_seconds, 3),
+        "peak_rss_bytes": observed_peak_rss_bytes,
+        "rss_growth_bytes": max(0, observed_peak_rss_bytes - rss_before),
+        "os_threads_before": threads_before,
+        "os_threads_after": observed_threads,
+        "torch_threads": torch.get_num_threads(),
+        "policy_wall_seconds": limits.wall_clock_seconds,
+        "policy_address_space_bytes": limits.address_space_bytes,
+        "policy_threads": limits.thread_count,
+    }
+    print(f"kronos_resource_observation={json.dumps(resource_observation, sort_keys=True)}")
+    assert observed_wall_seconds <= limits.wall_clock_seconds
+    assert observed_peak_rss_bytes <= limits.address_space_bytes
+    assert torch.get_num_threads() <= limits.thread_count
     assert result.paths.shape == (32, 5, 6)
     assert result.quantiles.shape == (3, 5, 6)
     assert result.provenance == {

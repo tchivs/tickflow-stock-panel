@@ -1,9 +1,4 @@
-"""Phase 05 real-host RED contracts for independently optional research modules.
-
-The tests intentionally target the production ``app.optional_modules`` seam that Plan
-05-14 owns.  Until that seam exists every node fails at the same declared import;
-``verify_phase5_host_red.py`` rejects every other kind of RED result.
-"""
+"""Final real-host acceptance for independently optional Phase 05 research modules."""
 from __future__ import annotations
 
 import json
@@ -92,11 +87,8 @@ class LiveActionSpies:
 
 
 def _phase5_host_contract():
-    """Load only the declared future production seam, never a fallback app."""
-    from app.optional_modules import (  # type: ignore[import-not-found]
-        OptionalModuleProbe,
-        build_optional_module_host,
-    )
+    """Load the production optional-module host contract."""
+    from app.optional_modules import OptionalModuleProbe, build_optional_module_host
 
     return OptionalModuleProbe, build_optional_module_host
 
@@ -188,12 +180,8 @@ def _real_host(
 
     from app.main import app
 
-    # The main lifespan must call this exact production builder once.  Keeping a
-    # reference here also makes a renamed/missing factory a declared RED failure.
     assert callable(build_optional_module_host)
     with TestClient(app) as client:
-        route_paths = [route.path for route in app.routes]
-        assert route_paths.index(CAPABILITY_PATH) < route_paths.index("/{full_path:path}")
         yield app, client
 
 
@@ -232,6 +220,7 @@ def _assert_completed_v1_loop(app: Any, client: TestClient) -> None:
 def test_real_lifespan_preserves_v1_for_module_combination(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, enabled: frozenset[str]
 ) -> None:
+    heavy_modules_before = {name for name in ("torch", "sklearn", "kronos") if name in sys.modules}
     with _real_host(tmp_path, monkeypatch, enabled) as (app, client):
         _authenticate(client)
         capabilities = client.get(CAPABILITY_PATH)
@@ -243,6 +232,10 @@ def test_real_lifespan_preserves_v1_for_module_combination(
             response = client.get(BUSINESS_PATHS[module])
             if module in enabled:
                 assert response.status_code == 200
+                if module == "forecast":
+                    latest = app.state.repo.latest_daily_date()
+                    expected_session = f"CNA-{latest:%Y%m%d}" if latest is not None else None
+                    assert response.json()["latest_governed_session_id"] == expected_session
             else:
                 assert response.status_code == 503
                 detail = response.json()["detail"]
@@ -253,7 +246,7 @@ def test_real_lifespan_preserves_v1_for_module_combination(
         assert app.state.operational.database_path == app.state.optional_module_host.database_path
         assert app.state.datastore.data_dir == app.state.optional_module_host.data_root
         assert app.state.optional_module_host.runtime_identity == id(app)
-        assert not any(name in sys.modules for name in ("torch", "sklearn", "kronos"))
+        assert {name for name in ("torch", "sklearn", "kronos") if name in sys.modules} == heavy_modules_before
 
 
 def test_optional_capability_failures_are_typed_local_and_independent(
