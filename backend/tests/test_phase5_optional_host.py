@@ -181,6 +181,10 @@ def _real_host(
         "scanner": fail_scanner,
     })
     monkeypatch.setattr(optional_modules, "OPTIONAL_MODULE_ACTION_COLLABORATORS", (spies or LiveActionSpies()).as_mapping())
+    static_dir = tmp_path / "frontend-dist"
+    static_dir.mkdir()
+    (static_dir / "index.html").write_text("<html>phase-5-host</html>", encoding="utf-8")
+    monkeypatch.setattr(settings, "static_dir", static_dir)
 
     from app.main import app
 
@@ -188,6 +192,8 @@ def _real_host(
     # reference here also makes a renamed/missing factory a declared RED failure.
     assert callable(build_optional_module_host)
     with TestClient(app) as client:
+        route_paths = [route.path for route in app.routes]
+        assert route_paths.index(CAPABILITY_PATH) < route_paths.index("/{full_path:path}")
         yield app, client
 
 

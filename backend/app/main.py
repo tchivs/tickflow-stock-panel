@@ -21,6 +21,7 @@ from app.api.routes import router as core_router
 from app.config import settings
 from app.jobs import daily_pipeline
 from app.operational.repository import OperationalRepository
+from app.optional_modules import install_optional_module_routes
 from app.portfolio.service import PortfolioService
 from app.services.quote_service import QuoteService
 from app.tickflow import client as tf_client
@@ -715,6 +716,9 @@ app.include_router(portfolio.router)
 app.include_router(decision.router)
 app.include_router(alerts.router)
 app.include_router(rps.router)
+
+install_optional_module_routes(app)
+
 
 
 # 能力门控异常 → 403(而非默认 500)

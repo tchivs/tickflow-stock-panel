@@ -599,18 +599,24 @@ class _AuthenticatedInstrumentScope:
         return subject_kind == "instrument" and bool(re.fullmatch(r"[0-9A-Z.-]{1,32}", subject_key))
 
 
-def install_optional_module_host(app: Any, host: OptionalModuleHost) -> None:
-    """Install all route shapes once, then initialize each optional module independently."""
-    if not getattr(app.state, "phase5_optional_routes_installed", False):
-        from app.forecast.api import router as forecast_router
-        from app.shadow.api import router as shadow_router
-        from app.theses.api import router as thesis_router
+def install_optional_module_routes(app: Any) -> None:
+    """Install optional route shapes once before any catch-all route."""
+    if getattr(app.state, "phase5_optional_routes_installed", False):
+        return
+    from app.forecast.api import router as forecast_router
+    from app.shadow.api import router as shadow_router
+    from app.theses.api import router as thesis_router
 
-        app.include_router(_capability_router)
-        app.include_router(shadow_router)
-        app.include_router(thesis_router)
-        app.include_router(forecast_router)
-        app.state.phase5_optional_routes_installed = True
+    app.include_router(_capability_router)
+    app.include_router(shadow_router)
+    app.include_router(thesis_router)
+    app.include_router(forecast_router)
+    app.state.phase5_optional_routes_installed = True
+
+
+def install_optional_module_host(app: Any, host: OptionalModuleHost) -> None:
+    """Install route shapes, then initialize each optional module independently."""
+    install_optional_module_routes(app)
     app.state.optional_module_host = host
     scope = _AuthenticatedInstrumentScope()
     app.state.resolve_thesis_subject_scope = lambda _request: scope
