@@ -8,6 +8,7 @@ import { StrategyBacktest } from './backtest/StrategyBacktest'
 import { StrategyOptimizer } from './backtest/StrategyOptimizer'
 import { ResearchLibrary } from './backtest/ResearchLibrary'
 import { ExperimentComparison } from './backtest/ExperimentComparison'
+import { ShadowAccount } from './backtest/ShadowAccount'
 import { AdvancedResearchPanels } from '@/components/advanced/AdvancedResearchPanels'
 import { BarChart3, FlaskConical, SlidersHorizontal } from 'lucide-react'
 
@@ -102,7 +103,8 @@ export function Backtest() {
 
       <main className="flex-1 min-h-0 px-3 pb-3 pt-3 lg:px-4 lg:pb-4">
         {activeTab === 'factor' && <div id="backtest-mode-panel-factor" role="tabpanel" aria-labelledby="backtest-mode-tab-factor" className="space-y-4"><FactorBacktest /><ResearchLibrary /><ExperimentComparison /></div>}
-        {activeTab === 'strategy' && <div id="backtest-mode-panel-strategy" role="tabpanel" aria-labelledby="backtest-mode-tab-strategy" className="space-y-4"><StrategyBacktest onStrategyChange={setSelectedStrategyId} /><ResearchLibrary /><ExperimentComparison /><AdvancedResearchPanels binding={binding.data?.binding ?? null} bindingError={selectedStrategyId ? (binding.isLoading ? '正在解析服务器研究资产绑定。' : binding.isError ? '服务器研究资产绑定不可用；高级研究操作已禁用。' : null) : '请选择已安装策略以解析服务器研究资产绑定。'} /></div>}
+        {activeTab === 'strategy' && <div id="backtest-mode-panel-strategy" role="tabpanel" aria-labelledby="backtest-mode-tab-strategy" className="space-y-4"><StrategyBacktest onStrategyChange={setSelectedStrategyId} /><ResearchLibrary /><ExperimentComparison /><ShadowAccount /><AdvancedResearchPanels binding={binding.data?.binding ?? null} bindingError={selectedStrategyId ? (binding.isLoading ? '正在解析服务器研究资产绑定。' : binding.isError ? '服务器研究资产绑定不可用；高级研究操作已禁用。' : null) : '请选择已安装策略以解析服务器研究资产绑定。'} /></div>}
+        {activeTab === 'optimizer' && <div id="backtest-mode-panel-optimizer" role="tabpanel" aria-labelledby="backtest-mode-tab-optimizer" className="space-y-4"><StrategyOptimizer /></div>}
       </main>
     </div>
   )

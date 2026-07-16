@@ -582,8 +582,85 @@ function importForm(input: ShadowImportInput | ShadowConfirmImportInput): FormDa
   return form
 }
 
-function unwrapPreview(response: { preview: ShadowImportPreview } | ShadowImportPreview): ShadowImportPreview {
-  return 'preview' in response ? response.preview : response
+function normalizePreview(response: { preview: ShadowImportPreview } | ShadowImportPreview): ShadowImportPreview {
+  const preview = 'preview' in response ? response.preview : response
+  return {
+    ...preview,
+    status: preview.status ?? 'preview_ready',
+    encoding: preview.encoding ?? null,
+    mapping_version: preview.mapping_version ?? null,
+    source_row_count: preview.source_row_count ?? preview.rows?.length ?? 0,
+    sample_rows: Array.isArray(preview.sample_rows) ? preview.sample_rows : [],
+    sample_truncated: preview.sample_truncated ?? false,
+    diagnostics: Array.isArray(preview.diagnostics) ? preview.diagnostics : [],
+  }
+}
+
+function normalizeDiagnostic(value: ShadowDiagnostic | string): ShadowDiagnostic {
+  return typeof value === 'string' ? { message: value } : value
+}
+
+function normalizeBatch(batch: ShadowBatch): ShadowBatch {
+  return {
+    ...batch,
+    source_label: batch.source_label ?? batch.label ?? 'Shadow import',
+    content_sha256: batch.content_sha256 ?? batch.content_digest ?? '',
+    importer_version: batch.importer_version ?? '',
+    mapping_version: batch.mapping_version ?? '',
+    supersedes_batch_id: batch.supersedes_batch_id ?? null,
+    same_content_as: batch.same_content_as ?? null,
+    source_row_count: batch.source_row_count ?? batch.total_rows ?? 0,
+    normalized_row_count: batch.normalized_row_count ?? batch.valid_rows ?? 0,
+    rejected_row_count: batch.rejected_row_count ?? batch.invalid_rows ?? 0,
+    diagnostics: Array.isArray(batch.diagnostics) ? batch.diagnostics.map(normalizeDiagnostic) : [],
+    status: batch.status ?? 'rejected',
+    created_at: batch.created_at ?? '',
+  }
+}
+
+function normalizeEvidenceSet(evidenceSet: ShadowEvidenceSet): ShadowEvidenceSet {
+  return {
+    ...evidenceSet,
+    included_batch_ids: Array.isArray(evidenceSet.included_batch_ids) ? evidenceSet.included_batch_ids : [],
+    included_trade_ids: Array.isArray(evidenceSet.included_trade_ids) ? evidenceSet.included_trade_ids : [],
+    included_trade_count: evidenceSet.included_trade_count ?? evidenceSet.trade_count ?? 0,
+    exclusions: Array.isArray(evidenceSet.exclusions) ? evidenceSet.exclusions : [],
+    created_at: evidenceSet.created_at ?? '',
+  }
+}
+
+function normalizeCandidate(candidate: ShadowCandidate): ShadowCandidate {
+  return {
+    ...candidate,
+    evidence_set_fingerprint: candidate.evidence_set_fingerprint ?? candidate.evidence_fingerprint ?? '',
+    distiller_version: candidate.distiller_version ?? '',
+    rule_schema_version: candidate.rule_schema_version ?? '',
+    rules: candidate.rules ?? [],
+    features: Array.isArray(candidate.features) ? candidate.features : [],
+    parameters: candidate.parameters ?? {},
+    exit_assumptions: candidate.exit_assumptions ?? {},
+    holding_assumptions: candidate.holding_assumptions ?? {},
+    source_batch_ids: Array.isArray(candidate.source_batch_ids) ? candidate.source_batch_ids : [],
+    training_window: candidate.training_window ?? {},
+    seed: candidate.seed ?? null,
+    class_balance: candidate.class_balance ?? {},
+    metrics: candidate.metrics ?? {},
+    limitations: Array.isArray(candidate.limitations) ? candidate.limitations : [],
+    rule_fingerprint: candidate.rule_fingerprint ?? null,
+    created_at: candidate.created_at ?? '',
+  }
+}
+
+function normalizeRetention(retention: ShadowRetention): ShadowRetention {
+  return {
+    ...retention,
+    evidence_set_id: retention.evidence_set_id ?? '',
+    evidence_set_fingerprint: retention.evidence_set_fingerprint ?? '',
+    in_sample_evaluation_id: retention.in_sample_evaluation_id ?? '',
+    out_of_sample_evaluation_id: retention.out_of_sample_evaluation_id ?? '',
+    status: retention.status ?? 'retained_research_only',
+    created_at: retention.created_at ?? '',
+  }
 }
 
 export const phase5Api = {
@@ -594,26 +671,44 @@ export const phase5Api = {
       method: 'POST',
       body: importForm(input),
     })
-    return unwrapPreview(response)
+    return normalizePreview(response)
   },
-  shadowConfirmImport: (input: ShadowConfirmImportInput) =>
-    request<{ batch: ShadowBatch }>('/api/shadow/imports/confirm', { method: 'POST', body: importForm(input) }),
-  shadowBatches: (offset = 0, limit = 50) =>
-    request<{ batches: ShadowBatch[]; page?: PageMeta }>(`/api/shadow/batches?${pageParams(offset, limit)}`),
-  shadowBatch: (batchId: string) =>
-    request<{ batch: ShadowBatch }>(`/api/shadow/batches/${encodeURIComponent(batchId)}`),
-  shadowEvidenceSets: (offset = 0, limit = 50) =>
-    request<{ evidence_sets: ShadowEvidenceSet[]; page?: PageMeta }>(`/api/shadow/evidence-sets?${pageParams(offset, limit)}`),
-  shadowEvidenceSet: (evidenceSetId: string) =>
-    request<{ evidence_set: ShadowEvidenceSet }>(`/api/shadow/evidence-sets/${encodeURIComponent(evidenceSetId)}`),
-  shadowCreateEvidenceSet: (input: ShadowEvidenceSetInput) =>
-    request<{ evidence_set: ShadowEvidenceSet }>('/api/shadow/evidence-sets', { method: 'POST', body: JSON.stringify(input) }),
-  shadowCandidates: (offset = 0, limit = 50) =>
-    request<{ candidates: ShadowCandidate[]; page?: PageMeta }>(`/api/shadow/candidates?${pageParams(offset, limit)}`),
-  shadowCandidate: (candidateId: string) =>
-    request<{ candidate: ShadowCandidate }>(`/api/shadow/candidates/${encodeURIComponent(candidateId)}`),
-  shadowDistill: (evidenceSetId: string, input: ShadowDistillInput) =>
-    request<{ candidate: ShadowCandidate }>(`/api/shadow/evidence-sets/${encodeURIComponent(evidenceSetId)}/candidates`, { method: 'POST', body: JSON.stringify(input) }),
+  shadowConfirmImport: async (input: ShadowConfirmImportInput) => {
+    const response = await request<{ batch: ShadowBatch }>('/api/shadow/imports/confirm', { method: 'POST', body: importForm(input) })
+    return { batch: normalizeBatch(response.batch) }
+  },
+  shadowBatches: async (offset = 0, limit = 50) => {
+    const response = await request<{ batches: ShadowBatch[]; page?: PageMeta }>(`/api/shadow/batches?${pageParams(offset, limit)}`)
+    return { ...response, batches: response.batches.map(normalizeBatch) }
+  },
+  shadowBatch: async (batchId: string) => {
+    const response = await request<{ batch: ShadowBatch }>(`/api/shadow/batches/${encodeURIComponent(batchId)}`)
+    return { batch: normalizeBatch(response.batch) }
+  },
+  shadowEvidenceSets: async (offset = 0, limit = 50) => {
+    const response = await request<{ evidence_sets: ShadowEvidenceSet[]; page?: PageMeta }>(`/api/shadow/evidence-sets?${pageParams(offset, limit)}`)
+    return { ...response, evidence_sets: response.evidence_sets.map(normalizeEvidenceSet) }
+  },
+  shadowEvidenceSet: async (evidenceSetId: string) => {
+    const response = await request<{ evidence_set: ShadowEvidenceSet }>(`/api/shadow/evidence-sets/${encodeURIComponent(evidenceSetId)}`)
+    return { evidence_set: normalizeEvidenceSet(response.evidence_set) }
+  },
+  shadowCreateEvidenceSet: async (input: ShadowEvidenceSetInput) => {
+    const response = await request<{ evidence_set: ShadowEvidenceSet }>('/api/shadow/evidence-sets', { method: 'POST', body: JSON.stringify(input) })
+    return { evidence_set: normalizeEvidenceSet(response.evidence_set) }
+  },
+  shadowCandidates: async (offset = 0, limit = 50) => {
+    const response = await request<{ candidates: ShadowCandidate[]; page?: PageMeta }>(`/api/shadow/candidates?${pageParams(offset, limit)}`)
+    return { ...response, candidates: response.candidates.map(normalizeCandidate) }
+  },
+  shadowCandidate: async (candidateId: string) => {
+    const response = await request<{ candidate: ShadowCandidate }>(`/api/shadow/candidates/${encodeURIComponent(candidateId)}`)
+    return { candidate: normalizeCandidate(response.candidate) }
+  },
+  shadowDistill: async (evidenceSetId: string, input: ShadowDistillInput) => {
+    const response = await request<{ candidate: ShadowCandidate }>(`/api/shadow/evidence-sets/${encodeURIComponent(evidenceSetId)}/candidates`, { method: 'POST', body: JSON.stringify(input) })
+    return { candidate: normalizeCandidate(response.candidate) }
+  },
   shadowEvaluations: (candidateId?: string, offset = 0, limit = 50) => {
     const params = new URLSearchParams({ offset: String(offset), limit: String(limit) })
     if (candidateId) params.set('candidate_id', candidateId)
@@ -625,15 +720,20 @@ export const phase5Api = {
     request<{ evaluations: { in_sample: ShadowEvaluation; out_of_sample: ShadowEvaluation } }>(`/api/shadow/evidence-sets/${encodeURIComponent(evidenceSetId)}/candidates/${encodeURIComponent(candidateId)}/evaluations`, { method: 'POST', body: JSON.stringify(input) }),
   shadowRetryEvaluation: (evaluationId: string) =>
     request<{ evaluation: ShadowEvaluation }>(`/api/shadow/evaluations/${encodeURIComponent(evaluationId)}/retry`, { method: 'POST', body: JSON.stringify({}) }),
-  shadowRetentions: (candidateId?: string, offset = 0, limit = 50) => {
+  shadowRetentions: async (candidateId?: string, offset = 0, limit = 50) => {
     const params = new URLSearchParams({ offset: String(offset), limit: String(limit) })
     if (candidateId) params.set('candidate_id', candidateId)
-    return request<{ retentions: ShadowRetention[]; page?: PageMeta }>(`/api/shadow/retentions?${params}`)
+    const response = await request<{ retentions: ShadowRetention[]; page?: PageMeta }>(`/api/shadow/retentions?${params}`)
+    return { ...response, retentions: response.retentions.map(normalizeRetention) }
   },
-  shadowRetention: (retentionId: string) =>
-    request<{ retention: ShadowRetention }>(`/api/shadow/retentions/${encodeURIComponent(retentionId)}`),
-  shadowRetain: (evidenceSetId: string, candidateId: string, input: ShadowRetainInput) =>
-    request<{ retention: ShadowRetention }>(`/api/shadow/evidence-sets/${encodeURIComponent(evidenceSetId)}/candidates/${encodeURIComponent(candidateId)}/retain`, { method: 'POST', body: JSON.stringify(input) }),
+  shadowRetention: async (retentionId: string) => {
+    const response = await request<{ retention: ShadowRetention }>(`/api/shadow/retentions/${encodeURIComponent(retentionId)}`)
+    return { retention: normalizeRetention(response.retention) }
+  },
+  shadowRetain: async (evidenceSetId: string, candidateId: string, input: ShadowRetainInput) => {
+    const response = await request<{ retention: ShadowRetention }>(`/api/shadow/evidence-sets/${encodeURIComponent(evidenceSetId)}/candidates/${encodeURIComponent(candidateId)}/retain`, { method: 'POST', body: JSON.stringify(input) })
+    return { retention: normalizeRetention(response.retention) }
+  },
 
   thesisVersions: (instrument: string, page = 1, pageSize = 25) =>
     request<{ versions: ThesisVersion[]; current_version_id: string | null; total: number; page: number; page_size: number }>(`/api/theses/instruments/${encodeURIComponent(instrument)}/versions?page=${page}&page_size=${pageSize}`),
