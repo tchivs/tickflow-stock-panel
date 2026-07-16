@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from hashlib import sha256
 import json
 from pathlib import Path
@@ -458,6 +458,366 @@ class ShadowRepository:
                 "SELECT * FROM shadow_candidates ORDER BY created_at, id"
             ).fetchall()
         return [self._candidate_row(row) for row in rows]
+
+    def append_evaluation_attempt(
+        self, payload: dict[str, object]
+    ) -> dict[str, Any]:
+        """Reserve one immutable attempt before the bounded collaborator starts.
+
+        The Phase 05 schema intentionally permits only terminal run facts.  The
+        reservation is therefore an immutable ``interrupted`` run boundary; its
+        separately appended evaluation row owns the eventual terminal result.
+        A process interruption leaves the reservation as truthful terminal evidence.
+        """
+        required = {
+            "candidate_id",
+            "evidence_set_id",
+            "evidence_set_fingerprint",
+            "split_kind",
+            "window",
+            "governed_fingerprint",
+            "artifact",
+            "adjustment_policy",
+            "cost_policy",
+        }
+        if set(payload) not in {required, required | {"retry_of_evaluation_id"}}:
+            raise ShadowRepositoryError("evaluation attempt schema is invalid")
+        candidate_id = str(payload["candidate_id"])
+        evidence_set_id = str(payload["evidence_set_id"])
+        split_kind = str(payload["split_kind"])
+        fingerprint = str(payload["governed_fingerprint"])
+        if split_kind not in {"in_sample", "out_of_sample"} or len(fingerprint) != 64:
+            raise ShadowRepositoryError("evaluation split identity is invalid")
+        window = payload["window"]
+        if not isinstance(window, Mapping) or set(window) != {"start", "end"}:
+            raise ShadowRepositoryError("evaluation window is invalid")
+        try:
+            start = date.fromisoformat(str(window["start"]))
+            end = date.fromisoformat(str(window["end"]))
+        except ValueError as error:
+            raise ShadowRepositoryError("evaluation window is invalid") from error
+        if start > end:
+            raise ShadowRepositoryError("evaluation window is invalid")
+        artifact = payload["artifact"]
+        cost_policy = payload["cost_policy"]
+        if not isinstance(artifact, Mapping) or not isinstance(cost_policy, Mapping):
+            raise ShadowRepositoryError("evaluation frozen inputs are invalid")
+
+        evaluation_id = uuid4().hex
+        run_id = uuid4().hex
+        manifest = {
+            "evaluation_id": evaluation_id,
+            "evidence_set_id": evidence_set_id,
+            "evidence_set_fingerprint": payload["evidence_set_fingerprint"],
+            "split_kind": split_kind,
+            "window": {"start": start.isoformat(), "end": end.isoformat()},
+            "artifact": dict(artifact),
+            "adjustment_policy": payload["adjustment_policy"],
+            "cost_policy": dict(cost_policy),
+            "retry_of_evaluation_id": payload.get("retry_of_evaluation_id"),
+        }
+        created_at = self.now()
+        with self._connection() as connection, connection:
+            candidate = connection.execute(
+                "SELECT evidence_set_id, evidence_set_fingerprint FROM shadow_candidates WHERE id = ?",
+                (candidate_id,),
+            ).fetchone()
+            evidence = connection.execute(
+                "SELECT fingerprint FROM shadow_evidence_sets WHERE id = ?",
+                (evidence_set_id,),
+            ).fetchone()
+            if (
+                candidate is None
+                or evidence is None
+                or candidate["evidence_set_id"] != evidence_set_id
+                or candidate["evidence_set_fingerprint"] != evidence["fingerprint"]
+                or payload["evidence_set_fingerprint"] != evidence["fingerprint"]
+            ):
+                raise ShadowRepositoryError("evaluation candidate evidence is invalid")
+            retry_of = payload.get("retry_of_evaluation_id")
+            if retry_of is not None:
+                previous = connection.execute(
+                    "SELECT status FROM shadow_candidate_evaluations WHERE id = ? AND candidate_id = ?",
+                    (retry_of, candidate_id),
+                ).fetchone()
+                if previous is None or previous["status"] == "passed":
+                    raise ShadowRepositoryError("evaluation retry source is invalid")
+            attempt = int(
+                connection.execute(
+                    "SELECT COALESCE(MAX(attempt), 0) + 1 FROM shadow_candidate_runs WHERE candidate_id = ?",
+                    (candidate_id,),
+                ).fetchone()[0]
+            )
+            connection.execute(
+                """INSERT INTO shadow_candidate_runs
+                   (id, candidate_id, attempt, governed_fingerprint, runner_manifest_json,
+                    status, terminal_reason, created_at)
+                   VALUES (?, ?, ?, ?, ?, 'interrupted', ?, ?)""",
+                (
+                    run_id,
+                    candidate_id,
+                    attempt,
+                    fingerprint,
+                    _canonical_json(manifest, "evaluation attempt manifest"),
+                    "attempt boundary recorded before bounded evaluation",
+                    created_at,
+                ),
+            )
+        return {
+            "id": evaluation_id,
+            "run_id": run_id,
+            "status": "running",
+            "created_at": created_at,
+            **dict(payload),
+        }
+
+    def complete_evaluation(
+        self, evaluation_id: str, terminal: dict[str, object]
+    ) -> dict[str, Any]:
+        """Append, never update, the terminal evaluation for a reserved attempt."""
+        status = terminal.get("status")
+        status_to_db = {
+            "passed": "passed",
+            "failed": "failed",
+            "failed_gate": "failed",
+            "timeout": "timed_out",
+            "resource_exhausted": "resource_limited",
+            "interrupted": "interrupted",
+        }
+        if status not in status_to_db or set(terminal) not in (
+            {"status", "metrics"},
+            {"status", "reason"},
+        ):
+            raise ShadowRepositoryError("evaluation terminal schema is invalid")
+        metrics = terminal.get("metrics") if status == "passed" else {}
+        if not isinstance(metrics, Mapping):
+            raise ShadowRepositoryError("evaluation terminal metrics are invalid")
+        reason = None if status == "passed" else str(terminal.get("reason", "evaluation did not pass"))[:256]
+        with self._connection() as connection, connection:
+            run_row, manifest = self._evaluation_attempt(connection, evaluation_id)
+            existing = connection.execute(
+                "SELECT 1 FROM shadow_candidate_evaluations WHERE id = ?", (evaluation_id,)
+            ).fetchone()
+            if existing is not None:
+                raise ShadowRepositoryError("evaluation terminal fact already exists")
+            window = manifest["window"]
+            connection.execute(
+                """INSERT INTO shadow_candidate_evaluations
+                   (id, candidate_id, run_id, split_kind, window_start, window_end,
+                    governed_fingerprint, artifact_descriptor_json, metrics_json,
+                    status, terminal_reason, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    evaluation_id,
+                    run_row["candidate_id"],
+                    run_row["id"],
+                    manifest["split_kind"],
+                    window["start"],
+                    window["end"],
+                    run_row["governed_fingerprint"],
+                    _canonical_json(manifest["artifact"], "evaluation artifact"),
+                    _canonical_json(dict(metrics), "evaluation metrics"),
+                    status_to_db[status],
+                    reason,
+                    self.now(),
+                ),
+            )
+        record = self.get_evaluation(evaluation_id)
+        if record is None:
+            raise ShadowRepositoryError("persisted evaluation is unavailable")
+        return record
+
+    def get_evaluation(self, evaluation_id: str) -> dict[str, Any] | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                """SELECT evaluation.*, run.runner_manifest_json
+                   FROM shadow_candidate_evaluations AS evaluation
+                   JOIN shadow_candidate_runs AS run ON run.id = evaluation.run_id
+                   WHERE evaluation.id = ?""",
+                (evaluation_id,),
+            ).fetchone()
+        return None if row is None else self._evaluation_row(row)
+
+    def list_evaluations(
+        self, *, candidate_id: str | None = None
+    ) -> list[dict[str, Any]]:
+        query = """SELECT evaluation.*, run.runner_manifest_json
+                   FROM shadow_candidate_evaluations AS evaluation
+                   JOIN shadow_candidate_runs AS run ON run.id = evaluation.run_id"""
+        parameters: tuple[object, ...] = ()
+        if candidate_id is not None:
+            query += " WHERE evaluation.candidate_id = ?"
+            parameters = (candidate_id,)
+        query += " ORDER BY evaluation.created_at, evaluation.id"
+        with self._connection() as connection:
+            rows = connection.execute(query, parameters).fetchall()
+        return [self._evaluation_row(row) for row in rows]
+
+    def append_retention_event(self, payload: dict[str, object]) -> dict[str, Any]:
+        required = {
+            "candidate_id",
+            "evidence_set_id",
+            "evidence_set_fingerprint",
+            "in_sample_evaluation_id",
+            "out_of_sample_evaluation_id",
+            "reviewer_principal",
+            "rationale",
+        }
+        if set(payload) != required:
+            raise ShadowRepositoryError("retention event schema is invalid")
+        candidate_id = str(payload["candidate_id"])
+        in_id = str(payload["in_sample_evaluation_id"])
+        out_id = str(payload["out_of_sample_evaluation_id"])
+        with self._connection() as connection, connection:
+            candidate = connection.execute(
+                "SELECT * FROM shadow_candidates WHERE id = ?", (candidate_id,)
+            ).fetchone()
+            evidence = connection.execute(
+                "SELECT * FROM shadow_evidence_sets WHERE id = ?", (payload["evidence_set_id"],)
+            ).fetchone()
+            evaluations = connection.execute(
+                """SELECT evaluation.*, run.runner_manifest_json
+                   FROM shadow_candidate_evaluations AS evaluation
+                   JOIN shadow_candidate_runs AS run ON run.id = evaluation.run_id
+                   WHERE evaluation.id IN (?, ?)""",
+                (in_id, out_id),
+            ).fetchall()
+            by_id = {str(row["id"]): self._evaluation_row(row) for row in evaluations}
+            in_sample, out_of_sample = by_id.get(in_id), by_id.get(out_id)
+            if (
+                candidate is None
+                or evidence is None
+                or candidate["evidence_set_id"] != evidence["id"]
+                or candidate["evidence_set_fingerprint"] != evidence["fingerprint"]
+                or payload["evidence_set_fingerprint"] != evidence["fingerprint"]
+                or not self._eligible_evaluation(in_sample, candidate_id, "in_sample")
+                or not self._eligible_evaluation(out_of_sample, candidate_id, "out_of_sample")
+                or str(in_sample["window"]["end"]) >= str(out_of_sample["window"]["start"])
+            ):
+                raise ShadowRepositoryError("retention requires canonical passing IS/OOS evidence")
+            existing = connection.execute(
+                """SELECT id FROM shadow_retention_events
+                   WHERE candidate_id = ? AND in_sample_evaluation_id = ?
+                     AND out_of_sample_evaluation_id = ?""",
+                (candidate_id, in_id, out_id),
+            ).fetchone()
+            if existing is None:
+                event_id = uuid4().hex
+                connection.execute(
+                    """INSERT INTO shadow_retention_events
+                       (id, candidate_id, in_sample_evaluation_id,
+                        out_of_sample_evaluation_id, reviewer_principal, rationale,
+                        status, created_at)
+                       VALUES (?, ?, ?, ?, ?, ?, 'retained_research_only', ?)""",
+                    (
+                        event_id,
+                        candidate_id,
+                        in_id,
+                        out_id,
+                        payload["reviewer_principal"],
+                        payload["rationale"],
+                        self.now(),
+                    ),
+                )
+            else:
+                event_id = str(existing["id"])
+        record = self.get_retention_event(event_id)
+        if record is None:
+            raise ShadowRepositoryError("persisted retention event is unavailable")
+        return record
+
+    def get_retention_event(self, event_id: str) -> dict[str, Any] | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                """SELECT retention.*, candidate.evidence_set_id,
+                          candidate.evidence_set_fingerprint
+                   FROM shadow_retention_events AS retention
+                   JOIN shadow_candidates AS candidate ON candidate.id = retention.candidate_id
+                   WHERE retention.id = ?""",
+                (event_id,),
+            ).fetchone()
+        return None if row is None else dict(row)
+
+    def list_retention_events(
+        self, *, candidate_id: str | None = None
+    ) -> list[dict[str, Any]]:
+        query = """SELECT retention.*, candidate.evidence_set_id,
+                          candidate.evidence_set_fingerprint
+                   FROM shadow_retention_events AS retention
+                   JOIN shadow_candidates AS candidate ON candidate.id = retention.candidate_id"""
+        parameters: tuple[object, ...] = ()
+        if candidate_id is not None:
+            query += " WHERE retention.candidate_id = ?"
+            parameters = (candidate_id,)
+        query += " ORDER BY retention.created_at, retention.id"
+        with self._connection() as connection:
+            rows = connection.execute(query, parameters).fetchall()
+        return [dict(row) for row in rows]
+
+    @staticmethod
+    def _evaluation_attempt(
+        connection: sqlite3.Connection, evaluation_id: str
+    ) -> tuple[sqlite3.Row, dict[str, Any]]:
+        rows = connection.execute(
+            "SELECT * FROM shadow_candidate_runs ORDER BY created_at, id"
+        ).fetchall()
+        for row in rows:
+            manifest = _json_object(row["runner_manifest_json"], "evaluation attempt manifest")
+            if manifest.get("evaluation_id") == evaluation_id:
+                return row, manifest
+        raise ShadowRepositoryError("evaluation attempt is unavailable")
+
+    @staticmethod
+    def _evaluation_row(row: sqlite3.Row) -> dict[str, Any]:
+        record = dict(row)
+        manifest = _json_object(
+            record.pop("runner_manifest_json"), "evaluation attempt manifest"
+        )
+        artifact = _json_object(
+            record.pop("artifact_descriptor_json"), "evaluation artifact"
+        )
+        metrics = _json_object(record.pop("metrics_json"), "evaluation metrics")
+        status_from_db = {
+            "passed": "passed",
+            "failed": "failed",
+            "timed_out": "timeout",
+            "resource_limited": "resource_exhausted",
+            "interrupted": "interrupted",
+        }
+        public = {
+            **record,
+            "status": status_from_db[str(record["status"])],
+            "evidence_set_id": manifest["evidence_set_id"],
+            "evidence_set_fingerprint": manifest["evidence_set_fingerprint"],
+            "window": manifest["window"],
+            "artifact": artifact,
+            "adjustment_policy": manifest["adjustment_policy"],
+            "cost_policy": manifest["cost_policy"],
+        }
+        retry_of = manifest.get("retry_of_evaluation_id")
+        if retry_of is not None:
+            public["retry_of_evaluation_id"] = retry_of
+        if metrics:
+            public["metrics"] = metrics
+        if public.get("terminal_reason"):
+            public["reason"] = public.pop("terminal_reason")
+        else:
+            public.pop("terminal_reason", None)
+        return public
+
+    @staticmethod
+    def _eligible_evaluation(
+        evaluation: Mapping[str, object] | None,
+        candidate_id: str,
+        split_kind: str,
+    ) -> bool:
+        return bool(
+            evaluation
+            and evaluation.get("candidate_id") == candidate_id
+            and evaluation.get("split_kind") == split_kind
+            and evaluation.get("status") == "passed"
+            and isinstance(evaluation.get("metrics"), Mapping)
+        )
 
     @staticmethod
     def list_operational_mutations() -> list[dict[str, object]]:
