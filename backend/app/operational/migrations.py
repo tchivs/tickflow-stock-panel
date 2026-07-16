@@ -767,6 +767,445 @@ MIGRATIONS: tuple[str, ...] = (
       OR NEW.consumed <= OLD.consumed
     BEGIN SELECT RAISE(ABORT, 'advanced rate consumption must increase within its immutable window'); END;
     """,
+    """
+    -- Phase 05 shares operational.db across three independently optional domains.
+    -- Business/evidence rows are immutable; only schedules, global leases, and
+    -- forecast jobs expose narrowly guarded recovery-cursor updates.
+    CREATE TABLE shadow_import_batches (
+        id TEXT PRIMARY KEY,
+        principal TEXT NOT NULL,
+        raw_artifact_descriptor_json TEXT NOT NULL,
+        content_sha256 TEXT NOT NULL CHECK (length(content_sha256) = 64),
+        source_label TEXT NOT NULL,
+        importer_version TEXT NOT NULL,
+        mapping_version TEXT NOT NULL,
+        supersedes_batch_id TEXT REFERENCES shadow_import_batches(id) ON DELETE RESTRICT,
+        source_row_count INTEGER NOT NULL CHECK (source_row_count >= 0),
+        normalized_row_count INTEGER NOT NULL CHECK (normalized_row_count >= 0),
+        rejected_row_count INTEGER NOT NULL CHECK (rejected_row_count >= 0),
+        diagnostics_json TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('completed', 'rejected')),
+        created_at TEXT NOT NULL
+    );
+    CREATE TABLE shadow_trade_facts (
+        id TEXT PRIMARY KEY,
+        batch_id TEXT NOT NULL REFERENCES shadow_import_batches(id) ON DELETE RESTRICT,
+        row_identity TEXT NOT NULL,
+        duplicate_group_hash TEXT NOT NULL CHECK (length(duplicate_group_hash) = 64),
+        broker_fill_id TEXT,
+        account_alias TEXT NOT NULL,
+        symbol TEXT NOT NULL,
+        side TEXT NOT NULL CHECK (side IN ('buy', 'sell')),
+        executed_at TEXT NOT NULL,
+        quantity REAL NOT NULL CHECK (quantity > 0),
+        price REAL NOT NULL CHECK (price >= 0),
+        fees REAL NOT NULL CHECK (fees >= 0),
+        currency TEXT NOT NULL,
+        source_row_ordinal INTEGER NOT NULL CHECK (source_row_ordinal > 0),
+        source_values_json TEXT NOT NULL,
+        normalized_payload_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(batch_id, row_identity),
+        UNIQUE(batch_id, source_row_ordinal)
+    );
+    CREATE TABLE shadow_evidence_sets (
+        id TEXT PRIMARY KEY,
+        principal TEXT NOT NULL,
+        fingerprint TEXT NOT NULL CHECK (length(fingerprint) = 64),
+        manifest_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(principal, fingerprint)
+    );
+    CREATE TABLE shadow_evidence_batches (
+        evidence_set_id TEXT NOT NULL REFERENCES shadow_evidence_sets(id) ON DELETE RESTRICT,
+        batch_id TEXT NOT NULL REFERENCES shadow_import_batches(id) ON DELETE RESTRICT,
+        ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY(evidence_set_id, batch_id),
+        UNIQUE(evidence_set_id, ordinal)
+    );
+    CREATE TABLE shadow_evidence_members (
+        evidence_set_id TEXT NOT NULL REFERENCES shadow_evidence_sets(id) ON DELETE RESTRICT,
+        trade_id TEXT NOT NULL REFERENCES shadow_trade_facts(id) ON DELETE RESTRICT,
+        ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY(evidence_set_id, trade_id),
+        UNIQUE(evidence_set_id, ordinal)
+    );
+    CREATE TABLE shadow_evidence_exclusions (
+        id TEXT PRIMARY KEY,
+        evidence_set_id TEXT NOT NULL REFERENCES shadow_evidence_sets(id) ON DELETE RESTRICT,
+        trade_id TEXT NOT NULL REFERENCES shadow_trade_facts(id) ON DELETE RESTRICT,
+        reason TEXT NOT NULL CHECK (length(trim(reason)) > 0),
+        created_at TEXT NOT NULL,
+        UNIQUE(evidence_set_id, trade_id)
+    );
+    CREATE TABLE shadow_candidates (
+        id TEXT PRIMARY KEY,
+        evidence_set_id TEXT NOT NULL REFERENCES shadow_evidence_sets(id) ON DELETE RESTRICT,
+        distiller_version TEXT NOT NULL,
+        rule_schema_version TEXT NOT NULL,
+        rules_json TEXT NOT NULL,
+        features_json TEXT NOT NULL,
+        parameters_json TEXT NOT NULL,
+        exit_assumptions_json TEXT NOT NULL,
+        holding_assumptions_json TEXT NOT NULL,
+        source_batch_ids_json TEXT NOT NULL,
+        evidence_set_fingerprint TEXT NOT NULL CHECK (length(evidence_set_fingerprint) = 64),
+        training_window_json TEXT NOT NULL,
+        seed INTEGER NOT NULL,
+        class_balance_json TEXT NOT NULL,
+        metrics_json TEXT NOT NULL,
+        limitations_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(evidence_set_id, distiller_version, rule_schema_version, seed)
+    );
+    CREATE TABLE shadow_candidate_runs (
+        id TEXT PRIMARY KEY,
+        candidate_id TEXT NOT NULL REFERENCES shadow_candidates(id) ON DELETE RESTRICT,
+        attempt INTEGER NOT NULL CHECK (attempt > 0),
+        governed_fingerprint TEXT NOT NULL CHECK (length(governed_fingerprint) = 64),
+        runner_manifest_json TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('passed', 'failed', 'timed_out', 'resource_limited', 'interrupted')),
+        terminal_reason TEXT,
+        created_at TEXT NOT NULL,
+        UNIQUE(candidate_id, attempt)
+    );
+    CREATE TABLE shadow_candidate_evaluations (
+        id TEXT PRIMARY KEY,
+        candidate_id TEXT NOT NULL REFERENCES shadow_candidates(id) ON DELETE RESTRICT,
+        run_id TEXT NOT NULL REFERENCES shadow_candidate_runs(id) ON DELETE RESTRICT,
+        split_kind TEXT NOT NULL CHECK (split_kind IN ('in_sample', 'out_of_sample')),
+        window_start TEXT NOT NULL,
+        window_end TEXT NOT NULL CHECK (window_end >= window_start),
+        governed_fingerprint TEXT NOT NULL CHECK (length(governed_fingerprint) = 64),
+        artifact_descriptor_json TEXT NOT NULL,
+        metrics_json TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('passed', 'failed', 'timed_out', 'resource_limited', 'interrupted')),
+        terminal_reason TEXT,
+        created_at TEXT NOT NULL,
+        UNIQUE(candidate_id, split_kind, run_id)
+    );
+    CREATE TABLE shadow_retention_events (
+        id TEXT PRIMARY KEY,
+        candidate_id TEXT NOT NULL REFERENCES shadow_candidates(id) ON DELETE RESTRICT,
+        in_sample_evaluation_id TEXT NOT NULL REFERENCES shadow_candidate_evaluations(id) ON DELETE RESTRICT,
+        out_of_sample_evaluation_id TEXT NOT NULL REFERENCES shadow_candidate_evaluations(id) ON DELETE RESTRICT,
+        reviewer_principal TEXT NOT NULL,
+        rationale TEXT NOT NULL CHECK (length(trim(rationale)) > 0),
+        status TEXT NOT NULL CHECK (status = 'retained_research_only'),
+        created_at TEXT NOT NULL,
+        UNIQUE(candidate_id, in_sample_evaluation_id, out_of_sample_evaluation_id)
+    );
+
+    CREATE TABLE theses (
+        id TEXT PRIMARY KEY,
+        instrument TEXT NOT NULL,
+        created_by TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(instrument)
+    );
+    CREATE TABLE thesis_versions (
+        id TEXT PRIMARY KEY,
+        thesis_id TEXT NOT NULL REFERENCES theses(id) ON DELETE RESTRICT,
+        version INTEGER NOT NULL CHECK (version > 0),
+        predecessor_id TEXT,
+        core_judgment TEXT NOT NULL,
+        rationale TEXT NOT NULL,
+        change_reason TEXT NOT NULL,
+        created_by TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(thesis_id, version),
+        UNIQUE(thesis_id, id),
+        FOREIGN KEY(thesis_id, predecessor_id)
+            REFERENCES thesis_versions(thesis_id, id) ON DELETE RESTRICT
+    );
+    CREATE TABLE thesis_valuation_anchors (
+        id TEXT PRIMARY KEY,
+        version_id TEXT NOT NULL REFERENCES thesis_versions(id) ON DELETE RESTRICT,
+        method TEXT NOT NULL,
+        currency TEXT NOT NULL,
+        as_of TEXT NOT NULL,
+        low REAL NOT NULL,
+        high REAL NOT NULL CHECK (high >= low),
+        assumptions_json TEXT NOT NULL,
+        limitations_json TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    );
+    CREATE TABLE thesis_conditions (
+        id TEXT PRIMARY KEY,
+        version_id TEXT NOT NULL REFERENCES thesis_versions(id) ON DELETE RESTRICT,
+        copied_from_condition_id TEXT REFERENCES thesis_conditions(id) ON DELETE RESTRICT,
+        source_kind TEXT NOT NULL CHECK (source_kind IN ('market', 'financial', 'analysis')),
+        field TEXT NOT NULL,
+        operator TEXT NOT NULL,
+        threshold_json TEXT NOT NULL,
+        unit TEXT NOT NULL,
+        lookback_days INTEGER NOT NULL CHECK (lookback_days > 0),
+        cadence TEXT NOT NULL CHECK (cadence IN ('daily', 'weekly', 'monthly', 'quarterly')),
+        timezone TEXT NOT NULL,
+        description TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(version_id, id)
+    );
+    CREATE TABLE thesis_condition_schedules (
+        condition_id TEXT PRIMARY KEY REFERENCES thesis_conditions(id) ON DELETE RESTRICT,
+        active INTEGER NOT NULL CHECK (active IN (0, 1)),
+        next_due_at TEXT NOT NULL,
+        lease_owner TEXT,
+        lease_until TEXT,
+        last_attempt_at TEXT,
+        transition_version INTEGER NOT NULL CHECK (transition_version >= 0),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        CHECK ((lease_owner IS NULL) = (lease_until IS NULL))
+    );
+    CREATE TABLE thesis_condition_checks (
+        id TEXT PRIMARY KEY,
+        version_id TEXT NOT NULL,
+        condition_id TEXT NOT NULL,
+        due_at TEXT NOT NULL,
+        result TEXT NOT NULL CHECK (result IN ('matched', 'not_matched', 'insufficient_evidence', 'error')),
+        observed_value_json TEXT,
+        evidence_fingerprint TEXT NOT NULL CHECK (length(evidence_fingerprint) = 64),
+        evidence_json TEXT NOT NULL,
+        safe_reason TEXT,
+        checked_at TEXT NOT NULL,
+        UNIQUE(condition_id, due_at),
+        FOREIGN KEY(version_id, condition_id)
+            REFERENCES thesis_conditions(version_id, id) ON DELETE RESTRICT
+    );
+    CREATE TABLE thesis_pending_conclusions (
+        id TEXT PRIMARY KEY,
+        thesis_id TEXT NOT NULL REFERENCES theses(id) ON DELETE RESTRICT,
+        version_id TEXT NOT NULL REFERENCES thesis_versions(id) ON DELETE RESTRICT,
+        condition_id TEXT NOT NULL REFERENCES thesis_conditions(id) ON DELETE RESTRICT,
+        check_id TEXT NOT NULL UNIQUE REFERENCES thesis_condition_checks(id) ON DELETE RESTRICT,
+        evidence_fingerprint TEXT NOT NULL CHECK (length(evidence_fingerprint) = 64),
+        proposed_state TEXT NOT NULL CHECK (proposed_state = 'invalidated'),
+        reason TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status = 'pending'),
+        created_at TEXT NOT NULL
+    );
+    CREATE TABLE thesis_review_events (
+        id TEXT PRIMARY KEY,
+        pending_id TEXT NOT NULL UNIQUE REFERENCES thesis_pending_conclusions(id) ON DELETE RESTRICT,
+        decision TEXT NOT NULL CHECK (decision IN ('confirmed', 'rejected')),
+        reviewer_principal TEXT NOT NULL,
+        rationale TEXT NOT NULL CHECK (length(trim(rationale)) > 0),
+        created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE forecast_jobs (
+        id TEXT PRIMARY KEY,
+        principal TEXT NOT NULL,
+        instrument_id TEXT NOT NULL,
+        horizon INTEGER NOT NULL CHECK (horizon IN (5, 20, 60)),
+        catalog_id TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL,
+        input_fingerprint TEXT NOT NULL CHECK (length(input_fingerprint) = 64),
+        status TEXT NOT NULL CHECK (status IN (
+            'queued', 'running', 'completed', 'validation_failed', 'model_unavailable',
+            'artifact_failed', 'timed_out', 'resource_limited', 'interrupted'
+        )),
+        transition_version INTEGER NOT NULL CHECK (transition_version >= 0),
+        retry_of_job_id TEXT REFERENCES forecast_jobs(id) ON DELETE RESTRICT,
+        attempt INTEGER NOT NULL CHECK (attempt > 0),
+        lease_owner TEXT,
+        lease_until TEXT,
+        terminal_reason TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(principal, instrument_id, horizon, catalog_id, idempotency_key),
+        CHECK ((lease_owner IS NULL) = (lease_until IS NULL))
+    );
+    CREATE TABLE forecast_global_leases (
+        lease_name TEXT PRIMARY KEY CHECK (lease_name = 'forecast-inference'),
+        lease_owner TEXT,
+        lease_until TEXT,
+        transition_version INTEGER NOT NULL CHECK (transition_version >= 0),
+        updated_at TEXT NOT NULL,
+        CHECK ((lease_owner IS NULL) = (lease_until IS NULL))
+    );
+    INSERT INTO forecast_global_leases
+        (lease_name, lease_owner, lease_until, transition_version, updated_at)
+    VALUES ('forecast-inference', NULL, NULL, 0, '');
+    CREATE TABLE forecast_records (
+        id TEXT PRIMARY KEY,
+        job_id TEXT NOT NULL UNIQUE REFERENCES forecast_jobs(id) ON DELETE RESTRICT,
+        instrument_id TEXT NOT NULL,
+        origin_session_id TEXT NOT NULL,
+        calendar_id TEXT NOT NULL,
+        calendar_revision TEXT NOT NULL,
+        future_session_ids_json TEXT NOT NULL,
+        input_fingerprint TEXT NOT NULL CHECK (length(input_fingerprint) = 64),
+        input_artifact_descriptor_json TEXT NOT NULL,
+        horizon INTEGER NOT NULL CHECK (horizon IN (5, 20, 60)),
+        lookback INTEGER NOT NULL CHECK (lookback > 0),
+        seed INTEGER NOT NULL,
+        temperature REAL NOT NULL CHECK (temperature > 0),
+        top_k INTEGER NOT NULL CHECK (top_k > 0),
+        top_p REAL NOT NULL CHECK (top_p > 0 AND top_p <= 1),
+        sample_count INTEGER NOT NULL CHECK (sample_count = 32),
+        catalog_id TEXT NOT NULL,
+        source_revision TEXT NOT NULL,
+        source_digest_sha256 TEXT NOT NULL CHECK (length(source_digest_sha256) = 64),
+        model_revision TEXT NOT NULL,
+        model_digest_sha256 TEXT NOT NULL CHECK (length(model_digest_sha256) = 64),
+        tokenizer_revision TEXT NOT NULL,
+        tokenizer_digest_sha256 TEXT NOT NULL CHECK (length(tokenizer_digest_sha256) = 64),
+        output_artifact_descriptor_json TEXT NOT NULL,
+        paths_checksum_sha256 TEXT NOT NULL CHECK (length(paths_checksum_sha256) = 64),
+        validation_warnings_json TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    );
+    CREATE TABLE forecast_outcomes (
+        id TEXT PRIMARY KEY,
+        forecast_id TEXT NOT NULL REFERENCES forecast_records(id) ON DELETE RESTRICT,
+        horizon INTEGER NOT NULL CHECK (horizon IN (5, 20, 60)),
+        status TEXT NOT NULL CHECK (status IN ('evaluated', 'unevaluable')),
+        actual_session_id TEXT,
+        actual_value_json TEXT,
+        actual_fingerprint TEXT,
+        reason TEXT,
+        observed_at TEXT NOT NULL,
+        UNIQUE(forecast_id, horizon),
+        CHECK (actual_fingerprint IS NULL OR length(actual_fingerprint) = 64)
+    );
+    CREATE TABLE forecast_calibration_facts (
+        id TEXT PRIMARY KEY,
+        forecast_id TEXT NOT NULL REFERENCES forecast_records(id) ON DELETE RESTRICT,
+        outcome_id TEXT NOT NULL UNIQUE REFERENCES forecast_outcomes(id) ON DELETE RESTRICT,
+        metric_schema TEXT NOT NULL,
+        close_mae REAL,
+        p10_p90_interval_covered INTEGER CHECK (p10_p90_interval_covered IN (0, 1)),
+        p10_pinball_loss REAL,
+        p50_pinball_loss REAL,
+        p90_pinball_loss REAL,
+        coverage_start TEXT,
+        coverage_end TEXT,
+        created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX idx_shadow_trade_facts_batch ON shadow_trade_facts(batch_id, source_row_ordinal);
+    CREATE INDEX idx_shadow_evidence_sets_principal ON shadow_evidence_sets(principal, created_at DESC);
+    CREATE INDEX idx_shadow_candidates_evidence ON shadow_candidates(evidence_set_id, created_at DESC);
+    CREATE INDEX idx_shadow_candidate_runs_candidate ON shadow_candidate_runs(candidate_id, attempt DESC);
+    CREATE INDEX idx_shadow_candidate_evaluations_candidate ON shadow_candidate_evaluations(candidate_id, split_kind, created_at DESC);
+    CREATE INDEX idx_thesis_versions_thesis ON thesis_versions(thesis_id, version DESC);
+    CREATE INDEX idx_thesis_conditions_version ON thesis_conditions(version_id, created_at);
+    CREATE INDEX idx_thesis_condition_schedules_due ON thesis_condition_schedules(active, next_due_at, condition_id);
+    CREATE INDEX idx_thesis_condition_checks_condition ON thesis_condition_checks(condition_id, due_at DESC);
+    CREATE INDEX idx_thesis_pending_thesis ON thesis_pending_conclusions(thesis_id, created_at DESC);
+    CREATE INDEX idx_forecast_jobs_status ON forecast_jobs(status, created_at, id);
+    CREATE INDEX idx_forecast_jobs_lease ON forecast_jobs(status, lease_until, id);
+    CREATE INDEX idx_forecast_records_instrument ON forecast_records(instrument_id, created_at DESC);
+    CREATE INDEX idx_forecast_outcomes_forecast ON forecast_outcomes(forecast_id, horizon);
+
+    CREATE TRIGGER thesis_condition_schedules_guarded_update
+    BEFORE UPDATE ON thesis_condition_schedules
+    WHEN NEW.condition_id IS NOT OLD.condition_id
+      OR NEW.created_at IS NOT OLD.created_at
+      OR NEW.active > OLD.active
+      OR NEW.next_due_at < OLD.next_due_at
+      OR NEW.transition_version != OLD.transition_version + 1
+      OR NEW.updated_at < OLD.updated_at
+      OR ((NEW.lease_owner IS NULL) != (NEW.lease_until IS NULL))
+      OR (NEW.lease_owner IS NOT NULL AND OLD.lease_owner IS NOT NULL
+          AND NEW.lease_owner IS NOT OLD.lease_owner)
+      OR (NEW.lease_until IS NOT NULL AND OLD.lease_until IS NOT NULL
+          AND NEW.lease_until < OLD.lease_until)
+      OR (NEW.last_attempt_at IS NOT NULL AND OLD.last_attempt_at IS NOT NULL
+          AND NEW.last_attempt_at < OLD.last_attempt_at)
+    BEGIN SELECT RAISE(ABORT, 'thesis schedule cursor must advance monotonically'); END;
+    CREATE TRIGGER thesis_condition_schedules_no_delete
+    BEFORE DELETE ON thesis_condition_schedules
+    BEGIN SELECT RAISE(ABORT, 'thesis schedule cursor is immutable'); END;
+
+    CREATE TRIGGER forecast_jobs_guarded_columns
+    BEFORE UPDATE ON forecast_jobs
+    WHEN NEW.id IS NOT OLD.id OR NEW.principal IS NOT OLD.principal
+      OR NEW.instrument_id IS NOT OLD.instrument_id OR NEW.horizon IS NOT OLD.horizon
+      OR NEW.catalog_id IS NOT OLD.catalog_id OR NEW.idempotency_key IS NOT OLD.idempotency_key
+      OR NEW.input_fingerprint IS NOT OLD.input_fingerprint
+      OR NEW.retry_of_job_id IS NOT OLD.retry_of_job_id OR NEW.attempt IS NOT OLD.attempt
+      OR NEW.created_at IS NOT OLD.created_at
+      OR NEW.transition_version != OLD.transition_version + 1
+      OR NEW.updated_at < OLD.updated_at
+      OR ((NEW.lease_owner IS NULL) != (NEW.lease_until IS NULL))
+      OR (OLD.status = 'running' AND NEW.status = 'running'
+          AND NEW.lease_owner IS NOT OLD.lease_owner)
+    BEGIN SELECT RAISE(ABORT, 'forecast job cursor cannot mutate immutable columns'); END;
+    CREATE TRIGGER forecast_jobs_valid_transition
+    BEFORE UPDATE ON forecast_jobs
+    WHEN NOT (
+        OLD.status = 'queued' AND NEW.status = 'running'
+        OR OLD.status = 'queued' AND NEW.status IN ('validation_failed', 'model_unavailable', 'interrupted')
+        OR OLD.status = 'running' AND NEW.status = 'running'
+        OR OLD.status = 'running' AND NEW.status IN (
+            'completed', 'validation_failed', 'model_unavailable', 'artifact_failed',
+            'timed_out', 'resource_limited', 'interrupted'
+        )
+    )
+    BEGIN SELECT RAISE(ABORT, 'forecast job cannot transition from its current state'); END;
+    CREATE TRIGGER forecast_jobs_no_delete
+    BEFORE DELETE ON forecast_jobs
+    BEGIN SELECT RAISE(ABORT, 'forecast jobs are immutable after terminal state'); END;
+
+    CREATE TRIGGER forecast_global_leases_guarded_update
+    BEFORE UPDATE ON forecast_global_leases
+    WHEN NEW.lease_name IS NOT OLD.lease_name
+      OR NEW.transition_version != OLD.transition_version + 1
+      OR NEW.updated_at < OLD.updated_at
+      OR ((NEW.lease_owner IS NULL) != (NEW.lease_until IS NULL))
+      OR (NEW.lease_until IS NOT NULL AND OLD.lease_until IS NOT NULL
+          AND NEW.lease_until < OLD.lease_until)
+    BEGIN SELECT RAISE(ABORT, 'forecast global lease cursor must advance monotonically'); END;
+    CREATE TRIGGER forecast_global_leases_no_delete
+    BEFORE DELETE ON forecast_global_leases
+    BEGIN SELECT RAISE(ABORT, 'forecast global lease cursor is immutable'); END;
+
+    CREATE TRIGGER shadow_import_batches_no_update BEFORE UPDATE ON shadow_import_batches BEGIN SELECT RAISE(ABORT, 'phase 05 facts are immutable'); END;
+    CREATE TRIGGER shadow_import_batches_no_delete BEFORE DELETE ON shadow_import_batches BEGIN SELECT RAISE(ABORT, 'phase 05 facts are immutable'); END;
+    CREATE TRIGGER shadow_trade_facts_no_update BEFORE UPDATE ON shadow_trade_facts BEGIN SELECT RAISE(ABORT, 'phase 05 facts are immutable'); END;
+    CREATE TRIGGER shadow_trade_facts_no_delete BEFORE DELETE ON shadow_trade_facts BEGIN SELECT RAISE(ABORT, 'phase 05 facts are immutable'); END;
+    CREATE TRIGGER shadow_evidence_sets_no_update BEFORE UPDATE ON shadow_evidence_sets BEGIN SELECT RAISE(ABORT, 'phase 05 facts are immutable'); END;
+    CREATE TRIGGER shadow_evidence_sets_no_delete BEFORE DELETE ON shadow_evidence_sets BEGIN SELECT RAISE(ABORT, 'phase 05 facts are immutable'); END;
+    CREATE TRIGGER shadow_evidence_batches_no_update BEFORE UPDATE ON shadow_evidence_batches BEGIN SELECT RAISE(ABORT, 'phase 05 facts are immutable'); END;
+    CREATE TRIGGER shadow_evidence_batches_no_delete BEFORE DELETE ON shadow_evidence_batches BEGIN SELECT RAISE(ABORT, 'phase 05 facts are immutable'); END;
+    CREATE TRIGGER shadow_evidence_members_no_update BEFORE UPDATE ON shadow_evidence_members BEGIN SELECT RAISE(ABORT, 'phase 05 facts are immutable'); END;
+    CREATE TRIGGER shadow_evidence_members_no_delete BEFORE DELETE ON shadow_evidence_members BEGIN SELECT RAISE(ABORT, 'phase 05 facts are immutable'); END;
+    CREATE TRIGGER shadow_evidence_exclusions_no_update BEFORE UPDATE ON shadow_evidence_exclusions BEGIN SELECT RAISE(ABORT, 'phase 05 facts are immutable'); END;
+    CREATE TRIGGER shadow_evidence_exclusions_no_delete BEFORE DELETE ON shadow_evidence_exclusions BEGIN SELECT RAISE(ABORT, 'phase 05 facts are immutable'); END;
+    CREATE TRIGGER shadow_candidates_no_update BEFORE UPDATE ON shadow_candidates BEGIN SELECT RAISE(ABORT, 'phase 05 facts are immutable'); END;
+    CREATE TRIGGER shadow_candidates_no_delete BEFORE DELETE ON shadow_candidates BEGIN SELECT RAISE(ABORT, 'phase 05 facts are immutable'); END;
+    CREATE TRIGGER shadow_candidate_runs_no_update BEFORE UPDATE ON shadow_candidate_runs BEGIN SELECT RAISE(ABORT, 'phase 05 facts are immutable'); END;
+    CREATE TRIGGER shadow_candidate_runs_no_delete BEFORE DELETE ON shadow_candidate_runs BEGIN SELECT RAISE(ABORT, 'phase 05 facts are immutable'); END;
+    CREATE TRIGGER shadow_candidate_evaluations_no_update BEFORE UPDATE ON shadow_candidate_evaluations BEGIN SELECT RAISE(ABORT, 'phase 05 facts are immutable'); END;
+    CREATE TRIGGER shadow_candidate_evaluations_no_delete BEFORE DELETE ON shadow_candidate_evaluations BEGIN SELECT RAISE(ABORT, 'phase 05 facts are immutable'); END;
+    CREATE TRIGGER shadow_retention_events_no_update BEFORE UPDATE ON shadow_retention_events BEGIN SELECT RAISE(ABORT, 'phase 05 facts are immutable'); END;
+    CREATE TRIGGER shadow_retention_events_no_delete BEFORE DELETE ON shadow_retention_events BEGIN SELECT RAISE(ABORT, 'phase 05 facts are immutable'); END;
+    CREATE TRIGGER theses_no_update BEFORE UPDATE ON theses BEGIN SELECT RAISE(ABORT, 'phase 05 facts are immutable'); END;
+    CREATE TRIGGER theses_no_delete BEFORE DELETE ON theses BEGIN SELECT RAISE(ABORT, 'phase 05 facts are immutable'); END;
+    CREATE TRIGGER thesis_versions_no_update BEFORE UPDATE ON thesis_versions BEGIN SELECT RAISE(ABORT, 'phase 05 facts are immutable'); END;
+    CREATE TRIGGER thesis_versions_no_delete BEFORE DELETE ON thesis_versions BEGIN SELECT RAISE(ABORT, 'phase 05 facts are immutable'); END;
+    CREATE TRIGGER thesis_valuation_anchors_no_update BEFORE UPDATE ON thesis_valuation_anchors BEGIN SELECT RAISE(ABORT, 'phase 05 facts are immutable'); END;
+    CREATE TRIGGER thesis_valuation_anchors_no_delete BEFORE DELETE ON thesis_valuation_anchors BEGIN SELECT RAISE(ABORT, 'phase 05 facts are immutable'); END;
+    CREATE TRIGGER thesis_conditions_no_update BEFORE UPDATE ON thesis_conditions BEGIN SELECT RAISE(ABORT, 'phase 05 facts are immutable'); END;
+    CREATE TRIGGER thesis_conditions_no_delete BEFORE DELETE ON thesis_conditions BEGIN SELECT RAISE(ABORT, 'phase 05 facts are immutable'); END;
+    CREATE TRIGGER thesis_condition_checks_no_update BEFORE UPDATE ON thesis_condition_checks BEGIN SELECT RAISE(ABORT, 'phase 05 facts are immutable'); END;
+    CREATE TRIGGER thesis_condition_checks_no_delete BEFORE DELETE ON thesis_condition_checks BEGIN SELECT RAISE(ABORT, 'phase 05 facts are immutable'); END;
+    CREATE TRIGGER thesis_pending_conclusions_no_update BEFORE UPDATE ON thesis_pending_conclusions BEGIN SELECT RAISE(ABORT, 'phase 05 facts are immutable'); END;
+    CREATE TRIGGER thesis_pending_conclusions_no_delete BEFORE DELETE ON thesis_pending_conclusions BEGIN SELECT RAISE(ABORT, 'phase 05 facts are immutable'); END;
+    CREATE TRIGGER thesis_review_events_no_update BEFORE UPDATE ON thesis_review_events BEGIN SELECT RAISE(ABORT, 'phase 05 facts are immutable'); END;
+    CREATE TRIGGER thesis_review_events_no_delete BEFORE DELETE ON thesis_review_events BEGIN SELECT RAISE(ABORT, 'phase 05 facts are immutable'); END;
+    CREATE TRIGGER forecast_records_no_update BEFORE UPDATE ON forecast_records BEGIN SELECT RAISE(ABORT, 'phase 05 facts are immutable'); END;
+    CREATE TRIGGER forecast_records_no_delete BEFORE DELETE ON forecast_records BEGIN SELECT RAISE(ABORT, 'phase 05 facts are immutable'); END;
+    CREATE TRIGGER forecast_outcomes_no_update BEFORE UPDATE ON forecast_outcomes BEGIN SELECT RAISE(ABORT, 'phase 05 facts are immutable'); END;
+    CREATE TRIGGER forecast_outcomes_no_delete BEFORE DELETE ON forecast_outcomes BEGIN SELECT RAISE(ABORT, 'phase 05 facts are immutable'); END;
+    CREATE TRIGGER forecast_calibration_facts_no_update BEFORE UPDATE ON forecast_calibration_facts BEGIN SELECT RAISE(ABORT, 'phase 05 facts are immutable'); END;
+    CREATE TRIGGER forecast_calibration_facts_no_delete BEFORE DELETE ON forecast_calibration_facts BEGIN SELECT RAISE(ABORT, 'phase 05 facts are immutable'); END;
+    """,
 )
 
 
