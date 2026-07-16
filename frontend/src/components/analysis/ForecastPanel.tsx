@@ -314,7 +314,7 @@ export function ForecastPanel({ instrument, title }: ForecastPanelProps) {
   })
   const task = useForecastTask({ instrument, jobId: activeJobId, enabled: !!activeJobId && createJob.data?.job.status !== 'completed' })
 
-  const capability = capabilityQuery.data?.modules.forecast
+  const capability = capabilityQuery.data?.modules?.forecast
   const unavailable = capability?.available === false
   const gateVerified = !!selectedCatalogView && selectedCatalogView.available === true && selectedCatalogView.integrity === 'verified'
   const selectedPathsPage = embedded.length ? embedded.slice(pathPage * PATH_PAGE_SIZE, (pathPage + 1) * PATH_PAGE_SIZE) : pathsFromPoints(pathsQuery.data?.items ?? [])

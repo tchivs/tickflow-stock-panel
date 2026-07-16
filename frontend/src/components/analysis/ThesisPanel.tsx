@@ -217,7 +217,7 @@ export function ThesisPanel({ instrument, title }: ThesisPanelProps) {
   const selectedVersion = versions.find(item => item.id === (selectedVersionId ?? currentVersionId)) ?? versions[0]
   const pendingItems = pendingQuery.data?.pending ?? []
   const checks = (checksQuery.data?.checks ?? []).filter(item => checkConditionId === 'all' || item.condition_id === checkConditionId)
-  const capability = capabilityQuery.data?.modules.thesis
+  const capability = capabilityQuery.data?.modules?.thesis
   const unavailable = capability?.available === false
   const knownConditions = useMemo(() => versions.flatMap(item => item.conditions).filter((item, index, all) => all.findIndex(other => other.id === item.id) === index), [versions])
 

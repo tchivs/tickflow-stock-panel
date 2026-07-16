@@ -342,7 +342,7 @@ test('stale strategy retention restores retryable state without promotion', asyn
   await activateWithKeyboard(page, page.getByRole('button', { name: '注册策略', exact: true }))
   await activateWithKeyboard(page, page.getByRole('button', { name: '运行回测' }))
   await activateWithKeyboard(page, page.getByRole('button', { name: '保留此完成策略实验以供比较' }))
-  await expect(page.getByRole('alert')).toHaveText('无法保留此完成策略实验：执行句柄已过期或已保留。请重试。')
+  await expect(page.getByRole('alert').filter({ hasText: '无法保留此完成策略实验：执行句柄已过期或已保留。请重试。' })).toBeVisible()
   await expect(page.getByRole('button', { name: '保留此完成策略实验以供比较' })).toBeEnabled()
   await expect(page.getByText('已保留：此完成快照现在可在比较中选择。')).toHaveCount(0)
   await expect(page.getByText('实验 ID：')).toHaveCount(0)

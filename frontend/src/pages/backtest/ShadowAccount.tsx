@@ -278,7 +278,7 @@ export function ShadowAccount() {
   const evaluationsQuery = useQuery({ queryKey: QK.shadow.evaluations(null, evaluationOffset, PAGE_SIZE), queryFn: () => phase5Api.shadowEvaluations(undefined, evaluationOffset, PAGE_SIZE), placeholderData: keepPreviousData })
   const retentionsQuery = useQuery({ queryKey: QK.shadow.retentions(null, retentionOffset, PAGE_SIZE), queryFn: () => phase5Api.shadowRetentions(undefined, retentionOffset, PAGE_SIZE), placeholderData: keepPreviousData })
 
-  const capability = capabilityQuery.data?.modules.shadow
+  const capability = capabilityQuery.data?.modules?.shadow
   const batches = Array.isArray(batchesQuery.data?.batches) ? batchesQuery.data.batches : []
   const evidenceSets = Array.isArray(evidenceQuery.data?.evidence_sets) ? evidenceQuery.data.evidence_sets : []
   const candidates = Array.isArray(candidatesQuery.data?.candidates) ? candidatesQuery.data.candidates : []
