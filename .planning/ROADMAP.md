@@ -246,7 +246,7 @@ Plans:
   2. User can view an investment thesis with its valuation anchor, invalidation conditions, and periodic evidence checks.
   3. Researcher can request and inspect a time-series forecast that includes quantiles, sampled paths, and the associated model checkpoint.
 
-**Plans**: 16/17 plans executed
+**Plans**: 17/17 plans executed
 
 Plans:
 
@@ -289,7 +289,7 @@ Plans:
 
 **Wave 7 — final acceptance**
 
-- [ ] 05-17-PLAN.md — Make all backend real-host and 13 browser scenarios green, plus optional pinned-model human-check.
+- [x] 05-17-PLAN.md — Make all backend real-host and 13 browser scenarios green, plus optional pinned-model human-check.
 
 **UI hint**: yes
 
@@ -303,4 +303,4 @@ Plans:
 | 2. Factor And Strategy Research | 8/8 | Complete    | 2026-07-11 |
 | 3. AI Analysis | 12/12 | Complete    | 2026-07-12 |
 | 4. Advanced Capabilities | 27/27 | Complete    | 2026-07-15 |
-| 5. Optional Enhancements | 16/17 | In Progress|  |
+| 5. Optional Enhancements | 17/17 | In Progress|  |

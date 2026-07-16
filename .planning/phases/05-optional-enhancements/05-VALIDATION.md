@@ -3,7 +3,7 @@ phase: 05
 slug: optional-enhancements
 status: approved
 nyquist_compliant: true
-wave_0_complete: false
+wave_0_complete: true
 created: 2026-07-15
 ---
 
@@ -40,16 +40,16 @@ The optional real-model smoke is `cd backend && uv run --extra forecast pytest t
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| 05-W0-01 | 05-02 Task 1 → 05-08 Task 1 | 0 contract / 2 green | SHDW-01 | T-05-02-01..04, T-05-08-01..03 | Immutable bounded import; invalid files create no evidence set | strict RED then unit/integration | `cd backend && uv run python tests/shadow/verify_red_contract.py --group import-evidence`; green owner: `uv run pytest tests/shadow/test_imports.py tests/shadow/test_evidence_sets.py -x` | ❌ W0 | ⬜ pending |
-| 05-W0-02 | 05-02 Task 2 → 05-08 Task 2 / 05-11 Task 1 | 0 contract / 2–3 green | SHDW-01 | T-05-02-05..06, T-05-08-04, T-05-11-01..02 | Candidate is allowlisted explainable rules; retention needs frozen non-overlap IS/OOS and no activation | strict RED then integration | `cd backend && uv run python tests/shadow/verify_red_contract.py --group distillation-evaluation`; green owner: `uv run pytest tests/shadow/test_distillation.py tests/shadow/test_evaluation_retention.py -x` | ❌ W0 | ⬜ pending |
-| 05-W0-03 | 05-03 Task 1 → 05-09 Task 1 | 0 contract / 2 green | THES-01 | T-05-03-01..03, T-05-09-01..03 | Versions/anchors/conditions append; restricted AST rejects injected fields/operators | strict RED then unit/integration | `cd backend && uv run python tests/theses/verify_red_contract.py --group contracts-versions`; green owner: `uv run pytest tests/theses/test_contracts.py tests/theses/test_versions.py -x` | ❌ W0 | ⬜ pending |
-| 05-W0-04 | 05-03 Task 2 → 05-12 Tasks 1–2 | 0 contract / 3 green | THES-01 | T-05-03-04..06, T-05-12-01..04 | Due checks are restart-idempotent; only server-authorized confirmation changes official state | strict RED then integration/API | `cd backend && uv run python tests/theses/verify_red_contract.py --group scheduler-lifecycle`; green owner: `uv run pytest tests/theses/test_scheduler.py tests/theses/test_lifecycle.py -x` | ❌ W0 | ⬜ pending |
-| 05-W0-05 | 05-04 Task 1 → 05-10 Task 1 | 0 contract / 2 green | FORE-01 | T-05-04-01..03, T-05-10-01..03 | Catalog rejects moving refs, mismatch, digest/type/root failure, unsafe loading, and foreign scope | strict RED then unit/host | `cd backend && uv run python tests/forecast/verify_red_contract.py --group catalog-input`; green owner: `uv run pytest tests/forecast/test_catalog.py -x` | ❌ W0 | ⬜ pending |
-| 05-W0-06 | 05-04 Task 1 → 05-10 Task 1 | 0 contract / 2 green | FORE-01 | T-05-04-03, T-05-10-03 | Only authorized governed daily stock OHLCV and exact 5/20/60 CN-A sessions enter frozen input | strict RED then integration | same catalog-input harness; green owner: `cd backend && uv run pytest tests/forecast/test_input.py -x` | ❌ W0 | ⬜ pending |
-| 05-W0-07 | 05-04 Task 2 → 05-10 Task 2 | 0 contract / 2 green | FORE-01 | T-05-04-02/05, T-05-10-02/04 | P10/P50/P90 derive from 32 retained pre-mean paths | strict RED then fixture/unit | `cd backend && uv run python tests/forecast/verify_red_contract.py --group adapter-runner`; green owner: `uv run pytest tests/forecast/test_kronos_adapter.py -x` | ❌ W0 | ⬜ pending |
-| 05-W0-08 | 05-04 Task 2 → 05-13 Tasks 1–2 | 0 contract / 3 green | FORE-01 | T-05-04-04..08, T-05-13-01..06 | CAS/idempotency/lease/retry/restart and bounded worker create no partial record | strict RED then integration | same adapter-runner harness; green owner: `cd backend && uv run pytest tests/forecast/test_runner.py -x` | ❌ W0 | ⬜ pending |
-| 05-W0-09 | 05-04 Task 3 → 05-14 Task 1 | 0 contract / 4 green | FORE-01 | T-05-04-09, T-05-14-01 | Mature outcomes/calibration append uniquely; retries never rewrite forecast | strict RED then integration | `cd backend && uv run python tests/forecast/verify_red_contract.py --group calibration`; green owner: `uv run pytest tests/forecast/test_calibration.py -x` | ❌ W0 | ⬜ pending |
-| 05-W0-10 | 05-05 Tasks 1–2 → 05-14 Task 2 / 05-15 / 05-16 / 05-17 | 0 contract / 4–7 green | SHDW-01, THES-01, FORE-01 | T-05-05-01..05, T-05-14-04..05, T-05-17-01..05 | Eight real-host combinations, completed-v1/no-action, and all 13 approved browser scenarios | strict RED then real host/browser | `cd backend && uv run python tests/verify_phase5_host_red.py`; `cd frontend && node e2e/verify-phase5-red-contract.mjs`; final green commands in Plan 05-17 | ❌ W0 | ⬜ pending |
+| 05-W0-01 | 05-02 Task 1 → 05-08 Task 1 | 0 contract / 2 green | SHDW-01 | T-05-02-01..04, T-05-08-01..03 | Immutable bounded import; invalid files create no evidence set | strict RED then unit/integration | `cd backend && uv run python tests/shadow/verify_red_contract.py --group import-evidence`; green owner: `uv run pytest tests/shadow/test_imports.py tests/shadow/test_evidence_sets.py -x` | ✅ exists | ✅ green |
+| 05-W0-02 | 05-02 Task 2 → 05-08 Task 2 / 05-11 Task 1 | 0 contract / 2–3 green | SHDW-01 | T-05-02-05..06, T-05-08-04, T-05-11-01..02 | Candidate is allowlisted explainable rules; retention needs frozen non-overlap IS/OOS and no activation | strict RED then integration | `cd backend && uv run python tests/shadow/verify_red_contract.py --group distillation-evaluation`; green owner: `uv run pytest tests/shadow/test_distillation.py tests/shadow/test_evaluation_retention.py -x` | ✅ exists | ✅ green |
+| 05-W0-03 | 05-03 Task 1 → 05-09 Task 1 | 0 contract / 2 green | THES-01 | T-05-03-01..03, T-05-09-01..03 | Versions/anchors/conditions append; restricted AST rejects injected fields/operators | strict RED then unit/integration | `cd backend && uv run python tests/theses/verify_red_contract.py --group contracts-versions`; green owner: `uv run pytest tests/theses/test_contracts.py tests/theses/test_versions.py -x` | ✅ exists | ✅ green |
+| 05-W0-04 | 05-03 Task 2 → 05-12 Tasks 1–2 | 0 contract / 3 green | THES-01 | T-05-03-04..06, T-05-12-01..04 | Due checks are restart-idempotent; only server-authorized confirmation changes official state | strict RED then integration/API | `cd backend && uv run python tests/theses/verify_red_contract.py --group scheduler-lifecycle`; green owner: `uv run pytest tests/theses/test_scheduler.py tests/theses/test_lifecycle.py -x` | ✅ exists | ✅ green |
+| 05-W0-05 | 05-04 Task 1 → 05-10 Task 1 | 0 contract / 2 green | FORE-01 | T-05-04-01..03, T-05-10-01..03 | Catalog rejects moving refs, mismatch, digest/type/root failure, unsafe loading, and foreign scope | strict RED then unit/host | `cd backend && uv run python tests/forecast/verify_red_contract.py --group catalog-input`; green owner: `uv run pytest tests/forecast/test_catalog.py -x` | ✅ exists | ✅ green |
+| 05-W0-06 | 05-04 Task 1 → 05-10 Task 1 | 0 contract / 2 green | FORE-01 | T-05-04-03, T-05-10-03 | Only authorized governed daily stock OHLCV and exact 5/20/60 CN-A sessions enter frozen input | strict RED then integration | same catalog-input harness; green owner: `cd backend && uv run pytest tests/forecast/test_input.py -x` | ✅ exists | ✅ green |
+| 05-W0-07 | 05-04 Task 2 → 05-10 Task 2 | 0 contract / 2 green | FORE-01 | T-05-04-02/05, T-05-10-02/04 | P10/P50/P90 derive from 32 retained pre-mean paths | strict RED then fixture/unit | `cd backend && uv run python tests/forecast/verify_red_contract.py --group adapter-runner`; green owner: `uv run pytest tests/forecast/test_kronos_adapter.py -x` | ✅ exists | ✅ green |
+| 05-W0-08 | 05-04 Task 2 → 05-13 Tasks 1–2 | 0 contract / 3 green | FORE-01 | T-05-04-04..08, T-05-13-01..06 | CAS/idempotency/lease/retry/restart and bounded worker create no partial record | strict RED then integration | same adapter-runner harness; green owner: `cd backend && uv run pytest tests/forecast/test_runner.py -x` | ✅ exists | ✅ green |
+| 05-W0-09 | 05-04 Task 3 → 05-14 Task 1 | 0 contract / 4 green | FORE-01 | T-05-04-09, T-05-14-01 | Mature outcomes/calibration append uniquely; retries never rewrite forecast | strict RED then integration | `cd backend && uv run python tests/forecast/verify_red_contract.py --group calibration`; green owner: `cd backend && uv run pytest tests/forecast/test_calibration.py -x` | ✅ exists | ✅ green |
+| 05-W0-10 | 05-05 Tasks 1–2 → 05-14 Task 2 / 05-15 / 05-16 / 05-17 | 0 contract / 4–7 green | SHDW-01, THES-01, FORE-01 | T-05-05-01..05, T-05-14-04..05, T-05-17-01..05 | Eight real-host combinations, completed-v1/no-action, and all 13 approved browser scenarios | strict RED then real host/browser | final green commands in Plan 05-17: 177 backend passed, exactly 13 browser scenarios passed | ✅ exists | ✅ green |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -57,13 +57,13 @@ The optional real-model smoke is `cd backend && uv run --extra forecast pytest t
 
 ## Wave 0 Requirements
 
-- [ ] `backend/tests/shadow/test_imports.py`, `test_evidence_sets.py`, `test_distillation.py`, `test_evaluation_retention.py`
-- [ ] `backend/tests/theses/test_contracts.py`, `test_versions.py`, `test_scheduler.py`, `test_lifecycle.py`
-- [ ] `backend/tests/forecast/test_catalog.py`, `test_input.py`, `test_kronos_adapter.py`, `test_runner.py`, `test_calibration.py`
-- [ ] `backend/tests/test_phase5_optional_host.py` — optional-module combinations, completed-v1 non-regression, and no-live-execution contract
-- [ ] `frontend/e2e/phase5-optional-enhancements.spec.ts` — desktop/narrow viewport, immutable history, pending confirmation, quantiles/paths, unavailable modules, and SSE reconnection
-- [ ] Deterministic fixtures for broker CSV/XLSX imports, duplicate/partial fills, governed OHLCV/calendar Parquet, a fixed sampled tensor, and maturity outcomes
-- [ ] Human-approved offline Kronos source/checkpoint policy; routine tests must never download models
+- [x] `backend/tests/shadow/test_imports.py`, `test_evidence_sets.py`, `test_distillation.py`, `test_evaluation_retention.py`
+- [x] `backend/tests/theses/test_contracts.py`, `test_versions.py`, `test_scheduler.py`, `test_lifecycle.py`
+- [x] `backend/tests/forecast/test_catalog.py`, `test_input.py`, `test_kronos_adapter.py`, `test_runner.py`, `test_calibration.py`
+- [x] `backend/tests/test_phase5_optional_host.py` — optional-module combinations, completed-v1 non-regression, and no-live-execution contract
+- [x] `frontend/e2e/phase5-optional-enhancements.spec.ts` — desktop/narrow viewport, immutable history, pending confirmation, quantiles/paths, unavailable modules, and SSE reconnection
+- [x] Deterministic fixtures for broker CSV/XLSX imports, duplicate/partial fills, governed OHLCV/calendar Parquet, a fixed sampled tensor, and maturity outcomes
+- [x] Human-approved offline Kronos source/checkpoint policy; routine tests must never download models
 
 ---
 
@@ -100,6 +100,6 @@ No sequence contains three implementation tasks without an automated sample. No 
 - [x] Focused task commands target <30s; optional real-model smoke is isolated from routine sampling
 - [x] Routine suites make no external model/network requests
 - [x] `nyquist_compliant: true` set in frontmatter
-- [x] `wave_0_complete: false` intentionally remains until execution creates and runs the contracts
+- [x] `wave_0_complete: true` after all production owners and final host/browser gates passed
 
-**Approval:** approved — planning review completed 2026-07-15; execution status remains pending.
+**Approval:** approved — planning review completed 2026-07-15; execution completed 2026-07-16 with 177 backend tests and exactly 13 browser scenarios green.

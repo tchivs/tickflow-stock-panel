@@ -77,9 +77,9 @@
 | ADV-03 | Phase 4 | Complete |
 | SAFE-01 | Phase 4 | Complete |
 | SAFE-02 | Phase 4 | Complete |
-| SHDW-01 | Phase 5 | Optional v2 |
-| THES-01 | Phase 5 | Optional v2 |
-| FORE-01 | Phase 5 | Optional v2 |
+| SHDW-01 | Phase 5 | Complete |
+| THES-01 | Phase 5 | Complete |
+| FORE-01 | Phase 5 | Complete |
 
 **Coverage:**
 
