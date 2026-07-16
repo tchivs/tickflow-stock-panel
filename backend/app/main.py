@@ -586,8 +586,22 @@ async def lifespan(app: FastAPI):
         logger.warning("monitor engine load failed: %s", e)
     app.state.monitor_engine = monitor_engine
 
+    from app.optional_modules import build_and_install_optional_module_host
+
+    app.state.optional_module_host = build_and_install_optional_module_host(
+        app=app,
+        database_path=operational.database_path,
+        data_root=store.data_dir,
+        scheduler=app.state.scheduler,
+        quote_service=qs,
+        governed_repository=repo,
+    )
+
     yield
 
+    from app.optional_modules import shutdown_optional_module_host
+
+    shutdown_optional_module_host(app)
     if app.state.scheduler:
         app.state.scheduler.shutdown(wait=False)
     ps = getattr(app.state, "pull_scheduler", None)

@@ -209,7 +209,7 @@ def _assert_completed_v1_loop(app: Any, client: TestClient) -> None:
     assert data_status.status_code == portfolio.status_code == monitor.status_code == intraday.status_code == 200
     assert missing_decision.status_code == 404
     assert isinstance(portfolio.json()["accounts"], list)
-    assert isinstance(monitor.json(), list)
+    assert isinstance(monitor.json()["rules"], list)
     assert any(route.path == "/api/intraday/stream" for route in app.routes)
     subscriber = app.state.quote_service.subscribe(
         analysis_scope=app.state.resolve_analysis_subject_scope(None),
@@ -314,7 +314,11 @@ def test_optional_success_failure_and_terminal_paths_call_no_live_actions(
     with _real_host(tmp_path, monkeypatch, frozenset(MODULE_NAMES), spies=spies) as (_app, client):
         _authenticate(client)
         operations = (
-            ("/api/shadow/evidence-sets/server-evidence/candidates/server-candidate/retain", {}),
+            ("/api/shadow/evidence-sets/server-evidence/candidates/server-candidate/retain", {
+                "in_sample_evaluation_id": "server-is",
+                "out_of_sample_evaluation_id": "server-oos",
+                "rationale": "research-only retention evidence",
+            }),
             ("/api/theses/pending/server-pending/confirm", {"rationale": "人工确认理由至少十个字符。"}),
             ("/api/theses/pending/server-pending/reject", {"rationale": "人工驳回理由至少十个字符。"}),
             ("/api/forecast/instruments/600000.SH/jobs", {"horizon": 20, "catalog_id": "approved-mini", "idempotency_key": "phase5-host"}),
