@@ -246,7 +246,7 @@ Plans:
   2. User can view an investment thesis with its valuation anchor, invalidation conditions, and periodic evidence checks.
   3. Researcher can request and inspect a time-series forecast that includes quantiles, sampled paths, and the associated model checkpoint.
 
-**Plans**: 5/17 plans executed
+**Plans**: 7/17 plans executed
 
 Plans:
 
@@ -260,8 +260,8 @@ Plans:
 
 **Wave 1 — shared and dependency foundations**
 
-- [ ] 05-06-PLAN.md — Add focused migration, immutable artifact, and optional capability foundation.
-- [ ] 05-07-PLAN.md — Add approved optional lock, pinned vendor sync, and explicit checkpoint provisioner.
+- [x] 05-06-PLAN.md — Add focused migration, immutable artifact, and optional capability foundation.
+- [x] 05-07-PLAN.md — Add approved optional lock, pinned vendor sync, and explicit checkpoint provisioner.
 
 **Wave 2 — parallel immutable domain foundations**
 
@@ -303,4 +303,4 @@ Plans:
 | 2. Factor And Strategy Research | 8/8 | Complete    | 2026-07-11 |
 | 3. AI Analysis | 12/12 | Complete    | 2026-07-12 |
 | 4. Advanced Capabilities | 27/27 | Complete    | 2026-07-15 |
-| 5. Optional Enhancements | 5/17 | In Progress|  |
+| 5. Optional Enhancements | 7/17 | In Progress|  |

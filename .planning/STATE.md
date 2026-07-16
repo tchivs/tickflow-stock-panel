@@ -5,15 +5,15 @@ milestone_name: milestone
 current_phase: 05
 current_phase_name: Optional Enhancements
 status: executing
-stopped_at: Completed 05-05-PLAN.md
-last_updated: "2026-07-16T04:02:11.333Z"
+stopped_at: Completed 05-07-PLAN.md
+last_updated: "2026-07-16T05:50:13.623Z"
 last_activity: 2026-07-16
 last_activity_desc: Plan 05-05 strict host and browser RED contracts completed
 progress:
   total_phases: 5
   completed_phases: 4
-  total_plans: 79
-  completed_plans: 65
+  total_plans: 66
+  completed_plans: 56
 ---
 
 # Project State
@@ -28,11 +28,11 @@ See: .planning/PROJECT.md (updated 2026-07-10)
 ## Current Position
 
 Phase: 05 — Optional Enhancements
-Plan: 05 of 17
+Plan: 8 of 17
 Status: Executing — Wave 0 contracts
 Last activity: 2026-07-16 — Plan 05-05 strict host and browser RED contracts completed
 
-Progress: [████████░░] 82%
+Progress: [█████████░] 85%
 
 ## Performance Metrics
 
@@ -88,6 +88,7 @@ Progress: [████████░░] 82%
 | Plan | Duration | Tasks | Files |
 |------|----------|-------|-------|
 | Phase 05 P05 | 920 | 2 tasks | 5 files |
+| Phase 05 P07 | 12m 30s | 3 tasks | 13 files |
 
 ## Accumulated Context
 
@@ -154,6 +155,9 @@ No implementation decision was explicitly locked by the architecture intake. Req
 - [Phase ?]: Phase 05 optional-host contracts start the single production FastAPI lifespan and limit test overrides to independent deployment probes and failure injection.
 - [Phase ?]: Phase 05 browser RED accepts exactly one scenario-specific missing production locator per UI-SPEC scenario; all fixture, syntax, launch, skip, retry, timeout, external-request, and unexpected-pass failures remain fatal.
 - [Phase ?]: Descriptor-less SHDW-01 and THES-01 edges remain flagged-unverified until final named green host/browser scenarios; no probe descriptor is invented in Wave 0.
+- [Phase ?]: Kronos-base revision 2b554741eca47781b64468546e77fef3e85130e6 is cataloged only with Tokenizer-base and remains explicit-provisioning-only.
+- [Phase ?]: Provisioning admits only config.json and model.safetensors at immutable revisions, verifies full SHA-256 in temporary staging, and atomically publishes the deployment catalog.
+- [Phase ?]: Checkpoint verification and routine runtime paths stay local-only; existing mismatched assets are rejected rather than overwritten.
 
 ### Pending Todos
 
@@ -171,6 +175,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-07-16T04:02:11.325Z
-Stopped at: Completed 05-05-PLAN.md
+Last session: 2026-07-16T05:50:13.613Z
+Stopped at: Completed 05-07-PLAN.md
 Resume file: None
