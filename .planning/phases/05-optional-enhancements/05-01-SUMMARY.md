@@ -66,8 +66,9 @@ approved_at: 2026-07-16T03:41:52Z
 | Kronos-Tokenizer-2k | `26966d0035065a0cae0ebad7af8ece35bc1fb51c` | `b97ec46b3b72160509e289183eaf7bdf5f0dac5bb9b49522f6d46638a99a8717` | approved only with Kronos-mini |
 | Kronos-small | `901c26c1332695a2a8f243eb2f37243a37bea320` | `b082dfcbd8e8c142a725c8bbb99781802f38fec81210e13479effb32b3c3e020` | approved optional catalog model |
 | Kronos-Tokenizer-base | `0e0117387f39004a9016484a186a908917e22426` | `59d85f6af76a2c3b8240ea06cb21db4213b4eeca053f246b23e29cf832fc6bee` | approved only with small/base family |
+| Kronos-base | `2b554741eca47781b64468546e77fef3e85130e6` | `abff193acab6db1a0368e9773e75799d11403b6d054ee6d5f0a11aeabc5f4b83` | approved optional catalog model; explicit operator provisioning only |
 
-Hugging Face metadata identifies all four assets as MIT-tagged safetensors repositories. Expanded tree metadata reports the exact LFS SHA-256 values above and safe/no-code-execution scanner results.
+Hugging Face metadata identifies all five assets as MIT-tagged safetensors repositories. Expanded tree metadata reports the exact LFS SHA-256 values above and safe/no-code-execution scanner results.
 
 ## Approved Runtime Policy
 
@@ -81,7 +82,7 @@ Hugging Face metadata identifies all four assets as MIT-tagged safetensors repos
 
 ## Human Gate Evidence
 
-At `2026-07-16T03:41:52Z`, the exact table above was presented after reading official PyPI, GitHub, and Hugging Face API metadata. The user selected **“全部批准”**. No row was inferred, omitted, or partially approved.
+At `2026-07-16T03:41:52Z`, the initial exact table was presented after reading official PyPI, GitHub, and Hugging Face API metadata, and the user selected **“全部批准”**. At `2026-07-16T05:33:17Z`, the omitted `Kronos-base` optional catalog row was separately presented with its immutable revision, 409,264,008-byte safetensors digest, MIT tag, and safe/no-code-execution scan; the user selected **“批准为可选目录项”**. No row was inferred, omitted, or partially approved.
 
 ## Deviations From Plan
 
