@@ -7,11 +7,10 @@ the frozen input descriptor.
 """
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from datetime import date
-import math
-from typing import Any, Protocol
-
+from typing import Protocol
 
 _REQUIRED_METRICS = (
     "precision",
@@ -187,6 +186,9 @@ class ShadowEvaluationService:
         cost_policy: dict[str, float],
         retry_of_evaluation_id: str | None,
     ) -> dict[str, object]:
+        artifact = frozen_input.get("artifact")
+        if not isinstance(artifact, Mapping):
+            raise ShadowEvaluationError("frozen artifact descriptor is invalid")
         payload: dict[str, object] = {
             "candidate_id": str(candidate["id"]),
             "evidence_set_id": str(evidence["id"]),
@@ -194,7 +196,7 @@ class ShadowEvaluationService:
             "split_kind": split_kind,
             "window": dict(window),
             "governed_fingerprint": str(frozen_input["governed_fingerprint"]),
-            "artifact": dict(frozen_input["artifact"]),
+            "artifact": dict(artifact),
             "adjustment_policy": adjustment_policy,
             "cost_policy": dict(cost_policy),
         }
@@ -275,10 +277,11 @@ class ShadowEvaluationService:
     @staticmethod
     def _runner_candidate(candidate: Mapping[str, object]) -> dict[str, object]:
         """Pass only replayable rule data, never estimator or repository internals."""
+        limitations = candidate.get("limitations")
         return {
             "id": str(candidate["id"]),
             "rules": candidate["rules"],
-            "limitations": list(candidate.get("limitations", [])),
+            "limitations": list(limitations) if isinstance(limitations, list) else [],
         }
 
     @classmethod

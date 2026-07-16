@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import date
-from typing import Protocol
+from typing import Any, Protocol
 
 from app.shadow.evaluation import ShadowEvaluationService
 
@@ -21,6 +21,15 @@ class ShadowWorkflowRepository(Protocol):
 
     def append_retention_event(self, payload: dict[str, object]) -> dict[str, object]: ...
 
+    def create_evidence_set(
+        self,
+        *,
+        principal: str,
+        included_batch_ids: list[str],
+        included_trade_ids: list[str],
+        exclusions: list[Mapping[str, object]],
+    ) -> dict[str, object]: ...
+
 
 class ShadowService:
     """Coordinate immutable Shadow facts without any completed-v1 action dependency."""
@@ -30,9 +39,55 @@ class ShadowService:
         *,
         repository: ShadowWorkflowRepository,
         evaluation_service: ShadowEvaluationService,
+        importer: object | None = None,
+        distiller: object | None = None,
     ) -> None:
         self.repository = repository
         self.evaluation_service = evaluation_service
+        self.importer = importer
+        self.distiller = distiller
+
+    def preview_import(self, **request: object) -> dict[str, object]:
+        return self._invoke(self.importer, "preview", request)
+
+    def confirm_import(self, **request: object) -> dict[str, object]:
+        return self._invoke(self.importer, "confirm_import", request)
+
+    def create_evidence_set(
+        self,
+        *,
+        principal: str,
+        included_batch_ids: list[str],
+        included_trade_ids: list[str],
+        exclusions: list[Mapping[str, object]],
+    ) -> dict[str, object]:
+        return self.repository.create_evidence_set(
+            principal=self._text(principal, "principal", 128),
+            included_batch_ids=included_batch_ids,
+            included_trade_ids=included_trade_ids,
+            exclusions=exclusions,
+        )
+
+    def distill_candidate(self, **request: object) -> dict[str, object]:
+        return self._invoke(self.distiller, "distill", request)
+
+    def evaluate_candidate(self, **request: object) -> dict[str, dict[str, object]]:
+        return self.evaluation_service.evaluate_candidate(**request)  # type: ignore[arg-type]
+
+    def retry_evaluation(self, *, evaluation_id: str) -> dict[str, object]:
+        return self.evaluation_service.retry_evaluation(evaluation_id=evaluation_id)
+
+    @staticmethod
+    def _invoke(
+        component: object | None, method_name: str, request: dict[str, object]
+    ) -> dict[str, object]:
+        method = getattr(component, method_name, None)
+        if not callable(method):
+            raise RuntimeError("Shadow optional component is unavailable")
+        result: Any = method(**request)
+        if not isinstance(result, dict):
+            raise RuntimeError("Shadow optional component returned an invalid record")
+        return result
 
     def retain_candidate(
         self,
@@ -75,6 +130,7 @@ class ShadowService:
             evidence_set_id=evidence_key,
         )
 
+        assert evidence is not None
         return self.repository.append_retention_event(
             {
                 "candidate_id": candidate_key,

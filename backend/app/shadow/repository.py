@@ -1,13 +1,13 @@
 """Append-only SQLite persistence for immutable Shadow evidence facts."""
 from __future__ import annotations
 
+import json
+import sqlite3
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import UTC, date, datetime
 from hashlib import sha256
-import json
 from pathlib import Path
-import sqlite3
 from typing import Any
 from uuid import uuid4
 
@@ -692,7 +692,7 @@ class ShadowRepository:
                 or payload["evidence_set_fingerprint"] != evidence["fingerprint"]
                 or not self._eligible_evaluation(in_sample, candidate_id, "in_sample")
                 or not self._eligible_evaluation(out_of_sample, candidate_id, "out_of_sample")
-                or str(in_sample["window"]["end"]) >= str(out_of_sample["window"]["start"])
+                or not self._ordered_evaluations(in_sample, out_of_sample)
             ):
                 raise ShadowRepositoryError("retention requires canonical passing IS/OOS evidence")
             existing = connection.execute(
@@ -804,6 +804,20 @@ class ShadowRepository:
         else:
             public.pop("terminal_reason", None)
         return public
+
+    @staticmethod
+    def _ordered_evaluations(
+        in_sample: Mapping[str, object] | None,
+        out_of_sample: Mapping[str, object] | None,
+    ) -> bool:
+        if in_sample is None or out_of_sample is None:
+            return False
+        in_window, out_window = in_sample.get("window"), out_of_sample.get("window")
+        return bool(
+            isinstance(in_window, Mapping)
+            and isinstance(out_window, Mapping)
+            and str(in_window.get("end", "")) < str(out_window.get("start", ""))
+        )
 
     @staticmethod
     def _eligible_evaluation(
