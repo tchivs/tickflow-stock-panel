@@ -597,6 +597,265 @@ class ForecastRepository:
             rows = connection.execute("SELECT * FROM forecast_records ORDER BY created_at, id").fetchall()
         return [self._record_row(row) for row in rows]
 
+    def get_forecast(self, forecast_id: str) -> dict[str, Any] | None:
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM forecast_records WHERE id = ?", (forecast_id,)
+            ).fetchone()
+        return None if row is None else self._record_row(row)
+
+    def list_forecasts_for_instrument(self, instrument_id: str) -> list[dict[str, Any]]:
+        with self.connection() as connection:
+            rows = connection.execute(
+                """SELECT * FROM forecast_records
+                   WHERE instrument_id = ? ORDER BY created_at DESC, id DESC""",
+                (instrument_id,),
+            ).fetchall()
+        return [self._record_row(row) for row in rows]
+
+    def outcomes_for_forecast(self, forecast_id: str) -> list[dict[str, Any]]:
+        with self.connection() as connection:
+            rows = connection.execute(
+                """SELECT o.*, f.calendar_revision
+                   FROM forecast_outcomes AS o
+                   JOIN forecast_records AS f ON f.id = o.forecast_id
+                   WHERE o.forecast_id = ? ORDER BY o.horizon, o.observed_at, o.id""",
+                (forecast_id,),
+            ).fetchall()
+        return [self._outcome_row(row) for row in rows]
+
+    def outcome_for_horizon(self, forecast_id: str, horizon: int) -> dict[str, Any] | None:
+        with self.connection() as connection:
+            row = connection.execute(
+                """SELECT o.*, f.calendar_revision
+                   FROM forecast_outcomes AS o
+                   JOIN forecast_records AS f ON f.id = o.forecast_id
+                   WHERE o.forecast_id = ? AND o.horizon = ?""",
+                (forecast_id, horizon),
+            ).fetchone()
+        return None if row is None else self._outcome_row(row)
+
+    def calibration_for_outcome(self, outcome_id: str) -> dict[str, Any] | None:
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM forecast_calibration_facts WHERE outcome_id = ?",
+                (outcome_id,),
+            ).fetchone()
+        return None if row is None else self._calibration_row(row)
+
+    def calibration_facts_for_forecast(self, forecast_id: str) -> list[dict[str, Any]]:
+        with self.connection() as connection:
+            rows = connection.execute(
+                """SELECT * FROM forecast_calibration_facts
+                   WHERE forecast_id = ? ORDER BY coverage_start, id""",
+                (forecast_id,),
+            ).fetchall()
+        return [self._calibration_row(row) for row in rows]
+
+    def append_maturity_fact(
+        self,
+        *,
+        forecast_id: str,
+        horizon: int,
+        status: str,
+        actual_session_id: str,
+        actual_close: float | None,
+        actual_fingerprint: str | None,
+        reason: str | None,
+        observed_at: str,
+        metric_schema: str,
+        close_mae: float | None,
+        interval_covered: bool | None,
+        pinball_p10: float | None,
+        pinball_p50: float | None,
+        pinball_p90: float | None,
+    ) -> dict[str, Any]:
+        """Append one canonical outcome and its calibration fact atomically."""
+        if horizon not in {5, 20, 60} or status not in {"evaluated", "unevaluable"}:
+            raise ValueError("forecast maturity fact is invalid")
+        if status == "evaluated" and actual_close is None:
+            raise ValueError("evaluated forecast outcome requires an actual close")
+        if status == "unevaluable" and not reason:
+            raise ValueError("unevaluable forecast outcome requires a reason")
+        if actual_fingerprint is not None and not _SHA256.fullmatch(actual_fingerprint):
+            raise ValueError("forecast actual fingerprint is invalid")
+        with self._immediate() as connection:
+            existing = connection.execute(
+                """SELECT o.*, f.calendar_revision
+                   FROM forecast_outcomes AS o
+                   JOIN forecast_records AS f ON f.id = o.forecast_id
+                   WHERE o.forecast_id = ? AND o.horizon = ?""",
+                (forecast_id, horizon),
+            ).fetchone()
+            if existing is not None:
+                return self._outcome_row(existing)
+            if connection.execute(
+                "SELECT 1 FROM forecast_records WHERE id = ?", (forecast_id,)
+            ).fetchone() is None:
+                raise ValueError("forecast record does not exist")
+            outcome_id = str(uuid4())
+            outcome_values = None if actual_close is None else _canonical_json({"close": actual_close})
+            connection.execute(
+                """INSERT INTO forecast_outcomes
+                   (id, forecast_id, horizon, status, actual_session_id, actual_value_json,
+                    actual_fingerprint, reason, observed_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    outcome_id,
+                    forecast_id,
+                    horizon,
+                    status,
+                    actual_session_id,
+                    outcome_values,
+                    actual_fingerprint,
+                    reason,
+                    observed_at,
+                ),
+            )
+            connection.execute(
+                """INSERT INTO forecast_calibration_facts
+                   (id, forecast_id, outcome_id, metric_schema, close_mae,
+                    p10_p90_interval_covered, p10_pinball_loss, p50_pinball_loss,
+                    p90_pinball_loss, coverage_start, coverage_end, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    str(uuid4()),
+                    forecast_id,
+                    outcome_id,
+                    metric_schema,
+                    close_mae,
+                    None if interval_covered is None else int(interval_covered),
+                    pinball_p10,
+                    pinball_p50,
+                    pinball_p90,
+                    actual_session_id,
+                    actual_session_id,
+                    observed_at,
+                ),
+            )
+            row = connection.execute(
+                """SELECT o.*, f.calendar_revision
+                   FROM forecast_outcomes AS o
+                   JOIN forecast_records AS f ON f.id = o.forecast_id
+                   WHERE o.id = ?""",
+                (outcome_id,),
+            ).fetchone()
+        assert row is not None
+        return self._outcome_row(row)
+
+    def calibration_summary(self, *, metric_schema: str) -> dict[str, Any]:
+        with self.connection() as connection:
+            row = connection.execute(
+                """SELECT COUNT(close_mae) AS sample_count,
+                          MIN(CASE WHEN close_mae IS NOT NULL THEN coverage_start END) AS coverage_start,
+                          MAX(CASE WHEN close_mae IS NOT NULL THEN coverage_end END) AS coverage_end
+                   FROM forecast_calibration_facts WHERE metric_schema = ?""",
+                (metric_schema,),
+            ).fetchone()
+        assert row is not None
+        match = re.search(r"-v([1-9][0-9]*)$", metric_schema)
+        return {
+            "metric_schema": metric_schema,
+            "metric_version": int(match.group(1)) if match else 1,
+            "sample_count": int(row["sample_count"]),
+            "coverage_start": row["coverage_start"],
+            "coverage_end": row["coverage_end"],
+        }
+
+    def expire_maturity_leases(self, *, now: str | datetime) -> int:
+        """Validate the recovery cursor time; maturity commits are lease-free and atomic."""
+        _as_utc(now)
+        return 0
+
+    def insert_fixture_forecast(self, payload: Mapping[str, object]) -> dict[str, Any]:
+        """Insert one complete immutable record for focused governed-boundary tests."""
+        forecast_id = str(payload["id"])
+        instrument_id = str(payload["instrument_id"])
+        horizon = int(payload["horizon"])
+        fingerprint = str(payload["input_fingerprint"])
+        created_at = str(payload["created_at"])
+        job_id = f"fixture-job-{forecast_id}"
+        descriptor = {
+            "artifact_id": f"fixture-{forecast_id}",
+            "relative_path": f"forecast/{forecast_id}/paths.parquet",
+            "schema_version": "forecast-output-v1",
+            "byte_size": 1,
+            "checksum_sha256": str(payload["paths_checksum_sha256"]),
+            "sample_count": 32,
+            "horizon": horizon,
+            "feature_count": 6,
+            "quantiles": payload.get("quantiles", {}),
+            "quantiles_checksum_sha256": payload.get("quantiles_checksum_sha256"),
+            "checkpoint_provenance": payload.get("checkpoint_provenance", {}),
+        }
+        with self._immediate() as connection:
+            existing = connection.execute(
+                "SELECT * FROM forecast_records WHERE id = ?", (forecast_id,)
+            ).fetchone()
+            if existing is not None:
+                return self._record_row(existing)
+            connection.execute(
+                """INSERT INTO forecast_jobs
+                   (id, principal, instrument_id, horizon, catalog_id, idempotency_key,
+                    input_fingerprint, status, transition_version, retry_of_job_id, attempt,
+                    lease_owner, lease_until, terminal_reason, created_at, updated_at)
+                   VALUES (?, 'fixture-principal', ?, ?, 'fixture-catalog', ?, ?, 'completed',
+                           1, NULL, 1, NULL, NULL, NULL, ?, ?)""",
+                (job_id, instrument_id, horizon, job_id, fingerprint, created_at, created_at),
+            )
+            connection.execute(
+                """INSERT INTO forecast_records
+                   (id, job_id, instrument_id, origin_session_id, calendar_id, calendar_revision,
+                    future_session_ids_json, input_fingerprint, input_artifact_descriptor_json,
+                    horizon, lookback, seed, temperature, top_k, top_p, sample_count, catalog_id,
+                    source_revision, source_digest_sha256, model_revision, model_digest_sha256,
+                    tokenizer_revision, tokenizer_digest_sha256, output_artifact_descriptor_json,
+                    paths_checksum_sha256, validation_warnings_json, created_at)
+                   VALUES (?, ?, ?, ?, 'cn-a', ?, ?, ?, '{}', ?, 1, 0, 1.0, 1, 1.0, 32,
+                           'fixture-catalog', ?, ?, ?, ?, ?, ?, ?, ?, '[]', ?)""",
+                (
+                    forecast_id,
+                    job_id,
+                    instrument_id,
+                    str(payload["origin_session_id"]),
+                    str(payload["calendar_revision"]),
+                    _canonical_json(payload["future_session_ids"]),
+                    fingerprint,
+                    horizon,
+                    str(payload.get("checkpoint_provenance", {}).get("source_revision", "fixture-source")),
+                    fingerprint,
+                    str(payload.get("checkpoint_provenance", {}).get("model_revision", "fixture-model")),
+                    fingerprint,
+                    str(payload.get("checkpoint_provenance", {}).get("tokenizer_revision", "fixture-tokenizer")),
+                    fingerprint,
+                    _canonical_json(descriptor),
+                    str(payload["paths_checksum_sha256"]),
+                    created_at,
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM forecast_records WHERE id = ?", (forecast_id,)
+            ).fetchone()
+        assert row is not None
+        return self._record_row(row)
+
+    @staticmethod
+    def _outcome_row(row: sqlite3.Row) -> dict[str, Any]:
+        outcome = dict(row)
+        raw_values = outcome.pop("actual_value_json")
+        values = json.loads(raw_values) if raw_values else None
+        outcome["actual_close"] = None if values is None else values.get("close")
+        return outcome
+    @staticmethod
+    def _calibration_row(row: sqlite3.Row) -> dict[str, Any]:
+        fact = dict(row)
+        covered = fact.pop("p10_p90_interval_covered")
+        fact["p10_p90_interval_covered"] = None if covered is None else bool(covered)
+        fact["pinball_p10"] = fact.pop("p10_pinball_loss")
+        fact["pinball_p50"] = fact.pop("p50_pinball_loss")
+        fact["pinball_p90"] = fact.pop("p90_pinball_loss")
+        return fact
+
     @staticmethod
     def _record_row(row: sqlite3.Row) -> dict[str, Any]:
         record = dict(row)
@@ -607,4 +866,13 @@ class ForecastRepository:
             "validation_warnings_json",
         ):
             record[field.removesuffix("_json")] = json.loads(record.pop(field))
+        output = record["output_artifact_descriptor"]
+        if isinstance(output, dict):
+            for field in (
+                "quantiles",
+                "quantiles_checksum_sha256",
+                "checkpoint_provenance",
+            ):
+                if field in output:
+                    record[field] = output[field]
         return record
