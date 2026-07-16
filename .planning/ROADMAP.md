@@ -246,15 +246,15 @@ Plans:
   2. User can view an investment thesis with its valuation anchor, invalidation conditions, and periodic evidence checks.
   3. Researcher can request and inspect a time-series forecast that includes quantiles, sampled paths, and the associated model checkpoint.
 
-**Plans**: 3/17 plans executed
+**Plans**: 5/17 plans executed
 
 Plans:
 
 **Wave 0 — executable contracts and blocking supply-chain gate**
 
 - [x] 05-01-PLAN.md — Human-approve optional packages, pinned Kronos source, and local checkpoint policy.
-- [ ] 05-02-PLAN.md — Create strict Shadow RED contracts and exact-failure harness.
-- [ ] 05-03-PLAN.md — Create strict Thesis RED contracts and exact-failure harness.
+- [x] 05-02-PLAN.md — Create strict Shadow RED contracts and exact-failure harness.
+- [x] 05-03-PLAN.md — Create strict Thesis RED contracts and exact-failure harness.
 - [x] 05-04-PLAN.md — Create focused Forecast catalog/input, adapter/runner, and calibration RED contracts/harness.
 - [x] 05-05-PLAN.md — Create strict eight-host-combination and 13-scenario browser contracts/harnesses.
 
@@ -303,4 +303,4 @@ Plans:
 | 2. Factor And Strategy Research | 8/8 | Complete    | 2026-07-11 |
 | 3. AI Analysis | 12/12 | Complete    | 2026-07-12 |
 | 4. Advanced Capabilities | 27/27 | Complete    | 2026-07-15 |
-| 5. Optional Enhancements | 3/17 | In Progress|  |
+| 5. Optional Enhancements | 5/17 | In Progress|  |
