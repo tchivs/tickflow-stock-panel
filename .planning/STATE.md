@@ -5,15 +5,15 @@ milestone_name: milestone
 current_phase: 05
 current_phase_name: Optional Enhancements
 status: executing
-stopped_at: Completed 05-08-PLAN.md
-last_updated: "2026-07-16T06:12:07.610Z"
+stopped_at: Completed 05-11-PLAN.md
+last_updated: "2026-07-16T06:35:42.570Z"
 last_activity: 2026-07-16
 last_activity_desc: Plan 05-05 strict host and browser RED contracts completed
 progress:
   total_phases: 5
   completed_phases: 4
-  total_plans: 66
-  completed_plans: 57
+  total_plans: 79
+  completed_plans: 72
 ---
 
 # Project State
@@ -28,11 +28,11 @@ See: .planning/PROJECT.md (updated 2026-07-10)
 ## Current Position
 
 Phase: 05 — Optional Enhancements
-Plan: 9 of 17
+Plan: 10 of 17
 Status: Executing — Wave 0 contracts
 Last activity: 2026-07-16 — Plan 05-05 strict host and browser RED contracts completed
 
-Progress: [█████████░] 86%
+Progress: [█████████░] 91%
 
 ## Performance Metrics
 
@@ -90,6 +90,7 @@ Progress: [█████████░] 86%
 | Phase 05 P05 | 920 | 2 tasks | 5 files |
 | Phase 05 P07 | 12m 30s | 3 tasks | 13 files |
 | Phase 05 P08 | 15m 9s | 2 tasks | 6 files |
+| Phase 05 P11 | 15m 17s | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -162,6 +163,9 @@ No implementation decision was explicitly locked by the architecture intake. Req
 - [Phase ?]: Same-content retries and corrections always receive distinct Shadow batch and artifact identities; hashes record lineage without deduplicating facts.
 - [Phase ?]: A Shadow evidence set freezes only when every trade in each attributable completed batch is explicitly included or excluded.
 - [Phase ?]: Shadow estimators are transient; only canonical allowlisted rule data, provenance, metrics, assumptions, limitations, and replay evidence persist.
+- [Phase ?]: Shadow retries reuse exact frozen split identities but append new immutable attempts and terminal evaluations; failed evidence is never rewritten or promoted.
+- [Phase ?]: Shadow retention is one idempotent research event with no strategy, monitor, plan, position, ledger, broker, provider, or market-action collaborator.
+- [Phase ?]: Shadow public history uses hand-written allowlists and omits managed paths, raw data, account aliases, runner internals, exceptions, and client verdicts.
 
 ### Pending Todos
 
@@ -179,6 +183,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-07-16T06:12:07.600Z
-Stopped at: Completed 05-08-PLAN.md
+Last session: 2026-07-16T06:35:42.562Z
+Stopped at: Completed 05-11-PLAN.md
 Resume file: None

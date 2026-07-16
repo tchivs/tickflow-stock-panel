@@ -246,7 +246,7 @@ Plans:
   2. User can view an investment thesis with its valuation anchor, invalidation conditions, and periodic evidence checks.
   3. Researcher can request and inspect a time-series forecast that includes quantiles, sampled paths, and the associated model checkpoint.
 
-**Plans**: 10/17 plans executed
+**Plans**: 11/17 plans executed
 
 Plans:
 
@@ -272,7 +272,7 @@ Plans:
 **Wave 3 — parallel backend vertical flows**
 
 - [ ] 05-11-PLAN.md — Complete Shadow IS/OOS, retention, safe projection, and API.
-- [ ] 05-12-PLAN.md — Complete Thesis due scanner, pending/confirm/reject, safe projection, and API.
+- [x] 05-12-PLAN.md — Complete Thesis due scanner, pending/confirm/reject, safe projection, and API.
 - [ ] 05-13-PLAN.md — Complete Forecast CAS/idempotency/lease/retry/restart runner and immutable commit.
 
 **Wave 4 — calibration, API/SSE, and real host registration**
@@ -303,4 +303,4 @@ Plans:
 | 2. Factor And Strategy Research | 8/8 | Complete    | 2026-07-11 |
 | 3. AI Analysis | 12/12 | Complete    | 2026-07-12 |
 | 4. Advanced Capabilities | 27/27 | Complete    | 2026-07-15 |
-| 5. Optional Enhancements | 10/17 | In Progress|  |
+| 5. Optional Enhancements | 11/17 | In Progress|  |
