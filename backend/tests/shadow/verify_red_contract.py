@@ -91,10 +91,17 @@ ALLOWED_IMPORTS: dict[str, frozenset[str]] = {
     "app.shadow.service": frozenset({"ShadowService", "ShadowRetentionError"}),
 }
 
-MISSING_MODULE = re.compile(r"No module named ['\"](?P<module>app\.shadow(?:\.[A-Za-z_]\w*)*)['\"]")
+MISSING_MODULE = re.compile(
+    r"^(?:E\s+)?ModuleNotFoundError: No module named "
+    r"['\"](?P<module>app\.shadow(?:\.[A-Za-z_]\w*)*)['\"]$"
+)
 MISSING_SYMBOL = re.compile(
-    r"cannot import name ['\"](?P<symbol>[A-Za-z_]\w*)['\"] from "
-    r"['\"](?P<module>app\.shadow(?:\.[A-Za-z_]\w*)*)['\"]"
+    r"^(?:E\s+)?ImportError: cannot import name ['\"](?P<symbol>[A-Za-z_]\w*)['\"] from "
+    r"['\"](?P<module>app\.shadow(?:\.[A-Za-z_]\w*)*)['\"](?: .*)?$"
+)
+UNALLOWLISTED_EXCEPTION = re.compile(
+    r"(?:AssertionError|SyntaxError|FixtureLookupError|NameError|TypeError|ValueError|"
+    r"RuntimeError|TimeoutError|Failed:|XPASS|XFAIL)"
 )
 
 
@@ -199,16 +206,44 @@ def _collect(files: tuple[str, ...], expected: set[str]) -> None:
 
 
 def _is_declared_missing_boundary(text: str) -> bool:
-    module_match = MISSING_MODULE.search(text)
-    if module_match:
-        module = module_match.group("module")
+    if UNALLOWLISTED_EXCEPTION.search(text):
+        return False
+    matches: set[tuple[str, str | None]] = set()
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        module_match = MISSING_MODULE.fullmatch(line)
+        if module_match:
+            matches.add((module_match.group("module"), None))
+            continue
+        symbol_match = MISSING_SYMBOL.fullmatch(line)
+        if symbol_match:
+            matches.add((symbol_match.group("module"), symbol_match.group("symbol")))
+    if len(matches) != 1:
+        return False
+    module, symbol = next(iter(matches))
+    if symbol is None:
         return module == "app.shadow" or module in ALLOWED_IMPORTS
-    symbol_match = MISSING_SYMBOL.search(text)
-    if symbol_match:
-        module = symbol_match.group("module")
-        symbol = symbol_match.group("symbol")
-        return symbol in ALLOWED_IMPORTS.get(module, frozenset())
-    return False
+    return symbol in ALLOWED_IMPORTS.get(module, frozenset())
+
+
+def _validate_failure_classifier() -> None:
+    accepted = (
+        "ModuleNotFoundError: No module named 'app.shadow'",
+        "E   ModuleNotFoundError: No module named 'app.shadow.importer'",
+        "ImportError: cannot import name 'ShadowImporter' from 'app.shadow.importer' (/tmp/importer.py)",
+    )
+    rejected = (
+        "AssertionError: No module named 'app.shadow'",
+        "SyntaxError: invalid syntax\nModuleNotFoundError: No module named 'app.shadow'",
+        "FixtureLookupError: fixture 'shadow_repo' not found",
+        "ModuleNotFoundError: No module named 'sklearn'",
+        "ImportError: cannot import name 'BrokerClient' from 'app.shadow.importer'",
+        "XPASS app.shadow production unexpectedly exists",
+    )
+    if not all(_is_declared_missing_boundary(item) for item in accepted):
+        raise RedContractError("RED failure classifier rejects a declared production boundary")
+    if any(_is_declared_missing_boundary(item) for item in rejected):
+        raise RedContractError("RED failure classifier accepts an unrelated failure")
 
 
 def _verify_red(files: tuple[str, ...], expected: set[str]) -> None:
@@ -265,6 +300,7 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
+        _validate_failure_classifier()
         _validate_fixtures()
         selected = tuple(GROUPS) if args.group == "all" else (args.group,)
         files = tuple(file_name for group in selected for file_name in GROUPS[group])
