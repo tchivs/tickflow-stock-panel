@@ -356,6 +356,109 @@ class ShadowRepository:
             ).fetchall()
         return [self._trade_row(row) for row in rows]
 
+    def append_candidate(self, candidate: dict[str, object]) -> dict[str, Any]:
+        """Persist only canonical data exported by the optional learner."""
+        required = {
+            "distiller_version",
+            "rule_schema_version",
+            "rules",
+            "features",
+            "parameters",
+            "exit_assumptions",
+            "holding_assumptions",
+            "source_batch_ids",
+            "evidence_set_id",
+            "evidence_set_fingerprint",
+            "training_window",
+            "seed",
+            "class_balance",
+            "metrics",
+            "limitations",
+            "created_at",
+            "negative_sampling",
+            "canonical_rules_json",
+            "rule_fingerprint",
+            "training_replay",
+        }
+        if set(candidate) != required:
+            raise ShadowRepositoryError("candidate fact schema is invalid")
+        evidence = self.get_evidence_set(str(candidate["evidence_set_id"]))
+        if (
+            evidence is None
+            or candidate["evidence_set_fingerprint"] != evidence["fingerprint"]
+            or candidate["source_batch_ids"] != evidence["included_batch_ids"]
+        ):
+            raise ShadowRepositoryError("candidate evidence attribution is invalid")
+        identifier = uuid4().hex
+        parameters_record = {
+            "parameters": candidate["parameters"],
+            "negative_sampling": candidate["negative_sampling"],
+            "canonical_rules_json": candidate["canonical_rules_json"],
+            "rule_fingerprint": candidate["rule_fingerprint"],
+            "training_replay": candidate["training_replay"],
+        }
+        with self._connection() as connection, connection:
+            existing = connection.execute(
+                """SELECT * FROM shadow_candidates
+                   WHERE evidence_set_id = ? AND distiller_version = ?
+                     AND rule_schema_version = ? AND seed = ?""",
+                (
+                    candidate["evidence_set_id"],
+                    candidate["distiller_version"],
+                    candidate["rule_schema_version"],
+                    candidate["seed"],
+                ),
+            ).fetchone()
+            if existing is None:
+                connection.execute(
+                    """INSERT INTO shadow_candidates
+                       (id, evidence_set_id, distiller_version, rule_schema_version,
+                        rules_json, features_json, parameters_json, exit_assumptions_json,
+                        holding_assumptions_json, source_batch_ids_json,
+                        evidence_set_fingerprint, training_window_json, seed,
+                        class_balance_json, metrics_json, limitations_json, created_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        identifier,
+                        candidate["evidence_set_id"],
+                        candidate["distiller_version"],
+                        candidate["rule_schema_version"],
+                        _canonical_json(candidate["rules"], "candidate rules"),
+                        _canonical_json(candidate["features"], "candidate features"),
+                        _canonical_json(parameters_record, "candidate parameters"),
+                        _canonical_json(candidate["exit_assumptions"], "exit assumptions"),
+                        _canonical_json(candidate["holding_assumptions"], "holding assumptions"),
+                        _canonical_json(candidate["source_batch_ids"], "source batch ids"),
+                        candidate["evidence_set_fingerprint"],
+                        _canonical_json(candidate["training_window"], "training window"),
+                        candidate["seed"],
+                        _canonical_json(candidate["class_balance"], "class balance"),
+                        _canonical_json(candidate["metrics"], "candidate metrics"),
+                        _canonical_json(candidate["limitations"], "candidate limitations"),
+                        candidate["created_at"],
+                    ),
+                )
+                existing = connection.execute(
+                    "SELECT * FROM shadow_candidates WHERE id = ?", (identifier,)
+                ).fetchone()
+        if existing is None:
+            raise ShadowRepositoryError("persisted candidate is unavailable")
+        return self._candidate_row(existing)
+
+    def get_candidate(self, candidate_id: str) -> dict[str, Any] | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM shadow_candidates WHERE id = ?", (candidate_id,)
+            ).fetchone()
+        return None if row is None else self._candidate_row(row)
+
+    def list_candidates(self) -> list[dict[str, Any]]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                "SELECT * FROM shadow_candidates ORDER BY created_at, id"
+            ).fetchall()
+        return [self._candidate_row(row) for row in rows]
+
     @staticmethod
     def list_operational_mutations() -> list[dict[str, object]]:
         """Shadow evidence intentionally has no account, position, or broker mutations."""
@@ -413,6 +516,57 @@ class ShadowRepository:
             record.pop("normalized_payload_json"), "normalized payload"
         )
         return {**record, "source_values": source_values, "normalized": normalized}
+
+    @staticmethod
+    def _candidate_row(row: sqlite3.Row) -> dict[str, Any]:
+        record = dict(row)
+        parameters_record = _json_object(
+            record.pop("parameters_json"), "candidate parameters"
+        )
+        if set(parameters_record) != {
+            "parameters",
+            "negative_sampling",
+            "canonical_rules_json",
+            "rule_fingerprint",
+            "training_replay",
+        }:
+            raise ShadowRepositoryError("persisted candidate parameters are invalid")
+        rules = _json_list(record.pop("rules_json"), "candidate rules")
+        features = _json_list(record.pop("features_json"), "candidate features")
+        exit_assumptions = _json_object(
+            record.pop("exit_assumptions_json"), "exit assumptions"
+        )
+        holding_assumptions = _json_object(
+            record.pop("holding_assumptions_json"), "holding assumptions"
+        )
+        source_batch_ids = _json_list(
+            record.pop("source_batch_ids_json"), "source batch ids"
+        )
+        training_window = _json_object(
+            record.pop("training_window_json"), "training window"
+        )
+        class_balance = _json_object(
+            record.pop("class_balance_json"), "class balance"
+        )
+        metrics = _json_object(record.pop("metrics_json"), "candidate metrics")
+        limitations = _json_list(record.pop("limitations_json"), "candidate limitations")
+        return {
+            **record,
+            "rules": rules,
+            "features": features,
+            "parameters": parameters_record["parameters"],
+            "exit_assumptions": exit_assumptions,
+            "holding_assumptions": holding_assumptions,
+            "source_batch_ids": source_batch_ids,
+            "training_window": training_window,
+            "class_balance": class_balance,
+            "metrics": metrics,
+            "limitations": limitations,
+            "negative_sampling": parameters_record["negative_sampling"],
+            "canonical_rules_json": parameters_record["canonical_rules_json"],
+            "rule_fingerprint": parameters_record["rule_fingerprint"],
+            "training_replay": parameters_record["training_replay"],
+        }
 
     @staticmethod
     def _evidence_row(row: sqlite3.Row) -> dict[str, Any]:
