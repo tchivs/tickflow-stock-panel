@@ -23,6 +23,10 @@ GROUPS: dict[str, tuple[str, ...]] = {
         "tests/theses/test_contracts.py",
         "tests/theses/test_versions.py",
     ),
+    "scheduler-lifecycle": (
+        "tests/theses/test_scheduler.py",
+        "tests/theses/test_lifecycle.py",
+    ),
 }
 
 EXPECTED_NODES: dict[str, tuple[str, ...]] = {
@@ -50,6 +54,39 @@ EXPECTED_NODES: dict[str, tuple[str, ...]] = {
         "test_foreign_key_and_cross_thesis_predecessor_tampering_fail",
         "test_historical_projection_is_complete_auditable_and_safe",
     ),
+    "tests/theses/test_scheduler.py": (
+        "test_each_condition_cadence_advances_its_independent_monotonic_cursor[daily]",
+        "test_each_condition_cadence_advances_its_independent_monotonic_cursor[weekly]",
+        "test_each_condition_cadence_advances_its_independent_monotonic_cursor[monthly]",
+        "test_each_condition_cadence_advances_its_independent_monotonic_cursor[quarterly]",
+        "test_bounded_scanner_acquires_due_conditions_in_stable_order",
+        "test_duplicate_scanner_calls_return_one_check_per_condition_due_identity",
+        "test_two_parallel_acquirers_have_one_lease_and_one_check_winner",
+        "test_interruption_before_append_retries_same_due_after_lease_expiry",
+        "test_interruption_after_append_reuses_canonical_check_on_restart",
+        "test_resolver_failure_appends_safe_error_check_and_advances_by_policy",
+        "test_process_restart_recovers_expired_lease_without_duplicate_evidence",
+        "test_old_version_conditions_are_excluded_from_new_due_acquisition",
+        "test_condition_due_identity_is_unique_and_checks_are_immutable",
+    ),
+    "tests/theses/test_lifecycle.py": (
+        "test_each_evidence_result_appends_one_exact_immutable_check[matched]",
+        "test_each_evidence_result_appends_one_exact_immutable_check[not-matched]",
+        "test_each_evidence_result_appends_one_exact_immutable_check[insufficient]",
+        "test_each_evidence_result_appends_one_exact_immutable_check[error]",
+        "test_matched_check_creates_exactly_one_evidence_linked_pending_conclusion",
+        "test_not_matched_insufficient_and_error_never_create_pending_or_false_zero",
+        "test_automation_never_changes_official_state_or_opens_dialogs",
+        "test_confirmation_requires_session_derived_server_principal",
+        "test_confirmation_revalidates_evidence_and_appends_one_official_event",
+        "test_confirmation_conflicts_when_governed_evidence_no_longer_matches",
+        "test_rejection_appends_review_and_preserves_official_state",
+        "test_duplicate_or_already_processed_review_is_a_conflict",
+        "test_old_version_pending_conflicts_after_new_version_becomes_current",
+        "test_competing_pending_review_conflicts_after_official_state_changes",
+        "test_review_and_check_history_remain_readable_but_public_projection_is_safe",
+        "test_lifecycle_invokes_zero_strategy_monitor_plan_portfolio_or_broker_actions",
+    ),
 }
 
 ALLOWED_IMPORTS: dict[str, frozenset[str]] = {
@@ -64,6 +101,8 @@ ALLOWED_IMPORTS: dict[str, frozenset[str]] = {
         }
     ),
     "app.theses.repository": frozenset({"ThesisRepository"}),
+    "app.theses.scheduler": frozenset({"ThesisDueScanner"}),
+    "app.theses.service": frozenset({"ThesisService", "ThesisConflictError"}),
 }
 
 MISSING_MODULE = re.compile(
