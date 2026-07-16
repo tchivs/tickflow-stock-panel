@@ -332,9 +332,14 @@ def test_rate_window_migration_preserves_legacy_accounting_under_unrunnable_iden
     database = tmp_path / "legacy-operational.db"
     connection = sqlite3.connect(database)
     try:
-        for migration in MIGRATIONS[:-1]:
+        rate_window_migration_index = next(
+            index
+            for index, migration in enumerate(MIGRATIONS)
+            if "__legacy_rate_window__" in migration
+        )
+        for migration in MIGRATIONS[:rate_window_migration_index]:
             connection.executescript(migration)
-        connection.execute(f"PRAGMA user_version = {len(MIGRATIONS) - 1}")
+        connection.execute(f"PRAGMA user_version = {rate_window_migration_index}")
         connection.execute(
             """INSERT INTO advanced_policy_revisions
                (id, revision, fingerprint, fact_schema_version, snapshot_json, created_at)
