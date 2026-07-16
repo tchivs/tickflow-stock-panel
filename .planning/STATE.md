@@ -5,15 +5,15 @@ milestone_name: milestone
 current_phase: 05
 current_phase_name: Optional Enhancements
 status: executing
-stopped_at: Completed 05-14-PLAN.md
-last_updated: "2026-07-16T07:12:54.330Z"
+stopped_at: Completed 05-15-PLAN.md
+last_updated: "2026-07-16T07:48:09.372Z"
 last_activity: 2026-07-16
 last_activity_desc: Plan 05-14 Forecast calibration API SSE and optional host completed
 progress:
   total_phases: 5
   completed_phases: 4
-  total_plans: 66
-  completed_plans: 63
+  total_plans: 79
+  completed_plans: 76
 ---
 
 # Project State
@@ -28,11 +28,11 @@ See: .planning/PROJECT.md (updated 2026-07-10)
 ## Current Position
 
 Phase: 05 — Optional Enhancements
-Plan: 15 of 17
+Plan: 16 of 17
 Status: Executing — optional integration
 Last activity: 2026-07-16 — Plan 05-14 Forecast calibration API SSE and optional host completed
 
-Progress: [██████████] 95%
+Progress: [██████████] 96%
 
 ## Performance Metrics
 
@@ -92,6 +92,7 @@ Progress: [██████████] 95%
 | Phase 05 P08 | 15m 9s | 2 tasks | 6 files |
 | Phase 05 P11 | 15m 17s | 2 tasks | 5 files |
 | Phase 05 P14 | 20m | 2 tasks | 7 files |
+| Phase 05-optional-enhancements P15 | 18m30s | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -170,6 +171,10 @@ No implementation decision was explicitly locked by the architecture intake. Req
 - [Phase ?]: Forecast maturity uses the existing unique forecast/horizon fact identity and one atomic outcome-plus-calibration transaction without another store.
 - [Phase ?]: Forecast SSE queues are bounded transport only; every subscription and reconnect re-authorizes and reads committed persisted job state.
 - [Phase ?]: Optional route shapes install once while each lifespan independently probes initializes recovers schedules and closes module-local services.
+- [Phase ?]: Phase 05 frontend exports one status-aware shared request wrapper; no parallel transport library was introduced.
+- [Phase ?]: Forecast SSE is hook-local transport only; terminal state is refreshed from persisted job status before object-local invalidation.
+- [Phase ?]: Shadow retainability is derived only from two persisted passing IS/OOS evaluations; browser verdict and activation authority remain absent.
+- [Phase ?]: Shadow normalizes bounded safe Wave 0 fixture fields but keeps production /evaluations authoritative and does not fabricate legacy /runs facts or a SHDW descriptor.
 
 ### Pending Todos
 
@@ -187,6 +192,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-07-16T07:12:09.038Z
-Stopped at: Completed 05-14-PLAN.md
+Last session: 2026-07-16T07:48:09.363Z
+Stopped at: Completed 05-15-PLAN.md
 Resume file: None
