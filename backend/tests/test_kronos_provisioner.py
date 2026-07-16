@@ -36,7 +36,11 @@ def fixture_spec(monkeypatch: pytest.MonkeyPatch) -> provisioner.CheckpointSpec:
         local_model_dir="Kronos-mini-fixture",
         local_tokenizer_dir="Kronos-Tokenizer-2k-fixture",
     )
-    monkeypatch.setitem(provisioner.APPROVED_CHECKPOINTS, spec.catalog_id, spec)
+    monkeypatch.setattr(
+        provisioner,
+        "APPROVED_CHECKPOINTS",
+        {**provisioner.APPROVED_CHECKPOINTS, spec.catalog_id: spec},
+    )
     return spec
 
 
@@ -136,7 +140,16 @@ def test_example_catalog_documents_complete_relative_local_profiles():
         assert entries[catalog_id]["local_files_only"] is True
         assert entries[catalog_id]["trust_remote_code"] is False
     assert entries["kronos-base"]["explicit_provisioning_only"] is True
-    assert "kronos-large" not in json.dumps(payload).lower()
+    assert all(entry["catalog_id"] != "kronos-large" for entry in payload["entries"])
+    assert payload["excluded_profiles"] == [
+        {
+            "model_size": "large",
+            "reason": (
+                "Not approved for integrity-pinned provisioning; see the Kronos-large "
+                "OPT-OUT in COVERAGE.md."
+            ),
+        }
+    ]
 
 
 def test_verify_only_succeeds_offline_for_valid_local_fixture(

@@ -1,0 +1,85 @@
+{
+  "schema_version": "forecast-catalog-v1",
+  "entries": [
+    {
+      "catalog_id": "kronos-mini",
+      "source_repository": "https://github.com/shiyu-coder/Kronos",
+      "source_revision": "67b630e67f6a18c9e9be918d9b4337c960db1e9a",
+      "model_repo": "NeoQuasar/Kronos-mini",
+      "model_revision": "f4e68697d9d5aed55cef5c96aabc3376bcad9f81",
+      "model_weight_file": "model.safetensors",
+      "model_weight_sha256": "a7d5f37e2e9fbd9891f7d7d4f72574512dd1f704fee14223e0a8cd0fbf54197c",
+      "local_model_dir": "Kronos-mini",
+      "tokenizer_repo": "NeoQuasar/Kronos-Tokenizer-2k",
+      "tokenizer_revision": "26966d0035065a0cae0ebad7af8ece35bc1fb51c",
+      "tokenizer_weight_file": "model.safetensors",
+      "tokenizer_weight_sha256": "b97ec46b3b72160509e289183eaf7bdf5f0dac5bb9b49522f6d46638a99a8717",
+      "local_tokenizer_dir": "Kronos-Tokenizer-2k",
+      "pairing": "mini:2k",
+      "max_context": 2048,
+      "allowed_devices": [
+        "cpu",
+        "cuda:0"
+      ],
+      "weight_format": "safetensors",
+      "trust_remote_code": false,
+      "local_files_only": true,
+      "explicit_provisioning_only": false
+    },
+    {
+      "catalog_id": "kronos-small",
+      "source_repository": "https://github.com/shiyu-coder/Kronos",
+      "source_revision": "67b630e67f6a18c9e9be918d9b4337c960db1e9a",
+      "model_repo": "NeoQuasar/Kronos-small",
+      "model_revision": "901c26c1332695a2a8f243eb2f37243a37bea320",
+      "model_weight_file": "model.safetensors",
+      "model_weight_sha256": "b082dfcbd8e8c142a725c8bbb99781802f38fec81210e13479effb32b3c3e020",
+      "local_model_dir": "Kronos-small",
+      "tokenizer_repo": "NeoQuasar/Kronos-Tokenizer-base",
+      "tokenizer_revision": "0e0117387f39004a9016484a186a908917e22426",
+      "tokenizer_weight_file": "model.safetensors",
+      "tokenizer_weight_sha256": "59d85f6af76a2c3b8240ea06cb21db4213b4eeca053f246b23e29cf832fc6bee",
+      "local_tokenizer_dir": "Kronos-Tokenizer-base",
+      "pairing": "small:base",
+      "max_context": 512,
+      "allowed_devices": [
+        "cpu",
+        "cuda:0"
+      ],
+      "weight_format": "safetensors",
+      "trust_remote_code": false,
+      "local_files_only": true,
+      "explicit_provisioning_only": false
+    },
+    {
+      "catalog_id": "kronos-base",
+      "source_repository": "https://github.com/shiyu-coder/Kronos",
+      "source_revision": "67b630e67f6a18c9e9be918d9b4337c960db1e9a",
+      "model_repo": "NeoQuasar/Kronos-base",
+      "model_revision": "2b554741eca47781b64468546e77fef3e85130e6",
+      "model_weight_file": "model.safetensors",
+      "model_weight_sha256": "abff193acab6db1a0368e9773e75799d11403b6d054ee6d5f0a11aeabc5f4b83",
+      "local_model_dir": "Kronos-base",
+      "tokenizer_repo": "NeoQuasar/Kronos-Tokenizer-base",
+      "tokenizer_revision": "0e0117387f39004a9016484a186a908917e22426",
+      "tokenizer_weight_file": "model.safetensors",
+      "tokenizer_weight_sha256": "59d85f6af76a2c3b8240ea06cb21db4213b4eeca053f246b23e29cf832fc6bee",
+      "local_tokenizer_dir": "Kronos-Tokenizer-base",
+      "pairing": "base:base",
+      "max_context": 512,
+      "allowed_devices": [
+        "cuda:0"
+      ],
+      "weight_format": "safetensors",
+      "trust_remote_code": false,
+      "local_files_only": true,
+      "explicit_provisioning_only": true
+    }
+  ],
+  "excluded_profiles": [
+    {
+      "model_size": "large",
+      "reason": "Not approved for integrity-pinned provisioning; see the Kronos-large OPT-OUT in COVERAGE.md."
+    }
+  ]
+}
