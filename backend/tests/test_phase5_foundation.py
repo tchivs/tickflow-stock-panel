@@ -329,3 +329,201 @@ def test_migration_enforces_forecast_job_state_machine_and_column_guard(tmp_path
         )
     with pytest.raises(sqlite3.DatabaseError, match="immutable"):
         connection.execute("DELETE FROM forecast_jobs WHERE id = 'job-1'")
+
+
+def test_artifact_bytes_are_atomic_root_contained_and_descriptor_verified(
+    tmp_path: Path,
+) -> None:
+    from app.optional_artifacts import ManagedImmutableArtifactStore
+
+    store = ManagedImmutableArtifactStore(tmp_path / "managed")
+    descriptor = store.create_bytes(
+        b"immutable phase 05 payload",
+        schema_version="phase5-test-v1",
+        scope={"instrument_id": "instrument-600000", "horizon": 20},
+        content_type="application/octet-stream",
+    )
+
+    assert not Path(descriptor.relative_path).is_absolute()
+    assert str(tmp_path) not in repr(descriptor)
+    assert descriptor == store.descriptor(descriptor.artifact_id)
+    assert store.load_bytes(descriptor) == b"immutable phase 05 payload"
+    assert (store.root / descriptor.relative_path).resolve().is_relative_to(store.root)
+    assert not list(store.root.glob(".*.tmp"))
+
+
+def test_artifact_collision_escape_partial_and_tamper_fail_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dataclasses import replace
+
+    from app import optional_artifacts
+    from app.optional_artifacts import ManagedArtifactError, ManagedImmutableArtifactStore
+
+    class FixedId:
+        hex = "1" * 32
+
+    monkeypatch.setattr(optional_artifacts, "uuid4", lambda: FixedId())
+    store = ManagedImmutableArtifactStore(tmp_path / "managed")
+    descriptor = store.create_bytes(
+        b"canonical",
+        schema_version="phase5-test-v1",
+        scope={"kind": "shadow"},
+        content_type="application/octet-stream",
+    )
+    with pytest.raises(ManagedArtifactError, match="exists|collision"):
+        store.create_bytes(
+            b"replacement",
+            schema_version="phase5-test-v1",
+            scope={"kind": "shadow"},
+            content_type="application/octet-stream",
+        )
+    assert store.load_bytes(descriptor) == b"canonical"
+
+    with pytest.raises(ManagedArtifactError, match="identifier|managed|descriptor"):
+        store.descriptor("../escape")
+    with pytest.raises(ManagedArtifactError, match="managed|descriptor|path"):
+        store.load_bytes(replace(descriptor, relative_path="../outside.bin"))
+
+    payload_path = store.root / descriptor.relative_path
+    payload_path.write_bytes(b"tampered")
+    with pytest.raises(ManagedArtifactError, match="checksum|size|tamper"):
+        store.load_bytes(descriptor)
+
+    partial_id = "2" * 32
+    partial = store.root / partial_id
+    partial.mkdir()
+    (partial / "payload.bin").write_bytes(b"partial")
+    with pytest.raises(ManagedArtifactError, match="metadata|incomplete"):
+        store.descriptor(partial_id)
+
+
+def test_artifact_metadata_scope_and_parquet_payload_are_verified(tmp_path: Path) -> None:
+    import json
+
+    import polars as pl
+
+    from app.optional_artifacts import ManagedArtifactError, ManagedImmutableArtifactStore
+
+    store = ManagedImmutableArtifactStore(tmp_path / "managed")
+    frame = pl.DataFrame({"session_id": ["S1", "S2"], "close": [10.0, 11.0]})
+    descriptor = store.create_parquet(
+        frame,
+        schema_version="governed-panel-v1",
+        scope={"instrument_id": "instrument-600000", "sessions": ["S1", "S2"]},
+    )
+    assert store.load_parquet(descriptor).equals(frame)
+
+    namespace = (store.root / descriptor.relative_path).parent
+    metadata_path = namespace / "metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["scope"] = {"instrument_id": "foreign"}
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+    with pytest.raises(ManagedArtifactError, match="metadata|scope|checksum"):
+        store.descriptor(descriptor.artifact_id)
+
+
+def test_optional_identity_is_independent_lazy_cached_and_light(tmp_path: Path) -> None:
+    import sys
+
+    before = set(sys.modules)
+    from app.optional_modules import (
+        OptionalModuleName,
+        OptionalModuleServices,
+        OptionalModuleStatus,
+        build_optional_module_host,
+    )
+    imported = set(sys.modules) - before
+    assert not {"sklearn", "torch", "huggingface_hub", "kronos"}.intersection(imported)
+
+    class FakeFactory:
+        def __init__(self, name: OptionalModuleName, available: bool) -> None:
+            self.name = name
+            self.is_available = available
+            self.probes = 0
+            self.creates = 0
+            self.closes = 0
+            self.received: OptionalModuleServices | None = None
+
+        def probe(self) -> OptionalModuleStatus:
+            self.probes += 1
+            if self.is_available:
+                return OptionalModuleStatus.ready(self.name)
+            return OptionalModuleStatus.unavailable(self.name)
+
+        def create(self, services: OptionalModuleServices) -> object:
+            self.creates += 1
+            self.received = services
+            return {"module": self.name.value}
+
+        def close(self, service: object) -> None:
+            self.closes += 1
+
+    shadow = FakeFactory(OptionalModuleName.SHADOW, True)
+    thesis = FakeFactory(OptionalModuleName.THESIS, False)
+    host = build_optional_module_host(
+        database_path=tmp_path / "operational.db",
+        data_root=tmp_path / "governed-data",
+        factories={OptionalModuleName.SHADOW: shadow, OptionalModuleName.THESIS: thesis},
+    )
+
+    assert host.status(OptionalModuleName.SHADOW).available is True
+    assert host.status(OptionalModuleName.SHADOW).available is True
+    assert shadow.probes == 1
+    assert thesis.probes == 0
+    assert host.status(OptionalModuleName.THESIS).available is False
+    assert host.status(OptionalModuleName.FORECAST).available is False
+    assert thesis.probes == 1
+    assert host.service(OptionalModuleName.THESIS) is None
+    assert thesis.creates == 0
+    assert host.service(OptionalModuleName.SHADOW) == {"module": "shadow"}
+    assert host.service(OptionalModuleName.SHADOW) == {"module": "shadow"}
+    assert shadow.creates == 1
+    assert shadow.received is not None
+    assert shadow.received.database_path == host.database_path
+    host.close()
+    assert shadow.closes == 1
+
+
+def test_optional_identity_probe_failure_is_sanitized_and_local(tmp_path: Path) -> None:
+    from app.optional_modules import (
+        OptionalModuleName,
+        OptionalModuleServices,
+        OptionalModuleStatus,
+        build_optional_module_host,
+    )
+
+    class BrokenFactory:
+        def probe(self) -> OptionalModuleStatus:
+            raise RuntimeError("password=secret path=/tmp/private/checkpoint")
+
+        def create(self, services: OptionalModuleServices) -> object:
+            raise AssertionError("unavailable factory must not initialize")
+
+        def close(self, service: object) -> None:
+            raise AssertionError("unavailable factory has no service")
+
+    class ReadyFactory:
+        def probe(self) -> OptionalModuleStatus:
+            return OptionalModuleStatus.ready(OptionalModuleName.THESIS)
+
+        def create(self, services: OptionalModuleServices) -> object:
+            return object()
+
+        def close(self, service: object) -> None:
+            return None
+
+    host = build_optional_module_host(
+        database_path=tmp_path / "operational.db",
+        data_root=tmp_path / "governed-data",
+        factories={
+            OptionalModuleName.SHADOW: BrokenFactory(),
+            OptionalModuleName.THESIS: ReadyFactory(),
+        },
+    )
+    broken = host.status(OptionalModuleName.SHADOW)
+    assert broken.available is False
+    assert broken.code == "shadow_probe_failed"
+    assert "secret" not in repr(broken).lower()
+    assert "/tmp/" not in repr(broken)
+    assert host.status(OptionalModuleName.THESIS).available is True
