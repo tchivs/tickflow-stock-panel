@@ -1,244 +1,241 @@
 ---
 phase: 05-optional-enhancements
-verified: 2026-07-16T10:34:11Z
+verified: 2026-07-17T14:22:29Z
 status: gaps_found
-score: 1/7 must-haves verified
+score: "3/7 must-haves verified"
 behavior_unverified: 0
 overrides_applied: 0
-next_action: "Close the confirmed production-path and audit/supply-chain gaps, then re-run Phase 05 verification."
+review_findings: 10
+review_blockers: 7
+review_warnings: 3
+next_action: "修复 10 项代码审查缺陷；由独立人工重新提供并批准完整 Kronos config 与 PyTorch CPU 工件身份；随后执行 05-26、05-27 和 05-29，并重新验证 Phase 05。"
 next_command: "/gsd:plan-phase 5 --gaps"
+re_verification:
+  previous_status: gaps_found
+  previous_score: "1/7"
+  gaps_closed:
+    - "Thesis 严格 resolver、时区、受治理 readers、scanner 和 readiness 的生产组合已建立，并有命名行为测试通过。"
+    - "可选模块完整 readiness、可信 loopback principal/Origin/Host 与迁移原子性已有实现及行为证据。"
+  gaps_remaining:
+    - "Shadow 浏览器无法从正常非空导入批次创建证据集。"
+    - "Forecast 分位数持久化、principal 所有权、校准展示、输入身份、进程回收与重启恢复仍有阻断缺陷。"
+    - "05-28 是明确 rejected/incomplete；05-26 与 05-27 未执行，Kronos 供应链和运行时字节绑定仍未完成。"
+    - "05-29 最终后修复 backend/browser gate 未执行且 SUMMARY 缺失。"
+  regressions: []
 gaps:
-  - truth: "A user can create and evaluate a Shadow Account-derived strategy from actual local trading logs."
+  - truth: "用户可以从实际交易日志创建并评估 Shadow Account 派生策略。"
     status: failed
-    reason: "The production browser request cannot satisfy the strict backend distillation schema, the production Shadow factory deliberately supplies no distiller and an evaluation service that always fails, and multiple immutable/idempotency boundaries alias or lose attributable work."
+    reason: "生产 UI 固定提交空 included_trade_ids/exclusions，而仓储要求每笔成交显式 included 或 excluded；正常非空批次必然在证据集创建处返回 422，后续蒸馏与评估不可达。"
     artifacts:
-      - path: "frontend/src/lib/phase5Api.ts"
-        issue: "ShadowDistillInput sends min_samples_leaf, min_support, min_precision, and training_window instead of required min_leaf_support; backend forbids the extra fields."
       - path: "frontend/src/pages/backtest/ShadowAccount.tsx"
-        issue: "The production mutation sends that incompatible payload, and mapping/timezone edits do not invalidate the already displayed preview before confirmation."
-      - path: "backend/app/optional_modules.py"
-        issue: "The production Shadow bundle sets distiller=None and _UnavailableShadowEvaluation, so advertised availability is not usable end to end."
+        issue: "第 538 行固定发送 included_trade_ids: [] 与 exclusions: []；页面和批次 DTO 没有提供完整 trade ID 集合。"
       - path: "backend/app/shadow/repository.py"
-        issue: "Candidate replay identity omits material request content; interrupted reservations are not queryable; retention replay ignores reviewer/rationale divergence; duplicate-content lookup is cross-principal."
-      - path: "backend/app/shadow/evaluation.py"
-        issue: "IS is independently completed before OOS freezing/execution; failure of the later split leaves an orphaned IS fact and retry does not resume the pair atomically."
+        issue: "第 406-411 行要求 selected_ids == available_ids，否则拒绝。"
+      - path: "backend/tests/test_phase5_optional_host.py"
+        issue: "命名生产测试第 619-628 行直接从 repository 读取 trade IDs 后提交，绕过了真实浏览器缺口。"
     missing:
-      - "Align the typed distillation request exactly with the backend contract."
-      - "Wire a real production distiller, governed feature freezer, bounded evaluator, and complete availability probe."
-      - "Make candidate, evaluation-pair, and retention idempotency content-complete and conflict-safe."
-      - "Scope duplicate lineage to the principal and bind confirmation to the previewed mapping/content identity."
-  - truth: "A user can view and operate an investment-thesis lifecycle with valuation anchors, invalidation conditions, and periodic governed evidence checks."
+      - "增加 principal-scoped、有界的成交成员 API 并让 UI 提交完整集合，或定义服务端授权批次的显式默认全部纳入语义。"
+      - "新增真实浏览器到严格 backend 的非空批次证据创建回归测试。"
+  - truth: "研究者可以请求并检查包含 P10/P50/P90、32 条 sampled paths 和 checkpoint provenance 的 Kronos 预测。"
     status: failed
-    reason: "Normal production governed evidence resolution receives forbidden repository metadata and degrades to an error check; actionable pending data includes stale old-version conclusions, and production evidence readers are empty placeholders."
+    reason: "Forecast 唯一提交边界不持久化 quantiles，公共 API 会返回空分位数；同时 principal 所有权、校准事实展示、输入身份、重启恢复和 worker 生命周期存在可证实阻断缺陷。"
     artifacts:
-      - path: "backend/app/theses/repository.py"
-        issue: "get_condition/get_pending add thesis_id to the condition mapping; list_pending returns all thesis versions without actionable current/unreviewed filtering."
-      - path: "backend/app/theses/evidence.py"
-        issue: "_validated_inputs strips id/version/instrument metadata but not thesis_id before ThesisCondition(extra=forbid) validation; due dates are normalized to UTC rather than the condition timezone."
-      - path: "backend/app/theses/service.py"
-        issue: "The complete augmented condition is passed to the resolver and pending_for_instrument projects every thesis-level pending record."
-      - path: "backend/app/optional_modules.py"
-        issue: "Production Thesis is reported available while market, financial, and analysis readers all return None."
-    missing:
-      - "Construct an explicit allowlisted ThesisCondition payload at the resolver boundary."
-      - "Use the declared condition timezone for evidence calendar dates."
-      - "Separate current actionable pending conclusions from immutable all-version history."
-      - "Wire real governed readers and make availability depend on complete service/scanner readiness."
-  - truth: "A researcher can request and inspect a Kronos time-series forecast with P10/P50/P90, sampled paths, and exact checkpoint provenance."
-    status: failed
-    reason: "The production factory does not wire the approved catalog/input/runner, sampled-path paging is row-based and incompatible with the frontend path contract, and the immutable input/record identities can accept materially different or defaulted provenance."
-    artifacts:
-      - path: "backend/app/optional_modules.py"
-        issue: "Forecast uses a repository-only request service, an actuals adapter that always returns None, and row-based Parquet paging; the complete approved catalog/freezer/runner is not the production service."
-      - path: "backend/app/forecast/input.py"
-        issue: "input_fingerprint hashes metadata/session IDs but not the selected OHLCV/amount values or promoted artifact checksum; partially-null amount is admitted as a feature."
       - path: "backend/app/forecast/repository.py"
-        issue: "Commit defaults missing revisions/digests and sampling fields, does not bind descriptor horizon to the job, and only performs lexical output-path checks."
+        issue: "forecast_records INSERT/schema 与 _validated_immutable_record 均没有 quantiles；output descriptor 严格八字段也没有 quantile artifact；recover_after_restart 只返回 requeue。"
+      - path: "backend/app/forecast/api.py"
+        issue: "list/detail/record ownership 仅按 instrument 过滤，不校验 persisted principal。"
       - path: "frontend/src/components/analysis/ForecastPanel.tsx"
-        issue: "The UI expects path_index and path-count paging, but production artifacts expose sample_index rows; retry keys/config use fresh or stale render state."
-      - path: "backend/app/forecast/calendar.py"
-        issue: "Future sessions are selected by lexicographic ID without resolving the as-of row/sequence in the selected calendar revision."
-    missing:
-      - "Wire the complete approved catalog, governed input freezer, bounded runner, actuals, and calibration service in production."
-      - "Bind input identity to canonical frame bytes/artifact checksum."
-      - "Fail closed on every immutable provenance field and shape relation at commit."
-      - "Page distinct paths and return complete path/session rows with a 32-path total."
-      - "Resolve calendar horizons from an exact governed as-of sequence."
-  - truth: "Shadow, Thesis, and Forecast are independently deployable and fail locally without breaking the completed v1 loop."
-    status: failed
-    reason: "The real capability factories advertise incomplete services as available, Forecast can remain unavailable regardless of approved assets, and the supported unconfigured-local host path exposes wildcard-CORS API access without assigning the principal required by Phase 05 routes."
-    artifacts:
-      - path: "backend/app/optional_modules.py"
-        issue: "Probe status is dependency-level rather than complete service readiness; production Shadow/Thesis/Forecast collaborators are placeholders or incomplete."
-      - path: "backend/app/main.py"
-        issue: "Wildcard CORS is combined with an unauthenticated local-network branch; that branch does not set reviewer_principal, so Phase 05 principal-scoped routes cannot operate even when status says available."
-    missing:
-      - "Probe complete per-module operational readiness and only advertise usable services."
-      - "Require authenticated initialization or a tightly trusted loopback Origin/Host policy and a stable server-owned principal."
-      - "Keep absence/failure typed and local after complete factory/scanner wiring."
-  - truth: "Phase 05 records and artifacts are immutable, attributable, append-safe, and auditable across failure, retry, restart, and correction."
-    status: failed
-    reason: "Although fact-table mutation triggers exist, the forward migration is not atomic, several replay keys silently substitute materially different facts, and recovery/pagination paths can lose discoverability or exhaust workers."
-    artifacts:
-      - path: "backend/app/operational/migrations.py"
-        issue: "executescript runs without an explicit migration transaction; a mid-script failure can leave partial schema with user_version unchanged."
-      - path: "backend/app/shadow/repository.py"
-        issue: "Candidate/retention replay keys omit identity-defining content, interrupted evaluation attempts are not discoverable through get/list, and large evidence/history queries materialize unbounded rows."
-      - path: "backend/app/theses/service.py"
-        issue: "Version/check/history resources are materialized before API pagination, including per-condition query expansion."
-      - path: "backend/app/forecast/calibration.py"
-        issue: "Oldest-first bounded scanning repeatedly consumes canonical/not-mature entries and can starve newer forecasts; missing actual is persisted terminally and later repair is blocked."
-    missing:
-      - "Make each migration plus user_version update atomic."
-      - "Use canonical payload digests and conflict-on-divergence for immutable replay."
-      - "Persist/query interrupted attempts and paired split operation identity."
-      - "Move ownership, deterministic pagination, and bounded scans into repositories with durable cursors."
-  - truth: "Kronos execution is pinned, byte-bound, local-only, and reproducibly provisioned."
-    status: failed
-    reason: "Runtime source/config verification is not bound to all executed bytes, the worker import is not proven to come from the verified directory, and checkpoint provisioning has no inter-process serialization or safe shared-asset rollback."
-    artifacts:
-      - path: "backend/app/forecast/catalog.py"
-        issue: "Source verification trusts UPSTREAM.json's self-reported revision; model/tokenizer config.json bytes are not digest-bound."
-      - path: "backend/app/forecast/kronos_adapter.py"
-        issue: "The worker imports app.vendor.kronos rather than proving import from the catalog-verified source_dir."
-      - path: "backend/scripts/provision_kronos.py"
-        issue: "Catalog read-modify-write and promotions have no inter-process lock/CAS; rollback can delete a shared promoted tokenizer directory."
+        issue: "API calibration 分支把所有事实错标为 record 总 horizon，丢弃 outcomes 的 actual session/value。"
+      - path: "backend/app/forecast/service.py"
+        issue: "child 获得同 UID 可写 managed input path，成功提交前没有再次校验输入。"
       - path: "backend/app/forecast/runner.py"
-        issue: "Child stdout and manifest cross memory/IPC before the advertised output cap; process-group cleanup races setsid and has no terminate/kill fallback."
+        issue: "leader 正常退出即视为 reaped，未确认/终止遗留进程组 descendants。"
     missing:
-      - "Approve and verify hashes for every executed vendored/config byte before spawn and again in the child."
-      - "Bind the loaded module directory to the verified catalog source directory."
-      - "Serialize or CAS provision/catalog publication and never delete shared final assets during rollback."
-      - "Enforce output bounds before allocation/IPC and add a child-ready cleanup handshake with fallback termination."
+      - "在唯一提交事务中持久化并验证与 32-path tensor 绑定的 quantile artifact/规范分位数，并让 projection 与 maturity scanner 使用同一来源。"
+      - "所有 Forecast job/record/path/calibration/SSE/retry 查询在 SQL 和 API 层绑定 principal + instrument。"
+      - "将 outcomes 与 calibrations 按 outcome_id 连接并展示真实 horizon/actual/target。"
+      - "提交前重新验证输入 checksum；对 queued restart outcome 真正调度或明确 terminalize。"
+      - "在所有返回路径确认整个 worker process group 已被回收。"
+  - truth: "Phase 05 事实和工件在失败、重试、重启、纠正与并发下保持不可变、可归因、append-safe 且可审计。"
+    status: failed
+    reason: "CR-03/05/06/07 与 WR-01/02 证明所有权、输入字节身份、子进程生命周期、queued 恢复、孤儿工件和 Parquet TOCTOU 仍不满足审计不变量。"
+    artifacts:
+      - path: "backend/app/forecast/api.py"
+        issue: "跨 principal IDOR 可读取/重试/订阅同 instrument 的 Forecast 事实。"
+      - path: "backend/app/forecast/service.py"
+        issue: "幂等复用前先永久创建新输入工件，且 worker 后可篡改输入而记录仍声明旧 fingerprint。"
+      - path: "backend/app/optional_artifacts.py"
+        issue: "校验后再次按 pathname 打开 Parquet，消费字节可与验证字节不同。"
+      - path: "backend/app/forecast/runner.py"
+        issue: "直接 child 正常退出时不清理 descendants。"
+      - path: "backend/app/optional_modules.py"
+        issue: "host 忽略 recover_after_restart 返回的 requeue outcomes。"
+    missing:
+      - "修复所有 review finding 对应的不变量，并添加会在当前实现上失败的行为测试。"
+  - truth: "Kronos 执行与供应链是人工批准、精确 pin、完整字节绑定、本地 only、并发安全且可复现的。"
+    status: failed
+    reason: "05-28 明确记录 rejected/incomplete，05-26/05-27 没有 SUMMARY 且未执行；当前 catalog、provisioner、dependency 和 runner 仍是 gap 前实现。"
+    artifacts:
+      - path: ".planning/phases/05-optional-enhancements/05-28-SUMMARY.md"
+        issue: "approval: rejected、gate_status: blocked；五个 config 身份与精确 PyTorch CPU 工件身份未批准。"
+      - path: "backend/app/forecast/checkpoints.example.json"
+        issue: "只有 weight digest，没有 model/tokenizer config.json digest。"
+      - path: "backend/pyproject.toml"
+        issue: "Forecast 仍为 torch>=2,<3，而非独立审阅的精确 CPU build/index/wheel identity。"
+      - path: "backend/app/forecast/catalog.py"
+        issue: "_verify_source 只信 UPSTREAM.json revision；_verify_asset 只哈希 model.safetensors。"
+      - path: "backend/app/forecast/kronos_adapter.py"
+        issue: "从 app.vendor.kronos 导入，未证明模块来自 checkpoint.source_dir。"
+      - path: "backend/scripts/provision_kronos.py"
+        issue: "无 inter-process lock/CAS；失败 rollback 删除 promoted final directories。"
+      - path: "backend/app/forecast/runner.py"
+        issue: "manifest 经 multiprocessing Queue 反序列化后才执行 JSON 大小检查，且无 child-ready handshake。"
+    missing:
+      - "独立人工提供并批准五个 config.json 的完整身份与精确 PyTorch CPU wheel 身份。"
+      - "执行并完成 05-26 与 05-27 的全部 artifacts、key links、prohibitions 和命名测试。"
+  - truth: "所有 gap 修改完成后，由同一最终 revision 通过完整 backend 与未过滤 browser acceptance gate。"
+    status: failed
+    reason: "05-29 依赖未完成的 05-27；05-29-SUMMARY.md 不存在，且 05-29 backend/browser 命令未执行。05-17 的旧 177/13 结果按计划明文禁止复用。"
+    artifacts:
+      - path: ".planning/phases/05-optional-enhancements/05-29-SUMMARY.md"
+        issue: "缺失。"
+      - path: ".planning/phases/05-optional-enhancements/05-29-PLAN.md"
+        issue: "计划状态未完成；must-have 明确要求 post-gap 同一 revision 的完整 gate。"
+    missing:
+      - "完成 05-26/05-27 和全部代码审查缺陷后，执行 05-29 两个完整命令并记录未过滤结果。"
 ---
 
-# Phase 05: Optional Enhancements Verification Report
+## Verification Complete
 
-**Phase Goal:** The approved optional Shadow Account, investment-thesis lifecycle, and Kronos probabilistic forecasting capabilities are independently deployable, immutable/auditable, local-only where required, and cannot break or gain authority over the completed v1 loop.
+**状态：** `gaps_found`  
+**得分：** `3/7 must-haves verified`  
+**报告：** `.planning/phases/05-optional-enhancements/05-VERIFICATION.md`
 
-**Verified:** 2026-07-16T10:34:11Z
-**Status:** `gaps_found`
-**Re-verification:** No — initial Phase 05 verification; no prior `05-VERIFICATION.md` existed.
-**Next action:** Close the structured gaps, then re-run verification. Suggested command: `/gsd:plan-phase 5 --gaps`.
+### 结论
 
-## Goal Achievement
+Phase 05 尚未实现目标。Shadow、Thesis、Forecast 的主体代码与大量测试都存在，Thesis 核心生产链、八种可选模块组合和零 live-action 边界有实际通过证据；但真实 Shadow 浏览器链在证据集创建处确定性中断，Forecast 结果边界丢弃 quantiles，并存在跨 principal IDOR、错误校准展示、输入身份破坏、进程遗留和 queued 重启悬停。更上游的 Kronos supply gate 被独立人工明确拒绝，05-26、05-27 和最终 05-29 均未完成。因此 `REQUIREMENTS.md` 中 Phase 05 的 `Complete` 标记不是当前代码事实，不能据此判定通过。
 
-### Observable Truths
+**重验证模式：** 是。上一版为 `gaps_found`、`1/7`。本次只把已有通过项做回归检查，对旧失败项和新增审查问题执行完整存在性、实质性、wiring 与数据流验证。
 
-| # | Truth | Status | Evidence |
-| --- | --- | --- | --- |
-| 1 | A user can create and evaluate a Shadow Account-derived strategy from actual local trading logs. | ✗ FAILED | Backend domain artifacts are substantive, but the production factory supplies `distiller=None` and `_UnavailableShadowEvaluation` (`optional_modules.py:307-323`). The frontend sends a schema-incompatible distillation body (`phase5Api.ts:215-225`; `ShadowAccount.tsx:332-343`) to the strict backend body (`shadow/api.py:32-40`). Candidate/evaluation/retention replay defects are visible in `shadow/repository.py:407-417,557-578,636-660,704-729`. |
-| 2 | A user can view an investment thesis with valuation anchors, invalidation conditions, and periodic evidence checks. | ✗ FAILED | Immutable schemas/repository/UI exist, but the real resolver path receives forbidden `thesis_id`: repository adds it (`theses/repository.py:214-232,585-590`), service forwards the full mapping (`theses/service.py:88-100,121-123`), and resolver does not strip it before `extra="forbid"` validation (`theses/evidence.py:191-203`). Production readers are all `None` lambdas (`optional_modules.py:333-347`). |
-| 3 | A researcher can request and inspect a forecast with quantiles, sampled paths, and checkpoint provenance. | ✗ FAILED | Numerical adapter tests pass, but the production host does not wire the catalog/freezer/runner (`optional_modules.py:357-380`), path paging slices raw rows (`optional_modules.py:260-279`) while the UI groups `path_index` (`ForecastPanel.tsx:160-177`), and input/record identities omit or default material evidence (`forecast/input.py:168-197`; `forecast/repository.py:453-481`). |
-| 4 | The three capabilities are independently deployable and unavailable/failing peers cannot break v1. | ✗ FAILED | The eight-combination acceptance is valuable regression evidence, but it uses deployment probe overrides while real factories expose incomplete services. The supported unconfigured-local branch combines wildcard CORS (`main.py:633-642`) with unauthenticated local-network access and no `reviewer_principal` (`main.py:669-686`), so Phase 05 can be advertised available while principal-scoped routes fail. |
-| 5 | Phase 05 evidence is immutable, append-safe, attributable, and auditable across retries/restarts. | ✗ FAILED | Fact triggers exist (`migrations.py:1189-1207`), but migration application is not atomic (`migrations.py:1219-1222`), Shadow replay identities can silently substitute facts, and Forecast maturity scanning can starve later records (`calibration.py:129-144`). |
-| 6 | Kronos source/checkpoints are pinned, byte-bound, local-only, and reproducibly provisioned. | ✗ FAILED | Network-free intent and immutable revision checks exist, but source verification trusts only manifest revision and hashes only safetensors (`catalog.py:303-331`); config and executed vendored bytes are not all bound, the worker import directory is not tied to `source_dir`, and provisioning read-modify-write/rollback is race-prone (`provision_kronos.py:428-516`). |
-| 7 | Optional research outputs cannot activate or invoke completed-v1 strategy, monitor, plan, position, ledger, broker, provider, or market actions. | ✓ VERIFIED | Source boundaries expose explicit empty/no-action collaborators, and four verifier-run named spot checks passed: Shadow no-action, Thesis confirmation, path-axis quantiles, and real-host success/failure/terminal no-action. The host no-action test passed with three pre-existing Polars warnings. |
+## 目标倒推与可观察真值
 
-**Score:** **1/7** truths verified. `behavior_unverified: 0` — remaining truths are observably failed, not merely uncertain.
+| # | 可观察真值 | 状态 | 实际证据 |
+|---|---|---|---|
+| 1 | 用户能从实际本地交易日志创建并评估 Shadow 派生策略 | FAILED | 生产 UI 在 `ShadowAccount.tsx:538` 固定发送空 trade IDs；`shadow/repository.py:406-411` 对正常非空批次必然拒绝。通过的 host test 在 `test_phase5_optional_host.py:619-628` 直接读取 repository trade IDs，未覆盖浏览器请求。 |
+| 2 | 用户能查看和操作含估值锚、失效条件及周期性受治理检查的 Thesis 生命周期 | VERIFIED WITH WARNING | `test_production_thesis_readiness_and_governed_pending_are_real` 本次通过；05-21/05-32 的 strict resolver/readers/scanner 已生产 wiring。WR-03 仍会在未加载关联 version 时静默隐藏旧 checks/history，见审查表。 |
+| 3 | 研究者能请求并查看含 quantiles、32 paths 与 checkpoint provenance 的 Forecast | FAILED | fixture 生产路径测试通过，但 `forecast_records` 与 `_validated_immutable_record()` 不保存 quantiles（`repository.py:628-635,658-784`）；projection 只能在偶然存在 mapping 时输出（`projections.py:132-143`）。实际 approved supply 也不存在。 |
+| 4 | Shadow/Thesis/Forecast 独立可选，任一缺失/失败不破坏已完成 v1 loop | VERIFIED | 本次运行单个参数化测试 `test_eight_module_combinations_preserve_v1_and_runtime_boundaries`，8/8 组合通过；先前 Phase 2/3/4 回归 42/9/213 和浏览器 6/3/10+3 亦为正向回归证据。 |
+| 5 | Phase 05 事实/工件在 failure/retry/restart/correction 下不可变、可归因、append-safe | FAILED | CR-03/05/06/07 与 WR-01/02 均由当前源码确认；principal、输入 checksum、requeue、descendant 和 TOCTOU 不变量不成立。 |
+| 6 | Kronos 是精确批准、字节绑定、本地 only、可复现且并发安全的 | FAILED | `05-28-SUMMARY.md` 为 `approval: rejected`、`gate_status: blocked`；05-26/27 SUMMARY 缺失；当前 config/Torch/provision/runtime code 仍缺计划要求。 |
+| 7 | 可选研究输出不会调用 strategy/monitor/plan/position/ledger/broker/provider/market-action | VERIFIED | 本次 `test_optional_success_failure_and_terminal_paths_call_no_live_actions` 通过；组合测试与三个生产 tracer 均未观测 live-action。 |
 
-## Required Artifacts
+**得分：3/7。** `behavior_unverified: 0`；未通过项均由当前源码或缺失 gate 直接证明为失败，不是仅需人工判断的“不确定”。
 
-`gsd-tools query verify.artifacts` returned `valid` for Plans 05-06 and 05-11 through 05-16. Existence and substantive implementation are not the blocker; production wiring and behavioral integrity are.
+## 需求覆盖
 
-| Artifact group | Expected | Status | Details |
-| --- | --- | --- | --- |
-| `backend/app/shadow/*` | Immutable local import, explainable candidate, IS/OOS, safe retention/API | ⚠️ PARTIAL / HOLLOW IN PRODUCTION | Substantive domain code exists. Production host omits a real distiller/evaluator; replay, pair atomicity, attribution, and scope defects remain. |
-| `backend/app/theses/*` | Immutable versions, governed checks, pending-only human lifecycle | ⚠️ PARTIAL / HOLLOW IN PRODUCTION | Version/condition/check storage is substantive. Production resolver receives forbidden metadata and production evidence readers are empty. |
-| `backend/app/forecast/*` | Approved catalog/input, bounded runner, immutable record/path/calibration/API | ⚠️ PARTIAL / HOLLOW IN PRODUCTION | Numerical and repository modules exist, but production factory does not compose them; input/provenance/path/calibration integrity gaps remain. |
-| `backend/app/optional_modules.py`, `backend/app/main.py` | Independent complete module factories in one safe host | ✗ FAILED | Factories advertise incomplete services; local unauthenticated principal/CORS boundary prevents safe usable Phase 05 routes. |
-| `backend/app/operational/migrations.py`, `backend/app/optional_artifacts.py` | Atomic append-only schema and immutable managed artifacts | ⚠️ PARTIAL | Triggers and checksum store are substantive; migration is non-atomic and Parquet-library exceptions can bypass temporary cleanup/error translation. |
-| `frontend/src/pages/backtest/ShadowAccount.tsx` | Usable Shadow workflow in Backtest | ✗ FAILED | Mounted and substantial, but sends an incompatible distillation body and allows confirmation after mapping changes without a matching fresh preview. |
-| `frontend/src/components/analysis/ThesisPanel.tsx`, `ForecastPanel.tsx`, `AnalysisWorkspace.tsx` | Stock-only thesis/forecast review with object-local data | ⚠️ PARTIAL | UI is substantive and browser scenarios pass against fixtures, but `keepPreviousData` plus retained object IDs can render/mutate the previous subject after stock switches; path DTO semantics diverge from production. |
-| Phase 05 tests and E2E spec | Behavioral acceptance | ✓ SUBSTANTIVE, COVERAGE GAPS | Exactly 13 browser scenarios and focused backend contracts exist. They do not exercise the contradictory production factory composition or several review-confirmed edge identities. |
+| Requirement | 需求 | 状态 | 证据与缺口 |
+|---|---|---|---|
+| SHDW-01 | 从实际交易日志派生并评估 Shadow 策略 | BLOCKED | importer、candidate、IS/OOS 与 production factory 均实质存在；但真实 UI 无法构造仓储要求的完整 trade membership，用户主链不可达。 |
+| THES-01 | 跟踪论点、估值锚、失效条件、周期证据检查 | SATISFIED WITH WARNING | 生产 resolver/readers/scanner 和命名 host 行为测试通过；WR-03 使旧检查/历史可见性依赖 versions 分页进度，必须修复但不单独阻断当前核心 truth。 |
+| FORE-01 | 请求含 quantiles、sampled paths、model checkpoint 的 Kronos 预测 | BLOCKED | path artifact 数值测试通过；唯一 record commit 不保留 quantiles，public ownership/恢复/worker 边界失败，且 supply approval 被拒绝。 |
 
-## Key Link Verification
+`REQUIREMENTS.md` 恰好把这三个 ID 映射到 Phase 05，没有 orphaned requirement。当前文件中的 `Complete` 是静态追踪声明，不覆盖实际失败证据。当前 milestone 没有后续 phase，因此没有可合法 deferred 的缺口。
 
-`gsd-tools query verify.key-links` returned `valid` for Plans 05-11 through 05-16, but manual Level-3/4 tracing found broken or hollow runtime links.
+## 必需工件：存在、实质、wiring、数据流
 
-| From | To | Via | Status | Details |
-| --- | --- | --- | --- | --- |
-| `ShadowAccount` | `shadow/api.py::DistillRequest` | typed `phase5Api.shadowDistill` | ✗ NOT WIRED CONTRACTUALLY | Client field names/shape cannot validate against the server's extra-forbid request. |
-| `OptionalModuleHost` | Shadow distillation/evaluation | `_ConcreteFactory._create_shadow` | ✗ HOLLOW | Factory supplies no distiller and a deliberately unavailable evaluator. |
-| `ThesisService` | `GovernedEvidenceResolver` | `_resolve(condition=dict(condition))` | ✗ BROKEN | Repository metadata reaches strict condition validation and produces error checks. |
-| `OptionalModuleHost` | governed Thesis sources | `_create_thesis` | ✗ HOLLOW | All governed readers return `None`. |
-| `OptionalModuleHost` | Forecast catalog/freezer/runner | `_create_forecast` | ✗ NOT WIRED | Production creates a repository request service and inert actuals scanner rather than the approved full pipeline. |
-| Forecast path API | `ForecastPanel` | Parquet page DTO | ✗ BROKEN | Server pages raw rows/sample indexes; client expects complete distinct path indexes. |
-| Forecast request | immutable record | freezer → runner → repository commit | ⚠️ PARTIAL | Components exist, but production composition is absent and the fingerprint/commit validation accepts hollow provenance. |
-| Optional mutations | completed-v1 action domains | explicit no-action seams | ✓ WIRED NEGATIVELY | Named unit/host checks confirm no live-action collaborator call. |
+| 工件/组 | L1/L2 | L3/L4 | 状态 | 说明 |
+|---|---|---|---|---|
+| `backend/app/shadow/*` | 存在且实质 | backend production factory 已 wiring | PARTIAL | UI→evidence repository membership contract 断裂；后续 candidate/evaluation 对正常浏览器用户不可达。 |
+| `frontend/src/pages/backtest/ShadowAccount.tsx` | 存在且实质 | mutation 已接 API | FAILED DATA FLOW | `included_trade_ids: []` 无法通过严格仓储；fixture E2E 接受模拟响应而不验证后端。 |
+| `backend/app/theses/*` | 存在且实质 | governed readers→resolver→scanner→API 已 wiring | VERIFIED | 本次 production Thesis test 通过；旧 ledger UI 仍有 WR-03。 |
+| `frontend/src/components/analysis/ThesisPanel.tsx` | 存在且实质 | API pages 已 wiring | PARTIAL | `checks/historyItems` 由 `versionById` 过滤，关联旧版本未加载时静默丢行。 |
+| `backend/app/forecast/*` | 存在且实质 | fixture catalog/freezer/runner 已 wiring | FAILED DATA FLOW | path bytes 流动，但 quantiles 在唯一 record commit 被丢弃；production approved supply 不存在。 |
+| `backend/app/optional_modules.py` | 存在且实质 | 三模块与 scanners 已 wiring | PARTIAL | readiness 组合通过；Forecast `recover_after_restart()` 的 `requeue` outcomes 未被消费。 |
+| `backend/app/forecast/checkpoints.example.json` | 存在 | 只有 weight identity | STUB RELATIVE TO 05-26 | 无 model/tokenizer config SHA-256。 |
+| `backend/scripts/provision_kronos.py` | 存在且实质 | 无锁/CAS，rollback 删除 promoted final | FAILED RELATIVE TO 05-26 | 05-26 artifact query 存在性有效，但关键链接无效。 |
+| `backend/app/forecast/catalog.py`, `kronos_adapter.py`, `runner.py` | 存在且实质 | 未满足 verified source dir/byte IPC/ready handshake | FAILED RELATIVE TO 05-27 | 05-27 artifact query 存在性有效，但关键链接无效。 |
+| `.planning/.../05-29-SUMMARY.md` | 缺失 | 无最终结果 | MISSING | `verify.artifacts` 与 `verify.key-links` 对 05-29 均未通过。 |
 
-## Data-Flow Trace (Level 4)
+## 关键链接与数据流
 
-| Artifact | Data variable | Source | Produces real authoritative data | Status |
-| --- | --- | --- | --- | --- |
-| Shadow panel | batches/evidence/candidates/evaluations | typed API → production Shadow factory | No, not for distillation/evaluation | ✗ HOLLOW |
-| Thesis panel | versions/checks/pending | typed API → ThesisService → governed resolver | Versions yes; normal governed checks degrade to error and readers are empty | ✗ HOLLOW |
-| Forecast panel | jobs/records/paths/calibration | typed API → production Forecast bundle | Repository fixtures/rows exist; approved model pipeline and actuals are not production-wired | ✗ HOLLOW |
-| v1 action domains | strategy/monitor/plan/position/broker mutations | optional services | No calls are available or observed | ✓ ISOLATED |
+| From | To | Via | 状态 | 证据 |
+|---|---|---|---|---|
+| Shadow UI | Shadow evidence repository | `createEvidence` body | BROKEN | UI 空 IDs 对 strict membership 必然失败。 |
+| Thesis governed lake/ledger | Thesis UI | readers→resolver→scanner→API | WIRED | 命名 production behavior test 本次通过。 |
+| Forecast path tensor | path API/UI | artifact reader distinct path pages | WIRED IN FIXTURE | `test_path_quantile_consistency` 本次通过，但它不经过 record persistence。 |
+| Forecast path tensor | immutable record quantiles | runner→repository commit→projection | NOT WIRED | record schema/validator/INSERT 无 quantiles。 |
+| Forecast persisted principal | list/detail/retry/SSE/record | API ownership checks | NOT WIRED | `_owned_job/_owned_record` 只验证 instrument。 |
+| Forecast restart recovery | runner | host consumes `requeue` | NOT WIRED | `optional_modules.py:691-694` 忽略 outcomes。 |
+| approved supply summary | exact config/Torch/provision/runtime | 05-28→05-26→05-27 | BLOCKED | 05-28 明确拒绝，禁止下游 mutation。 |
+| all gap outputs | final backend/browser acceptance | 05-29 | MISSING | 05-27 与 05-29 未完成，无 SUMMARY。 |
+| Optional modules | completed-v1 action domains | explicit no-action seams | WIRED NEGATIVELY | 本次 no-live-action 与 8-combination tests 通过。 |
 
-## Behavioral Spot-Checks
+## 05-26 / 05-27 / 05-29 明确处置
 
-The assignment prohibited project-wide commands. Verification ran only four named, focused checks.
+| Plan | 状态 | 可接受的解释 | 验证结论 |
+|---|---|---|---|
+| 05-26 | 未执行、无 SUMMARY | 05-28 的 rejected/incomplete 是 fail-closed 结果，不是批准 | 不得运行 supply mutation；config digests、精确 Torch、CAS 与 safe rollback 未实现。 |
+| 05-27 | 未执行、无 SUMMARY | 依赖 05-26，不能越过 supply gate | source/config/weight revalidation、verified import origin、pre-IPC cap、ready handshake、descendant cleanup 未实现。 |
+| 05-29 | 未执行、无 SUMMARY | 依赖 05-27 和所有 terminal gap plans | post-gap backend/browser final gate 不存在；05-17 旧证据按 05-29 prohibition 不可复用。 |
 
-| Behavior | Command | Result | Status |
-| --- | --- | --- | --- |
-| Shadow retention invokes no completed-v1 action | `uv run pytest tests/shadow/test_evaluation_retention.py::test_retention_invokes_zero_strategy_monitor_plan_position_ledger_broker_or_market_actions -q` | `1 passed` | ✓ PASS |
-| Thesis confirmation revalidates evidence and appends one official event | `uv run pytest tests/theses/test_lifecycle.py::test_confirmation_revalidates_evidence_and_appends_one_official_event -q` | `1 passed` | ✓ PASS (fake resolver path; does not cover production metadata defect) |
-| Forecast quantiles derive over path axis zero | `uv run pytest tests/forecast/test_kronos_adapter.py::test_adapter_quantiles_are_computed_over_path_axis_zero -q` | `1 passed` | ✓ PASS |
-| Real-host optional success/failure/terminal paths invoke no live actions | `uv run pytest tests/test_phase5_optional_host.py::test_optional_success_failure_and_terminal_paths_call_no_live_actions -q` | `1 passed`, 3 pre-existing Polars warnings | ✓ PASS |
+05-28 自身作为“拒绝记录”已正确完成；它证明 downstream 必须停止，不证明 FORE-01 完成。`checkpoints.example.json`、`pyproject.toml`、`uv.lock` 和 provisioner 保持 gap 前状态符合 fail-closed 要求，但也因此不能满足 Phase 05 目标。
 
-## Final Acceptance Evidence Accounted For
+## 10 项代码审查发现逐项核验
 
-The supplied final evidence and `05-17-SUMMARY.md` were considered, but completion claims were not treated as source proof.
+| ID | 等级 | 状态 | 当前源码证据 | 对目标的影响 |
+|---|---|---|---|---|
+| CR-01 | BLOCKER | CONFIRMED OPEN | `ShadowAccount.tsx:538`; `shadow/repository.py:406-411` | 正常 Shadow 浏览器主链在 evidence 创建处中断。 |
+| CR-02 | BLOCKER | CONFIRMED OPEN | `forecast/repository.py:628-635,658-848`; `projections.py:132-143` | quantiles 在唯一持久化边界消失，FORE-01 直接失败，校准缺规范来源。 |
+| CR-03 | BLOCKER | CONFIRMED OPEN | `forecast/api.py:229-264,547-560`; migration `forecast_jobs.principal` 已存在 | 同 instrument 的有效 principal 可跨会话读取/重试/订阅 Forecast。 |
+| CR-04 | BLOCKER | CONFIRMED OPEN | `ForecastPanel.tsx:209-245,409-410`; API 已返回 outcomes | API calibration 分支把 5/20/60 全标成 record horizon，actual session/value 丢失。 |
+| CR-05 | BLOCKER | CONFIRMED OPEN | `forecast/service.py:216-229`; runner commit 前只验输出 | worker 可改写同 UID 输入 path，记录仍声明原 fingerprint。 |
+| CR-06 | BLOCKER | CONFIRMED OPEN | `forecast/runner.py:405-409,477-479,548-559` | leader 正常退出时遗留 descendants 不被回收。 |
+| CR-07 | BLOCKER | CONFIRMED OPEN | `repository.py:850-894`; `optional_modules.py:685-697` | queued job 仅标记 requeue，host 不调度，重启后永久 queued。 |
+| WR-01 | WARNING | CONFIRMED OPEN | `forecast/service.py:83-109` | 幂等查重前 `_prepare()` 已创建 immutable input namespace，复用产生孤儿工件。 |
+| WR-02 | WARNING | CONFIRMED OPEN | `optional_artifacts.py:141-151,276-282` | checksum 后按 pathname 二次打开，存在验证/消费 TOCTOU。 |
+| WR-03 | WARNING | CONFIRMED OPEN | `ThesisPanel.tsx:237-246,456-467` | checks/history 与 versions 独立分页时，关联未加载版本的事实被静默隐藏。 |
 
-| Evidence | Recorded result | Verification interpretation |
-| --- | --- | --- |
-| Phase 05 focused backend | `177 passed, 1 approved environment-unavailable local-model skip` | Strong evidence for the encoded contracts and no-action regression. It does not cover the source-confirmed production factory, request-schema, metadata, replay-identity, or supply-chain defects. |
-| Phase 05 browser | Exactly `13/13` scenarios | Strong fixture-backed UI evidence. Production Shadow request and Forecast path contracts still contradict source; previous-subject retention is not made safe by fixture success. |
-| TypeScript and production build | `tsc` and production build pass | Confirms compilation/bundling, not API semantic compatibility or production data flow. |
-| Phase 02/03/04 regression gates after append-safe/scoped test fixes | Passed | Positive evidence that Phase 05 changes did not regress the tested earlier loops. The confirmed Phase 05 availability/auth/migration issues still prevent the stronger goal. |
-| Optional pinned local Kronos model | One approved local-model skip | Correctly reported as environment-unavailable, not accepted. The skip itself is not a gap; byte-binding/provisioning/runtime composition defects are. |
+审查报告生成后没有修复计划或摘要；本次逐项读取当前源码确认全部 10 项仍开放。没有 override，用户对 supply identity 的拒绝也不能解释为任何 defect 的接受。
 
-## Requirements Coverage
+## 行为抽查
 
-| Requirement | Source plans | Description | Status | Evidence |
-| --- | --- | --- | --- | --- |
-| **SHDW-01** | 05-01/02/05/06/07/08/11/14/15/17 | Derive and evaluate strategy from immutable actual trading logs | ✗ BLOCKED | Domain tests exist, but production factory and frontend/backend request link are unusable; audit/idempotency/scoping gaps remain. |
-| **THES-01** | 05-03/05/06/09/12/14/16/17 | Track versioned thesis, anchors, conditions, periodic checks, and human review | ✗ BLOCKED | Immutable versions exist, but production governed checks systematically error and readers are placeholders. |
-| **FORE-01** | 05-01/04/05/06/07/10/13/14/15/16/17 | Request Kronos quantiles, sampled paths, and model checkpoints | ✗ BLOCKED | Adapter and runner tests exist, but production composition/path flow/provenance/supply-chain integrity are incomplete. |
+| 行为 | 命令 | 结果 | 结论 |
+|---|---|---|---|
+| Shadow/Thesis/Forecast production tracer、path quantile artifact、queued restart、零 live-action | `cd backend && uv run pytest -q` 加 6 个精确 node IDs | `6 passed, 14 warnings` | 通过所编码路径；同时证明现有 queued test 只断言返回 `requeue`，不证明执行。 |
+| 八种 module availability 组合与 v1 边界 | `cd backend && uv run pytest -q tests/test_phase5_optional_host.py::test_eight_module_combinations_preserve_v1_and_runtime_boundaries` | `8 passed, 24 warnings` | 可选性与测试覆盖的 v1 smoke 通过。 |
+| 05-29 完整 backend gate | 未执行 | SKIPPED BY BLOCKING PRECONDITION | 05-27 未完成且 7 个 review blocker 仍开放；不能把 narrowed spot checks冒充 final gate。 |
+| 05-29 完整未过滤 Playwright | 未执行 | SKIPPED BY BLOCKING PRECONDITION | 最终 backend closure 与 supply/runtime prerequisites 未满足。 |
 
-`REQUIREMENTS.md` maps exactly SHDW-01, THES-01, and FORE-01 to Phase 05. No orphaned Phase 05 requirement exists, and there is no later milestone phase to which these goal gaps can be deferred.
+本次 6-test command 中通过的 production Forecast test 使用 `ApprovedForecastCheckpointFixture`，并不能替代 05-28 独立供应批准。`test_path_quantile_consistency` 验证 artifact store 数值关系，不经过缺失 quantile 字段的 repository commit。Phase 05 E2E 使用 route fixtures；例如 Shadow fixture 接受空 trade IDs，Forecast fixture内嵌 calibration，均不会暴露真实 backend 缺陷。
 
-## Anti-Patterns and Review Findings
+## Probe、反模式与人工验证
 
-The targeted debt-marker scan found no unreferenced `TBD`, `FIXME`, `XXX`, `TODO`, `HACK`, or placeholder delivery marker in the Phase 05 source paths. The blockers are implemented behavior, not comments.
+- **Probe execution：** Phase 05 没有声明 `probe-*.sh`；契约由 pytest/Playwright 表达。
+- **债务标记扫描：** Phase 05 生产路径未发现未引用的 `TBD/FIXME/XXX/TODO/HACK/PLACEHOLDER`。阻断来自已实现但错误的行为，不是注释占位。
+- **人工验证：** 当前不需要人工 UI 判断来确定状态；所有 blocker 都可由源码或缺失 artifact 判定。Plan 05-17 的真实 Kronos CPU smoke 仍被 supply approval 拒绝所阻塞，不能用人工运行绕过。
+- **prohibitions：** 05-26/27/29 的禁止项没有被批准解除。尤其不得把 05-28 拒绝解释为 approval、不得复用 05-17 旧 gate、不得自行下载/计算/批准替代身份。
 
-| Area | Pattern | Severity | Impact |
-| --- | --- | --- | --- |
-| Production capability factory | Advertises incomplete/hollow services | 🛑 BLOCKER | All three roadmap user flows can be unavailable or unusable despite `available`. |
-| API/client contracts | Strict server request and typed client diverge | 🛑 BLOCKER | Shadow distillation returns 422 for the production UI request. |
-| Immutable identity | Replay keys omit material content/attribution | 🛑 BLOCKER | Audited facts can silently represent a different request/reviewer. |
-| Migration/recovery | Partial schema and undiscoverable/starved work | 🛑 BLOCKER | Shared operational DB can brick or omit truthful retry/recovery behavior. |
-| Forecast supply chain | Executed/config bytes not fully digest-bound | 🛑 BLOCKER | A local revision label can pass while modified code/config executes. |
-| Authorization/local host | Wildcard CORS plus unauthenticated local branch | 🛑 BLOCKER | Local browser origins can read unconfigured APIs; Phase 05 lacks the required principal. |
-| Frontend object state | Previous-subject data and IDs survive subject changes | 🛑 BLOCKER | Old-instrument data can appear under and mutate from a new stock context. |
-| Targeted source scan | No debt markers found | ℹ️ INFO | No marker-based blocker; the source-confirmed review findings determine status. |
+## 前次缺口关闭情况
 
-## Probe Execution
+| 前次根因 | 本次状态 |
+|---|---|
+| Shadow strict DTO 与 production factory | 大部分 CLOSED；05-18/19/20/30/31 已建立实质 backend，但 CR-01 仍阻断真实用户链。 |
+| Thesis resolver/readers/scanner/readiness | CLOSED at backend core；05-21/32 与命名行为测试支持，WR-03 仍为 UI 历史警告。 |
+| Forecast production composition/path/cursor/SSE | PARTIAL；05-22/23/24 实质存在，但 CR-02–07 与 supply/runtime gaps 阻断。 |
+| host principal/CORS/readiness 与 migration 原子性 | CLOSED by source/tests；05-25 有命名证据，8-combination 本次回归通过。 |
+| Kronos byte binding/provisioning | OPEN；05-28 rejected，05-26/27 未执行。 |
+| final integrated acceptance | OPEN；05-29 缺失。 |
 
-No Phase 05 shell probe was declared. The Phase 05 contract is expressed through pytest and Playwright artifacts. No project-wide command or model provisioning/download was run.
+## 下一步
 
-## Human Verification Required
+1. 先修复 CR-01 至 CR-07 和 WR-01 至 WR-03，并为每项增加会在当前实现上失败的行为测试。
+2. 由独立人工重新提供并批准 05-28 所需五个 config.json 完整身份与精确 PyTorch CPU wheel/build/index/hash；不得由 executor 推断或自批。
+3. 按依赖顺序执行 05-26、05-27；确认所有 named supply/runtime tests、`uv lock --check`、key links 与 prohibitions 通过。
+4. 最后执行 05-29 的完整 `ATHENA_ALLOW_NETWORK=0` backend gate 与未过滤 desktop-chromium Phase 05 browser gate，记录真实计数、skip/xfail、external/action spy 结果。
+5. 重新运行 Phase 05 verification。当前没有 later phase 可以合法 deferred 这些缺口。
 
-None for this verdict. The blocking gaps are directly observable in current source. The optional deployment-specific Kronos CPU/resource check remains correctly unavailable until approved local assets are provisioned, but human execution of that check cannot resolve the source-confirmed production and supply-chain gaps above.
+### Gaps Found
 
-## Gaps Summary
+共有 5 个根缺口阻断目标：Shadow 真实主链、Forecast 结果与安全/恢复、跨失败审计不变量、Kronos supply/runtime 完整性，以及缺失的最终 post-gap gate。结构化 gaps 已写入本文件 frontmatter，下一步命令为 `/gsd:plan-phase 5 --gaps`。
 
-Phase 05 is **not goal-complete** despite substantial implementation and strong focused acceptance results. The codebase contains all major domain/UI artifacts and preserves a verified no-live-action boundary, but the actual production composition is hollow for all three capabilities, key frontend/backend contracts diverge, several immutable identities are incomplete, the shared migration is non-atomic, and Kronos execution/provisioning is not fully byte-bound or concurrency-safe.
-
-The unresolved `05-REVIEW.md` blockers are confirmed by current source rather than accepted from review prose. Because each roadmap success criterion fails at the real production wiring/data-flow level, the correct canonical status is `gaps_found`, not `human_needed` or `passed`.
-
----
-
-_Verified: 2026-07-16T10:34:11Z_
-_Verifier: OMP (gsd-verifier)_
+[gsd-task-result] phase 05 plan verification task Phase05Verifier completed
