@@ -167,6 +167,38 @@ class ThesisRepository:
             ).fetchall()
             return [version for row in rows if (version := self._version(connection, row["id"])) is not None]
 
+    def page_versions_for_instrument(
+        self, instrument: str, *, offset: int, limit: int
+    ) -> dict[str, Any]:
+        """Page immutable versions after exact instrument ownership filtering."""
+        canonical = _required_instrument(instrument)
+        page_offset, page_limit = _page_bounds(offset, limit)
+        with self._connection() as connection:
+            total = int(
+                connection.execute(
+                    """SELECT COUNT(*)
+                       FROM thesis_versions AS version
+                       JOIN theses AS thesis ON thesis.id = version.thesis_id
+                       WHERE thesis.instrument = ?""",
+                    (canonical,),
+                ).fetchone()[0]
+            )
+            rows = connection.execute(
+                """SELECT version.id
+                   FROM thesis_versions AS version
+                   JOIN theses AS thesis ON thesis.id = version.thesis_id
+                   WHERE thesis.instrument = ?
+                   ORDER BY version.version DESC, version.created_at DESC, version.id DESC
+                   LIMIT ? OFFSET ?""",
+                (canonical, page_limit, page_offset),
+            ).fetchall()
+            items = [
+                version
+                for row in rows
+                if (version := self._version(connection, row["id"])) is not None
+            ]
+        return _page_result(items, offset=page_offset, limit=page_limit, total=total)
+
     def list_for_instrument(self, instrument: str) -> list[dict[str, Any]]:
         """Return deterministic latest projections for the exact persisted instrument."""
         with self._connection() as connection:
@@ -411,6 +443,31 @@ class ThesisRepository:
             ).fetchall()
         return [self._check_projection(row) for row in rows]
 
+    def page_checks_for_instrument(
+        self, instrument: str, *, offset: int, limit: int
+    ) -> dict[str, Any]:
+        """Page immutable checks across every version of one exact instrument."""
+        canonical = _required_instrument(instrument)
+        page_offset, page_limit = _page_bounds(offset, limit)
+        joins = """FROM thesis_condition_checks AS condition_check
+                   JOIN thesis_conditions AS condition
+                     ON condition.id = condition_check.condition_id
+                   JOIN thesis_versions AS version ON version.id = condition.version_id
+                   JOIN theses AS thesis ON thesis.id = version.thesis_id
+                   WHERE thesis.instrument = ?"""
+        with self._connection() as connection:
+            total = int(connection.execute(f"SELECT COUNT(*) {joins}", (canonical,)).fetchone()[0])
+            rows = connection.execute(
+                f"""SELECT condition_check.* {joins}
+                    ORDER BY condition_check.due_at DESC,
+                             condition_check.checked_at DESC,
+                             condition_check.id DESC
+                    LIMIT ? OFFSET ?""",
+                (canonical, page_limit, page_offset),
+            ).fetchall()
+        items = [self._check_projection(row) for row in rows]
+        return _page_result(items, offset=page_offset, limit=page_limit, total=total)
+
     def condition_outcome(self, condition_id: str, due_at: str) -> dict[str, Any] | None:
         """Return the canonical check and optional pending fact for one due identity."""
         with self._connection() as connection:
@@ -550,6 +607,107 @@ class ThesisRepository:
                 (_required_identifier(thesis_id, "thesis_id"),),
             ).fetchall()
         return [self._pending_projection(row) for row in rows]
+
+    def page_actionable_pending_for_instrument(
+        self, instrument: str, *, offset: int, limit: int
+    ) -> dict[str, Any]:
+        """Page only current-version pending conclusions without a human review."""
+        canonical = _required_instrument(instrument)
+        page_offset, page_limit = _page_bounds(offset, limit)
+        predicate = """FROM thesis_pending_conclusions AS pending
+                       JOIN theses AS thesis ON thesis.id = pending.thesis_id
+                       WHERE thesis.instrument = ?
+                         AND pending.status = 'pending'
+                         AND NOT EXISTS (
+                             SELECT 1 FROM thesis_review_events AS review
+                             WHERE review.pending_id = pending.id
+                         )
+                         AND NOT EXISTS (
+                             SELECT 1 FROM thesis_versions AS successor
+                             WHERE successor.thesis_id = pending.thesis_id
+                               AND successor.predecessor_id = pending.version_id
+                         )"""
+        with self._connection() as connection:
+            total = int(
+                connection.execute(f"SELECT COUNT(*) {predicate}", (canonical,)).fetchone()[0]
+            )
+            rows = connection.execute(
+                f"""SELECT pending.* {predicate}
+                    ORDER BY pending.created_at DESC, pending.id DESC
+                    LIMIT ? OFFSET ?""",
+                (canonical, page_limit, page_offset),
+            ).fetchall()
+        items = [self._pending_projection(row) for row in rows]
+        return _page_result(items, offset=page_offset, limit=page_limit, total=total)
+
+    def page_pending_history_for_instrument(
+        self, instrument: str, *, offset: int, limit: int
+    ) -> dict[str, Any]:
+        """Page all-version pending history with immutable review and lifecycle state."""
+        canonical = _required_instrument(instrument)
+        page_offset, page_limit = _page_bounds(offset, limit)
+        with self._connection() as connection:
+            total = int(
+                connection.execute(
+                    """SELECT COUNT(*)
+                       FROM thesis_pending_conclusions AS pending
+                       JOIN theses AS thesis ON thesis.id = pending.thesis_id
+                       WHERE thesis.instrument = ?""",
+                    (canonical,),
+                ).fetchone()[0]
+            )
+            rows = connection.execute(
+                """SELECT pending.*,
+                          review.id AS review_id,
+                          review.decision AS review_decision,
+                          review.reviewer_principal AS review_principal,
+                          review.rationale AS review_rationale,
+                          review.created_at AS review_created_at,
+                          CASE WHEN NOT EXISTS (
+                              SELECT 1 FROM thesis_versions AS successor
+                              WHERE successor.thesis_id = pending.thesis_id
+                                AND successor.predecessor_id = pending.version_id
+                          ) THEN 1 ELSE 0 END AS is_current
+                   FROM thesis_pending_conclusions AS pending
+                   JOIN theses AS thesis ON thesis.id = pending.thesis_id
+                   LEFT JOIN thesis_review_events AS review ON review.pending_id = pending.id
+                   WHERE thesis.instrument = ?
+                   ORDER BY pending.created_at DESC, pending.id DESC
+                   LIMIT ? OFFSET ?""",
+                (canonical, page_limit, page_offset),
+            ).fetchall()
+        items: list[dict[str, Any]] = []
+        for row in rows:
+            review = None
+            if row["review_id"] is not None:
+                review = {
+                    "id": row["review_id"],
+                    "pending_id": row["id"],
+                    "thesis_id": row["thesis_id"],
+                    "version_id": row["version_id"],
+                    "condition_id": row["condition_id"],
+                    "check_id": row["check_id"],
+                    "evidence_fingerprint": row["evidence_fingerprint"],
+                    "decision": row["review_decision"],
+                    "reviewer_principal": row["review_principal"],
+                    "rationale": row["review_rationale"],
+                    "created_at": row["review_created_at"],
+                }
+            state = (
+                str(row["review_decision"])
+                if review is not None
+                else "actionable"
+                if bool(row["is_current"]) and row["status"] == "pending"
+                else "superseded"
+            )
+            items.append(
+                {
+                    "pending": self._pending_projection(row),
+                    "review": review,
+                    "state": state,
+                }
+            )
+        return _page_result(items, offset=page_offset, limit=page_limit, total=total)
 
     def get_pending(self, pending_id: str) -> dict[str, Any] | None:
         """Return one pending fact with the exact persisted check and condition."""
@@ -898,6 +1056,36 @@ class ThesisRepository:
             "rationale": row["rationale"],
             "created_at": row["created_at"],
         }
+
+
+def _required_instrument(value: str) -> str:
+    if not isinstance(value, str) or not (canonical := value.strip().upper()):
+        raise ValueError("instrument must be non-empty bounded text")
+    if len(canonical) > 32 or any(
+        not (character.isalnum() or character in ".-") for character in canonical
+    ):
+        raise ValueError("instrument is invalid")
+    return canonical
+
+
+def _page_bounds(offset: int, limit: int) -> tuple[int, int]:
+    if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+        raise ValueError("offset must be a non-negative integer")
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1 or limit > 100:
+        raise ValueError("limit must be between 1 and 100")
+    return offset, limit
+
+
+def _page_result(
+    items: list[dict[str, Any]], *, offset: int, limit: int, total: int
+) -> dict[str, Any]:
+    return {
+        "items": items,
+        "offset": offset,
+        "limit": limit,
+        "total": total,
+        "has_more": offset + len(items) < total,
+    }
 
 
 def _required_identifier(value: str, field: str) -> str:

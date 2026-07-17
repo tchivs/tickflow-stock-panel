@@ -2,11 +2,12 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, datetime, timedelta
 from hashlib import sha256
 import json
 import math
 from typing import Any, Protocol
+from zoneinfo import ZoneInfo
 
 from pydantic import ValidationError
 
@@ -55,7 +56,7 @@ class GovernedEvidenceResolver:
         """Resolve and evaluate one condition without accepting evidence authority."""
         try:
             validated_condition, resolved_instrument = _validated_inputs(condition, instrument)
-            due = _aware_datetime(due_at)
+            due = _aware_datetime(due_at).astimezone(ZoneInfo(validated_condition.timezone))
         except (TypeError, ValueError, ValidationError):
             fingerprint = _fingerprint({"status": "error", "reason": "invalid_resolution_request"})
             return _result(
@@ -116,6 +117,7 @@ class GovernedEvidenceResolver:
                 "source_id": source_id,
                 "source_revision": source_revision,
                 "source_kind": validated_condition.source_kind,
+                "instrument": resolved_instrument,
                 "field": validated_condition.field,
                 "observed_value": float(observed),
                 "unit": unit,
@@ -193,15 +195,9 @@ def _validated_inputs(
 ) -> tuple[ThesisCondition, str]:
     if isinstance(condition, ThesisCondition):
         validated = condition
-        embedded_instrument = None
     else:
-        values = dict(condition)
-        embedded_instrument = values.pop("instrument", None)
-        values.pop("id", None)
-        values.pop("version_id", None)
-        values.pop("copied_from_condition_id", None)
-        validated = ThesisCondition.model_validate(values)
-    candidate = instrument if instrument is not None else embedded_instrument
+        validated = ThesisCondition.model_validate(dict(condition))
+    candidate = instrument
     if not isinstance(candidate, str) or not (resolved := candidate.strip().upper()):
         raise ValueError("instrument is required for governed evidence resolution")
     if len(resolved) > 32 or any(not (character.isalnum() or character in ".-") for character in resolved):
@@ -215,7 +211,7 @@ def _aware_datetime(value: str) -> datetime:
     parsed = datetime.fromisoformat(value)
     if parsed.tzinfo is None:
         raise ValueError("due_at must include a timezone")
-    return parsed.astimezone(UTC)
+    return parsed
 
 
 def _as_date(value: object) -> date:

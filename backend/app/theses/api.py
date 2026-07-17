@@ -119,14 +119,6 @@ def _translate(error: ValueError) -> HTTPException:
     return HTTPException(status_code=422, detail="thesis request is invalid")
 
 
-def _page(items: list[dict[str, Any]], *, page: int, page_size: int) -> dict[str, Any]:
-    start = (page - 1) * page_size
-    return {
-        "items": items[start : start + page_size],
-        "total": len(items),
-        "page": page,
-        "page_size": page_size,
-    }
 
 
 @router.get("/capability")
@@ -139,20 +131,13 @@ def capability(request: Request) -> dict[str, object]:
 def list_versions(
     instrument: str,
     request: Request,
-    page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=100),
 ) -> dict[str, Any]:
     canonical = _require_instrument(request, instrument)
-    records = _service(request).versions_for_instrument(canonical)
-    projected = [projections.version(record) for record in records]
-    result = _page(projected, page=page, page_size=page_size)
-    return {
-        "versions": result["items"],
-        "current_version_id": projected[0]["id"] if projected else None,
-        "total": result["total"],
-        "page": page,
-        "page_size": page_size,
-    }
+    return _service(request).versions_for_instrument(
+        canonical, offset=offset, limit=limit
+    )
 
 
 @router.post("/instruments/{instrument}/versions", status_code=status.HTTP_201_CREATED)
@@ -195,35 +180,39 @@ def revise_version(version_id: str, payload: ThesisRevisionRequest, request: Req
 def list_checks(
     instrument: str,
     request: Request,
-    page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=100),
 ) -> dict[str, Any]:
     canonical = _require_instrument(request, instrument)
-    checks = _service(request).checks_for_instrument(canonical)
-    result = _page(checks, page=page, page_size=page_size)
-    return {"checks": result["items"], "total": result["total"], "page": page, "page_size": page_size}
+    return _service(request).checks_for_instrument(
+        canonical, offset=offset, limit=limit
+    )
 
 
 @router.get("/instruments/{instrument}/pending")
 def list_pending(
     instrument: str,
     request: Request,
-    page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=100),
 ) -> dict[str, Any]:
     canonical = _require_instrument(request, instrument)
-    pending_records = _service(request).pending_for_instrument(canonical)
-    result = _page(pending_records, page=page, page_size=page_size)
-    return {"pending": result["items"], "total": result["total"], "page": page, "page_size": page_size}
+    return _service(request).pending_for_instrument(
+        canonical, offset=offset, limit=limit
+    )
 
 
 @router.get("/instruments/{instrument}/history")
-def history(instrument: str, request: Request) -> dict[str, Any]:
+def history(
+    instrument: str,
+    request: Request,
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=100),
+) -> dict[str, Any]:
     canonical = _require_instrument(request, instrument)
-    record = _service(request).history_for_instrument(canonical)
-    if record is None:
-        raise HTTPException(status_code=404, detail="thesis resource not found")
-    return {"history": record}
+    return _service(request).history_for_instrument(
+        canonical, offset=offset, limit=limit
+    )
 
 
 @router.post("/pending/{pending_id}/confirm")

@@ -9,6 +9,18 @@ from typing import Any
 from app.theses import projections
 from app.theses.schemas import ConditionCheckResult, ThesisRevisionRequest, ThesisVersionRequest
 
+_CONDITION_FIELDS = (
+    "source_kind",
+    "field",
+    "operator",
+    "threshold",
+    "unit",
+    "lookback_days",
+    "cadence",
+    "timezone",
+    "description",
+)
+
 
 class ThesisConflictError(ValueError):
     """A typed immutable-lifecycle conflict requiring the caller to refresh."""
@@ -45,11 +57,14 @@ class ThesisService:
     def get_pending(self, pending_id: str) -> dict[str, Any] | None:
         return self._repository.get_pending(pending_id)
 
-    def versions_for_instrument(self, instrument: str) -> list[dict[str, Any]]:
-        current = self._repository.current_version_for_instrument(instrument)
-        if current is None:
-            return []
-        return self._repository.list_versions(current["thesis_id"])
+    def versions_for_instrument(
+        self, instrument: str, *, offset: int = 0, limit: int = 50
+    ) -> dict[str, Any]:
+        page = self._repository.page_versions_for_instrument(
+            instrument, offset=offset, limit=limit
+        )
+        page["items"] = [projections.version(record) for record in page["items"]]
+        return page
 
     def version_projection(self, record: Mapping[str, Any]) -> dict[str, Any]:
         schedules: dict[str, Mapping[str, Any] | None] = {}
@@ -60,30 +75,38 @@ class ThesisService:
             checks[condition_id] = self._repository.list_checks(condition_id)
         return projections.version(record, schedules=schedules, checks=checks)
 
-    def checks_for_instrument(self, instrument: str) -> list[dict[str, Any]]:
-        checks = [
-            projections.check(item)
-            for version in self.versions_for_instrument(instrument)
-            for condition in version["conditions"]
-            for item in self._repository.list_checks(condition["id"])
-        ]
-        return sorted(checks, key=lambda item: (item["due_at"], item["id"]), reverse=True)
+    def checks_for_instrument(
+        self, instrument: str, *, offset: int = 0, limit: int = 50
+    ) -> dict[str, Any]:
+        page = self._repository.page_checks_for_instrument(
+            instrument, offset=offset, limit=limit
+        )
+        page["items"] = [projections.check(record) for record in page["items"]]
+        return page
 
-    def pending_for_instrument(self, instrument: str) -> list[dict[str, Any]]:
-        current = self._repository.current_version_for_instrument(instrument)
-        if current is None:
-            return []
-        return [
-            projections.pending(
-                item,
-                review=(reviews[0] if (reviews := self._repository.list_review_events(item["id"])) else None),
-            )
-            for item in self._repository.list_pending(current["thesis_id"])
-        ]
+    def pending_for_instrument(
+        self, instrument: str, *, offset: int = 0, limit: int = 50
+    ) -> dict[str, Any]:
+        page = self._repository.page_actionable_pending_for_instrument(
+            instrument, offset=offset, limit=limit
+        )
+        page["items"] = [projections.pending(record) for record in page["items"]]
+        return page
 
-    def history_for_instrument(self, instrument: str) -> dict[str, Any] | None:
-        current = self._repository.current_version_for_instrument(instrument)
-        return None if current is None else self.history(current["thesis_id"])
+    def history_for_instrument(
+        self, instrument: str, *, offset: int = 0, limit: int = 50
+    ) -> dict[str, Any]:
+        page = self._repository.page_pending_history_for_instrument(
+            instrument, offset=offset, limit=limit
+        )
+        page["items"] = [
+            {
+                **projections.pending(item["pending"], review=item["review"]),
+                "state": item["state"],
+            }
+            for item in page["items"]
+        ]
+        return page
 
     def evaluate_due_condition(self, *, condition_id: str, due_at: str) -> dict[str, Any]:
         """Append one canonical due check and only a matched pending conclusion."""
@@ -203,7 +226,12 @@ class ThesisService:
 
     def _resolve(self, *, condition: Mapping[str, Any], due_at: str) -> dict[str, Any]:
         try:
-            payload = self._evidence_resolver.resolve(condition=dict(condition), due_at=due_at)
+            strict_condition = {field: condition[field] for field in _CONDITION_FIELDS}
+            payload = self._evidence_resolver.resolve(
+                condition=strict_condition,
+                due_at=due_at,
+                instrument=condition.get("instrument"),
+            )
             if not isinstance(payload, Mapping):
                 raise ValueError("resolver response is invalid")
             result = ConditionCheckResult(payload.get("result")).value
