@@ -102,9 +102,12 @@ export function parseForecastProgressEvent(raw: string, expectedJobId: string): 
 export function useForecastTask({ instrument, jobId, enabled = true }: UseForecastTaskOptions): ForecastTaskState {
   const queryClient = useQueryClient()
   const [state, setState] = useState<ForecastTaskState>(INITIAL_STATE)
-  const eventSourceRef = useRef<EventSource | null>(null)
+  const abortRef = useRef<AbortController | null>(null)
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const healthyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const reconnectAttemptRef = useRef(0)
+  const latestEventIdRef = useRef<string | null>(null)
+  const terminalHandledRef = useRef(false)
 
   useEffect(() => {
     if (!enabled || !jobId || !SAFE_REFERENCE.test(jobId) || !SAFE_INSTRUMENT.test(instrument)) {
@@ -113,27 +116,39 @@ export function useForecastTask({ instrument, jobId, enabled = true }: UseForeca
     }
 
     let disposed = false
+    const eventStorageKey = `forecast-sse:${instrument}:${jobId}:last-event-id`
+    const storedEventId = sessionStorage.getItem(eventStorageKey)
+    latestEventIdRef.current = storedEventId && /^(?:0|[1-9][0-9]{0,18})$/.test(storedEventId) ? storedEventId : null
+    reconnectAttemptRef.current = 0
+    terminalHandledRef.current = false
+
+    const clearHealthyTimer = () => {
+      if (healthyTimerRef.current) {
+        clearTimeout(healthyTimerRef.current)
+        healthyTimerRef.current = null
+      }
+    }
 
     const clearTransport = () => {
-      if (eventSourceRef.current) {
-        eventSourceRef.current.close()
-        eventSourceRef.current = null
-      }
+      abortRef.current?.abort()
+      abortRef.current = null
       if (reconnectTimerRef.current) {
         clearTimeout(reconnectTimerRef.current)
         reconnectTimerRef.current = null
       }
+      clearHealthyTimer()
     }
 
     const invalidateTerminal = async (job: ForecastJob) => {
       queryClient.setQueryData(QK.forecast.job(instrument, jobId), { job })
       const invalidations: Array<Promise<unknown>> = [
-        queryClient.invalidateQueries({ queryKey: QK.forecast.jobs(instrument) }),
+        queryClient.invalidateQueries({ queryKey: QK.forecast.jobsRoot(instrument) }),
       ]
       if (job.record_id) {
         invalidations.push(
-          queryClient.invalidateQueries({ queryKey: QK.forecast.records(instrument) }),
+          queryClient.invalidateQueries({ queryKey: QK.forecast.recordsRoot(instrument) }),
           queryClient.invalidateQueries({ queryKey: QK.forecast.record(instrument, job.record_id) }),
+          queryClient.invalidateQueries({ queryKey: QK.forecast.pathsRoot(instrument, job.record_id) }),
           queryClient.invalidateQueries({ queryKey: QK.forecast.calibration(instrument, job.record_id) }),
         )
       }
@@ -147,16 +162,18 @@ export function useForecastTask({ instrument, jobId, enabled = true }: UseForeca
           queryFn: () => phase5Api.forecastJob(jobId),
           staleTime: 0,
         })
-        return response.job
+        return response.job.instrument === instrument ? response.job : null
       } catch {
         return null
       }
     }
 
     const finishFromPersisted = async (fallback: ForecastProgressEvent): Promise<boolean> => {
+      if (terminalHandledRef.current) return true
       const persisted = await refreshPersistedJob()
       if (disposed) return true
       if (!persisted || !isTerminal(persisted.status)) return false
+      terminalHandledRef.current = true
       clearTransport()
       await invalidateTerminal(persisted)
       if (disposed) return true
@@ -172,17 +189,17 @@ export function useForecastTask({ instrument, jobId, enabled = true }: UseForeca
     }
 
     const scheduleReconnect = async (connect: () => void) => {
+      clearHealthyTimer()
       const persisted = await refreshPersistedJob()
       if (disposed) return
       if (persisted && isTerminal(persisted.status)) {
-        const terminalProgress: ForecastProgressEvent = {
+        await finishFromPersisted({
           job_id: persisted.id,
           status: persisted.status,
           stage: persisted.stage,
           stage_recorded_at: persisted.stage_recorded_at,
           ...(persisted.safe_reason ? { safe_reason: persisted.safe_reason } : {}),
-        }
-        await finishFromPersisted(terminalProgress)
+        })
         return
       }
       reconnectAttemptRef.current += 1
@@ -197,47 +214,68 @@ export function useForecastTask({ instrument, jobId, enabled = true }: UseForeca
         return
       }
       const attempt = reconnectAttemptRef.current
-      setState(previous => ({
-        ...previous,
-        connection: 'reconnecting',
-        transportError: null,
-        reconnectAttempt: attempt,
-      }))
+      setState(previous => ({ ...previous, connection: 'reconnecting', transportError: null, reconnectAttempt: attempt }))
       reconnectTimerRef.current = setTimeout(connect, Math.min(BASE_RECONNECT_DELAY_MS * 2 ** (attempt - 1), 8_000))
     }
 
-    const connect = () => {
+    const acceptFrame = (frame: string): ForecastProgressEvent | null => {
+      let eventType = 'message'
+      let eventId: string | null = null
+      const data: string[] = []
+      for (const line of frame.split('\n')) {
+        if (line.startsWith('event:')) eventType = line.slice(6).trim()
+        else if (line.startsWith('id:')) eventId = line.slice(3).trim()
+        else if (line.startsWith('data:')) data.push(line.slice(5).trimStart())
+      }
+      if ((eventType !== 'forecast_progress' && eventType !== 'done') || !eventId || !/^(?:0|[1-9][0-9]{0,18})$/.test(eventId)) return null
+      const previousId = latestEventIdRef.current
+      if (previousId != null && BigInt(eventId) <= BigInt(previousId)) return null
+      const progress = parseForecastProgressEvent(data.join('\n'), jobId)
+      if (!progress) return null
+      latestEventIdRef.current = eventId
+      sessionStorage.setItem(eventStorageKey, eventId)
+      reconnectAttemptRef.current = 0
+      clearHealthyTimer()
+      setState(previous => ({ ...previous, connection: 'connected', progress, transportError: null, reconnectAttempt: 0 }))
+      return progress
+    }
+
+    const connect = async () => {
       if (disposed) return
-      if (eventSourceRef.current) eventSourceRef.current.close()
-      setState(previous => ({
-        ...previous,
-        connection: reconnectAttemptRef.current === 0 ? 'connecting' : 'reconnecting',
-        transportError: null,
-      }))
-      const eventSource = new EventSource(`/api/forecast/jobs/${encodeURIComponent(jobId)}/stream`)
-      eventSourceRef.current = eventSource
-
-      eventSource.onopen = () => {
-        if (disposed || eventSourceRef.current !== eventSource) return
-        reconnectAttemptRef.current = 0
-        setState(previous => ({ ...previous, connection: 'connected', reconnectAttempt: 0, transportError: null }))
-      }
-
-      const receive = (event: MessageEvent<string>) => {
-        if (disposed || eventSourceRef.current !== eventSource) return
-        const progress = parseForecastProgressEvent(event.data, jobId)
-        if (!progress) return
-        setState(previous => ({ ...previous, progress, transportError: null }))
-        if (isTerminal(progress.status)) void finishFromPersisted(progress)
-      }
-
-      eventSource.addEventListener('forecast_progress', receive as EventListener)
-      eventSource.addEventListener('done', receive as EventListener)
-      eventSource.onerror = () => {
-        if (disposed || eventSourceRef.current !== eventSource) return
-        eventSource.close()
-        eventSourceRef.current = null
-        void scheduleReconnect(connect)
+      abortRef.current?.abort()
+      const controller = new AbortController()
+      abortRef.current = controller
+      setState(previous => ({ ...previous, connection: reconnectAttemptRef.current === 0 ? 'connecting' : 'reconnecting', transportError: null }))
+      try {
+        const headers = new Headers({ Accept: 'text/event-stream' })
+        if (latestEventIdRef.current) headers.set('Last-Event-ID', latestEventIdRef.current)
+        const response = await fetch(`/api/forecast/jobs/${encodeURIComponent(jobId)}/stream`, { headers, signal: controller.signal })
+        if (!response.ok || !response.body) throw new Error(`Forecast progress stream returned ${response.status}`)
+        setState(previous => ({ ...previous, connection: 'connected', transportError: null, reconnectAttempt: reconnectAttemptRef.current }))
+        healthyTimerRef.current = setTimeout(() => {
+          if (disposed || abortRef.current !== controller) return
+          reconnectAttemptRef.current = 0
+          setState(previous => ({ ...previous, reconnectAttempt: 0 }))
+        }, 10_000)
+        const reader = response.body.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ''
+        while (!disposed) {
+          const chunk = await reader.read()
+          if (chunk.done) break
+          buffer += decoder.decode(chunk.value, { stream: true }).replace(/\r\n/g, '\n')
+          let boundary = buffer.indexOf('\n\n')
+          while (boundary >= 0) {
+            const frame = buffer.slice(0, boundary)
+            buffer = buffer.slice(boundary + 2)
+            const progress = acceptFrame(frame)
+            if (progress && isTerminal(progress.status) && await finishFromPersisted(progress)) return
+            boundary = buffer.indexOf('\n\n')
+          }
+        }
+        if (!disposed) await scheduleReconnect(() => { void connect() })
+      } catch (error) {
+        if (!disposed && !(error instanceof DOMException && error.name === 'AbortError')) await scheduleReconnect(() => { void connect() })
       }
     }
 
@@ -254,7 +292,7 @@ export function useForecastTask({ instrument, jobId, enabled = true }: UseForeca
       setState(previous => ({ ...previous, progress }))
       if (isTerminal(persisted.status)) void finishFromPersisted(progress)
     })
-    connect()
+    void connect()
 
     return () => {
       disposed = true

@@ -1,7 +1,8 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Sparkles, LineChart, History as HistoryIcon, Loader2, ExternalLink, Bell, AlertTriangle } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
+import { Modal } from '@/components/Modal'
 import { EmptyState } from '@/components/EmptyState'
 import { StockFinancialSearch } from '@/components/financials/StockFinancialSearch'
 import { StockPreviewDialog } from '@/components/StockPreviewDialog'
@@ -31,6 +32,7 @@ export function StockAnalysis() {
   const [checking, setChecking] = useState(false)
   const [confirmReport, setConfirmReport] = useState<{ id: string; created_at: string; focus: string } | null>(null)
   const [previewSymbol, setPreviewSymbol] = useState<string | null>(null)
+  const analyzeButtonRef = useRef<HTMLButtonElement>(null)
   const { last: lastStock, remember: rememberStock } = useLastStock('stock-analysis')
 
   // 进入页面立即加载历史报告(供右侧常驻列表)。store 内部有 historyLoaded 去重, 重复调用安全。
@@ -50,6 +52,11 @@ export function StockAnalysis() {
     setName(nm)
     setConfirmReport(null)
     rememberStock(sym, nm)
+  }
+
+  const closeConfirm = () => {
+    setConfirmReport(null)
+    requestAnimationFrame(() => analyzeButtonRef.current?.focus())
   }
 
   const handleAnalyze = async () => {
@@ -92,39 +99,43 @@ export function StockAnalysis() {
         }
       />
 
-      <div className="w-full px-8 py-6 space-y-6">
+      <div className="w-full space-y-6 px-4 py-5 sm:px-6 sm:py-6 lg:px-8">
         {/* 搜索栏 */}
-        <div className="flex items-center gap-3">
-          <div className="w-72">
+        <div className="flex min-w-0 flex-wrap items-center gap-3">
+          <div className="min-w-0 basis-full sm:basis-72 sm:flex-1 sm:max-w-xl">
             <StockFinancialSearch onSelect={onSelect} />
           </div>
           {symbol && (
             <>
               <button
+                type="button"
                 onClick={() => setPreviewSymbol(symbol)}
                 title="查看个股日 K 详情"
-                className="group flex items-center gap-2 text-sm rounded-md px-1.5 py-0.5 -mx-1.5 hover:bg-elevated transition-colors"
+                className="group flex min-h-11 min-w-0 max-w-full items-center gap-2 rounded-btn px-2 text-sm transition-colors hover:bg-elevated focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-base"
               >
-                <span className="text-foreground font-medium group-hover:text-sky-300 transition-colors">{name || symbol}</span>
-                <span className="text-[10px] font-mono text-muted">{symbol}</span>
-                <ExternalLink className="h-3 w-3 text-muted opacity-0 group-hover:opacity-100 transition-opacity" />
+                <span className="truncate font-medium text-foreground transition-colors group-hover:text-accent">{name || symbol}</span>
+                <span className="shrink-0 font-mono text-[10px] text-muted">{symbol}</span>
+                <ExternalLink className="h-3 w-3 shrink-0 text-muted opacity-60 transition-opacity group-hover:opacity-100" aria-hidden="true" />
               </button>
               <button
+                type="button"
+                ref={analyzeButtonRef}
                 onClick={handleAnalyze}
                 disabled={checking}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-btn bg-gradient-to-r from-sky-500/25 to-blue-500/15 border border-sky-400/30 text-sky-300 text-xs font-medium hover:from-sky-500/35 hover:to-blue-500/25 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                className="inline-flex min-h-11 items-center gap-1.5 rounded-btn bg-accent px-3 text-xs font-medium text-white transition-colors hover:bg-accent/90 focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-base disabled:cursor-not-allowed disabled:opacity-40"
               >
-                {checking ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                {checking ? <Loader2 className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />}
                 AI 个股分析
               </button>
               <button
+                type="button"
                 onClick={() => toast('点位提醒功能开发中,敬请期待', 'error')}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-btn border border-border/40 bg-elevated/40 text-muted text-xs font-medium hover:border-border/70 hover:text-secondary transition-all"
+                className="inline-flex min-h-11 items-center gap-1.5 rounded-btn border border-border bg-elevated px-3 text-xs font-medium text-secondary transition-colors hover:text-foreground focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-base"
                 title="当价格触及关键价位时提醒(开发中)"
               >
-                <Bell className="h-3.5 w-3.5" />
+                <Bell className="h-3.5 w-3.5" aria-hidden="true" />
                 点位提醒
-                <span className="rounded-full bg-amber-400/15 px-1.5 py-px text-[9px] font-semibold uppercase tracking-wider text-amber-400">
+                <span className="rounded-full bg-warning/15 px-1.5 py-px text-[9px] font-semibold text-warning">
                   开发中
                 </span>
               </button>
@@ -158,9 +169,9 @@ export function StockAnalysis() {
       {confirmReport && (
         <ConfirmModal
           report={confirmReport}
-          onView={() => { openHistoryReport(confirmReport.id); setConfirmReport(null) }}
-          onRedo={async () => { setConfirmReport(null); await doAnalysis() }}
-          onClose={() => setConfirmReport(null)}
+          onView={() => { openHistoryReport(confirmReport.id); closeConfirm() }}
+          onRedo={async () => { closeConfirm(); await doAnalysis() }}
+          onClose={closeConfirm}
         />
       )}
 
@@ -300,8 +311,9 @@ function HistorySidebar() {
                     )}
                   </button>
                   <button
+                    type="button"
                     onClick={() => { deleteReport(r.id); toast('已删除', 'success') }}
-                    className="shrink-0 text-[10px] text-muted/60 hover:text-danger transition-colors px-1 py-0.5 opacity-0 group-hover:opacity-100"
+                    className="inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-btn px-2 text-[10px] text-muted transition-colors hover:text-danger focus:opacity-100 focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-base sm:min-h-0 sm:min-w-0 sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100"
                     title="删除"
                   >
                     删除
@@ -323,33 +335,34 @@ function ConfirmModal({ report, onView, onRedo, onClose }: {
   onRedo: () => void
   onClose: () => void
 }) {
+  const viewRef = useRef<HTMLButtonElement>(null)
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={onClose}>
-      <div
-        className="w-full max-w-sm bg-surface border border-border rounded-2xl p-5 shadow-2xl"
-        onClick={e => e.stopPropagation()}
-      >
-        <div className="flex items-center gap-2 mb-2">
-          <HistoryIcon className="h-4 w-4 text-sky-400" />
-          <span className="text-sm font-medium text-foreground">该个股已有分析报告</span>
-        </div>
-        <p className="text-xs text-secondary leading-relaxed mb-1">
-          最近一次报告生成于 <span className="text-foreground">{fmtRelative(report.created_at)}</span>。
-        </p>
-        {report.focus && <p className="text-xs text-muted mb-1">关注点: {report.focus}</p>}
-        <p className="text-xs text-muted mb-4">可直接查看历史,或重新生成一份新报告。</p>
-        <div className="flex gap-2">
-          <button onClick={onView}
-            className="flex-1 h-8 rounded-lg bg-elevated border border-border text-xs text-secondary hover:text-foreground transition-colors">
-            查看历史
-          </button>
-          <button onClick={onRedo}
-            className="flex-1 h-8 rounded-lg bg-gradient-to-r from-sky-500/20 to-blue-500/15 border border-sky-400/30 text-xs text-sky-300 hover:from-sky-500/30 transition-all">
-            重新分析
-          </button>
-        </div>
+    <Modal
+      onClose={onClose}
+      labelledBy="stock-analysis-confirm-title"
+      initialFocusRef={viewRef}
+      panelClassName="w-[calc(100vw-2rem)] max-w-sm rounded-dialog border border-border bg-surface p-5 shadow-xl"
+    >
+      <div className="mb-2 flex items-center gap-2">
+        <HistoryIcon className="h-4 w-4 text-accent" aria-hidden="true" />
+        <h2 id="stock-analysis-confirm-title" className="text-sm font-medium text-foreground">该个股已有分析报告</h2>
       </div>
-    </div>
+      <p className="mb-1 text-xs leading-relaxed text-secondary">
+        最近一次报告生成于 <span className="text-foreground">{fmtRelative(report.created_at)}</span>。
+      </p>
+      {report.focus && <p className="mb-1 break-words text-xs text-muted">关注点: {report.focus}</p>}
+      <p className="mb-4 text-xs text-secondary">可直接查看历史,或重新生成一份新报告。</p>
+      <div className="flex flex-wrap gap-2">
+        <button ref={viewRef} type="button" onClick={onView}
+          className="inline-flex min-h-11 flex-1 items-center justify-center rounded-btn border border-border bg-elevated px-3 text-xs text-secondary transition-colors hover:text-foreground focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-base">
+          查看历史
+        </button>
+        <button type="button" onClick={onRedo}
+          className="inline-flex min-h-11 flex-1 items-center justify-center rounded-btn bg-accent px-3 text-xs font-medium text-white transition-colors hover:bg-accent/90 focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-base">
+          重新分析
+        </button>
+      </div>
+    </Modal>
   )
 }
 

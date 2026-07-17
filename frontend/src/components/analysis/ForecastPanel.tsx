@@ -1,6 +1,6 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, ChevronLeft, ChevronRight, Copy } from 'lucide-react'
-import { useId, useMemo, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { EChartsOption } from 'echarts'
 import { ApiRequestError } from '@/lib/api'
 import { useForecastTask } from '@/lib/forecastTask'
@@ -21,12 +21,20 @@ const FOCUS = 'focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offs
 const BUTTON = `inline-flex min-h-11 items-center justify-center rounded-btn px-3 text-sm ${FOCUS}`
 const HORIZONS: ForecastHorizon[] = [5, 20, 60]
 const PATH_PAGE_SIZE = 12
+const HISTORY_PAGE_SIZE = 25
 
 type LooseRecord = Record<string, unknown>
 
 interface ForecastPanelProps {
   instrument: string
   title: string
+}
+
+interface ForecastOperation {
+  instrument: string
+  horizon: ForecastHorizon
+  catalogId: string
+  idempotencyKey: string
 }
 
 interface QuantileRow {
@@ -98,6 +106,27 @@ function errorReason(error: unknown): string {
     return text(detail.reason, text(detail.message, error.message))
   }
   return error instanceof Error ? error.message : '服务暂不可用'
+}
+
+function sessionOrdinal(value: string | null | undefined): number | null {
+  const match = /^CNA-(\d{4})(\d{2})(\d{2})$/.exec(value ?? '')
+  if (!match) return null
+  const year = Number(match[1])
+  const month = Number(match[2])
+  const day = Number(match[3])
+  const date = new Date(Date.UTC(year, month - 1, day))
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return null
+  return year * 10_000 + month * 100 + day
+}
+
+function mergeById<T extends { id: string }>(current: T[], incoming: T[], reset: boolean): T[] {
+  const values = reset ? [] : [...current]
+  for (const item of incoming) {
+    const index = values.findIndex(existing => existing.id === item.id)
+    if (index >= 0) values[index] = item
+    else values.push(item)
+  }
+  return values
 }
 
 function displayTitle(title: string, instrument: string): string {
@@ -275,31 +304,86 @@ export function ForecastPanel({ instrument, title }: ForecastPanelProps) {
   const [selectedPathIds, setSelectedPathIds] = useState<string[]>([])
   const [pathsOpen, setPathsOpen] = useState(false)
   const [copied, setCopied] = useState<string | null>(null)
+  const [recordOffset, setRecordOffset] = useState(0)
+  const [jobOffset, setJobOffset] = useState(0)
+  const [loadedRecords, setLoadedRecords] = useState<ForecastRecord[]>([])
+  const [loadedJobs, setLoadedJobs] = useState<ForecastJob[]>([])
+  const operationRef = useRef<ForecastOperation | null>(null)
 
   const capabilityQuery = useQuery({ queryKey: QK.phase5Capabilities, queryFn: phase5Api.capabilities, staleTime: 60_000 })
   const catalogQuery = useQuery({ queryKey: QK.forecast.catalog, queryFn: phase5Api.forecastCatalog, placeholderData: keepPreviousData })
-  const recordsQuery = useQuery({ queryKey: QK.forecast.records(instrument), queryFn: () => phase5Api.forecastRecords(instrument), placeholderData: keepPreviousData })
-  const jobsQuery = useQuery({ queryKey: QK.forecast.jobs(instrument), queryFn: () => phase5Api.forecastJobs(instrument), placeholderData: keepPreviousData })
+  const recordsQuery = useQuery({ queryKey: QK.forecast.records(instrument, recordOffset, HISTORY_PAGE_SIZE), queryFn: () => phase5Api.forecastRecords(instrument, recordOffset, HISTORY_PAGE_SIZE), placeholderData: keepPreviousData })
+  const jobsQuery = useQuery({ queryKey: QK.forecast.jobs(instrument, jobOffset, HISTORY_PAGE_SIZE), queryFn: () => phase5Api.forecastJobs(instrument, jobOffset, HISTORY_PAGE_SIZE), placeholderData: keepPreviousData })
 
   const catalogEntries = catalogQuery.data?.entries ?? []
   const selectedCatalog = catalogEntries.find(entry => entry.catalog_id === catalogId) ?? catalogEntries[0]
   const selectedCatalogView = selectedCatalog ? catalogProjection(selectedCatalog) : null
   const createJob = useMutation({
-    mutationFn: () => phase5Api.forecastCreateJob(instrument, {
-      horizon,
-      catalog_id: selectedCatalog!.catalog_id,
-      idempotency_key: crypto.randomUUID(),
-    }),
-    onSuccess: response => {
+    mutationFn: async (operation: ForecastOperation) => {
+      if (operation.instrument !== instrument) throw new Error('预测请求对象与当前标的不一致。')
+      const response = await phase5Api.forecastCreateJob(operation.instrument, {
+        horizon: operation.horizon,
+        catalog_id: operation.catalogId,
+        idempotency_key: operation.idempotencyKey,
+      })
+      if (response.job.instrument !== instrument) {
+        if (operationRef.current?.idempotencyKey === operation.idempotencyKey) operationRef.current = null
+        throw new Error('预测响应对象与当前标的不一致。')
+      }
+      return response
+    },
+    onSuccess: (response, operation) => {
+      if (operationRef.current?.idempotencyKey === operation.idempotencyKey) operationRef.current = null
       setActiveJobId(response.job.id)
       queryClient.setQueryData(QK.forecast.job(instrument, response.job.id), response)
-      void queryClient.invalidateQueries({ queryKey: QK.forecast.jobs(instrument) })
-      if (response.job.record_id) void queryClient.invalidateQueries({ queryKey: QK.forecast.records(instrument) })
+      void queryClient.invalidateQueries({ queryKey: QK.forecast.jobsRoot(instrument) })
+      if (response.job.record_id) void queryClient.invalidateQueries({ queryKey: QK.forecast.recordsRoot(instrument) })
+    },
+    onError: (error, operation) => {
+      if (error instanceof ApiRequestError && operationRef.current?.idempotencyKey === operation.idempotencyKey) operationRef.current = null
     },
   })
-  const records = recordsQuery.data?.records ?? []
+  const records = loadedRecords.filter(item => item.instrument === instrument)
   const selectedRecord = records.find(item => item.id === selectedRecordId) ?? records[0]
   const embedded = selectedRecord ? embeddedPaths(selectedRecord) : []
+  useEffect(() => {
+    const data = recordsQuery.data
+    const page = data?.page
+    if (!data || !page || page.offset !== recordOffset) return
+    setLoadedRecords(current => mergeById(current, data.records.filter(item => item.instrument === instrument), page.offset === 0))
+  }, [instrument, recordOffset, recordsQuery.data])
+  useEffect(() => {
+    const data = jobsQuery.data
+    const page = data?.page
+    if (!data || !page || page.offset !== jobOffset) return
+    setLoadedJobs(current => mergeById(current, data.jobs.filter(item => item.instrument === instrument), page.offset === 0))
+  }, [instrument, jobOffset, jobsQuery.data])
+
+  useEffect(() => {
+    setHorizon(20)
+    setCatalogId('')
+    setSelectedRecordId(null)
+    setRecordOffset(0)
+    setJobOffset(0)
+    setLoadedRecords([])
+    setLoadedJobs([])
+    operationRef.current = null
+    setActiveJobId(null)
+    setPathPage(0)
+    setSelectedPathIds([])
+    setPathsOpen(false)
+    setCopied(null)
+    createJob.reset()
+  // createJob is stable for the mounted mutation observer; instrument owns this reset.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [instrument])
+
+  useEffect(() => {
+    setPathPage(0)
+    setSelectedPathIds([])
+    setPathsOpen(false)
+  }, [selectedRecord?.id])
+
   const pathsQuery = useQuery({
     queryKey: QK.forecast.paths(instrument, selectedRecord?.id ?? 'none', pathPage * PATH_PAGE_SIZE, PATH_PAGE_SIZE),
     queryFn: () => phase5Api.forecastPaths(selectedRecord!.id, pathPage * PATH_PAGE_SIZE, PATH_PAGE_SIZE),
@@ -312,7 +396,8 @@ export function ForecastPanel({ instrument, title }: ForecastPanelProps) {
     enabled: !!selectedRecord,
     placeholderData: keepPreviousData,
   })
-  const task = useForecastTask({ instrument, jobId: activeJobId, enabled: !!activeJobId && createJob.data?.job.status !== 'completed' })
+  const createdJob = createJob.data?.job.instrument === instrument ? createJob.data.job : null
+  const task = useForecastTask({ instrument, jobId: activeJobId, enabled: !!activeJobId && createdJob?.status !== 'completed' })
 
   const capability = capabilityQuery.data?.modules?.forecast
   const unavailable = capability?.available === false
@@ -325,16 +410,27 @@ export function ForecastPanel({ instrument, title }: ForecastPanelProps) {
   const calibration = selectedRecord ? calibrationViews(selectedRecord, calibrationQuery.data?.calibration ?? []) : []
   const latestGovernedSession = recordsQuery.data?.latest_governed_session_id
   const selectedRecordAsOf = selectedRecord ? recordAsOf(selectedRecord) : null
-  const latestGovernedTime = latestGovernedSession ? Date.parse(latestGovernedSession) : Number.NaN
-  const selectedRecordTime = selectedRecordAsOf ? Date.parse(selectedRecordAsOf) : Number.NaN
-  const staleRecord = Number.isFinite(latestGovernedTime) && Number.isFinite(selectedRecordTime) && latestGovernedTime > selectedRecordTime
+  const latestGovernedOrdinal = sessionOrdinal(latestGovernedSession)
+  const selectedRecordOrdinal = sessionOrdinal(selectedRecordAsOf)
+  const staleRecord = latestGovernedOrdinal != null && selectedRecordOrdinal != null && latestGovernedOrdinal > selectedRecordOrdinal
 
 
-  const taskJob = task.terminalJob ?? createJob.data?.job ?? null
+  const taskJob = task.terminalJob?.instrument === instrument ? task.terminalJob : createdJob
   const progressStage = task.progress?.stage ?? taskJob?.stage
   const showReconnect = task.connection === 'reconnecting' || task.transportError != null
-  const historicalTerminalJob = jobsQuery.data?.jobs.find(job => !['queued', 'running', 'completed'].includes(job.status)) ?? null
+  const activeJobs = loadedJobs.filter(job => job.instrument === instrument)
+  const historicalTerminalJob = activeJobs.find(job => !['queued', 'running', 'completed'].includes(job.status)) ?? null
   const pageCount = Math.max(1, Math.ceil(totalPaths / PATH_PAGE_SIZE))
+
+  function submitNewForecast(nextHorizon: ForecastHorizon, nextCatalogId: string) {
+    const operation: ForecastOperation = { instrument, horizon: nextHorizon, catalogId: nextCatalogId, idempotencyKey: crypto.randomUUID() }
+    operationRef.current = operation
+    createJob.mutate(operation)
+  }
+
+  function retryAmbiguousForecast() {
+    if (operationRef.current?.instrument === instrument) createJob.mutate(operationRef.current)
+  }
 
   function togglePath(id: string) {
     setSelectedPathIds(current => current.includes(id) ? current.filter(item => item !== id) : current.length >= 12 ? current : [...current, id])
@@ -356,17 +452,17 @@ export function ForecastPanel({ instrument, title }: ForecastPanelProps) {
       {selectedCatalogView && <CatalogDetails view={selectedCatalogView} />}
       {selectedCatalogView && !gateVerified && <div role="alert" className="rounded-input border border-danger/50 bg-danger/10 p-3 text-danger"><AlertTriangle className="mr-2 inline h-4 w-4" aria-hidden="true" />完整性校验未通过：{text(selectedCatalogView.reason, String(selectedCatalogView.integrity))}。不能开始任务，也不能绕过本地批准目录。</div>}
       <div className="rounded-input border border-border bg-surface p-3"><p className="font-semibold">开始前确认</p><p className="mt-1 text-secondary">对象 {instrument} · {horizon} 个交易日 · 检查点 {selectedCatalog?.catalog_id ?? '未选择'}。服务端将冻结受治理日线、解析检查点身份并创建新的不可变任务；浏览器不提供量化结果、摘要或官方状态。</p></div>
-      <button type="button" onClick={() => createJob.mutate()} disabled={!gateVerified || createJob.isPending || (!!taskJob && (taskJob.status === 'queued' || taskJob.status === 'running'))} className={`${BUTTON} w-full bg-accent font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto`}>{createJob.isPending ? '正在创建预测任务…' : '生成概率预测'}</button>
+      <button type="button" onClick={() => selectedCatalog && submitNewForecast(horizon, selectedCatalog.catalog_id)} disabled={!gateVerified || createJob.isPending || (!!taskJob && (taskJob.status === 'queued' || taskJob.status === 'running'))} className={`${BUTTON} w-full bg-accent font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto`}>{createJob.isPending ? '正在创建预测任务…' : '生成概率预测'}</button>
     </section>
 
     {(taskJob || progressStage) && <section aria-live="polite" className="rounded-card border border-border p-4"><h3 className="text-base font-semibold">当前任务</h3><p className="mt-2">{taskJob?.id ?? activeJobId} · {jobStageLabel(progressStage)}</p>{showReconnect && <p className="mt-2 text-warning">进度连接已中断，正在按记录状态重新连接。</p>}{taskJob && taskJob.status !== 'completed' && !['queued', 'running'].includes(taskJob.status) && <TerminalError job={taskJob} />}</section>}
-    {createJob.isError && <LocalError title="预测未完成" detail={`预测未完成：${errorReason(createJob.error)}。未创建概率预测记录；若服务端已创建任务，其只读状态将通过任务历史恢复。`} action="查看恢复方式" onRetry={() => createJob.mutate()} compact />}
+    {createJob.isError && <LocalError title="预测未完成" detail={`预测未完成：${errorReason(createJob.error)}。未创建概率预测记录；若服务端已创建任务，其只读状态将通过任务历史恢复。`} action="查看恢复方式" onRetry={retryAmbiguousForecast} compact />}
 
     {recordsQuery.isError && <LocalError title="无法读取概率预测历史" detail={`无法读取概率预测历史：${errorReason(recordsQuery.error)}。此前显示的记录和当前选择保持不变。`} action="重新加载概率预测历史" onRetry={() => recordsQuery.refetch()} compact />}
     {!recordsQuery.isLoading && !selectedRecord ? <div className="rounded-card border border-border p-4"><h3 className="text-base font-semibold">尚无此标的的概率预测</h3><p className="mt-2 text-secondary">选择 5、20 或 60 个交易日与一个已批准检查点，生成包含 P10/P50/P90 和采样路径的不可变记录。</p></div> : null}
 
     {selectedRecord && <article className="space-y-5" aria-labelledby={`${headingId}-result`}>
-      <div className="flex flex-wrap items-start justify-between gap-3"><div><h3 id={`${headingId}-result`} className="text-base font-semibold">{recordLabel(selectedRecord)}</h3><p className="mt-1 text-xs text-secondary">completed · 数据截至 {recordAsOf(selectedRecord)} · {selectedRecord.horizon} 个交易日 · {selectedRecord.sample_count} 个样本</p></div><button type="button" onClick={() => { setHorizon(selectedRecord.horizon); setCatalogId(selectedRecord.catalog_id); createJob.mutate() }} disabled={!gateVerified || createJob.isPending} className={`${BUTTON} border border-border bg-elevated disabled:opacity-50`}>基于相同配置创建新预测</button></div>
+      <div className="flex flex-wrap items-start justify-between gap-3"><div><h3 id={`${headingId}-result`} className="text-base font-semibold">{recordLabel(selectedRecord)}</h3><p className="mt-1 text-xs text-secondary">completed · 数据截至 {recordAsOf(selectedRecord)} · {selectedRecord.horizon} 个交易日 · {selectedRecord.sample_count} 个样本</p></div><button type="button" onClick={() => { setHorizon(selectedRecord.horizon); setCatalogId(selectedRecord.catalog_id); submitNewForecast(selectedRecord.horizon, selectedRecord.catalog_id) }} disabled={!catalogEntries.some(entry => entry.catalog_id === selectedRecord.catalog_id && catalogProjection(entry).available === true && catalogProjection(entry).integrity === 'verified') || createJob.isPending} className={`${BUTTON} border border-border bg-elevated disabled:opacity-50`}>基于相同配置创建新预测</button></div>
       {recordWarnings(selectedRecord).map(warning => <p key={warning} role="alert" className="rounded-input bg-warning/10 p-3 text-warning">validation warning：{warning}</p>)}
       {staleRecord && <p role="status" className="rounded-input border border-warning/50 bg-warning/10 p-3 text-warning">已有更新行情；此预测仍保留其原始数据截至日。</p>}
       <QuantileSummary rows={quantiles} asOf={recordAsOf(selectedRecord)} />
@@ -386,7 +482,11 @@ export function ForecastPanel({ instrument, title }: ForecastPanelProps) {
 
     {historicalTerminalJob && historicalTerminalJob.id !== taskJob?.id ? <TerminalError job={historicalTerminalJob} /> : null}
     {jobsQuery.isError && <LocalError title="预测状态连接中断" detail={`预测状态连接中断：${errorReason(jobsQuery.error)}。已显示的历史和最后已知任务阶段将保留；连接中断不代表推理失败，也不会重复启动任务。`} action="重新连接并刷新任务状态" onRetry={() => jobsQuery.refetch()} compact />}
-    <ForecastHistory records={records} jobs={jobsQuery.data?.jobs ?? []} selectedRecordId={selectedRecord?.id ?? null} onSelect={id => { setSelectedRecordId(id); setPathPage(0); setSelectedPathIds([]) }} />
+    <ForecastHistory records={records} jobs={activeJobs} selectedRecordId={selectedRecord?.id ?? null} onSelect={id => setSelectedRecordId(id)} />
+    <div className="flex flex-wrap gap-2">
+      {recordsQuery.data?.page?.has_more && <button type="button" onClick={() => setRecordOffset(recordsQuery.data!.page!.offset + recordsQuery.data!.records.length)} className={`${BUTTON} border border-border`}>加载更多预测记录</button>}
+      {jobsQuery.data?.page.has_more && <button type="button" onClick={() => setJobOffset(jobsQuery.data!.page.offset + jobsQuery.data!.jobs.length)} className={`${BUTTON} border border-border`}>加载更多预测任务</button>}
+    </div>
   </section>
 }
 

@@ -21,6 +21,10 @@ export interface PageMeta {
   has_more: boolean
 }
 
+export interface ResourcePage<T> extends PageMeta {
+  items: T[]
+}
+
 export type SafeScalar = string | number | boolean | null
 export type SafeJson = SafeScalar | SafeJson[] | { [key: string]: SafeJson }
 export type SafeObject = { [key: string]: SafeJson }
@@ -423,6 +427,7 @@ export interface ThesisPending {
   status: 'pending' | 'confirmed' | 'rejected'
   created_at: string
   review: ThesisReview | null
+  state?: 'actionable' | 'superseded' | 'confirmed' | 'rejected' | string
 }
 
 export interface ThesisHistory {
@@ -527,12 +532,14 @@ export interface ForecastRecord {
 }
 
 export interface ForecastPathPoint {
-  path_index?: number
-  session_id?: string
-  feature?: string
-  value?: number
+  path_index: number
+  session_id: string
+  feature: string
+  value: number
   warning_code?: string
 }
+
+export type ForecastPathPage = ResourcePage<ForecastPathPoint>
 
 export interface ForecastOutcome {
   id: string
@@ -740,20 +747,20 @@ export const phase5Api = {
     return { retention: normalizeRetention(response.retention) }
   },
 
-  thesisVersions: (instrument: string, page = 1, pageSize = 25) =>
-    request<{ versions: ThesisVersion[]; current_version_id: string | null; total: number; page: number; page_size: number }>(`/api/theses/instruments/${encodeURIComponent(instrument)}/versions?page=${page}&page_size=${pageSize}`),
+  thesisVersions: (instrument: string, offset = 0, limit = 25) =>
+    request<ResourcePage<ThesisVersion>>(`/api/theses/instruments/${encodeURIComponent(instrument)}/versions?${pageParams(offset, limit)}`),
   thesisVersion: (versionId: string) =>
     request<{ version: ThesisVersion }>(`/api/theses/versions/${encodeURIComponent(versionId)}`),
   thesisCreateVersion: (instrument: string, input: ThesisVersionInput) =>
     request<{ version: ThesisVersion }>(`/api/theses/instruments/${encodeURIComponent(instrument)}/versions`, { method: 'POST', body: JSON.stringify(input) }),
   thesisReviseVersion: (versionId: string, input: ThesisRevisionInput) =>
     request<{ version: ThesisVersion }>(`/api/theses/versions/${encodeURIComponent(versionId)}`, { method: 'POST', body: JSON.stringify(input) }),
-  thesisChecks: (instrument: string, page = 1, pageSize = 50) =>
-    request<{ checks: ThesisCheck[]; total: number; page: number; page_size: number }>(`/api/theses/instruments/${encodeURIComponent(instrument)}/checks?page=${page}&page_size=${pageSize}`),
-  thesisPending: (instrument: string, page = 1, pageSize = 50) =>
-    request<{ pending: ThesisPending[]; total: number; page: number; page_size: number }>(`/api/theses/instruments/${encodeURIComponent(instrument)}/pending?page=${page}&page_size=${pageSize}`),
-  thesisHistory: (instrument: string) =>
-    request<{ history: ThesisHistory }>(`/api/theses/instruments/${encodeURIComponent(instrument)}/history`),
+  thesisChecks: (instrument: string, offset = 0, limit = 50) =>
+    request<ResourcePage<ThesisCheck>>(`/api/theses/instruments/${encodeURIComponent(instrument)}/checks?${pageParams(offset, limit)}`),
+  thesisPending: (instrument: string, offset = 0, limit = 50) =>
+    request<ResourcePage<ThesisPending>>(`/api/theses/instruments/${encodeURIComponent(instrument)}/pending?${pageParams(offset, limit)}`),
+  thesisHistory: (instrument: string, offset = 0, limit = 50) =>
+    request<ResourcePage<ThesisPending>>(`/api/theses/instruments/${encodeURIComponent(instrument)}/history?${pageParams(offset, limit)}`),
   thesisConfirm: (pendingId: string, rationale: string) =>
     request<{ review: ThesisReview; official_status: string }>(`/api/theses/pending/${encodeURIComponent(pendingId)}/confirm`, { method: 'POST', body: JSON.stringify({ rationale }) }),
   thesisReject: (pendingId: string, rationale: string) =>
@@ -773,10 +780,7 @@ export const phase5Api = {
   forecastRecord: (recordId: string) =>
     request<{ record: ForecastRecord }>(`/api/forecast/records/${encodeURIComponent(recordId)}`),
   forecastPaths: async (recordId: string, offset = 0, limit = 100) => {
-    const response = await request<{ paths: { items: ForecastPathPoint[]; offset: number; limit: number; total: number; has_more: boolean } } | { paths: ForecastPathPoint[]; total: number; page: number; page_size: number }>(`/api/forecast/records/${encodeURIComponent(recordId)}/paths?${pageParams(offset, limit)}`)
-    if ('page' in response) {
-      return { items: response.paths, offset: (response.page - 1) * response.page_size, limit: response.page_size, total: response.total, has_more: response.page * response.page_size < response.total }
-    }
+    const response = await request<{ paths: ForecastPathPage }>(`/api/forecast/records/${encodeURIComponent(recordId)}/paths?${pageParams(offset, limit)}`)
     return response.paths
   },
   forecastCalibration: (recordId: string) =>
