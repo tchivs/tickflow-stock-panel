@@ -503,7 +503,7 @@ class ShadowRepository:
             "adjustment_policy",
             "cost_policy",
         }
-        if set(payload) not in {required, required | {"retry_of_evaluation_id"}}:
+        if set(payload) not in (required, required | {"retry_of_evaluation_id"}):
             raise ShadowRepositoryError("evaluation attempt schema is invalid")
         candidate_id = str(payload["candidate_id"])
         evidence_set_id = str(payload["evidence_set_id"])

@@ -194,12 +194,6 @@ class _RuntimeBundle:
     path_reader: object | None = None
 
 
-class _UnavailableShadowEvaluation:
-    def evaluate_candidate(self, **_request: object) -> dict[str, object]:
-        raise ValueError("Shadow evaluation collaborator is unavailable")
-
-    def retry_evaluation(self, **_request: object) -> dict[str, object]:
-        raise ValueError("Shadow evaluation collaborator is unavailable")
 
 
 class _ForecastRequestService:
@@ -305,21 +299,52 @@ class _ConcreteFactory:
 
     @staticmethod
     def _create_shadow(services: OptionalModuleServices) -> _RuntimeBundle:
+        from app.backtest.frozen_panel import FrozenPanelArtifactStore
         from app.shadow.artifacts import ShadowArtifactStore
+        from app.shadow.distillation import ShadowDistiller
+        from app.shadow.evaluation import ShadowEvaluationService
         from app.shadow.importer import ShadowImporter
+        from app.shadow.production import (
+            ProductionShadowEvaluationRunner,
+            ProductionShadowFeatureFreezer,
+            ProductionShadowFeatureSource,
+            assert_shadow_runtime_ready,
+        )
         from app.shadow.repository import ShadowRepository
         from app.shadow.service import ShadowService
 
+        assert_shadow_runtime_ready(services.governed_repository)
         repository = ShadowRepository(services.database_path)
-        importer = ShadowImporter(
+        raw_artifacts = ShadowArtifactStore(services.data_root / "shadow-artifacts")
+        repository.set_artifact_verifier(raw_artifacts.load)
+        importer = ShadowImporter(repository=repository, artifact_store=raw_artifacts)
+        governed_panels = FrozenPanelArtifactStore(
+            services.data_root / "shadow-artifacts" / "evaluation-panels"
+        )
+        distiller = ShadowDistiller(
             repository=repository,
-            artifact_store=ShadowArtifactStore(services.data_root / "shadow-artifacts"),
+            governed_feature_source=ProductionShadowFeatureSource(
+                shadow_repository=repository,
+                governed_repository=services.governed_repository,
+            ),
+        )
+        evaluation_service = ShadowEvaluationService(
+            repository=repository,
+            feature_freezer=ProductionShadowFeatureFreezer(
+                shadow_repository=repository,
+                governed_repository=services.governed_repository,
+                artifact_store=governed_panels,
+            ),
+            runner=ProductionShadowEvaluationRunner(
+                governed_repository=services.governed_repository,
+                artifact_store=governed_panels,
+            ),
         )
         service = ShadowService(
             repository=repository,
-            evaluation_service=_UnavailableShadowEvaluation(),
+            evaluation_service=evaluation_service,
             importer=importer,
-            distiller=None,
+            distiller=distiller,
         )
         return _RuntimeBundle(
             name=OptionalModuleName.SHADOW,

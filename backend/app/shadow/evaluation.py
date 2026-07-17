@@ -281,6 +281,8 @@ class ShadowEvaluationService:
         return {
             "id": str(candidate["id"]),
             "rules": candidate["rules"],
+            "exit_assumptions": candidate.get("exit_assumptions"),
+            "holding_assumptions": candidate.get("holding_assumptions"),
             "limitations": list(limitations) if isinstance(limitations, list) else [],
         }
 

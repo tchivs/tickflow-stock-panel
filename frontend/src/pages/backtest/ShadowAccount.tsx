@@ -332,14 +332,13 @@ export function ShadowAccount() {
   const distillCandidate = useMutation({
     mutationFn: ({ evidenceSetId }: { evidenceSetId: string }) => phase5Api.shadowDistill(evidenceSetId, {
       feature_names: ['close_return_5d', 'volume_ratio_20d', 'intraday_range'],
-      max_depth: 3,
-      min_samples_leaf: 20,
-      min_support: 10,
-      min_precision: 0.55,
       seed: 17,
-      training_window: { start: inSampleStart, end: outSampleEnd },
-      exit_assumptions: { max_holding_sessions: 20, exit_on_rule_break: true },
-      holding_assumptions: { position_sizing: 'equal_weight', overlapping_positions: false },
+      max_depth: 3,
+      min_leaf_support: 20,
+      exit_assumptions: { kind: 'fixed_holding_days', days: 20 },
+      holding_assumptions: {
+        price_adjustment: 'unadjusted_execution_vs_forward_adjusted_research',
+      },
     }),
     onSuccess: ({ candidate }) => {
       setSelectedCandidateId(candidate.id)

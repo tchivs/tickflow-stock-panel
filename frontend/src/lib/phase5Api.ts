@@ -214,14 +214,16 @@ export interface ShadowCostPolicyInput {
 
 export interface ShadowDistillInput {
   feature_names: Array<'close_return_5d' | 'volume_ratio_20d' | 'intraday_range'>
-  max_depth: number
-  min_samples_leaf: number
-  min_support: number
-  min_precision: number
   seed: number
-  training_window: ShadowDateWindowInput
-  exit_assumptions: SafeObject
-  holding_assumptions: SafeObject
+  max_depth: number
+  min_leaf_support: number
+  exit_assumptions: {
+    kind: 'fixed_holding_days'
+    days: number
+  }
+  holding_assumptions: {
+    price_adjustment: 'unadjusted_execution_vs_forward_adjusted_research'
+  }
 }
 
 export interface ShadowEvaluationInput {
