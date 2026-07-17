@@ -246,7 +246,7 @@ Plans:
   2. User can view an investment thesis with its valuation anchor, invalidation conditions, and periodic evidence checks.
   3. Researcher can request and inspect a time-series forecast that includes quantiles, sampled paths, and the associated model checkpoint.
 
-**Plans**: 27/32 plans executed
+**Plans**: 28/32 plans executed
 
 Plans:
 
@@ -323,7 +323,7 @@ Plans:
 
 **Gap Closure Wave 7** *(blocked on Wave 6 migration ownership)*
 
-- [ ] 05-23-PLAN.md — Add the forward maturity cursor migration, complete path/quantile validation, durable calibration, and bounded resumable SSE.
+- [x] 05-23-PLAN.md — Add the forward maturity cursor migration, complete path/quantile validation, durable calibration, and bounded resumable SSE.
 
 **Gap Closure Wave 8** *(blocked on relevant Wave 7 plans)*
 
@@ -345,4 +345,4 @@ Plans:
 | 2. Factor And Strategy Research | 8/8 | Complete    | 2026-07-11 |
 | 3. AI Analysis | 12/12 | Complete    | 2026-07-12 |
 | 4. Advanced Capabilities | 27/27 | Complete    | 2026-07-15 |
-| 5. Optional Enhancements | 27/32 | In Progress|  |
+| 5. Optional Enhancements | 28/32 | In Progress|  |
