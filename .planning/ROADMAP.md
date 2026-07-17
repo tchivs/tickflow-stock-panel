@@ -246,7 +246,7 @@ Plans:
   2. User can view an investment thesis with its valuation anchor, invalidation conditions, and periodic evidence checks.
   3. Researcher can request and inspect a time-series forecast that includes quantiles, sampled paths, and the associated model checkpoint.
 
-**Plans**: 19/32 plans executed
+**Plans**: 20/32 plans executed
 
 Plans:
 
@@ -298,7 +298,7 @@ Plans:
 
 **Gap Closure Wave 2** *(blocked on relevant Wave 1 plans)*
 
-- [ ] 05-18-PLAN.md — Trace the strict production Shadow browser request through complete factory, distillation, and IS/OOS evaluation.
+- [x] 05-18-PLAN.md — Trace the strict production Shadow browser request through complete factory, distillation, and IS/OOS evaluation.
 - [ ] 05-26-PLAN.md — Consume approved config/Torch identities and serialize concurrency-safe provisioning with exact dependency contracts.
 
 **Gap Closure Wave 3** *(blocked on relevant Wave 2 plans)*
@@ -345,4 +345,4 @@ Plans:
 | 2. Factor And Strategy Research | 8/8 | Complete    | 2026-07-11 |
 | 3. AI Analysis | 12/12 | Complete    | 2026-07-12 |
 | 4. Advanced Capabilities | 27/27 | Complete    | 2026-07-15 |
-| 5. Optional Enhancements | 19/32 | In Progress|  |
+| 5. Optional Enhancements | 20/32 | In Progress|  |
