@@ -246,7 +246,7 @@ Plans:
   2. User can view an investment thesis with its valuation anchor, invalidation conditions, and periodic evidence checks.
   3. Researcher can request and inspect a time-series forecast that includes quantiles, sampled paths, and the associated model checkpoint.
 
-**Plans**: 22/32 plans executed
+**Plans**: 24/32 plans executed
 
 Plans:
 
@@ -308,8 +308,8 @@ Plans:
 
 **Gap Closure Wave 4** *(blocked on relevant Wave 3 plans)*
 
-- [ ] 05-20-PLAN.md — Bind Shadow preview/confirmation and principal-safe bounded histories.
-- [ ] 05-32-PLAN.md — Wire governed Thesis readers, poison-safe scanner operation, and complete production readiness.
+- [x] 05-20-PLAN.md — Bind Shadow preview/confirmation and principal-safe bounded histories.
+- [x] 05-32-PLAN.md — Wire governed Thesis readers, poison-safe scanner operation, and complete production readiness.
 
 **Gap Closure Wave 5** *(blocked on relevant Wave 4 plans)*
 
@@ -345,4 +345,4 @@ Plans:
 | 2. Factor And Strategy Research | 8/8 | Complete    | 2026-07-11 |
 | 3. AI Analysis | 12/12 | Complete    | 2026-07-12 |
 | 4. Advanced Capabilities | 27/27 | Complete    | 2026-07-15 |
-| 5. Optional Enhancements | 22/32 | In Progress|  |
+| 5. Optional Enhancements | 24/32 | In Progress|  |
