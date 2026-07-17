@@ -27,10 +27,23 @@ class ThesisDueScanner:
         self._batch_limit = batch_limit
         self._lease_seconds = lease_seconds
 
+    def assert_ready(self) -> None:
+        """Fail closed unless every bounded lease transition collaborator is present."""
+        repository_methods = (
+            "acquire_due_conditions",
+            "get_condition",
+            "complete_due_condition",
+        )
+        if any(not callable(getattr(self._repository, name, None)) for name in repository_methods):
+            raise RuntimeError("thesis scanner collaborators are incomplete")
+        if not callable(getattr(self._service, "evaluate_due_condition", None)):
+            raise RuntimeError("thesis scanner collaborators are incomplete")
+
     def scan_once(self, *, now: datetime, owner: str) -> list[dict[str, Any]]:
-        """Evaluate one bounded batch; expired leases make interrupted work retryable."""
+        """Evaluate a bounded batch while isolating each retryable lease."""
         if not isinstance(now, datetime) or now.tzinfo is None:
             raise ValueError("now must be a timezone-aware datetime")
+        self.assert_ready()
         current = now.astimezone(UTC)
         leases = self._repository.acquire_due_conditions(
             now=current,
@@ -42,27 +55,37 @@ class ThesisDueScanner:
         for lease in leases:
             condition_id = str(lease["condition_id"])
             due_at = str(lease["due_at"])
-            outcome = self._service.evaluate_due_condition(
-                condition_id=condition_id,
-                due_at=due_at,
-            )
-            condition = self._repository.get_condition(condition_id)
-            if condition is None:
-                raise ValueError("leased thesis condition no longer exists")
-            next_due_at = _next_due_at(
-                due_at=due_at,
-                cadence=str(condition["cadence"]),
-                timezone=str(condition["timezone"]),
-            )
-            advanced = self._repository.complete_due_condition(
-                condition_id=condition_id,
-                due_at=due_at,
-                owner=owner,
-                next_due_at=next_due_at,
-                completed_at=current.isoformat(),
-            )
-            if not advanced:
-                raise ValueError("thesis schedule lease changed before completion")
+            try:
+                outcome = self._service.evaluate_due_condition(
+                    condition_id=condition_id,
+                    due_at=due_at,
+                )
+                condition = self._repository.get_condition(condition_id)
+                if condition is None:
+                    raise ValueError("leased thesis condition no longer exists")
+                next_due_at = _next_due_at(
+                    due_at=due_at,
+                    cadence=str(condition["cadence"]),
+                    timezone=str(condition["timezone"]),
+                )
+                advanced = self._repository.complete_due_condition(
+                    condition_id=condition_id,
+                    due_at=due_at,
+                    owner=owner,
+                    next_due_at=next_due_at,
+                    completed_at=current.isoformat(),
+                )
+                if not advanced:
+                    raise ValueError("thesis schedule lease changed before completion")
+            except InterruptedError:
+                # A process-interruption signal preserves the original crash/restart
+                # semantics: the durable lease expires and the caller sees the crash.
+                raise
+            except Exception:
+                # Acquisition already persisted owner, expiry, and last_attempt_at.
+                # Leaving this lease in that bounded retryable state prevents a bad
+                # condition from hiding or mutating later work in the acquired batch.
+                continue
             completed.append(outcome["check"])
         return completed
 

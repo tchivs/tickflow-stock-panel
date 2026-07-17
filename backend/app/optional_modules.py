@@ -356,20 +356,34 @@ class _ConcreteFactory:
 
     @staticmethod
     def _create_thesis(services: OptionalModuleServices) -> _RuntimeBundle:
-        from app.theses.evidence import GovernedEvidenceResolver
+        from app.theses.evidence import (
+            GovernedAnalysisReader,
+            GovernedEvidenceResolver,
+            GovernedFinancialReader,
+            GovernedMarketReader,
+        )
         from app.theses.repository import ThesisRepository
         from app.theses.scheduler import ThesisDueScanner
         from app.theses.service import ThesisService
 
+        if services.governed_repository is None:
+            raise RuntimeError("thesis governed repository is unavailable")
+        if not callable(getattr(services.scheduler, "add_job", None)):
+            raise RuntimeError("thesis scheduler is unavailable")
         repository = ThesisRepository(services.database_path)
-        empty_reader = lambda **_request: None
+        market_reader = GovernedMarketReader(repository=services.governed_repository)
+        financial_reader = GovernedFinancialReader(data_root=services.data_root)
+        analysis_reader = GovernedAnalysisReader(database_path=services.database_path)
+        for reader in (market_reader, financial_reader, analysis_reader):
+            reader.assert_ready()
         resolver = GovernedEvidenceResolver(
-            market_reader=empty_reader,
-            financial_reader=empty_reader,
-            analysis_reader=empty_reader,
+            market_reader=market_reader,
+            financial_reader=financial_reader,
+            analysis_reader=analysis_reader,
         )
         service = ThesisService(repository=repository, evidence_resolver=resolver)
         scanner = ThesisDueScanner(repository=repository, service=service)
+        scanner.assert_ready()
         return _RuntimeBundle(
             name=OptionalModuleName.THESIS,
             database_path=services.database_path,
@@ -720,8 +734,16 @@ def _register_scanner(
 ) -> None:
     scheduler = host.scheduler
     if scheduler is None:
+        if name is OptionalModuleName.THESIS:
+            raise RuntimeError("thesis scanner registration is unavailable")
         return
+    if not callable(getattr(scheduler, "add_job", None)):
+        raise RuntimeError("optional scanner registration is unavailable")
     if name is OptionalModuleName.THESIS:
+        readiness = getattr(bundle.scanner, "assert_ready", None)
+        if not callable(readiness):
+            raise RuntimeError("thesis scanner readiness is unavailable")
+        readiness()
         callback = lambda: bundle.scanner.scan_once(
             now=datetime.now(UTC), owner="phase5-thesis-scanner"
         )
