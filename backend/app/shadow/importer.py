@@ -59,6 +59,14 @@ class ShadowImportError(ValueError):
     """Untrusted import bytes or mapping failed a bounded safe check."""
 
 
+class ShadowImportCleanupError(ShadowImportError):
+    """An invocation-owned artifact could not be removed after persistence failed."""
+
+    def __init__(self, batch_id: str) -> None:
+        super().__init__(f"import cleanup for batch {batch_id} requires reconciliation")
+        self.batch_id = batch_id
+
+
 @dataclass(frozen=True, slots=True)
 class ShadowImportLimits:
     max_bytes: int = 8 * 1024 * 1024
@@ -210,8 +218,9 @@ class ShadowImporter:
             }
             for row in rows
         ]
+        persisted = False
         try:
-            return self.repository.append_import_batch(
+            result = self.repository.append_import_batch(
                 batch_id=batch_id,
                 principal=principal_value,
                 raw_artifact=descriptor,
@@ -226,14 +235,18 @@ class ShadowImporter:
                 diagnostics=diagnostics,
                 status=status,
             )
+            persisted = True
+            return result
         except (ShadowRepositoryError, KeyError, sqlite3.Error) as error:
-            try:
-                self.artifact_store.discard_uncommitted(
-                    batch_id=batch_id, descriptor=descriptor
-                )
-            except ShadowArtifactError:
-                pass
             raise ShadowImportError("import attempt could not be persisted") from error
+        finally:
+            if not persisted:
+                try:
+                    self.artifact_store.discard_uncommitted(
+                        batch_id=batch_id, descriptor=descriptor
+                    )
+                except ShadowArtifactError as cleanup_error:
+                    raise ShadowImportCleanupError(batch_id) from cleanup_error
 
     def _preview_identity(
         self,

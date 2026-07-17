@@ -1,6 +1,7 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, CheckCircle2, FileUp, LoaderCircle, ShieldCheck } from 'lucide-react'
-import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react'
+import { useRef, useState, type ReactNode } from 'react'
+import { Modal } from '@/components/Modal'
 import { ApiRequestError } from '@/lib/api'
 import {
   phase5Api,
@@ -50,59 +51,35 @@ interface ConfirmationDialogProps {
   description: ReactNode
   confirmLabel: string
   pending: boolean
-  triggerRef: RefObject<HTMLButtonElement | null>
+  confirmDisabled?: boolean
   children?: ReactNode
   onClose: () => void
   onConfirm: () => void
 }
 
-function ConfirmationDialog({ open, title, description, confirmLabel, pending, triggerRef, children, onClose, onConfirm }: ConfirmationDialogProps) {
-  const dialogRef = useRef<HTMLDivElement>(null)
-  const cancelRef = useRef<HTMLButtonElement>(null)
-
-  useEffect(() => {
-    if (open) cancelRef.current?.focus()
-  }, [open])
-
+function ConfirmationDialog({ open, title, description, confirmLabel, pending, confirmDisabled = false, children, onClose, onConfirm }: ConfirmationDialogProps) {
   if (!open) return null
 
-  const close = () => {
-    onClose()
-    requestAnimationFrame(() => triggerRef.current?.focus())
-  }
-
-  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.key === 'Escape') {
-      event.preventDefault()
-      close()
-      return
-    }
-    if (event.key !== 'Tab' || !dialogRef.current) return
-    const controls = Array.from(dialogRef.current.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'))
-    if (!controls.length) return
-    const first = controls[0]
-    const last = controls[controls.length - 1]
-    if (event.shiftKey && document.activeElement === first) {
-      event.preventDefault()
-      last.focus()
-    } else if (!event.shiftKey && document.activeElement === last) {
-      event.preventDefault()
-      first.focus()
-    }
+  const closeWhenSafe = () => {
+    if (!pending) onClose()
   }
 
   return (
-    <div role="dialog" aria-modal="true" aria-labelledby="shadow-confirmation-title" className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4" onKeyDown={handleKeyDown}>
-      <div ref={dialogRef} className="max-h-[calc(100vh-2rem)] w-full max-w-xl overflow-y-auto rounded-dialog border border-border bg-surface p-5">
-        <h3 id="shadow-confirmation-title" className="text-base font-semibold text-foreground">{title}</h3>
-        <div className="mt-3 max-w-[70ch] text-sm leading-relaxed text-secondary">{description}</div>
-        {children}
-        <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-          <button ref={cancelRef} type="button" className={BUTTON_CLASS} onClick={close}>返回审阅</button>
-          <button type="button" className={PRIMARY_CLASS} disabled={pending} onClick={onConfirm}>{pending ? '正在记录…' : confirmLabel}</button>
-        </div>
+    <Modal
+      labelledBy="shadow-confirmation-title"
+      onClose={closeWhenSafe}
+      closeOnBackdrop={!pending}
+      overlayClassName="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4"
+      panelClassName="max-h-[calc(100vh-2rem)] w-full max-w-xl overflow-y-auto rounded-dialog border border-border bg-surface p-5"
+    >
+      <h3 id="shadow-confirmation-title" className="text-base font-semibold text-foreground">{title}</h3>
+      <div className="mt-3 max-w-[70ch] text-sm leading-relaxed text-secondary">{description}</div>
+      {children}
+      <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+        <button type="button" className={BUTTON_CLASS} disabled={pending} onClick={closeWhenSafe}>返回审阅</button>
+        <button type="button" className={PRIMARY_CLASS} disabled={pending || confirmDisabled} onClick={() => { if (!pending && !confirmDisabled) onConfirm() }}>{pending ? '正在记录…' : confirmLabel}</button>
       </div>
-    </div>
+    </Modal>
   )
 }
 
@@ -269,8 +246,6 @@ export function ShadowAccount() {
   const [inSampleEnd, setInSampleEnd] = useState('2024-06-28')
   const [outSampleStart, setOutSampleStart] = useState('2024-07-01')
   const [outSampleEnd, setOutSampleEnd] = useState('2024-12-31')
-  const importTriggerRef = useRef<HTMLButtonElement>(null)
-  const retainTriggerRef = useRef<HTMLButtonElement>(null)
   const errorRef = useRef<HTMLDivElement>(null)
   const previewRevisionRef = useRef(0)
 
@@ -298,6 +273,8 @@ export function ShadowAccount() {
   const inSample = evaluationRows.find(item => item.split === 'in_sample')
   const outOfSample = evaluationRows.find(item => item.split === 'out_of_sample')
   const retainable = inSample?.status === 'passed' && outOfSample?.status === 'passed'
+  const trimmedRetentionRationale = retentionRationale.trim()
+  const retentionRationaleValid = trimmedRetentionRationale.length >= 10 && trimmedRetentionRationale.length <= 4_000
   const retained = currentCandidate ? retentions.find(item => item.candidate_id === currentCandidate.id) : undefined
   const newestBatchTime = batches[0]?.created_at ? Date.parse(batches[0].created_at) : 0
   const evidenceTime = currentEvidence?.created_at ? Date.parse(currentEvidence.created_at) : 0
@@ -374,10 +351,10 @@ export function ShadowAccount() {
     },
   })
   const retainCandidate = useMutation({
-    mutationFn: ({ evidenceSetId, candidateId, inSampleId, outSampleId }: { evidenceSetId: string; candidateId: string; inSampleId: string; outSampleId: string }) => phase5Api.shadowRetain(evidenceSetId, candidateId, {
+    mutationFn: ({ evidenceSetId, candidateId, inSampleId, outSampleId, rationale }: { evidenceSetId: string; candidateId: string; inSampleId: string; outSampleId: string; rationale: string }) => phase5Api.shadowRetain(evidenceSetId, candidateId, {
       in_sample_evaluation_id: inSampleId,
       out_of_sample_evaluation_id: outSampleId,
-      rationale: retentionRationale,
+      rationale,
     }),
     onSuccess: () => {
       setRetainConfirmationOpen(false)
@@ -522,7 +499,7 @@ export function ShadowAccount() {
                     <tbody>{(currentPreview.sample_rows.length ? currentPreview.sample_rows : currentPreview.rows ?? []).map((row, index) => <tr key={`${row.source_row_ordinal ?? index}-${row.broker_fill_id ?? ''}`}><td className={`${TABLE_CELL_CLASS} font-mono`}>{row.symbol ?? '未提供'}</td><td className={TABLE_CELL_CLASS}>{row.side ?? '未提供'}</td><td className={`${TABLE_CELL_CLASS} font-mono`}>{row.executed_at ?? '未提供'}</td><td className={`${TABLE_CELL_CLASS} text-right font-mono tabular-nums`}>{row.quantity ?? '未提供'}</td><td className={`${TABLE_CELL_CLASS} text-right font-mono tabular-nums`}>{row.price ?? '未提供'}</td><td className={`${TABLE_CELL_CLASS} break-words font-mono`}>{row.duplicate_group_hash ?? '无'}</td></tr>)}</tbody>
                   </table>
                 </OverflowTable>
-                <button ref={importTriggerRef} type="button" className={PRIMARY_CLASS} disabled={!sourceLabel || confirmImport.isPending} onClick={() => setImportConfirmationOpen(true)}>确认不可变导入</button>
+                <button type="button" className={PRIMARY_CLASS} disabled={!sourceLabel || confirmImport.isPending} onClick={() => setImportConfirmationOpen(true)}>确认不可变导入</button>
               </div>
             ) : null}
           </section>
@@ -617,10 +594,9 @@ export function ShadowAccount() {
               <Pagination page={evaluationsQuery.data?.page} offset={evaluationOffset} onOffset={setEvaluationOffset} />
 
               <div className="mt-5 border-t border-border pt-5">
-                <button ref={retainTriggerRef} type="button" className={PRIMARY_CLASS} disabled={!retainable || Boolean(retained) || retainCandidate.isPending} onClick={() => setRetainConfirmationOpen(true)}>保留为 Shadow 研究候选</button>
+                <button type="button" className={PRIMARY_CLASS} disabled={!retainable || Boolean(retained) || retainCandidate.isPending} onClick={() => { retainCandidate.reset(); setRetainConfirmationOpen(true) }}>保留为 Shadow 研究候选</button>
                 {!retainable ? <p className="mt-2 text-sm text-warning">必须先完成相互独立的样本内与样本外评估，且两者均通过。</p> : null}
                 {retained ? <p role="status" className="mt-2 text-sm text-foreground">已保留为研究候选：{retained.id}。不会注册或启用策略。</p> : null}
-                {retainCandidate.isError ? <p role="alert" className="mt-2 text-sm text-danger">保留请求未完成：{safeReason(retainCandidate.error)}。候选、评估与理由均保持不变。</p> : null}
               </div>
             </section>
           ) : null}
@@ -634,10 +610,14 @@ export function ShadowAccount() {
         </div>
       ) : null}
 
-      <ConfirmationDialog open={importConfirmationOpen} title="确认不可变导入" confirmLabel="确认不可变导入" pending={confirmImport.isPending || !currentPreview} triggerRef={importTriggerRef} onClose={() => setImportConfirmationOpen(false)} onConfirm={() => file && currentPreview && confirmImport.mutate({ file, mapping, source_timezone: sourceTimezone, source_label: sourceLabel, preview_identity: currentPreview.preview_identity })} description={<dl className="grid gap-2"><div><dt className="font-semibold text-foreground">原文件名</dt><dd className="break-words">{file?.name ?? '未选择'}</dd></div><div><dt className="font-semibold text-foreground">来源标签 / 时区</dt><dd>{sourceLabel} / {sourceTimezone}</dd></div><div><dt className="font-semibold text-foreground">映射 / 行数</dt><dd className="break-words">{JSON.stringify(mapping)} / {currentPreview?.source_row_count ?? '需重新预览'}</dd></div><div><dt className="font-semibold text-foreground">预览确认标识</dt><dd className="break-all font-mono">{currentPreview?.preview_identity ?? '需重新预览'}</dd></div><div><dt className="font-semibold text-foreground">不可覆写</dt><dd>确认后追加新的不可变批次；不会覆盖、删除或修改任何旧批次，也不会激活策略或执行交易。</dd></div></dl>} />
+      <ConfirmationDialog open={importConfirmationOpen} title="确认不可变导入" confirmLabel="确认不可变导入" pending={confirmImport.isPending || !currentPreview} onClose={() => setImportConfirmationOpen(false)} onConfirm={() => file && currentPreview && confirmImport.mutate({ file, mapping, source_timezone: sourceTimezone, source_label: sourceLabel, preview_identity: currentPreview.preview_identity })} description={<dl className="grid gap-2"><div><dt className="font-semibold text-foreground">原文件名</dt><dd className="break-words">{file?.name ?? '未选择'}</dd></div><div><dt className="font-semibold text-foreground">来源标签 / 时区</dt><dd>{sourceLabel} / {sourceTimezone}</dd></div><div><dt className="font-semibold text-foreground">映射 / 行数</dt><dd className="break-all font-mono">{currentPreview?.preview_identity ?? '预览未就绪'} / {currentPreview?.source_row_count ?? currentPreview?.rows?.length ?? 0}</dd></div></dl>} />
 
-      <ConfirmationDialog open={retainConfirmationOpen} title="保留为 Shadow 研究候选" confirmLabel="保留为 Shadow 研究候选" pending={retainCandidate.isPending} triggerRef={retainTriggerRef} onClose={() => setRetainConfirmationOpen(false)} onConfirm={() => currentCandidate && inSample && outOfSample && retainCandidate.mutate({ evidenceSetId: currentCandidate.evidence_set_id, candidateId: currentCandidate.id, inSampleId: inSample.id, outSampleId: outOfSample.id })} description={<>确认保留候选 {currentCandidate?.label ?? currentCandidate?.id}？系统将记录冻结证据集和样本内/样本外评估；不会注册或启用策略，也不会创建监控、计划或市场动作。</>}>
+      <ConfirmationDialog open={retainConfirmationOpen} title="保留为 Shadow 研究候选" confirmLabel="保留为 Shadow 研究候选" pending={retainCandidate.isPending} confirmDisabled={!retentionRationaleValid} onClose={() => setRetainConfirmationOpen(false)} onConfirm={() => { const rationale = retentionRationale.trim(); if (rationale.length < 10 || rationale.length > 4_000) return; if (currentCandidate && inSample && outOfSample) retainCandidate.mutate({ evidenceSetId: currentCandidate.evidence_set_id, candidateId: currentCandidate.id, inSampleId: inSample.id, outSampleId: outOfSample.id, rationale }) }} description={<>确认保留候选 {currentCandidate?.label ?? currentCandidate?.id}？系统将记录冻结证据集和样本内/样本外评估；不会注册或启用策略，也不会创建监控、计划或市场动作。</>}>
         <label className="mt-4 block text-sm text-secondary">保留理由（至少 10 个字符）<textarea value={retentionRationale} minLength={10} maxLength={4_000} className={`${CONTROL_CLASS} mt-1 min-h-24 w-full`} onChange={event => setRetentionRationale(event.target.value)} /></label>
+        <div className="mt-3 min-h-5 text-sm" aria-live="polite" aria-atomic="true">
+          {retainCandidate.isPending ? <p role="status" className="text-secondary">正在记录保留决定…</p> : null}
+          {retainCandidate.isError ? <p role="alert" className="text-danger">保留请求未完成：{safeReason(retainCandidate.error)}。候选、评估与理由均保持不变。</p> : null}
+        </div>
       </ConfirmationDialog>
     </section>
   )

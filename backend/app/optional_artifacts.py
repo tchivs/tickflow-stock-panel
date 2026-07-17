@@ -31,6 +31,16 @@ class ManagedArtifactError(RuntimeError):
     """A managed artifact was incomplete, unsafe, or failed verification."""
 
 
+class ManagedArtifactCleanupError(ManagedArtifactError):
+    """An invocation-owned temporary namespace requires reconciliation."""
+
+    def __init__(self, artifact_id: str) -> None:
+        super().__init__(
+            f"managed artifact temporary cleanup failed for {artifact_id}"
+        )
+        self.artifact_id = artifact_id
+
+
 @dataclass(frozen=True, slots=True)
 class ArtifactDescriptor:
     """Safe public identity and integrity metadata for one immutable payload."""
@@ -90,7 +100,8 @@ class ManagedImmutableArtifactStore:
         schema_version: str,
         scope: Mapping[str, object],
     ) -> ArtifactDescriptor:
-        """Create one immutable Parquet payload without serializing it through SQLite."""
+        """Create Parquet and translate the documented Polars exception base."""
+        import polars as pl
 
         def write_parquet(path: Path) -> None:
             if not callable(getattr(frame, "write_parquet", None)):
@@ -101,7 +112,7 @@ class ManagedImmutableArtifactStore:
                 self._fsync_file(path)
             except ManagedArtifactError:
                 raise
-            except (OSError, TypeError, ValueError) as error:
+            except (pl.exceptions.PolarsError, OSError, TypeError, ValueError) as error:
                 raise ManagedArtifactError("could not write managed Parquet payload") from error
 
         return self._create(
@@ -136,7 +147,7 @@ class ManagedImmutableArtifactStore:
             import polars as pl
 
             return pl.read_parquet(payload_path)
-        except (OSError, TypeError, ValueError) as error:
+        except (pl.exceptions.PolarsError, OSError, TypeError, ValueError) as error:
             raise ManagedArtifactError("managed Parquet payload could not be decoded") from error
 
     def _create(
@@ -160,8 +171,10 @@ class ManagedImmutableArtifactStore:
         if temporary.exists() or final.exists():
             raise ManagedArtifactError("managed artifact namespace collision")
 
+        temporary_created = False
         try:
             temporary.mkdir(mode=0o700, exist_ok=False)
+            temporary_created = True
             payload_path = temporary / payload_name
             writer(payload_path)
             if not payload_path.is_file() or payload_path.is_symlink():
@@ -194,11 +207,12 @@ class ManagedImmutableArtifactStore:
             self._fsync_directory(self.root)
             return descriptor
         except ManagedArtifactError:
-            self._remove_temporary(temporary)
             raise
         except (OSError, TypeError, ValueError) as error:
-            self._remove_temporary(temporary)
             raise ManagedArtifactError("could not atomically create managed artifact") from error
+        finally:
+            if temporary_created:
+                self._remove_temporary(temporary, artifact_id=artifact_id)
 
     def _verified_payload(
         self, descriptor: ArtifactDescriptor
@@ -367,13 +381,15 @@ class ManagedImmutableArtifactStore:
         finally:
             os.close(descriptor)
 
-    @staticmethod
-    def _remove_temporary(path: Path) -> None:
+    def _remove_temporary(self, path: Path, *, artifact_id: str) -> None:
+        expected = self.root / f".{artifact_id}.tmp"
+        if path != expected:
+            raise ManagedArtifactCleanupError(artifact_id)
         try:
-            if path.exists() and path.name.startswith(".") and path.name.endswith(".tmp"):
+            if path.exists():
                 shutil.rmtree(path)
-        except OSError:
-            pass
+        except OSError as error:
+            raise ManagedArtifactCleanupError(artifact_id) from error
 
     @staticmethod
     def _constant_equal(left: str, right: str) -> bool:
