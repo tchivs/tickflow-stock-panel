@@ -3,11 +3,14 @@ from __future__ import annotations
 
 import json
 import sys
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from datetime import date, timedelta
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
+import polars as pl
 import pytest
 from fastapi.testclient import TestClient
 
@@ -118,12 +121,12 @@ def _assert_typed_status(payload: dict[str, Any], module: str, available: bool) 
 
 
 def _optional_probe(module: str, enabled: frozenset[str], *, fail: str | None = None):
-    OptionalModuleProbe, _ = _phase5_host_contract()
+    optional_module_probe, _ = _phase5_host_contract()
     if module == fail:
         raise RuntimeError(f"{module} fixture probe failed with local detail that must be sanitized")
     if module in enabled:
-        return OptionalModuleProbe.available(code=f"{module}_available")
-    return OptionalModuleProbe.unavailable(
+        return optional_module_probe.available(code=f"{module}_available")
+    return optional_module_probe.unavailable(
         code=f"{module}_dependency_missing",
         reason=f"{module} optional dependency is not installed",
         install_hint=f"enable the {module} optional deployment capability",
@@ -360,3 +363,148 @@ def test_optional_host_uses_one_runtime_database_lake_and_scheduler(
         assert len({service.data_root for service in host.initialized_services}) == 1
         assert len([route for route in app.routes if route.path == CAPABILITY_PATH]) == 1
         _assert_completed_v1_loop(app, client)
+
+
+def test_production_shadow_browser_contract_distills_and_evaluates_with_complete_factory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spies = LiveActionSpies()
+    with _real_host(tmp_path, monkeypatch, frozenset({"shadow"}), spies=spies) as (app, client):
+        _authenticate(client)
+
+        sessions: list[date] = []
+        cursor = date(2024, 1, 2)
+        while cursor <= date(2024, 12, 31):
+            if cursor.weekday() < 5:
+                sessions.append(cursor)
+            cursor += timedelta(days=1)
+        trade_indexes = {60, 80, 180, 200}
+        governed_rows = []
+        for index, session in enumerate(sessions):
+            is_trade_session = index in trade_indexes
+            close = 10.0 + index * 0.01
+            governed_rows.append(
+                {
+                    "symbol": "600001.SH",
+                    "date": session,
+                    "open": close - 0.02,
+                    "high": close + (0.8 if is_trade_session else 0.05),
+                    "low": close - (0.8 if is_trade_session else 0.05),
+                    "close": close,
+                    "volume": 8_000.0 if is_trade_session else 1_000.0 + index % 10,
+                    "amount": close * (8_000.0 if is_trade_session else 1_000.0 + index % 10),
+                    "quote_ts": 1_704_180_600_000 + index * 86_400_000,
+                }
+            )
+        app.state.repo.append_enriched(pl.DataFrame(governed_rows))
+        app.state.repo.rebuild_views()
+
+        csv_rows = [
+            "broker_fill_id,symbol,side,executed_at,quantity,price,fees,currency,account_alias"
+        ]
+        for ordinal, index in enumerate(sorted(trade_indexes), start=1):
+            csv_rows.append(
+                f"FILL-{ordinal:03d},600001.SH,buy,{sessions[index].isoformat()} 09:31:00,100,10.00,1.00,CNY,local-shadow"
+            )
+        mapping = {
+            "broker_fill_id": "broker_fill_id",
+            "symbol": "symbol",
+            "side": "side",
+            "executed_at": "executed_at",
+            "quantity": "quantity",
+            "price": "price",
+            "fees": "fees",
+            "currency": "currency",
+            "account_alias": "account_alias",
+        }
+        imported = client.post(
+            "/api/shadow/imports/confirm",
+            files={"file": ("executions.csv", "\n".join(csv_rows).encode(), "text/csv")},
+            data={
+                "mapping": json.dumps(mapping),
+                "source_timezone": "Asia/Shanghai",
+                "source_label": "deterministic local executions",
+            },
+        )
+        assert imported.status_code == 201, imported.text
+        batch_id = imported.json()["batch"]["id"]
+        trade_ids = [
+            item["id"]
+            for item in app.state.shadow_repository.list_trade_facts(batch_id=batch_id)
+        ]
+        frozen = client.post(
+            "/api/shadow/evidence-sets",
+            json={
+                "included_batch_ids": [batch_id],
+                "included_trade_ids": trade_ids,
+                "exclusions": [],
+            },
+        )
+        assert frozen.status_code == 201, frozen.text
+        evidence = frozen.json()["evidence_set"]
+
+        strict_body = {
+            "feature_names": [
+                "close_return_5d",
+                "volume_ratio_20d",
+                "intraday_range",
+            ],
+            "seed": 17,
+            "max_depth": 3,
+            "min_leaf_support": 2,
+            "exit_assumptions": {"kind": "fixed_holding_days", "days": 20},
+            "holding_assumptions": {
+                "price_adjustment": "unadjusted_execution_vs_forward_adjusted_research"
+            },
+        }
+        distilled = client.post(
+            f"/api/shadow/evidence-sets/{evidence['id']}/candidates", json=strict_body
+        )
+        assert distilled.status_code == 201, distilled.text
+        candidate = distilled.json()["candidate"]
+        assert candidate["features"] == strict_body["feature_names"]
+        assert candidate["parameters"]["min_leaf_support"] == 2
+        assert candidate["exit_assumptions"] == strict_body["exit_assumptions"]
+        assert candidate["holding_assumptions"] == strict_body["holding_assumptions"]
+        assert candidate["rules"]
+
+        evaluated = client.post(
+            f"/api/shadow/evidence-sets/{evidence['id']}/candidates/{candidate['id']}/evaluations",
+            json={
+                "in_sample_window": {"start": "2024-01-02", "end": "2024-06-28"},
+                "out_of_sample_window": {"start": "2024-07-01", "end": "2024-12-31"},
+                "split_policy": "chronological",
+                "adjustment_policy": "governed_adjusted_daily",
+                "cost_policy": {
+                    "commission_bps": 3,
+                    "slippage_bps": 5,
+                    "stamp_duty_bps": 5,
+                },
+            },
+        )
+        assert evaluated.status_code == 201, evaluated.text
+        evaluations = evaluated.json()["evaluations"]
+        assert set(evaluations) == {"in_sample", "out_of_sample"}
+        assert {item["status"] for item in evaluations.values()} == {"passed"}
+        assert all(item["governed_fingerprint"] for item in evaluations.values())
+        assert all(item["artifact"]["checksum_sha256"] for item in evaluations.values())
+        spies.assert_zero_calls()
+        _assert_completed_v1_loop(app, client)
+
+    from app.optional_modules import (
+        OptionalModuleName,
+        build_optional_module_host,
+        production_optional_factories,
+    )
+
+    incomplete = build_optional_module_host(
+        database_path=tmp_path / "missing-governed" / "operational.db",
+        data_root=tmp_path / "missing-governed" / "data",
+        factories=production_optional_factories(),
+        governed_repository=None,
+    )
+    assert incomplete.service(OptionalModuleName.SHADOW) is None
+    status = incomplete.status(OptionalModuleName.SHADOW)
+    assert status.available is False
+    assert status.code == "shadow_initialization_failed"
+    incomplete.close()

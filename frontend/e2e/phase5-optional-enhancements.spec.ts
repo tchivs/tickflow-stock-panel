@@ -21,6 +21,7 @@ const SCENARIO_TITLES = [
   'scenario 11: Later calibration',
   'scenario 12: Responsive、keyboard、contrast 与 reduced motion',
   'scenario 13: 跨模块无权威副作用',
+  'Shadow production distillation contract',
 ] as const
 
 type ModuleName = 'shadow' | 'thesis' | 'forecast'
@@ -832,6 +833,46 @@ test.describe('Phase 05 optional enhancement browser contracts', () => {
     const afterForecast = telemetry.apiRequests.slice(mutationIndex + 1)
     expect(afterForecast.filter(entry => /shadow|theses|portfolio|monitor-rules|decision|strategies/.test(entry))).toEqual([])
     expect(afterForecast.every(entry => entry.includes('/api/forecast/') || entry.includes('/api/intraday/stream'))).toBeTruthy()
+    expectNoAuthorityRequests(telemetry)
+  })
+
+  test(SCENARIO_TITLES[13], async ({ page }) => {
+    const telemetry = await installPhase5Fixture(page, { shadowState: 'populated' })
+    await page.goto('/backtest')
+    const panel = page.getByRole('region', { name: SHADOW_HEADING })
+    await requireSurface(panel.getByRole('heading', { name: SHADOW_HEADING, exact: true }))
+
+    await panel.getByRole('button', { name: '基于相同证据集创建新蒸馏运行' }).click()
+    await expect(panel.getByText(/已创建可解释候选/)).toBeVisible()
+
+    const distillation = telemetry.mutationBodies.find(
+      entry => entry.method === 'POST' && entry.path.endsWith('/candidates'),
+    )
+    expect(distillation?.body).toEqual({
+      feature_names: ['close_return_5d', 'volume_ratio_20d', 'intraday_range'],
+      seed: 17,
+      max_depth: 3,
+      min_leaf_support: 20,
+      exit_assumptions: { kind: 'fixed_holding_days', days: 20 },
+      holding_assumptions: {
+        price_adjustment: 'unadjusted_execution_vs_forward_adjusted_research',
+      },
+    })
+    expect(Object.keys(distillation?.body as Record<string, unknown>)).not.toEqual(
+      expect.arrayContaining(['min_samples_leaf', 'min_support', 'min_precision', 'training_window']),
+    )
+
+    await panel.getByRole('button', { name: '创建新的样本内与样本外评估' }).click()
+    await expect(panel.getByText(/样本内与样本外评估已分别记录/)).toBeVisible()
+    const evaluation = telemetry.mutationBodies.find(
+      entry => entry.method === 'POST' && entry.path.endsWith('/evaluations'),
+    )
+    expect(evaluation?.body).toEqual({
+      in_sample_window: { start: '2024-01-02', end: '2024-06-28' },
+      out_of_sample_window: { start: '2024-07-01', end: '2024-12-31' },
+      adjustment_policy: 'governed_adjusted_daily',
+      cost_policy: { commission_bps: 3, slippage_bps: 5, stamp_duty_bps: 5 },
+    })
     expectNoAuthorityRequests(telemetry)
   })
 })
