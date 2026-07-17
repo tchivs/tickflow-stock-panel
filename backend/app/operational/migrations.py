@@ -1311,14 +1311,62 @@ MIGRATIONS: tuple[str, ...] = (
 )
 
 
+def _migration_statements(script: str) -> tuple[str, ...]:
+    """Split one SQLite script without breaking compound trigger statements."""
+    statements: list[str] = []
+    pending: list[str] = []
+    for line in script.splitlines(keepends=True):
+        pending.append(line)
+        candidate = "".join(pending)
+        if sqlite3.complete_statement(candidate):
+            statements.append(candidate)
+            pending.clear()
+    if "".join(pending).strip():
+        raise ValueError("operational migration contains an incomplete SQL statement")
+    return tuple(statement for statement in statements if statement.strip())
+
+
+def _foreign_keys_directive(statement: str) -> bool | None:
+    """Return an explicit foreign-key setting, ignoring leading line comments."""
+    sql = "\n".join(
+        line for line in statement.splitlines() if not line.lstrip().startswith("--")
+    )
+    normalized = "".join(sql.strip().rstrip(";").casefold().split())
+    if normalized == "pragmaforeign_keys=off":
+        return False
+    if normalized == "pragmaforeign_keys=on":
+        return True
+    return None
+
+
 def migrate_operational_db(connection: sqlite3.Connection) -> None:
-    """Apply each migration exactly once using SQLite's schema version."""
+    """Apply each migration and its schema version in one atomic transaction."""
     connection.execute("PRAGMA foreign_keys = ON")
     current_version = int(connection.execute("PRAGMA user_version").fetchone()[0])
     if current_version > len(MIGRATIONS):
         raise RuntimeError("operational database is newer than this application")
 
     for version, migration in enumerate(MIGRATIONS[current_version:], start=current_version + 1):
-        with connection:
-            connection.executescript(migration)
-            connection.execute(f"PRAGMA user_version = {version}")
+        statements = _migration_statements(migration)
+        disable_foreign_keys = any(
+            _foreign_keys_directive(statement) is False for statement in statements
+        )
+        connection.execute(
+            "PRAGMA foreign_keys = OFF" if disable_foreign_keys else "PRAGMA foreign_keys = ON"
+        )
+        transactional_sql = "\n".join(
+            statement
+            for statement in statements
+            if _foreign_keys_directive(statement) is None
+        )
+        transactional_sql = (
+            f"BEGIN;\n{transactional_sql}\nPRAGMA user_version = {version};\nCOMMIT;"
+        )
+        try:
+            connection.executescript(transactional_sql)
+        except BaseException:
+            if connection.in_transaction:
+                connection.execute("ROLLBACK")
+            raise
+        finally:
+            connection.execute("PRAGMA foreign_keys = ON")
