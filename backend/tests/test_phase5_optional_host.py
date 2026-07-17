@@ -285,6 +285,9 @@ def _real_host(
     fail_scanner: str | None = None,
     spies: LiveActionSpies | None = None,
     production_scheduler: bool = False,
+    configured: bool = True,
+    base_url: str = "http://testserver",
+    client_host: str = "testclient",
 ) -> Iterator[tuple[Any, TestClient]]:
     """Start the one production app/lifespan with deterministic probe overrides.
 
@@ -303,7 +306,7 @@ def _real_host(
     monkeypatch.setenv("PHASE1_FIXTURE_MODE", "1")
     monkeypatch.setenv("PHASE1_FIXTURE_DIR", str(fixture_dir))
     monkeypatch.setattr(settings, "data_dir", data_dir)
-    monkeypatch.setattr(settings, "auth_password", "host-test-password")
+    monkeypatch.setattr(settings, "auth_password", "host-test-password" if configured else "")
     monkeypatch.setattr(auth_service, "_configured_cache", None)
     if production_scheduler:
         from app.jobs import daily_pipeline
@@ -336,7 +339,11 @@ def _real_host(
     from app.main import app
 
     assert callable(build_optional_module_host)
-    with TestClient(app) as client:
+    with TestClient(
+        app,
+        base_url=base_url,
+        client=(client_host, 50_000),
+    ) as client:
         yield app, client
 
 
@@ -372,7 +379,7 @@ def _assert_completed_v1_loop(app: Any, client: TestClient) -> None:
 
 
 @pytest.mark.parametrize("enabled", MODULE_COMBINATIONS)
-def test_real_lifespan_preserves_v1_for_module_combination(
+def test_eight_module_combinations_preserve_v1_and_runtime_boundaries(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, enabled: frozenset[str]
 ) -> None:
     heavy_modules_before = {name for name in ("torch", "sklearn", "kronos") if name in sys.modules}
@@ -404,15 +411,29 @@ def test_real_lifespan_preserves_v1_for_module_combination(
         assert {name for name in ("torch", "sklearn", "kronos") if name in sys.modules} == heavy_modules_before
 
 
-def test_optional_capability_failures_are_typed_local_and_independent(
+def test_complete_operational_readiness_failures_are_typed_local_and_independent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     failure_cases = (
         {"fail_probe": "shadow"},
+        {"fail_init": "shadow"},
         {"fail_init": "thesis"},
+        {"fail_init": "forecast"},
         {"fail_recovery": "forecast"},
+        {"fail_scanner": "thesis"},
         {"fail_scanner": "forecast"},
     )
+    state_attributes = {
+        "shadow": ("shadow_repository", "shadow_service"),
+        "thesis": ("thesis_repository", "thesis_service", "thesis_due_scanner"),
+        "forecast": (
+            "forecast_repository",
+            "forecast_request_service",
+            "forecast_maturity_scanner",
+            "forecast_path_reader",
+            "forecast_progress_hub",
+        ),
+    }
     for index, failure in enumerate(failure_cases):
         case_root = tmp_path / str(index)
         case_root.mkdir()
@@ -424,6 +445,8 @@ def test_optional_capability_failures_are_typed_local_and_independent(
                 _assert_typed_status(payload, module, module != failed_module)
                 response = client.get(BUSINESS_PATHS[module])
                 assert response.status_code == (503 if module == failed_module else 200)
+            for attribute in state_attributes[failed_module]:
+                assert getattr(app.state, attribute) is None
             _assert_completed_v1_loop(app, client)
 
 
@@ -772,7 +795,11 @@ def test_production_thesis_readiness_and_governed_pending_are_real(
         spies.assert_zero_calls()
         _assert_completed_v1_loop(app, client)
 
-    from app.optional_modules import OptionalModuleName, build_optional_module_host, production_optional_factories
+    from app.optional_modules import (
+        OptionalModuleName,
+        build_optional_module_host,
+        production_optional_factories,
+    )
 
     no_scheduler = build_optional_module_host(
         database_path=tmp_path / "no-scheduler" / "operational.db",
@@ -821,3 +848,109 @@ def test_production_forecast_factory_completes_approved_request_and_stays_indepe
 
         assert app.state.forecast_request_service.__class__.__name__ == "ForecastService"
         spies.assert_zero_calls()
+
+
+def test_trusted_loopback_origin_host_principal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    trusted_origin = "http://localhost:3018"
+    spies = LiveActionSpies()
+    unconfigured_root = tmp_path / "unconfigured"
+    unconfigured_root.mkdir()
+    with _real_host(
+        unconfigured_root,
+        monkeypatch,
+        frozenset({"shadow"}),
+        configured=False,
+        base_url=trusted_origin,
+        client_host="127.0.0.1",
+        spies=spies,
+    ) as (app, client):
+        capabilities = client.get(CAPABILITY_PATH, headers={"origin": trusted_origin})
+        assert capabilities.status_code == 200, capabilities.text
+        assert capabilities.headers["access-control-allow-origin"] == trusted_origin
+        assert client.get(CAPABILITY_PATH).status_code == 200
+
+        fixture = Path(__file__).with_name("shadow") / "fixtures" / "executions_utf8.csv"
+        mapping = {
+            "broker_fill_id": "成交编号",
+            "symbol": "证券代码",
+            "side": "买卖方向",
+            "executed_at": "成交时间",
+            "quantity": "成交数量",
+            "price": "成交价格",
+            "fees": "手续费",
+            "currency": "币种",
+            "account_alias": "账户别名",
+        }
+        form = {"mapping": json.dumps(mapping), "source_timezone": "Asia/Shanghai"}
+        upload = {"file": (fixture.name, fixture.read_bytes(), "text/csv")}
+        preview = client.post(
+            "/api/shadow/imports/preview",
+            headers={"origin": trusted_origin},
+            data=form,
+            files=upload,
+        )
+        assert preview.status_code == 200, preview.text
+        confirmed = client.post(
+            "/api/shadow/imports/confirm",
+            headers={"origin": trusted_origin},
+            data={
+                **form,
+                "source_label": "trusted local import",
+                "preview_identity": preview.json()["preview"]["preview_identity"],
+            },
+            files=upload,
+        )
+        assert confirmed.status_code == 201, confirmed.text
+        batches = app.state.shadow_repository.list_import_batches(principal="local_owner_v1")
+        assert [batch["id"] for batch in batches] == [confirmed.json()["batch"]["id"]]
+        spies.assert_zero_calls()
+
+    configured_root = tmp_path / "configured"
+    configured_root.mkdir()
+    with _real_host(configured_root, monkeypatch, frozenset()) as (_app, client):
+        assert client.get(CAPABILITY_PATH).status_code == 401
+        _authenticate(client)
+        assert client.get(CAPABILITY_PATH).status_code == 200
+
+
+def test_hostile_origin_denied(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    trusted_origin = "http://localhost:3018"
+    loopback_root = tmp_path / "loopback"
+    loopback_root.mkdir()
+    with _real_host(
+        loopback_root,
+        monkeypatch,
+        frozenset(),
+        configured=False,
+        base_url=trusted_origin,
+        client_host="127.0.0.1",
+    ) as (_app, client):
+        hostile = client.get(
+            CAPABILITY_PATH,
+            headers={"origin": "https://attacker.example"},
+        )
+        assert hostile.status_code == 403
+        assert hostile.headers.get("access-control-allow-origin") is None
+        assert client.get(
+            CAPABILITY_PATH,
+            headers={"origin": trusted_origin, "host": "attacker.example"},
+        ).status_code == 403
+        assert client.get(CAPABILITY_PATH, headers={"host": ""}).status_code == 403
+
+    lan_root = tmp_path / "lan"
+    lan_root.mkdir()
+    with _real_host(
+        lan_root,
+        monkeypatch,
+        frozenset(),
+        configured=False,
+        base_url=trusted_origin,
+        client_host="192.168.1.20",
+    ) as (_app, client):
+        denied = client.get(CAPABILITY_PATH, headers={"origin": trusted_origin})
+        assert denied.status_code == 403
+        assert denied.headers.get("access-control-allow-origin") != "*"
