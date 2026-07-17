@@ -1,4 +1,5 @@
 """Shadow explainable-distillation RED contracts."""
+
 from __future__ import annotations
 
 import json
@@ -43,14 +44,62 @@ class GovernedFeatureSource:
 
 def _feature_rows() -> list[dict[str, object]]:
     return [
-        {"date": "2025-01-02", "actual_trade": False, "close_return_5d": -0.05, "volume_ratio_20d": 0.7, "intraday_range": 0.02},
-        {"date": "2025-01-03", "actual_trade": False, "close_return_5d": -0.02, "volume_ratio_20d": 0.8, "intraday_range": 0.03},
-        {"date": "2025-01-06", "actual_trade": True, "close_return_5d": 0.04, "volume_ratio_20d": 1.7, "intraday_range": 0.05},
-        {"date": "2025-01-07", "actual_trade": False, "close_return_5d": 0.00, "volume_ratio_20d": 1.0, "intraday_range": 0.02},
-        {"date": "2025-01-08", "actual_trade": True, "close_return_5d": 0.06, "volume_ratio_20d": 1.9, "intraday_range": 0.06},
-        {"date": "2025-01-09", "actual_trade": False, "close_return_5d": -0.01, "volume_ratio_20d": 0.9, "intraday_range": 0.01},
-        {"date": "2025-01-10", "actual_trade": True, "close_return_5d": 0.03, "volume_ratio_20d": 1.5, "intraday_range": 0.04},
-        {"date": "2025-01-13", "actual_trade": False, "close_return_5d": 0.01, "volume_ratio_20d": 1.1, "intraday_range": 0.02},
+        {
+            "date": "2025-01-02",
+            "actual_trade": False,
+            "close_return_5d": -0.05,
+            "volume_ratio_20d": 0.7,
+            "intraday_range": 0.02,
+        },
+        {
+            "date": "2025-01-03",
+            "actual_trade": False,
+            "close_return_5d": -0.02,
+            "volume_ratio_20d": 0.8,
+            "intraday_range": 0.03,
+        },
+        {
+            "date": "2025-01-06",
+            "actual_trade": True,
+            "close_return_5d": 0.04,
+            "volume_ratio_20d": 1.7,
+            "intraday_range": 0.05,
+        },
+        {
+            "date": "2025-01-07",
+            "actual_trade": False,
+            "close_return_5d": 0.00,
+            "volume_ratio_20d": 1.0,
+            "intraday_range": 0.02,
+        },
+        {
+            "date": "2025-01-08",
+            "actual_trade": True,
+            "close_return_5d": 0.06,
+            "volume_ratio_20d": 1.9,
+            "intraday_range": 0.06,
+        },
+        {
+            "date": "2025-01-09",
+            "actual_trade": False,
+            "close_return_5d": -0.01,
+            "volume_ratio_20d": 0.9,
+            "intraday_range": 0.01,
+        },
+        {
+            "date": "2025-01-10",
+            "actual_trade": True,
+            "close_return_5d": 0.03,
+            "volume_ratio_20d": 1.5,
+            "intraday_range": 0.04,
+        },
+        {
+            "date": "2025-01-13",
+            "actual_trade": False,
+            "close_return_5d": 0.01,
+            "volume_ratio_20d": 1.1,
+            "intraday_range": 0.02,
+        },
     ]
 
 
@@ -59,7 +108,11 @@ def _distiller(repository=None, source=None):
 
     repository = repository or CandidateRepository()
     source = source or GovernedFeatureSource()
-    return repository, source, ShadowDistiller(repository=repository, governed_feature_source=source)
+    return (
+        repository,
+        source,
+        ShadowDistiller(repository=repository, governed_feature_source=source),
+    )
 
 
 def _distill(distiller, **overrides):
@@ -70,7 +123,9 @@ def _distill(distiller, **overrides):
         "max_depth": 3,
         "min_leaf_support": 2,
         "exit_assumptions": {"kind": "fixed_holding_days", "days": 5},
-        "holding_assumptions": {"price_adjustment": "unadjusted_execution_vs_forward_adjusted_research"},
+        "holding_assumptions": {
+            "price_adjustment": "unadjusted_execution_vs_forward_adjusted_research"
+        },
     }
     payload.update(overrides)
     return distiller.distill(**payload)
@@ -83,16 +138,25 @@ def test_distillation_uses_only_server_governed_features_and_deterministic_negat
     first = _distill(first_distiller)
     second = _distill(second_distiller)
 
-    assert first_source.calls == second_source.calls == [{
-        "evidence_set": first_repository.evidence,
-        "feature_names": ALLOWED_FEATURES,
-    }]
+    assert (
+        first_source.calls
+        == second_source.calls
+        == [
+            {
+                "evidence_set": first_repository.evidence,
+                "feature_names": ALLOWED_FEATURES,
+            }
+        ]
+    )
     assert first["rules"] == second["rules"]
     assert first["parameters"] == second["parameters"]
     assert first["class_balance"] == second["class_balance"]
     assert first["negative_sampling"]["seed"] == 17
     assert first["negative_sampling"]["source"] == "governed_non_trade_sessions"
-    assert first["negative_sampling"]["selected_dates"] == second["negative_sampling"]["selected_dates"]
+    assert (
+        first["negative_sampling"]["selected_dates"]
+        == second["negative_sampling"]["selected_dates"]
+    )
     assert len(first_repository.list_candidates()) == len(second_repository.list_candidates()) == 1
 
 
@@ -122,10 +186,23 @@ def test_candidate_is_complete_versioned_attributable_and_explainable():
     candidate = _distill(distiller)
 
     required = {
-        "id", "distiller_version", "rule_schema_version", "rules", "features", "parameters",
-        "exit_assumptions", "holding_assumptions", "source_batch_ids", "evidence_set_id",
-        "evidence_set_fingerprint", "training_window", "seed", "class_balance", "metrics",
-        "limitations", "created_at",
+        "id",
+        "distiller_version",
+        "rule_schema_version",
+        "rules",
+        "features",
+        "parameters",
+        "exit_assumptions",
+        "holding_assumptions",
+        "source_batch_ids",
+        "evidence_set_id",
+        "evidence_set_fingerprint",
+        "training_window",
+        "seed",
+        "class_balance",
+        "metrics",
+        "limitations",
+        "created_at",
     }
     assert required.issubset(candidate)
     assert candidate["source_batch_ids"] == repository.evidence["included_batch_ids"]
@@ -134,7 +211,10 @@ def test_candidate_is_complete_versioned_attributable_and_explainable():
     assert candidate["training_window"] == {"start": "2025-01-02", "end": "2025-01-13"}
     assert {"support", "precision", "recall"}.issubset(candidate["metrics"])
     assert candidate["limitations"]
-    assert any("exit" in limitation.lower() or "holding" in limitation.lower() for limitation in candidate["limitations"])
+    assert any(
+        "exit" in limitation.lower() or "holding" in limitation.lower()
+        for limitation in candidate["limitations"]
+    )
     assert candidate["rules"] and all(rule["conditions"] for rule in candidate["rules"])
 
 
@@ -142,19 +222,38 @@ def test_rule_validator_rejects_unsupported_fields_operators_and_nonfinite_thres
     from app.shadow.distillation import ShadowDistillationError, ShadowRuleValidator
 
     validator = ShadowRuleValidator()
-    valid = [{
-        "conditions": [{"field": "close_return_5d", "operator": ">", "threshold": 0.02}],
-        "prediction": "entry",
-        "support": 3,
-        "precision": 1.0,
-        "recall": 1.0,
-    }]
+    valid = [
+        {
+            "conditions": [{"field": "close_return_5d", "operator": ">", "threshold": 0.02}],
+            "prediction": "entry",
+            "support": 3,
+            "precision": 1.0,
+            "recall": 1.0,
+        }
+    ]
     assert validator.validate(valid) == valid
 
     invalid_rules = [
-        [{**valid[0], "conditions": [{"field": "browser_alpha", "operator": ">", "threshold": 0.0}]}],
-        [{**valid[0], "conditions": [{"field": "close_return_5d", "operator": "exec", "threshold": 0.0}]}],
-        [{**valid[0], "conditions": [{"field": "close_return_5d", "operator": ">", "threshold": math.inf}]}],
+        [
+            {
+                **valid[0],
+                "conditions": [{"field": "browser_alpha", "operator": ">", "threshold": 0.0}],
+            }
+        ],
+        [
+            {
+                **valid[0],
+                "conditions": [{"field": "close_return_5d", "operator": "exec", "threshold": 0.0}],
+            }
+        ],
+        [
+            {
+                **valid[0],
+                "conditions": [
+                    {"field": "close_return_5d", "operator": ">", "threshold": math.inf}
+                ],
+            }
+        ],
     ]
     for rules in invalid_rules:
         with pytest.raises(ShadowDistillationError):
@@ -186,7 +285,15 @@ def test_persisted_candidate_contains_no_estimator_pickle_joblib_source_import_o
     def inspect(value: object) -> None:
         assert not callable(value)
         if isinstance(value, dict):
-            forbidden = {"estimator", "model_blob", "pickle", "joblib", "python_source", "imports", "callable"}
+            forbidden = {
+                "estimator",
+                "model_blob",
+                "pickle",
+                "joblib",
+                "python_source",
+                "imports",
+                "callable",
+            }
             assert forbidden.isdisjoint(key.lower() for key in value)
             for nested in value.values():
                 inspect(nested)
@@ -248,8 +355,14 @@ def test_bounded_assumption_schema_rejects_extra_recursive_collection_string_and
     assert DistillRequest.model_fields["exit_assumptions"].annotation.__name__ == "ExitAssumptions"
 
     invalid_pairs = (
-        ({"kind": "fixed_holding_days", "days": 5, "browser_authority": True}, valid["holding_assumptions"]),
-        ({"kind": {"level_1": {"level_2": {"level_3": 1}}}, "days": 5}, valid["holding_assumptions"]),
+        (
+            {"kind": "fixed_holding_days", "days": 5, "browser_authority": True},
+            valid["holding_assumptions"],
+        ),
+        (
+            {"kind": {"level_1": {"level_2": {"level_3": 1}}}, "days": 5},
+            valid["holding_assumptions"],
+        ),
         ({f"key_{index}": index for index in range(17)}, valid["holding_assumptions"]),
         ({"kind": "fixed_holding_days", "days": list(range(33))}, valid["holding_assumptions"]),
         ({"kind": "fixed_holding_days", "days": 5}, {"price_adjustment": "界" * 43}),
@@ -352,16 +465,24 @@ def test_direct_boundary_rejects_oversize_before_distiller_or_repository_work(tm
     with repository._connection() as connection, connection:
         connection.execute(
             "INSERT INTO shadow_evidence_sets (id, principal, fingerprint, manifest_json, created_at) VALUES (?, ?, ?, ?, ?)",
-            ("evidence-set-1", "shadow-user-opaque", evidence_fingerprint, evidence_json, "2025-01-01T00:00:00+00:00"),
+            (
+                "evidence-set-1",
+                "shadow-user-opaque",
+                evidence_fingerprint,
+                evidence_json,
+                "2025-01-01T00:00:00+00:00",
+            ),
         )
 
-    rules = [{
-        "conditions": [{"field": "close_return_5d", "operator": ">", "threshold": 0.02}],
-        "prediction": "entry",
-        "support": 3,
-        "precision": 1.0,
-        "recall": 1.0,
-    }]
+    rules = [
+        {
+            "conditions": [{"field": "close_return_5d", "operator": ">", "threshold": 0.02}],
+            "prediction": "entry",
+            "support": 3,
+            "precision": 1.0,
+            "recall": 1.0,
+        }
+    ]
     canonical_rules_json = json.dumps(
         rules, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     )
@@ -382,7 +503,11 @@ def test_direct_boundary_rejects_oversize_before_distiller_or_repository_work(tm
         "metrics": {"support": 2, "precision": 1.0, "recall": 1.0},
         "limitations": ["research only"],
         "created_at": "2025-01-01T00:00:00+00:00",
-        "negative_sampling": {"seed": 17, "source": "governed_non_trade_sessions", "selected_dates": []},
+        "negative_sampling": {
+            "seed": 17,
+            "source": "governed_non_trade_sessions",
+            "selected_dates": [],
+        },
         "canonical_rules_json": canonical_rules_json,
         "rule_fingerprint": __import__("hashlib").sha256(canonical_rules_json.encode()).hexdigest(),
         "training_replay": [True],
@@ -406,3 +531,124 @@ def test_direct_boundary_rejects_oversize_before_distiller_or_repository_work(tm
         from app.shadow import projections
 
         projections.candidate({**persisted, "holding_assumptions": {"price_adjustment": "x" * 129}})
+
+
+def _persisted_candidate_fixture(tmp_path):
+    from app.shadow.repository import ShadowRepository
+
+    repository = ShadowRepository(tmp_path / "candidate-replay.db")
+    evidence_manifest = {
+        "included_batch_ids": ["batch-1"],
+        "included_trade_ids": [],
+        "exclusions": [],
+    }
+    evidence_json = json.dumps(
+        evidence_manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+    evidence_fingerprint = __import__("hashlib").sha256(evidence_json.encode()).hexdigest()
+    with repository._connection() as connection, connection:
+        connection.execute(
+            "INSERT INTO shadow_evidence_sets (id, principal, fingerprint, manifest_json, created_at) VALUES (?, ?, ?, ?, ?)",
+            (
+                "evidence-set-replay",
+                "shadow-user-opaque",
+                evidence_fingerprint,
+                evidence_json,
+                "2025-01-01T00:00:00+00:00",
+            ),
+        )
+
+    rules = [
+        {
+            "conditions": [{"field": "close_return_5d", "operator": ">", "threshold": 0.02}],
+            "prediction": "entry",
+            "support": 3,
+            "precision": 1.0,
+            "recall": 1.0,
+        }
+    ]
+    canonical_rules_json = json.dumps(
+        rules, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+    candidate = {
+        "distiller_version": "shadow-shallow-tree-v1",
+        "rule_schema_version": "shadow-entry-rules-v1",
+        "rules": rules,
+        "features": ["close_return_5d"],
+        "parameters": {
+            "max_depth": 1,
+            "min_leaf_support": 2,
+            "class_weight": "balanced",
+        },
+        "exit_assumptions": {"kind": "fixed_holding_days", "days": 5},
+        "holding_assumptions": {
+            "price_adjustment": "unadjusted_execution_vs_forward_adjusted_research"
+        },
+        "source_batch_ids": ["batch-1"],
+        "evidence_set_id": "evidence-set-replay",
+        "evidence_set_fingerprint": evidence_fingerprint,
+        "training_window": {"start": "2025-01-01", "end": "2025-01-31"},
+        "seed": 17,
+        "class_balance": {"positive": 2, "negative": 2},
+        "metrics": {"support": 2, "precision": 1.0, "recall": 1.0},
+        "limitations": ["research only"],
+        "created_at": "2025-01-01T00:00:00+00:00",
+        "negative_sampling": {
+            "seed": 17,
+            "source": "governed_non_trade_sessions",
+            "selected_dates": [],
+        },
+        "canonical_rules_json": canonical_rules_json,
+        "rule_fingerprint": __import__("hashlib").sha256(canonical_rules_json.encode()).hexdigest(),
+        "training_replay": [True],
+    }
+    return repository, candidate
+
+
+def test_candidate_replay_digest_covers_all_identity_defining_content(tmp_path):
+    from app.shadow.repository import ShadowRepositoryError
+
+    repository, candidate = _persisted_candidate_fixture(tmp_path)
+    first = repository.append_candidate(deepcopy(candidate))
+    assert repository.append_candidate(deepcopy(candidate)) == first
+
+    divergent_candidates = []
+    changed = deepcopy(candidate)
+    changed["features"] = ["volume_ratio_20d"]
+    divergent_candidates.append(changed)
+    changed = deepcopy(candidate)
+    changed["parameters"]["max_depth"] = 2
+    divergent_candidates.append(changed)
+    changed = deepcopy(candidate)
+    changed["exit_assumptions"]["days"] = 6
+    divergent_candidates.append(changed)
+    changed = deepcopy(candidate)
+    changed["training_window"]["end"] = "2025-02-03"
+    divergent_candidates.append(changed)
+    changed = deepcopy(candidate)
+    changed["negative_sampling"]["selected_dates"] = ["2025-01-03"]
+    divergent_candidates.append(changed)
+    changed = deepcopy(candidate)
+    changed["rules"][0]["conditions"][0]["threshold"] = 0.03
+    changed["canonical_rules_json"] = json.dumps(
+        changed["rules"], ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+    changed["rule_fingerprint"] = (
+        __import__("hashlib").sha256(changed["canonical_rules_json"].encode()).hexdigest()
+    )
+    divergent_candidates.append(changed)
+    changed = deepcopy(candidate)
+    changed["rule_fingerprint"] = "f" * 64
+    divergent_candidates.append(changed)
+    changed = deepcopy(candidate)
+    changed["metrics"]["precision"] = 0.5
+    divergent_candidates.append(changed)
+
+    for index, divergent in enumerate(divergent_candidates):
+        try:
+            repository.append_candidate(divergent)
+        except ShadowRepositoryError as error:
+            assert "conflict" in str(error), f"divergence {index}: {error}"
+        else:
+            pytest.fail(f"divergence {index} did not conflict")
+    assert repository.list_candidates() == [first]
