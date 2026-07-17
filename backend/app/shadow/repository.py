@@ -12,6 +12,11 @@ from typing import Any
 from uuid import uuid4
 
 from app.operational.migrations import migrate_operational_db
+from app.shadow.schemas import (
+    ShadowAssumptionError,
+    validate_assumption_pair,
+    validate_persisted_assumption_pair,
+)
 
 
 class ShadowRepositoryError(RuntimeError):
@@ -388,6 +393,18 @@ class ShadowRepository:
         }
         if set(candidate) != required:
             raise ShadowRepositoryError("candidate fact schema is invalid")
+        try:
+            assumptions = validate_assumption_pair(
+                exit_assumptions=candidate["exit_assumptions"],
+                holding_assumptions=candidate["holding_assumptions"],
+            )
+        except ShadowAssumptionError as error:
+            raise ShadowRepositoryError("candidate assumptions are invalid") from error
+        candidate = {
+            **candidate,
+            "exit_assumptions": assumptions.exit,
+            "holding_assumptions": assumptions.holding,
+        }
         evidence = self.get_evidence_set(str(candidate["evidence_set_id"]))
         if (
             evidence is None
@@ -432,8 +449,8 @@ class ShadowRepository:
                         _canonical_json(candidate["rules"], "candidate rules"),
                         _canonical_json(candidate["features"], "candidate features"),
                         _canonical_json(parameters_record, "candidate parameters"),
-                        _canonical_json(candidate["exit_assumptions"], "exit assumptions"),
-                        _canonical_json(candidate["holding_assumptions"], "holding assumptions"),
+                        assumptions.exit_json,
+                        assumptions.holding_json,
                         _canonical_json(candidate["source_batch_ids"], "source batch ids"),
                         candidate["evidence_set_fingerprint"],
                         _canonical_json(candidate["training_window"], "training window"),
@@ -913,12 +930,13 @@ class ShadowRepository:
             raise ShadowRepositoryError("persisted candidate parameters are invalid")
         rules = _json_list(record.pop("rules_json"), "candidate rules")
         features = _json_list(record.pop("features_json"), "candidate features")
-        exit_assumptions = _json_object(
-            record.pop("exit_assumptions_json"), "exit assumptions"
-        )
-        holding_assumptions = _json_object(
-            record.pop("holding_assumptions_json"), "holding assumptions"
-        )
+        try:
+            assumptions = validate_persisted_assumption_pair(
+                exit_json=record.pop("exit_assumptions_json"),
+                holding_json=record.pop("holding_assumptions_json"),
+            )
+        except ShadowAssumptionError as error:
+            raise ShadowRepositoryError("persisted candidate assumptions are invalid") from error
         source_batch_ids = _json_list(
             record.pop("source_batch_ids_json"), "source batch ids"
         )
@@ -935,8 +953,8 @@ class ShadowRepository:
             "rules": rules,
             "features": features,
             "parameters": parameters_record["parameters"],
-            "exit_assumptions": exit_assumptions,
-            "holding_assumptions": holding_assumptions,
+            "exit_assumptions": assumptions.exit,
+            "holding_assumptions": assumptions.holding,
             "source_batch_ids": source_batch_ids,
             "training_window": training_window,
             "class_balance": class_balance,

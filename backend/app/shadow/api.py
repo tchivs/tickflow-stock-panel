@@ -6,13 +6,19 @@ from collections.abc import Mapping
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.shadow import projections
 from app.shadow.evaluation import ShadowEvaluationError
 from app.shadow.importer import ShadowImportError
 from app.shadow.repository import ShadowEvidenceError, ShadowRepositoryError
-from app.shadow.schemas import EvidenceExclusion, ImportMapping
+from app.shadow.schemas import (
+    EvidenceExclusion,
+    ExitAssumptions,
+    HoldingAssumptions,
+    ImportMapping,
+    validate_assumption_pair,
+)
 from app.shadow.service import ShadowRetentionError
 
 router = APIRouter(prefix="/api/shadow", tags=["shadow"])
@@ -36,8 +42,16 @@ class DistillRequest(StrictShadowRequest):
     seed: int
     max_depth: int = Field(ge=1, le=3)
     min_leaf_support: int = Field(ge=2, le=10_000)
-    exit_assumptions: dict[str, object]
-    holding_assumptions: dict[str, object]
+    exit_assumptions: ExitAssumptions
+    holding_assumptions: HoldingAssumptions
+
+    @model_validator(mode="after")
+    def _bounded_assumptions(self) -> DistillRequest:
+        validate_assumption_pair(
+            exit_assumptions=self.exit_assumptions,
+            holding_assumptions=self.holding_assumptions,
+        )
+        return self
 
 
 class DateWindow(StrictShadowRequest):

@@ -6,6 +6,7 @@ from datetime import date
 from typing import Any, Protocol
 
 from app.shadow.evaluation import ShadowEvaluationService
+from app.shadow.schemas import validate_assumption_pair
 
 
 class ShadowRetentionError(ValueError):
@@ -69,7 +70,14 @@ class ShadowService:
         )
 
     def distill_candidate(self, **request: object) -> dict[str, object]:
-        return self._invoke(self.distiller, "distill", request)
+        assumptions = validate_assumption_pair(
+            exit_assumptions=request.get("exit_assumptions"),
+            holding_assumptions=request.get("holding_assumptions"),
+        )
+        bounded_request = dict(request)
+        bounded_request["exit_assumptions"] = assumptions.exit
+        bounded_request["holding_assumptions"] = assumptions.holding
+        return self._invoke(self.distiller, "distill", bounded_request)
 
     def evaluate_candidate(self, **request: object) -> dict[str, dict[str, object]]:
         return self.evaluation_service.evaluate_candidate(**request)  # type: ignore[arg-type]

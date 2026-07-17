@@ -4,6 +4,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from app.shadow.schemas import validate_assumption_pair
+
 _METRIC_FIELDS = (
     "precision",
     "recall",
@@ -116,6 +118,10 @@ def evidence_set(record: Mapping[str, Any]) -> dict[str, object]:
 
 
 def candidate(record: Mapping[str, Any]) -> dict[str, object]:
+    assumptions = validate_assumption_pair(
+        exit_assumptions=record.get("exit_assumptions"),
+        holding_assumptions=record.get("holding_assumptions"),
+    )
     return {
         "id": str(record["id"]),
         "evidence_set_id": str(record.get("evidence_set_id", "")),
@@ -125,8 +131,8 @@ def candidate(record: Mapping[str, Any]) -> dict[str, object]:
         "rules": _safe_json(record.get("rules")),
         "features": _safe_strings(record.get("features"), maximum=16),
         "parameters": _safe_json(record.get("parameters")),
-        "exit_assumptions": _safe_json(record.get("exit_assumptions")),
-        "holding_assumptions": _safe_json(record.get("holding_assumptions")),
+        "exit_assumptions": assumptions.exit,
+        "holding_assumptions": assumptions.holding,
         "source_batch_ids": _safe_strings(record.get("source_batch_ids"), maximum=128),
         "training_window": _safe_json(record.get("training_window")),
         "seed": record.get("seed") if isinstance(record.get("seed"), int) else None,
