@@ -1,20 +1,19 @@
 """Independent lazy lifecycle host for optional Phase 05 capabilities."""
 from __future__ import annotations
 
+import importlib.util
+import re
+import sqlite3
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from enum import Enum
 from hashlib import sha256
-import importlib.util
 from pathlib import Path
-import re
-import sqlite3
 from typing import Any, Callable, Mapping, Protocol, runtime_checkable
 
 from fastapi import APIRouter, Request
 
 from app.operational.migrations import migrate_operational_db
-
 
 _SAFE_CODE = re.compile(r"[a-z][a-z0-9_]{0,127}\Z")
 _UNSAFE_STATUS_MARKERS = (
@@ -691,7 +690,7 @@ def install_optional_module_routes(app: Any) -> None:
 
 
 def install_optional_module_host(app: Any, host: OptionalModuleHost) -> None:
-    """Install route shapes, then initialize each optional module independently."""
+    """Install routes and publish only completely initialized module readiness."""
     install_optional_module_routes(app)
     app.state.optional_module_host = host
     scope = _AuthenticatedInstrumentScope()
@@ -718,7 +717,6 @@ def install_optional_module_host(app: Any, host: OptionalModuleHost) -> None:
                 app.state.forecast_progress_hub = ForecastProgressHub()
         else:
             _clear_module_state(app, name)
-        _publish_module_status(app, host, name)
 
     forecast = host.service(OptionalModuleName.FORECAST)
     if isinstance(forecast, _RuntimeBundle):
@@ -731,24 +729,26 @@ def install_optional_module_host(app: Any, host: OptionalModuleHost) -> None:
                     revalidate=forecast.request_service.revalidate
                 )
             except Exception:
-                host.mark_unavailable(OptionalModuleName.FORECAST, code="forecast_recovery_failed")
+                host.mark_unavailable(
+                    OptionalModuleName.FORECAST, code="forecast_recovery_failed"
+                )
                 _clear_module_state(app, OptionalModuleName.FORECAST)
 
     for name in (OptionalModuleName.THESIS, OptionalModuleName.FORECAST):
         bundle = host.service(name)
         if not isinstance(bundle, _RuntimeBundle):
-            _publish_module_status(app, host, name)
             continue
         if OPTIONAL_MODULE_TEST_FAILURES.get("scanner") == name.value:
             host.mark_unavailable(name, code=f"{name.value}_scanner_failed")
             _clear_module_state(app, name)
-            _publish_module_status(app, host, name)
             continue
         try:
             _register_scanner(host, name, bundle)
         except Exception:
             host.mark_unavailable(name, code=f"{name.value}_scanner_failed")
             _clear_module_state(app, name)
+
+    for name in OptionalModuleName:
         _publish_module_status(app, host, name)
 
 
@@ -822,6 +822,7 @@ def _clear_module_state(app: Any, name: OptionalModuleName) -> None:
             "forecast_request_service",
             "forecast_maturity_scanner",
             "forecast_path_reader",
+            "forecast_progress_hub",
         ),
     }[name]
     for attribute in names:

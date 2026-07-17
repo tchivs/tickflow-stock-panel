@@ -1,6 +1,7 @@
 """FastAPI 入口。"""
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
 import os
@@ -14,9 +15,34 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app import __version__
-from app.api import analysis as analysis_menus, auth as auth_api, backtest, data, decision, ext_data, financials, indices, intraday, kline, market_recap, monitor_rules, alerts, overview, pipeline, portfolio, research, rps, screener, settings as settings_api, signals, stock_analysis, strategy, watchlist
-from app.analysis import api as analysis_api
 from app.advanced import api as advanced_api
+from app.analysis import api as analysis_api
+from app.api import (
+    alerts,
+    backtest,
+    data,
+    decision,
+    ext_data,
+    financials,
+    indices,
+    intraday,
+    kline,
+    market_recap,
+    monitor_rules,
+    overview,
+    pipeline,
+    portfolio,
+    research,
+    rps,
+    screener,
+    signals,
+    stock_analysis,
+    strategy,
+    watchlist,
+)
+from app.api import analysis as analysis_menus
+from app.api import auth as auth_api
+from app.api import settings as settings_api
 from app.api.routes import router as core_router
 from app.config import settings
 from app.jobs import daily_pipeline
@@ -483,9 +509,9 @@ async def lifespan(app: FastAPI):
         app.state.financial_scheduler = financial_scheduler
 
     # 策略引擎
+    from app.services.screener import ScreenerService
     from app.strategy.engine import StrategyEngine
     from app.strategy.monitor import StrategyMonitorService
-    from app.services.screener import ScreenerService
 
     _screener_svc = ScreenerService(repo)
     _etf_screener_svc = ScreenerService(repo, asset_type="etf")
@@ -541,7 +567,10 @@ async def lifespan(app: FastAPI):
             raise RuntimeError("advanced host fixture research asset binding conflicts with persisted lifecycle binding")
         app.state.advanced_research_asset_binding = existing_binding
     from app.advanced.experiments import ExperimentService
-    from app.advanced.governed_runner import GovernedExperimentRunner, StrategyBacktestExperimentCollaborator
+    from app.advanced.governed_runner import (
+        GovernedExperimentRunner,
+        StrategyBacktestExperimentCollaborator,
+    )
     from app.backtest.strategy import StrategyBacktestService
 
     app.state.experiment_service = ExperimentService(
@@ -556,9 +585,9 @@ async def lifespan(app: FastAPI):
     )
 
     # 通用监控规则引擎: 启动时 reload 规则到内存态 (修复重启后告警失效)
-    from app.strategy.monitor import MonitorRuleEngine
-    from app.strategy import monitor_rules as mr_store
     from app.services import preferences
+    from app.strategy import monitor_rules as mr_store
+    from app.strategy.monitor import MonitorRuleEngine
     monitor_engine = MonitorRuleEngine()
     monitor_engine.set_strategy_engine(strategy_engine)
     monitor_engine.set_data_dir(store.data_dir)
@@ -630,13 +659,24 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS: 允许局域网访问 (自托管场景, 放开所有来源)
-# 注: allow_credentials=True 与 allow_origins=['*'] 不能共存 (浏览器规范),
-# 本项目认证走 header (API Key), 不依赖 cookie, 故关闭 credentials 换取通配来源。
+# CORS is deployment-owned: only the loopback app and supported local dev origin
+# may read credentialed API responses. Same-origin production requests need no CORS.
+_LOCAL_AUTHORITIES = frozenset(
+    authority
+    for hostname in ("localhost", "127.0.0.1", "[::1]")
+    for authority in (hostname, f"{hostname}:{settings.port}", f"{hostname}:5173")
+)
+_LOCAL_ORIGINS = frozenset(
+    f"{scheme}://{authority}"
+    for scheme in ("http", "https")
+    for authority in _LOCAL_AUTHORITIES
+)
+_LOCAL_REVIEWER_PRINCIPAL = "local_owner_v1"
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
+    allow_origins=sorted(_LOCAL_ORIGINS),
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -645,32 +685,38 @@ app.add_middleware(
 # ================================================================
 # 访问认证中间件
 # ================================================================
-# 拦截所有 /api/ 请求, 三种状态:
-#   1. 未设密码 + 本机/内网 → 放行(让本机用户访问面板 + 调 /api/auth/setup 设密码)
-#   2. 未设密码 + 公网       → 拒绝(403, 防裸奔也防抢占; 引导本机设密码)
-#   3. 已设密码              → 检查 session, 无效则 401(前端跳登录)
-# 白名单: /api/auth/* (设密码/登录本身)、/health 等探活。
 _AUTH_WHITELIST_PREFIX = ("/api/auth/",)
 _AUTH_WHITELIST_EXACT = ("/health", "/api/health", "/openapi.json", "/docs", "/redoc")
+
+
+def _is_trusted_unconfigured_request(request: Request) -> bool:
+    """Admit only exact deployment-owned loopback Host/Origin combinations."""
+    if request.client is None:
+        return False
+    try:
+        if not ipaddress.ip_address(request.client.host).is_loopback:
+            return False
+    except ValueError:
+        return False
+    host = request.headers.get("host", "").casefold()
+    if host not in _LOCAL_AUTHORITIES:
+        return False
+    origin = request.headers.get("origin")
+    return origin is None or origin.casefold() in _LOCAL_ORIGINS
 
 
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
     path = request.url.path
-    # 仅 /api/ 走认证; 静态资源(前端页面/assets)放行, 由前端处理跳转
     if not path.startswith("/api/"):
-        return await call_next(request)
-    # 白名单放行(设密码/登录/探活本身不拦)
-    if path.startswith(_AUTH_WHITELIST_PREFIX) or path in _AUTH_WHITELIST_EXACT:
         return await call_next(request)
 
     from app.services import auth as auth_service
-    # 情况 1+2: 未设密码
+
     if not auth_service.is_configured():
-        # 本机/内网 → 放行(服务器主人可访问, 并去 /login 设密码)
-        if auth_api._is_local_network(auth_api._client_ip(request)):
+        if _is_trusted_unconfigured_request(request):
+            request.state.reviewer_principal = _LOCAL_REVIEWER_PRINCIPAL
             return await call_next(request)
-        # 公网 → 拒绝。不裸奔, 也不给公网设密码的机会(防抢占)
         return JSONResponse(
             status_code=403,
             content={
@@ -679,12 +725,15 @@ async def auth_middleware(request: Request, call_next):
             },
         )
 
-    # 情况 3: 已设密码, 检查会话
+    if path.startswith(_AUTH_WHITELIST_PREFIX) or path in _AUTH_WHITELIST_EXACT:
+        return await call_next(request)
+
     token = request.cookies.get(auth_api.COOKIE_NAME)
     if token and auth_service.is_valid_session(token):
-        request.state.reviewer_principal = auth_service.resolve_authenticated_reviewer(token)
-        return await call_next(request)
-    # 未登录: 401(前端跳登录页)
+        principal = auth_service.resolve_authenticated_reviewer(token)
+        if principal:
+            request.state.reviewer_principal = principal
+            return await call_next(request)
     return JSONResponse(status_code=401, content={"detail": "未登录或会话已过期"})
 
 
@@ -726,6 +775,7 @@ install_optional_module_routes(app)
 # 若不注册 handler 会冒泡成 500 Internal Server Error,对前端不友好且语义错误。
 from fastapi import Request
 from fastapi.responses import JSONResponse
+
 from app.tickflow.capabilities import CapabilityDenied
 
 
