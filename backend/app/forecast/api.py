@@ -1,12 +1,14 @@
 """Authenticated object-scoped Forecast API and persisted-state SSE."""
+
 from __future__ import annotations
 
 import asyncio
-from collections import defaultdict, deque
-from collections.abc import AsyncIterator, Mapping
 import json
 import os
 import re
+from collections import defaultdict, deque
+from collections.abc import AsyncIterator, Mapping
+from threading import Lock
 from typing import Any, Literal, Protocol
 from uuid import uuid4
 
@@ -15,7 +17,6 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.forecast import projections
-
 
 router = APIRouter(prefix="/api/forecast", tags=["forecast"])
 _INSTRUMENT = re.compile(r"^[0-9A-Z.-]{1,32}$")
@@ -63,33 +64,99 @@ class TerminalJobRequest(StrictForecastRequest):
     ]
 
 
+class ForecastSubscriptionCapacityError(RuntimeError):
+    """A synchronized Forecast subscription ceiling rejected admission."""
+
+
 class ForecastProgressHub:
-    """Bound each subscriber while persisted job state remains the reconnect source."""
+    """Synchronized bounded wake queues; persisted transitions remain authoritative."""
 
-    def __init__(self, *, queue_size: int = 16) -> None:
-        if not 1 <= queue_size <= 128:
-            raise ValueError("Forecast progress queue size is invalid")
+    def __init__(
+        self,
+        *,
+        queue_size: int = 16,
+        per_principal_limit: int = 4,
+        per_job_limit: int = 4,
+        global_limit: int = 64,
+    ) -> None:
+        limits = (queue_size, per_principal_limit, per_job_limit, global_limit)
+        if any(
+            isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 128
+            for value in limits
+        ):
+            raise ValueError("Forecast progress subscription limits are invalid")
         self._queue_size = queue_size
-        self._subscribers: dict[str, list[deque[dict[str, str]]]] = defaultdict(list)
+        self._per_principal_limit = per_principal_limit
+        self._per_job_limit = per_job_limit
+        self._global_limit = global_limit
+        self._lock = Lock()
+        self._subscribers: dict[str, list[tuple[str, deque[dict[str, str]]]]] = defaultdict(list)
+        self._principal_counts: dict[str, int] = defaultdict(int)
+        self._active_count = 0
 
-    def subscribe(self, job_id: str) -> deque[dict[str, str]]:
-        queue: deque[dict[str, str]] = deque(maxlen=self._queue_size)
-        self._subscribers[job_id].append(queue)
-        return queue
+    @property
+    def active_count(self) -> int:
+        with self._lock:
+            return self._active_count
 
-    def unsubscribe(self, job_id: str, queue: deque[dict[str, str]]) -> None:
+    def subscribe(self, *, principal: str, job_id: str) -> deque[dict[str, str]]:
+        if not principal or not job_id:
+            raise ValueError("Forecast progress subscription identity is invalid")
+        with self._lock:
+            if (
+                self._active_count >= self._global_limit
+                or self._principal_counts[principal] >= self._per_principal_limit
+                or len(self._subscribers[job_id]) >= self._per_job_limit
+            ):
+                raise ForecastSubscriptionCapacityError(
+                    "Forecast progress subscription capacity is exhausted"
+                )
+            queue: deque[dict[str, str]] = deque(maxlen=self._queue_size)
+            self._subscribers[job_id].append((principal, queue))
+            self._principal_counts[principal] += 1
+            self._active_count += 1
+            return queue
+
+    def unsubscribe(self, *, principal: str, job_id: str, queue: deque[dict[str, str]]) -> None:
+        with self._lock:
+            self._remove_locked(principal=principal, job_id=job_id, queue=queue)
+
+    def _remove_locked(self, *, principal: str, job_id: str, queue: deque[dict[str, str]]) -> None:
         subscribers = self._subscribers.get(job_id)
-        if subscribers is None:
+        if not subscribers:
             return
-        if queue in subscribers:
-            subscribers.remove(queue)
+        for index, (registered_principal, registered_queue) in enumerate(subscribers):
+            if registered_principal == principal and registered_queue is queue:
+                subscribers.pop(index)
+                self._principal_counts[principal] -= 1
+                if self._principal_counts[principal] <= 0:
+                    self._principal_counts.pop(principal, None)
+                self._active_count -= 1
+                break
         if not subscribers:
             self._subscribers.pop(job_id, None)
 
     def publish(self, record: Mapping[str, object]) -> None:
         event = projections.progress(record)
-        for queue in tuple(self._subscribers.get(str(record["id"]), ())):
-            queue.append(dict(event))
+        version = record.get("transition_version")
+        if isinstance(version, int) and not isinstance(version, bool):
+            event["transition_version"] = str(version)
+        job_id = str(record["id"])
+        with self._lock:
+            for principal, queue in tuple(self._subscribers.get(job_id, ())):
+                if len(queue) >= self._queue_size:
+                    queue.clear()
+                    queue.append(
+                        {
+                            "job_id": job_id,
+                            "status": "interrupted",
+                            "stage": "transport_overflow",
+                            "stage_recorded_at": str(record.get("updated_at") or ""),
+                        }
+                    )
+                    self._remove_locked(principal=principal, job_id=job_id, queue=queue)
+                else:
+                    queue.append(dict(event))
 
 
 @router.get("/capability")
@@ -104,17 +171,13 @@ def catalog(request: Request) -> dict[str, object]:
     entries = getattr(request.app.state, "forecast_catalog_entries", ())
     return {
         "entries": [
-            projections.catalog_entry(entry)
-            for entry in entries
-            if isinstance(entry, Mapping)
+            projections.catalog_entry(entry) for entry in entries if isinstance(entry, Mapping)
         ]
     }
 
 
 @router.post("/instruments/{instrument}/jobs", status_code=status.HTTP_201_CREATED)
-def create_job(
-    instrument: str, payload: ForecastJobRequest, request: Request
-) -> dict[str, object]:
+def create_job(instrument: str, payload: ForecastJobRequest, request: Request) -> dict[str, object]:
     canonical = _require_instrument(request, instrument)
     principal = _principal(request)
     service = getattr(request.app.state, "forecast_request_service", None)
@@ -132,23 +195,25 @@ def create_job(
     except LookupError as error:
         raise _not_found() from error
     except ValueError as error:
-        raise HTTPException(status_code=422, detail="Forecast request failed governed validation") from error
+        raise HTTPException(
+            status_code=422, detail="Forecast request failed governed validation"
+        ) from error
     result = projections.job(record, record_id=_record_id_for_job(request, str(record["id"])))
     _hub(request).publish(record)
     return {"job": result}
 
 
 @router.post("/jobs/{job_id}/retry", status_code=status.HTTP_201_CREATED)
-def retry_job(
-    job_id: str, payload: ForecastRetryRequest, request: Request
-) -> dict[str, object]:
+def retry_job(job_id: str, payload: ForecastRetryRequest, request: Request) -> dict[str, object]:
     source = _owned_job(request, job_id)
     try:
         record = _repository(request).create_retry_job(
             source_job_id=str(source["id"]), idempotency_key=payload.idempotency_key
         )
     except ValueError as error:
-        raise HTTPException(status_code=409, detail="Forecast retry conflicts with persisted state") from error
+        raise HTTPException(
+            status_code=409, detail="Forecast retry conflicts with persisted state"
+        ) from error
     _hub(request).publish(record)
     return {"job": projections.job(record)}
 
@@ -157,9 +222,7 @@ def retry_job(
 def job_detail(job_id: str, request: Request) -> dict[str, object]:
     record = _owned_job(request, job_id)
     return {
-        "job": projections.job(
-            record, record_id=_record_id_for_job(request, str(record["id"]))
-        )
+        "job": projections.job(record, record_id=_record_id_for_job(request, str(record["id"])))
     }
 
 
@@ -221,7 +284,9 @@ def record_paths(
     try:
         rows, total = read_page(record=record, offset=offset, limit=limit)
     except (OSError, ValueError) as error:
-        raise HTTPException(status_code=409, detail="Forecast path artifact failed verification") from error
+        raise HTTPException(
+            status_code=409, detail="Forecast path artifact failed verification"
+        ) from error
     return {"paths": projections.path_page(rows, offset=offset, limit=limit, total=total)}
 
 
@@ -239,40 +304,79 @@ def refresh_record_calibration(
     record = _owned_record(request, record_id)
     scanner = getattr(request.app.state, "forecast_maturity_scanner", None)
     session_resolver = getattr(request.app.state, "forecast_current_session", None)
+    evaluate = getattr(scanner, "evaluate", None)
     if scanner is not None and callable(session_resolver):
+        if not callable(evaluate):
+            raise HTTPException(
+                status_code=503, detail="Forecast calibration scanner is unavailable"
+            )
         try:
-            scanner.scan(as_of_session_id=session_resolver())
+            as_of_session_id = session_resolver()
+            for horizon in (5, 20, 60):
+                if horizon <= int(record["horizon"]):
+                    evaluate(
+                        forecast_id=str(record["id"]),
+                        horizon=horizon,
+                        as_of_session_id=as_of_session_id,
+                    )
         except (OSError, ValueError, RuntimeError) as error:
-            raise HTTPException(status_code=409, detail="Forecast calibration scan could not complete") from error
+            raise HTTPException(
+                status_code=409, detail="Forecast calibration scan could not complete"
+            ) from error
     return _calibration_payload(request, record)
 
 
 @router.get("/jobs/{job_id}/events")
 @router.get("/jobs/{job_id}/stream")
 def job_events(job_id: str, request: Request) -> StreamingResponse:
-    _owned_job(request, job_id)
+    job = _owned_job(request, job_id)
     last_event_id = request.headers.get("last-event-id")
+    if last_event_id is None:
+        after_version = -1
+    elif re.fullmatch(r"0|[1-9][0-9]{0,18}", last_event_id) is None:
+        raise HTTPException(status_code=400, detail="Forecast Last-Event-ID is invalid")
+    else:
+        after_version = int(last_event_id)
+    if after_version > int(job["transition_version"]):
+        raise HTTPException(status_code=409, detail="Forecast Last-Event-ID is ahead of the job")
+    principal = _principal(request)
+    hub = _hub(request)
+    try:
+        queue = hub.subscribe(principal=principal, job_id=job_id)
+    except ForecastSubscriptionCapacityError as error:
+        raise HTTPException(
+            status_code=429,
+            detail={"code": "forecast_subscription_capacity", "retryable": True},
+        ) from error
     return StreamingResponse(
-        _event_stream(request, job_id=job_id, last_event_id=last_event_id),
+        _event_stream(
+            request,
+            job_id=job_id,
+            principal=principal,
+            after_version=after_version,
+            queue=queue,
+        ),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 
 @router.post("/testing/terminal-jobs", status_code=status.HTTP_201_CREATED)
-def create_terminal_job(
-    payload: TerminalJobRequest, request: Request
-) -> dict[str, object]:
+def create_terminal_job(payload: TerminalJobRequest, request: Request) -> dict[str, object]:
     if os.environ.get("PHASE1_FIXTURE_MODE", "").strip().lower() not in {"1", "true", "yes"}:
         raise HTTPException(status_code=404, detail="Forecast resource not found")
     canonical = _require_instrument(request, payload.instrument)
     repository = _repository(request)
-    fingerprint = __import__("hashlib").sha256(
-        json.dumps(
-            {"instrument": canonical, "terminal": payload.terminal, "nonce": uuid4().hex},
-            sort_keys=True,
-        ).encode()
-    ).hexdigest()
+    fingerprint = (
+        __import__("hashlib")
+        .sha256(
+            json.dumps(
+                {"instrument": canonical, "terminal": payload.terminal, "nonce": uuid4().hex},
+                sort_keys=True,
+            ).encode()
+        )
+        .hexdigest()
+    )
     job = repository.create_or_get_active_job(
         principal=_principal(request),
         instrument_id=canonical,
@@ -316,31 +420,45 @@ def create_terminal_job(
 
 
 async def _event_stream(
-    request: Request, *, job_id: str, last_event_id: str | None
+    request: Request,
+    *,
+    job_id: str,
+    principal: str,
+    after_version: int,
+    queue: deque[dict[str, str]],
 ) -> AsyncIterator[str]:
-    del last_event_id
     hub = _hub(request)
-    queue = hub.subscribe(job_id)
-    sequence = 0
-    last_payload: dict[str, str] | None = None
+    repository = _repository(request)
     try:
         for _poll in range(120):
             if await request.is_disconnected():
                 return
-            persisted = _owned_job(request, job_id)
-            event = projections.progress(persisted)
-            if queue:
-                event = queue.popleft()
-            if event != last_payload:
-                sequence += 1
-                last_payload = event
-                yield _sse("forecast_progress", event, event_id=str(sequence))
-            if event["status"] in _TERMINAL:
-                yield _sse("done", event, event_id=str(sequence + 1))
+            transitions = repository.job_transitions_after(
+                job_id, after_version=after_version, limit=128
+            )
+            for persisted in transitions:
+                version = int(persisted["transition_version"])
+                if version <= after_version:
+                    continue
+                event = projections.progress(persisted)
+                event_name = "done" if event["status"] in _TERMINAL else "forecast_progress"
+                yield _sse(event_name, event, event_id=str(version))
+                after_version = version
+                if event_name == "done":
+                    return
+            while queue:
+                wake = queue.popleft()
+                if wake.get("stage") == "transport_overflow":
+                    return
+            current = _owned_job(request, job_id)
+            if (
+                int(current["transition_version"]) <= after_version
+                and projections.progress(current)["status"] in _TERMINAL
+            ):
                 return
             await asyncio.sleep(0.25)
     finally:
-        hub.unsubscribe(job_id, queue)
+        hub.unsubscribe(principal=principal, job_id=job_id, queue=queue)
 
 
 def _sse(event: str, payload: Mapping[str, str], *, event_id: str) -> str:
@@ -387,8 +505,12 @@ def _module_status(request: Request, *, available: bool | None = None) -> dict[s
     return {
         "available": is_available,
         "code": "forecast_available" if is_available else "forecast_unavailable",
-        "reason": "forecast optional capability is available" if is_available else "forecast optional capability is unavailable",
-        "install_hint": "forecast optional capability is enabled" if is_available else "enable the forecast optional deployment capability",
+        "reason": "forecast optional capability is available"
+        if is_available
+        else "forecast optional capability is unavailable",
+        "install_hint": "forecast optional capability is enabled"
+        if is_available
+        else "enable the forecast optional deployment capability",
     }
 
 

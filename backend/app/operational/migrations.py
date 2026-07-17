@@ -1308,6 +1308,71 @@ MIGRATIONS: tuple[str, ...] = (
     BEFORE DELETE ON shadow_evaluation_attempts
     BEGIN SELECT RAISE(ABORT, 'phase 05 facts are immutable'); END;
     """,
+    """
+    CREATE TABLE forecast_maturity_cursor (
+        cursor_name TEXT PRIMARY KEY CHECK (cursor_name = 'forecast-maturity'),
+        cursor_created_at TEXT NOT NULL,
+        cursor_forecast_id TEXT NOT NULL,
+        cursor_horizon INTEGER NOT NULL CHECK (cursor_horizon IN (0, 5, 20, 60)),
+        lease_owner TEXT,
+        lease_until TEXT,
+        transition_version INTEGER NOT NULL CHECK (transition_version >= 0),
+        updated_at TEXT NOT NULL,
+        CHECK ((lease_owner IS NULL) = (lease_until IS NULL)),
+        CHECK (
+            (cursor_created_at = '' AND cursor_forecast_id = '' AND cursor_horizon = 0)
+            OR (cursor_created_at != '' AND cursor_forecast_id != '' AND cursor_horizon != 0)
+        )
+    );
+    INSERT INTO forecast_maturity_cursor
+        (cursor_name, cursor_created_at, cursor_forecast_id, cursor_horizon,
+         lease_owner, lease_until, transition_version, updated_at)
+    VALUES ('forecast-maturity', '', '', 0, NULL, NULL, 0, '');
+
+    CREATE TABLE forecast_job_transitions (
+        job_id TEXT NOT NULL REFERENCES forecast_jobs(id) ON DELETE RESTRICT,
+        transition_version INTEGER NOT NULL CHECK (transition_version >= 0),
+        status TEXT NOT NULL CHECK (status IN (
+            'queued', 'running', 'completed', 'validation_failed', 'model_unavailable',
+            'artifact_failed', 'timed_out', 'resource_limited', 'interrupted'
+        )),
+        terminal_reason TEXT,
+        recorded_at TEXT NOT NULL,
+        PRIMARY KEY(job_id, transition_version)
+    );
+    INSERT INTO forecast_job_transitions
+        (job_id, transition_version, status, terminal_reason, recorded_at)
+    SELECT id, transition_version, status, terminal_reason, updated_at
+    FROM forecast_jobs;
+    CREATE INDEX idx_forecast_job_transitions_resume
+        ON forecast_job_transitions(job_id, transition_version);
+
+    CREATE TRIGGER forecast_maturity_cursor_guarded_update
+    BEFORE UPDATE ON forecast_maturity_cursor
+    WHEN NEW.cursor_name IS NOT OLD.cursor_name
+      OR NEW.transition_version != OLD.transition_version + 1
+      OR NEW.updated_at < OLD.updated_at
+      OR ((NEW.lease_owner IS NULL) != (NEW.lease_until IS NULL))
+      OR (
+          NOT (
+              NEW.cursor_created_at = ''
+              AND NEW.cursor_forecast_id = ''
+              AND NEW.cursor_horizon = 0
+          )
+          AND (NEW.cursor_created_at, NEW.cursor_forecast_id, NEW.cursor_horizon)
+              < (OLD.cursor_created_at, OLD.cursor_forecast_id, OLD.cursor_horizon)
+      )
+    BEGIN SELECT RAISE(ABORT, 'forecast maturity cursor must advance monotonically'); END;
+    CREATE TRIGGER forecast_maturity_cursor_no_delete
+    BEFORE DELETE ON forecast_maturity_cursor
+    BEGIN SELECT RAISE(ABORT, 'forecast maturity cursor is durable'); END;
+    CREATE TRIGGER forecast_job_transitions_no_update
+    BEFORE UPDATE ON forecast_job_transitions
+    BEGIN SELECT RAISE(ABORT, 'forecast job transitions are immutable'); END;
+    CREATE TRIGGER forecast_job_transitions_no_delete
+    BEFORE DELETE ON forecast_job_transitions
+    BEGIN SELECT RAISE(ABORT, 'forecast job transitions are immutable'); END;
+    """,
 )
 
 
@@ -1328,9 +1393,7 @@ def _migration_statements(script: str) -> tuple[str, ...]:
 
 def _foreign_keys_directive(statement: str) -> bool | None:
     """Return an explicit foreign-key setting, ignoring leading line comments."""
-    sql = "\n".join(
-        line for line in statement.splitlines() if not line.lstrip().startswith("--")
-    )
+    sql = "\n".join(line for line in statement.splitlines() if not line.lstrip().startswith("--"))
     normalized = "".join(sql.strip().rstrip(";").casefold().split())
     if normalized == "pragmaforeign_keys=off":
         return False
@@ -1355,9 +1418,7 @@ def migrate_operational_db(connection: sqlite3.Connection) -> None:
             "PRAGMA foreign_keys = OFF" if disable_foreign_keys else "PRAGMA foreign_keys = ON"
         )
         transactional_sql = "\n".join(
-            statement
-            for statement in statements
-            if _foreign_keys_directive(statement) is None
+            statement for statement in statements if _foreign_keys_directive(statement) is None
         )
         transactional_sql = (
             f"BEGIN;\n{transactional_sql}\nPRAGMA user_version = {version};\nCOMMIT;"

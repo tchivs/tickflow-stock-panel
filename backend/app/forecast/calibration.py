@@ -1,12 +1,15 @@
 """Restart-safe append-only Forecast maturity and calibration scanner."""
+
 from __future__ import annotations
 
-from collections.abc import Mapping
-from hashlib import sha256
 import json
 import math
+import re
+from collections.abc import Mapping
+from datetime import datetime
+from hashlib import sha256
 from typing import Any
-
+from uuid import uuid4
 
 _HORIZONS = (5, 20, 60)
 
@@ -38,7 +41,11 @@ class ForecastMaturityScanner:
             or not 1 <= max_items_per_scan <= 256
         ):
             raise ValueError("Forecast maturity batch size must be between 1 and 256")
-        if not isinstance(metric_schema, str) or not metric_schema.strip() or len(metric_schema) > 128:
+        if (
+            not isinstance(metric_schema, str)
+            or not metric_schema.strip()
+            or len(metric_schema) > 128
+        ):
             raise ValueError("Forecast calibration metric schema is invalid")
         self.repository = repository
         self.actuals = actuals
@@ -48,9 +55,7 @@ class ForecastMaturityScanner:
         self.action_collaborators = dict(action_collaborators or {})
         self.interrupt_at: str | None = None
 
-    def evaluate(
-        self, *, forecast_id: str, horizon: int, as_of_session_id: str
-    ) -> dict[str, Any]:
+    def evaluate(self, *, forecast_id: str, horizon: int, as_of_session_id: str) -> dict[str, Any]:
         if horizon not in _HORIZONS:
             raise ValueError("Forecast maturity horizon is invalid")
         canonical = self.repository.outcome_for_horizon(forecast_id, horizon)
@@ -82,12 +87,12 @@ class ForecastMaturityScanner:
         close = self._finite_close(actual)
         quantiles = self._quantiles(record, horizon)
         if close is None:
-            status = "unevaluable"
-            reason = "missing_actual"
-            actual_fingerprint = None
-            close_mae = None
-            covered = None
-            losses = (None, None, None)
+            return {
+                "status": "missing_actual",
+                "forecast_id": forecast_id,
+                "horizon": horizon,
+                "actual_session_id": target_session,
+            }
         elif quantiles is None:
             status = "unevaluable"
             reason = "missing_quantiles"
@@ -127,21 +132,35 @@ class ForecastMaturityScanner:
         )
 
     def scan(self, *, as_of_session_id: str) -> list[dict[str, Any]]:
+        owner = f"maturity-{uuid4().hex}"
+        candidates = self.repository.acquire_maturity_page(
+            owner=owner,
+            ttl_seconds=30,
+            limit=self.max_items_per_scan,
+        )
+        if not candidates:
+            return []
         results: list[dict[str, Any]] = []
-        for record in self.repository.list_forecasts():
-            for horizon in _HORIZONS:
-                if horizon > int(record["horizon"]):
-                    continue
-                if len(results) >= self.max_items_per_scan:
-                    return results
-                results.append(
-                    self.evaluate(
-                        forecast_id=str(record["id"]),
-                        horizon=horizon,
-                        as_of_session_id=as_of_session_id,
-                    )
+        try:
+            for record in candidates:
+                forecast_id = str(record["id"])
+                horizon = int(record["maturity_horizon"])
+                result = self.evaluate(
+                    forecast_id=forecast_id,
+                    horizon=horizon,
+                    as_of_session_id=as_of_session_id,
                 )
-        return results
+                results.append(result)
+                if not self.repository.advance_maturity_cursor(
+                    owner=owner,
+                    created_at=str(record["created_at"]),
+                    forecast_id=forecast_id,
+                    horizon=horizon,
+                ):
+                    raise RuntimeError("Forecast maturity cursor lost its lease")
+            return results
+        finally:
+            self.repository.release_maturity_page(owner=owner)
 
     def restart_scan(self, *, as_of_session_id: str) -> list[dict[str, Any]]:
         self.repository.expire_maturity_leases(now=self.repository.now())
@@ -155,10 +174,34 @@ class ForecastMaturityScanner:
             raise ValueError("Forecast maturity as-of session is invalid")
         try:
             target_index = future_sessions.index(target_session)
-            as_of_index = future_sessions.index(as_of_session_id)
         except ValueError:
             return False
-        return as_of_index >= target_index
+        try:
+            return future_sessions.index(as_of_session_id) >= target_index
+        except ValueError:
+            pass
+
+        target_sequence = ForecastMaturityScanner._external_sequence(target_session)
+        as_of_sequence = ForecastMaturityScanner._external_sequence(as_of_session_id)
+        return (
+            target_sequence is not None
+            and as_of_sequence is not None
+            and as_of_sequence >= target_sequence
+        )
+
+    @staticmethod
+    def _external_sequence(session_id: str) -> tuple[str, int] | None:
+        governed = re.fullmatch(r"CNA-([0-9]{8})", session_id)
+        if governed is not None:
+            try:
+                value = datetime.strptime(governed.group(1), "%Y%m%d").date().toordinal()
+            except ValueError:
+                return None
+            return ("cn-a-date", value)
+        synthetic = re.fullmatch(r"CNA-FUTURE-([0-9]+)", session_id)
+        if synthetic is not None:
+            return ("frozen-fixture-sequence", int(synthetic.group(1)))
+        return None
 
     @staticmethod
     def _finite_close(actual: object) -> float | None:
@@ -187,9 +230,7 @@ class ForecastMaturityScanner:
         return quantiles  # type: ignore[return-value]
 
     @staticmethod
-    def _actual_fingerprint(
-        record: Mapping[str, object], session_id: str, close: float
-    ) -> str:
+    def _actual_fingerprint(record: Mapping[str, object], session_id: str, close: float) -> str:
         return sha256(
             _canonical_json(
                 {

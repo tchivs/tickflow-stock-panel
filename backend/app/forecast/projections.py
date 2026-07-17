@@ -1,9 +1,8 @@
 """Deny-by-default public projections for immutable Forecast state."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any
-
 
 _PUBLIC_STATUS = {
     "timed_out": "timeout",
@@ -120,8 +119,7 @@ def record(value: Mapping[str, object]) -> dict[str, object]:
         "tokenizer_digest_sha256": str(value["tokenizer_digest_sha256"]),
         "paths_checksum_sha256": str(value["paths_checksum_sha256"]),
         "validation_warnings": [
-            str(item) for item in value.get("validation_warnings", [])
-            if isinstance(item, str)
+            str(item) for item in value.get("validation_warnings", []) if isinstance(item, str)
         ],
         "created_at": str(value["created_at"]),
     }
@@ -212,19 +210,26 @@ def path_page(
     rows: Sequence[Mapping[str, object]], *, offset: int, limit: int, total: int
 ) -> dict[str, object]:
     items: list[dict[str, object]] = []
-    for row in rows[:limit]:
+    path_indexes: set[int] = set()
+    for row in rows:
         projected: dict[str, object] = {}
         for key in ("path_index", "session_id", "feature", "value", "warning_code"):
             item = row.get(key)
             if isinstance(item, (str, int, float)) and not isinstance(item, bool):
                 projected[key] = item
+        path_index = projected.get("path_index")
+        if not isinstance(path_index, int):
+            raise ValueError("Forecast path point has no path identity")
+        path_indexes.add(path_index)
         items.append(projected)
+    if len(path_indexes) > limit:
+        raise ValueError("Forecast path page exceeds its declared path limit")
     return {
         "items": items,
         "offset": offset,
         "limit": limit,
         "total": total,
-        "has_more": offset + len(items) < total,
+        "has_more": offset + len(path_indexes) < total,
     }
 
 

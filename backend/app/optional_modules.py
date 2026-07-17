@@ -1,15 +1,16 @@
 """Independent lazy lifecycle host for optional Phase 05 capabilities."""
+
 from __future__ import annotations
 
 import importlib.util
 import re
 import sqlite3
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from enum import Enum
-from hashlib import sha256
 from pathlib import Path
-from typing import Any, Callable, Mapping, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from fastapi import APIRouter, Request
 
@@ -38,9 +39,7 @@ class OptionalModuleName(str, Enum):
 class OptionalModuleProbe:
     """Lightweight deployment probe value used without importing optional packages."""
 
-    def __init__(
-        self, *, available: bool, code: str, reason: str, install_hint: str
-    ) -> None:
+    def __init__(self, *, available: bool, code: str, reason: str, install_hint: str) -> None:
         self.available = available
         self.code = code
         self.reason = reason
@@ -84,8 +83,7 @@ def _default_probe(name: str) -> OptionalModuleProbe:
 
 
 OPTIONAL_MODULE_PROBES: Mapping[str, Callable[[], OptionalModuleProbe]] = {
-    name: (lambda module=name: _default_probe(module))
-    for name in ("shadow", "thesis", "forecast")
+    name: (lambda module=name: _default_probe(module)) for name in ("shadow", "thesis", "forecast")
 }
 OPTIONAL_MODULE_TEST_FAILURES: Mapping[str, str | None] = {
     "init": None,
@@ -148,7 +146,8 @@ class OptionalModuleStatus:
             available=False,
             code=code or f"{module.value}_unavailable",
             reason=reason or f"{module.value} optional capability is unavailable",
-            install_hint=install_hint or f"enable the {module.value} optional deployment capability",
+            install_hint=install_hint
+            or f"enable the {module.value} optional deployment capability",
         )
 
     def as_dict(self) -> dict[str, object]:
@@ -191,36 +190,6 @@ class _RuntimeBundle:
     scanner: object | None = None
     request_service: object | None = None
     path_reader: object | None = None
-
-
-
-
-
-
-class _ForecastPathReader:
-    def __init__(self, root: Path) -> None:
-        self.root = root.resolve()
-
-    def read_page(
-        self, *, record: Mapping[str, object], offset: int, limit: int
-    ) -> tuple[list[dict[str, object]], int]:
-        descriptor = record.get("output_artifact_descriptor")
-        if not isinstance(descriptor, Mapping):
-            raise ValueError("Forecast output descriptor is unavailable")
-        relative = descriptor.get("relative_path")
-        checksum = descriptor.get("checksum_sha256")
-        if not isinstance(relative, str) or not isinstance(checksum, str):
-            raise ValueError("Forecast output descriptor is invalid")
-        candidate = (self.root / relative).resolve()
-        if candidate != self.root and self.root not in candidate.parents:
-            raise ValueError("Forecast output artifact escapes its managed root")
-        payload = candidate.read_bytes()
-        if sha256(payload).hexdigest() != checksum:
-            raise ValueError("Forecast output artifact checksum mismatch")
-        import polars as pl
-
-        frame = pl.read_parquet(candidate)
-        return frame.slice(offset, limit).to_dicts(), frame.height
 
 
 class _ConcreteFactory:
@@ -347,6 +316,7 @@ class _ConcreteFactory:
     def _create_forecast(services: OptionalModuleServices) -> _RuntimeBundle:
         from functools import partial
 
+        from app.forecast.artifacts import ForecastPathReader
         from app.forecast.calibration import ForecastMaturityScanner
         from app.forecast.input import ForecastInputFreezer
         from app.forecast.repository import ForecastRepository
@@ -369,9 +339,7 @@ class _ConcreteFactory:
         input_root = Path(components.get("input_root", services.data_root / "forecast-inputs"))
         output_root = Path(components.get("output_root", services.data_root / "forecast-outputs"))
         output_root.mkdir(parents=True, exist_ok=True)
-        repository = ForecastRepository(
-            services.database_path, artifact_root=output_root
-        )
+        repository = ForecastRepository(services.database_path, artifact_root=output_root)
         repository.migrate()
         input_repository = components.get("input_repository")
         if input_repository is None:
@@ -451,7 +419,7 @@ class _ConcreteFactory:
             service=request_service,
             scanner=scanner,
             request_service=request_service,
-            path_reader=_ForecastPathReader(output_root),
+            path_reader=ForecastPathReader(output_root),
         )
 
     def close(self, service: object) -> None:
@@ -601,9 +569,7 @@ class OptionalModuleHost:
         self._statuses.clear()
 
     @staticmethod
-    def _validated_status(
-        name: OptionalModuleName, status: object
-    ) -> OptionalModuleStatus:
+    def _validated_status(name: OptionalModuleName, status: object) -> OptionalModuleStatus:
         if not isinstance(status, OptionalModuleStatus):
             return OptionalModuleStatus.unavailable(
                 name,
@@ -664,9 +630,7 @@ def optional_module_capabilities(request: Request) -> dict[str, object]:
                 for name in OptionalModuleName
             }
         }
-    return {
-        "modules": {name.value: host.status(name).as_dict() for name in OptionalModuleName}
-    }
+    return {"modules": {name.value: host.status(name).as_dict() for name in OptionalModuleName}}
 
 
 class _AuthenticatedInstrumentScope:
@@ -729,9 +693,7 @@ def install_optional_module_host(app: Any, host: OptionalModuleHost) -> None:
                     revalidate=forecast.request_service.revalidate
                 )
             except Exception:
-                host.mark_unavailable(
-                    OptionalModuleName.FORECAST, code="forecast_recovery_failed"
-                )
+                host.mark_unavailable(OptionalModuleName.FORECAST, code="forecast_recovery_failed")
                 _clear_module_state(app, OptionalModuleName.FORECAST)
 
     for name in (OptionalModuleName.THESIS, OptionalModuleName.FORECAST):
@@ -784,9 +746,7 @@ def _register_scanner(
         )
         job_id = "phase5_thesis_due_scan"
     else:
-        callback = lambda: bundle.scanner.scan(
-            as_of_session_id=_forecast_as_of(bundle.repository)
-        )
+        callback = lambda: bundle.scanner.scan(as_of_session_id=_forecast_as_of(bundle.repository))
         job_id = "phase5_forecast_maturity_scan"
     scheduler.add_job(
         callback,
@@ -807,9 +767,7 @@ def _forecast_as_of(repository: object) -> str:
     return str(sessions[-1]) if sessions else "no-governed-session"
 
 
-def _publish_module_status(
-    app: Any, host: OptionalModuleHost, name: OptionalModuleName
-) -> None:
+def _publish_module_status(app: Any, host: OptionalModuleHost, name: OptionalModuleName) -> None:
     setattr(app.state, f"{name.value}_module_status", host.status(name))
 
 

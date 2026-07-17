@@ -1,22 +1,22 @@
 """Durable single-flight state and immutable Forecast record persistence."""
+
 from __future__ import annotations
 
-from copy import deepcopy
-from hashlib import sha256
 import json
-import re
 import math
+import re
 import shutil
 import sqlite3
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
+from copy import deepcopy
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
-from pathlib import PurePosixPath
-from typing import Any, Callable, Iterator, Mapping, Sequence
+from hashlib import sha256
+from pathlib import Path, PurePosixPath
+from typing import Any
 from uuid import uuid4
 
 from app.operational.migrations import migrate_operational_db
-
 
 _ACTIVE_STATUSES = frozenset({"queued", "running"})
 _TERMINAL_STATUSES = frozenset(
@@ -145,8 +145,6 @@ def _validated_input_descriptor(value: object) -> dict[str, object]:
     }
 
 
-
-
 class ForecastRepository:
     """Short-lived SQLite transactions for the Forecast job and record ledger."""
 
@@ -195,6 +193,23 @@ class ForecastRepository:
     def now(self) -> str:
         return _timestamp(_as_utc(self._clock()))
 
+    @staticmethod
+    def _append_job_transition(connection: sqlite3.Connection, row: sqlite3.Row | None) -> None:
+        if row is None:
+            raise RuntimeError("forecast job transition row is unavailable")
+        connection.execute(
+            """INSERT INTO forecast_job_transitions
+               (job_id, transition_version, status, terminal_reason, recorded_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            (
+                row["id"],
+                int(row["transition_version"]),
+                row["status"],
+                row["terminal_reason"],
+                row["updated_at"],
+            ),
+        )
+
     def create_or_get_active_job(
         self,
         *,
@@ -208,7 +223,10 @@ class ForecastRepository:
         """Return the canonical request identity, whether active or terminal."""
         if horizon not in {5, 20, 60}:
             raise ValueError("forecast horizon is invalid")
-        if not all(isinstance(value, str) and value for value in (principal, instrument_id, catalog_id, idempotency_key)):
+        if not all(
+            isinstance(value, str) and value
+            for value in (principal, instrument_id, catalog_id, idempotency_key)
+        ):
             raise ValueError("forecast request identity is invalid")
         if not _SHA256.fullmatch(input_fingerprint):
             raise ValueError("forecast input fingerprint is invalid")
@@ -252,7 +270,10 @@ class ForecastRepository:
                 if existing is not None:
                     return dict(existing)
                 raise ValueError("forecast job identity conflicts") from error
-            row = connection.execute("SELECT * FROM forecast_jobs WHERE id = ?", (identifier,)).fetchone()
+            row = connection.execute(
+                "SELECT * FROM forecast_jobs WHERE id = ?", (identifier,)
+            ).fetchone()
+            self._append_job_transition(connection, row)
         assert row is not None
         return dict(row)
 
@@ -262,7 +283,9 @@ class ForecastRepository:
             raise ValueError("forecast retry identity is invalid")
         now = self.now()
         with self._immediate() as connection:
-            source = connection.execute("SELECT * FROM forecast_jobs WHERE id = ?", (source_job_id,)).fetchone()
+            source = connection.execute(
+                "SELECT * FROM forecast_jobs WHERE id = ?", (source_job_id,)
+            ).fetchone()
             if source is None:
                 raise ValueError("forecast retry source does not exist")
             if source["status"] not in _TERMINAL_STATUSES:
@@ -304,7 +327,10 @@ class ForecastRepository:
                     now,
                 ),
             )
-            row = connection.execute("SELECT * FROM forecast_jobs WHERE id = ?", (identifier,)).fetchone()
+            row = connection.execute(
+                "SELECT * FROM forecast_jobs WHERE id = ?", (identifier,)
+            ).fetchone()
+            self._append_job_transition(connection, row)
         assert row is not None
         return dict(row)
 
@@ -375,7 +401,10 @@ class ForecastRepository:
             ).rowcount
             if changed != 1:
                 raise ValueError("forecast job has a stale state or version")
-            row = connection.execute("SELECT * FROM forecast_jobs WHERE id = ?", (job_id,)).fetchone()
+            row = connection.execute(
+                "SELECT * FROM forecast_jobs WHERE id = ?", (job_id,)
+            ).fetchone()
+            self._append_job_transition(connection, row)
         assert row is not None
         return dict(row)
 
@@ -402,7 +431,10 @@ class ForecastRepository:
             ).rowcount
             if changed != 1:
                 raise ValueError("forecast job owner, lease, or version is stale")
-            row = connection.execute("SELECT * FROM forecast_jobs WHERE id = ?", (job_id,)).fetchone()
+            row = connection.execute(
+                "SELECT * FROM forecast_jobs WHERE id = ?", (job_id,)
+            ).fetchone()
+            self._append_job_transition(connection, row)
         assert row is not None
         return dict(row)
 
@@ -429,7 +461,9 @@ class ForecastRepository:
                 new_status,
                 expected_version + 1,
                 None if terminal else lease_owner,
-                None if terminal else connection.execute(
+                None
+                if terminal
+                else connection.execute(
                     "SELECT lease_until FROM forecast_jobs WHERE id = ?", (job_id,)
                 ).fetchone()[0],
                 safe_reason,
@@ -448,8 +482,13 @@ class ForecastRepository:
                 parameters,
             ).rowcount
             if changed != 1:
-                raise ValueError("forecast job transition rejected by stale state, version, or owner")
-            row = connection.execute("SELECT * FROM forecast_jobs WHERE id = ?", (job_id,)).fetchone()
+                raise ValueError(
+                    "forecast job transition rejected by stale state, version, or owner"
+                )
+            row = connection.execute(
+                "SELECT * FROM forecast_jobs WHERE id = ?", (job_id,)
+            ).fetchone()
+            self._append_job_transition(connection, row)
         assert row is not None
         return dict(row)
 
@@ -483,9 +522,7 @@ class ForecastRepository:
                 else:
                     candidate.unlink(missing_ok=True)
 
-    def bind_commit_identity(
-        self, *, job_id: str, immutable_record: Mapping[str, object]
-    ) -> None:
+    def bind_commit_identity(self, *, job_id: str, immutable_record: Mapping[str, object]) -> None:
         """Bind the server-selected catalog/input identity before child execution."""
         job = self.get_job(job_id)
         if job is None:
@@ -607,6 +644,10 @@ class ForecastRepository:
             ).rowcount
             if changed != 1:
                 raise ValueError("forecast commit lost its state transition")
+            transition = connection.execute(
+                "SELECT * FROM forecast_jobs WHERE id = ?", (job_id,)
+            ).fetchone()
+            self._append_job_transition(connection, transition)
             canonical = connection.execute(
                 "SELECT * FROM forecast_records WHERE id = ?", (record_id,)
             ).fetchone()
@@ -651,18 +692,22 @@ class ForecastRepository:
         horizon = _strict_int(value["horizon"], "horizon", minimum=1, maximum=60)
         if horizon not in {5, 20, 60} or horizon != int(job["horizon"]):
             raise ValueError("forecast record horizon does not match its job")
-        sample_count = _strict_int(
-            value["sample_count"], "sample count", minimum=32, maximum=32
-        )
+        sample_count = _strict_int(value["sample_count"], "sample count", minimum=32, maximum=32)
         lookback = _strict_int(value["lookback"], "lookback", minimum=1, maximum=4096)
         seed = _strict_int(value["seed"], "seed", minimum=0, maximum=2**63 - 1)
         top_k = _strict_int(value["top_k"], "top-k", minimum=1, maximum=4096)
         temperature = _strict_float(
-            value["temperature"], "temperature", minimum=0.0, maximum=10.0,
+            value["temperature"],
+            "temperature",
+            minimum=0.0,
+            maximum=10.0,
             exclusive_minimum=True,
         )
         top_p = _strict_float(
-            value["top_p"], "top-p", minimum=0.0, maximum=1.0,
+            value["top_p"],
+            "top-p",
+            minimum=0.0,
+            maximum=1.0,
             exclusive_minimum=True,
         )
         instrument = _nonempty_text(value["instrument_id"], "instrument")
@@ -826,7 +871,11 @@ class ForecastRepository:
                         reason="restart_revalidation_failed",
                     )
                     outcomes.append(
-                        {"job_id": job["id"], "action": "terminalized", "status": "validation_failed"}
+                        {
+                            "job_id": job["id"],
+                            "action": "terminalized",
+                            "status": "validation_failed",
+                        }
                     )
             elif status == "running" and (
                 not job["lease_until"] or _as_utc(job["lease_until"]) <= observed
@@ -839,27 +888,65 @@ class ForecastRepository:
                     status="interrupted",
                     reason="restart_expired_lease",
                 )
-                outcomes.append({"job_id": job["id"], "action": "terminalized", "status": "interrupted"})
+                outcomes.append(
+                    {"job_id": job["id"], "action": "terminalized", "status": "interrupted"}
+                )
         return outcomes
 
     def get_job(self, job_id: str) -> dict[str, Any] | None:
         with self.connection() as connection:
-            row = connection.execute("SELECT * FROM forecast_jobs WHERE id = ?", (job_id,)).fetchone()
+            row = connection.execute(
+                "SELECT * FROM forecast_jobs WHERE id = ?", (job_id,)
+            ).fetchone()
         return None if row is None else dict(row)
+
+    def job_transitions_after(
+        self, job_id: str, *, after_version: int, limit: int = 128
+    ) -> list[dict[str, Any]]:
+        if (
+            not isinstance(job_id, str)
+            or not job_id
+            or isinstance(after_version, bool)
+            or not isinstance(after_version, int)
+            or after_version < -1
+            or isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or not 1 <= limit <= 256
+        ):
+            raise ValueError("forecast transition resume request is invalid")
+        with self.connection() as connection:
+            rows = connection.execute(
+                """SELECT j.id, t.job_id, j.instrument_id, j.horizon, j.catalog_id,
+                          j.attempt, j.created_at, t.status, t.transition_version,
+                          t.terminal_reason, t.recorded_at AS updated_at
+                   FROM forecast_job_transitions AS t
+                   JOIN forecast_jobs AS j ON j.id = t.job_id
+                   WHERE t.job_id = ? AND t.transition_version > ?
+                   ORDER BY t.transition_version
+                   LIMIT ?""",
+                (job_id, after_version, limit),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def list_jobs(self) -> list[dict[str, Any]]:
         with self.connection() as connection:
-            rows = connection.execute("SELECT * FROM forecast_jobs ORDER BY created_at, id").fetchall()
+            rows = connection.execute(
+                "SELECT * FROM forecast_jobs ORDER BY created_at, id"
+            ).fetchall()
         return [dict(row) for row in rows]
 
     def forecast_for_job(self, job_id: str) -> dict[str, Any] | None:
         with self.connection() as connection:
-            row = connection.execute("SELECT * FROM forecast_records WHERE job_id = ?", (job_id,)).fetchone()
+            row = connection.execute(
+                "SELECT * FROM forecast_records WHERE job_id = ?", (job_id,)
+            ).fetchone()
         return None if row is None else self._record_row(row)
 
     def list_forecasts(self) -> list[dict[str, Any]]:
         with self.connection() as connection:
-            rows = connection.execute("SELECT * FROM forecast_records ORDER BY created_at, id").fetchall()
+            rows = connection.execute(
+                "SELECT * FROM forecast_records ORDER BY created_at, id"
+            ).fetchall()
         return [self._record_row(row) for row in rows]
 
     def get_forecast(self, forecast_id: str) -> dict[str, Any] | None:
@@ -954,12 +1041,17 @@ class ForecastRepository:
             ).fetchone()
             if existing is not None:
                 return self._outcome_row(existing)
-            if connection.execute(
-                "SELECT 1 FROM forecast_records WHERE id = ?", (forecast_id,)
-            ).fetchone() is None:
+            if (
+                connection.execute(
+                    "SELECT 1 FROM forecast_records WHERE id = ?", (forecast_id,)
+                ).fetchone()
+                is None
+            ):
                 raise ValueError("forecast record does not exist")
             outcome_id = str(uuid4())
-            outcome_values = None if actual_close is None else _canonical_json({"close": actual_close})
+            outcome_values = (
+                None if actual_close is None else _canonical_json({"close": actual_close})
+            )
             connection.execute(
                 """INSERT INTO forecast_outcomes
                    (id, forecast_id, horizon, status, actual_session_id, actual_value_json,
@@ -1027,10 +1119,165 @@ class ForecastRepository:
             "coverage_end": row["coverage_end"],
         }
 
+    def acquire_maturity_page(
+        self, *, owner: str, ttl_seconds: int, limit: int
+    ) -> list[dict[str, Any]]:
+        """Lease one stable pending keyset page without advancing past unprocessed work."""
+        if (
+            not isinstance(owner, str)
+            or not owner
+            or isinstance(ttl_seconds, bool)
+            or not isinstance(ttl_seconds, int)
+            or not 1 <= ttl_seconds <= 3600
+            or isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or not 1 <= limit <= 256
+        ):
+            raise ValueError("forecast maturity page request is invalid")
+        now_dt = _as_utc(self._clock())
+        now = _timestamp(now_dt)
+        lease_until = _timestamp(now_dt + timedelta(seconds=ttl_seconds))
+        with self._immediate() as connection:
+            cursor = connection.execute(
+                "SELECT * FROM forecast_maturity_cursor WHERE cursor_name = 'forecast-maturity'"
+            ).fetchone()
+            if cursor is None:
+                raise RuntimeError("forecast maturity cursor is unavailable")
+            if (
+                cursor["lease_owner"] is not None
+                and cursor["lease_owner"] != owner
+                and cursor["lease_until"] > now
+            ):
+                return []
+            changed = connection.execute(
+                """UPDATE forecast_maturity_cursor
+                   SET lease_owner = ?, lease_until = ?,
+                       transition_version = transition_version + 1, updated_at = ?
+                   WHERE cursor_name = 'forecast-maturity'
+                     AND (lease_owner IS NULL OR lease_owner = ? OR lease_until <= ?)""",
+                (owner, lease_until, now, owner, now),
+            ).rowcount
+            if changed != 1:
+                return []
+            cursor = connection.execute(
+                "SELECT * FROM forecast_maturity_cursor WHERE cursor_name = 'forecast-maturity'"
+            ).fetchone()
+            assert cursor is not None
+            rows = self._pending_maturity_page(
+                connection,
+                after=(
+                    str(cursor["cursor_created_at"]),
+                    str(cursor["cursor_forecast_id"]),
+                    int(cursor["cursor_horizon"]),
+                ),
+                limit=limit,
+            )
+            if not rows and (
+                cursor["cursor_created_at"]
+                or cursor["cursor_forecast_id"]
+                or int(cursor["cursor_horizon"])
+            ):
+                connection.execute(
+                    """UPDATE forecast_maturity_cursor
+                       SET cursor_created_at = '', cursor_forecast_id = '', cursor_horizon = 0,
+                           transition_version = transition_version + 1, updated_at = ?
+                       WHERE cursor_name = 'forecast-maturity' AND lease_owner = ?""",
+                    (now, owner),
+                )
+                rows = self._pending_maturity_page(connection, after=("", "", 0), limit=limit)
+            if not rows:
+                connection.execute(
+                    """UPDATE forecast_maturity_cursor
+                       SET lease_owner = NULL, lease_until = NULL,
+                           transition_version = transition_version + 1, updated_at = ?
+                       WHERE cursor_name = 'forecast-maturity' AND lease_owner = ?""",
+                    (now, owner),
+                )
+                return []
+            return [self._record_row(row) for row in rows]
+
+    @staticmethod
+    def _pending_maturity_page(
+        connection: sqlite3.Connection,
+        *,
+        after: tuple[str, str, int],
+        limit: int,
+    ) -> list[sqlite3.Row]:
+        return connection.execute(
+            """WITH maturity_horizons(horizon) AS (
+                   SELECT 5 UNION ALL SELECT 20 UNION ALL SELECT 60
+               )
+               SELECT f.*, h.horizon AS maturity_horizon
+               FROM forecast_records AS f
+               JOIN maturity_horizons AS h ON h.horizon <= f.horizon
+               LEFT JOIN forecast_outcomes AS o
+                 ON o.forecast_id = f.id AND o.horizon = h.horizon
+               WHERE o.id IS NULL
+                 AND (f.created_at, f.id, h.horizon) > (?, ?, ?)
+               ORDER BY f.created_at, f.id, h.horizon
+               LIMIT ?""",
+            (*after, limit),
+        ).fetchall()
+
+    def advance_maturity_cursor(
+        self,
+        *,
+        owner: str,
+        created_at: str,
+        forecast_id: str,
+        horizon: int,
+    ) -> bool:
+        if not owner or not created_at or not forecast_id or horizon not in {5, 20, 60}:
+            raise ValueError("forecast maturity cursor identity is invalid")
+        now = self.now()
+        with self._immediate() as connection:
+            changed = connection.execute(
+                """UPDATE forecast_maturity_cursor
+                   SET cursor_created_at = ?, cursor_forecast_id = ?, cursor_horizon = ?,
+                       transition_version = transition_version + 1, updated_at = ?
+                   WHERE cursor_name = 'forecast-maturity' AND lease_owner = ?
+                     AND lease_until > ?
+                     AND (cursor_created_at, cursor_forecast_id, cursor_horizon) < (?, ?, ?)""",
+                (
+                    created_at,
+                    forecast_id,
+                    horizon,
+                    now,
+                    owner,
+                    now,
+                    created_at,
+                    forecast_id,
+                    horizon,
+                ),
+            ).rowcount
+        return changed == 1
+
+    def release_maturity_page(self, *, owner: str) -> bool:
+        if not owner:
+            return False
+        now = self.now()
+        with self._immediate() as connection:
+            changed = connection.execute(
+                """UPDATE forecast_maturity_cursor
+                   SET lease_owner = NULL, lease_until = NULL,
+                       transition_version = transition_version + 1, updated_at = ?
+                   WHERE cursor_name = 'forecast-maturity' AND lease_owner = ?""",
+                (now, owner),
+            ).rowcount
+        return changed == 1
+
     def expire_maturity_leases(self, *, now: str | datetime) -> int:
-        """Validate the recovery cursor time; maturity commits are lease-free and atomic."""
-        _as_utc(now)
-        return 0
+        observed = _timestamp(_as_utc(now))
+        with self._immediate() as connection:
+            changed = connection.execute(
+                """UPDATE forecast_maturity_cursor
+                   SET lease_owner = NULL, lease_until = NULL,
+                       transition_version = transition_version + 1, updated_at = ?
+                   WHERE cursor_name = 'forecast-maturity'
+                     AND lease_owner IS NOT NULL AND lease_until <= ?""",
+                (observed, observed),
+            ).rowcount
+        return int(changed)
 
     def insert_fixture_forecast(self, payload: Mapping[str, object]) -> dict[str, Any]:
         """Insert one complete immutable record for focused governed-boundary tests."""
@@ -1068,6 +1315,10 @@ class ForecastRepository:
                            1, NULL, 1, NULL, NULL, NULL, ?, ?)""",
                 (job_id, instrument_id, horizon, job_id, fingerprint, created_at, created_at),
             )
+            fixture_job = connection.execute(
+                "SELECT * FROM forecast_jobs WHERE id = ?", (job_id,)
+            ).fetchone()
+            self._append_job_transition(connection, fixture_job)
             connection.execute(
                 """INSERT INTO forecast_records
                    (id, job_id, instrument_id, origin_session_id, calendar_id, calendar_revision,
@@ -1087,11 +1338,23 @@ class ForecastRepository:
                     _canonical_json(payload["future_session_ids"]),
                     fingerprint,
                     horizon,
-                    str(payload.get("checkpoint_provenance", {}).get("source_revision", "fixture-source")),
+                    str(
+                        payload.get("checkpoint_provenance", {}).get(
+                            "source_revision", "fixture-source"
+                        )
+                    ),
                     fingerprint,
-                    str(payload.get("checkpoint_provenance", {}).get("model_revision", "fixture-model")),
+                    str(
+                        payload.get("checkpoint_provenance", {}).get(
+                            "model_revision", "fixture-model"
+                        )
+                    ),
                     fingerprint,
-                    str(payload.get("checkpoint_provenance", {}).get("tokenizer_revision", "fixture-tokenizer")),
+                    str(
+                        payload.get("checkpoint_provenance", {}).get(
+                            "tokenizer_revision", "fixture-tokenizer"
+                        )
+                    ),
                     fingerprint,
                     _canonical_json(descriptor),
                     str(payload["paths_checksum_sha256"]),
@@ -1111,6 +1374,7 @@ class ForecastRepository:
         values = json.loads(raw_values) if raw_values else None
         outcome["actual_close"] = None if values is None else values.get("close")
         return outcome
+
     @staticmethod
     def _calibration_row(row: sqlite3.Row) -> dict[str, Any]:
         fact = dict(row)
