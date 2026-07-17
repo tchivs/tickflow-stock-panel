@@ -16,8 +16,10 @@ class FixedEvidenceResolver:
         self.fail = fail
         self.calls: list[dict[str, object]] = []
 
-    def resolve(self, *, condition: dict[str, object], due_at: str) -> dict[str, object]:
-        self.calls.append({"condition": condition, "due_at": due_at})
+    def resolve(
+        self, *, condition: dict[str, object], due_at: str, instrument: str | None = None
+    ) -> dict[str, object]:
+        self.calls.append({"condition": condition, "due_at": due_at, "instrument": instrument})
         if self.fail is not None:
             raise self.fail
         observed = -0.02 if self.result == "matched" else 0.04
@@ -231,7 +233,22 @@ def test_old_version_conditions_are_excluded_from_new_due_acquisition(tmp_path) 
 
     assert [check["condition_id"] for check in checks] == [second["conditions"][0]["id"]]
     assert repository.list_checks(old_condition["id"]) == []
-    assert all(call["condition"]["version_id"] == second["id"] for call in resolver.calls)
+    assert all(call["instrument"] == "600519.SH" for call in resolver.calls)
+    assert all(
+        set(call["condition"])
+        == {
+            "source_kind",
+            "field",
+            "operator",
+            "threshold",
+            "unit",
+            "lookback_days",
+            "cadence",
+            "timezone",
+            "description",
+        }
+        for call in resolver.calls
+    )
     assert repository.get_schedule(old_condition["id"])["active"] is False
 
 

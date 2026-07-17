@@ -24,8 +24,12 @@ class FixedEvidenceResolver:
         self.result = result
         self.calls: list[dict[str, object]] = []
 
-    def resolve(self, *, condition: dict[str, object], due_at: str) -> dict[str, object]:
-        self.calls.append({"condition": deepcopy(condition), "due_at": due_at})
+    def resolve(
+        self, *, condition: dict[str, object], due_at: str, instrument: str | None = None
+    ) -> dict[str, object]:
+        self.calls.append(
+            {"condition": deepcopy(condition), "due_at": due_at, "instrument": instrument}
+        )
         observed = -0.02 if self.result == "matched" else 0.04
         if self.result in {"insufficient_evidence", "error"}:
             observed = None
@@ -307,3 +311,207 @@ def test_lifecycle_invokes_zero_strategy_monitor_plan_portfolio_or_broker_action
     )
 
     assert audited.forbidden_calls == []
+
+
+def test_strict_resolver_payload_uses_condition_timezone_and_instrument_identity(tmp_path) -> None:
+    from app.theses.evidence import GovernedEvidenceResolver
+    from app.theses.repository import ThesisRepository
+    from app.theses.schemas import ThesisVersionRequest
+    from app.theses.service import ThesisService
+
+    due_at = "2026-07-01T16:00:00+00:00"
+
+    class RecordingReader:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        def __call__(
+            self, *, instrument: str, field: str, as_of: date, lookback_days: int
+        ) -> dict[str, object]:
+            self.calls.append(
+                {
+                    "instrument": instrument,
+                    "field": field,
+                    "as_of": as_of,
+                    "lookback_days": lookback_days,
+                }
+            )
+            return {
+                "observed_value": -0.02,
+                "unit": "ratio",
+                "as_of": as_of,
+                "source_id": "filing-2026q2",
+                "source_revision": "exchange-v1",
+            }
+
+    reader = RecordingReader()
+    governed = GovernedEvidenceResolver(
+        market_reader=reader,
+        financial_reader=reader,
+        analysis_reader=reader,
+    )
+
+    class CapturingResolver:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        def resolve(self, **kwargs: object) -> dict[str, object]:
+            self.calls.append(deepcopy(kwargs))
+            return governed.resolve(**kwargs)
+
+    repository = ThesisRepository(tmp_path / "operational.db", now=lambda: due_at)
+    version = repository.create_version(
+        request=ThesisVersionRequest.model_validate(_payload()),
+        created_by="principal-opaque",
+    )
+    resolver = CapturingResolver()
+    service = ThesisService(repository=repository, evidence_resolver=resolver)
+
+    outcome = service.evaluate_due_condition(
+        condition_id=version["conditions"][0]["id"], due_at=due_at
+    )
+
+    assert outcome["check"]["result"] == "matched", (outcome, resolver.calls, reader.calls)
+    assert reader.calls == [
+        {
+            "instrument": "600519.SH",
+            "field": "revenue_growth_yoy",
+            "as_of": date(2026, 7, 2),
+            "lookback_days": 120,
+        }
+    ]
+    assert resolver.calls[0]["instrument"] == "600519.SH"
+    assert set(resolver.calls[0]["condition"]) == {
+        "source_kind",
+        "field",
+        "operator",
+        "threshold",
+        "unit",
+        "lookback_days",
+        "cadence",
+        "timezone",
+        "description",
+    }
+    strict_condition = resolver.calls[0]["condition"]
+    other_instrument = governed.resolve(
+        condition=strict_condition,
+        due_at=due_at,
+        instrument="000001.SZ",
+    )
+    assert other_instrument["evidence_fingerprint"] != outcome["check"]["evidence_fingerprint"]
+
+
+def _pending_history_runtime(tmp_path):
+    from app.theses.repository import ThesisRepository
+    from app.theses.schemas import ThesisRevisionRequest, ThesisVersionRequest
+    from app.theses.service import ThesisService
+
+    repository = ThesisRepository(tmp_path / "operational.db", now=lambda: DUE_AT)
+    first = repository.create_version(
+        request=ThesisVersionRequest.model_validate(_payload()),
+        created_by="principal-opaque",
+    )
+    service = ThesisService(repository=repository, evidence_resolver=FixedEvidenceResolver())
+    first_pending = service.evaluate_due_condition(
+        condition_id=first["conditions"][0]["id"], due_at="2026-07-01T00:00:00+00:00"
+    )["pending"]
+
+    def revise(predecessor: dict[str, object], label: str) -> dict[str, object]:
+        request = ThesisRevisionRequest.model_validate(
+            {
+                "expected_predecessor_id": predecessor["id"],
+                "change_reason": f"{label} filing",
+                "rationale": f"{label} governed evidence changed the current version.",
+            }
+        )
+        return repository.revise_version(
+            thesis_id=first["thesis_id"], request=request, created_by="principal-opaque"
+        )
+
+    second = revise(first, "Second")
+    second_pending = service.evaluate_due_condition(
+        condition_id=second["conditions"][0]["id"], due_at="2026-07-02T00:00:00+00:00"
+    )["pending"]
+    service.reject(
+        pending_id=second_pending["id"],
+        rationale="Governed evidence was reviewed but did not invalidate the thesis.",
+        reviewer_principal="reviewer-principal-opaque",
+    )
+    third = revise(second, "Third")
+    current_pending = service.evaluate_due_condition(
+        condition_id=third["conditions"][0]["id"], due_at="2026-07-03T00:00:00+00:00"
+    )["pending"]
+    return repository, service, first_pending, second_pending, current_pending
+
+
+def test_actionable_pending_contains_only_current_unreviewed_conclusions(tmp_path) -> None:
+    _repository, service, first_pending, second_pending, current_pending = _pending_history_runtime(tmp_path)
+
+    page = service.pending_for_instrument("600519.SH", offset=0, limit=10)
+
+    assert [item["id"] for item in page["items"]] == [current_pending["id"]]
+    assert page == {
+        "items": page["items"],
+        "offset": 0,
+        "limit": 10,
+        "total": 1,
+        "has_more": False,
+    }
+    assert first_pending["id"] not in {item["id"] for item in page["items"]}
+    assert second_pending["id"] not in {item["id"] for item in page["items"]}
+
+
+def test_paged_history_preserves_superseded_reviewed_and_actionable_state(tmp_path) -> None:
+    _repository, service, first_pending, second_pending, current_pending = _pending_history_runtime(tmp_path)
+
+    pages = [service.history_for_instrument("600519.SH", offset=offset, limit=1) for offset in range(3)]
+    items = [page["items"][0] for page in pages]
+    states = {item["id"]: item["state"] for item in items}
+
+    assert all(page["total"] == 3 for page in pages)
+    assert [page["has_more"] for page in pages] == [True, True, False]
+    assert states == {
+        first_pending["id"]: "superseded",
+        second_pending["id"]: "rejected",
+        current_pending["id"]: "actionable",
+    }
+
+
+def test_paged_history_executes_limit_and_offset_before_materialization(tmp_path) -> None:
+    from contextlib import contextmanager
+
+    from app.theses.repository import ThesisRepository
+    from app.theses.schemas import ThesisVersionRequest
+    from app.theses.service import ThesisService
+
+    class TracingRepository(ThesisRepository):
+        def __init__(self, *args, **kwargs) -> None:
+            self.statements: list[str] = []
+            super().__init__(*args, **kwargs)
+
+        @contextmanager
+        def _connection(self):
+            with super()._connection() as connection:
+                connection.set_trace_callback(self.statements.append)
+                yield connection
+
+    repository = TracingRepository(tmp_path / "operational.db", now=lambda: DUE_AT)
+    version = repository.create_version(
+        request=ThesisVersionRequest.model_validate(_payload()),
+        created_by="principal-opaque",
+    )
+    service = ThesisService(repository=repository, evidence_resolver=FixedEvidenceResolver())
+    condition_id = version["conditions"][0]["id"]
+    for day in range(1, 4):
+        service.evaluate_due_condition(
+            condition_id=condition_id,
+            due_at=f"2026-07-0{day}T00:00:00+00:00",
+        )
+    repository.statements.clear()
+
+    page = service.history_for_instrument("600519.SH", offset=1, limit=1)
+
+    assert len(page["items"]) == 1
+    assert page["total"] == 3
+    bounded_queries = [statement.upper() for statement in repository.statements if "THESIS_PENDING_CONCLUSIONS" in statement.upper()]
+    assert any("LIMIT 1 OFFSET 1" in statement for statement in bounded_queries)
