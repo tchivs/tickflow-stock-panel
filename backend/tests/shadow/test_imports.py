@@ -23,8 +23,8 @@ MAPPING = {
 
 
 def _stack(tmp_path):
-    from app.shadow.importer import ShadowImporter, ShadowImportLimits
     from app.shadow.artifacts import ShadowArtifactStore
+    from app.shadow.importer import ShadowImporter, ShadowImportLimits
     from app.shadow.repository import ShadowRepository
 
     repository = ShadowRepository(tmp_path / "operational.db")
@@ -50,6 +50,7 @@ def _preview(importer, fixture: str, media_type: str):
         content=path.read_bytes(),
         mapping=MAPPING,
         source_timezone="Asia/Shanghai",
+        principal="shadow-user-opaque",
     )
 
 
@@ -65,6 +66,16 @@ def _confirm(importer, fixture: str, media_type: str, **overrides):
         "source_label": "local-broker-export",
     }
     payload.update(overrides)
+    if "preview_identity" not in payload:
+        preview = importer.preview(
+            filename=payload["filename"],
+            media_type=payload["media_type"],
+            content=payload["content"],
+            mapping=payload["mapping"],
+            source_timezone=payload["source_timezone"],
+            principal=payload["principal"],
+        )
+        payload["preview_identity"] = preview["preview_identity"]
     return importer.confirm_import(**payload)
 
 
@@ -123,6 +134,143 @@ def test_preview_normalizes_gb18030_time_and_keeps_partial_and_duplicate_rows(tm
     assert rows[3]["source_row_ordinal"] != rows[4]["source_row_ordinal"]
 
 
+
+def test_preview_identity_binds_exact_transform_and_principal(tmp_path):
+    repository, _artifacts, importer = _stack(tmp_path)
+    path = FIXTURES / "executions_utf8.csv"
+    request = {
+        "filename": path.name,
+        "media_type": "text/csv",
+        "content": path.read_bytes(),
+        "mapping": MAPPING,
+        "source_timezone": "Asia/Shanghai",
+        "principal": "shadow-user-opaque",
+    }
+
+    first = importer.preview(**request)
+    replay = importer.preview(**request)
+    without_optional_mapping = importer.preview(
+        **{**request, "mapping": {key: value for key, value in MAPPING.items() if key != "fees"}}
+    )
+    other_timezone = importer.preview(**{**request, "source_timezone": "UTC"})
+    other_principal = importer.preview(**{**request, "principal": "other-shadow-user"})
+
+    assert first["preview_identity"] == replay["preview_identity"]
+    assert len(first["preview_identity"]) == 64
+    assert {
+        without_optional_mapping["preview_identity"],
+        other_timezone["preview_identity"],
+        other_principal["preview_identity"],
+    }.isdisjoint({first["preview_identity"]})
+    assert repository.list_import_batches(principal="shadow-user-opaque") == []
+
+
+def test_confirm_rejects_stale_preview_before_persistence(tmp_path):
+    from app.shadow.importer import ShadowImportError
+
+    repository, artifacts, importer = _stack(tmp_path)
+    path = FIXTURES / "executions_utf8.csv"
+    request = {
+        "filename": path.name,
+        "media_type": "text/csv",
+        "content": path.read_bytes(),
+        "mapping": MAPPING,
+        "source_timezone": "Asia/Shanghai",
+        "principal": "shadow-user-opaque",
+    }
+    identity = importer.preview(**request)["preview_identity"]
+    changed_requests = (
+        {**request, "content": request["content"] + b"\n"},
+        {**request, "mapping": {key: value for key, value in MAPPING.items() if key != "fees"}},
+        {**request, "source_timezone": "UTC"},
+    )
+
+    for changed in changed_requests:
+        with pytest.raises(ShadowImportError, match="preview identity"):
+            importer.confirm_import(
+                **changed,
+                preview_identity=identity,
+                source_label="local-broker-export",
+            )
+
+    assert repository.list_import_batches(principal="shadow-user-opaque") == []
+    assert artifacts.managed_paths() == []
+
+
+def test_exact_preview_identity_confirms_immutable_batch(tmp_path):
+    repository, _artifacts, importer = _stack(tmp_path)
+    path = FIXTURES / "executions_utf8.csv"
+    request = {
+        "filename": path.name,
+        "media_type": "text/csv",
+        "content": path.read_bytes(),
+        "mapping": MAPPING,
+        "source_timezone": "Asia/Shanghai",
+        "principal": "shadow-user-opaque",
+    }
+    identity = importer.preview(**request)["preview_identity"]
+
+    batch = importer.confirm_import(
+        **request,
+        preview_identity=identity,
+        source_label="local-broker-export",
+    )
+
+    assert repository.get_import_batch(batch["id"])["id"] == batch["id"]
+    assert repository.list_operational_mutations() == []
+
+def test_confirm_rejects_stale_preview_at_api_boundary(tmp_path):
+    from fastapi import FastAPI, Request
+    from fastapi.testclient import TestClient
+
+    from app.shadow.api import router
+    from app.shadow.service import ShadowService
+
+    repository, _artifacts, importer = _stack(tmp_path)
+    application = FastAPI()
+
+    @application.middleware("http")
+    async def bind_principal(request: Request, call_next):
+        request.state.reviewer_principal = "shadow-user-opaque"
+        return await call_next(request)
+
+    application.include_router(router)
+    application.state.shadow_repository = repository
+    application.state.shadow_service = ShadowService(
+        repository=repository,
+        evaluation_service=object(),
+        importer=importer,
+    )
+    path = FIXTURES / "executions_utf8.csv"
+    preview_form = {
+        "mapping": json.dumps(MAPPING),
+        "source_timezone": "Asia/Shanghai",
+    }
+
+    with TestClient(application) as client:
+        preview_response = client.post(
+            "/api/shadow/imports/preview",
+            data=preview_form,
+            files={"file": (path.name, path.read_bytes(), "text/csv")},
+        )
+        assert preview_response.status_code == 200
+        identity = preview_response.json()["preview"]["preview_identity"]
+
+        response = client.post(
+            "/api/shadow/imports/confirm",
+            data={
+                **preview_form,
+                "source_timezone": "UTC",
+                "source_label": "local-broker-export",
+                "preview_identity": identity,
+            },
+            files={"file": (path.name, path.read_bytes(), "text/csv")},
+        )
+
+    assert response.status_code == 409
+    assert repository.list_import_batches(principal="shadow-user-opaque") == []
+
+
 def test_rejects_extension_media_archive_and_preparse_limits_without_parser_work(tmp_path):
     from app.shadow.importer import ShadowImportError
 
@@ -143,6 +291,7 @@ def test_rejects_extension_media_archive_and_preparse_limits_without_parser_work
                 content=content,
                 mapping=MAPPING,
                 source_timezone="Asia/Shanghai",
+                principal="shadow-user-opaque",
             )
 
     assert repository.list_import_batches(principal="shadow-user-opaque") == []
@@ -207,26 +356,40 @@ def test_same_content_retry_and_correction_append_distinct_attributable_batches(
     assert artifacts.load(first["raw_artifact"]) == (FIXTURES / "executions_utf8.csv").read_bytes()
 
 
-def test_parser_failure_records_safe_diagnostic_and_cleans_temporary_paths(tmp_path):
+def test_same_content_lineage_is_principal_scoped(tmp_path):
+    _repository, _artifacts, importer = _stack(tmp_path)
+
+    first = _confirm(importer, "executions_utf8.csv", "text/csv")
+    other_principal = _confirm(
+        importer,
+        "executions_utf8.csv",
+        "text/csv",
+        principal="other-shadow-user",
+    )
+    same_principal = _confirm(importer, "executions_utf8.csv", "text/csv")
+
+    assert other_principal["same_content_as"] is None
+    assert same_principal["same_content_as"] == first["id"]
+    assert first["id"] not in json.dumps(other_principal)
+
+
+def test_unpreviewable_parser_failure_persists_no_import_attempt(tmp_path):
+    from app.shadow.importer import ShadowImportError
+
     repository, artifacts, importer = _stack(tmp_path)
 
-    batch = importer.confirm_import(
-        filename="broken.csv",
-        media_type="text/csv",
-        content=b"\xff\xfe\x00\x80not-csv",
-        mapping=MAPPING,
-        source_timezone="Asia/Shanghai",
-        principal="shadow-user-opaque",
-        source_label="local-broker-export",
-    )
+    with pytest.raises(ShadowImportError):
+        importer.preview(
+            filename="broken.csv",
+            media_type="text/csv",
+            content=b"\xff\xfe\x00\x80not-csv",
+            mapping=MAPPING,
+            source_timezone="Asia/Shanghai",
+            principal="shadow-user-opaque",
+        )
 
-    assert batch["status"] == "rejected"
-    assert batch["normalized_row_count"] == 0
-    assert batch["diagnostics"]
-    assert {item["severity"] for item in batch["diagnostics"]} == {"error"}
-    assert repository.list_trade_facts(batch_id=batch["id"]) == []
+    assert repository.list_import_batches(principal="shadow-user-opaque") == []
     assert artifacts.list_temporary_namespaces() == []
-    _assert_safe_projection(batch, artifacts.root)
 
 
 def test_raw_artifact_tamper_and_partial_files_fail_closed(tmp_path):

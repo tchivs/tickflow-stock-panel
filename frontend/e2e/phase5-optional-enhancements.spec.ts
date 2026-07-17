@@ -200,6 +200,7 @@ async function installPhase5Fixture(page: Page, options: FixtureOptions = {}): P
   const mutationBodies: Array<{ method: string; path: string; body: unknown }> = []
   let batchCounter = 3
   let forecastCounter = 1
+  let previewCounter = 0
   const batches = [
     shadowBatch('batch-server-3', '修正批次 3', { supersedes_batch_id: 'batch-server-1' }),
     shadowBatch('batch-server-2', '同内容批次 2', { same_content_as: 'batch-server-1' }),
@@ -273,11 +274,19 @@ async function installPhase5Fixture(page: Page, options: FixtureOptions = {}): P
   await page.route('**/api/optional-modules', route => json(route, { modules: { shadow: capability('shadow', availability.shadow), thesis: capability('thesis', availability.thesis), forecast: capability('forecast', availability.forecast) } }))
   await page.route('**/api/shadow/**', route => {
     const request = route.request()
-    const path = new URL(request.url()).pathname
+    const url = new URL(request.url())
+    const path = url.pathname
     if (!availability.shadow) return json(route, { detail: capability('shadow', false) }, 503)
     if (path.endsWith('/capability')) return json(route, capability('shadow', true))
-    if (path.endsWith('/batches') && request.method() === 'GET') return json(route, { batches: options.shadowState === 'empty' ? [] : batches })
-    if (path.endsWith('/imports/preview')) return json(route, { preview_id: 'preview-server-1', original_filename: 'executions.csv', format: 'CSV', timezone: 'Asia/Shanghai', mapping: [{ target: 'symbol', source: '证券代码', sample: '600519.SH', unit_timezone: '代码', status: 'mapped' }], rows: [{ symbol: STOCK.symbol, side: 'buy', executed_at: '2026-07-15T09:31:00+08:00', quantity: 100, price: 1450 }], diagnostics: [] })
+    if (path.endsWith('/batches') && request.method() === 'GET') {
+      const offset = Number(url.searchParams.get('offset') ?? 0)
+      const limit = Number(url.searchParams.get('limit') ?? 50)
+      return json(route, { batches: options.shadowState === 'empty' ? [] : batches, page: { offset, limit, total: 75, has_more: offset + limit < 75 } })
+    }
+    if (path.endsWith('/imports/preview')) {
+      previewCounter += 1
+      return json(route, { preview_identity: `preview-server-${previewCounter}`, original_filename: 'executions.csv', format: 'CSV', timezone: 'Asia/Shanghai', mapping: [{ target: 'symbol', source: '证券代码', sample: '600519.SH', unit_timezone: '代码', status: 'mapped' }], rows: [{ symbol: STOCK.symbol, side: 'buy', executed_at: '2026-07-15T09:31:00+08:00', quantity: 100, price: 1450 }], diagnostics: [] })
+    }
     if (path.endsWith('/imports/confirm')) { batchCounter += 1; return json(route, { batch: shadowBatch(`batch-server-${batchCounter}`, `不可变批次 ${batchCounter}`) }, 201) }
     if (path.endsWith('/evidence-sets')) return request.method() === 'POST' ? json(route, { evidence_set: { id: 'evidence-server-1', included_batch_ids: ['batch-server-1'], excluded_trade_ids: [], trade_count: 4, duplicate_groups: 1, partial_fills: 2, fingerprint: LONG_ID, created_at: '2026-07-15T09:10:00Z' } }, 201) : json(route, { evidence_sets: [{ id: 'evidence-server-1', fingerprint: LONG_ID, batch_count: 1, trade_count: 4 }] })
     if (path.includes('/candidates') && path.endsWith('/retain')) return json(route, { retention: { id: 'retention-server-1', candidate_id: candidate.id, status: 'retained_research_only', created_at: '2026-07-15T09:30:00Z' } }, 201)
@@ -530,6 +539,57 @@ test.describe('Phase 05 optional enhancement browser contracts', () => {
     await expect(panel.getByText(LONG_ID).first()).toBeVisible()
     expect(telemetry.mutationBodies.some(entry => entry.path.endsWith('/imports/confirm'))).toBeTruthy()
     expectNoAuthorityRequests(telemetry)
+  })
+
+  test('Shadow preview identity follows current bytes mapping and timezone', async ({ page }) => {
+    const telemetry = await installPhase5Fixture(page, { shadowState: 'populated' })
+    await page.goto('/backtest')
+    const panel = page.getByRole('region', { name: SHADOW_HEADING })
+    await requireSurface(panel.getByRole('heading', { name: SHADOW_HEADING, exact: true }))
+    const file = panel.getByLabel('选择本地成交日志')
+
+    await file.setInputFiles({ name: 'executions.csv', mimeType: 'text/csv', buffer: Buffer.from('symbol,side,time,quantity,price\n600519.SH,buy,2026-07-15 09:31,100,1450') })
+    await expect.poll(() => telemetry.requestsFor('/api/shadow/imports/preview')).toBe(1)
+
+    await panel.getByLabel('费用来源列').fill('手续费金额')
+    await expect.poll(() => telemetry.requestsFor('/api/shadow/imports/preview')).toBe(2)
+    await panel.getByLabel('源时区').selectOption('UTC')
+    await expect.poll(() => telemetry.requestsFor('/api/shadow/imports/preview')).toBe(3)
+    await file.setInputFiles({ name: 'executions.csv', mimeType: 'text/csv', buffer: Buffer.from('symbol,side,time,quantity,price\n600519.SH,buy,2026-07-15 09:31,200,1450') })
+    await expect.poll(() => telemetry.requestsFor('/api/shadow/imports/preview')).toBe(4)
+
+    await panel.getByRole('button', { name: '确认不可变导入' }).click()
+    const dialog = page.getByRole('dialog', { name: '确认不可变导入' })
+    await expect(dialog).toContainText('preview-server-4')
+    await dialog.getByRole('button', { name: '确认不可变导入' }).click()
+
+    const confirmation = telemetry.mutationBodies.findLast(entry => entry.path.endsWith('/imports/confirm'))
+    expect(confirmation?.body).toContain('preview-server-4')
+    expectNoAuthorityRequests(telemetry)
+  })
+
+  test('Shadow non-first history page refreshes after append', async ({ page }) => {
+    const batchOffsets: number[] = []
+    page.on('request', request => {
+      const url = new URL(request.url())
+      if (request.method() === 'GET' && url.pathname === '/api/shadow/batches') {
+        batchOffsets.push(Number(url.searchParams.get('offset') ?? 0))
+      }
+    })
+    await installPhase5Fixture(page, { shadowState: 'populated' })
+    await page.goto('/backtest')
+    const panel = page.getByRole('region', { name: SHADOW_HEADING })
+    await requireSurface(panel.getByRole('heading', { name: SHADOW_HEADING, exact: true }))
+
+    await panel.getByRole('navigation', { name: 'Shadow 历史分页' }).first().getByRole('button', { name: '下一页' }).click()
+    await expect.poll(() => batchOffsets.filter(offset => offset === 50).length).toBe(1)
+
+    const file = panel.getByLabel('选择本地成交日志')
+    await file.setInputFiles({ name: 'executions.csv', mimeType: 'text/csv', buffer: Buffer.from('symbol,side,time,quantity,price\n600519.SH,buy,2026-07-15 09:31,100,1450') })
+    await panel.getByRole('button', { name: '确认不可变导入' }).click()
+    await page.getByRole('dialog', { name: '确认不可变导入' }).getByRole('button', { name: '确认不可变导入' }).click()
+
+    await expect.poll(() => batchOffsets.filter(offset => offset === 50).length).toBeGreaterThan(1)
   })
 
   test(SCENARIO_TITLES[2], async ({ page }) => {
