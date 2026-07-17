@@ -6,7 +6,7 @@ import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -144,12 +144,14 @@ def _real_host(
     fail_recovery: str | None = None,
     fail_scanner: str | None = None,
     spies: LiveActionSpies | None = None,
+    production_scheduler: bool = False,
 ) -> Iterator[tuple[Any, TestClient]]:
     """Start the one production app/lifespan with deterministic probe overrides.
 
     The override is limited to deployment probes/failure injection.  The returned
     services, routers, repositories, recovery and scanners are the production ones.
     """
+    production_scheduler = production_scheduler or "thesis" in enabled
     from app import optional_modules
     from app.config import settings
     from app.services import auth as auth_service
@@ -163,6 +165,11 @@ def _real_host(
     monkeypatch.setattr(settings, "data_dir", data_dir)
     monkeypatch.setattr(settings, "auth_password", "host-test-password")
     monkeypatch.setattr(auth_service, "_configured_cache", None)
+    if production_scheduler:
+        from app.jobs import daily_pipeline
+
+        daily_pipeline.run_phase1_fixture_sync(data_dir)
+        monkeypatch.setenv("PHASE1_FIXTURE_MODE", "0")
     auth_service._sessions.clear()
 
     probe_overrides = {
@@ -417,13 +424,24 @@ def test_production_shadow_browser_contract_distills_and_evaluates_with_complete
             "currency": "currency",
             "account_alias": "account_alias",
         }
+        csv_bytes = "\n".join(csv_rows).encode()
+        previewed = client.post(
+            "/api/shadow/imports/preview",
+            files={"file": ("executions.csv", csv_bytes, "text/csv")},
+            data={
+                "mapping": json.dumps(mapping),
+                "source_timezone": "Asia/Shanghai",
+            },
+        )
+        assert previewed.status_code == 200, previewed.text
         imported = client.post(
             "/api/shadow/imports/confirm",
-            files={"file": ("executions.csv", "\n".join(csv_rows).encode(), "text/csv")},
+            files={"file": ("executions.csv", csv_bytes, "text/csv")},
             data={
                 "mapping": json.dumps(mapping),
                 "source_timezone": "Asia/Shanghai",
                 "source_label": "deterministic local executions",
+                "preview_identity": previewed.json()["preview"]["preview_identity"],
             },
         )
         assert imported.status_code == 201, imported.text
@@ -508,3 +526,113 @@ def test_production_shadow_browser_contract_distills_and_evaluates_with_complete
     assert status.available is False
     assert status.code == "shadow_initialization_failed"
     incomplete.close()
+
+
+def test_production_thesis_readiness_and_governed_pending_are_real(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spies = LiveActionSpies()
+    with _real_host(
+        tmp_path,
+        monkeypatch,
+        frozenset(MODULE_NAMES),
+        spies=spies,
+        production_scheduler=True,
+    ) as (app, client):
+        _authenticate(client)
+        capabilities = client.get(CAPABILITY_PATH)
+        assert capabilities.status_code == 200
+        for module in MODULE_NAMES:
+            _assert_typed_status(capabilities.json(), module, True)
+
+        payload = {
+            "instrument": "600000.SH",
+            "core_judgment": "Governed profitability remains a reviewable thesis input.",
+            "rationale": "The existing governed financial lake supplies the immutable observation.",
+            "change_reason": "Initial governed production thesis",
+            "anchors": [{
+                "method": "return_on_equity_range",
+                "currency": "CNY",
+                "as_of": "2023-09-30",
+                "low": 8.0,
+                "high": 12.0,
+                "assumptions": [{"name": "roe_floor", "value": 0.1, "unit": "ratio"}],
+                "limitations": ["The fixture contains one governed reporting period."],
+            }],
+            "conditions": [{
+                "source_kind": "financial",
+                "field": "roe",
+                "operator": "lt",
+                "threshold": 0.1,
+                "unit": "ratio",
+                "lookback_days": 3650,
+                "cadence": "quarterly",
+                "timezone": "Asia/Shanghai",
+                "description": "Return on equity falls below the review floor.",
+            }],
+        }
+        created = client.post("/api/theses/instruments/600000.SH/versions", json=payload)
+        assert created.status_code == 201, created.text
+
+        checks = app.state.thesis_due_scanner.scan_once(
+            now=datetime.now(UTC) + timedelta(seconds=2), owner="host-acceptance"
+        )
+        assert len(checks) == 1
+        assert checks[0]["result"] == "matched"
+        assert checks[0]["observed_value"] == 0.09
+        assert len(checks[0]["evidence"]) == 1
+        assert set(checks[0]["evidence"][0]) == {
+            "source_id",
+            "source_revision",
+            "source_kind",
+            "instrument",
+            "field",
+            "observed_value",
+            "unit",
+            "as_of",
+        }
+        assert checks[0]["evidence"][0]["instrument"] == "600000.SH"
+        assert checks[0]["evidence"][0]["field"] == "roe"
+
+        pending = client.get("/api/theses/instruments/600000.SH/pending?offset=0&limit=1")
+        assert pending.status_code == 200, pending.text
+        assert pending.json()["total"] == 1
+        assert pending.json()["has_more"] is False
+        assert len(pending.json()["items"]) == 1
+        assert pending.json()["items"][0]["status"] == "pending"
+        assert pending.json()["items"][0]["proposed_state"] == "invalidated"
+        spies.assert_zero_calls()
+        _assert_completed_v1_loop(app, client)
+
+    failure_root = tmp_path / "thesis-scanner-failure"
+    failure_root.mkdir()
+    with _real_host(
+        failure_root,
+        monkeypatch,
+        frozenset(MODULE_NAMES),
+        fail_scanner="thesis",
+        spies=spies,
+        production_scheduler=True,
+    ) as (app, client):
+        _authenticate(client)
+        failed = client.get(CAPABILITY_PATH)
+        assert failed.status_code == 200
+        _assert_typed_status(failed.json(), "thesis", False)
+        _assert_typed_status(failed.json(), "shadow", True)
+        _assert_typed_status(failed.json(), "forecast", True)
+        assert app.state.thesis_service is None
+        assert app.state.thesis_due_scanner is None
+        spies.assert_zero_calls()
+        _assert_completed_v1_loop(app, client)
+
+    from app.optional_modules import OptionalModuleName, build_optional_module_host, production_optional_factories
+
+    no_scheduler = build_optional_module_host(
+        database_path=tmp_path / "no-scheduler" / "operational.db",
+        data_root=tmp_path / "no-scheduler" / "data",
+        factories=production_optional_factories(),
+        governed_repository=object(),
+    )
+    assert no_scheduler.service(OptionalModuleName.THESIS) is None
+    assert no_scheduler.status(OptionalModuleName.THESIS).available is False
+    no_scheduler.close()

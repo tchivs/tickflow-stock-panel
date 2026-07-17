@@ -4,6 +4,9 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, date, datetime, timedelta
 
+from types import SimpleNamespace
+
+import polars as pl
 import pytest
 
 NOW = datetime(2026, 7, 1, 0, 0, tzinfo=UTC)
@@ -268,3 +271,113 @@ def test_condition_due_identity_is_unique_and_checks_are_immutable(tmp_path) -> 
             connection.execute("UPDATE thesis_condition_checks SET result = 'matched' WHERE id = ?", (canonical["id"],))
         with pytest.raises(sqlite3.DatabaseError, match="immutable"):
             connection.execute("DELETE FROM thesis_condition_checks WHERE id = ?", (canonical["id"],))
+
+
+def test_production_governed_readers_return_allowlisted_bounded_facts_and_missing_evidence(tmp_path) -> None:
+    from app.analysis.repository import AnalysisRepository
+    from app.theses.evidence import (
+        GovernedAnalysisReader,
+        GovernedFinancialReader,
+        GovernedMarketReader,
+    )
+
+    as_of = date.today()
+
+    class MarketRepository:
+        def __init__(self) -> None:
+            self.store = SimpleNamespace(data_dir=tmp_path)
+            self.requests: list[dict[str, object]] = []
+
+        def get_daily(self, symbol, start, end, columns=None):
+            self.requests.append({"symbol": symbol, "start": start, "end": end, "columns": columns})
+            if symbol != "600000.SH" or columns != ["date", "close"]:
+                return pl.DataFrame()
+            return pl.DataFrame({"date": [as_of - timedelta(days=1)], "close": [9.5]})
+
+    metrics_dir = tmp_path / "financials" / "metrics"
+    metrics_dir.mkdir(parents=True)
+    pl.DataFrame(
+        {"symbol": ["600000.SH"], "report_date": [as_of - timedelta(days=30)], "roe": [0.09]}
+    ).write_parquet(metrics_dir / "part.parquet")
+
+    analysis_repository = AnalysisRepository(tmp_path / "operational.db")
+    analysis_repository.migrate()
+    report = analysis_repository.append_validated_report(
+        subject_kind="instrument",
+        subject_key="600000.SH",
+        report={"generated": {"perspectives": [{"score": 70}, {"score": 50}]}},
+    )
+
+    repository = MarketRepository()
+    market = GovernedMarketReader(repository=repository)
+    financial = GovernedFinancialReader(data_root=tmp_path)
+    analysis = GovernedAnalysisReader(database_path=analysis_repository.database_path)
+    for reader in (market, financial, analysis):
+        reader.assert_ready()
+
+    market_fact = market(instrument="600000.SH", field="close", as_of=as_of, lookback_days=5)
+    financial_fact = financial(instrument="600000.SH", field="roe", as_of=as_of, lookback_days=120)
+    analysis_fact = analysis(instrument="600000.SH", field="report_score", as_of=as_of, lookback_days=30)
+
+    assert market_fact is not None
+    assert set(market_fact) == {"source_id", "source_revision", "value", "unit", "as_of"}
+    assert market_fact["value"] == 9.5
+    assert market_fact["unit"] == "CNY"
+    assert repository.requests == [{
+        "symbol": "600000.SH",
+        "start": as_of - timedelta(days=5),
+        "end": as_of,
+        "columns": ["date", "close"],
+    }]
+    assert financial_fact is not None
+    assert financial_fact["value"] == 0.09
+    assert financial_fact["unit"] == "ratio"
+    assert analysis_fact is not None
+    assert analysis_fact["source_id"] == f"analysis-report:{report['id']}:report_score"
+    assert analysis_fact["value"] == 60.0
+    assert analysis_fact["unit"] == "score"
+    assert financial(instrument="000001.SZ", field="roe", as_of=as_of, lookback_days=120) is None
+    assert analysis(instrument="000001.SZ", field="report_score", as_of=as_of, lookback_days=30) is None
+
+
+def test_poison_condition_does_not_starve_later_leases_and_retries_after_expiry(tmp_path) -> None:
+    repository, service, scanner, _resolver, first_version, _condition = _runtime(tmp_path, limit=2)
+    from app.theses.schemas import ThesisVersionRequest
+
+    second_version = repository.create_version(
+        request=ThesisVersionRequest.model_validate(_payload(instrument="600520.SH")),
+        created_by="principal-opaque",
+    )
+    condition_ids = sorted(
+        [first_version["conditions"][0]["id"], second_version["conditions"][0]["id"]]
+    )
+    poisoned_id, valid_id = condition_ids
+    original = service.evaluate_due_condition
+
+    def fail_poison(*, condition_id: str, due_at: str):
+        if condition_id == poisoned_id:
+            raise RuntimeError("poisoned governed condition")
+        return original(condition_id=condition_id, due_at=due_at)
+
+    service.evaluate_due_condition = fail_poison
+    completed = scanner.scan_once(now=NOW, owner="scanner-a")
+
+    assert [check["condition_id"] for check in completed] == [valid_id]
+    assert repository.get_schedule(poisoned_id)["lease_owner"] == "scanner-a"
+    assert repository.list_checks(poisoned_id) == []
+
+    service.evaluate_due_condition = original
+    retried = scanner.scan_once(now=NOW + timedelta(seconds=61), owner="scanner-retry")
+    assert [check["condition_id"] for check in retried] == [poisoned_id]
+
+
+def test_scanner_readiness_requires_complete_repository_and_service_collaborators(tmp_path) -> None:
+    _repository, _service, scanner, _resolver, _version, _condition = _runtime(tmp_path)
+
+    scanner.assert_ready()
+
+    from app.theses.scheduler import ThesisDueScanner
+
+    incomplete = ThesisDueScanner(repository=object(), service=object())
+    with pytest.raises(RuntimeError, match="scanner collaborators"):
+        incomplete.assert_ready()
