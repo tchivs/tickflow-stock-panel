@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import date
 from pathlib import Path
 
 import polars as pl
@@ -11,6 +12,26 @@ import pytest
 FIXTURES = Path(__file__).parent / "fixtures"
 DAILY = FIXTURES / "governed_daily.parquet"
 SESSIONS = FIXTURES / "cn_a_sessions.parquet"
+
+
+def _calendar_frame() -> pl.DataFrame:
+    frame = pl.read_parquet(SESSIONS)
+    anchors = []
+    for calendar_id, revision in frame.select(
+        ["calendar_id", "calendar_revision"]
+    ).unique(maintain_order=True).iter_rows():
+        anchors.append(
+            {
+                "calendar_id": calendar_id,
+                "calendar_revision": revision,
+                "market": "CN-A",
+                "session_id": "CNA-20250430",
+                "trade_date": date(2025, 4, 30),
+                "is_open": True,
+                "sequence": 0,
+            }
+        )
+    return pl.concat([pl.DataFrame(anchors, schema=frame.schema), frame])
 
 
 class GovernedFixtureRepository:
@@ -42,7 +63,7 @@ class GovernedFixtureRepository:
 def _services(tmp_path: Path, *, repository: GovernedFixtureRepository | None = None):
     from app.forecast.calendar import GovernedTradingCalendar
     from app.forecast.input import ForecastInputFreezer
-    calendar = GovernedTradingCalendar.from_parquet(SESSIONS)
+    calendar = GovernedTradingCalendar(_calendar_frame())
     repo = repository or GovernedFixtureRepository()
     freezer = ForecastInputFreezer(repository=repo, calendar=calendar, artifact_root=tmp_path / "forecast-inputs")
     return freezer, repo, calendar
@@ -130,14 +151,29 @@ def test_input_rejects_index_etf_intraday_and_portfolio_batch(tmp_path):
         _request(frequency="intraday")
 
 
-def test_input_requires_governed_daily_ohlcv_and_preserves_optional_amount(tmp_path):
-    freezer, _repo, _calendar = _services(tmp_path)
-    frozen = freezer.freeze(request=_request(), principal="researcher-1", as_of_session_id="CNA-20250430")
-    restored = pl.read_parquet(frozen.descriptor.managed_path)
-    assert restored.columns == [
-        "session_id", "trade_date", "open", "high", "low", "close", "volume", "amount"
-    ]
-    assert restored["amount"].null_count() > 0
+def test_input_amount_coverage_is_all_or_none_before_freezing(tmp_path):
+    partial_freezer, _repo, _calendar = _services(tmp_path)
+    partial = partial_freezer.freeze(
+        request=_request(), principal="researcher-1", as_of_session_id="CNA-20250430"
+    )
+    partial_frame = pl.read_parquet(partial.descriptor.managed_path)
+    assert "amount" not in partial.feature_schema
+    assert "amount" not in partial_frame.columns
+
+    complete_source = (
+        pl.read_parquet(DAILY)
+        .filter(pl.col("case_id") == "valid")
+        .drop("case_id")
+        .with_columns(pl.col("amount").fill_null(pl.col("close") * pl.col("volume")))
+    )
+    complete_freezer, _repo, _calendar = _services(
+        tmp_path / "complete", repository=GovernedFixtureRepository(complete_source)
+    )
+    complete = complete_freezer.freeze(
+        request=_request(), principal="researcher-1", as_of_session_id="CNA-20250430"
+    )
+    assert complete.feature_schema[-1] == "amount"
+    assert pl.read_parquet(complete.descriptor.managed_path)["amount"].null_count() == 0
 
 
 def test_input_rejects_missing_required_columns_without_synthesizing_values(tmp_path):
@@ -199,7 +235,7 @@ def test_input_freezes_adjustment_calendar_schema_and_session_provenance(tmp_pat
     assert frozen.calendar_revision == "cn-a-calendar-2025-v1"
     assert len(frozen.historical_session_ids) >= frozen.lookback
     assert len(frozen.future_session_ids) == 20
-    assert frozen.feature_schema == ["open", "high", "low", "close", "volume", "amount"]
+    assert frozen.feature_schema == ["open", "high", "low", "close", "volume"]
 
 
 def test_input_fingerprint_is_server_derived_complete_and_deterministic(tmp_path):
@@ -234,3 +270,58 @@ def test_input_artifact_descriptor_is_root_contained_and_public_path_free(tmp_pa
     serialized = json.dumps(public)
     assert str(tmp_path) not in serialized
     assert set(public) == {"artifact_id", "schema_version", "byte_size", "checksum_sha256"}
+
+
+def test_input_frame_bytes_and_artifact_checksum_bind_the_fingerprint(tmp_path):
+    source = pl.read_parquet(DAILY).filter(pl.col("case_id") == "valid").drop("case_id")
+    baseline_freezer, _repo, _calendar = _services(
+        tmp_path / "baseline", repository=GovernedFixtureRepository(source)
+    )
+    baseline = baseline_freezer.freeze(
+        request=_request(), principal="researcher-1", as_of_session_id="CNA-20250430"
+    )
+
+    changed = source.with_columns(
+        pl.when(pl.col("session_id") == "CNA-20250430")
+        .then(pl.col("close") + 0.01)
+        .otherwise(pl.col("close"))
+        .alias("close")
+    )
+    changed_freezer, _repo, _calendar = _services(
+        tmp_path / "changed", repository=GovernedFixtureRepository(changed)
+    )
+    mutated = changed_freezer.freeze(
+        request=_request(), principal="researcher-1", as_of_session_id="CNA-20250430"
+    )
+
+    assert mutated.input_fingerprint != baseline.input_fingerprint
+    metadata = json.loads(baseline.descriptor.metadata_json)
+    payload = metadata["fingerprint_payload"]
+    assert payload["frame_payload_sha256"]
+    assert payload["artifact_checksum_sha256"] == baseline.descriptor.checksum_sha256
+
+
+def test_calendar_exact_as_of_sequence_rejects_missing_or_closed_anchor(tmp_path):
+    from app.forecast.calendar import GovernedTradingCalendar
+
+    frame = _calendar_frame()
+    missing = GovernedTradingCalendar(
+        frame.filter(pl.col("session_id") != "CNA-20250430")
+    )
+    with pytest.raises(ValueError, match="as-of"):
+        missing.future_sessions(
+            calendar_id="cn-a-v1", after_session_id="CNA-20250430", count=5
+        )
+
+    closed = GovernedTradingCalendar(
+        frame.with_columns(
+            pl.when(pl.col("session_id") == "CNA-20250430")
+            .then(False)
+            .otherwise(pl.col("is_open"))
+            .alias("is_open")
+        )
+    )
+    with pytest.raises(ValueError, match="open as-of"):
+        closed.future_sessions(
+            calendar_id="cn-a-v1", after_session_id="CNA-20250430", count=5
+        )

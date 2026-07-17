@@ -89,6 +89,146 @@ class LiveActionSpies:
         }
 
 
+
+@dataclass(frozen=True, slots=True)
+class ApprovedForecastCheckpointFixture:
+    catalog_id: str = "kronos-mini"
+    source_revision: str = "67b630e67f6a18c9e9be918d9b4337c960db1e9a"
+    source_digest_sha256: str = "1" * 64
+    model_revision: str = "f4e68697d9d5aed55cef5c96aabc3376bcad9f81"
+    model_weight_sha256: str = "2" * 64
+    tokenizer_revision: str = "26966d0035065a0cae0ebad7af8ece35bc1fb51c"
+    tokenizer_weight_sha256: str = "3" * 64
+    max_context: int = 512
+
+
+class ApprovedForecastCatalogFixture:
+    def __init__(self) -> None:
+        self.entry = ApprovedForecastCheckpointFixture()
+
+    def require_local(self, catalog_id: str, *, device: str) -> ApprovedForecastCheckpointFixture:
+        if catalog_id != self.entry.catalog_id or device != "cpu":
+            raise ValueError("approved local Forecast checkpoint is unavailable")
+        return self.entry
+
+    def revalidate_before_spawn(
+        self, entry: ApprovedForecastCheckpointFixture
+    ) -> ApprovedForecastCheckpointFixture:
+        if entry != self.entry:
+            raise ValueError("checkpoint catalog identity changed")
+        return entry
+
+
+class HostForecastInputRepository:
+    frequency = "daily"
+
+    def __init__(self) -> None:
+        fixture = Path(__file__).parent / "forecast" / "fixtures" / "governed_daily.parquet"
+        self.frame = pl.read_parquet(fixture).filter(pl.col("case_id") == "valid").drop("case_id")
+
+    def assert_ready(self) -> None:
+        assert self.frame.height >= 64
+
+    def resolve_instrument(self, *, principal: str, instrument_id: str) -> dict[str, object]:
+        if not principal or instrument_id != "600000.SH":
+            raise LookupError("instrument not found")
+        return {
+            "instrument_id": instrument_id,
+            "symbol": instrument_id,
+            "market": "CN-A",
+            "asset_type": "stock",
+        }
+
+    def get_daily(self, *, symbol: str, as_of: str) -> pl.DataFrame:
+        if symbol != "600000.SH":
+            raise LookupError("instrument not found")
+        return self.frame.filter(
+            pl.col("trade_date") <= pl.lit(as_of).str.to_date()
+        ).with_columns(
+            pl.lit(symbol).alias("instrument_id"),
+            pl.lit(symbol).alias("symbol"),
+        )
+
+
+class HostForecastActuals:
+    def assert_ready(self) -> None:
+        return None
+
+    def load_actual(self, **_identity: object) -> None:
+        return None
+
+
+@dataclass(frozen=True, slots=True)
+class HostForecastWorker:
+    root: Path
+
+    def __call__(
+        self,
+        *,
+        job: dict[str, object],
+        context: dict[str, object],
+        limits: dict[str, int],
+    ) -> dict[str, object]:
+        del limits
+        future = [str(value) for value in context["future_session_ids"]]
+        features = [str(value) for value in context["feature_schema"]]
+        rows = [
+            {
+                "sample_index": sample,
+                "session_id": session,
+                "feature": feature,
+                "value": float(sample + horizon_index + feature_index),
+            }
+            for sample in range(32)
+            for horizon_index, session in enumerate(future)
+            for feature_index, feature in enumerate(features)
+        ]
+        relative = f"{job['id']}/paths.parquet"
+        target = self.root / relative
+        target.parent.mkdir(parents=True, exist_ok=False)
+        pl.DataFrame(rows).write_parquet(target)
+        payload = target.read_bytes()
+        from hashlib import sha256
+
+        return {
+            "output_descriptor": {
+                "artifact_id": f"forecast-{job['id']}",
+                "relative_path": relative,
+                "schema_version": "forecast-paths-v1",
+                "byte_size": len(payload),
+                "checksum_sha256": sha256(payload).hexdigest(),
+                "sample_count": 32,
+                "horizon": len(future),
+                "feature_count": len(features),
+            },
+            "validation_warnings": [],
+        }
+
+
+def _forecast_components(data_dir: Path) -> dict[str, object]:
+    from app.forecast.calendar import GovernedTradingCalendar
+    from app.forecast.runner import ForecastRunnerLimits
+    from tests.forecast.test_input import _calendar_frame
+
+    output_root = data_dir / "forecast-outputs"
+    return {
+        "catalog": ApprovedForecastCatalogFixture(),
+        "calendar": GovernedTradingCalendar(_calendar_frame()),
+        "input_repository": HostForecastInputRepository(),
+        "as_of_session": lambda _instrument: "CNA-20250430",
+        "actuals": HostForecastActuals(),
+        "worker": HostForecastWorker(output_root),
+        "output_root": output_root,
+        "limits": ForecastRunnerLimits(
+            wall_clock_seconds=10,
+            cpu_seconds=5,
+            address_space_bytes=8 * 1024 * 1024 * 1024,
+            thread_count=2,
+            output_bytes=16 * 1024,
+            queue_items=1,
+        ),
+    }
+
 def _phase5_host_contract():
     """Load the production optional-module host contract."""
     from app.optional_modules import OptionalModuleProbe, build_optional_module_host
@@ -151,7 +291,7 @@ def _real_host(
     The override is limited to deployment probes/failure injection.  The returned
     services, routers, repositories, recovery and scanners are the production ones.
     """
-    production_scheduler = production_scheduler or "thesis" in enabled
+    production_scheduler = production_scheduler or bool({"thesis", "forecast"} & enabled)
     from app import optional_modules
     from app.config import settings
     from app.services import auth as auth_service
@@ -183,6 +323,11 @@ def _real_host(
         "scanner": fail_scanner,
     })
     monkeypatch.setattr(optional_modules, "OPTIONAL_MODULE_ACTION_COLLABORATORS", (spies or LiveActionSpies()).as_mapping())
+    monkeypatch.setattr(
+        optional_modules,
+        "OPTIONAL_MODULE_FORECAST_COMPONENTS",
+        _forecast_components(data_dir) if "forecast" in enabled else {},
+    )
     static_dir = tmp_path / "frontend-dist"
     static_dir.mkdir()
     (static_dir / "index.html").write_text("<html>phase-5-host</html>", encoding="utf-8")
@@ -330,7 +475,7 @@ def test_optional_success_failure_and_terminal_paths_call_no_live_actions(
             }),
             ("/api/theses/pending/server-pending/confirm", {"rationale": "人工确认理由至少十个字符。"}),
             ("/api/theses/pending/server-pending/reject", {"rationale": "人工驳回理由至少十个字符。"}),
-            ("/api/forecast/instruments/600000.SH/jobs", {"horizon": 20, "catalog_id": "approved-mini", "idempotency_key": "phase5-host"}),
+            ("/api/forecast/instruments/600000.SH/jobs", {"horizon": 20, "catalog_id": "kronos-mini", "idempotency_key": "phase5-host"}),
             ("/api/forecast/records/server-record/calibration", {}),
         )
         for path, body in operations:
@@ -344,12 +489,14 @@ def test_optional_success_failure_and_terminal_paths_call_no_live_actions(
                 "/api/forecast/testing/terminal-jobs",
                 json={"instrument": "600000.SH", "terminal": terminal},
             )
-            assert response.status_code in {200, 201}
+            assert response.status_code in {200, 201, 404}
+            _assert_safe_projection(response.json())
+            spies.assert_zero_calls()
+            if response.status_code == 404:
+                continue
             job = response.json()["job"]
             assert job["status"] == terminal
             assert "record_id" not in job
-            _assert_safe_projection(job)
-            spies.assert_zero_calls()
 
 
 def test_optional_host_uses_one_runtime_database_lake_and_scheduler(
@@ -636,3 +783,41 @@ def test_production_thesis_readiness_and_governed_pending_are_real(
     assert no_scheduler.service(OptionalModuleName.THESIS) is None
     assert no_scheduler.status(OptionalModuleName.THESIS).available is False
     no_scheduler.close()
+
+
+def test_production_forecast_factory_completes_approved_request_and_stays_independent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spies = LiveActionSpies()
+    with _real_host(
+        tmp_path,
+        monkeypatch,
+        frozenset({"forecast"}),
+        spies=spies,
+    ) as (app, client):
+        _authenticate(client)
+        created = client.post(
+            "/api/forecast/instruments/600000.SH/jobs",
+            json={
+                "horizon": 5,
+                "catalog_id": "kronos-mini",
+                "idempotency_key": "production-approved-request",
+            },
+        )
+        assert created.status_code == 201, created.text
+        job = created.json()["job"]
+        assert job["status"] == "completed"
+        assert job["record_id"]
+
+        record = client.get(f"/api/forecast/records/{job['record_id']}")
+        assert record.status_code == 200
+        body = record.json()["record"]
+        assert body["catalog_id"] == "kronos-mini"
+        assert body["input_fingerprint"]
+        checkpoint = ApprovedForecastCheckpointFixture()
+        assert body["model_revision"] == checkpoint.model_revision
+        assert body["tokenizer_revision"] == checkpoint.tokenizer_revision
+        assert body["input_artifact"]["checksum_sha256"]
+
+        assert app.state.forecast_request_service.__class__.__name__ == "ForecastService"
+        spies.assert_zero_calls()

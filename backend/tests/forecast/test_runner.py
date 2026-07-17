@@ -5,6 +5,7 @@ import json
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
@@ -21,7 +22,10 @@ JOB = {
 
 def _repository(tmp_path: Path):
     from app.forecast.repository import ForecastRepository
-    repository = ForecastRepository(tmp_path / "operational.db")
+
+    repository = ForecastRepository(
+        tmp_path / "operational.db", artifact_root=tmp_path / "forecast-outputs"
+    )
     repository.migrate()
     return repository
 
@@ -38,10 +42,12 @@ def _acquire(repository, job, *, owner: str = "worker-1"):
     )
 
 
-def _descriptor(tmp_path: Path) -> dict[str, object]:
-    artifact = tmp_path / "forecast-output.parquet"
+def _descriptor(tmp_path: Path, *, horizon: int = 20, feature_count: int = 6) -> dict[str, object]:
+    artifact = tmp_path / "forecast-outputs" / "forecast" / "artifact-1" / "output.parquet"
+    artifact.parent.mkdir(parents=True, exist_ok=True)
     artifact.write_bytes(b"verified-forecast-output")
     from hashlib import sha256
+
     return {
         "artifact_id": "artifact-1",
         "relative_path": "forecast/artifact-1/output.parquet",
@@ -49,28 +55,59 @@ def _descriptor(tmp_path: Path) -> dict[str, object]:
         "byte_size": artifact.stat().st_size,
         "checksum_sha256": sha256(artifact.read_bytes()).hexdigest(),
         "sample_count": 32,
-        "horizon": 20,
-        "feature_count": 6,
+        "horizon": horizon,
+        "feature_count": feature_count,
+    }
+
+
+def _immutable(job) -> dict[str, object]:
+    origin = date(2025, 4, 30)
+    horizon = int(job["horizon"])
+    return {
+        "instrument_id": str(job["instrument_id"]),
+        "origin_session_id": "CNA-20250430",
+        "calendar_id": "cn-a-v1",
+        "calendar_revision": "cn-a-calendar-2025-v1",
+        "future_session_ids": [
+            (origin + timedelta(days=index + 1)).strftime("CNA-%Y%m%d")
+            for index in range(horizon)
+        ],
+        "input_fingerprint": str(job["input_fingerprint"]),
+        "input_artifact_descriptor": {
+            "artifact_id": "input-artifact",
+            "schema_version": "forecast-input-v1",
+            "byte_size": 1024,
+            "checksum_sha256": "b" * 64,
+        },
+        "horizon": horizon,
+        "lookback": 64,
+        "seed": 0,
+        "temperature": 1.0,
+        "top_k": 1,
+        "top_p": 1.0,
+        "sample_count": 32,
+        "catalog_id": str(job["catalog_id"]),
+        "source_revision": "67b630e67f6a18c9e9be918d9b4337c960db1e9a",
+        "source_digest_sha256": "c" * 64,
+        "model_revision": "f4e68697d9d5aed55cef5c96aabc3376bcad9f81",
+        "model_digest_sha256": "d" * 64,
+        "tokenizer_revision": "26966d0035065a0cae0ebad7af8ece35bc1fb51c",
+        "tokenizer_digest_sha256": "e" * 64,
+        "feature_schema": ["open", "high", "low", "close", "volume", "amount"],
+        "validation_warnings": [],
     }
 
 
 def _commit(repository, job, tmp_path: Path, *, owner: str = "worker-1"):
+    immutable = _immutable(job)
+    repository.bind_commit_identity(job_id=str(job["id"]), immutable_record=immutable)
     return repository.commit_completed_forecast(
         job_id=job["id"],
         expected_status="running",
         expected_version=job["transition_version"],
         lease_owner=owner,
-        output_descriptor=_descriptor(tmp_path),
-        immutable_record={
-            "instrument_id": "instrument-600000",
-            "horizon": 20,
-            "catalog_id": "kronos-mini",
-            "input_fingerprint": "a" * 64,
-            "sample_count": 32,
-            "source_revision": "67b630e67f6a18c9e9be918d9b4337c960db1e9a",
-            "model_revision": "f4e68697d9d5aed55cef5c96aabc3376bcad9f81",
-            "tokenizer_revision": "26966d0035065a0cae0ebad7af8ece35bc1fb51c",
-        },
+        output_descriptor=_descriptor(tmp_path, horizon=int(job["horizon"])),
+        immutable_record=immutable,
     )
 
 
@@ -267,6 +304,29 @@ class CountingBoundary:
         return True
 
 
+@dataclass
+class CommitArtifactBoundary:
+    root: Path
+    repository: object
+    calls: int = 0
+
+    def __call__(self, *, manifest, job):
+        self.calls += 1
+        descriptor = manifest["output_descriptor"]
+        target = self.root / "forecast-outputs" / descriptor["relative_path"]
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"verified-runner-output")
+        from hashlib import sha256
+
+        payload = target.read_bytes()
+        descriptor["byte_size"] = len(payload)
+        descriptor["checksum_sha256"] = sha256(payload).hexdigest()
+        self.repository.bind_commit_identity(
+            job_id=str(job["id"]), immutable_record=manifest["immutable_record"]
+        )
+        return True
+
+
 def _runner(tmp_path: Path, **overrides):
     from app.forecast.runner import ForecastRunner, ForecastRunnerLimits
     repository = _repository(tmp_path)
@@ -275,7 +335,7 @@ def _runner(tmp_path: Path, **overrides):
         "catalog_revalidate": CountingBoundary(),
         "input_revalidate": CountingBoundary(),
         "worker": CountingBoundary(),
-        "artifact_verify": CountingBoundary(),
+        "artifact_verify": CommitArtifactBoundary(tmp_path, repository),
     }
     boundaries.update(overrides)
     runner = ForecastRunner(
@@ -365,3 +425,180 @@ def test_runner_success_commits_once_and_never_invokes_downstream_authority(tmp_
     assert result["status"] == "completed"
     assert len(repository.list_forecasts()) == 1
     assert all(spy.calls == 0 for spy in action_spies.values())
+
+
+def test_production_service_revalidation_reloads_catalog_and_frozen_input_before_run(tmp_path):
+    from types import SimpleNamespace
+
+    from app.forecast.service import ForecastService
+
+    repository = _repository(tmp_path)
+    checkpoint = SimpleNamespace(
+        catalog_id="kronos-mini",
+        source_revision="67b630e67f6a18c9e9be918d9b4337c960db1e9a",
+        source_digest_sha256="c" * 64,
+        model_revision="f4e68697d9d5aed55cef5c96aabc3376bcad9f81",
+        model_weight_sha256="d" * 64,
+        tokenizer_revision="26966d0035065a0cae0ebad7af8ece35bc1fb51c",
+        tokenizer_weight_sha256="e" * 64,
+        max_context=512,
+    )
+
+    class Catalog:
+        def __init__(self):
+            self.revalidations = 0
+
+        def require_local(self, catalog_id, *, device):
+            assert catalog_id == "kronos-mini"
+            assert device == "cpu"
+            return checkpoint
+
+        def revalidate_before_spawn(self, selected):
+            assert selected is checkpoint
+            self.revalidations += 1
+            return selected
+
+    descriptor = SimpleNamespace(
+        checksum_sha256="b" * 64,
+        managed_path=str(tmp_path / "input.parquet"),
+        public=lambda: {
+            "artifact_id": "input-artifact",
+            "schema_version": "forecast-input-v1",
+            "byte_size": 1,
+            "checksum_sha256": "b" * 64,
+        },
+    )
+    frozen = SimpleNamespace(
+        instrument_id="instrument-600000",
+        catalog_id="kronos-mini",
+        horizon=20,
+        as_of_session_id="CNA-20250430",
+        lookback=64,
+        calendar_revision="cn-a-calendar-2025-v1",
+        historical_session_ids=tuple(
+            (date(2025, 2, 25) + timedelta(days=index)).strftime("CNA-%Y%m%d")
+            for index in range(64)
+        ),
+        future_session_ids=tuple(
+            (date(2025, 5, 1) + timedelta(days=index)).strftime("CNA-%Y%m%d")
+            for index in range(20)
+        ),
+        feature_schema=["open", "high", "low", "close", "volume"],
+        input_fingerprint="a" * 64,
+        descriptor=descriptor,
+    )
+
+    class Freezer:
+        def __init__(self):
+            self.freezes = 0
+
+        def freeze(self, **kwargs):
+            assert kwargs["principal"] == "researcher-1"
+            assert kwargs["as_of_session_id"] == "CNA-20250430"
+            assert kwargs["max_context"] == 512
+            self.freezes += 1
+            return frozen
+
+        def load(self, descriptor):
+            assert descriptor is frozen.descriptor
+            return object()
+
+    class Runner:
+        def __init__(self):
+            self.calls = []
+
+        def run_job(self, job_id):
+            self.calls.append(job_id)
+            return {"status": "queued"}
+
+    catalog = Catalog()
+    freezer = Freezer()
+    runner = Runner()
+    service = ForecastService(
+        repository=repository,
+        catalog=catalog,
+        freezer=freezer,
+        runner=runner,
+        as_of_session=lambda _instrument: "CNA-20250430",
+        device="cpu",
+    )
+
+    job = service.create_or_get_job(
+        principal="researcher-1",
+        instrument="instrument-600000",
+        horizon=20,
+        catalog_id="kronos-mini",
+        idempotency_key="production-revalidation",
+    )
+    assert runner.calls == [job["id"]]
+    assert service.revalidate(job) is True
+    assert catalog.revalidations >= 2
+    assert freezer.freezes >= 3
+
+
+
+def test_commit_rejects_missing_or_divergent_provenance_and_shape(tmp_path):
+    cases = (
+        lambda record, descriptor: record.pop("source_digest_sha256"),
+        lambda record, descriptor: record.__setitem__("catalog_id", "kronos-small"),
+        lambda record, descriptor: record.__setitem__("temperature", float("nan")),
+        lambda record, descriptor: record.__setitem__("future_session_ids", record["future_session_ids"][:-1]),
+        lambda record, descriptor: descriptor.__setitem__("horizon", 5),
+        lambda record, descriptor: record["input_artifact_descriptor"].__setitem__("checksum_sha256", "f" * 64),
+    )
+    for index, mutate in enumerate(cases):
+        case_root = tmp_path / f"case-{index}"
+        repository = _repository(case_root)
+        running = _acquire(
+            repository,
+            _create(repository, idempotency_key=f"strict-commit-{index}"),
+            owner=f"worker-{index}",
+        )
+        expected = _immutable(running)
+        repository.bind_commit_identity(job_id=str(running["id"]), immutable_record=expected)
+        record = json.loads(json.dumps(expected))
+        descriptor = _descriptor(case_root)
+        mutate(record, descriptor)
+        with pytest.raises(ValueError):
+            repository.commit_completed_forecast(
+                job_id=running["id"],
+                expected_status="running",
+                expected_version=running["transition_version"],
+                lease_owner=f"worker-{index}",
+                output_descriptor=descriptor,
+                immutable_record=record,
+            )
+
+
+def test_output_path_containment_requires_regular_verified_artifact(tmp_path):
+    def rejected(relative_path: str, *, symlink: bool = False, checksum: str | None = None) -> None:
+        case_root = tmp_path / relative_path.replace("/", "_").replace(".", "dot")
+        repository = _repository(case_root)
+        running = _acquire(repository, _create(repository, idempotency_key=case_root.name))
+        immutable = _immutable(running)
+        repository.bind_commit_identity(job_id=str(running["id"]), immutable_record=immutable)
+        descriptor = _descriptor(case_root)
+        descriptor["relative_path"] = relative_path
+        if symlink:
+            outside = case_root / "outside.parquet"
+            outside.write_bytes(b"verified-forecast-output")
+            link = case_root / "forecast-outputs" / relative_path
+            link.parent.mkdir(parents=True, exist_ok=True)
+            link.unlink(missing_ok=True)
+            link.symlink_to(outside)
+        if checksum is not None:
+            descriptor["checksum_sha256"] = checksum
+        with pytest.raises(ValueError):
+            repository.commit_completed_forecast(
+                job_id=running["id"],
+                expected_status="running",
+                expected_version=running["transition_version"],
+                lease_owner="worker-1",
+                output_descriptor=descriptor,
+                immutable_record=immutable,
+            )
+
+    rejected("../escaped.parquet")
+    rejected("/absolute/output.parquet")
+    rejected("forecast/symlink/output.parquet", symlink=True)
+    rejected("forecast/artifact-1/output.parquet", checksum="0" * 64)
