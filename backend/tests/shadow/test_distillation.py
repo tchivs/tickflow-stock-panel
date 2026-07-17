@@ -220,3 +220,189 @@ def test_invalid_or_insufficient_training_input_creates_no_candidate_fact():
     with pytest.raises(ShadowDistillationError, match="feature"):
         _distill(distiller, feature_names=("close_return_5d", "browser_supplied_signal"))
     assert repository.list_candidates() == []
+
+
+def _distill_request_payload(**overrides):
+    payload = {
+        "feature_names": list(ALLOWED_FEATURES),
+        "seed": 17,
+        "max_depth": 3,
+        "min_leaf_support": 2,
+        "exit_assumptions": {"kind": "fixed_holding_days", "days": 5},
+        "holding_assumptions": {
+            "price_adjustment": "unadjusted_execution_vs_forward_adjusted_research"
+        },
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_bounded_assumption_schema_rejects_extra_recursive_collection_string_and_number():
+    from pydantic import ValidationError
+
+    from app.shadow.api import DistillRequest
+
+    valid = _distill_request_payload()
+    request = DistillRequest.model_validate(valid)
+    assert request.model_dump() == valid
+    assert DistillRequest.model_fields["exit_assumptions"].annotation.__name__ == "ExitAssumptions"
+
+    invalid_pairs = (
+        ({"kind": "fixed_holding_days", "days": 5, "browser_authority": True}, valid["holding_assumptions"]),
+        ({"kind": {"level_1": {"level_2": {"level_3": 1}}}, "days": 5}, valid["holding_assumptions"]),
+        ({f"key_{index}": index for index in range(17)}, valid["holding_assumptions"]),
+        ({"kind": "fixed_holding_days", "days": list(range(33))}, valid["holding_assumptions"]),
+        ({"kind": "fixed_holding_days", "days": 5}, {"price_adjustment": "界" * 43}),
+        ({"kind": "fixed_holding_days", "days": math.inf}, valid["holding_assumptions"]),
+    )
+    for index, (exit_assumptions, holding_assumptions) in enumerate(invalid_pairs):
+        try:
+            DistillRequest.model_validate(
+                _distill_request_payload(
+                    exit_assumptions=exit_assumptions,
+                    holding_assumptions=holding_assumptions,
+                )
+            )
+        except ValidationError:
+            continue
+        pytest.fail(f"invalid assumption case {index} was accepted")
+
+
+def test_assumption_byte_ceiling_preserves_canonical_identity_and_rejects_overruns():
+    from app.shadow.schemas import ShadowAssumptionError, validate_assumption_pair
+
+    first = validate_assumption_pair(
+        exit_assumptions={"days": 5, "kind": "fixed_holding_days"},
+        holding_assumptions={
+            "price_adjustment": "unadjusted_execution_vs_forward_adjusted_research"
+        },
+    )
+    replay = validate_assumption_pair(
+        exit_assumptions={"kind": "fixed_holding_days", "days": 5},
+        holding_assumptions={
+            "price_adjustment": "unadjusted_execution_vs_forward_adjusted_research"
+        },
+    )
+    assert first == replay
+    assert first.exit_json == '{"days":5,"kind":"fixed_holding_days"}'
+
+    with pytest.raises(ShadowAssumptionError, match="4096"):
+        validate_assumption_pair(
+            exit_assumptions={
+                "kind": "fixed_holding_days",
+                "days": 5,
+                "padding": ["x" * 124] * 32,
+            },
+            holding_assumptions=replay.holding,
+        )
+    with pytest.raises(ShadowAssumptionError, match="8192"):
+        validate_assumption_pair(
+            exit_assumptions={
+                "kind": "fixed_holding_days",
+                "days": 5,
+                "padding": ["x" * 123] * 32,
+            },
+            holding_assumptions={
+                "price_adjustment": "unadjusted_execution_vs_forward_adjusted_research",
+                "padding": ["x" * 122] * 32,
+            },
+        )
+
+
+def test_direct_boundary_rejects_oversize_before_distiller_or_repository_work(tmp_path):
+    from app.shadow.repository import ShadowRepository, ShadowRepositoryError
+    from app.shadow.schemas import ShadowAssumptionError
+    from app.shadow.service import ShadowService
+
+    class RecordingDistiller:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        def distill(self, **request):
+            self.calls.append(deepcopy(request))
+            return {"id": "candidate-from-distiller"}
+
+    distiller = RecordingDistiller()
+    service = ShadowService(
+        repository=CandidateRepository(),
+        evaluation_service=object(),  # type: ignore[arg-type]
+        distiller=distiller,
+    )
+    valid = _distill_request_payload()
+    assert service.distill_candidate(evidence_set_id="evidence-set-1", **valid)["id"]
+    with pytest.raises(ShadowAssumptionError):
+        service.distill_candidate(
+            evidence_set_id="evidence-set-1",
+            **_distill_request_payload(
+                exit_assumptions={"kind": "fixed_holding_days", "days": 5, "padding": "x" * 4_097}
+            ),
+        )
+    assert len(distiller.calls) == 1
+
+    repository = ShadowRepository(tmp_path / "operational.db")
+    evidence_manifest = {
+        "included_batch_ids": ["batch-1"],
+        "included_trade_ids": [],
+        "exclusions": [],
+    }
+    evidence_json = json.dumps(
+        evidence_manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+    evidence_fingerprint = __import__("hashlib").sha256(evidence_json.encode()).hexdigest()
+    with repository._connection() as connection, connection:
+        connection.execute(
+            "INSERT INTO shadow_evidence_sets (id, principal, fingerprint, manifest_json, created_at) VALUES (?, ?, ?, ?, ?)",
+            ("evidence-set-1", "shadow-user-opaque", evidence_fingerprint, evidence_json, "2025-01-01T00:00:00+00:00"),
+        )
+
+    rules = [{
+        "conditions": [{"field": "close_return_5d", "operator": ">", "threshold": 0.02}],
+        "prediction": "entry",
+        "support": 3,
+        "precision": 1.0,
+        "recall": 1.0,
+    }]
+    canonical_rules_json = json.dumps(
+        rules, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+    candidate = {
+        "distiller_version": "shadow-shallow-tree-v1",
+        "rule_schema_version": "shadow-entry-rules-v1",
+        "rules": rules,
+        "features": ["close_return_5d"],
+        "parameters": {"max_depth": 1, "min_leaf_support": 2, "class_weight": "balanced"},
+        "exit_assumptions": valid["exit_assumptions"],
+        "holding_assumptions": valid["holding_assumptions"],
+        "source_batch_ids": ["batch-1"],
+        "evidence_set_id": "evidence-set-1",
+        "evidence_set_fingerprint": evidence_fingerprint,
+        "training_window": {"start": "2025-01-01", "end": "2025-01-31"},
+        "seed": 17,
+        "class_balance": {"positive": 2, "negative": 2},
+        "metrics": {"support": 2, "precision": 1.0, "recall": 1.0},
+        "limitations": ["research only"],
+        "created_at": "2025-01-01T00:00:00+00:00",
+        "negative_sampling": {"seed": 17, "source": "governed_non_trade_sessions", "selected_dates": []},
+        "canonical_rules_json": canonical_rules_json,
+        "rule_fingerprint": __import__("hashlib").sha256(canonical_rules_json.encode()).hexdigest(),
+        "training_replay": [True],
+    }
+    persisted = repository.append_candidate(candidate)
+    assert persisted["exit_assumptions"] == valid["exit_assumptions"]
+    assert persisted["holding_assumptions"] == valid["holding_assumptions"]
+
+    invalid_candidate = deepcopy(candidate)
+    invalid_candidate["seed"] = 18
+    invalid_candidate["exit_assumptions"] = {
+        "kind": "fixed_holding_days",
+        "days": 5,
+        "padding": "x" * 4_097,
+    }
+    with pytest.raises(ShadowRepositoryError, match="assumption"):
+        repository.append_candidate(invalid_candidate)
+    assert len(repository.list_candidates()) == 1
+
+    with pytest.raises(ShadowAssumptionError):
+        from app.shadow import projections
+
+        projections.candidate({**persisted, "holding_assumptions": {"price_adjustment": "x" * 129}})
