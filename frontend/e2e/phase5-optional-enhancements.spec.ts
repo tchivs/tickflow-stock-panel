@@ -107,10 +107,11 @@ const terminalEvaluations = [
 
 const thesisVersion = (version: number, overrides: Record<string, unknown> = {}) => ({
   id: `thesis-version-${version}`,
+  thesis_id: 'thesis-ledger-1',
   instrument: STOCK.symbol,
   version,
   predecessor_id: version === 1 ? null : `thesis-version-${version - 1}`,
-  official_status: 'active',
+  official_state: 'active',
   core_judgment: '高端白酒品牌力与渠道质量仍支持长期现金流，但估值必须保留安全边际。',
   rationale: '治理后的财务与渠道证据支持当前判断，同时需求恢复节奏仍有不确定性。',
   change_reason: version === 1 ? '建立首版研究账本' : '追加年度报告证据并调整估值区间',
@@ -133,6 +134,7 @@ const thesisChecks = [
 ]
 
 const pending = {
+  thesis_id: 'thesis-ledger-1',
   id: 'pending-server-1',
   instrument: STOCK.symbol,
   version_id: 'thesis-version-2',
@@ -146,6 +148,11 @@ const pending = {
   evidence_at: '2026-07-14T01:02:00Z',
   evidence_fingerprint: LONG_ID,
   official_status: 'active',
+  proposed_state: 'invalidated',
+  reason: '受治理条件命中，等待人工确认。',
+  status: 'pending',
+  created_at: '2026-07-14T01:02:00Z',
+  review: null,
 }
 
 const forecastPaths = Array.from({ length: 32 }, (_, pathIndex) => ({
@@ -173,8 +180,10 @@ const forecastRecord = {
   label: '预测 F-001',
   instrument: STOCK.symbol,
   created_at: '2026-07-15T09:00:00Z',
-  as_of: '2026-07-15',
+  as_of: 'CNA-20260715',
+  origin_session_id: 'CNA-20260715',
   horizon: 20,
+  catalog_id: 'kronos-mini-approved',
   status: 'completed',
   checkpoint: { catalog_id: 'kronos-mini-approved', model: 'Kronos-mini', tokenizer: 'Kronos-Tokenizer-2k', source_revision: '67b630e', model_revision: 'f4e6869', tokenizer_revision: '26966d0', digest: LONG_ID, pairing: 'mini/2k', max_context: 2048, device: 'cpu', integrity: 'verified' },
   input: { fingerprint: LONG_ID, coverage_start: '2024-01-02', coverage_end: '2026-07-15', session_count: 512, schema: 'daily OHLCV' },
@@ -256,8 +265,8 @@ async function installPhase5Fixture(page: Page, options: FixtureOptions = {}): P
   await page.route('**/api/kline/daily**', route => json(route, { symbol: STOCK.symbol, name: STOCK.name, rows: [] }))
   await page.route('**/api/stock-analysis/levels**', route => json(route, { symbol: STOCK.symbol, levels: {}, close: null, summary: '浏览器验收无行情档位' }))
   await page.route('**/api/advanced/viewpoints**', route => json(route, { viewpoints: [] }))
-  await page.route('**/api/analysis/subjects/**/reports', route => json(route, { reports: [{ id: 'existing-report', subject: { kind: 'stock', key: STOCK.symbol }, version: 1, status: 'validated', generated_at: '2026-07-10T00:00:00Z', evidence_limitations: [] }] }))
-  await page.route('**/api/analysis/reports/existing-report', route => json(route, { report: { id: 'existing-report', signal_id: 'existing-signal', subject: { kind: 'stock', key: STOCK.symbol }, version: 1, status: 'validated', generated_at: '2026-07-10T00:00:00Z', perspectives: [], score: null, valuation: null, ic_memo: { thesis: '既有分析仍可读取', risks: [], open_questions: [] } } }))
+  await page.route('**/api/analysis/subjects/**/reports', route => json(route, { reports: [{ id: 'existing-report', subject: { kind: 'instrument', key: STOCK.symbol }, version: 1, status: 'validated', generated_at: '2026-07-10T00:00:00Z', evidence_limitations: [] }] }))
+  await page.route('**/api/analysis/reports/existing-report', route => json(route, { report: { id: 'existing-report', signal_id: 'existing-signal', subject: { kind: 'instrument', key: STOCK.symbol }, version: 1, status: 'validated', generated_at: '2026-07-10T00:00:00Z', perspectives: [], score: null, valuation: null, ic_memo: { thesis: '既有分析仍可读取', risks: [], open_questions: [] } } }))
   await page.route('**/api/analysis/reports/existing-report/evidence', route => json(route, { report_id: 'existing-report', sources: [], material_numbers: [] }))
   await page.route('**/api/analysis/signals/existing-signal/history', route => json(route, { signal_id: 'existing-signal', current_state: null, events: [], pending_review_id: null, reviews: [], plans: [] }))
   await page.route('**/api/screener/strategies**', route => json(route, { presets: [{ id: 'registered-demo', name: '既有策略回测', description: 'completed v1 fixture', source: 'builtin' }] }))
@@ -310,13 +319,17 @@ async function installPhase5Fixture(page: Page, options: FixtureOptions = {}): P
 
   await page.route('**/api/theses/**', route => {
     const request = route.request()
-    const path = new URL(request.url()).pathname
+    const url = new URL(request.url())
+    const path = url.pathname
+    const offset = Number(url.searchParams.get('offset') ?? 0)
+    const limit = Number(url.searchParams.get('limit') ?? 50)
     if (!availability.thesis) return json(route, { detail: capability('thesis', false) }, 503)
     if (path.endsWith('/capability')) return json(route, capability('thesis', true))
-    if (path.endsWith('/versions') && request.method() === 'GET') return json(route, { versions: options.thesisState === 'empty' ? [] : versions, current_version_id: 'thesis-version-2' })
+    if (path.endsWith('/versions') && request.method() === 'GET') return json(route, { items: options.thesisState === 'empty' ? [] : versions, offset, limit, total: options.thesisState === 'empty' ? 0 : versions.length, has_more: false })
     if (path.endsWith('/versions') && request.method() === 'POST') return json(route, { version: thesisVersion(3) }, 201)
-    if (path.endsWith('/checks')) return json(route, { checks: thesisChecks })
-    if (path.endsWith('/pending')) return json(route, { pending: options.thesisState === 'pending' || options.thesisState === 'conflict' ? [pending] : [] })
+    if (path.endsWith('/checks')) return json(route, { items: thesisChecks, offset, limit, total: thesisChecks.length, has_more: false })
+    if (path.endsWith('/pending')) { const items = options.thesisState === 'pending' || options.thesisState === 'conflict' ? [pending] : []; return json(route, { items, offset, limit, total: items.length, has_more: false }) }
+    if (path.endsWith('/history')) return json(route, { items: [], offset, limit, total: 0, has_more: false })
     if (path.endsWith('/confirm') || path.endsWith('/reject')) {
       if (options.thesisState === 'conflict') return json(route, { detail: 'state changed' }, 409)
       return json(route, { review: { id: 'review-server-1', decision: path.endsWith('/confirm') ? 'confirmed' : 'rejected', principal: 'server-session-user', reason: '人工理由完整保留', created_at: '2026-07-15T10:00:00Z' }, official_status: path.endsWith('/confirm') ? 'invalidated' : 'active' })
@@ -336,32 +349,33 @@ async function installPhase5Fixture(page: Page, options: FixtureOptions = {}): P
     }
     if (path.endsWith('/records') && request.method() === 'GET') return json(route, {
       records: options.forecastState && options.forecastState !== 'empty' ? records : [],
-      latest_governed_session_id: options.forecastState === 'terminal' ? '2026-07-16' : '2026-07-15',
+      page: { offset: 0, limit: 25, total: options.forecastState && options.forecastState !== 'empty' ? records.length : 0, has_more: false },
+      latest_governed_session_id: options.forecastState === 'terminal' ? 'CNA-20260716' : 'CNA-20260715',
     })
     if (path.endsWith('/jobs') && request.method() === 'GET') return json(route, {
       jobs: options.forecastState === 'terminal' ? [
-        { id: 'job-timeout', status: 'timeout', stage: 'timeout', safe_reason: 'timeout', record_id: null, created_at: '2026-07-15T10:01:00Z' },
-        { id: 'job-oom', status: 'resource_terminated', stage: 'resource_terminated', safe_reason: 'OOM', record_id: null, created_at: '2026-07-15T10:02:00Z' },
-        { id: 'job-shape', status: 'validation_failed', stage: 'validation_failed', safe_reason: 'shape failure', record_id: null, created_at: '2026-07-15T10:03:00Z' },
-        { id: 'job-artifact', status: 'artifact_failed', stage: 'artifact_failed', safe_reason: 'artifact failure', record_id: null, created_at: '2026-07-15T10:04:00Z' },
+        { id: 'job-timeout', instrument: STOCK.symbol, status: 'timeout', stage: 'timeout', safe_reason: 'timeout', record_id: null, created_at: '2026-07-15T10:01:00Z' },
+        { id: 'job-oom', instrument: STOCK.symbol, status: 'resource_terminated', stage: 'resource_terminated', safe_reason: 'OOM', record_id: null, created_at: '2026-07-15T10:02:00Z' },
+        { id: 'job-shape', instrument: STOCK.symbol, status: 'validation_failed', stage: 'validation_failed', safe_reason: 'shape failure', record_id: null, created_at: '2026-07-15T10:03:00Z' },
+        { id: 'job-artifact', instrument: STOCK.symbol, status: 'artifact_failed', stage: 'artifact_failed', safe_reason: 'artifact failure', record_id: null, created_at: '2026-07-15T10:04:00Z' },
       ] : [],
       page: { offset: 0, limit: 25, total: options.forecastState === 'terminal' ? 4 : 0, has_more: false },
     })
     if (path.endsWith('/jobs') && request.method() === 'POST') {
       forecastCounter += 1
       const terminal = options.forecastState === 'terminal'
-      return json(route, { job: { id: `forecast-job-${forecastCounter}`, status: terminal ? 'running' : 'completed', stage: terminal ? 'generating_paths' : '已完成', record_id: terminal ? null : `forecast-record-${forecastCounter}`, created_at: '2026-07-15T10:00:00Z' } }, 201)
+      return json(route, { job: { id: `forecast-job-${forecastCounter}`, instrument: STOCK.symbol, horizon: 20, catalog_id: 'kronos-mini-approved', status: terminal ? 'running' : 'completed', stage: terminal ? 'generating_paths' : 'completed', stage_recorded_at: '2026-07-15T10:00:00Z', attempt: 1, record_id: terminal ? null : `forecast-record-${forecastCounter}`, created_at: '2026-07-15T10:00:00Z', updated_at: '2026-07-15T10:00:00Z' } }, 201)
     }
-    if (path.includes('/records/') && path.endsWith('/paths')) return json(route, { paths: forecastPaths, total: 32, page: 1, page_size: 12 })
+    if (path.includes('/records/') && path.endsWith('/paths')) return json(route, { paths: { items: [], offset: 0, limit: 12, total: 32, has_more: true } })
     if (path.includes('/records/') && path.endsWith('/calibration')) return json(route, { calibration: forecastRecord.calibration })
     if (path.includes('/records/')) return json(route, { record: forecastRecord })
-    if (path.includes('/jobs/')) return json(route, { job: { id: path.split('/').at(-1), status: options.forecastState === 'terminal' ? 'running' : 'completed', stage: options.forecastState === 'terminal' ? 'generating_paths' : '已完成', safe_reason: null, record_id: options.forecastState === 'terminal' ? null : forecastRecord.id } })
+    if (path.includes('/jobs/')) return json(route, { job: { id: path.split('/').at(-1), instrument: STOCK.symbol, horizon: 20, catalog_id: 'kronos-mini-approved', status: options.forecastState === 'terminal' ? 'running' : 'completed', stage: options.forecastState === 'terminal' ? 'generating_paths' : 'completed', stage_recorded_at: '2026-07-15T10:00:00Z', attempt: 1, safe_reason: null, record_id: options.forecastState === 'terminal' ? null : forecastRecord.id, created_at: '2026-07-15T10:00:00Z', updated_at: '2026-07-15T10:00:00Z' } })
     unexpectedRequests.push(`${request.method()} ${path}`)
     return json(route, { detail: `Unhandled Forecast fixture route: ${path}` }, 500)
   })
   await page.route('**/api/forecast/jobs/**/stream', route => options.forecastState === 'terminal'
     ? route.abort('connectionreset')
-    : route.fulfill({ contentType: 'text/event-stream', body: 'event: forecast_progress\ndata: {"job_id":"forecast-job-1","stage":"completed","status":"completed","record_id":"forecast-record-1"}\n\n' }))
+    : route.fulfill({ contentType: 'text/event-stream', body: 'id: 1\nevent: forecast_progress\ndata: {"job_id":"forecast-job-1","stage":"completed","status":"completed","stage_recorded_at":"2026-07-15T10:00:00Z"}\n\n' }))
 
   return {
     apiRequests,
@@ -733,7 +747,7 @@ test.describe('Phase 05 optional enhancement browser contracts', () => {
     const insufficient = panel.getByRole('row', { name: /证据不足/ })
     await expect(insufficient).toContainText(/缺少已披露季度值/)
     await expect(insufficient.getByText(/^0(?:\.0+)?$/)).toHaveCount(0)
-    for (const label of ['到期时间', '检查时间', '观测值', '证据', '版本', '检查周期']) await expect(panel.getByRole('columnheader', { name: label, exact: true })).toBeVisible()
+    for (const label of ['到期时间', '检查时间', '观测值', '证据', '版本', '检查周期']) await expect(panel.getByRole('table', { name: '投资论点证据检查历史' }).getByRole('columnheader', { name: label, exact: true })).toBeVisible()
     await expect(panel.getByRole('heading', { name: '待确认失效结论' })).toHaveCount(1)
     await expect(panel.getByText('当前官方状态未改变，等待你的确认。')).toBeVisible()
     expect(telemetry.mutationBodies).toEqual([])
@@ -982,6 +996,239 @@ test.describe('Phase 05 optional enhancement browser contracts', () => {
       adjustment_policy: 'governed_adjusted_daily',
       cost_policy: { commission_bps: 3, slippage_bps: 5, stamp_duty_bps: 5 },
     })
+    expectNoAuthorityRequests(telemetry)
+  })
+
+  test('rapid stock switch keeps Phase 05 object authority local', async ({ page }) => {
+    const alternate = { symbol: '000001.SZ', name: '平安银行' }
+    const telemetry = await installPhase5Fixture(page, { thesisState: 'pending', forecastState: 'populated' })
+    await page.route('**/api/kline/instruments/search**', route => json(route, { results: [alternate] }))
+    await page.route('**/api/analysis/subjects/instrument/000001.SZ/reports', async route => {
+      const { promise, resolve } = Promise.withResolvers<void>()
+      setTimeout(resolve, 600)
+      await promise
+      return json(route, { reports: [] })
+    })
+    await page.route('**/api/theses/instruments/000001.SZ/**', async route => {
+      const { promise, resolve } = Promise.withResolvers<void>()
+      setTimeout(resolve, 600)
+      await promise
+      const path = new URL(route.request().url()).pathname
+      if (path.endsWith('/versions')) return json(route, { items: [], offset: 0, limit: 25, total: 0, has_more: false, current_version_id: null })
+      if (path.endsWith('/checks')) return json(route, { items: [], offset: 0, limit: 50, total: 0, has_more: false })
+      if (path.endsWith('/pending')) return json(route, { items: [], offset: 0, limit: 50, total: 0, has_more: false })
+      if (path.endsWith('/history')) return json(route, { items: [], offset: 0, limit: 50, total: 0, has_more: false })
+      return json(route, { detail: 'alternate thesis route not found' }, 404)
+    })
+    await page.route('**/api/forecast/instruments/000001.SZ/**', async route => {
+      const { promise, resolve } = Promise.withResolvers<void>()
+      setTimeout(resolve, 600)
+      await promise
+      const path = new URL(route.request().url()).pathname
+      if (path.endsWith('/records')) return json(route, { records: [], page: { offset: 0, limit: 25, total: 0, has_more: false }, latest_governed_session_id: 'CNA-20260715' })
+      if (path.endsWith('/jobs')) return json(route, { jobs: [], page: { offset: 0, limit: 25, total: 0, has_more: false } })
+      return json(route, { detail: 'alternate forecast route not found' }, 404)
+    })
+
+    await selectStock(page)
+    await page.goto('/stock-analysis')
+    const thesis = await openAnalysisTab(page, THESIS_TAB)
+    await expect(thesis.getByRole('button', { name: '确认论点失效' })).toBeVisible()
+    const forecast = await openAnalysisTab(page, FORECAST_TAB)
+    await expect(forecast.getByRole('heading', { name: '预测 F-001', exact: true })).toBeVisible()
+
+    const search = page.getByPlaceholder('输入股票代码或名称，如 600000 / 浦发')
+    await search.fill('000001')
+    await expect(page.getByRole('button', { name: /000001\.SZ.*平安银行/ })).toBeVisible()
+    await search.press('Enter')
+    await expect(page.getByText(`${alternate.name}（${alternate.symbol}）`).first()).toBeVisible()
+    await expect(page.getByRole('tab', { name: '分析结论' })).toHaveAttribute('aria-selected', 'true')
+    await expect(page.getByRole('button', { name: '确认论点失效' })).toHaveCount(0, { timeout: 300 })
+    await expect(page.getByRole('heading', { name: '预测 F-001', exact: true })).toHaveCount(0, { timeout: 300 })
+
+    await openAnalysisTab(page, FORECAST_TAB)
+    await expect(page.getByText('尚无此标的的概率预测')).toBeVisible()
+    await page.route('**/api/kline/instruments/search**', route => json(route, { results: [STOCK] }))
+    await search.fill(STOCK.symbol)
+    await expect(page.getByRole('button', { name: /600519\.SH.*贵州茅台/ })).toBeVisible()
+    await search.press('Enter')
+    await expect(page.getByRole('tab', { name: FORECAST_TAB })).toHaveAttribute('aria-selected', 'true')
+    expectNoAuthorityRequests(telemetry)
+  })
+
+  test('StockAnalysis narrow dialog focus contract', async ({ page }) => {
+    const report = {
+      id: 'stock-report-today', symbol: STOCK.symbol, name: STOCK.name,
+      created_at: new Date().toISOString(), focus: '今日关键价位', summary: '历史报告只读摘要', close: 1450,
+    }
+    await installPhase5Fixture(page)
+    await page.route('**/api/stock-analysis/reports', route => json(route, { reports: [report] }))
+    await page.setViewportSize({ width: 375, height: 844 })
+    await selectStock(page)
+    await page.goto('/stock-analysis')
+
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(375)
+    const deleteControl = page.getByRole('button', { name: '删除' })
+    await deleteControl.focus()
+    await expect(deleteControl).toBeFocused()
+    await expect.poll(() => deleteControl.evaluate(element => Number(getComputedStyle(element).opacity))).toBe(1)
+
+    const trigger = page.getByRole('button', { name: 'AI 个股分析' })
+    await trigger.focus()
+    await trigger.press('Enter')
+    const dialog = page.getByRole('dialog', { name: '该个股已有分析报告' })
+    await expect(dialog).toHaveAttribute('aria-modal', 'true')
+    const firstAction = dialog.getByRole('button', { name: '查看历史' })
+    const lastAction = dialog.getByRole('button', { name: '重新分析' })
+    await expect(firstAction).toBeFocused()
+    await page.keyboard.press('Shift+Tab')
+    await expect(lastAction).toBeFocused()
+    await page.keyboard.press('Tab')
+    await expect(firstAction).toBeFocused()
+    await page.keyboard.press('Escape')
+    await expect(dialog).toBeHidden()
+    await expect(trigger).toBeFocused()
+  })
+
+  test('complete path pages and durable retry', async ({ page }) => {
+    const telemetry = await installPhase5Fixture(page, { forecastState: 'populated' })
+    const pagedRecord = { ...forecastRecord, paths: undefined, horizon: 5, catalog_id: 'record-approved' }
+    const submissions: Array<Record<string, unknown>> = []
+    const requestedOffsets: number[] = []
+    await page.route('**/api/forecast/catalog', route => json(route, {
+      entries: [
+        { ...forecastRecord.checkpoint, catalog_id: 'request-default', available: true, integrity: 'verified' },
+        { ...forecastRecord.checkpoint, catalog_id: 'record-approved', available: true, integrity: 'verified' },
+      ],
+    }))
+    await page.route(`**/api/forecast/instruments/${STOCK.symbol}/records**`, route => json(route, {
+      records: [pagedRecord],
+      page: { offset: 0, limit: 25, total: 1, has_more: false },
+      latest_governed_session_id: 'CNA-20260715',
+    }))
+    await page.route(`**/api/forecast/instruments/${STOCK.symbol}/jobs**`, route => {
+      const request = route.request()
+      if (request.method() === 'GET') return json(route, { jobs: [], page: { offset: 0, limit: 25, total: 0, has_more: false } })
+      const body = request.postDataJSON() as Record<string, unknown>
+      submissions.push(body)
+      if (submissions.length === 1) return route.abort('connectionreset')
+      return json(route, { job: { id: 'forecast-retry-job', instrument: STOCK.symbol, horizon: body.horizon, catalog_id: body.catalog_id, status: 'completed', stage: 'completed', stage_recorded_at: '2026-07-17T09:30:00Z', attempt: 1, created_at: '2026-07-17T09:30:00Z', updated_at: '2026-07-17T09:30:00Z', record_id: pagedRecord.id } }, 201)
+    })
+    await page.route(`**/api/forecast/records/${pagedRecord.id}/paths**`, route => {
+      const url = new URL(route.request().url())
+      const offset = Number(url.searchParams.get('offset') ?? 0)
+      const limit = Number(url.searchParams.get('limit') ?? 12)
+      requestedOffsets.push(offset)
+      const selected = Array.from({ length: Math.min(limit, 32 - offset) }, (_, index) => offset + index)
+      const items = selected.flatMap(pathIndex => ['CNA-20260801', 'CNA-20260804'].flatMap((sessionId, sessionIndex) => [
+        { path_index: pathIndex, session_id: sessionId, feature: 'close', value: 1450 + pathIndex + sessionIndex },
+        { path_index: pathIndex, session_id: sessionId, feature: 'volume', value: 100000 + pathIndex * 100 + sessionIndex },
+      ]))
+      return json(route, { paths: { items, offset, limit, total: 32, has_more: offset + selected.length < 32 } })
+    })
+
+    await selectStock(page)
+    await page.goto('/stock-analysis')
+    const panel = await openAnalysisTab(page, FORECAST_TAB)
+    await panel.getByRole('button', { name: '查看采样路径' }).click()
+    await expect(panel.getByText('共 32 条路径 · 第 1/3 页')).toBeVisible()
+    await panel.getByRole('button', { name: '下一页采样路径' }).click()
+    await expect(panel.getByText('共 32 条路径 · 第 2/3 页')).toBeVisible()
+    await panel.getByRole('button', { name: '下一页采样路径' }).click()
+    await expect(panel.getByText('共 32 条路径 · 第 3/3 页')).toBeVisible()
+    await expect(panel.getByRole('checkbox', { name: '采样路径 25' })).toBeVisible()
+    expect(requestedOffsets).toEqual(expect.arrayContaining([0, 12, 24]))
+
+    await panel.getByRole('button', { name: '基于相同配置创建新预测' }).click()
+    await expect(panel.getByRole('button', { name: '查看恢复方式' })).toBeVisible()
+    await panel.getByRole('button', { name: '查看恢复方式' }).click()
+    await expect.poll(() => submissions.length).toBe(2)
+    expect(submissions[0].idempotency_key).toBe(submissions[1].idempotency_key)
+    expect(submissions[1]).toMatchObject({ horizon: 5, catalog_id: 'record-approved' })
+    expectNoAuthorityRequests(telemetry)
+  })
+
+  test('paged Thesis history and strict condition review', async ({ page }) => {
+    const telemetry = await installPhase5Fixture(page, { thesisState: 'populated' })
+    const routeOffsets: Record<string, number[]> = { versions: [], checks: [], pending: [], history: [] }
+    await page.route(`**/api/theses/instruments/${STOCK.symbol}/**`, route => {
+      const url = new URL(route.request().url())
+      const resource = url.pathname.split('/').at(-1) as keyof typeof routeOffsets
+      const offset = Number(url.searchParams.get('offset') ?? 0)
+      const limit = Number(url.searchParams.get('limit') ?? 1)
+      routeOffsets[resource].push(offset)
+      if (resource === 'versions') {
+        const items = offset === 0 ? [thesisVersion(2)] : [thesisVersion(1)]
+        return json(route, { items, current_version_id: 'thesis-version-2', offset, limit, total: 2, has_more: offset === 0 })
+      }
+      if (resource === 'checks') {
+        const items = offset === 0 ? thesisChecks.slice(0, 2) : thesisChecks.slice(2)
+        return json(route, { items, offset, limit, total: 4, has_more: offset === 0 })
+      }
+      if (resource === 'pending') return json(route, { items: [], offset, limit, total: 0, has_more: false })
+      if (resource === 'history') {
+        const item = { ...pending, id: offset === 0 ? 'history-current' : 'history-superseded', status: offset === 0 ? 'pending' : 'confirmed', actionable: offset === 0, superseded: offset > 0 }
+        return json(route, { items: [item], offset, limit, total: 2, has_more: offset === 0 })
+      }
+      return json(route, { detail: 'unknown thesis page' }, 404)
+    })
+
+    await selectStock(page)
+    await page.goto('/stock-analysis')
+    const panel = await openAnalysisTab(page, THESIS_TAB)
+    await panel.getByRole('button', { name: '加载更多论点版本' }).click()
+    await expect(panel.getByRole('row', { name: /^版本 1 / })).toBeVisible()
+    await panel.getByRole('button', { name: '加载更多检查记录' }).click()
+    await expect(panel.getByText('检查错误', { exact: true })).toBeVisible()
+    await panel.getByRole('button', { name: '加载更多论点历史' }).click()
+    await expect(panel.getByRole('row', { name: /history-superseded.*已确认/ })).toBeVisible()
+    expect(routeOffsets.versions).toEqual(expect.arrayContaining([0, 1]))
+    expect(routeOffsets.checks).toEqual(expect.arrayContaining([0, 2]))
+    expect(routeOffsets.history).toEqual(expect.arrayContaining([0, 1]))
+
+    await panel.getByRole('button', { name: '基于此版本创建新版本' }).click()
+    await panel.getByLabel('版本变更理由').fill('严格校验区间与 lookback')
+    await panel.getByLabel('运算符').first().selectOption('between')
+    await panel.getByLabel('阈值').first().fill('850')
+    await panel.getByRole('button', { name: '进入审阅' }).click()
+    await expect(panel.getByRole('alert')).toContainText('区间阈值必须恰好包含两个有限数字')
+    await panel.getByLabel('阈值').first().fill('900,850')
+    await panel.getByRole('button', { name: '进入审阅' }).click()
+    await expect(panel.getByRole('alert')).toContainText('区间下限必须小于或等于上限')
+    await panel.getByLabel('阈值').first().fill('850,900')
+    await panel.getByLabel('lookback（日）').first().fill('0')
+    await panel.getByRole('button', { name: '进入审阅' }).click()
+    await expect(panel.getByRole('alert')).toContainText('lookback 必须是正整数')
+    await panel.getByLabel('lookback（日）').first().fill('1.5')
+    await panel.getByRole('button', { name: '进入审阅' }).click()
+    await expect(panel.getByRole('alert')).toContainText('lookback 必须是正整数')
+    expectNoAuthorityRequests(telemetry)
+  })
+
+  test('Forecast SSE persisted resume and flapping budget', async ({ page }) => {
+    await page.clock.install()
+    const telemetry = await installPhase5Fixture(page, { forecastState: 'terminal' })
+    const resumeHeaders: Array<string | undefined> = []
+    let streamRequests = 0
+    await page.route('**/api/forecast/jobs/**/stream', route => {
+      streamRequests += 1
+      resumeHeaders.push(route.request().headers()['last-event-id'])
+      if (streamRequests === 1) {
+        return route.fulfill({ status: 200, contentType: 'text/event-stream', body: 'id: 3\nevent: forecast_progress\ndata: {"job_id":"forecast-job-2","stage":"generating_paths","status":"running","stage_recorded_at":"2026-07-17T09:30:00Z"}\n\n' })
+      }
+      if (streamRequests === 2) return json(route, { detail: { code: 'forecast_subscription_capacity', retryable: true } }, 429)
+      return route.fulfill({ status: 200, contentType: 'text/event-stream', body: 'event: stream_ready\ndata: {}\n\n' })
+    })
+
+    await selectStock(page)
+    await page.goto('/stock-analysis')
+    const panel = await openAnalysisTab(page, FORECAST_TAB)
+    await panel.getByRole('button', { name: '生成概率预测' }).click()
+    await page.clock.runFor(40_000)
+    await expect.poll(() => streamRequests).toBe(6)
+    expect(resumeHeaders[0]).toBeUndefined()
+    expect(resumeHeaders.slice(1)).toEqual(['3', '3', '3', '3', '3'])
+    await expect(panel.getByText('进度连接已中断，正在按记录状态重新连接。')).toBeVisible()
     expectNoAuthorityRequests(telemetry)
   })
 })
