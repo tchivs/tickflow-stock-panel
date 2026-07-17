@@ -1,4 +1,5 @@
 """Versioned migrations for the operational SQLite database."""
+
 from __future__ import annotations
 
 import sqlite3
@@ -138,7 +139,7 @@ MIGRATIONS: tuple[str, ...] = (
     );
 
     CREATE INDEX idx_notification_deliveries_event_id ON notification_deliveries(event_id, id);
-    """, 
+    """,
     """
     ALTER TABLE accounts ADD COLUMN notes TEXT NOT NULL DEFAULT '';
     ALTER TABLE positions ADD COLUMN notes TEXT NOT NULL DEFAULT '';
@@ -1205,6 +1206,107 @@ MIGRATIONS: tuple[str, ...] = (
     CREATE TRIGGER forecast_outcomes_no_delete BEFORE DELETE ON forecast_outcomes BEGIN SELECT RAISE(ABORT, 'phase 05 facts are immutable'); END;
     CREATE TRIGGER forecast_calibration_facts_no_update BEFORE UPDATE ON forecast_calibration_facts BEGIN SELECT RAISE(ABORT, 'phase 05 facts are immutable'); END;
     CREATE TRIGGER forecast_calibration_facts_no_delete BEFORE DELETE ON forecast_calibration_facts BEGIN SELECT RAISE(ABORT, 'phase 05 facts are immutable'); END;
+    """,
+    """
+    CREATE TABLE shadow_candidate_request_identities (
+        logical_key_digest TEXT PRIMARY KEY CHECK (length(logical_key_digest) = 64),
+        request_digest TEXT NOT NULL CHECK (length(request_digest) = 64),
+        candidate_id TEXT NOT NULL UNIQUE REFERENCES shadow_candidates(id) ON DELETE RESTRICT,
+        created_at TEXT NOT NULL
+    );
+    CREATE TABLE shadow_retention_decision_identities (
+        logical_key_digest TEXT PRIMARY KEY CHECK (length(logical_key_digest) = 64),
+        decision_digest TEXT NOT NULL CHECK (length(decision_digest) = 64),
+        retention_event_id TEXT NOT NULL UNIQUE REFERENCES shadow_retention_events(id) ON DELETE RESTRICT,
+        created_at TEXT NOT NULL
+    );
+    CREATE TRIGGER shadow_candidate_request_identities_no_update
+    BEFORE UPDATE ON shadow_candidate_request_identities
+    BEGIN SELECT RAISE(ABORT, 'phase 05 facts are immutable'); END;
+    CREATE TRIGGER shadow_candidate_request_identities_no_delete
+    BEFORE DELETE ON shadow_candidate_request_identities
+    BEGIN SELECT RAISE(ABORT, 'phase 05 facts are immutable'); END;
+    CREATE TRIGGER shadow_retention_decision_identities_no_update
+    BEFORE UPDATE ON shadow_retention_decision_identities
+    BEGIN SELECT RAISE(ABORT, 'phase 05 facts are immutable'); END;
+    CREATE TRIGGER shadow_retention_decision_identities_no_delete
+    BEFORE DELETE ON shadow_retention_decision_identities
+    BEGIN SELECT RAISE(ABORT, 'phase 05 facts are immutable'); END;
+    """,
+    """
+    CREATE TABLE shadow_evaluation_pairs (
+        id TEXT PRIMARY KEY,
+        pair_key_digest TEXT NOT NULL UNIQUE CHECK (length(pair_key_digest) = 64),
+        pair_digest TEXT NOT NULL CHECK (length(pair_digest) = 64),
+        candidate_id TEXT NOT NULL REFERENCES shadow_candidates(id) ON DELETE RESTRICT,
+        evidence_set_id TEXT NOT NULL REFERENCES shadow_evidence_sets(id) ON DELETE RESTRICT,
+        evidence_set_fingerprint TEXT NOT NULL CHECK (length(evidence_set_fingerprint) = 64),
+        in_sample_window_json TEXT NOT NULL,
+        out_of_sample_window_json TEXT NOT NULL,
+        adjustment_policy TEXT NOT NULL,
+        cost_policy_json TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    );
+    CREATE TABLE shadow_evaluation_attempts (
+        id TEXT PRIMARY KEY,
+        pair_id TEXT REFERENCES shadow_evaluation_pairs(id) ON DELETE RESTRICT,
+        run_id TEXT NOT NULL UNIQUE REFERENCES shadow_candidate_runs(id) ON DELETE RESTRICT,
+        candidate_id TEXT NOT NULL REFERENCES shadow_candidates(id) ON DELETE RESTRICT,
+        split_kind TEXT NOT NULL CHECK (split_kind IN ('in_sample', 'out_of_sample')),
+        attempt INTEGER NOT NULL CHECK (attempt > 0),
+        retry_of_evaluation_id TEXT REFERENCES shadow_evaluation_attempts(id) ON DELETE RESTRICT,
+        window_start TEXT NOT NULL,
+        window_end TEXT NOT NULL CHECK (window_end >= window_start),
+        governed_fingerprint TEXT NOT NULL CHECK (length(governed_fingerprint) = 64),
+        artifact_descriptor_json TEXT NOT NULL,
+        adjustment_policy TEXT NOT NULL,
+        cost_policy_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(pair_id, split_kind, attempt)
+    );
+    CREATE INDEX idx_shadow_evaluation_pairs_candidate
+        ON shadow_evaluation_pairs(candidate_id, created_at, id);
+    CREATE INDEX idx_shadow_evaluation_attempts_pair
+        ON shadow_evaluation_attempts(pair_id, split_kind, attempt);
+    CREATE INDEX idx_shadow_evaluation_attempts_candidate
+        ON shadow_evaluation_attempts(candidate_id, created_at, id);
+
+    INSERT INTO shadow_evaluation_attempts
+        (id, pair_id, run_id, candidate_id, split_kind, attempt,
+         retry_of_evaluation_id, window_start, window_end, governed_fingerprint,
+         artifact_descriptor_json, adjustment_policy, cost_policy_json, created_at)
+    SELECT
+        json_extract(runner_manifest_json, '$.evaluation_id'),
+        NULL,
+        id,
+        candidate_id,
+        json_extract(runner_manifest_json, '$.split_kind'),
+        attempt,
+        json_extract(runner_manifest_json, '$.retry_of_evaluation_id'),
+        json_extract(runner_manifest_json, '$.window.start'),
+        json_extract(runner_manifest_json, '$.window.end'),
+        governed_fingerprint,
+        json_extract(runner_manifest_json, '$.artifact'),
+        json_extract(runner_manifest_json, '$.adjustment_policy'),
+        json_extract(runner_manifest_json, '$.cost_policy'),
+        created_at
+    FROM shadow_candidate_runs
+    WHERE json_valid(runner_manifest_json)
+      AND json_type(runner_manifest_json, '$.evaluation_id') = 'text'
+      AND json_type(runner_manifest_json, '$.split_kind') = 'text';
+
+    CREATE TRIGGER shadow_evaluation_pairs_no_update
+    BEFORE UPDATE ON shadow_evaluation_pairs
+    BEGIN SELECT RAISE(ABORT, 'phase 05 facts are immutable'); END;
+    CREATE TRIGGER shadow_evaluation_pairs_no_delete
+    BEFORE DELETE ON shadow_evaluation_pairs
+    BEGIN SELECT RAISE(ABORT, 'phase 05 facts are immutable'); END;
+    CREATE TRIGGER shadow_evaluation_attempts_no_update
+    BEFORE UPDATE ON shadow_evaluation_attempts
+    BEGIN SELECT RAISE(ABORT, 'phase 05 facts are immutable'); END;
+    CREATE TRIGGER shadow_evaluation_attempts_no_delete
+    BEFORE DELETE ON shadow_evaluation_attempts
+    BEGIN SELECT RAISE(ABORT, 'phase 05 facts are immutable'); END;
     """,
 )
 

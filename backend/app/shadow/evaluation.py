@@ -5,11 +5,13 @@ loads the immutable candidate and evidence facts, freezes each declared chronolo
 window independently, and gives a bounded collaborator only canonical rule data plus
 the frozen input descriptor.
 """
+
 from __future__ import annotations
 
 import math
 from collections.abc import Mapping
 from datetime import date
+from threading import Lock
 from typing import Protocol
 
 _REQUIRED_METRICS = (
@@ -29,6 +31,7 @@ _RETRYABLE_STATUSES = frozenset(
     {"failed", "failed_gate", "timeout", "resource_exhausted", "interrupted"}
 )
 _COST_FIELDS = frozenset({"commission_bps", "slippage_bps", "stamp_duty_bps"})
+_PAIR_EXECUTION_LOCK = Lock()
 
 
 class ShadowEvaluationError(ValueError):
@@ -40,7 +43,13 @@ class EvaluationRepository(Protocol):
 
     def get_evidence_set(self, evidence_set_id: str) -> dict[str, object] | None: ...
 
-    def append_evaluation_attempt(self, payload: dict[str, object]) -> dict[str, object]: ...
+    def get_evaluation_pair(self, payload: Mapping[str, object]) -> dict[str, object] | None: ...
+
+    def reserve_evaluation_pair(self, payload: Mapping[str, object]) -> dict[str, object]: ...
+
+    def reserve_evaluation_retry(
+        self, *, pair_id: str, evaluation_id: str
+    ) -> dict[str, object]: ...
 
     def complete_evaluation(
         self, evaluation_id: str, terminal: dict[str, object]
@@ -83,6 +92,7 @@ class ShadowEvaluationService:
         self.repository = repository
         self.feature_freezer = feature_freezer
         self.runner = runner
+        self._pair_lock = _PAIR_EXECUTION_LOCK
 
     def evaluate_candidate(
         self,
@@ -106,111 +116,128 @@ class ShadowEvaluationService:
             raise ShadowEvaluationError("in-sample and out-of-sample windows must not overlap")
         adjustment = self._bounded_text(adjustment_policy, "adjustment policy", 256)
         costs = self._cost_policy(cost_policy)
+        pair_request: dict[str, object] = {
+            "candidate_id": str(candidate["id"]),
+            "evidence_set_id": str(evidence["id"]),
+            "evidence_set_fingerprint": str(evidence["fingerprint"]),
+            "in_sample_window": in_sample,
+            "out_of_sample_window": out_of_sample,
+            "adjustment_policy": adjustment,
+            "cost_policy": costs,
+        }
 
-        results: dict[str, dict[str, object]] = {}
-        for split_kind, window in (
-            ("in_sample", in_sample),
-            ("out_of_sample", out_of_sample),
-        ):
-            frozen_input = self._frozen_input(
-                evidence=evidence,
-                split_kind=split_kind,
-                window=window,
-                adjustment_policy=adjustment,
-            )
-            results[split_kind] = self._run_attempt(
-                candidate=candidate,
-                evidence=evidence,
-                split_kind=split_kind,
-                window=window,
-                frozen_input=frozen_input,
-                adjustment_policy=adjustment,
-                cost_policy=costs,
-                retry_of_evaluation_id=None,
-            )
-        return results
+        with self._pair_lock:
+            pair = self.repository.get_evaluation_pair(pair_request)
+            if pair is None:
+                splits: dict[str, dict[str, object]] = {}
+                for split_kind, window in (
+                    ("in_sample", in_sample),
+                    ("out_of_sample", out_of_sample),
+                ):
+                    frozen = self._frozen_input(
+                        evidence=evidence,
+                        split_kind=split_kind,
+                        window=window,
+                        adjustment_policy=adjustment,
+                    )
+                    splits[split_kind] = {
+                        "window": frozen["window"],
+                        "governed_fingerprint": frozen["governed_fingerprint"],
+                        "artifact": frozen["artifact"],
+                    }
+                pair = self.repository.reserve_evaluation_pair({**pair_request, "splits": splits})
+            pair_id = pair.get("id")
+            if not isinstance(pair_id, str) or not pair_id:
+                raise ShadowEvaluationError("evaluation repository returned an invalid pair")
+            fresh = pair.get("created") is True
+            results: dict[str, dict[str, object]] = {}
+            for split_kind in ("in_sample", "out_of_sample"):
+                current = pair.get(split_kind)
+                if not isinstance(current, Mapping):
+                    raise ShadowEvaluationError("evaluation repository returned an incomplete pair")
+                status = current.get("status")
+                if status == "passed":
+                    results[split_kind] = dict(current)
+                    continue
+                if status not in _RETRYABLE_STATUSES:
+                    raise ShadowEvaluationError("evaluation pair contains a non-retryable split")
+                attempt = (
+                    dict(current)
+                    if fresh
+                    else self.repository.reserve_evaluation_retry(
+                        pair_id=pair_id, evaluation_id=str(current["id"])
+                    )
+                )
+                if attempt.get("status") == "passed":
+                    results[split_kind] = dict(attempt)
+                    continue
+                results[split_kind] = self._run_reserved_attempt(
+                    candidate=candidate,
+                    attempt=attempt,
+                    cost_policy=costs,
+                )
+            return results
 
     def retry_evaluation(self, *, evaluation_id: str) -> dict[str, object]:
-        previous = self.repository.get_evaluation(
-            self._bounded_text(evaluation_id, "evaluation identifier", 128)
-        )
-        if previous is None or previous.get("status") not in _RETRYABLE_STATUSES:
-            raise ShadowEvaluationError("only a failed terminal evaluation can be retried")
-        candidate_id = previous.get("candidate_id")
-        evidence_set_id = previous.get("evidence_set_id")
-        if not isinstance(candidate_id, str) or not isinstance(evidence_set_id, str):
-            raise ShadowEvaluationError("persisted evaluation attribution is invalid")
-        candidate, evidence = self._canonical_subjects(
-            candidate_id=candidate_id, evidence_set_id=evidence_set_id
-        )
-        if previous.get("evidence_set_fingerprint") != evidence.get("fingerprint"):
-            raise ShadowEvaluationError("persisted evaluation evidence has changed")
-        split_kind = previous.get("split_kind")
+        evaluation_key = self._bounded_text(evaluation_id, "evaluation identifier", 128)
+        with self._pair_lock:
+            previous = self.repository.get_evaluation(evaluation_key)
+            if previous is None or previous.get("status") not in _RETRYABLE_STATUSES:
+                raise ShadowEvaluationError("only a failed terminal evaluation can be retried")
+            candidate_id = previous.get("candidate_id")
+            evidence_set_id = previous.get("evidence_set_id")
+            pair_id = previous.get("pair_id")
+            if (
+                not isinstance(candidate_id, str)
+                or not isinstance(evidence_set_id, str)
+                or not isinstance(pair_id, str)
+            ):
+                raise ShadowEvaluationError("persisted evaluation attribution is invalid")
+            candidate, evidence = self._canonical_subjects(
+                candidate_id=candidate_id, evidence_set_id=evidence_set_id
+            )
+            if previous.get("evidence_set_fingerprint") != evidence.get("fingerprint"):
+                raise ShadowEvaluationError("persisted evaluation evidence has changed")
+            costs = self._cost_policy(previous.get("cost_policy"))
+            attempt = self.repository.reserve_evaluation_retry(
+                pair_id=pair_id, evaluation_id=evaluation_key
+            )
+            if attempt.get("status") == "passed":
+                return dict(attempt)
+            return self._run_reserved_attempt(
+                candidate=candidate,
+                attempt=attempt,
+                cost_policy=costs,
+            )
+
+    def _run_reserved_attempt(
+        self,
+        *,
+        candidate: Mapping[str, object],
+        attempt: Mapping[str, object],
+        cost_policy: dict[str, float],
+    ) -> dict[str, object]:
+        evaluation_id = attempt.get("id")
+        split_kind = attempt.get("split_kind")
+        if not isinstance(evaluation_id, str) or not evaluation_id:
+            raise ShadowEvaluationError("evaluation repository returned an invalid attempt")
         if split_kind not in {"in_sample", "out_of_sample"}:
             raise ShadowEvaluationError("persisted evaluation split is invalid")
-        window = self._window(previous.get("window"), "persisted")
-        fingerprint = self._sha256(
-            previous.get("governed_fingerprint"), "governed fingerprint"
-        )
-        artifact = self._artifact(previous.get("artifact"))
-        adjustment = self._bounded_text(
-            previous.get("adjustment_policy"), "adjustment policy", 256
-        )
-        costs = self._cost_policy(previous.get("cost_policy"))
+        window = self._window(attempt.get("window"), "persisted")
+        fingerprint = self._sha256(attempt.get("governed_fingerprint"), "governed fingerprint")
+        artifact = self._artifact(attempt.get("artifact"))
+        if self._cost_policy(attempt.get("cost_policy")) != cost_policy:
+            raise ShadowEvaluationError("persisted evaluation cost policy diverged")
         frozen_input = {
             "artifact": artifact,
             "governed_fingerprint": fingerprint,
             "window": window,
             "split_kind": split_kind,
         }
-        return self._run_attempt(
-            candidate=candidate,
-            evidence=evidence,
-            split_kind=split_kind,
-            window=window,
-            frozen_input=frozen_input,
-            adjustment_policy=adjustment,
-            cost_policy=costs,
-            retry_of_evaluation_id=str(previous["id"]),
-        )
-
-    def _run_attempt(
-        self,
-        *,
-        candidate: Mapping[str, object],
-        evidence: Mapping[str, object],
-        split_kind: str,
-        window: dict[str, str],
-        frozen_input: Mapping[str, object],
-        adjustment_policy: str,
-        cost_policy: dict[str, float],
-        retry_of_evaluation_id: str | None,
-    ) -> dict[str, object]:
-        artifact = frozen_input.get("artifact")
-        if not isinstance(artifact, Mapping):
-            raise ShadowEvaluationError("frozen artifact descriptor is invalid")
-        payload: dict[str, object] = {
-            "candidate_id": str(candidate["id"]),
-            "evidence_set_id": str(evidence["id"]),
-            "evidence_set_fingerprint": str(evidence["fingerprint"]),
-            "split_kind": split_kind,
-            "window": dict(window),
-            "governed_fingerprint": str(frozen_input["governed_fingerprint"]),
-            "artifact": dict(artifact),
-            "adjustment_policy": adjustment_policy,
-            "cost_policy": dict(cost_policy),
-        }
-        if retry_of_evaluation_id is not None:
-            payload["retry_of_evaluation_id"] = retry_of_evaluation_id
-        attempt = self.repository.append_evaluation_attempt(payload)
-        evaluation_id = attempt.get("id")
-        if not isinstance(evaluation_id, str) or not evaluation_id:
-            raise ShadowEvaluationError("evaluation repository returned an invalid attempt")
-
         try:
             outcome = self.runner.run(
                 candidate=self._runner_candidate(candidate),
-                frozen_input=dict(frozen_input),
+                frozen_input=frozen_input,
                 cost_policy=dict(cost_policy),
             )
             terminal = self._terminal(outcome)
@@ -230,10 +257,9 @@ class ShadowEvaluationService:
         evidence = self.repository.get_evidence_set(evidence_key)
         if candidate is None or evidence is None:
             raise ShadowEvaluationError("candidate or evidence is unavailable")
-        if (
-            candidate.get("evidence_set_id") != evidence_key
-            or candidate.get("evidence_set_fingerprint") != evidence.get("fingerprint")
-        ):
+        if candidate.get("evidence_set_id") != evidence_key or candidate.get(
+            "evidence_set_fingerprint"
+        ) != evidence.get("fingerprint"):
             raise ShadowEvaluationError("candidate and frozen evidence do not match")
         self._sha256(evidence.get("fingerprint"), "evidence fingerprint")
         rules = candidate.get("rules")
@@ -307,13 +333,20 @@ class ShadowEvaluationService:
         metrics: dict[str, float | int] = {}
         for key in _REQUIRED_METRICS:
             item = value[key]
-            if isinstance(item, bool) or not isinstance(item, (int, float)) or not math.isfinite(float(item)):
+            if (
+                isinstance(item, bool)
+                or not isinstance(item, (int, float))
+                or not math.isfinite(float(item))
+            ):
                 raise ShadowEvaluationError("evaluation metrics must be finite numbers")
             metrics[key] = item
         for key in ("precision", "recall", "coverage", "actual_trade_consistency"):
             if not 0 <= float(metrics[key]) <= 1:
                 raise ShadowEvaluationError(f"{key} must be between zero and one")
-        if int(metrics["candidate_trades"]) != metrics["candidate_trades"] or metrics["candidate_trades"] < 0:
+        if (
+            int(metrics["candidate_trades"]) != metrics["candidate_trades"]
+            or metrics["candidate_trades"] < 0
+        ):
             raise ShadowEvaluationError("candidate trades must be a non-negative integer")
         if metrics["costs"] < 0 or metrics["max_drawdown"] > 0:
             raise ShadowEvaluationError("evaluation cost or drawdown metric is invalid")
