@@ -145,9 +145,13 @@ class ShadowRepository:
         database_path: Path,
         *,
         clock: Callable[[], datetime] | None = None,
+        evidence_member_limit: int = 200_000,
     ) -> None:
         self.database_path = Path(database_path)
         self._clock = clock or (lambda: datetime.now(UTC))
+        if not isinstance(evidence_member_limit, int) or not 1 <= evidence_member_limit <= 200_000:
+            raise ValueError("evidence member limit must be between 1 and 200000")
+        self.evidence_member_limit = evidence_member_limit
         self._artifact_verifier: Callable[[Mapping[str, object]], bytes] | None = None
         self.migrate()
 
@@ -174,6 +178,26 @@ class ShadowRepository:
 
     def now(self) -> str:
         return self._clock().astimezone(UTC).isoformat()
+
+    @staticmethod
+    def _page_window(offset: int, limit: int) -> tuple[int, int]:
+        if not isinstance(offset, int) or offset < 0 or offset > 1_000_000:
+            raise ShadowRepositoryError("page offset is invalid")
+        if not isinstance(limit, int) or limit < 1 or limit > 100:
+            raise ShadowRepositoryError("page limit is invalid")
+        return offset, limit
+
+    @staticmethod
+    def _page_result(
+        items: list[dict[str, Any]], *, offset: int, limit: int, total: int
+    ) -> dict[str, Any]:
+        return {
+            "items": items,
+            "offset": offset,
+            "limit": limit,
+            "total": total,
+            "has_more": offset + len(items) < total,
+        }
 
     def append_import_batch(
         self,
@@ -275,10 +299,11 @@ class ShadowRepository:
                 return None
             same = connection.execute(
                 """SELECT id FROM shadow_import_batches
-                   WHERE content_sha256 = ? AND id != ?
+                   WHERE principal = ? AND content_sha256 = ? AND id != ?
                      AND (created_at < ? OR (created_at = ? AND id < ?))
                    ORDER BY created_at, id LIMIT 1""",
                 (
+                    row["principal"],
                     row["content_sha256"],
                     row["id"],
                     row["created_at"],
@@ -296,6 +321,38 @@ class ShadowRepository:
                 (principal,),
             ).fetchall()
         return [self.get_import_batch(str(row["id"])) for row in rows]  # type: ignore[list-item]
+
+    def page_import_batches(
+        self, *, principal: str, offset: int, limit: int
+    ) -> dict[str, Any]:
+        offset, limit = self._page_window(offset, limit)
+        with self._connection() as connection:
+            total = int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM shadow_import_batches WHERE principal = ?",
+                    (principal,),
+                ).fetchone()[0]
+            )
+            rows = connection.execute(
+                """SELECT batch.*,
+                          (SELECT prior.id FROM shadow_import_batches AS prior
+                           WHERE prior.principal = batch.principal
+                             AND prior.content_sha256 = batch.content_sha256
+                             AND prior.id != batch.id
+                             AND (prior.created_at < batch.created_at
+                                  OR (prior.created_at = batch.created_at AND prior.id < batch.id))
+                           ORDER BY prior.created_at, prior.id LIMIT 1) AS scoped_same_content_as
+                   FROM shadow_import_batches AS batch
+                   WHERE batch.principal = ?
+                   ORDER BY batch.created_at DESC, batch.id DESC
+                   LIMIT ? OFFSET ?""",
+                (principal, limit, offset),
+            ).fetchall()
+        items = [
+            self._import_batch_row(row, row["scoped_same_content_as"])
+            for row in rows
+        ]
+        return self._page_result(items, offset=offset, limit=limit, total=total)
 
     def list_trade_facts(self, *, batch_id: str) -> list[dict[str, Any]]:
         with self._connection() as connection:
@@ -326,13 +383,20 @@ class ShadowRepository:
         with self._connection() as connection:
             placeholders = ",".join("?" for _ in batch_ids)
             batch_rows = connection.execute(
-                f"SELECT * FROM shadow_import_batches WHERE id IN ({placeholders})",
-                batch_ids,
+                f"""SELECT * FROM shadow_import_batches
+                    WHERE id IN ({placeholders}) AND principal = ? AND status = 'completed'""",
+                (*batch_ids, principal),
             ).fetchall()
-            if len(batch_rows) != len(batch_ids) or any(
-                row["status"] != "completed" or row["principal"] != principal for row in batch_rows
-            ):
+            if len(batch_rows) != len(batch_ids):
                 raise ShadowEvidenceError("evidence requires an attributable completed batch")
+            aggregate_member_count = int(
+                connection.execute(
+                    f"SELECT COUNT(*) FROM shadow_trade_facts WHERE batch_id IN ({placeholders})",
+                    batch_ids,
+                ).fetchone()[0]
+            )
+            if aggregate_member_count > self.evidence_member_limit:
+                raise ShadowEvidenceError("evidence aggregate member limit exceeded")
             all_trade_rows = connection.execute(
                 f"""SELECT * FROM shadow_trade_facts WHERE batch_id IN ({placeholders})
                     ORDER BY batch_id, source_row_ordinal, id""",
@@ -423,6 +487,25 @@ class ShadowRepository:
                 (principal,),
             ).fetchall()
         return [self._evidence_row(row) for row in rows]
+
+    def page_evidence_sets(
+        self, *, principal: str, offset: int, limit: int
+    ) -> dict[str, Any]:
+        offset, limit = self._page_window(offset, limit)
+        with self._connection() as connection:
+            total = int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM shadow_evidence_sets WHERE principal = ?",
+                    (principal,),
+                ).fetchone()[0]
+            )
+            rows = connection.execute(
+                """SELECT * FROM shadow_evidence_sets WHERE principal = ?
+                   ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?""",
+                (principal, limit, offset),
+            ).fetchall()
+        items = [self._evidence_row(row) for row in rows]
+        return self._page_result(items, offset=offset, limit=limit, total=total)
 
     def resolve_evidence_trades(self, *, evidence_set_id: str) -> list[dict[str, Any]]:
         with self._connection() as connection:
@@ -595,6 +678,29 @@ class ShadowRepository:
                 "SELECT * FROM shadow_candidates ORDER BY created_at, id"
             ).fetchall()
         return [self._candidate_row(row) for row in rows]
+
+    def page_candidates(
+        self, *, principal: str, offset: int, limit: int
+    ) -> dict[str, Any]:
+        offset, limit = self._page_window(offset, limit)
+        ownership = """FROM shadow_candidates AS candidate
+                       JOIN shadow_evidence_sets AS evidence
+                         ON evidence.id = candidate.evidence_set_id
+                       WHERE evidence.principal = ?"""
+        with self._connection() as connection:
+            total = int(
+                connection.execute(
+                    f"SELECT COUNT(*) {ownership}", (principal,)
+                ).fetchone()[0]
+            )
+            rows = connection.execute(
+                f"""SELECT candidate.* {ownership}
+                    ORDER BY candidate.created_at DESC, candidate.id DESC
+                    LIMIT ? OFFSET ?""",
+                (principal, limit, offset),
+            ).fetchall()
+        items = [self._candidate_row(row) for row in rows]
+        return self._page_result(items, offset=offset, limit=limit, total=total)
 
     def get_evaluation_pair(self, payload: Mapping[str, object]) -> dict[str, Any] | None:
         pair_key_digest, _pair_digest = _evaluation_pair_identity(payload)
@@ -870,6 +976,41 @@ class ShadowRepository:
             rows = connection.execute(query, parameters).fetchall()
             return [self._evaluation_attempt(connection, str(row["id"])) for row in rows]
 
+    def page_evaluations(
+        self,
+        *,
+        principal: str,
+        candidate_id: str | None,
+        offset: int,
+        limit: int,
+    ) -> dict[str, Any]:
+        offset, limit = self._page_window(offset, limit)
+        ownership = """FROM shadow_evaluation_attempts AS attempt
+                       JOIN shadow_candidates AS candidate ON candidate.id = attempt.candidate_id
+                       JOIN shadow_evidence_sets AS evidence
+                         ON evidence.id = candidate.evidence_set_id
+                       WHERE evidence.principal = ?"""
+        parameters: list[object] = [principal]
+        if candidate_id is not None:
+            ownership += " AND attempt.candidate_id = ?"
+            parameters.append(candidate_id)
+        with self._connection() as connection:
+            total = int(
+                connection.execute(
+                    f"SELECT COUNT(*) {ownership}", parameters
+                ).fetchone()[0]
+            )
+            rows = connection.execute(
+                f"""SELECT attempt.id {ownership}
+                    ORDER BY attempt.created_at DESC, attempt.id DESC
+                    LIMIT ? OFFSET ?""",
+                (*parameters, limit, offset),
+            ).fetchall()
+            items = [
+                self._evaluation_attempt(connection, str(row["id"])) for row in rows
+            ]
+        return self._page_result(items, offset=offset, limit=limit, total=total)
+
     def append_retention_event(self, payload: dict[str, object]) -> dict[str, Any]:
         required = {
             "candidate_id",
@@ -1034,6 +1175,40 @@ class ShadowRepository:
         with self._connection() as connection:
             rows = connection.execute(query, parameters).fetchall()
         return [dict(row) for row in rows]
+
+    def page_retention_events(
+        self,
+        *,
+        principal: str,
+        candidate_id: str | None,
+        offset: int,
+        limit: int,
+    ) -> dict[str, Any]:
+        offset, limit = self._page_window(offset, limit)
+        ownership = """FROM shadow_retention_events AS retention
+                       JOIN shadow_candidates AS candidate ON candidate.id = retention.candidate_id
+                       JOIN shadow_evidence_sets AS evidence
+                         ON evidence.id = candidate.evidence_set_id
+                       WHERE evidence.principal = ?"""
+        parameters: list[object] = [principal]
+        if candidate_id is not None:
+            ownership += " AND retention.candidate_id = ?"
+            parameters.append(candidate_id)
+        with self._connection() as connection:
+            total = int(
+                connection.execute(
+                    f"SELECT COUNT(*) {ownership}", parameters
+                ).fetchone()[0]
+            )
+            rows = connection.execute(
+                f"""SELECT retention.*, candidate.evidence_set_id,
+                           candidate.evidence_set_fingerprint {ownership}
+                    ORDER BY retention.created_at DESC, retention.id DESC
+                    LIMIT ? OFFSET ?""",
+                (*parameters, limit, offset),
+            ).fetchall()
+        items = [dict(row) for row in rows]
+        return self._page_result(items, offset=offset, limit=limit, total=total)
 
     @staticmethod
     def _evaluation_window(value: object) -> dict[str, str]:

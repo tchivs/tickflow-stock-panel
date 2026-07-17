@@ -202,10 +202,17 @@ def _mapping(raw: str) -> dict[str, str | None]:
         raise HTTPException(status_code=422, detail="Shadow import mapping is invalid") from error
 
 
-def _page_payload(items: list[dict[str, object]], *, offset: int, limit: int) -> tuple[list[dict[str, object]], dict[str, object]]:
-    payload = projections.page(items, offset=offset, limit=limit)
-    page = {key: payload[key] for key in ("offset", "limit", "has_more", "total")}
-    return payload["items"], page  # type: ignore[return-value]
+def _page_payload(
+    payload: Mapping[str, object], projector: Any
+) -> tuple[list[dict[str, object]], dict[str, object]]:
+    records = payload.get("items")
+    if not isinstance(records, list):
+        raise ShadowRepositoryError("repository page items are invalid")
+    items = [projector(record) for record in records if isinstance(record, Mapping)]
+    page = {
+        key: payload[key] for key in ("offset", "limit", "has_more", "total")
+    }
+    return items, page
 
 
 @router.post("/imports/preview")
@@ -215,7 +222,7 @@ async def preview_import(
     mapping: Annotated[str, Form(min_length=2, max_length=8_000)],
     source_timezone: Annotated[str, Form(min_length=1, max_length=64)],
 ) -> dict[str, object]:
-    _principal(request)
+    principal = _principal(request)
     content = await _upload_bytes(file)
     try:
         result = _service(request).preview_import(
@@ -224,6 +231,7 @@ async def preview_import(
             content=content,
             mapping=_mapping(mapping),
             source_timezone=source_timezone,
+            principal=principal,
         )
     except (ShadowImportError, ShadowRepositoryError, RuntimeError) as error:
         raise _translate(error, import_request=True) from error
@@ -237,6 +245,7 @@ async def confirm_import(
     mapping: Annotated[str, Form(min_length=2, max_length=8_000)],
     source_timezone: Annotated[str, Form(min_length=1, max_length=64)],
     source_label: Annotated[str, Form(min_length=1, max_length=256)],
+    preview_identity: Annotated[str, Form(min_length=64, max_length=64)],
     supersedes_batch_id: Annotated[str | None, Form(max_length=128)] = None,
 ) -> dict[str, object]:
     principal = _principal(request)
@@ -251,6 +260,7 @@ async def confirm_import(
             mapping=_mapping(mapping),
             source_timezone=source_timezone,
             principal=principal,
+            preview_identity=preview_identity,
             source_label=source_label,
             supersedes_batch_id=supersedes_batch_id,
         )
@@ -265,8 +275,10 @@ def list_batches(
     offset: int = Query(default=0, ge=0, le=1_000_000),
     limit: int = Query(default=50, ge=1, le=100),
 ) -> dict[str, object]:
-    records = list(reversed(_repository(request).list_import_batches(principal=_principal(request))))
-    items, page = _page_payload([projections.batch(record) for record in records], offset=offset, limit=limit)
+    payload = _repository(request).page_import_batches(
+        principal=_principal(request), offset=offset, limit=limit
+    )
+    items, page = _page_payload(payload, projections.batch)
     return {"batches": items, "page": page}
 
 
@@ -297,8 +309,10 @@ def list_evidence_sets(
     offset: int = Query(default=0, ge=0, le=1_000_000),
     limit: int = Query(default=50, ge=1, le=100),
 ) -> dict[str, object]:
-    records = list(reversed(_repository(request).list_evidence_sets(principal=_principal(request))))
-    items, page = _page_payload([projections.evidence_set(record) for record in records], offset=offset, limit=limit)
+    payload = _repository(request).page_evidence_sets(
+        principal=_principal(request), offset=offset, limit=limit
+    )
+    items, page = _page_payload(payload, projections.evidence_set)
     return {"evidence_sets": items, "page": page}
 
 
@@ -327,15 +341,10 @@ def list_candidates(
     offset: int = Query(default=0, ge=0, le=1_000_000),
     limit: int = Query(default=50, ge=1, le=100),
 ) -> dict[str, object]:
-    _principal(request)
-    records = []
-    for record in reversed(_repository(request).list_candidates()):
-        try:
-            _owned_evidence(request, str(record["evidence_set_id"]))
-        except HTTPException:
-            continue
-        records.append(projections.candidate(record))
-    items, page = _page_payload(records, offset=offset, limit=limit)
+    payload = _repository(request).page_candidates(
+        principal=_principal(request), offset=offset, limit=limit
+    )
+    items, page = _page_payload(payload, projections.candidate)
     return {"candidates": items, "page": page}
 
 
@@ -390,16 +399,13 @@ def list_evaluations(
 ) -> dict[str, object]:
     if candidate_id is not None:
         _owned_candidate(request, candidate_id)
-    else:
-        _principal(request)
-    records = []
-    for record in reversed(_repository(request).list_evaluations(candidate_id=candidate_id)):
-        try:
-            _owned_candidate(request, str(record["candidate_id"]))
-        except HTTPException:
-            continue
-        records.append(projections.evaluation(record))
-    items, page = _page_payload(records, offset=offset, limit=limit)
+    payload = _repository(request).page_evaluations(
+        principal=_principal(request),
+        candidate_id=candidate_id,
+        offset=offset,
+        limit=limit,
+    )
+    items, page = _page_payload(payload, projections.evaluation)
     return {"evaluations": items, "page": page}
 
 
@@ -443,16 +449,13 @@ def list_retentions(
 ) -> dict[str, object]:
     if candidate_id is not None:
         _owned_candidate(request, candidate_id)
-    else:
-        _principal(request)
-    records = []
-    for record in reversed(_repository(request).list_retention_events(candidate_id=candidate_id)):
-        try:
-            _owned_candidate(request, str(record["candidate_id"]))
-        except HTTPException:
-            continue
-        records.append(projections.retention(record))
-    items, page = _page_payload(records, offset=offset, limit=limit)
+    payload = _repository(request).page_retention_events(
+        principal=_principal(request),
+        candidate_id=candidate_id,
+        offset=offset,
+        limit=limit,
+    )
+    items, page = _page_payload(payload, projections.retention)
     return {"retentions": items, "page": page}
 
 

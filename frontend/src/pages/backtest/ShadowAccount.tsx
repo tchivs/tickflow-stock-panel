@@ -10,6 +10,7 @@ import {
   type ShadowEvaluation,
   type ShadowEvaluationSummary,
   type ShadowImportMapping,
+  type ShadowImportPreview,
   type ShadowRule,
 } from '@/lib/phase5Api'
 import { QK } from '@/lib/queryKeys'
@@ -256,6 +257,7 @@ export function ShadowAccount() {
   const [mapping, setMapping] = useState<ShadowImportMapping>(DEFAULT_MAPPING)
   const [sourceTimezone, setSourceTimezone] = useState('Asia/Shanghai')
   const [sourceLabel, setSourceLabel] = useState('本地券商导出')
+  const [currentPreview, setCurrentPreview] = useState<ShadowImportPreview | null>(null)
   const [selectedBatchIds, setSelectedBatchIds] = useState<Set<string>>(() => new Set())
   const [selectedEvidenceId, setSelectedEvidenceId] = useState<string | null>(null)
   const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(null)
@@ -270,6 +272,7 @@ export function ShadowAccount() {
   const importTriggerRef = useRef<HTMLButtonElement>(null)
   const retainTriggerRef = useRef<HTMLButtonElement>(null)
   const errorRef = useRef<HTMLDivElement>(null)
+  const previewRevisionRef = useRef(0)
 
   const capabilityQuery = useQuery({ queryKey: QK.phase5Capabilities, queryFn: phase5Api.capabilities, placeholderData: keepPreviousData })
   const batchesQuery = useQuery({ queryKey: QK.shadow.batches(batchOffset, PAGE_SIZE), queryFn: () => phase5Api.shadowBatches(batchOffset, PAGE_SIZE), placeholderData: keepPreviousData })
@@ -300,17 +303,22 @@ export function ShadowAccount() {
   const evidenceTime = currentEvidence?.created_at ? Date.parse(currentEvidence.created_at) : 0
   const staleEvidence = Boolean(currentCandidate && currentEvidence && batches[0] && (newestBatchTime > evidenceTime || !currentEvidence.included_batch_ids.includes(batches[0].id)))
   const loadFailed = batchesQuery.isError || evidenceQuery.isError || candidatesQuery.isError || evaluationsQuery.isError || retentionsQuery.isError
-
-  const invalidateBatches = () => queryClient.invalidateQueries({ queryKey: QK.shadow.batches() })
-  const invalidateEvidence = () => queryClient.invalidateQueries({ queryKey: QK.shadow.evidenceSets() })
-  const invalidateCandidates = () => queryClient.invalidateQueries({ queryKey: QK.shadow.candidates() })
-  const invalidateEvaluations = () => queryClient.invalidateQueries({ queryKey: QK.shadow.evaluations(null) })
-  const invalidateRetentions = () => queryClient.invalidateQueries({ queryKey: QK.shadow.retentions(null) })
+  const invalidateBatches = () => queryClient.invalidateQueries({ queryKey: ['phase5', 'shadow', 'batches'] })
+  const invalidateEvidence = () => queryClient.invalidateQueries({ queryKey: ['phase5', 'shadow', 'evidence-sets'] })
+  const invalidateCandidates = () => queryClient.invalidateQueries({ queryKey: ['phase5', 'shadow', 'candidates'] })
+  const invalidateEvaluations = () => queryClient.invalidateQueries({ queryKey: ['phase5', 'shadow', 'evaluations'] })
+  const invalidateRetentions = () => queryClient.invalidateQueries({ queryKey: ['phase5', 'shadow', 'retentions'] })
 
   const previewImport = useMutation({
-    mutationFn: phase5Api.shadowPreviewImport,
-    onSuccess: preview => setStatusMessage(`已解析 ${file?.name ?? '成交日志'}；预览 ${preview.sample_rows.length || preview.rows?.length || 0} 行。`),
-    onError: () => requestAnimationFrame(() => errorRef.current?.focus()),
+    mutationFn: ({ input }: { input: Parameters<typeof phase5Api.shadowPreviewImport>[0]; revision: number }) => phase5Api.shadowPreviewImport(input),
+    onSuccess: (preview, variables) => {
+      if (variables.revision !== previewRevisionRef.current) return
+      setCurrentPreview(preview)
+      setStatusMessage(`已解析 ${variables.input.file.name}；预览 ${preview.sample_rows.length || preview.rows?.length || 0} 行。`)
+    },
+    onError: (_error, variables) => {
+      if (variables.revision === previewRevisionRef.current) requestAnimationFrame(() => errorRef.current?.focus())
+    },
   })
   const confirmImport = useMutation({
     mutationFn: phase5Api.shadowConfirmImport,
@@ -378,11 +386,37 @@ export function ShadowAccount() {
     },
   })
 
+  const runPreview = (input: Parameters<typeof phase5Api.shadowPreviewImport>[0]) => {
+    const revision = previewRevisionRef.current + 1
+    previewRevisionRef.current = revision
+    setCurrentPreview(null)
+    setImportConfirmationOpen(false)
+    previewImport.reset()
+    previewImport.mutate({ input, revision })
+  }
+
   const chooseFile = (nextFile: File | null) => {
     setFile(nextFile)
-    if (!nextFile) return
+    if (!nextFile) {
+      previewRevisionRef.current += 1
+      setCurrentPreview(null)
+      setImportConfirmationOpen(false)
+      previewImport.reset()
+      return
+    }
     setStatusMessage(`已选择 ${nextFile.name}（${Math.ceil(nextFile.size / 1024)} KB），正在解析日志…`)
-    previewImport.mutate({ file: nextFile, mapping, source_timezone: sourceTimezone })
+    runPreview({ file: nextFile, mapping, source_timezone: sourceTimezone })
+  }
+
+  const updateMapping = (key: keyof ShadowImportMapping, value: string) => {
+    const nextMapping = { ...mapping, [key]: value || null }
+    setMapping(nextMapping)
+    if (file) runPreview({ file, mapping: nextMapping, source_timezone: sourceTimezone })
+  }
+
+  const updateSourceTimezone = (nextTimezone: string) => {
+    setSourceTimezone(nextTimezone)
+    if (file) runPreview({ file, mapping, source_timezone: nextTimezone })
   }
 
   const evidenceBatchIds = selectedBatchIds.size ? Array.from(selectedBatchIds) : batches.filter(batch => batch.status === 'completed').slice(0, 1).map(batch => batch.id)
@@ -436,7 +470,7 @@ export function ShadowAccount() {
 
           <section aria-labelledby="shadow-import-heading">
             <h3 id="shadow-import-heading" className="text-base font-semibold">1 选择日志 → 2 映射与预览 → 3 确认不可变导入</h3>
-            <p className="mt-2 max-w-[70ch] text-sm text-secondary">支持 CSV 与 XLSX；文件大小上限 8 MB、预览行数最多 50 行，源时区固定审阅为 Asia/Shanghai。文件仅发送到当前自托管服务，不提供手工逐笔录入。</p>
+            <p className="mt-2 max-w-[70ch] text-sm text-secondary">支持 CSV 与 XLSX；文件大小上限 8 MB、预览行数最多 50 行。每次文件、映射或源时区变更都会重新生成服务端确认标识。文件仅发送到当前自托管服务，不提供手工逐笔录入。</p>
             <div className="mt-4 grid gap-4 lg:grid-cols-2">
               <label className="text-sm text-secondary">选择本地成交日志
                 <input aria-label="选择本地成交日志" type="file" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" className={`${CONTROL_CLASS} mt-1 block w-full cursor-pointer file:mr-3 file:rounded-btn file:border-0 file:bg-accent file:px-3 file:py-2 file:text-sm file:font-semibold file:text-white`} onChange={event => chooseFile(event.target.files?.[0] ?? null)} />
@@ -446,7 +480,7 @@ export function ShadowAccount() {
                   <input value={sourceLabel} maxLength={256} className={`${CONTROL_CLASS} mt-1 w-full`} onChange={event => setSourceLabel(event.target.value)} />
                 </label>
                 <label className="text-sm text-secondary">源时区
-                  <select value={sourceTimezone} className={`${CONTROL_CLASS} mt-1 w-full`} onChange={event => setSourceTimezone(event.target.value)}><option value="Asia/Shanghai">Asia/Shanghai</option></select>
+                  <select aria-label="源时区" value={sourceTimezone} className={`${CONTROL_CLASS} mt-1 w-full`} onChange={event => updateSourceTimezone(event.target.value)}><option value="Asia/Shanghai">Asia/Shanghai</option><option value="UTC">UTC</option></select>
                 </label>
               </div>
             </div>
@@ -457,38 +491,38 @@ export function ShadowAccount() {
             {previewImport.isError ? (
               <div ref={errorRef} tabIndex={-1} role="alert" className="mt-4 rounded-card border border-danger/40 bg-danger/10 p-4 focus:outline-none">
                 <p className="font-semibold">无法解析成交日志：{safeReason(previewImport.error)}。请检查格式、字段映射和源时区后重试。</p>
-                <button type="button" className={`${BUTTON_CLASS} mt-3`} disabled={!file} onClick={() => file && previewImport.mutate({ file, mapping, source_timezone: sourceTimezone })}>按当前映射重新解析</button>
+                <button type="button" className={`${BUTTON_CLASS} mt-3`} disabled={!file} onClick={() => file && runPreview({ file, mapping, source_timezone: sourceTimezone })}>按当前映射重新解析</button>
               </div>
             ) : null}
 
-            {previewImport.data ? (
-              <div className="mt-5 space-y-5">
-                <div>
-                  <p className="mb-2 text-xs text-secondary">仅为预览；重复组和 partial fill（部分成交）不会自动删除或合并。</p>
-                  <OverflowTable instructionId="shadow-mapping-scroll-instruction">
-                    <table className="min-w-[760px] w-full">
-                      <caption className="sr-only">Shadow 字段映射预览</caption>
-                      <thead className={TABLE_HEADER_CLASS}><tr><th scope="col" className="px-3 py-2">目标字段</th><th scope="col" className="px-3 py-2">来源列</th><th scope="col" className="px-3 py-2">样例值</th><th scope="col" className="px-3 py-2">单位与时区</th><th scope="col" className="px-3 py-2">状态</th></tr></thead>
-                      <tbody>{MAPPING_FIELDS.map(field => {
-                        const fixtureMapping = previewImport.data.mapping?.find(item => item.target === field.key)
-                        const sampleRow = previewImport.data.sample_rows[0] ?? previewImport.data.rows?.[0]
-                        const sample = fixtureMapping?.sample ?? sampleRow?.[field.key as keyof typeof sampleRow]
-                        return <tr key={field.key}><th scope="row" className={`${TABLE_CELL_CLASS} font-normal text-foreground`}>{field.label} {field.required ? '（必需）' : '（可选）'}</th><td className={TABLE_CELL_CLASS}><input aria-label={`${field.label}来源列`} value={mapping[field.key] ?? ''} className={`${CONTROL_CLASS} w-full min-w-40`} onChange={event => setMapping(previous => ({ ...previous, [field.key]: event.target.value || null }))} /></td><td className={`${TABLE_CELL_CLASS} font-mono`}>{String(sample ?? '未提供')}</td><td className={TABLE_CELL_CLASS}>{field.unit}</td><td className={TABLE_CELL_CLASS}>{mapping[field.key] ? '已映射' : field.required ? '缺少必需映射' : '可选缺失'}</td></tr>
-                      })}</tbody>
-                    </table>
-                  </OverflowTable>
-                </div>
+            {file ? (
+              <div className="mt-5">
+                <OverflowTable instructionId="shadow-mapping-scroll-instruction">
+                  <table className="min-w-[760px] w-full">
+                    <caption className="sr-only">Shadow 字段映射预览</caption>
+                    <thead className={TABLE_HEADER_CLASS}><tr><th scope="col" className="px-3 py-2">目标字段</th><th scope="col" className="px-3 py-2">来源列</th><th scope="col" className="px-3 py-2">样例值</th><th scope="col" className="px-3 py-2">单位与时区</th><th scope="col" className="px-3 py-2">状态</th></tr></thead>
+                    <tbody>{MAPPING_FIELDS.map(field => {
+                      const fixtureMapping = currentPreview?.mapping?.find(item => item.target === field.key)
+                      const sampleRow = currentPreview?.sample_rows[0] ?? currentPreview?.rows?.[0]
+                      const sample = fixtureMapping?.sample ?? sampleRow?.[field.key as keyof typeof sampleRow]
+                      return <tr key={field.key}><th scope="row" className={`${TABLE_CELL_CLASS} font-normal text-foreground`}>{field.label} {field.required ? '（必需）' : '（可选）'}</th><td className={TABLE_CELL_CLASS}><input aria-label={`${field.label}来源列`} value={mapping[field.key] ?? ''} className={`${CONTROL_CLASS} w-full min-w-40`} onChange={event => updateMapping(field.key, event.target.value)} /></td><td className={`${TABLE_CELL_CLASS} font-mono`}>{String(sample ?? '未提供')}</td><td className={TABLE_CELL_CLASS}>{field.unit}</td><td className={TABLE_CELL_CLASS}>{mapping[field.key] ? '已映射' : field.required ? '缺少必需映射' : '可选缺失'}</td></tr>
+                    })}</tbody>
+                  </table>
+                </OverflowTable>
+              </div>
+            ) : null}
 
-                <div>
-                  <OverflowTable instructionId="shadow-preview-scroll-instruction">
-                    <table className="min-w-[760px] w-full">
-                      <caption className="sr-only">Shadow 成交日志仅为预览</caption>
-                      <thead className={TABLE_HEADER_CLASS}><tr><th scope="col" className="px-3 py-2">标的</th><th scope="col" className="px-3 py-2">方向</th><th scope="col" className="px-3 py-2">成交时间</th><th scope="col" className="px-3 py-2 text-right">数量</th><th scope="col" className="px-3 py-2 text-right">价格</th><th scope="col" className="px-3 py-2">重复组</th></tr></thead>
-                      <tbody>{(previewImport.data.sample_rows.length ? previewImport.data.sample_rows : previewImport.data.rows ?? []).map((row, index) => <tr key={`${row.source_row_ordinal ?? index}-${row.broker_fill_id ?? ''}`}><td className={`${TABLE_CELL_CLASS} font-mono`}>{row.symbol ?? '未提供'}</td><td className={TABLE_CELL_CLASS}>{row.side ?? '未提供'}</td><td className={`${TABLE_CELL_CLASS} font-mono`}>{row.executed_at ?? '未提供'}</td><td className={`${TABLE_CELL_CLASS} text-right font-mono tabular-nums`}>{row.quantity ?? '未提供'}</td><td className={`${TABLE_CELL_CLASS} text-right font-mono tabular-nums`}>{row.price ?? '未提供'}</td><td className={`${TABLE_CELL_CLASS} break-words font-mono`}>{row.duplicate_group_hash ?? '无'}</td></tr>)}</tbody>
-                    </table>
-                  </OverflowTable>
-                </div>
-                <button ref={importTriggerRef} type="button" className={PRIMARY_CLASS} disabled={!file || !sourceLabel || confirmImport.isPending} onClick={() => setImportConfirmationOpen(true)}>确认不可变导入</button>
+            {currentPreview ? (
+              <div className="mt-5 space-y-5">
+                <p className="text-xs text-secondary">仅为预览；重复组和 partial fill（部分成交）不会自动删除或合并。</p>
+                <OverflowTable instructionId="shadow-preview-scroll-instruction">
+                  <table className="min-w-[760px] w-full">
+                    <caption className="sr-only">Shadow 成交日志仅为预览</caption>
+                    <thead className={TABLE_HEADER_CLASS}><tr><th scope="col" className="px-3 py-2">标的</th><th scope="col" className="px-3 py-2">方向</th><th scope="col" className="px-3 py-2">成交时间</th><th scope="col" className="px-3 py-2 text-right">数量</th><th scope="col" className="px-3 py-2 text-right">价格</th><th scope="col" className="px-3 py-2">重复组</th></tr></thead>
+                    <tbody>{(currentPreview.sample_rows.length ? currentPreview.sample_rows : currentPreview.rows ?? []).map((row, index) => <tr key={`${row.source_row_ordinal ?? index}-${row.broker_fill_id ?? ''}`}><td className={`${TABLE_CELL_CLASS} font-mono`}>{row.symbol ?? '未提供'}</td><td className={TABLE_CELL_CLASS}>{row.side ?? '未提供'}</td><td className={`${TABLE_CELL_CLASS} font-mono`}>{row.executed_at ?? '未提供'}</td><td className={`${TABLE_CELL_CLASS} text-right font-mono tabular-nums`}>{row.quantity ?? '未提供'}</td><td className={`${TABLE_CELL_CLASS} text-right font-mono tabular-nums`}>{row.price ?? '未提供'}</td><td className={`${TABLE_CELL_CLASS} break-words font-mono`}>{row.duplicate_group_hash ?? '无'}</td></tr>)}</tbody>
+                  </table>
+                </OverflowTable>
+                <button ref={importTriggerRef} type="button" className={PRIMARY_CLASS} disabled={!sourceLabel || confirmImport.isPending} onClick={() => setImportConfirmationOpen(true)}>确认不可变导入</button>
               </div>
             ) : null}
           </section>
@@ -600,7 +634,7 @@ export function ShadowAccount() {
         </div>
       ) : null}
 
-      <ConfirmationDialog open={importConfirmationOpen} title="确认不可变导入" confirmLabel="确认不可变导入" pending={confirmImport.isPending} triggerRef={importTriggerRef} onClose={() => setImportConfirmationOpen(false)} onConfirm={() => file && confirmImport.mutate({ file, mapping, source_timezone: sourceTimezone, source_label: sourceLabel })} description={<dl className="grid gap-2"><div><dt className="font-semibold text-foreground">原文件名</dt><dd className="break-words">{file?.name ?? '未选择'}</dd></div><div><dt className="font-semibold text-foreground">来源标签 / 时区</dt><dd>{sourceLabel} / {sourceTimezone}</dd></div><div><dt className="font-semibold text-foreground">映射 / 行数</dt><dd className="break-words">{JSON.stringify(mapping)} / {previewImport.data?.source_row_count ?? '以服务端确认为准'}</dd></div><div><dt className="font-semibold text-foreground">不可覆写</dt><dd>确认后追加新的不可变批次；不会覆盖、删除或修改任何旧批次，也不会激活策略或执行交易。</dd></div></dl>} />
+      <ConfirmationDialog open={importConfirmationOpen} title="确认不可变导入" confirmLabel="确认不可变导入" pending={confirmImport.isPending || !currentPreview} triggerRef={importTriggerRef} onClose={() => setImportConfirmationOpen(false)} onConfirm={() => file && currentPreview && confirmImport.mutate({ file, mapping, source_timezone: sourceTimezone, source_label: sourceLabel, preview_identity: currentPreview.preview_identity })} description={<dl className="grid gap-2"><div><dt className="font-semibold text-foreground">原文件名</dt><dd className="break-words">{file?.name ?? '未选择'}</dd></div><div><dt className="font-semibold text-foreground">来源标签 / 时区</dt><dd>{sourceLabel} / {sourceTimezone}</dd></div><div><dt className="font-semibold text-foreground">映射 / 行数</dt><dd className="break-words">{JSON.stringify(mapping)} / {currentPreview?.source_row_count ?? '需重新预览'}</dd></div><div><dt className="font-semibold text-foreground">预览确认标识</dt><dd className="break-all font-mono">{currentPreview?.preview_identity ?? '需重新预览'}</dd></div><div><dt className="font-semibold text-foreground">不可覆写</dt><dd>确认后追加新的不可变批次；不会覆盖、删除或修改任何旧批次，也不会激活策略或执行交易。</dd></div></dl>} />
 
       <ConfirmationDialog open={retainConfirmationOpen} title="保留为 Shadow 研究候选" confirmLabel="保留为 Shadow 研究候选" pending={retainCandidate.isPending} triggerRef={retainTriggerRef} onClose={() => setRetainConfirmationOpen(false)} onConfirm={() => currentCandidate && inSample && outOfSample && retainCandidate.mutate({ evidenceSetId: currentCandidate.evidence_set_id, candidateId: currentCandidate.id, inSampleId: inSample.id, outSampleId: outOfSample.id })} description={<>确认保留候选 {currentCandidate?.label ?? currentCandidate?.id}？系统将记录冻结证据集和样本内/样本外评估；不会注册或启用策略，也不会创建监控、计划或市场动作。</>}>
         <label className="mt-4 block text-sm text-secondary">保留理由（至少 10 个字符）<textarea value={retentionRationale} minLength={10} maxLength={4_000} className={`${CONTROL_CLASS} mt-1 min-h-24 w-full`} onChange={event => setRetentionRationale(event.target.value)} /></label>

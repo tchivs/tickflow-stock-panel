@@ -61,6 +61,7 @@ def import_preview(record: Mapping[str, Any], *, max_rows: int = 50) -> dict[str
         "status": str(record.get("status", "preview_ready")),
         "encoding": _optional_text(record.get("encoding")),
         "mapping_version": _optional_text(record.get("mapping_version")),
+        "preview_identity": str(record.get("preview_identity", "")),
         "source_row_count": _nonnegative_int(record.get("source_row_count")),
         "sample_rows": safe_rows,
         "sample_truncated": _nonnegative_int(record.get("source_row_count")) > len(safe_rows),

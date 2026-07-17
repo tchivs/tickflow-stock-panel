@@ -2,24 +2,25 @@
 from __future__ import annotations
 
 import csv
+import json
+import math
+import re
+import sqlite3
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from hashlib import sha256
+from hmac import compare_digest
 from io import BytesIO, StringIO
-import json
-import math
 from pathlib import Path, PurePosixPath
-import re
-from typing import Any, Mapping, Sequence
+from typing import Any
 from uuid import uuid4
 from xml.etree import ElementTree
-import sqlite3
 from zipfile import BadZipFile, ZipFile
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.shadow.artifacts import ShadowArtifactError, ShadowArtifactStore
 from app.shadow.repository import ShadowRepository, ShadowRepositoryError
-
 
 _CANONICAL_FIELDS = frozenset(
     {
@@ -101,6 +102,7 @@ class ShadowImporter:
         content: bytes,
         mapping: Mapping[str, str],
         source_timezone: str,
+        principal: str,
     ) -> dict[str, Any]:
         suffix, canonical_mapping, timezone = self._validate_request(
             filename=filename,
@@ -109,6 +111,7 @@ class ShadowImporter:
             mapping=mapping,
             source_timezone=source_timezone,
         )
+        principal_value = self._bounded_text(principal, "principal", 128)
         rows, encoding = self._parse(
             suffix=suffix,
             content=content,
@@ -119,6 +122,14 @@ class ShadowImporter:
             "status": "preview_ready",
             "encoding": encoding,
             "mapping_version": self.MAPPING_VERSION,
+            "preview_identity": self._preview_identity(
+                suffix=suffix,
+                media_type=media_type,
+                content=content,
+                mapping=canonical_mapping,
+                source_timezone=timezone,
+                principal=principal_value,
+            ),
             "source_row_count": len(rows),
             "rows": rows,
         }
@@ -132,6 +143,7 @@ class ShadowImporter:
         mapping: Mapping[str, str],
         source_timezone: str,
         principal: str,
+        preview_identity: str,
         source_label: str,
         supersedes_batch_id: str | None = None,
     ) -> dict[str, Any]:
@@ -144,6 +156,18 @@ class ShadowImporter:
         )
         principal_value = self._bounded_text(principal, "principal", 128)
         source_label_value = self._bounded_text(source_label, "source label", 256)
+        if not isinstance(preview_identity, str) or len(preview_identity) != 64:
+            raise ShadowImportError("preview identity is invalid")
+        expected_identity = self._preview_identity(
+            suffix=suffix,
+            media_type=media_type,
+            content=content,
+            mapping=canonical_mapping,
+            source_timezone=timezone,
+            principal=principal_value,
+        )
+        if not compare_digest(preview_identity, expected_identity):
+            raise ShadowImportError("preview identity changed; preview again")
         batch_id = uuid4().hex
         try:
             descriptor = self.artifact_store.create(
@@ -210,6 +234,34 @@ class ShadowImporter:
             except ShadowArtifactError:
                 pass
             raise ShadowImportError("import attempt could not be persisted") from error
+
+    def _preview_identity(
+        self,
+        *,
+        suffix: str,
+        media_type: str,
+        content: bytes,
+        mapping: Mapping[str, str],
+        source_timezone: ZoneInfo,
+        principal: str,
+    ) -> str:
+        bound_transform = {
+            "content_sha256": sha256(content).hexdigest(),
+            "format": suffix,
+            "importer_version": self.IMPORTER_VERSION,
+            "mapping": {key: mapping[key] for key in sorted(mapping)},
+            "mapping_version": self.MAPPING_VERSION,
+            "media_type": media_type,
+            "principal": principal,
+            "source_timezone": source_timezone.key,
+        }
+        canonical = json.dumps(
+            bound_transform,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return sha256(canonical).hexdigest()
 
     def _validate_request(
         self,

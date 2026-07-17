@@ -60,6 +60,7 @@ export interface ShadowImportPreview {
   source_row_count: number
   sample_rows: ShadowPreviewRow[]
   sample_truncated: boolean
+  preview_identity: string
   preview_id?: string
   original_filename?: string
   format?: string
@@ -89,6 +90,7 @@ export interface ShadowImportInput {
 
 export interface ShadowConfirmImportInput extends ShadowImportInput {
   source_label: string
+  preview_identity: string
   supersedes_batch_id?: string | null
 }
 
@@ -579,6 +581,7 @@ function importForm(input: ShadowImportInput | ShadowConfirmImportInput): FormDa
   form.set('source_timezone', input.source_timezone)
   if ('source_label' in input) {
     form.set('source_label', input.source_label)
+    form.set('preview_identity', input.preview_identity)
     if (input.supersedes_batch_id) form.set('supersedes_batch_id', input.supersedes_batch_id)
   }
   return form
