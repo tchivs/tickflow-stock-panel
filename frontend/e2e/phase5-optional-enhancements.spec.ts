@@ -33,6 +33,7 @@ type FixtureOptions = {
   forecastState?: 'empty' | 'populated' | 'stale' | 'terminal' | 'partial'
   chartFailure?: boolean
   forecastGate?: 'verified' | 'missing' | 'pair_mismatch' | 'digest_mismatch' | 'calendar_short' | 'coverage_short'
+  retentionFailure?: boolean
 }
 
 type Telemetry = {
@@ -289,7 +290,14 @@ async function installPhase5Fixture(page: Page, options: FixtureOptions = {}): P
     }
     if (path.endsWith('/imports/confirm')) { batchCounter += 1; return json(route, { batch: shadowBatch(`batch-server-${batchCounter}`, `不可变批次 ${batchCounter}`) }, 201) }
     if (path.endsWith('/evidence-sets')) return request.method() === 'POST' ? json(route, { evidence_set: { id: 'evidence-server-1', included_batch_ids: ['batch-server-1'], excluded_trade_ids: [], trade_count: 4, duplicate_groups: 1, partial_fills: 2, fingerprint: LONG_ID, created_at: '2026-07-15T09:10:00Z' } }, 201) : json(route, { evidence_sets: [{ id: 'evidence-server-1', fingerprint: LONG_ID, batch_count: 1, trade_count: 4 }] })
-    if (path.includes('/candidates') && path.endsWith('/retain')) return json(route, { retention: { id: 'retention-server-1', candidate_id: candidate.id, status: 'retained_research_only', created_at: '2026-07-15T09:30:00Z' } }, 201)
+    if (path.includes('/candidates') && path.endsWith('/retain')) {
+      if (options.retentionFailure) {
+        const { promise, resolve } = Promise.withResolvers<void>()
+        setTimeout(resolve, 100)
+        return promise.then(() => json(route, { detail: 'retention state changed; review current evidence' }, 409))
+      }
+      return json(route, { retention: { id: 'retention-server-1', candidate_id: candidate.id, status: 'retained_research_only', created_at: '2026-07-15T09:30:00Z' } }, 201)
+    }
     if (path.endsWith('/candidates') && request.method() === 'POST') return options.shadowState === 'terminal'
       ? json(route, { detail: 'bounded distillation timeout' }, 409)
       : json(route, { candidate }, 201)
@@ -611,6 +619,47 @@ test.describe('Phase 05 optional enhancement browser contracts', () => {
     await expect(panel.getByText('Shadow 研究候选已保留；未注册或启用策略。')).toBeVisible()
     await expect(page.getByRole('button', { name: /启用策略|同步持仓|添加监控|生成交易计划|据此交易/ })).toHaveCount(0)
     expect(telemetry.mutationBodies.filter(entry => entry.path.endsWith('/retain'))).toHaveLength(1)
+    expectNoAuthorityRequests(telemetry)
+  })
+
+  test('Shadow retention dialog validates rationale and contains errors', async ({ page }) => {
+    const telemetry = await installPhase5Fixture(page, { shadowState: 'populated', retentionFailure: true })
+    await page.goto('/backtest')
+    const panel = page.getByRole('region', { name: SHADOW_HEADING })
+    await requireSurface(panel.getByRole('heading', { name: SHADOW_HEADING, exact: true }))
+    const trigger = panel.getByRole('button', { name: '保留为 Shadow 研究候选' })
+
+    await trigger.focus()
+    await page.keyboard.press('Enter')
+    const dialog = page.getByRole('dialog', { name: '保留为 Shadow 研究候选' })
+    const rationale = dialog.getByLabel('保留理由（至少 10 个字符）')
+    const confirm = dialog.getByRole('button', { name: '保留为 Shadow 研究候选' })
+    const live = dialog.locator('[aria-live]')
+    await expect(dialog).toHaveAttribute('aria-modal', 'true')
+    await expect(rationale).toBeFocused()
+    await rationale.fill('   短理由   ')
+    await expect(confirm).toBeDisabled()
+
+    const exactRationale = '这是至少十个字符的 Shadow 保留理由。'
+    await rationale.fill(`   ${exactRationale}   `)
+    await page.keyboard.press('Shift+Tab')
+    await page.keyboard.press('Tab')
+    await expect(rationale).toBeFocused()
+    await page.keyboard.press('Escape')
+    await expect(dialog).toBeHidden()
+    await expect(trigger).toBeFocused()
+
+    await trigger.click()
+    await rationale.fill(`   ${exactRationale}   `)
+    await Promise.all([
+      expect(live).toContainText('正在记录'),
+      confirm.click(),
+    ])
+    await expect(dialog.getByRole('alert')).toContainText('retention state changed')
+    await expect(rationale).toHaveValue(`   ${exactRationale}   `)
+    const retention = telemetry.mutationBodies.findLast(entry => entry.path.endsWith('/retain'))
+    expect(retention?.body).toMatchObject({ rationale: exactRationale })
+    await expect(page.getByRole('button', { name: /启用策略|同步持仓|添加监控|生成交易计划|据此交易/ })).toHaveCount(0)
     expectNoAuthorityRequests(telemetry)
   })
 

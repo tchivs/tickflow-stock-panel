@@ -373,6 +373,56 @@ def test_same_content_lineage_is_principal_scoped(tmp_path):
     assert first["id"] not in json.dumps(other_principal)
 
 
+
+def test_failed_import_temp_cleanup_is_scoped_and_preserves_committed_assets(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.shadow.importer import ShadowImportError
+    from app.shadow.repository import ShadowRepositoryError
+
+    repository, artifacts, importer = _stack(tmp_path)
+    committed = _confirm(importer, "executions_utf8.csv", "text/csv")
+    committed_bytes = artifacts.load(committed["raw_artifact"])
+
+    def fail_append(**_kwargs):
+        raise ShadowRepositoryError("injected database failure")
+
+    monkeypatch.setattr(repository, "append_import_batch", fail_append)
+    with pytest.raises(ShadowImportError, match="could not be persisted"):
+        _confirm(importer, "executions_gb18030.csv", "text/csv")
+
+    assert artifacts.load(committed["raw_artifact"]) == committed_bytes
+    assert {path.name for path in artifacts.root.iterdir()} == {committed["id"]}
+    assert artifacts.list_temporary_namespaces() == []
+
+
+def test_cleanup_failure_is_auditable_and_never_deletes_committed_assets(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.shadow.artifacts import ShadowArtifactError
+    from app.shadow.importer import ShadowImportCleanupError
+    from app.shadow.repository import ShadowRepositoryError
+
+    repository, artifacts, importer = _stack(tmp_path)
+    committed = _confirm(importer, "executions_utf8.csv", "text/csv")
+    committed_bytes = artifacts.load(committed["raw_artifact"])
+
+    def fail_append(**_kwargs):
+        raise ShadowRepositoryError("injected database failure")
+
+    def fail_cleanup(*, batch_id, descriptor):
+        raise ShadowArtifactError(f"injected cleanup failure for {batch_id}")
+
+    monkeypatch.setattr(repository, "append_import_batch", fail_append)
+    monkeypatch.setattr(artifacts, "discard_uncommitted", fail_cleanup)
+    with pytest.raises(ShadowImportCleanupError, match="requires reconciliation") as caught:
+        _confirm(importer, "executions_gb18030.csv", "text/csv")
+
+    assert len(caught.value.batch_id) == 32
+    assert isinstance(caught.value.__cause__, ShadowArtifactError)
+    assert (artifacts.root / caught.value.batch_id).is_dir()
+    assert artifacts.load(committed["raw_artifact"]) == committed_bytes
+
 def test_unpreviewable_parser_failure_persists_no_import_attempt(tmp_path):
     from app.shadow.importer import ShadowImportError
 

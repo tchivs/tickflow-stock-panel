@@ -428,6 +428,143 @@ def test_artifact_metadata_scope_and_parquet_payload_are_verified(tmp_path: Path
         store.descriptor(descriptor.artifact_id)
 
 
+def test_polars_error_cleanup_translates_with_cause_and_preserves_final_assets(
+    tmp_path: Path,
+) -> None:
+    import polars as pl
+
+    from app.optional_artifacts import ManagedArtifactError, ManagedImmutableArtifactStore
+
+    store = ManagedImmutableArtifactStore(tmp_path / "managed")
+    shared = store.create_bytes(
+        b"shared-immutable",
+        schema_version="phase5-test-v1",
+        scope={"kind": "shared"},
+        content_type="application/octet-stream",
+    )
+
+    class FailingFrame:
+        @staticmethod
+        def write_parquet(path: Path) -> None:
+            path.write_bytes(b"partial-sensitive-parquet")
+            raise pl.exceptions.ComputeError("injected parquet compute failure")
+
+    with pytest.raises(ManagedArtifactError, match="Parquet") as caught:
+        store.create_parquet(
+            FailingFrame(),
+            schema_version="governed-panel-v1",
+            scope={"instrument_id": "instrument-600000"},
+        )
+
+    assert isinstance(caught.value.__cause__, pl.exceptions.PolarsError)
+    assert list(store.root.glob(".*.tmp")) == []
+    assert store.load_bytes(shared) == b"shared-immutable"
+
+
+
+def test_polars_error_cleanup_translates_read_failure_without_deleting_final(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import polars as pl
+
+    from app.optional_artifacts import ManagedArtifactError, ManagedImmutableArtifactStore
+
+    store = ManagedImmutableArtifactStore(tmp_path / "managed")
+    descriptor = store.create_parquet(
+        pl.DataFrame({"session_id": ["S1"], "close": [10.0]}),
+        schema_version="governed-panel-v1",
+        scope={"instrument_id": "instrument-600000"},
+    )
+    payload_path = store.root / descriptor.relative_path
+    final_bytes = payload_path.read_bytes()
+
+    def fail_read(_path: Path):
+        raise pl.exceptions.ComputeError("injected parquet read failure")
+
+    monkeypatch.setattr(pl, "read_parquet", fail_read)
+    with pytest.raises(ManagedArtifactError, match="decoded") as caught:
+        store.load_parquet(descriptor)
+
+    assert isinstance(caught.value.__cause__, pl.exceptions.PolarsError)
+    assert payload_path.read_bytes() == final_bytes
+    assert list(store.root.glob(".*.tmp")) == []
+
+
+def test_managed_artifact_temp_finally_cleans_metadata_failure_without_touching_final(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.optional_artifacts import ManagedArtifactError, ManagedImmutableArtifactStore
+
+    store = ManagedImmutableArtifactStore(tmp_path / "managed")
+    final = store.create_bytes(
+        b"committed-final",
+        schema_version="phase5-test-v1",
+        scope={"kind": "shared"},
+        content_type="application/octet-stream",
+    )
+    original_write = store._write_exclusive
+
+    def fail_metadata(path: Path, payload: bytes) -> None:
+        if path.name == "metadata.json":
+            raise OSError("injected metadata failure")
+        original_write(path, payload)
+
+    monkeypatch.setattr(store, "_write_exclusive", fail_metadata)
+    with pytest.raises(ManagedArtifactError, match="atomically create"):
+        store.create_bytes(
+            b"invocation-owned",
+            schema_version="phase5-test-v1",
+            scope={"kind": "failed"},
+            content_type="application/octet-stream",
+        )
+
+    assert list(store.root.glob(".*.tmp")) == []
+    assert store.load_bytes(final) == b"committed-final"
+
+
+def test_managed_artifact_temp_finally_surfaces_attributable_cleanup_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app import optional_artifacts
+    from app.optional_artifacts import (
+        ManagedArtifactCleanupError,
+        ManagedArtifactError,
+        ManagedImmutableArtifactStore,
+    )
+
+    store = ManagedImmutableArtifactStore(tmp_path / "managed")
+    final = store.create_bytes(
+        b"committed-final",
+        schema_version="phase5-test-v1",
+        scope={"kind": "shared"},
+        content_type="application/octet-stream",
+    )
+    original_write = store._write_exclusive
+
+    def fail_metadata(path: Path, payload: bytes) -> None:
+        if path.name == "metadata.json":
+            raise ManagedArtifactError("injected writer failure")
+        original_write(path, payload)
+
+    def fail_cleanup(_path: Path) -> None:
+        raise OSError("injected cleanup failure")
+
+    monkeypatch.setattr(store, "_write_exclusive", fail_metadata)
+    monkeypatch.setattr(optional_artifacts.shutil, "rmtree", fail_cleanup)
+    with pytest.raises(ManagedArtifactCleanupError, match="temporary cleanup") as caught:
+        store.create_bytes(
+            b"invocation-owned",
+            schema_version="phase5-test-v1",
+            scope={"kind": "failed"},
+            content_type="application/octet-stream",
+        )
+
+    assert len(caught.value.artifact_id) == 32
+    assert isinstance(caught.value.__cause__, OSError)
+    assert (store.root / f".{caught.value.artifact_id}.tmp").is_dir()
+    assert store.load_bytes(final) == b"committed-final"
+
+
 def test_optional_identity_is_independent_lazy_cached_and_light(tmp_path: Path) -> None:
     import sys
 
