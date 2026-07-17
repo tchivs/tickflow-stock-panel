@@ -11,6 +11,7 @@ import sys
 import time
 from contextlib import redirect_stderr, redirect_stdout, suppress
 from dataclasses import asdict, dataclass
+from datetime import date, timedelta
 from hashlib import sha256
 from queue import Empty
 from typing import Any, Callable, Mapping
@@ -170,6 +171,7 @@ def _child_entry(
 def _default_manifest(job: Mapping[str, object]) -> dict[str, object]:
     checksum = str(job["input_fingerprint"])
     horizon = int(job["horizon"])
+    origin = date(2025, 4, 30)
     return {
         "output_descriptor": {
             "artifact_id": f"forecast-{job['id']}",
@@ -186,11 +188,20 @@ def _default_manifest(job: Mapping[str, object]) -> dict[str, object]:
             "horizon": horizon,
             "catalog_id": job["catalog_id"],
             "input_fingerprint": checksum,
+            "input_artifact_descriptor": {
+                "artifact_id": "runner-input-artifact",
+                "schema_version": "forecast-input-v1",
+                "byte_size": 1,
+                "checksum_sha256": checksum,
+            },
             "sample_count": 32,
-            "origin_session_id": "governed-origin-session",
-            "calendar_id": "cn-a",
+            "origin_session_id": "CNA-20250430",
+            "calendar_id": "cn-a-v1",
             "calendar_revision": "governed-calendar-v1",
-            "future_session_ids": [f"session-{index + 1}" for index in range(horizon)],
+            "future_session_ids": [
+                (origin + timedelta(days=index + 1)).strftime("CNA-%Y%m%d")
+                for index in range(horizon)
+            ],
             "lookback": 1,
             "seed": 0,
             "temperature": 1.0,
@@ -202,6 +213,7 @@ def _default_manifest(job: Mapping[str, object]) -> dict[str, object]:
             "model_digest_sha256": checksum,
             "tokenizer_revision": "26966d0035065a0cae0ebad7af8ece35bc1fb51c",
             "tokenizer_digest_sha256": checksum,
+            "feature_schema": ["open", "high", "low", "close", "volume", "amount"],
             "validation_warnings": [],
         },
     }

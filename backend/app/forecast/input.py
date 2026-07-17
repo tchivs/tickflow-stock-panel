@@ -141,7 +141,7 @@ class ForecastInputFreezer:
         frame = self._repository.get_daily(
             symbol=symbol, as_of=_session_id_to_date(as_of_session_id)
         )
-        validated, feature_schema, adjustment_policy, adjustment_revision, source_revision = (
+        validated, _base_features, adjustment_policy, adjustment_revision, source_revision = (
             _validate_daily_frame(
                 frame,
                 instrument_id=instrument_id,
@@ -154,6 +154,14 @@ class ForecastInputFreezer:
         historical = validated.tail(lookback)
         if historical["session_id"][-1] != as_of_session_id:
             raise ValueError("as-of session is absent from governed daily coverage")
+        feature_schema = list(_FEATURES)
+        if "amount" in historical.columns:
+            amount = historical["amount"]
+            finite_amount = amount.drop_nulls().to_numpy()
+            if not np.isfinite(finite_amount).all():
+                raise ValueError("governed daily amount values must be finite")
+            if amount.null_count() == 0:
+                feature_schema.append("amount")
 
         future = self._calendar.future_sessions(
             calendar_id=_CALENDAR_ID,
@@ -165,7 +173,7 @@ class ForecastInputFreezer:
         future_ids = tuple(session.session_id for session in future)
         payload_frame = historical.select(["session_id", "trade_date", *feature_schema])
 
-        fingerprint_payload: dict[str, object] = {
+        base_identity: dict[str, object] = {
             "schema_version": _SCHEMA_VERSION,
             "instrument_id": instrument_id,
             "symbol": symbol,
@@ -185,16 +193,24 @@ class ForecastInputFreezer:
             "historical_session_ids": list(historical_ids),
             "future_session_ids": list(future_ids),
         }
-        canonical_payload = _canonical_json(fingerprint_payload)
-        input_fingerprint = sha256(canonical_payload).hexdigest()
+        frame_payload_sha256 = sha256(_canonical_frame_bytes(payload_frame)).hexdigest()
+        # Non-circular order: canonical selected frame bytes are digested first; the
+        # immutable Parquet is then promoted; only afterward does its independent
+        # payload checksum enter the final input fingerprint.
         managed = self._store.create_parquet(
             payload_frame,
             schema_version=_SCHEMA_VERSION,
             scope={
-                "input_fingerprint": input_fingerprint,
-                "fingerprint_payload": fingerprint_payload,
+                "governed_identity": base_identity,
+                "frame_payload_sha256": frame_payload_sha256,
             },
         )
+        fingerprint_payload = {
+            **base_identity,
+            "frame_payload_sha256": frame_payload_sha256,
+            "artifact_checksum_sha256": managed.checksum_sha256,
+        }
+        input_fingerprint = sha256(_canonical_json(fingerprint_payload)).hexdigest()
         metadata_json = _canonical_json(
             {"fingerprint_payload": fingerprint_payload}
         ).decode("utf-8")
@@ -273,7 +289,6 @@ def _validate_daily_frame(
         non_null_amount = frame["amount"].drop_nulls().to_numpy()
         if not np.isfinite(non_null_amount).all():
             raise ValueError("governed daily amount values must be finite")
-        feature_schema.append("amount")
 
     adjustment_policy = _single_text(frame, "adjustment_policy")
     adjustment_revision = _single_text(frame, "adjustment_revision")
@@ -307,6 +322,17 @@ def _session_id_to_date(session_id: str) -> str:
         raise ValueError("as-of session identity is invalid")
     value = session_id[4:]
     return f"{value[:4]}-{value[4:6]}-{value[6:]}"
+
+
+def _canonical_frame_bytes(frame: pl.DataFrame) -> bytes:
+    schema = _canonical_json(
+        [(name, str(dtype)) for name, dtype in frame.schema.items()]
+    )
+    try:
+        rows = frame.write_json().encode("utf-8")
+    except (OSError, TypeError, ValueError) as error:
+        raise ValueError("Forecast input frame is not canonically serializable") from error
+    return schema + b"\n" + rows
 
 
 def _canonical_json(value: Any) -> bytes:

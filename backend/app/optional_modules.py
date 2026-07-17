@@ -6,7 +6,6 @@ from datetime import UTC, datetime
 from enum import Enum
 from hashlib import sha256
 import importlib.util
-import json
 from pathlib import Path
 import re
 import sqlite3
@@ -95,6 +94,7 @@ OPTIONAL_MODULE_TEST_FAILURES: Mapping[str, str | None] = {
     "scanner": None,
 }
 OPTIONAL_MODULE_ACTION_COLLABORATORS: Mapping[str, Callable[..., object]] = {}
+OPTIONAL_MODULE_FORECAST_COMPONENTS: Mapping[str, object] = {}
 
 
 @dataclass(frozen=True, slots=True)
@@ -196,55 +196,6 @@ class _RuntimeBundle:
 
 
 
-class _ForecastRequestService:
-    def __init__(self, repository: object, data_root: Path) -> None:
-        self.repository = repository
-        self.data_root = data_root
-
-    def create_or_get_job(
-        self,
-        *,
-        principal: str,
-        instrument: str,
-        horizon: int,
-        catalog_id: str,
-        idempotency_key: str,
-    ) -> dict[str, Any]:
-        identity = json.dumps(
-            {
-                "instrument": instrument,
-                "horizon": horizon,
-                "catalog_id": catalog_id,
-                "governed_root": self.data_root.name,
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode()
-        return self.repository.create_or_get_active_job(
-            principal=principal,
-            instrument_id=instrument,
-            horizon=horizon,
-            catalog_id=catalog_id,
-            idempotency_key=idempotency_key,
-            input_fingerprint=sha256(identity).hexdigest(),
-        )
-
-    @staticmethod
-    def revalidate(job: Mapping[str, object]) -> bool:
-        return (
-            job.get("horizon") in {5, 20, 60}
-            and isinstance(job.get("instrument_id"), str)
-            and isinstance(job.get("catalog_id"), str)
-            and isinstance(job.get("input_fingerprint"), str)
-            and len(str(job["input_fingerprint"])) == 64
-        )
-
-
-class _ForecastActuals:
-    """Read-only adapter; absent governed rows become explicit unevaluable facts."""
-
-    def load_actual(self, **_identity: object) -> None:
-        return None
 
 
 class _ForecastPathReader:
@@ -395,18 +346,104 @@ class _ConcreteFactory:
 
     @staticmethod
     def _create_forecast(services: OptionalModuleServices) -> _RuntimeBundle:
-        from app.forecast.calibration import ForecastMaturityScanner
-        from app.forecast.repository import ForecastRepository
+        from functools import partial
 
-        repository = ForecastRepository(services.database_path)
+        from app.forecast.calibration import ForecastMaturityScanner
+        from app.forecast.input import ForecastInputFreezer
+        from app.forecast.repository import ForecastRepository
+        from app.forecast.runner import ForecastRunner, ForecastRunnerLimits
+        from app.forecast.service import (
+            ContextualForecastWorker,
+            ForecastService,
+            GovernedForecastActuals,
+            GovernedForecastDataSource,
+            verify_output_artifact,
+        )
+
+        components = OPTIONAL_MODULE_FORECAST_COMPONENTS
+        catalog = components.get("catalog")
+        calendar = components.get("calendar")
+        worker = components.get("worker")
+        if catalog is None or calendar is None or not callable(worker):
+            raise RuntimeError("Forecast local runtime dependencies are unavailable")
+
+        input_root = Path(components.get("input_root", services.data_root / "forecast-inputs"))
+        output_root = Path(components.get("output_root", services.data_root / "forecast-outputs"))
+        output_root.mkdir(parents=True, exist_ok=True)
+        repository = ForecastRepository(
+            services.database_path, artifact_root=output_root
+        )
         repository.migrate()
-        request_service = _ForecastRequestService(repository, services.data_root)
+        input_repository = components.get("input_repository")
+        if input_repository is None:
+            input_repository = GovernedForecastDataSource(services.governed_repository)
+        readiness = getattr(input_repository, "assert_ready", None)
+        if callable(readiness):
+            readiness()
+
+        freezer = ForecastInputFreezer(
+            repository=input_repository,
+            calendar=calendar,
+            artifact_root=input_root,
+        )
+        as_of_session = components.get("as_of_session")
+        if not callable(as_of_session):
+            as_of_session = getattr(input_repository, "latest_session_id", None)
+        if not callable(as_of_session):
+            raise RuntimeError("Forecast governed as-of resolver is unavailable")
+
+        contexts: dict[str, Mapping[str, object]] = {}
+        request_service = ForecastService(
+            repository=repository,
+            catalog=catalog,
+            freezer=freezer,
+            runner=None,
+            as_of_session=as_of_session,
+            device=str(components.get("device", "cpu")),
+            worker_contexts=contexts,
+        )
+        limits = components.get("limits")
+        if limits is None:
+            limits = ForecastRunnerLimits()
+        if not isinstance(limits, ForecastRunnerLimits):
+            raise RuntimeError("Forecast runner limits are invalid")
+        verifier = components.get("artifact_verify")
+        if not callable(verifier):
+            verifier = partial(verify_output_artifact, root=output_root)
+        runner = ForecastRunner(
+            repository=repository,
+            limits=limits,
+            reauthorize=request_service.reauthorize,
+            catalog_revalidate=request_service.catalog_revalidate,
+            input_revalidate=request_service.input_revalidate,
+            worker=ContextualForecastWorker(delegate=worker, contexts=contexts),
+            artifact_verify=verifier,
+            action_collaborators=OPTIONAL_MODULE_ACTION_COLLABORATORS,
+        )
+        request_service.attach_runner(runner)
+        request_service.assert_ready()
+
+        actuals = components.get("actuals")
+        if actuals is None:
+            if not isinstance(input_repository, GovernedForecastDataSource):
+                raise RuntimeError("Forecast governed actual reader is unavailable")
+            actuals = GovernedForecastActuals(input_repository)
+        actuals_ready = getattr(actuals, "assert_ready", None)
+        if callable(actuals_ready):
+            actuals_ready()
+        if not callable(getattr(actuals, "load_actual", None)):
+            raise RuntimeError("Forecast governed actual reader is incomplete")
+
         scanner = ForecastMaturityScanner(
             repository=repository,
-            actuals=_ForecastActuals(),
+            actuals=actuals,
             max_items_per_scan=32,
             action_collaborators=OPTIONAL_MODULE_ACTION_COLLABORATORS,
         )
+        if not callable(getattr(scanner, "scan", None)) or not callable(
+            getattr(scanner, "evaluate", None)
+        ):
+            raise RuntimeError("Forecast maturity scanner is incomplete")
         return _RuntimeBundle(
             name=OptionalModuleName.FORECAST,
             database_path=services.database_path,
@@ -415,7 +452,7 @@ class _ConcreteFactory:
             service=request_service,
             scanner=scanner,
             request_service=request_service,
-            path_reader=_ForecastPathReader(services.data_root),
+            path_reader=_ForecastPathReader(output_root),
         )
 
     def close(self, service: object) -> None:
@@ -734,9 +771,7 @@ def _register_scanner(
 ) -> None:
     scheduler = host.scheduler
     if scheduler is None:
-        if name is OptionalModuleName.THESIS:
-            raise RuntimeError("thesis scanner registration is unavailable")
-        return
+        raise RuntimeError(f"{name.value} scanner registration is unavailable")
     if not callable(getattr(scheduler, "add_job", None)):
         raise RuntimeError("optional scanner registration is unavailable")
     if name is OptionalModuleName.THESIS:

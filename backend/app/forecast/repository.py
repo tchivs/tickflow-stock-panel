@@ -1,13 +1,17 @@
 """Durable single-flight state and immutable Forecast record persistence."""
 from __future__ import annotations
 
+from copy import deepcopy
+from hashlib import sha256
 import json
 import re
+import math
 import shutil
 import sqlite3
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from pathlib import PurePosixPath
 from typing import Any, Callable, Iterator, Mapping, Sequence
 from uuid import uuid4
 
@@ -67,16 +71,98 @@ def _safe_terminal_reason(value: object) -> str:
     return value if isinstance(value, str) and _SAFE_REASON.fullmatch(value) else "forecast_failed"
 
 
-def _digest_or_default(value: object, fallback: str) -> str:
-    return value if isinstance(value, str) and _SHA256.fullmatch(value) else fallback
+def _nonempty_text(value: object, field: str) -> str:
+    if not isinstance(value, str) or not value or len(value) > 512:
+        raise ValueError(f"forecast {field} is invalid")
+    return value
+
+
+def _immutable_text(value: object, field: str) -> str:
+    text = _nonempty_text(value, field)
+    lowered = text.lower()
+    if lowered in {"main", "master", "latest", "head"} or lowered.startswith("unknown"):
+        raise ValueError(f"forecast {field} is not immutable")
+    return text
+
+
+def _digest(value: object, field: str) -> str:
+    if not isinstance(value, str) or _SHA256.fullmatch(value) is None:
+        raise ValueError(f"forecast {field} is not a full SHA-256")
+    return value
+
+
+def _strict_int(
+    value: object,
+    field: str,
+    *,
+    minimum: int,
+    maximum: int | None = None,
+) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"forecast {field} must be an integer")
+    if value < minimum or (maximum is not None and value > maximum):
+        raise ValueError(f"forecast {field} is out of range")
+    return value
+
+
+def _strict_float(
+    value: object,
+    field: str,
+    *,
+    minimum: float,
+    maximum: float,
+    exclusive_minimum: bool = False,
+) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"forecast {field} must be numeric")
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError(f"forecast {field} must be finite")
+    below = number <= minimum if exclusive_minimum else number < minimum
+    if below or number > maximum:
+        raise ValueError(f"forecast {field} is out of range")
+    return number
+
+
+def _session_id(value: object, field: str) -> str:
+    text = _nonempty_text(value, field)
+    if re.fullmatch(r"CNA-\d{8}", text) is None:
+        raise ValueError(f"forecast {field} identity is invalid")
+    return text
+
+
+def _validated_input_descriptor(value: object) -> dict[str, object]:
+    if not isinstance(value, Mapping):
+        raise ValueError("forecast input artifact descriptor is invalid")
+    required = {"artifact_id", "schema_version", "byte_size", "checksum_sha256"}
+    if set(value) != required:
+        raise ValueError("forecast input artifact descriptor is incomplete")
+    return {
+        "artifact_id": _nonempty_text(value["artifact_id"], "input artifact"),
+        "schema_version": _immutable_text(value["schema_version"], "input schema"),
+        "byte_size": _strict_int(value["byte_size"], "input byte size", minimum=1),
+        "checksum_sha256": _digest(value["checksum_sha256"], "input checksum"),
+    }
+
+
 
 
 class ForecastRepository:
     """Short-lived SQLite transactions for the Forecast job and record ledger."""
 
-    def __init__(self, database_path: Path, *, clock: Callable[[], datetime] | None = None) -> None:
+    def __init__(
+        self,
+        database_path: Path,
+        *,
+        clock: Callable[[], datetime] | None = None,
+        artifact_root: Path | None = None,
+    ) -> None:
         self.database_path = Path(database_path)
         self._clock = clock or (lambda: datetime.now(UTC))
+        configured_root = Path(artifact_root or self.database_path.parent / "forecast-outputs")
+        configured_root.mkdir(parents=True, exist_ok=True)
+        self.artifact_root = configured_root.resolve(strict=True)
+        self._commit_identities: dict[str, dict[str, object]] = {}
 
     @contextmanager
     def connection(self) -> Iterator[sqlite3.Connection]:
@@ -397,6 +483,16 @@ class ForecastRepository:
                 else:
                     candidate.unlink(missing_ok=True)
 
+    def bind_commit_identity(
+        self, *, job_id: str, immutable_record: Mapping[str, object]
+    ) -> None:
+        """Bind the server-selected catalog/input identity before child execution."""
+        job = self.get_job(job_id)
+        if job is None:
+            raise ValueError("forecast job does not exist")
+        validated = self._validated_immutable_record(immutable_record, job=job)
+        self._commit_identities[job_id] = deepcopy(validated)
+
     def mark_interrupted_before_commit(self, *, job_id: str, lease_owner: str) -> dict[str, Any]:
         job = self.get_job(job_id)
         if job is None:
@@ -421,13 +517,16 @@ class ForecastRepository:
         immutable_record: Mapping[str, object],
     ) -> dict[str, Any]:
         """Atomically cross the sole forecast creation commit point."""
-        descriptor = self._validated_output_descriptor(output_descriptor)
         now = self.now()
         with self._immediate() as connection:
-            canonical = connection.execute("SELECT * FROM forecast_records WHERE job_id = ?", (job_id,)).fetchone()
+            canonical = connection.execute(
+                "SELECT * FROM forecast_records WHERE job_id = ?", (job_id,)
+            ).fetchone()
             if canonical is not None:
                 return self._record_row(canonical)
-            job = connection.execute("SELECT * FROM forecast_jobs WHERE id = ?", (job_id,)).fetchone()
+            job = connection.execute(
+                "SELECT * FROM forecast_jobs WHERE id = ?", (job_id,)
+            ).fetchone()
             if job is None:
                 raise ValueError("forecast job does not exist")
             if (
@@ -438,47 +537,54 @@ class ForecastRepository:
                 or not job["lease_until"]
                 or _as_utc(job["lease_until"]) <= _as_utc(now)
             ):
-                raise ValueError("forecast commit rejected by stale state, version, owner, or lease")
-            if immutable_record.get("instrument_id") != job["instrument_id"]:
-                raise ValueError("forecast record instrument does not match its job")
-            if int(immutable_record.get("horizon", 0)) != int(job["horizon"]):
-                raise ValueError("forecast record horizon does not match its job")
-            if immutable_record.get("catalog_id") != job["catalog_id"]:
-                raise ValueError("forecast record catalog does not match its job")
-            if immutable_record.get("input_fingerprint") != job["input_fingerprint"]:
-                raise ValueError("forecast record input does not match its job")
-            if int(immutable_record.get("sample_count", 0)) != 32:
-                raise ValueError("forecast record must retain exactly 32 paths")
+                raise ValueError(
+                    "forecast commit rejected by stale state, version, owner, or lease"
+                )
 
-            fallback_digest = str(job["input_fingerprint"])
+            record = self._validated_immutable_record(immutable_record, job=dict(job))
+            expected_identity = self._commit_identities.get(job_id)
+            if expected_identity is None:
+                raise ValueError("forecast commit has no server-bound immutable identity")
+            expected_comparable = {
+                key: value
+                for key, value in expected_identity.items()
+                if key != "validation_warnings"
+            }
+            record_comparable = {
+                key: value for key, value in record.items() if key != "validation_warnings"
+            }
+            if record_comparable != expected_comparable:
+                raise ValueError("forecast record diverges from its server-bound identity")
+            descriptor = self._validated_output_descriptor(output_descriptor, record=record)
+
             record_id = str(uuid4())
             values = (
                 record_id,
                 job_id,
                 job["instrument_id"],
-                str(immutable_record.get("origin_session_id", "origin-session")),
-                str(immutable_record.get("calendar_id", "cn-a")),
-                str(immutable_record.get("calendar_revision", "governed-calendar-v1")),
-                _canonical_json(immutable_record.get("future_session_ids", [])),
+                record["origin_session_id"],
+                record["calendar_id"],
+                record["calendar_revision"],
+                _canonical_json(record["future_session_ids"]),
                 job["input_fingerprint"],
-                _canonical_json(immutable_record.get("input_artifact_descriptor", {})),
+                _canonical_json(record["input_artifact_descriptor"]),
                 job["horizon"],
-                int(immutable_record.get("lookback", 1)),
-                int(immutable_record.get("seed", 0)),
-                float(immutable_record.get("temperature", 1.0)),
-                int(immutable_record.get("top_k", 1)),
-                float(immutable_record.get("top_p", 1.0)),
+                record["lookback"],
+                record["seed"],
+                record["temperature"],
+                record["top_k"],
+                record["top_p"],
                 32,
                 job["catalog_id"],
-                str(immutable_record.get("source_revision", "unknown-source")),
-                _digest_or_default(immutable_record.get("source_digest_sha256"), fallback_digest),
-                str(immutable_record.get("model_revision", "unknown-model")),
-                _digest_or_default(immutable_record.get("model_digest_sha256"), fallback_digest),
-                str(immutable_record.get("tokenizer_revision", "unknown-tokenizer")),
-                _digest_or_default(immutable_record.get("tokenizer_digest_sha256"), fallback_digest),
+                record["source_revision"],
+                record["source_digest_sha256"],
+                record["model_revision"],
+                record["model_digest_sha256"],
+                record["tokenizer_revision"],
+                record["tokenizer_digest_sha256"],
                 _canonical_json(descriptor),
                 descriptor["checksum_sha256"],
-                _canonical_json(immutable_record.get("validation_warnings", [])),
+                _canonical_json(record["validation_warnings"]),
                 now,
             )
             connection.execute(
@@ -501,12 +607,140 @@ class ForecastRepository:
             ).rowcount
             if changed != 1:
                 raise ValueError("forecast commit lost its state transition")
-            canonical = connection.execute("SELECT * FROM forecast_records WHERE id = ?", (record_id,)).fetchone()
+            canonical = connection.execute(
+                "SELECT * FROM forecast_records WHERE id = ?", (record_id,)
+            ).fetchone()
+        self._commit_identities.pop(job_id, None)
         assert canonical is not None
         return self._record_row(canonical)
 
     @staticmethod
-    def _validated_output_descriptor(value: Mapping[str, object]) -> dict[str, object]:
+    def _validated_immutable_record(
+        value: Mapping[str, object], *, job: Mapping[str, object]
+    ) -> dict[str, object]:
+        if not isinstance(value, Mapping):
+            raise ValueError("forecast immutable record is invalid")
+        required = {
+            "instrument_id",
+            "origin_session_id",
+            "calendar_id",
+            "calendar_revision",
+            "future_session_ids",
+            "input_fingerprint",
+            "input_artifact_descriptor",
+            "horizon",
+            "lookback",
+            "seed",
+            "temperature",
+            "top_k",
+            "top_p",
+            "sample_count",
+            "catalog_id",
+            "source_revision",
+            "source_digest_sha256",
+            "model_revision",
+            "model_digest_sha256",
+            "tokenizer_revision",
+            "tokenizer_digest_sha256",
+            "feature_schema",
+            "validation_warnings",
+        }
+        if not required.issubset(value):
+            raise ValueError("forecast immutable record is incomplete")
+
+        horizon = _strict_int(value["horizon"], "horizon", minimum=1, maximum=60)
+        if horizon not in {5, 20, 60} or horizon != int(job["horizon"]):
+            raise ValueError("forecast record horizon does not match its job")
+        sample_count = _strict_int(
+            value["sample_count"], "sample count", minimum=32, maximum=32
+        )
+        lookback = _strict_int(value["lookback"], "lookback", minimum=1, maximum=4096)
+        seed = _strict_int(value["seed"], "seed", minimum=0, maximum=2**63 - 1)
+        top_k = _strict_int(value["top_k"], "top-k", minimum=1, maximum=4096)
+        temperature = _strict_float(
+            value["temperature"], "temperature", minimum=0.0, maximum=10.0,
+            exclusive_minimum=True,
+        )
+        top_p = _strict_float(
+            value["top_p"], "top-p", minimum=0.0, maximum=1.0,
+            exclusive_minimum=True,
+        )
+        instrument = _nonempty_text(value["instrument_id"], "instrument")
+        catalog_id = _nonempty_text(value["catalog_id"], "catalog")
+        fingerprint = _digest(value["input_fingerprint"], "input fingerprint")
+        if instrument != job["instrument_id"]:
+            raise ValueError("forecast record instrument does not match its job")
+        if catalog_id != job["catalog_id"]:
+            raise ValueError("forecast record catalog does not match its job")
+        if fingerprint != job["input_fingerprint"]:
+            raise ValueError("forecast record input does not match its job")
+
+        origin = _session_id(value["origin_session_id"], "origin session")
+        future_value = value["future_session_ids"]
+        if not isinstance(future_value, (list, tuple)) or len(future_value) != horizon:
+            raise ValueError("forecast future sessions do not match its horizon")
+        future = [_session_id(item, "future session") for item in future_value]
+        if len(set(future)) != horizon or origin in future:
+            raise ValueError("forecast future sessions are invalid")
+
+        input_descriptor = _validated_input_descriptor(value["input_artifact_descriptor"])
+        features_value = value["feature_schema"]
+        if not isinstance(features_value, (list, tuple)) or not features_value:
+            raise ValueError("forecast feature schema is invalid")
+        features = [_nonempty_text(item, "feature") for item in features_value]
+        if len(set(features)) != len(features):
+            raise ValueError("forecast feature schema is duplicated")
+        warnings_value = value["validation_warnings"]
+        if not isinstance(warnings_value, (list, tuple)) or len(warnings_value) > 64:
+            raise ValueError("forecast validation warnings are invalid")
+        warnings = []
+        for warning in warnings_value:
+            text = _nonempty_text(warning, "validation warning")
+            if len(text) > 128:
+                raise ValueError("forecast validation warning is too long")
+            warnings.append(text)
+
+        revisions = {
+            field: _immutable_text(value[field], field)
+            for field in (
+                "calendar_revision",
+                "source_revision",
+                "model_revision",
+                "tokenizer_revision",
+            )
+        }
+        digests = {
+            field: _digest(value[field], field)
+            for field in (
+                "source_digest_sha256",
+                "model_digest_sha256",
+                "tokenizer_digest_sha256",
+            )
+        }
+        return {
+            "instrument_id": instrument,
+            "origin_session_id": origin,
+            "calendar_id": _immutable_text(value["calendar_id"], "calendar_id"),
+            **revisions,
+            "future_session_ids": future,
+            "input_fingerprint": fingerprint,
+            "input_artifact_descriptor": input_descriptor,
+            "horizon": horizon,
+            "lookback": lookback,
+            "seed": seed,
+            "temperature": temperature,
+            "top_k": top_k,
+            "top_p": top_p,
+            "sample_count": sample_count,
+            "catalog_id": catalog_id,
+            **digests,
+            "feature_schema": features,
+            "validation_warnings": warnings,
+        }
+
+    def _validated_output_descriptor(
+        self, value: Mapping[str, object], *, record: Mapping[str, object]
+    ) -> dict[str, object]:
         if not isinstance(value, Mapping):
             raise ValueError("forecast output descriptor is invalid")
         required = {
@@ -519,23 +753,54 @@ class ForecastRepository:
             "horizon",
             "feature_count",
         }
-        if not required.issubset(value):
+        if set(value) != required:
             raise ValueError("forecast output descriptor is incomplete")
-        relative_path = value["relative_path"]
+        relative = value["relative_path"]
         if (
-            not isinstance(relative_path, str)
-            or not relative_path
-            or relative_path.startswith(("/", "\\"))
-            or ".." in Path(relative_path).parts
+            not isinstance(relative, str)
+            or not relative
+            or relative == "."
+            or ":" in relative
+            or "\\" in relative
         ):
             raise ValueError("forecast output descriptor path is invalid")
-        if not isinstance(value["checksum_sha256"], str) or not _SHA256.fullmatch(value["checksum_sha256"]):
-            raise ValueError("forecast output descriptor checksum is invalid")
-        if int(value["sample_count"]) != 32 or int(value["horizon"]) not in {5, 20, 60}:
-            raise ValueError("forecast output descriptor shape is invalid")
-        if int(value["byte_size"]) < 0 or int(value["feature_count"]) <= 0:
-            raise ValueError("forecast output descriptor bounds are invalid")
-        return {key: value[key] for key in sorted(required)}
+        pure = PurePosixPath(relative)
+        if pure.is_absolute() or ".." in pure.parts or pure.as_posix() != relative:
+            raise ValueError("forecast output descriptor path is invalid")
+        unresolved = self.artifact_root / Path(*pure.parts)
+        if unresolved.is_symlink():
+            raise ValueError("forecast output artifact symlinks are forbidden")
+        try:
+            candidate = unresolved.resolve(strict=True)
+            candidate.relative_to(self.artifact_root)
+        except (OSError, ValueError) as error:
+            raise ValueError("forecast output artifact escapes its managed root") from error
+        if not candidate.is_file() or candidate.is_symlink():
+            raise ValueError("forecast output artifact is not a regular file")
+        payload = candidate.read_bytes()
+        byte_size = _strict_int(value["byte_size"], "output byte size", minimum=1)
+        checksum = _digest(value["checksum_sha256"], "output checksum")
+        if byte_size != len(payload) or sha256(payload).hexdigest() != checksum:
+            raise ValueError("forecast output artifact checksum or size diverges")
+        sample_count = _strict_int(
+            value["sample_count"], "output sample count", minimum=32, maximum=32
+        )
+        horizon = _strict_int(value["horizon"], "output horizon", minimum=1, maximum=60)
+        feature_count = _strict_int(value["feature_count"], "output feature count", minimum=1)
+        if horizon != record["horizon"] or sample_count != record["sample_count"]:
+            raise ValueError("forecast output descriptor shape diverges from its record")
+        if feature_count != len(record["feature_schema"]):
+            raise ValueError("forecast output features diverge from its record")
+        return {
+            "artifact_id": _nonempty_text(value["artifact_id"], "output artifact"),
+            "relative_path": relative,
+            "schema_version": _immutable_text(value["schema_version"], "output schema"),
+            "byte_size": byte_size,
+            "checksum_sha256": checksum,
+            "sample_count": sample_count,
+            "horizon": horizon,
+            "feature_count": feature_count,
+        }
 
     def recover_after_restart(
         self,
