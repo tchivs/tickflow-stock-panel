@@ -249,6 +249,7 @@ class ForecastRunner:
         worker: Callable[..., object],
         artifact_verify: Callable[..., object],
         action_collaborators: Mapping[str, Callable[..., object]] | None = None,
+        final_input_revalidate: Callable[..., object] | None = None,
     ) -> None:
         self.repository = repository
         self.limits = limits
@@ -260,6 +261,8 @@ class ForecastRunner:
         # Retained only as an explicit negative-authority seam. ForecastRunner never
         # invokes these collaborators or exposes activation fields.
         self.action_collaborators = dict(action_collaborators or {})
+        # Parent authority: mandatory checksum/fingerprint check immediately before commit.
+        self.final_input_revalidate = final_input_revalidate
 
     def run_job(self, job_id: str) -> dict[str, object]:
         job = self.repository.get_job(job_id)
@@ -454,6 +457,26 @@ class ForecastRunner:
                     reason="artifact_verification_failed",
                 )
                 return self._result(terminal, "artifact_failed", reason="artifact_verification_failed")
+
+            # CR-05: revalidate the same server-bound input identity immediately before
+            # the sole commit. Failure terminalizes with zero commit and zero actions.
+            if self.final_input_revalidate is not None:
+                try:
+                    final_ok = self.final_input_revalidate(job=dict(running))
+                except BaseException:
+                    final_ok = False
+                if final_ok is not True:
+                    terminal = self._terminalize_current(
+                        running,
+                        owner=owner,
+                        status="validation_failed",
+                        reason="final_input_revalidation_failed",
+                    )
+                    return self._result(
+                        terminal,
+                        "validation_failed",
+                        reason="final_input_revalidation_failed",
+                    )
 
             try:
                 record = self.repository.commit_completed_forecast(

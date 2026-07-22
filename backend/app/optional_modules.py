@@ -386,6 +386,7 @@ class _ConcreteFactory:
             worker=ContextualForecastWorker(delegate=worker, contexts=contexts),
             artifact_verify=verifier,
             action_collaborators=OPTIONAL_MODULE_ACTION_COLLABORATORS,
+            final_input_revalidate=request_service.final_input_revalidate,
         )
         request_service.attach_runner(runner)
         request_service.assert_ready()

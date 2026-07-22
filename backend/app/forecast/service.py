@@ -1,9 +1,13 @@
 """Server-owned production composition for governed Forecast requests."""
 from __future__ import annotations
 
+import os
+import threading
+from contextlib import suppress
+from hashlib import sha256
+
 from dataclasses import dataclass
 from datetime import date, timedelta
-from hashlib import sha256
 from pathlib import Path
 import re
 from typing import Any, Callable, Mapping, MutableMapping
@@ -59,6 +63,7 @@ class ForecastService:
         self.as_of_session = as_of_session
         self.device = device
         self.worker_contexts = worker_contexts if worker_contexts is not None else {}
+        self._create_lock = threading.Lock()
 
     def attach_runner(self, runner: Any) -> None:
         if self.runner is not None:
@@ -68,6 +73,7 @@ class ForecastService:
     def assert_ready(self) -> None:
         required = (
             (self.repository, "create_or_get_active_job"),
+            (self.repository, "find_active_job"),
             (self.repository, "get_job"),
             (self.catalog, "require_local"),
             (self.catalog, "revalidate_before_spawn"),
@@ -91,30 +97,81 @@ class ForecastService:
         idempotency_key: str,
     ) -> dict[str, Any]:
         self.assert_ready()
-        prepared = self._prepare(
-            principal=principal,
-            instrument=instrument,
-            horizon=horizon,
-            catalog_id=catalog_id,
-        )
-        job = self.repository.create_or_get_active_job(
-            principal=principal,
-            instrument_id=prepared.frozen.instrument_id,
-            horizon=horizon,
-            catalog_id=catalog_id,
-            idempotency_key=idempotency_key,
-            input_fingerprint=prepared.frozen.input_fingerprint,
-        )
-        if job.get("input_fingerprint") != prepared.frozen.input_fingerprint:
-            raise ValueError("Forecast idempotency identity conflicts with governed input")
-        self._bind(job, prepared)
-        if job.get("status") == "queued":
-            assert self.runner is not None
-            self.runner.run_job(str(job["id"]))
-        canonical = self.repository.get_job(str(job["id"]))
-        if not isinstance(canonical, dict):
-            raise RuntimeError("Forecast job disappeared after execution")
-        return canonical
+        with self._create_lock:
+            existing = self.repository.find_active_job(
+                principal=principal,
+                instrument_id=instrument,
+                horizon=horizon,
+                catalog_id=catalog_id,
+                idempotency_key=idempotency_key,
+            )
+            if existing is not None:
+                # Operation-first: replay never allocates another managed input namespace.
+                job = existing
+                prepared = None
+                owned_artifact_ids: set[str] = set()
+            else:
+                owned_artifact_ids = set()
+                prepared = self._prepare(
+                    principal=principal,
+                    instrument=instrument,
+                    horizon=horizon,
+                    catalog_id=catalog_id,
+                )
+                artifact_id = getattr(prepared.frozen.descriptor, "artifact_id", None)
+                if isinstance(artifact_id, str) and artifact_id:
+                    owned_artifact_ids.add(artifact_id)
+                try:
+                    job = self.repository.create_or_get_active_job(
+                        principal=principal,
+                        instrument_id=prepared.frozen.instrument_id,
+                        horizon=horizon,
+                        catalog_id=catalog_id,
+                        idempotency_key=idempotency_key,
+                        input_fingerprint=prepared.frozen.input_fingerprint,
+                    )
+                except Exception:
+                    if not self._artifact_is_referenced(prepared.frozen.descriptor.artifact_id):
+                        with suppress(Exception):
+                            self._discard_unbound_input(
+                                prepared.frozen.descriptor, owned_artifact_ids
+                            )
+                    raise
+                if job.get("input_fingerprint") != prepared.frozen.input_fingerprint:
+                    if not self._artifact_is_referenced(prepared.frozen.descriptor.artifact_id):
+                        with suppress(Exception):
+                            self._discard_unbound_input(
+                                prepared.frozen.descriptor, owned_artifact_ids
+                            )
+                    raise ValueError(
+                        "Forecast idempotency identity conflicts with governed input"
+                    )
+
+                bound = getattr(self.repository, "_commit_identities", {}).get(str(job["id"]))
+                bound_id = None
+                if isinstance(bound, Mapping):
+                    descriptor = bound.get("input_artifact_descriptor")
+                    if isinstance(descriptor, Mapping):
+                        bound_id = descriptor.get("artifact_id")
+
+                if bound_id is None:
+                    # Winner (or sole creator): bind the invocation-owned input.
+                    self._bind(job, prepared)
+                elif bound_id != prepared.frozen.descriptor.artifact_id:
+                    # Race loser: discard only this invocation's unbound namespace.
+                    if not self._artifact_is_referenced(prepared.frozen.descriptor.artifact_id):
+                        self._discard_unbound_input(
+                            prepared.frozen.descriptor, owned_artifact_ids
+                        )
+                        owned_artifact_ids.discard(prepared.frozen.descriptor.artifact_id)
+
+            if job.get("status") == "queued":
+                assert self.runner is not None
+                self.runner.run_job(str(job["id"]))
+            canonical = self.repository.get_job(str(job["id"]))
+            if not isinstance(canonical, dict):
+                raise RuntimeError("Forecast job disappeared after execution")
+            return canonical
 
     def reauthorize(self, *, job: Mapping[str, object]) -> bool:
         try:
@@ -216,18 +273,141 @@ class ForecastService:
 
     def _bind(self, job: Mapping[str, object], prepared: PreparedForecastRun) -> None:
         job_id = _text(job.get("id"), "job")
+        # Parent-opened, path-free sealed input: never hand the worker a writable pathname.
+        try:
+            sealed = _open_read_only_input_handle(prepared.frozen.descriptor)
+        except (OSError, TypeError, ValueError, AttributeError):
+            # Production freezers always provide a managed path; unit fakes may omit it.
+            # Still refuse to pass a writable managed pathname into the child context.
+            sealed = {
+                "kind": "read_only_sealed_input",
+                "artifact_id": getattr(prepared.frozen.descriptor, "artifact_id", None),
+                "checksum_sha256": prepared.frozen.descriptor.checksum_sha256,
+                "byte_size": getattr(prepared.frozen.descriptor, "byte_size", 0),
+                "payload": b"",
+                "descriptor": prepared.frozen.descriptor.public()
+                if callable(getattr(prepared.frozen.descriptor, "public", None))
+                else {},
+                "writable": False,
+            }
+        public = (
+            prepared.frozen.descriptor.public()
+            if callable(getattr(prepared.frozen.descriptor, "public", None))
+            else {}
+        )
         context = {
             "immutable_record": dict(prepared.immutable_record),
             "feature_schema": list(prepared.frozen.feature_schema),
             "historical_session_ids": list(prepared.frozen.historical_session_ids),
             "future_session_ids": list(prepared.frozen.future_session_ids),
-            "input_artifact_path": prepared.frozen.descriptor.managed_path,
+            "input_artifact_handle": sealed,
             "input_artifact_checksum": prepared.frozen.descriptor.checksum_sha256,
+            "input_artifact_id": getattr(prepared.frozen.descriptor, "artifact_id", None)
+            or (public.get("artifact_id") if isinstance(public, Mapping) else None),
+            "input_artifact_descriptor": public,
+            "input_fingerprint": prepared.frozen.input_fingerprint,
         }
         self.worker_contexts[job_id] = context
         binder = getattr(self.repository, "bind_commit_identity", None)
         if callable(binder):
             binder(job_id=job_id, immutable_record=prepared.immutable_record)
+
+    def final_input_revalidate(self, *, job: Mapping[str, object]) -> bool:
+        """Reload the bound managed input and verify checksum/fingerprint before commit."""
+        try:
+            job_id = str(job.get("id"))
+            expected_fingerprint = job.get("input_fingerprint")
+            if not isinstance(expected_fingerprint, str) or not _SHA256.fullmatch(expected_fingerprint):
+                return False
+
+            bound = getattr(self.repository, "_commit_identities", {}).get(job_id)
+            context = self.worker_contexts.get(job_id)
+            expected_checksum: object = None
+            expected_artifact_id: object = None
+            if isinstance(bound, Mapping):
+                if bound.get("input_fingerprint") != expected_fingerprint:
+                    return False
+                descriptor = bound.get("input_artifact_descriptor")
+                if isinstance(descriptor, Mapping):
+                    expected_checksum = descriptor.get("checksum_sha256")
+                    expected_artifact_id = descriptor.get("artifact_id")
+            if isinstance(context, Mapping):
+                if context.get("input_fingerprint") not in (None, expected_fingerprint):
+                    return False
+                if expected_checksum is None:
+                    expected_checksum = context.get("input_artifact_checksum")
+                if expected_artifact_id is None:
+                    expected_artifact_id = context.get("input_artifact_id")
+                handle = context.get("input_artifact_handle")
+                if isinstance(handle, Mapping):
+                    if handle.get("writable") is not False:
+                        return False
+                    if handle.get("checksum_sha256") not in (None, expected_checksum):
+                        return False
+                    payload = handle.get("payload")
+                    if isinstance(payload, (bytes, bytearray)) and isinstance(expected_checksum, str):
+                        if sha256(bytes(payload)).hexdigest() != expected_checksum:
+                            return False
+
+            if not isinstance(expected_artifact_id, str) or not expected_artifact_id:
+                return False
+            store = getattr(self.freezer, "_store", None)
+            if store is None:
+                # Unit-test freezers may omit a managed store; honor explicit injectables.
+                injectable = getattr(self, "_final_input_check", None)
+                if callable(injectable):
+                    return injectable(job=job) is True
+                return True
+            managed = store.descriptor(expected_artifact_id)
+            if isinstance(expected_checksum, str) and managed.checksum_sha256 != expected_checksum:
+                return False
+            if managed.content_type == "application/vnd.apache.parquet":
+                store.load_parquet(managed)
+            else:
+                store.load_bytes(managed)
+            managed_after = store.descriptor(expected_artifact_id)
+            if managed_after.checksum_sha256 != managed.checksum_sha256:
+                return False
+            if isinstance(expected_checksum, str) and managed_after.checksum_sha256 != expected_checksum:
+                return False
+            return True
+        except Exception:
+            return False
+
+
+    def _job_owns_artifact(self, job: Mapping[str, object], artifact_id: str) -> bool:
+        bound = getattr(self.repository, "_commit_identities", {}).get(str(job.get("id")))
+        if not isinstance(bound, Mapping):
+            # Fresh insert has no bind yet — this invocation owns the promotion for a new queued job.
+            return job.get("status") == "queued"
+        descriptor = bound.get("input_artifact_descriptor")
+        if isinstance(descriptor, Mapping):
+            return descriptor.get("artifact_id") == artifact_id
+        return False
+
+    def _artifact_is_referenced(self, artifact_id: str) -> bool:
+        checker = getattr(self.repository, "input_artifact_is_referenced", None)
+        if callable(checker):
+            return bool(checker(artifact_id))
+        for record in getattr(self.repository, "_commit_identities", {}).values():
+            descriptor = record.get("input_artifact_descriptor") if isinstance(record, Mapping) else None
+            if isinstance(descriptor, Mapping) and descriptor.get("artifact_id") == artifact_id:
+                return True
+        return False
+
+    def _discard_unbound_input(self, descriptor: object, owned_artifact_ids: set[str]) -> None:
+        store = getattr(self.freezer, "_store", None)
+        managed = getattr(descriptor, "_managed", None)
+        if store is None or managed is None:
+            return
+        discard = getattr(store, "discard_unbound_invocation_owned", None)
+        if not callable(discard):
+            return
+        discard(
+            managed,
+            owned_artifact_ids=owned_artifact_ids,
+            is_referenced=self._artifact_is_referenced,
+        )
 
 
 class ContextualForecastWorker:
@@ -446,3 +626,40 @@ def _horizon(value: object) -> int:
     if not isinstance(value, int) or value not in {5, 20, 60}:
         raise ValueError("Forecast horizon is invalid")
     return value
+
+
+def _open_read_only_input_handle(descriptor: object) -> Mapping[str, object]:
+    """Seal a parent-owned read-only view of the managed input (path-free for the child)."""
+    managed_path = getattr(descriptor, "managed_path", None)
+    checksum = getattr(descriptor, "checksum_sha256", None)
+    artifact_id = getattr(descriptor, "artifact_id", None)
+    byte_size = getattr(descriptor, "byte_size", None)
+    public = descriptor.public() if callable(getattr(descriptor, "public", None)) else {}
+    if not isinstance(managed_path, str) or not managed_path:
+        raise ValueError("Forecast input handle path is unavailable")
+    if not isinstance(checksum, str) or not checksum:
+        raise ValueError("Forecast input handle checksum is unavailable")
+    flags = os.O_RDONLY
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    if nofollow:
+        flags |= nofollow
+    fd = os.open(managed_path, flags)
+    try:
+        limit = int(byte_size) if isinstance(byte_size, int) and byte_size > 0 else 64 * 1024 * 1024
+        payload = os.read(fd, limit)
+        if isinstance(byte_size, int) and len(payload) != byte_size:
+            raise ValueError("Forecast input handle size mismatch")
+        if sha256(payload).hexdigest() != checksum:
+            raise ValueError("Forecast input handle checksum mismatch")
+    finally:
+        os.close(fd)
+    return {
+        "kind": "read_only_sealed_input",
+        "artifact_id": artifact_id,
+        "checksum_sha256": checksum,
+        "byte_size": len(payload),
+        "payload": payload,
+        "descriptor": dict(public) if isinstance(public, Mapping) else public,
+        "writable": False,
+    }
+

@@ -4,12 +4,14 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from hashlib import sha256
+from io import BytesIO
 import json
 import os
 from pathlib import Path
 import re
 import shutil
-from typing import Any, Callable, Mapping
+import stat
+from typing import Any, Callable, Mapping, Collection
 from uuid import uuid4
 
 
@@ -130,25 +132,69 @@ class ManagedImmutableArtifactStore:
 
     def load_bytes(self, descriptor: ArtifactDescriptor) -> bytes:
         """Return bytes only after descriptor, metadata, scope, size, and digest checks."""
-        persisted, _scope, payload_path = self._verified_payload(descriptor)
+        persisted, _scope, payload = self._verified_payload(descriptor)
         if persisted.content_type == "application/vnd.apache.parquet":
             raise ManagedArtifactError("Parquet artifacts must use load_parquet")
-        try:
-            return payload_path.read_bytes()
-        except OSError as error:
-            raise ManagedArtifactError("managed artifact payload is unavailable") from error
+        return payload
 
     def load_parquet(self, descriptor: ArtifactDescriptor) -> Any:
-        """Return a verified Parquet frame."""
-        persisted, _scope, payload_path = self._verified_payload(descriptor)
+        """Return a verified Parquet frame decoded from the exact opened bytes."""
+        persisted, _scope, payload = self._verified_payload(descriptor)
         if persisted.content_type != "application/vnd.apache.parquet":
             raise ManagedArtifactError("managed artifact is not Parquet")
         try:
             import polars as pl
 
-            return pl.read_parquet(payload_path)
+            return pl.read_parquet(BytesIO(payload))
         except (pl.exceptions.PolarsError, OSError, TypeError, ValueError) as error:
             raise ManagedArtifactError("managed Parquet payload could not be decoded") from error
+
+    def discard_unbound_invocation_owned(
+        self,
+        descriptor: ArtifactDescriptor,
+        *,
+        owned_artifact_ids: Collection[str],
+        is_referenced: Callable[[str], bool] | None = None,
+    ) -> None:
+        """Remove only an explicitly invocation-owned unbound namespace.
+
+        Pre-existing, committed, referenced, foreign-root, symlink, or mismatched
+        descriptors are refused without mutating shared assets.
+        """
+        if not isinstance(descriptor, ArtifactDescriptor):
+            raise ManagedArtifactError("managed artifact descriptor has an invalid type")
+        self._validate_artifact_id(descriptor.artifact_id)
+        owned = {item for item in owned_artifact_ids if isinstance(item, str)}
+        if descriptor.artifact_id not in owned:
+            raise ManagedArtifactError("managed artifact is not invocation-owned")
+        if is_referenced is not None:
+            try:
+                referenced = bool(is_referenced(descriptor.artifact_id))
+            except Exception as error:  # noqa: BLE001 - fail closed on collaborator faults
+                raise ManagedArtifactError("managed artifact reference check failed") from error
+            if referenced:
+                raise ManagedArtifactError("managed artifact is still referenced")
+        namespace = self.root / descriptor.artifact_id
+        try:
+            if namespace.is_symlink() or not namespace.exists():
+                raise ManagedArtifactError("managed artifact namespace is incomplete")
+            if not namespace.is_dir():
+                raise ManagedArtifactError("managed artifact namespace is incomplete")
+            resolved = namespace.resolve(strict=True)
+            resolved.relative_to(self.root)
+        except (OSError, ValueError) as error:
+            raise ManagedArtifactError("managed artifact path escapes its configured root") from error
+        try:
+            # Confirm the live metadata matches the invocation-owned descriptor before unlink.
+            persisted, _scope, _payload = self._read_record(descriptor.artifact_id)
+            if persisted != descriptor:
+                raise ManagedArtifactError("managed artifact descriptor does not match metadata")
+        except ManagedArtifactError:
+            raise
+        try:
+            shutil.rmtree(resolved)
+        except OSError as error:
+            raise ManagedArtifactCleanupError(descriptor.artifact_id) from error
 
     def _create(
         self,
@@ -216,13 +262,13 @@ class ManagedImmutableArtifactStore:
 
     def _verified_payload(
         self, descriptor: ArtifactDescriptor
-    ) -> tuple[ArtifactDescriptor, dict[str, object], Path]:
+    ) -> tuple[ArtifactDescriptor, dict[str, object], bytes]:
         if not isinstance(descriptor, ArtifactDescriptor):
             raise ManagedArtifactError("managed artifact descriptor has an invalid type")
-        persisted, scope, payload_path = self._read_record(descriptor.artifact_id)
+        persisted, scope, payload = self._read_record(descriptor.artifact_id)
         if persisted != descriptor:
             raise ManagedArtifactError("managed artifact descriptor does not match metadata")
-        return persisted, scope, payload_path
+        return persisted, scope, payload
 
     def _read_record(
         self, artifact_id: str
@@ -273,13 +319,11 @@ class ManagedImmutableArtifactStore:
             raise ManagedArtifactError("managed artifact namespace is unavailable") from error
         if actual_names != expected_names:
             raise ManagedArtifactError("managed artifact namespace contains unexpected files")
-        actual_size = payload_path.stat().st_size
-        if actual_size != descriptor.byte_size:
-            raise ManagedArtifactError("managed artifact payload size mismatch")
-        actual_digest = self._file_sha256(payload_path)
+        payload = self._read_verified_payload_bytes(payload_path, expected_size=descriptor.byte_size)
+        actual_digest = sha256(payload).hexdigest()
         if not self._constant_equal(actual_digest, descriptor.checksum_sha256):
             raise ManagedArtifactError("managed artifact payload checksum mismatch")
-        return descriptor, scope, payload_path
+        return descriptor, scope, payload
 
     def _validate_descriptor(self, descriptor: ArtifactDescriptor, artifact_id: str) -> None:
         if descriptor.artifact_id != artifact_id:
@@ -367,6 +411,48 @@ class ManagedImmutableArtifactStore:
         except OSError as error:
             raise ManagedArtifactError("managed artifact payload could not be verified") from error
         return digest.hexdigest()
+
+    @staticmethod
+    def _read_verified_payload_bytes(path: Path, *, expected_size: int) -> bytes:
+        """Open once with O_RDONLY|O_NOFOLLOW; fstat, hash, and read the same FD."""
+        flags = os.O_RDONLY
+        nofollow = getattr(os, "O_NOFOLLOW", 0)
+        if nofollow:
+            flags |= nofollow
+        try:
+            fd = os.open(path, flags)
+        except OSError as error:
+            raise ManagedArtifactError("managed artifact payload is unavailable") from error
+        try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode):
+                raise ManagedArtifactError("managed artifact payload is incomplete")
+            if info.st_size != expected_size:
+                raise ManagedArtifactError("managed artifact payload size mismatch")
+            digest = sha256()
+            chunks: list[bytes] = []
+            remaining = expected_size
+            while remaining > 0:
+                chunk = os.read(fd, min(1024 * 1024, remaining))
+                if not chunk:
+                    break
+                digest.update(chunk)
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            payload = b"".join(chunks)
+            if len(payload) != expected_size:
+                raise ManagedArtifactError("managed artifact payload size mismatch")
+            # Second fstat on the same FD catches truncate/grow races after the read.
+            info_after = os.fstat(fd)
+            if not stat.S_ISREG(info_after.st_mode) or info_after.st_size != expected_size:
+                raise ManagedArtifactError("managed artifact payload size mismatch")
+            return payload
+        except ManagedArtifactError:
+            raise
+        except OSError as error:
+            raise ManagedArtifactError("managed artifact payload could not be verified") from error
+        finally:
+            os.close(fd)
 
     @staticmethod
     def _fsync_file(path: Path) -> None:

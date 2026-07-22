@@ -669,3 +669,89 @@ def test_optional_identity_probe_failure_is_sanitized_and_local(tmp_path: Path) 
     assert "secret" not in repr(broken).lower()
     assert "/tmp/" not in repr(broken)
     assert host.status(OptionalModuleName.THESIS).available is True
+
+
+
+def test_wr02_parquet_same_open_rejects_toctou(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """WR-02: TOCTOU swap after open cannot make Polars decode replacement bytes."""
+    import os
+    import polars as pl
+    from app.optional_artifacts import ManagedArtifactError, ManagedImmutableArtifactStore
+
+    store = ManagedImmutableArtifactStore(tmp_path / "managed")
+    original = pl.DataFrame({"session_id": ["ORIG"], "close": [1.0]})
+    replacement = pl.DataFrame({"session_id": ["SWAP"], "close": [99.0]})
+    descriptor = store.create_parquet(
+        original, schema_version="governed-panel-v1", scope={"kind": "toctou"}
+    )
+    payload_path = store.root / descriptor.relative_path
+    replacement_bytes = (tmp_path / "replacement.parquet")
+    replacement.write_parquet(replacement_bytes)
+
+    real_open = os.open
+    opened: list[int] = []
+
+    def swapping_open(path, flags, *args, **kwargs):
+        fd = real_open(path, flags, *args, **kwargs)
+        try:
+            if Path(path).resolve() == payload_path.resolve():
+                opened.append(fd)
+                # Replace directory entry after the handle is open.
+                os.replace(replacement_bytes, payload_path)
+        except Exception:
+            pass
+        return fd
+
+    monkeypatch.setattr(os, "open", swapping_open)
+    try:
+        frame = store.load_parquet(descriptor)
+    except ManagedArtifactError:
+        # Fail-closed is acceptable.
+        assert opened, "expected same-open path to open the payload"
+        return
+    # If decode succeeds it must be the original frame, never the replacement.
+    assert frame["session_id"].to_list() == ["ORIG"]
+    assert frame["close"].to_list() == [1.0]
+
+
+def test_parquet_same_open_and_unbound_discard_reference_safe(tmp_path: Path) -> None:
+    import polars as pl
+    from app.optional_artifacts import (
+        ManagedArtifactError,
+        ManagedImmutableArtifactStore,
+    )
+
+    store = ManagedImmutableArtifactStore(tmp_path / "managed")
+    shared = store.create_bytes(
+        b"shared-final",
+        schema_version="phase5-test-v1",
+        scope={"kind": "shared"},
+        content_type="application/octet-stream",
+    )
+    frame = pl.DataFrame({"session_id": ["S1", "S2"], "close": [1.0, 2.0]})
+    owned = store.create_parquet(
+        frame, schema_version="governed-panel-v1", scope={"kind": "owned"}
+    )
+    loaded = store.load_parquet(owned)
+    assert loaded.equals(frame)
+
+    # Discard refuses non-owned descriptors.
+    with pytest.raises(ManagedArtifactError, match="invocation-owned|referenced"):
+        store.discard_unbound_invocation_owned(
+            shared, owned_artifact_ids={owned.artifact_id}, is_referenced=lambda _aid: False
+        )
+    assert store.load_bytes(shared) == b"shared-final"
+
+    # Discard refuses referenced owned artifacts.
+    with pytest.raises(ManagedArtifactError, match="referenced|invocation"):
+        store.discard_unbound_invocation_owned(
+            owned, owned_artifact_ids={owned.artifact_id}, is_referenced=lambda _aid: True
+        )
+    assert store.load_parquet(owned).equals(frame)
+
+    # Discard removes only the invocation-owned unbound namespace.
+    store.discard_unbound_invocation_owned(
+        owned, owned_artifact_ids={owned.artifact_id}, is_referenced=lambda _aid: False
+    )
+    assert not (store.root / owned.artifact_id).exists()
+    assert store.load_bytes(shared) == b"shared-final"

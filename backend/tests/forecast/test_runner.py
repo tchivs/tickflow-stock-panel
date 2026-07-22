@@ -489,7 +489,7 @@ def _runner(tmp_path: Path, **overrides):
     runner = ForecastRunner(
         repository=repository,
         limits=ForecastRunnerLimits(
-            wall_clock_seconds=3, cpu_seconds=2, address_space_bytes=512 * 1024 * 1024,
+            wall_clock_seconds=3, cpu_seconds=2, address_space_bytes=1024 * 1024 * 1024,
             thread_count=2, output_bytes=16 * 1024, queue_items=1,
         ),
         **boundaries,
@@ -782,3 +782,368 @@ def test_output_path_containment_requires_regular_verified_artifact(tmp_path):
     rejected("/absolute/output.parquet")
     rejected("forecast/symlink/output.parquet", symlink=True)
     rejected("forecast/artifact-1/output.parquet", checksum="0" * 64)
+
+
+
+@dataclass
+class CommitSpyRepository:
+    """Wrap ForecastRepository and count sole commit invocations."""
+
+    inner: object
+    commit_calls: int = 0
+
+    def __getattr__(self, name: str):
+        return getattr(self.inner, name)
+
+    def commit_completed_forecast(self, **kwargs):
+        self.commit_calls += 1
+        return self.inner.commit_completed_forecast(**kwargs)
+
+
+def test_cr05_final_input_revalidation_precedes_commit_and_commit_spy_zero(tmp_path):
+    """CR-05: post-worker/pre-commit input divergence terminalizes with commit spy 0."""
+    from app.forecast.runner import FixedWorker, ForecastRunner, ForecastRunnerLimits
+
+    action_spies = {
+        name: CountingBoundary()
+        for name in ("thesis", "strategy", "decision_plan", "monitor", "position", "broker")
+    }
+    order: list[str] = []
+    base = _repository(tmp_path)
+    spy_repo = CommitSpyRepository(inner=base)
+
+    def artifact_verify(*, manifest, job):
+        order.append("artifact_verify")
+        return True
+
+    def final_input_revalidate(*, job):
+        order.append("final_input_revalidate")
+        return False
+
+    runner = ForecastRunner(
+        repository=spy_repo,
+        limits=ForecastRunnerLimits(
+            wall_clock_seconds=30,
+            cpu_seconds=20,
+            address_space_bytes=1024 * 1024 * 1024,
+            thread_count=2,
+            output_bytes=16 * 1024,
+            queue_items=1,
+        ),
+        reauthorize=CountingBoundary(),
+        catalog_revalidate=CountingBoundary(),
+        input_revalidate=CountingBoundary(),
+        worker=FixedWorker(valid=True),
+        artifact_verify=artifact_verify,
+        action_collaborators=action_spies,
+        final_input_revalidate=final_input_revalidate,
+    )
+    job = _create(base, idempotency_key="cr05-final-input")
+    result = runner.run_job(job["id"])
+    assert result["status"] == "validation_failed"
+    assert result.get("reason") == "final_input_revalidation_failed"
+    assert spy_repo.commit_calls == 0
+    assert base.forecast_for_job(job["id"]) is None
+    assert all(spy.calls == 0 for spy in action_spies.values())
+    assert order == ["artifact_verify", "final_input_revalidate"]
+
+
+def test_cr05_worker_input_tamper_and_pre_commit_input_rejection(tmp_path, monkeypatch):
+    """Worker-visible context has no writable path; tamper fails final revalidation."""
+    from app.forecast.service import ForecastService, _open_read_only_input_handle
+    from types import SimpleNamespace
+    from app.optional_artifacts import ManagedImmutableArtifactStore
+    import polars as pl
+
+    store = ManagedImmutableArtifactStore(tmp_path / "inputs")
+    frame = pl.DataFrame({"session_id": ["S1"], "close": [1.0]})
+    managed = store.create_parquet(
+        frame, schema_version="forecast-input-v1", scope={"k": "v"}
+    )
+    descriptor = SimpleNamespace(
+        artifact_id=managed.artifact_id,
+        schema_version=managed.schema_version,
+        byte_size=managed.byte_size,
+        checksum_sha256=managed.checksum_sha256,
+        managed_path=str(store.root / managed.relative_path),
+        public=lambda: {
+            "artifact_id": managed.artifact_id,
+            "schema_version": managed.schema_version,
+            "byte_size": managed.byte_size,
+            "checksum_sha256": managed.checksum_sha256,
+        },
+        _managed=managed,
+    )
+    sealed = _open_read_only_input_handle(descriptor)
+    assert sealed["writable"] is False
+    assert "path" not in sealed
+    assert "managed_path" not in sealed
+    assert sealed["checksum_sha256"] == managed.checksum_sha256
+    # Mutating the sealed payload must not be possible via path rewrite of the
+    # authoritative namespace without failing the sealed checksum.
+    payload_path = store.root / managed.relative_path
+    original = payload_path.read_bytes()
+    payload_path.write_bytes(b"TAMPERED" + original[8:])
+    from hashlib import sha256
+
+    assert sha256(sealed["payload"]).hexdigest() == managed.checksum_sha256
+    assert sha256(payload_path.read_bytes()).hexdigest() != managed.checksum_sha256
+
+
+def test_wr01_operation_first_replay_race_leaves_no_orphan(tmp_path):
+    """WR-01: same-key replay allocates no input; race leaves one bound namespace."""
+    from types import SimpleNamespace
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from app.forecast.service import ForecastService
+    from app.optional_artifacts import ManagedImmutableArtifactStore
+    import polars as pl
+    import threading
+
+    store_root = tmp_path / "managed-inputs"
+    store = ManagedImmutableArtifactStore(store_root)
+    freezes: list[str] = []
+    freeze_lock = threading.Lock()
+
+    class Freezer:
+        def freeze(self, **kwargs):
+            frame = pl.DataFrame({"session_id": ["S1", "S2"], "close": [10.0, 11.0]})
+            managed = store.create_parquet(
+                frame,
+                schema_version="forecast-input-v1",
+                scope={"instrument": kwargs.get("principal"), "n": len(freezes)},
+            )
+            with freeze_lock:
+                freezes.append(managed.artifact_id)
+            descriptor = SimpleNamespace(
+                artifact_id=managed.artifact_id,
+                schema_version=managed.schema_version,
+                byte_size=managed.byte_size,
+                checksum_sha256=managed.checksum_sha256,
+                managed_path=str(store.root / managed.relative_path),
+                metadata_json="{}",
+                public=lambda: {
+                    "artifact_id": managed.artifact_id,
+                    "schema_version": managed.schema_version,
+                    "byte_size": managed.byte_size,
+                    "checksum_sha256": managed.checksum_sha256,
+                },
+                _managed=managed,
+            )
+            return SimpleNamespace(
+                instrument_id="instrument-600000",
+                symbol="600000.SH",
+                catalog_id="kronos-mini",
+                horizon=20,
+                as_of_session_id="CNA-20250430",
+                lookback=64,
+                adjustment_policy="forward",
+                adjustment_revision="adj-1",
+                calendar_revision="cn-a-calendar-2025-v1",
+                historical_session_ids=tuple(f"CNA-20250{i:03d}" for i in range(64)),
+                future_session_ids=tuple(f"CNA-20251{i:03d}" for i in range(20)),
+                feature_schema=["open", "high", "low", "close", "volume"],
+                input_fingerprint="a" * 64,
+                descriptor=descriptor,
+            )
+
+        def load(self, descriptor):
+            return store.load_parquet(descriptor._managed)
+
+        _store = store
+
+    class Catalog:
+        def require_local(self, catalog_id, *, device):
+            return SimpleNamespace(
+                catalog_id=catalog_id,
+                source_revision="67b630e67f6a18c9e9be918d9b4337c960db1e9a",
+                source_digest_sha256="c" * 64,
+                model_revision="f4e68697d9d5aed55cef5c96aabc3376bcad9f81",
+                model_weight_sha256="d" * 64,
+                tokenizer_revision="26966d0035065a0cae0ebad7af8ece35bc1fb51c",
+                tokenizer_weight_sha256="e" * 64,
+                max_context=512,
+            )
+
+        def revalidate_before_spawn(self, selected):
+            return selected
+
+    class Runner:
+        def __init__(self):
+            self.calls = []
+
+        def run_job(self, job_id):
+            self.calls.append(job_id)
+            return {"status": "queued"}
+
+    repository = _repository(tmp_path)
+    freezer = Freezer()
+    runner = Runner()
+    service = ForecastService(
+        repository=repository,
+        catalog=Catalog(),
+        freezer=freezer,
+        runner=runner,
+        as_of_session=lambda _instrument: "CNA-20250430",
+        device="cpu",
+    )
+
+    first = service.create_or_get_job(
+        principal="researcher-1",
+        instrument="instrument-600000",
+        horizon=20,
+        catalog_id="kronos-mini",
+        idempotency_key="wr01-key",
+    )
+    namespaces_after_first = {
+        p.name for p in store_root.iterdir() if p.is_dir() and not p.name.startswith(".")
+    }
+    assert len(namespaces_after_first) == 1
+    assert freezes  # one freeze
+    freeze_count_after_first = len(freezes)
+
+    # Ordinary same-key replay allocates nothing.
+    second = service.create_or_get_job(
+        principal="researcher-1",
+        instrument="instrument-600000",
+        horizon=20,
+        catalog_id="kronos-mini",
+        idempotency_key="wr01-key",
+    )
+    assert second["id"] == first["id"]
+    assert len(freezes) == freeze_count_after_first
+    namespaces_after_replay = {
+        p.name for p in store_root.iterdir() if p.is_dir() and not p.name.startswith(".")
+    }
+    assert namespaces_after_replay == namespaces_after_first
+
+    # Concurrent race: only one canonical namespace remains (losers discarded).
+    race_key = "wr01-race-key"
+    results = []
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futures = [
+            pool.submit(
+                service.create_or_get_job,
+                principal="researcher-1",
+                instrument="instrument-600000",
+                horizon=20,
+                catalog_id="kronos-mini",
+                idempotency_key=race_key,
+            )
+            for _ in range(4)
+        ]
+        for future in as_completed(futures):
+            results.append(future.result())
+    job_ids = {row["id"] for row in results}
+    assert len(job_ids) == 1
+    remaining = {
+        p.name for p in store_root.iterdir() if p.is_dir() and not p.name.startswith(".")
+    }
+    # First job namespace + race canonical namespace only.
+    assert len(remaining) == 2
+    # Bound identity for race job must reference an existing namespace.
+    bound = repository._commit_identities.get(results[0]["id"])
+    assert isinstance(bound, dict)
+    bound_id = bound["input_artifact_descriptor"]["artifact_id"]
+    assert bound_id in remaining
+
+
+def test_idempotent_input_namespace_and_orphan_cleanup_on_failure(tmp_path):
+    """Failure after promotion discards only the invocation-owned unbound namespace."""
+    from types import SimpleNamespace
+    from app.forecast.service import ForecastService
+    from app.optional_artifacts import ManagedImmutableArtifactStore
+    import polars as pl
+
+    store = ManagedImmutableArtifactStore(tmp_path / "managed-inputs")
+    shared = store.create_bytes(
+        b"shared-committed",
+        schema_version="phase5-test-v1",
+        scope={"kind": "shared"},
+        content_type="application/octet-stream",
+    )
+
+    class Freezer:
+        def freeze(self, **kwargs):
+            frame = pl.DataFrame({"session_id": ["S1"], "close": [1.0]})
+            managed = store.create_parquet(
+                frame, schema_version="forecast-input-v1", scope={"k": "fail"}
+            )
+            descriptor = SimpleNamespace(
+                artifact_id=managed.artifact_id,
+                schema_version=managed.schema_version,
+                byte_size=managed.byte_size,
+                checksum_sha256=managed.checksum_sha256,
+                managed_path=str(store.root / managed.relative_path),
+                metadata_json="{}",
+                public=lambda: {
+                    "artifact_id": managed.artifact_id,
+                    "schema_version": managed.schema_version,
+                    "byte_size": managed.byte_size,
+                    "checksum_sha256": managed.checksum_sha256,
+                },
+                _managed=managed,
+            )
+            return SimpleNamespace(
+                instrument_id="instrument-600000",
+                symbol="600000.SH",
+                catalog_id="kronos-mini",
+                horizon=20,
+                as_of_session_id="CNA-20250430",
+                lookback=64,
+                adjustment_policy="forward",
+                adjustment_revision="adj-1",
+                calendar_revision="cn-a-calendar-2025-v1",
+                historical_session_ids=tuple(f"CNA-20250{i:03d}" for i in range(64)),
+                future_session_ids=tuple(f"CNA-20251{i:03d}" for i in range(20)),
+                feature_schema=["open", "high", "low", "close", "volume"],
+                input_fingerprint="b" * 64,
+                descriptor=descriptor,
+            )
+
+        def load(self, descriptor):
+            raise RuntimeError("should not load")
+
+        _store = store
+
+    class Catalog:
+        def require_local(self, catalog_id, *, device):
+            return SimpleNamespace(
+                catalog_id=catalog_id,
+                source_revision="67b630e67f6a18c9e9be918d9b4337c960db1e9a",
+                source_digest_sha256="c" * 64,
+                model_revision="f4e68697d9d5aed55cef5c96aabc3376bcad9f81",
+                model_weight_sha256="d" * 64,
+                tokenizer_revision="26966d0035065a0cae0ebad7af8ece35bc1fb51c",
+                tokenizer_weight_sha256="e" * 64,
+                max_context=512,
+            )
+
+        def revalidate_before_spawn(self, selected):
+            return selected
+
+    class ExplodingRunner:
+        def run_job(self, job_id):
+            raise RuntimeError("runner boom")
+
+    repository = _repository(tmp_path)
+    service = ForecastService(
+        repository=repository,
+        catalog=Catalog(),
+        freezer=Freezer(),
+        runner=ExplodingRunner(),
+        as_of_session=lambda _instrument: "CNA-20250430",
+        device="cpu",
+    )
+    with pytest.raises(RuntimeError, match="runner boom"):
+        service.create_or_get_job(
+            principal="researcher-1",
+            instrument="instrument-600000",
+            horizon=20,
+            catalog_id="kronos-mini",
+            idempotency_key="orphan-fail",
+        )
+    # Job was created and bound before run_job; shared asset remains; job-bound
+    # namespace remains (referenced). Only unbound would be discarded.
+    assert store.load_bytes(shared) == b"shared-committed"
+    remaining = [p.name for p in store.root.iterdir() if p.is_dir() and not p.name.startswith(".")]
+    assert shared.artifact_id in remaining

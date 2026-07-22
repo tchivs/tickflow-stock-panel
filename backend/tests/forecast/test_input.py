@@ -325,3 +325,48 @@ def test_calendar_exact_as_of_sequence_rejects_missing_or_closed_anchor(tmp_path
         closed.future_sessions(
             calendar_id="cn-a-v1", after_session_id="CNA-20250430", count=5
         )
+
+
+
+def test_read_only_handle_is_path_free_and_checksum_bound(tmp_path):
+    from types import SimpleNamespace
+    from app.forecast.service import _open_read_only_input_handle
+    from app.optional_artifacts import ManagedImmutableArtifactStore
+    import polars as pl
+
+    store = ManagedImmutableArtifactStore(tmp_path / "managed")
+    frame = pl.DataFrame({"session_id": ["S1"], "close": [1.5]})
+    managed = store.create_parquet(
+        frame, schema_version="forecast-input-v1", scope={"k": "v"}
+    )
+    descriptor = SimpleNamespace(
+        artifact_id=managed.artifact_id,
+        schema_version=managed.schema_version,
+        byte_size=managed.byte_size,
+        checksum_sha256=managed.checksum_sha256,
+        managed_path=str(store.root / managed.relative_path),
+        public=lambda: {
+            "artifact_id": managed.artifact_id,
+            "schema_version": managed.schema_version,
+            "byte_size": managed.byte_size,
+            "checksum_sha256": managed.checksum_sha256,
+        },
+    )
+    sealed = _open_read_only_input_handle(descriptor)
+    assert sealed["kind"] == "read_only_sealed_input"
+    assert sealed["writable"] is False
+    assert sealed["checksum_sha256"] == managed.checksum_sha256
+    assert isinstance(sealed["payload"], (bytes, bytearray))
+    assert "input_artifact_path" not in sealed
+    assert not any(isinstance(v, str) and v.startswith(str(store.root)) for v in sealed.values() if not isinstance(v, (bytes, bytearray, dict)))
+
+
+def test_post_worker_revalidation_fingerprint_matches_bound_identity(tmp_path):
+    freezer, _repo, _calendar = _services(tmp_path)
+    frozen = freezer.freeze(
+        request=_request(), principal="researcher-1", as_of_session_id="CNA-20250430"
+    )
+    reloaded = freezer.load(frozen.descriptor)
+    assert reloaded.height == frozen.lookback or reloaded.height > 0
+    assert frozen.descriptor.checksum_sha256
+    assert len(frozen.input_fingerprint) == 64

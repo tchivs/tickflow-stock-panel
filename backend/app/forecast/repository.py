@@ -460,6 +460,55 @@ class ForecastRepository:
             ),
         )
 
+    def find_active_job(
+        self,
+        *,
+        principal: str,
+        instrument_id: str,
+        horizon: int,
+        catalog_id: str,
+        idempotency_key: str,
+    ) -> dict[str, Any] | None:
+        """Owner-scoped operation lookup before freezer promotion (operation-first)."""
+        if horizon not in {5, 20, 60}:
+            raise ValueError("forecast horizon is invalid")
+        if not all(
+            isinstance(value, str) and value
+            for value in (principal, instrument_id, catalog_id, idempotency_key)
+        ):
+            raise ValueError("forecast request identity is invalid")
+        with self._immediate() as connection:
+            existing = connection.execute(
+                """SELECT * FROM forecast_jobs
+                   WHERE principal = ? AND instrument_id = ? AND horizon = ?
+                     AND catalog_id = ? AND idempotency_key = ?""",
+                (principal, instrument_id, horizon, catalog_id, idempotency_key),
+            ).fetchone()
+            if existing is None:
+                return None
+            return dict(existing)
+
+    def input_artifact_is_referenced(self, artifact_id: str) -> bool:
+        """True when any bound commit identity or completed forecast references the id."""
+        if not isinstance(artifact_id, str) or not artifact_id:
+            return False
+        for record in self._commit_identities.values():
+            descriptor = record.get("input_artifact_descriptor")
+            if isinstance(descriptor, Mapping) and descriptor.get("artifact_id") == artifact_id:
+                return True
+        with self._immediate() as connection:
+            rows = connection.execute(
+                "SELECT input_artifact_descriptor_json FROM forecast_records"
+            ).fetchall()
+        for row in rows:
+            try:
+                payload = json.loads(row["input_artifact_descriptor_json"])
+            except (TypeError, json.JSONDecodeError, KeyError):
+                continue
+            if isinstance(payload, dict) and payload.get("artifact_id") == artifact_id:
+                return True
+        return False
+
     def create_or_get_active_job(
         self,
         *,
