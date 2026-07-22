@@ -5,15 +5,15 @@ milestone_name: milestone
 current_phase: 05
 current_phase_name: optional-enhancements
 status: gaps_found
-stopped_at: Native executor unavailable before Wave 1
-last_updated: "2026-07-17T14:26:47.772Z"
+stopped_at: Completed 05-36-PLAN.md
+last_updated: "2026-07-22T18:36:59.332Z"
 last_activity: 2026-07-17
 last_activity_desc: Phase 05 execution started
 progress:
   total_phases: 5
   completed_phases: 4
-  total_plans: 94
-  completed_plans: 79
+  total_plans: 103
+  completed_plans: 99
 ---
 
 # Project State
@@ -28,11 +28,11 @@ See: .planning/PROJECT.md (updated 2026-07-10)
 ## Current Position
 
 Phase: 05 (optional-enhancements) — EXECUTING
-Plan: 1 of 32
+Plan: 4 of 32
 Status: gaps_found
 Last activity: 2026-07-17 — Phase 05 execution started
 
-Progress: [████████░░] 84%
+Progress: [██████████] 96%
 
 ## Performance Metrics
 
@@ -96,6 +96,8 @@ Progress: [████████░░] 84%
 | Phase 05-optional-enhancements P15 | 18m30s | 2 tasks | 6 files |
 | Phase 05-optional-enhancements P16 | 25m33s | 3 tasks | 3 files |
 | Phase 05 P17 | 14m25s | 2 tasks | 11 files |
+| Phase 05 P40 | 1m | 1 tasks | 3 files |
+| Phase 05 P36 | 25min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -185,6 +187,10 @@ No implementation decision was explicitly locked by the architecture intake. Req
 - [Phase ?]: Lazy optional imports are checked against the process baseline so full-suite order cannot invalidate the real lifespan no-new-heavy-runtime guarantee.
 - [Phase ?]: Forecast freshness is projected from the existing governed Kline repository; no second calendar, store, or browser-authored as-of authority is introduced.
 - [Phase ?]: Real Kronos acceptance stays opt-in and local-only: absent approved assets report unavailable, while provisioned assets must pass exact provenance, network denial, and resource observation.
+- [Phase ?]: 05-40：完整且独立人工撰写的六行供应身份记录不可用，因此 approval: rejected、gate_status: blocked。
+- [Phase ?]: 05-40：执行器不得发现、获取、推断、选择、修复、替代、哈希或批准任何供应身份值；05-28 保持不可变拒绝历史。
+- [Phase ?]: 05-40：05-26 继续 fail-closed，FORE-01 不因本决策记录完成而标记完成。
+- [Phase ?]: Thesis check/history pages self-identify with instrument/version display identity (WR-03)
 
 ### Pending Todos
 
@@ -193,6 +199,7 @@ None yet.
 ### Blockers/Concerns
 
 - Phase 1 planning must map the existing tickflow, PanWatch, and Hermes extension points before choosing package and synchronization boundaries.
+- 05-26 仍被 05-40 rejected/blocked 供应身份 gate 阻断；缺少完整、独立人工撰写并逐行批准的六行记录。
 
 ## Deferred Items
 
@@ -202,6 +209,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-07-16T12:56:15Z
-Stopped at: Planned Phase 05 gap closure (15 plans)
+Last session: 2026-07-22T18:36:59.324Z
+Stopped at: Completed 05-36-PLAN.md
 Resume file: None
