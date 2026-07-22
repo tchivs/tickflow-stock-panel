@@ -10,6 +10,7 @@ import {
   type ForecastCatalogEntry,
   type ForecastHorizon,
   type ForecastJob,
+  type ForecastOutcome,
   type ForecastPathPoint,
   type ForecastRecord,
 } from '@/lib/phase5Api'
@@ -63,7 +64,7 @@ interface PathView {
 }
 
 interface CalibrationView {
-  horizon: number
+  horizon: number | null
   status: string
   actualSession: string | null
   actualValue: number | null
@@ -76,6 +77,7 @@ interface CalibrationView {
   sampleCount: number | null
   coverageStart: string | null
   coverageEnd: string | null
+  identityIncomplete: boolean
 }
 
 function record(value: unknown): LooseRecord {
@@ -206,44 +208,85 @@ function pathsFromPoints(points: ForecastPathPoint[]): PathView[] {
   }))
 }
 
-function calibrationViews(recordValue: ForecastRecord, calibrations: ForecastCalibration[]): CalibrationView[] {
-  const source = record(recordValue)
-  if (Array.isArray(source.calibration)) {
-    return source.calibration.map(item => {
-      const row = record(item)
-      return {
-        horizon: num(row.horizon) ?? recordValue.horizon,
-        status: text(row.status, 'pending'),
-        actualSession: typeof row.actual_session === 'string' ? row.actual_session : null,
-        actualValue: num(row.actual_value),
-        targetSession: typeof row.target_session === 'string' ? row.target_session : null,
-        closeMae: num(row.close_mae),
-        intervalCoverage: typeof row.interval_coverage === 'boolean' || typeof row.interval_coverage === 'number' ? row.interval_coverage : null,
-        pinballP10: num(row.p10_pinball),
-        pinballP50: num(row.p50_pinball),
-        pinballP90: num(row.p90_pinball),
-        sampleCount: num(row.sample_count),
-        coverageStart: typeof row.coverage_start === 'string' ? row.coverage_start : null,
-        coverageEnd: typeof row.coverage_end === 'string' ? row.coverage_end : null,
-      }
-    })
-  }
-  return calibrations.map(item => ({
-    horizon: recordValue.horizon,
-    status: item.close_mae == null ? 'pending' : 'evaluated',
+function incompleteCalibrationView(): CalibrationView {
+  return {
+    horizon: null,
+    status: 'identity_incomplete',
     actualSession: null,
     actualValue: null,
-    targetSession: recordValue.future_session_ids.at(-1) ?? null,
-    closeMae: item.close_mae,
-    intervalCoverage: item.p10_p90_interval_covered,
-    pinballP10: item.pinball_p10,
-    pinballP50: item.pinball_p50,
-    pinballP90: item.pinball_p90,
+    targetSession: null,
+    closeMae: null,
+    intervalCoverage: null,
+    pinballP10: null,
+    pinballP50: null,
+    pinballP90: null,
     sampleCount: null,
-    coverageStart: item.coverage_start,
-    coverageEnd: item.coverage_end,
-  }))
+    coverageStart: null,
+    coverageEnd: null,
+    identityIncomplete: true,
+  }
 }
+
+function calibrationViews(
+  recordValue: ForecastRecord,
+  outcomes: ForecastOutcome[],
+  calibrations: ForecastCalibration[],
+): CalibrationView[] {
+  const futureSessions = Array.isArray(recordValue.future_session_ids) ? recordValue.future_session_ids : []
+  const outcomeCounts = new Map<string, number>()
+  for (const outcome of outcomes) {
+    if (typeof outcome?.id !== 'string' || !outcome.id) continue
+    outcomeCounts.set(outcome.id, (outcomeCounts.get(outcome.id) ?? 0) + 1)
+  }
+  const outcomesById = new Map<string, ForecastOutcome>()
+  for (const outcome of outcomes) {
+    if (typeof outcome?.id !== 'string' || !outcome.id) continue
+    if ((outcomeCounts.get(outcome.id) ?? 0) === 1) outcomesById.set(outcome.id, outcome)
+  }
+
+  return calibrations.map(item => {
+    const outcomeId = typeof item.outcome_id === 'string' ? item.outcome_id : ''
+    if (!outcomeId) return incompleteCalibrationView()
+    if ((outcomeCounts.get(outcomeId) ?? 0) !== 1) return incompleteCalibrationView()
+    const outcome = outcomesById.get(outcomeId)
+    if (!outcome) return incompleteCalibrationView()
+    if (outcome.forecast_id !== recordValue.id || item.forecast_id !== recordValue.id) return incompleteCalibrationView()
+
+    const horizon = Number(outcome.horizon)
+    if (!(horizon === 5 || horizon === 20 || horizon === 60)) return incompleteCalibrationView()
+    if (!Number.isInteger(horizon) || horizon < 1 || horizon > futureSessions.length) return incompleteCalibrationView()
+    const targetSession = futureSessions[horizon - 1]
+    if (typeof targetSession !== 'string' || !targetSession) return incompleteCalibrationView()
+
+    const status = typeof outcome.status === 'string' && outcome.status ? outcome.status : 'pending'
+    const actualClose = num(outcome.actual_close)
+    const actualSession = typeof outcome.actual_session_id === 'string' && outcome.actual_session_id
+      ? outcome.actual_session_id
+      : null
+
+    if (status === 'evaluated') {
+      if (actualClose == null || !actualSession) return incompleteCalibrationView()
+    }
+
+    return {
+      horizon,
+      status,
+      actualSession: status === 'evaluated' ? actualSession : null,
+      actualValue: status === 'evaluated' ? actualClose : null,
+      targetSession,
+      closeMae: status === 'evaluated' ? num(item.close_mae) : null,
+      intervalCoverage: status === 'evaluated' ? item.p10_p90_interval_covered : null,
+      pinballP10: status === 'evaluated' ? num(item.pinball_p10) : null,
+      pinballP50: status === 'evaluated' ? num(item.pinball_p50) : null,
+      pinballP90: status === 'evaluated' ? num(item.pinball_p90) : null,
+      sampleCount: status === 'evaluated' ? 1 : null,
+      coverageStart: status === 'evaluated' ? (typeof item.coverage_start === 'string' ? item.coverage_start : null) : null,
+      coverageEnd: status === 'evaluated' ? (typeof item.coverage_end === 'string' ? item.coverage_end : null) : null,
+      identityIncomplete: false,
+    }
+  })
+}
+
 
 function recordLabel(value: ForecastRecord): string {
   return text(record(value).label, `预测 ${value.id.slice(0, 8)}`)
@@ -407,7 +450,7 @@ export function ForecastPanel({ instrument, title }: ForecastPanelProps) {
   const visibleSelectedPaths = selectedPathsPage.filter(item => selectedPathIds.includes(item.id))
   const pathForTable = visibleSelectedPaths[0] ?? selectedPathsPage[0]
   const quantiles = selectedRecord ? quantileRows(selectedRecord) : []
-  const calibration = selectedRecord ? calibrationViews(selectedRecord, calibrationQuery.data?.calibration ?? []) : []
+  const calibration = selectedRecord ? calibrationViews(selectedRecord, calibrationQuery.data?.outcomes ?? [], calibrationQuery.data?.calibration ?? []) : []
   const latestGovernedSession = recordsQuery.data?.latest_governed_session_id
   const selectedRecordAsOf = selectedRecord ? recordAsOf(selectedRecord) : null
   const latestGovernedOrdinal = sessionOrdinal(latestGovernedSession)
@@ -590,8 +633,22 @@ function Provenance({ recordValue, copied, onCopy }: { recordValue: ForecastReco
 
 function CalibrationTable({ rows }: { rows: CalibrationView[] }) {
   const descriptionId = useId()
-  return <section aria-labelledby={`${descriptionId}-heading`} className="space-y-2"><h3 id={`${descriptionId}-heading`} className="text-base font-semibold">追加式校准</h3><p id={descriptionId} className="text-xs text-secondary">左右滚动查看完整记录。校准只追加受治理实际值，不改写原分位数或采样路径。</p><div tabIndex={0} aria-describedby={descriptionId} className={`overflow-x-auto ${FOCUS}`}><table className="min-w-[980px] w-full text-right text-xs"><caption className="sr-only">预测校准证据</caption><thead className="bg-elevated text-secondary"><tr><th scope="col" className="p-2 text-left">范围 / 状态</th><th scope="col" className="p-2">实际交易日 / close</th><th scope="col" className="p-2">Close MAE</th><th scope="col" className="p-2">P10–P90 coverage</th><th scope="col" className="p-2">P10 pinball</th><th scope="col" className="p-2">P50 pinball</th><th scope="col" className="p-2">P90 pinball</th><th scope="col" className="p-2">样本数</th><th scope="col" className="p-2">覆盖期</th></tr></thead><tbody>{rows.length ? rows.map((row, index) => <tr key={`${row.horizon}-${index}`} className="border-t border-border"><th scope="row" className="p-2 text-left font-normal">{row.horizon} 个交易日 · {row.status === 'evaluated' ? '已评估' : row.status === 'pending' ? '未成熟' : '暂不可评估'}</th><td className="p-2">{row.status === 'pending' ? `目标 ${row.targetSession ?? '—'}` : row.status === 'unevaluable' ? '暂不可评估：缺少受治理实际值。' : `${row.actualSession ?? '—'} / ${row.actualValue ?? '—'}`}</td><td className="p-2">{row.closeMae ?? '—'}</td><td className="p-2">{row.intervalCoverage == null ? '—' : `${typeof row.intervalCoverage === 'boolean' ? (row.intervalCoverage ? 100 : 0) : row.intervalCoverage * 100}%`}</td><td className="p-2">{row.pinballP10 ?? '—'}</td><td className="p-2">{row.pinballP50 ?? '—'}</td><td className="p-2">{row.pinballP90 ?? '—'}</td><td className="p-2">{row.sampleCount ?? '—'}</td><td className="p-2">{row.coverageStart && row.coverageEnd ? `${row.coverageStart} – ${row.coverageEnd}` : '—'}</td></tr>) : <tr><td colSpan={9} className="p-4 text-center text-secondary">尚未到达目标交易日，校准将在受治理实际值可用后追加。</td></tr>}</tbody></table></div>{rows.some(row => row.status === 'pending') && <p className="text-warning">尚未到达目标交易日，校准将在受治理实际值可用后追加。</p>}</section>
+  const hasIncomplete = rows.some(row => row.identityIncomplete)
+  return <section aria-labelledby={`${descriptionId}-heading`} className="space-y-2"><h3 id={`${descriptionId}-heading`} className="text-base font-semibold">追加式校准</h3><p id={descriptionId} className="text-xs text-secondary">左右滚动查看完整记录。校准只追加受治理实际值，不改写原分位数或采样路径。</p>{hasIncomplete && <p role="alert" className="rounded-input border border-danger/50 bg-danger/10 p-3 text-danger">校准身份不完整</p>}<div tabIndex={0} aria-describedby={descriptionId} className={`overflow-x-auto ${FOCUS}`}><table className="min-w-[980px] w-full text-right text-xs"><caption className="sr-only">预测校准证据</caption><thead className="bg-elevated text-secondary"><tr><th scope="col" className="p-2 text-left">范围 / 状态</th><th scope="col" className="p-2">实际交易日 / close</th><th scope="col" className="p-2">Close MAE</th><th scope="col" className="p-2">P10–P90 coverage</th><th scope="col" className="p-2">P10 pinball</th><th scope="col" className="p-2">P50 pinball</th><th scope="col" className="p-2">P90 pinball</th><th scope="col" className="p-2">样本数</th><th scope="col" className="p-2">覆盖期</th></tr></thead><tbody>{rows.length ? rows.map((row, index) => {
+    const scopeLabel = row.identityIncomplete
+      ? '校准身份不完整'
+      : `${row.horizon} 个交易日 · ${row.status === 'evaluated' ? '已评估' : row.status === 'pending' ? '未成熟' : '暂不可评估'}`
+    const actualCell = row.identityIncomplete
+      ? '校准身份不完整'
+      : row.status === 'pending'
+        ? `目标 ${row.targetSession ?? '—'}`
+        : row.status === 'unevaluable'
+          ? '暂不可评估：缺少受治理实际值。'
+          : `${row.actualSession ?? '—'} / ${row.actualValue ?? '—'}`
+    return <tr key={`${row.horizon ?? 'x'}-${index}`} className="border-t border-border"><th scope="row" className="p-2 text-left font-normal">{scopeLabel}</th><td className="p-2">{actualCell}</td><td className="p-2">{row.identityIncomplete ? '—' : (row.closeMae ?? '—')}</td><td className="p-2">{row.identityIncomplete || row.intervalCoverage == null ? '—' : `${typeof row.intervalCoverage === 'boolean' ? (row.intervalCoverage ? 100 : 0) : row.intervalCoverage * 100}%`}</td><td className="p-2">{row.identityIncomplete ? '—' : (row.pinballP10 ?? '—')}</td><td className="p-2">{row.identityIncomplete ? '—' : (row.pinballP50 ?? '—')}</td><td className="p-2">{row.identityIncomplete ? '—' : (row.pinballP90 ?? '—')}</td><td className="p-2">{row.identityIncomplete ? '—' : (row.sampleCount ?? '—')}</td><td className="p-2">{!row.identityIncomplete && row.coverageStart && row.coverageEnd ? `${row.coverageStart} – ${row.coverageEnd}` : '—'}</td></tr>
+  }) : <tr><td colSpan={9} className="p-4 text-center text-secondary">尚未到达目标交易日，校准将在受治理实际值可用后追加。</td></tr>}</tbody></table></div>{rows.some(row => row.status === 'pending' && !row.identityIncomplete) && <p className="text-warning">尚未到达目标交易日，校准将在受治理实际值可用后追加。</p>}</section>
 }
+
 
 function ForecastHistory({ records, jobs, selectedRecordId, onSelect }: { records: ForecastRecord[]; jobs: ForecastJob[]; selectedRecordId: string | null; onSelect: (id: string) => void }) {
   const descriptionId = useId()

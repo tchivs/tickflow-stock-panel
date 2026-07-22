@@ -784,7 +784,7 @@ export const phase5Api = {
     return response.paths
   },
   forecastCalibration: (recordId: string) =>
-    request<{ outcomes?: ForecastOutcome[]; calibration: ForecastCalibration[] }>(`/api/forecast/records/${encodeURIComponent(recordId)}/calibration`),
+    request<{ outcomes: ForecastOutcome[]; calibration: ForecastCalibration[] }>(`/api/forecast/records/${encodeURIComponent(recordId)}/calibration`),
   forecastRefreshCalibration: (recordId: string) =>
-    request<{ outcomes?: ForecastOutcome[]; calibration: ForecastCalibration[] }>(`/api/forecast/records/${encodeURIComponent(recordId)}/calibration`, { method: 'POST', body: JSON.stringify({}) }),
+    request<{ outcomes: ForecastOutcome[]; calibration: ForecastCalibration[] }>(`/api/forecast/records/${encodeURIComponent(recordId)}/calibration`, { method: 'POST', body: JSON.stringify({}) }),
 } as const

@@ -35,6 +35,8 @@ type FixtureOptions = {
   forecastGate?: 'verified' | 'missing' | 'pair_mismatch' | 'digest_mismatch' | 'calendar_short' | 'coverage_short'
   retentionFailure?: boolean
   evidenceFailure?: boolean
+  /** CR-04 identity join fixtures: default healthy 5/20/60 outcomes; malformed modes fail closed. */
+  calibrationIdentity?: 'healthy' | 'missing' | 'duplicate' | 'foreign' | 'out_of_range'
 }
 
 type Telemetry = {
@@ -176,6 +178,87 @@ const quantiles = Array.from({ length: 20 }, (_, index) => ({
   p90: 1560 + index,
   unit: 'CNY',
 }))
+const futureSessionIds = Array.from({ length: 60 }, (_, index) => {
+  const day = new Date(Date.UTC(2026, 6, 16 + index)) // 2026-07-16 + index
+  return day.toISOString().slice(0, 10)
+})
+const forecastOutcomes = [
+  {
+    id: 'outcome-h5',
+    forecast_id: 'forecast-record-1',
+    horizon: 5 as const,
+    status: 'evaluated',
+    actual_session_id: '2026-07-22',
+    actual_close: 1492,
+    observed_at: '2026-07-22T16:00:00Z',
+  },
+  {
+    id: 'outcome-h20',
+    forecast_id: 'forecast-record-1',
+    horizon: 20 as const,
+    status: 'pending',
+    actual_session_id: '',
+    actual_close: null,
+    observed_at: '2026-07-15T09:00:00Z',
+  },
+  {
+    id: 'outcome-h60',
+    forecast_id: 'forecast-record-1',
+    horizon: 60 as const,
+    status: 'unevaluable',
+    actual_session_id: '',
+    actual_close: null,
+    observed_at: '2026-07-15T09:00:00Z',
+    reason: 'missing_actual',
+  },
+]
+const forecastCalibrationFacts = [
+  {
+    id: 'cal-h5',
+    forecast_id: 'forecast-record-1',
+    outcome_id: 'outcome-h5',
+    metric_schema: 'forecast-close-calibration-v1',
+    metric_version: 1,
+    close_mae: 12.4,
+    p10_p90_interval_covered: true,
+    pinball_p10: 2.1,
+    pinball_p50: 4.2,
+    pinball_p90: 1.7,
+    coverage_start: '2026-07-22',
+    coverage_end: '2026-07-22',
+    created_at: '2026-07-22T16:05:00Z',
+  },
+  {
+    id: 'cal-h20',
+    forecast_id: 'forecast-record-1',
+    outcome_id: 'outcome-h20',
+    metric_schema: 'forecast-close-calibration-v1',
+    metric_version: 1,
+    close_mae: null,
+    p10_p90_interval_covered: null,
+    pinball_p10: null,
+    pinball_p50: null,
+    pinball_p90: null,
+    coverage_start: null,
+    coverage_end: null,
+    created_at: '2026-07-15T09:00:00Z',
+  },
+  {
+    id: 'cal-h60',
+    forecast_id: 'forecast-record-1',
+    outcome_id: 'outcome-h60',
+    metric_schema: 'forecast-close-calibration-v1',
+    metric_version: 1,
+    close_mae: null,
+    p10_p90_interval_covered: null,
+    pinball_p10: null,
+    pinball_p50: null,
+    pinball_p90: null,
+    coverage_start: null,
+    coverage_end: null,
+    created_at: '2026-07-15T09:00:00Z',
+  },
+]
 const forecastRecord = {
   id: 'forecast-record-1',
   label: '预测 F-001',
@@ -183,7 +266,8 @@ const forecastRecord = {
   created_at: '2026-07-15T09:00:00Z',
   as_of: 'CNA-20260715',
   origin_session_id: 'CNA-20260715',
-  horizon: 20,
+  horizon: 60,
+  future_session_ids: futureSessionIds,
   catalog_id: 'kronos-mini-approved',
   status: 'completed',
   checkpoint: { catalog_id: 'kronos-mini-approved', model: 'Kronos-mini', tokenizer: 'Kronos-Tokenizer-2k', source_revision: '67b630e', model_revision: 'f4e6869', tokenizer_revision: '26966d0', digest: LONG_ID, pairing: 'mini/2k', max_context: 2048, device: 'cpu', integrity: 'verified' },
@@ -192,11 +276,6 @@ const forecastRecord = {
   quantiles,
   paths: forecastPaths,
   warnings: ['第 4 条路径成交量存在经济关系 warning，原值未被静默修正。'],
-  calibration: [
-    { horizon: 5, status: 'evaluated', actual_session: '2026-07-22', actual_value: 1492, close_mae: 12.4, interval_coverage: 1, p10_pinball: 2.1, p50_pinball: 4.2, p90_pinball: 1.7, sample_count: 1, coverage_start: '2026-07-22', coverage_end: '2026-07-22' },
-    { horizon: 20, status: 'pending', target_session: '2026-08-12' },
-    { horizon: 60, status: 'unevaluable', reason: 'missing_actual' },
-  ],
 }
 
 function json(route: Route, body: unknown, status = 200) {
@@ -397,7 +476,38 @@ async function installPhase5Fixture(page: Page, options: FixtureOptions = {}): P
       return json(route, { job: { id: `forecast-job-${forecastCounter}`, instrument: STOCK.symbol, horizon: 20, catalog_id: 'kronos-mini-approved', status: terminal ? 'running' : 'completed', stage: terminal ? 'generating_paths' : 'completed', stage_recorded_at: '2026-07-15T10:00:00Z', attempt: 1, record_id: terminal ? null : `forecast-record-${forecastCounter}`, created_at: '2026-07-15T10:00:00Z', updated_at: '2026-07-15T10:00:00Z' } }, 201)
     }
     if (path.includes('/records/') && path.endsWith('/paths')) return json(route, { paths: { items: [], offset: 0, limit: 12, total: 32, has_more: true } })
-    if (path.includes('/records/') && path.endsWith('/calibration')) return json(route, { calibration: forecastRecord.calibration })
+    if (path.includes('/records/') && path.endsWith('/calibration')) {
+      const mode = options.calibrationIdentity ?? 'healthy'
+      if (mode === 'missing') {
+        return json(route, {
+          outcomes: forecastOutcomes.filter(item => item.id !== 'outcome-h5'),
+          calibration: forecastCalibrationFacts,
+        })
+      }
+      if (mode === 'duplicate') {
+        return json(route, {
+          outcomes: [...forecastOutcomes, { ...forecastOutcomes[0], status: 'evaluated' }],
+          calibration: forecastCalibrationFacts,
+        })
+      }
+      if (mode === 'foreign') {
+        return json(route, {
+          outcomes: forecastOutcomes.map(item => item.id === 'outcome-h5'
+            ? { ...item, forecast_id: 'foreign-forecast' }
+            : item),
+          calibration: forecastCalibrationFacts,
+        })
+      }
+      if (mode === 'out_of_range') {
+        return json(route, {
+          outcomes: forecastOutcomes.map(item => item.id === 'outcome-h60'
+            ? { ...item, horizon: 120 as any }
+            : item),
+          calibration: forecastCalibrationFacts,
+        })
+      }
+      return json(route, { outcomes: forecastOutcomes, calibration: forecastCalibrationFacts })
+    }
     if (path.includes('/records/')) return json(route, { record: forecastRecord })
     if (path.includes('/jobs/')) return json(route, { job: { id: path.split('/').at(-1), instrument: STOCK.symbol, horizon: 20, catalog_id: 'kronos-mini-approved', status: options.forecastState === 'terminal' ? 'running' : 'completed', stage: options.forecastState === 'terminal' ? 'generating_paths' : 'completed', stage_recorded_at: '2026-07-15T10:00:00Z', attempt: 1, safe_reason: null, record_id: options.forecastState === 'terminal' ? null : forecastRecord.id, created_at: '2026-07-15T10:00:00Z', updated_at: '2026-07-15T10:00:00Z' } })
     unexpectedRequests.push(`${request.method()} ${path}`)
@@ -932,6 +1042,75 @@ test.describe('Phase 05 optional enhancement browser contracts', () => {
     expect(telemetry.mutationBodies).toEqual([])
     expectNoAuthorityRequests(telemetry)
   })
+
+  test('CR-04 calibration outcome identity renders 5 20 60 and fails closed', async ({ page }) => {
+    const telemetry = await installPhase5Fixture(page, { forecastState: 'partial' })
+    await selectStock(page)
+    await page.goto('/stock-analysis')
+    const panel = await openAnalysisTab(page, FORECAST_TAB)
+    await expectSemanticTable(panel, '预测校准证据')
+
+    const evaluated = panel.getByRole('row', { name: /5 个交易日.*已评估/ })
+    await expect(evaluated).toContainText('2026-07-22')
+    await expect(evaluated).toContainText('1492')
+    await expect(evaluated).toContainText('12.4')
+    await expect(evaluated).toContainText('100%')
+    await expect(evaluated).toContainText('2.1')
+    await expect(evaluated).toContainText('4.2')
+    await expect(evaluated).toContainText('1.7')
+
+    // target = future_session_ids[horizon - 1] — distinct for 5 / 20 / 60
+    const target5 = futureSessionIds[4]
+    const target20 = futureSessionIds[19]
+    const target60 = futureSessionIds[59]
+    expect(new Set([target5, target20, target60]).size).toBe(3)
+
+    const pending = panel.getByRole('row', { name: /20 个交易日.*未成熟/ })
+    await expect(pending).toContainText(`目标 ${target20}`)
+    await expect(panel.getByText('尚未到达目标交易日，校准将在受治理实际值可用后追加。')).toBeVisible()
+
+    const missing = panel.getByRole('row', { name: /60 个交易日/ })
+    await expect(missing).toContainText('暂不可评估：缺少受治理实际值。')
+    await expect(missing.getByText(/^0(?:\.0+)?$/)).toHaveCount(0)
+
+    // horizons must be distinct labels, never all record-total horizon
+    await expect(panel.getByRole('row', { name: /5 个交易日/ })).toHaveCount(1)
+    await expect(panel.getByRole('row', { name: /20 个交易日.*未成熟/ })).toHaveCount(1)
+    await expect(panel.getByRole('row', { name: /60 个交易日/ })).toHaveCount(1)
+
+    // chart-independent table remains after canvas removal
+    await page.evaluate(() => document.querySelectorAll('canvas').forEach(canvas => canvas.remove()))
+    await expect(panel.getByRole('table', { name: '预测校准证据' })).toBeVisible()
+    await expect(panel.getByText('左右滚动查看完整记录。校准只追加受治理实际值，不改写原分位数或采样路径。')).toBeVisible()
+    await expect(page.getByRole('button', { name: /应用到论点|应用到策略|设为目标价|据此交易|启用策略|同步持仓|添加监控|生成交易计划/ })).toHaveCount(0)
+    expectNoAuthorityRequests(telemetry)
+
+    // missing outcome identity fails closed
+    await installPhase5Fixture(page, { forecastState: 'partial', calibrationIdentity: 'missing' })
+    await page.goto('/stock-analysis')
+    const missingPanel = await openAnalysisTab(page, FORECAST_TAB)
+    await expect(missingPanel.getByText('校准身份不完整').first()).toBeVisible()
+    await expect(missingPanel.getByRole('row', { name: /校准身份不完整/ }).first()).toBeVisible()
+
+    // duplicate outcome identity fails closed
+    await installPhase5Fixture(page, { forecastState: 'partial', calibrationIdentity: 'duplicate' })
+    await page.goto('/stock-analysis')
+    const dupPanel = await openAnalysisTab(page, FORECAST_TAB)
+    await expect(dupPanel.getByText('校准身份不完整').first()).toBeVisible()
+
+    // foreign forecast_id fails closed
+    await installPhase5Fixture(page, { forecastState: 'partial', calibrationIdentity: 'foreign' })
+    await page.goto('/stock-analysis')
+    const foreignPanel = await openAnalysisTab(page, FORECAST_TAB)
+    await expect(foreignPanel.getByText('校准身份不完整').first()).toBeVisible()
+
+    // out-of-range horizon fails closed
+    await installPhase5Fixture(page, { forecastState: 'partial', calibrationIdentity: 'out_of_range' })
+    await page.goto('/stock-analysis')
+    const rangePanel = await openAnalysisTab(page, FORECAST_TAB)
+    await expect(rangePanel.getByText('校准身份不完整').first()).toBeVisible()
+  })
+
 
   test(SCENARIO_TITLES[11], async ({ page }) => {
     const telemetry = await installPhase5Fixture(page, { thesisState: 'pending', forecastState: 'populated' })
