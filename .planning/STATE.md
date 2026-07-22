@@ -5,10 +5,10 @@ milestone_name: milestone
 current_phase: 05
 current_phase_name: optional-enhancements
 status: blocked
-stopped_at: "Independent gaps closed through 05-36; remaining 05-26/27/39/29 blocked on human supply identity (05-40 rejected)"
-last_updated: "2026-07-22T18:37:49.000Z"
+stopped_at: "Independent code gaps closed through 05-36; remaining 05-26/27/39/29 blocked on human supply identity (05-40 rejected)"
+last_updated: "2026-07-22T18:38:16.000Z"
 last_activity: 2026-07-22
-last_activity_desc: "Closed independent review gaps CR-01..07 WR-01..03 except supply-chain/recovery"
+last_activity_desc: "Closed independent review gaps; supply chain still rejected/blocked"
 progress:
   total_phases: 5
   completed_phases: 4
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-07-10)
 Phase: 05 (optional-enhancements) — EXECUTING
 Plan: blocked on 05-26 human supply identity
 Status: blocked
-Last activity: 2026-07-22 — Completed 05-33..41 independent gaps including 05-36 WR-03
+Last activity: 2026-07-22 — Completed independent gaps through 05-36
 
 Progress: [█████████░] 90%
 
@@ -200,6 +200,7 @@ None yet.
 
 - Phase 1 planning must map the existing tickflow, PanWatch, and Hermes extension points before choosing package and synchronization boundaries.
 - 05-26 仍被 05-40 rejected/blocked 供应身份 gate 阻断；缺少完整、独立人工撰写并逐行批准的六行记录。
+- 05-27/05-39 依赖 05-26；05-29 依赖全部 terminal gap 与 approved supply。
 
 ## Deferred Items
 
@@ -209,6 +210,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-07-22T18:37:49.000Z
+Last session: 2026-07-22T18:38:16.000Z
 Stopped at: Independent code gaps closed; human supply gate blocks 05-26→05-27→05-39→05-29
 Resume file: None
