@@ -246,7 +246,7 @@ Plans:
   2. User can view an investment thesis with its valuation anchor, invalidation conditions, and periodic evidence checks.
   3. Researcher can request and inspect a time-series forecast that includes quantiles, sampled paths, and the associated model checkpoint.
 
-**Plans**: 29/32 plans executed
+**Plans**: 29/41 plans executed
 
 Plans:
 
@@ -294,17 +294,18 @@ Plans:
 **Gap Closure Wave 1** *(blocked on completed 05-17)*
 
 - [x] 05-30-PLAN.md — Enforce strict bounded Shadow assumptions across API, service, repository, persistence, and projection.
-- [x] 05-28-PLAN.md — Independently human-approve five config digests and the exact PyTorch CPU build/index/hash before supply mutation.
+- [x] 05-28-PLAN.md — Record the independent human supply review; completed as an immutable rejected decision that remains historical evidence.
 
 **Gap Closure Wave 2** *(blocked on relevant Wave 1 plans)*
 
 - [x] 05-18-PLAN.md — Trace the strict production Shadow browser request through complete factory, distillation, and IS/OOS evaluation.
-- [ ] 05-26-PLAN.md — Consume approved config/Torch identities and serialize concurrency-safe provisioning with exact dependency contracts.
+- [ ] 05-40-PLAN.md — Append a separate blocking-human supply identity approval retry while preserving 05-28 as rejected history.
 
 **Gap Closure Wave 3** *(blocked on relevant Wave 2 plans)*
 
 - [x] 05-19-PLAN.md — Make Shadow candidate, paired evaluation, and retention replay conflict-safe and restart-idempotent.
 - [x] 05-21-PLAN.md — Correct Thesis resolver/timezone/actionable history and repository-owned public pagination.
+- [ ] 05-26-PLAN.md — Consume only the complete independently approved 05-40 config/Torch identities and serialize concurrency-safe provisioning.
 
 **Gap Closure Wave 4** *(blocked on relevant Wave 3 plans)*
 
@@ -328,10 +329,27 @@ Plans:
 **Gap Closure Wave 8** *(blocked on relevant Wave 7 plans)*
 
 - [x] 05-24-PLAN.md — Align subject-bound/narrow accessible frontend state, paging, retries, validation, and finite SSE reconnect.
+- [ ] 05-34-PLAN.md — Persist only bounded quantile metadata in SQLite and use one immutable verified Parquet series for projection/calibration.
 
-**Gap Closure Wave 9 — final post-gap acceptance** *(blocked on every terminal gap plan, including 05-30–05-32)*
+**Gap Closure Wave 9** *(blocked on relevant Wave 8 plans)*
 
-- [ ] 05-29-PLAN.md — Run complete focused backend/host/migration/supply and all Phase 05 browser acceptance with zero action/external requests.
+- [ ] 05-33-PLAN.md — Make strict server-owned Shadow membership reachable through production and fixture-browser contracts.
+- [ ] 05-37-PLAN.md — Enforce principal-and-instrument ownership across every Forecast API surface.
+
+**Gap Closure Wave 10** *(blocked on relevant Wave 9 plans)*
+
+- [ ] 05-35-PLAN.md — Join calibration rows to exact outcomes and fail closed on malformed identity.
+- [ ] 05-38-PLAN.md — Close input replay/orphan/TOCTOU gaps and revalidate the canonical input immediately before the sole runner commit.
+- [ ] 05-41-PLAN.md — Prove CR-01 with the exact unmocked real-browser flow against the strict 05-33 production Shadow host.
+
+**Gap Closure Wave 11** *(blocked on relevant Wave 10 plans)*
+
+- [ ] 05-36-PLAN.md — Make Thesis ledger rows self-identifying and independent of versions pagination.
+- [ ] 05-39-PLAN.md — Execute queued recovery once and reap the saved process group on every post-spawn return.
+
+**Gap Closure Wave 12 — unique final post-gap acceptance** *(blocked on every terminal gap plan and complete approved 05-40 supply identity)*
+
+- [ ] 05-29-PLAN.md — Parse backend and both browser machine reports with fail-on-skip one-to-one CR/WR coverage and zero action/external requests.
 
 **UI hint**: yes
 
@@ -345,4 +363,4 @@ Plans:
 | 2. Factor And Strategy Research | 8/8 | Complete    | 2026-07-11 |
 | 3. AI Analysis | 12/12 | Complete    | 2026-07-12 |
 | 4. Advanced Capabilities | 27/27 | Complete    | 2026-07-15 |
-| 5. Optional Enhancements | 29/32 | In Progress|  |
+| 5. Optional Enhancements | 29/41 | In Progress|  |
