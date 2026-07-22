@@ -366,7 +366,12 @@ export interface ThesisEvidenceSummary {
 
 export interface ThesisCheck {
   id: string
+  instrument: string
+  thesis_id: string
   version_id: string
+  version: number
+  version_created_at: string
+  version_official_state: string
   condition_id: string
   due_at: string
   checked_at: string
@@ -417,8 +422,12 @@ export interface ThesisReview {
 
 export interface ThesisPending {
   id: string
+  instrument: string
   thesis_id: string
   version_id: string
+  version: number
+  version_created_at: string
+  version_official_state: string
   condition_id: string
   check_id: string
   evidence_fingerprint: string

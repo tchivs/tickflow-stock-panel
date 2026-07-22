@@ -225,6 +225,7 @@ export function ThesisPanel({ instrument, title }: ThesisPanelProps) {
   const [loadedChecks, setLoadedChecks] = useState<ThesisCheck[]>([])
   const [loadedPending, setLoadedPending] = useState<ThesisPending[]>([])
   const [loadedHistory, setLoadedHistory] = useState<ThesisPending[]>([])
+  const [foreignLedgerRejected, setForeignLedgerRejected] = useState(false)
   const lowRef = useRef<HTMLInputElement>(null)
   const firstFieldRef = useRef<HTMLTextAreaElement>(null)
 
@@ -233,17 +234,47 @@ export function ThesisPanel({ instrument, title }: ThesisPanelProps) {
   const checksQuery = useQuery({ queryKey: QK.thesis.checks(instrument, checkOffset, LEDGER_PAGE_SIZE), queryFn: () => phase5Api.thesisChecks(instrument, checkOffset, LEDGER_PAGE_SIZE), placeholderData: keepPreviousData })
   const pendingQuery = useQuery({ queryKey: QK.thesis.pending(instrument, pendingOffset, LEDGER_PAGE_SIZE), queryFn: () => phase5Api.thesisPending(instrument, pendingOffset, LEDGER_PAGE_SIZE), placeholderData: keepPreviousData })
   const historyQuery = useQuery({ queryKey: QK.thesis.history(instrument, historyOffset, LEDGER_PAGE_SIZE), queryFn: () => phase5Api.thesisHistory(instrument, historyOffset, LEDGER_PAGE_SIZE), placeholderData: keepPreviousData })
+  const missingSelectedVersionId = selectedVersionId && !loadedVersions.some(item => item.id === selectedVersionId) ? selectedVersionId : null
+  const versionDetailQuery = useQuery({
+    queryKey: QK.thesis.version(instrument, missingSelectedVersionId ?? 'none'),
+    queryFn: async () => {
+      const response = await phase5Api.thesisVersion(missingSelectedVersionId!)
+      if (response.version.instrument !== instrument) throw new Error('论点版本对象与当前标的不一致。')
+      return response.version
+    },
+    enabled: Boolean(missingSelectedVersionId),
+    retry: false,
+  })
+
+  useEffect(() => {
+    const detail = versionDetailQuery.data
+    if (!detail || detail.instrument !== instrument) return
+    setLoadedVersions(current => mergeById(current, [detail], false))
+  }, [instrument, versionDetailQuery.data])
 
   const versions = loadedVersions.filter(item => item.instrument === instrument)
   const versionById = new Map(versions.map(item => [item.id, item]))
   const currentVersionId = versions[0]?.id ?? null
   const selectedVersion = versions.find(item => item.id === (selectedVersionId ?? currentVersionId)) ?? versions[0]
-  const pendingItems = loadedPending.filter(item => {
-    const version = versionById.get(item.version_id)
-    return version?.instrument === instrument && version.thesis_id === item.thesis_id && item.status === 'pending'
-  })
-  const checks = loadedChecks.filter(item => versionById.has(item.version_id) && (checkConditionId === 'all' || item.condition_id === checkConditionId))
-  const historyItems = loadedHistory.filter(item => versionById.has(item.version_id))
+  const pendingItems = loadedPending.filter(item =>
+    item.instrument === instrument
+    && item.status === 'pending'
+    && typeof item.version === 'number'
+    && Boolean(item.version_id)
+    && Boolean(item.thesis_id),
+  )
+  const checks = loadedChecks.filter(item =>
+    item.instrument === instrument
+    && typeof item.version === 'number'
+    && Boolean(item.version_id)
+    && (checkConditionId === 'all' || item.condition_id === checkConditionId),
+  )
+  const historyItems = loadedHistory.filter(item =>
+    item.instrument === instrument
+    && typeof item.version === 'number'
+    && Boolean(item.version_id)
+    && Boolean(item.thesis_id),
+  )
   const capability = capabilityQuery.data?.modules?.thesis
   const unavailable = capability?.available === false
   const knownConditions = useMemo(() => versions.flatMap(item => item.conditions).filter((item, index, all) => all.findIndex(other => other.id === item.id) === index), [versions])
@@ -256,18 +287,33 @@ export function ThesisPanel({ instrument, title }: ThesisPanelProps) {
   useEffect(() => {
     const page = checksQuery.data
     if (!page || page.offset !== checkOffset) return
-    setLoadedChecks(current => mergeById(current, page.items, page.offset === 0))
-  }, [checkOffset, checksQuery.data])
+    if (page.items.some(item => item.instrument !== instrument)) setForeignLedgerRejected(true)
+    setLoadedChecks(current => mergeById(
+      current,
+      page.items.filter(item => item.instrument === instrument && typeof item.version === 'number' && Boolean(item.version_id)),
+      page.offset === 0,
+    ))
+  }, [instrument, checkOffset, checksQuery.data])
   useEffect(() => {
     const page = pendingQuery.data
     if (!page || page.offset !== pendingOffset) return
-    setLoadedPending(current => mergeById(current, page.items, page.offset === 0))
-  }, [pendingOffset, pendingQuery.data])
+    if (page.items.some(item => item.instrument !== instrument)) setForeignLedgerRejected(true)
+    setLoadedPending(current => mergeById(
+      current,
+      page.items.filter(item => item.instrument === instrument && typeof item.version === 'number' && Boolean(item.version_id)),
+      page.offset === 0,
+    ))
+  }, [instrument, pendingOffset, pendingQuery.data])
   useEffect(() => {
     const page = historyQuery.data
     if (!page || page.offset !== historyOffset) return
-    setLoadedHistory(current => mergeById(current, page.items, page.offset === 0))
-  }, [historyOffset, historyQuery.data])
+    if (page.items.some(item => item.instrument !== instrument)) setForeignLedgerRejected(true)
+    setLoadedHistory(current => mergeById(
+      current,
+      page.items.filter(item => item.instrument === instrument && typeof item.version === 'number' && Boolean(item.version_id)),
+      page.offset === 0,
+    ))
+  }, [instrument, historyOffset, historyQuery.data])
 
   useEffect(() => {
     setSelectedVersionId(null)
@@ -279,6 +325,7 @@ export function ThesisPanel({ instrument, title }: ThesisPanelProps) {
     setLoadedChecks([])
     setLoadedPending([])
     setLoadedHistory([])
+    setForeignLedgerRejected(false)
     setCheckConditionId('all')
     setEditing(false)
     setReviewingDraft(false)
@@ -334,8 +381,16 @@ export function ThesisPanel({ instrument, title }: ThesisPanelProps) {
 
   const reviewMutation = useMutation({
     mutationFn: ({ pending, action }: { pending: ThesisPending; action: ReviewAction }) => {
+      if (
+        pending.instrument !== instrument
+        || pending.thesis_id === ''
+        || pending.status !== 'pending'
+        || typeof pending.version !== 'number'
+      ) {
+        throw new Error('待确认结论与当前标的不一致。')
+      }
       const version = versionById.get(pending.version_id)
-      if (!version || version.instrument !== instrument || version.thesis_id !== pending.thesis_id || pending.status !== 'pending') {
+      if (version && (version.instrument !== instrument || version.thesis_id !== pending.thesis_id)) {
         throw new Error('待确认结论与当前标的不一致。')
       }
       return action === 'confirm'
@@ -425,12 +480,15 @@ export function ThesisPanel({ instrument, title }: ThesisPanelProps) {
       <p className="max-w-[72ch] text-sm text-secondary">自动检查只能提出待确认结论，不能替你改变论点状态。</p>
     </header>
 
+    {foreignLedgerRejected && <LocalError title="论点账本身份不完整" detail="收到与当前标的不一致的检查或历史记录，已拒绝渲染。请重新加载当前标的的投资论点。" action="重新加载投资论点" onRetry={() => { setForeignLedgerRejected(false); void invalidateLocal() }} compact />}
     {pendingItems.map(item => <PendingConclusion key={item.id} pending={item} version={versions.find(version => version.id === item.version_id)} checks={loadedChecks} onReview={action => { setConflict(false); setReviewTarget({ pending: item, action }) }} />)}
     {pendingQuery.data?.has_more && <button type="button" onClick={() => setPendingOffset(pendingQuery.data.offset + pendingQuery.data.items.length)} className={`${BUTTON} border border-border`}>加载更多待确认结论</button>}
     {pendingQuery.isError && <LocalError title="无法读取投资论点" detail={`无法读取投资论点：${errorReason(pendingQuery.error)}。已显示的版本、待确认结论和检查历史将保留，当前官方状态不会改变。`} action="重新加载投资论点" onRetry={() => pendingQuery.refetch()} compact />}
     {conflict && <div role="alert" className="rounded-card border border-danger/50 bg-danger/10 p-4 text-danger">结论未记录：状态已变化，请重新查看当前论点。</div>}
 
     {versionsQuery.isError && <LocalError title="无法读取投资论点" detail={`无法读取投资论点：${errorReason(versionsQuery.error)}。已显示的版本、待确认结论和检查历史将保留，当前官方状态不会改变。`} action="重新加载投资论点" onRetry={() => versionsQuery.refetch()} compact />}
+    {versionDetailQuery.isError && <LocalError title="版本详情未完整加载" detail={`已显示的检查与历史记录仍保留。版本详情加载失败：${errorReason(versionDetailQuery.error)}。`} action="重新加载版本详情" onRetry={() => versionDetailQuery.refetch()} compact />}
+    {versionDetailQuery.isFetching && missingSelectedVersionId && <p role="status" className="text-sm text-secondary">正在加载所选版本详情…</p>}
 
     {!versionsQuery.isLoading && versions.length === 0 && !editing ? <div className="rounded-card border border-border bg-elevated p-4">
       <h3 className="text-base font-semibold">尚无投资论点</h3>
@@ -496,7 +554,7 @@ function PendingConclusion({ pending, version, checks, onReview }: { pending: Th
   return <aside className="space-y-3 rounded-card border border-warning/50 bg-warning/10 p-4" aria-labelledby={`pending-${pending.id}`}>
     <h3 id={`pending-${pending.id}`} className="text-base font-semibold text-warning"><ShieldAlert className="mr-2 inline h-5 w-5" aria-hidden="true" />待确认失效结论</h3>
     <p className="font-semibold">当前官方状态未改变，等待你的确认。</p>
-    <dl className="grid gap-2 text-sm sm:grid-cols-2"><div><dt className="text-xs text-secondary">命中条件</dt><dd>{text(source.condition_name, pending.condition_id)}</dd></div><div><dt className="text-xs text-secondary">版本与检查</dt><dd>版本 {version?.version ?? pending.version_id} · {pending.check_id}</dd></div><div><dt className="text-xs text-secondary">观测值 / 阈值</dt><dd className="font-mono tabular-nums">{observed ?? '证据不足'} / {typeof source.threshold === 'number' || typeof source.threshold === 'string' ? source.threshold : '—'} {text(source.unit, '')}</dd></div><div><dt className="text-xs text-secondary">证据与时间</dt><dd>{text(source.evidence_label, '受治理证据')} · {dateTime(source.evidence_at ?? check?.checked_at)}</dd></div></dl>
+    <dl className="grid gap-2 text-sm sm:grid-cols-2"><div><dt className="text-xs text-secondary">命中条件</dt><dd>{text(source.condition_name, pending.condition_id)}</dd></div><div><dt className="text-xs text-secondary">版本与检查</dt><dd>版本 {version?.version ?? pending.version ?? pending.version_id} · {pending.check_id}</dd></div><div><dt className="text-xs text-secondary">观测值 / 阈值</dt><dd className="font-mono tabular-nums">{observed ?? '证据不足'} / {typeof source.threshold === 'number' || typeof source.threshold === 'string' ? source.threshold : '—'} {text(source.unit, '')}</dd></div><div><dt className="text-xs text-secondary">证据与时间</dt><dd>{text(source.evidence_label, '受治理证据')} · {dateTime(source.evidence_at ?? check?.checked_at)}</dd></div></dl>
     <p className="break-words font-mono text-xs [overflow-wrap:anywhere]">fingerprint: {text(source.evidence_fingerprint, check?.evidence_fingerprint ?? pending.evidence_fingerprint)}</p>
     <div className="flex flex-wrap gap-2"><button type="button" onClick={() => onReview('confirm')} className={`${BUTTON} bg-danger font-semibold text-white`}>确认论点失效</button><button type="button" onClick={() => onReview('reject')} className={`${BUTTON} border border-border bg-surface`}>驳回待确认结论</button></div>
   </aside>
@@ -509,7 +567,7 @@ function ConditionsTable({ conditions, current }: { conditions: ThesisCondition[
 
 function ChecksTable({ checks, versions }: { checks: Array<{ id: string; condition_id: string; version_id: string; due_at: string; checked_at: string; result: keyof typeof CHECK_LABELS; observed_value: number | null; evidence_fingerprint: string; evidence?: unknown[]; safe_reason?: string | null }>; versions: ThesisVersion[] }) {
   const descriptionId = useId()
-  return <><p id={descriptionId} className="text-xs text-secondary">左右滚动查看完整记录</p><div tabIndex={0} aria-describedby={descriptionId} className={`overflow-x-auto ${FOCUS}`}><table className="min-w-[960px] w-full text-left text-xs"><caption className="sr-only">投资论点证据检查历史</caption><thead className="bg-elevated text-secondary"><tr><th scope="col" className="p-2">结果</th><th scope="col" className="p-2">条件</th><th scope="col" className="p-2">到期时间</th><th scope="col" className="p-2">检查时间</th><th scope="col" className="p-2">观测值</th><th scope="col" className="p-2">证据</th><th scope="col" className="p-2">版本</th><th scope="col" className="p-2">检查周期</th></tr></thead><tbody>{checks.length ? checks.map(check => { const source = record(check); const version = versions.find(item => item.id === check.version_id); const condition = version?.conditions.find(item => item.id === check.condition_id); const evidence = Array.isArray(check.evidence) && check.evidence.length ? check.evidence.map(item => text(record(item).source_id, text(record(item).source_kind, '受治理证据'))).join('、') : text(source.evidence_label, check.safe_reason ?? '受治理证据'); return <tr key={check.id} className="border-t border-border"><th scope="row" className="p-2 font-normal">{CHECK_LABELS[check.result]}</th><td className="p-2">{text(record(condition).name, condition?.description || check.condition_id)}</td><td className="p-2">{dateTime(check.due_at)}</td><td className="p-2">{dateTime(check.checked_at)}</td><td className="p-2 font-mono">{check.observed_value == null ? '—' : `${check.observed_value} ${text(source.unit, condition?.unit ?? '')}`}</td><td className="p-2"><span>{evidence}</span><span className="mt-1 block break-words font-mono [overflow-wrap:anywhere]">{check.evidence_fingerprint}</span></td><td className="p-2">{version ? `版本 ${version.version}` : check.version_id}</td><td className="p-2">{text(source.cadence, condition?.cadence ?? '—')}</td></tr> }) : <tr><td colSpan={8} className="p-4 text-center text-secondary">尚无追加式检查记录。</td></tr>}</tbody></table></div></>
+  return <><p id={descriptionId} className="text-xs text-secondary">左右滚动查看完整记录</p><div tabIndex={0} aria-describedby={descriptionId} className={`overflow-x-auto ${FOCUS}`}><table className="min-w-[960px] w-full text-left text-xs"><caption className="sr-only">投资论点证据检查历史</caption><thead className="bg-elevated text-secondary"><tr><th scope="col" className="p-2">结果</th><th scope="col" className="p-2">条件</th><th scope="col" className="p-2">到期时间</th><th scope="col" className="p-2">检查时间</th><th scope="col" className="p-2">观测值</th><th scope="col" className="p-2">证据</th><th scope="col" className="p-2">版本</th><th scope="col" className="p-2">检查周期</th></tr></thead><tbody>{checks.length ? checks.map(check => { const source = record(check); const version = versions.find(item => item.id === check.version_id); const condition = version?.conditions.find(item => item.id === check.condition_id); const evidence = Array.isArray(check.evidence) && check.evidence.length ? check.evidence.map(item => text(record(item).source_id, text(record(item).source_kind, '受治理证据'))).join('、') : text(source.evidence_label, check.safe_reason ?? '受治理证据'); return <tr key={check.id} className="border-t border-border"><th scope="row" className="p-2 font-normal">{CHECK_LABELS[check.result]}</th><td className="p-2">{text(record(condition).name, condition?.description || check.condition_id)}</td><td className="p-2">{dateTime(check.due_at)}</td><td className="p-2">{dateTime(check.checked_at)}</td><td className="p-2 font-mono">{check.observed_value == null ? '—' : `${check.observed_value} ${text(source.unit, condition?.unit ?? '')}`}</td><td className="p-2"><span>{evidence}</span><span className="mt-1 block break-words font-mono [overflow-wrap:anywhere]">{check.evidence_fingerprint}</span></td><td className="p-2">{typeof check.version === 'number' ? `版本 ${check.version}` : version ? `版本 ${version.version}` : check.version_id}</td><td className="p-2">{text(source.cadence, condition?.cadence ?? '—')}</td></tr> }) : <tr><td colSpan={8} className="p-4 text-center text-secondary">尚无追加式检查记录。</td></tr>}</tbody></table></div></>
 }
 
 function VersionsTable({ versions, currentVersionId, selectedVersionId, onSelect }: { versions: ThesisVersion[]; currentVersionId: string | null; selectedVersionId: string | null; onSelect: (id: string) => void }) {
@@ -527,7 +585,7 @@ function ThesisHistoryTable({ items }: { items: ThesisPending[] }) {
     if (state === 'rejected') return '已驳回'
     return state
   }
-  return <section aria-labelledby={`${descriptionId}-heading`} className="space-y-2"><h3 id={`${descriptionId}-heading`} className="text-base font-semibold">不可变论点结论历史</h3><p id={descriptionId} className="text-xs text-secondary">左右滚动查看完整记录。待确认、已取代与人工决定均只读保留。</p><div tabIndex={0} aria-describedby={descriptionId} className={`overflow-x-auto ${FOCUS}`}><table className="min-w-[760px] w-full text-left text-xs"><caption className="sr-only">不可变论点结论历史</caption><thead className="bg-elevated text-secondary"><tr><th scope="col" className="p-2">记录</th><th scope="col" className="p-2">状态</th><th scope="col" className="p-2">版本 / 条件</th><th scope="col" className="p-2">证据</th><th scope="col" className="p-2">创建时间</th></tr></thead><tbody>{items.length ? items.map(item => <tr key={item.id} className="border-t border-border"><th scope="row" className="p-2 font-mono font-normal">{item.id}</th><td className="p-2">{stateLabel(item)}</td><td className="p-2">{item.version_id} / {item.condition_id}</td><td className="p-2 font-mono [overflow-wrap:anywhere]">{item.evidence_fingerprint}</td><td className="p-2">{dateTime(item.created_at)}</td></tr>) : <tr><td colSpan={5} className="p-3 text-secondary">暂无不可变论点结论历史。</td></tr>}</tbody></table></div></section>
+  return <section aria-labelledby={`${descriptionId}-heading`} className="space-y-2"><h3 id={`${descriptionId}-heading`} className="text-base font-semibold">不可变论点结论历史</h3><p id={descriptionId} className="text-xs text-secondary">左右滚动查看完整记录。待确认、已取代与人工决定均只读保留。</p><div tabIndex={0} aria-describedby={descriptionId} className={`overflow-x-auto ${FOCUS}`}><table className="min-w-[760px] w-full text-left text-xs"><caption className="sr-only">不可变论点结论历史</caption><thead className="bg-elevated text-secondary"><tr><th scope="col" className="p-2">记录</th><th scope="col" className="p-2">状态</th><th scope="col" className="p-2">版本 / 条件</th><th scope="col" className="p-2">证据</th><th scope="col" className="p-2">创建时间</th></tr></thead><tbody>{items.length ? items.map(item => <tr key={item.id} className="border-t border-border"><th scope="row" className="p-2 font-mono font-normal">{item.id}</th><td className="p-2">{stateLabel(item)}</td><td className="p-2">{typeof item.version === 'number' ? `版本 ${item.version}` : item.version_id} / {item.condition_id}</td><td className="p-2 font-mono [overflow-wrap:anywhere]">{item.evidence_fingerprint}</td><td className="p-2">{dateTime(item.created_at)}</td></tr>) : <tr><td colSpan={5} className="p-3 text-secondary">暂无不可变论点结论历史。</td></tr>}</tbody></table></div></section>
 }
 
 function VersionForm({ draft, setDraft, error, reviewing, lowRef, firstFieldRef, onReview, onCancel, onConfirm }: { draft: VersionDraft; setDraft: React.Dispatch<React.SetStateAction<VersionDraft>>; error: string | null; reviewing: boolean; lowRef: React.RefObject<HTMLInputElement>; firstFieldRef: React.RefObject<HTMLTextAreaElement>; onReview: () => void; onCancel: () => void; onConfirm: () => void }) {
@@ -548,7 +606,7 @@ function ReviewDialog({ target, instrumentTitle, versions, rationale, setRationa
   const title = target.action === 'confirm' ? '确认论点失效' : '驳回待确认结论'
   const normalizedTitle = instrumentTitle.replace(/（([^）]+)）/, '（$1）')
   return <FocusDialog title={title} initialFocus="textarea" onClose={onClose}>
-    <p>{target.action === 'confirm' ? `确认将 ${normalizedTitle}的论点版本 ${version?.version ?? target.pending.version_id} 记录为已失效？命中条件与证据会永久保留；此操作不会执行交易或修改其他研究对象。` : '驳回后，当前官方状态保持不变；条件、检查记录和证据仍会永久保留。'}</p>
+    <p>{target.action === 'confirm' ? `确认将 ${normalizedTitle}的论点版本 ${version?.version ?? target.pending.version ?? target.pending.version_id} 记录为已失效？命中条件与证据会永久保留；此操作不会执行交易或修改其他研究对象。` : '驳回后，当前官方状态保持不变；条件、检查记录和证据仍会永久保留。'}</p>
     <label className="mt-4 block">{target.action === 'confirm' ? '确认理由（至少 10 个字符）' : '驳回理由（至少 10 个字符）'}<textarea data-dialog-textarea value={rationale} onChange={event => setRationale(event.target.value)} className={`${INPUT} mt-1 min-h-28`} /></label>
     {mutation.isError && !(mutation.error instanceof ApiRequestError && mutation.error.status === 409) && <div role="alert" className="mt-3 rounded-input bg-danger/10 p-3 text-danger"><strong>无法确认论点操作结果</strong><p>确认或驳回请求的传输状态不确定：{errorReason(mutation.error)}。已填写的理由保留。</p><p>不得假定服务端未处理本次请求；重试前必须重新读取当前论点及待确认结论，并以服务端当前记录为准。</p></div>}
     <div className="mt-4 flex flex-wrap justify-end gap-2"><button type="button" onClick={onClose} className={`${BUTTON} border border-border`}>暂不处理</button><button type="button" onClick={() => mutation.mutate(target)} disabled={rationale.trim().length < 10 || mutation.isPending} className={`${BUTTON} ${target.action === 'confirm' ? 'bg-danger text-white' : 'bg-accent text-white'} font-semibold disabled:opacity-50`}>{mutation.isPending ? '正在记录人工决定…' : title}</button></div>

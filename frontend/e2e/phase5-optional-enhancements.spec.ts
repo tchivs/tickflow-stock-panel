@@ -129,17 +129,30 @@ const thesisVersion = (version: number, overrides: Record<string, unknown> = {})
   ...overrides,
 })
 
+const thesisLedgerIdentity = (version: number) => ({
+  instrument: STOCK.symbol,
+  thesis_id: 'thesis-ledger-1',
+  version_id: `thesis-version-${version}`,
+  version,
+  version_created_at: `2026-07-${10 + version}T09:00:00Z`,
+  version_official_state: 'active',
+})
+
 const thesisChecks = [
-  { id: 'check-matched', condition_id: 'condition-2-1', version_id: 'thesis-version-2', due_at: '2026-07-14T01:00:00Z', checked_at: '2026-07-14T01:02:00Z', result: 'matched', observed_value: 840, unit: 'CNY', cadence: 'weekly', evidence_label: '受治理批价快照', evidence_fingerprint: LONG_ID },
-  { id: 'check-not-matched', condition_id: 'condition-2-1', version_id: 'thesis-version-2', due_at: '2026-07-07T01:00:00Z', checked_at: '2026-07-07T01:01:00Z', result: 'not_matched', observed_value: 880, unit: 'CNY', cadence: 'weekly', evidence_label: '受治理批价快照', evidence_fingerprint: LONG_ID },
-  { id: 'check-insufficient', condition_id: 'condition-2-2', version_id: 'thesis-version-2', due_at: '2026-07-01T01:00:00Z', checked_at: '2026-07-01T01:03:00Z', result: 'insufficient_evidence', observed_value: null, unit: 'ratio', cadence: 'quarterly', evidence_label: '缺少已披露季度值', evidence_fingerprint: LONG_ID },
-  { id: 'check-error', condition_id: 'condition-2-2', version_id: 'thesis-version-2', due_at: '2026-04-01T01:00:00Z', checked_at: '2026-04-01T01:04:00Z', result: 'error', observed_value: null, unit: 'ratio', cadence: 'quarterly', evidence_label: '安全检查错误', evidence_fingerprint: LONG_ID },
+  { id: 'check-matched', ...thesisLedgerIdentity(2), condition_id: 'condition-2-1', due_at: '2026-07-14T01:00:00Z', checked_at: '2026-07-14T01:02:00Z', result: 'matched', observed_value: 840, unit: 'CNY', cadence: 'weekly', evidence_label: '受治理批价快照', evidence_fingerprint: LONG_ID },
+  { id: 'check-not-matched', ...thesisLedgerIdentity(2), condition_id: 'condition-2-1', due_at: '2026-07-07T01:00:00Z', checked_at: '2026-07-07T01:01:00Z', result: 'not_matched', observed_value: 880, unit: 'CNY', cadence: 'weekly', evidence_label: '受治理批价快照', evidence_fingerprint: LONG_ID },
+  { id: 'check-insufficient', ...thesisLedgerIdentity(2), condition_id: 'condition-2-2', due_at: '2026-07-01T01:00:00Z', checked_at: '2026-07-01T01:03:00Z', result: 'insufficient_evidence', observed_value: null, unit: 'ratio', cadence: 'quarterly', evidence_label: '缺少已披露季度值', evidence_fingerprint: LONG_ID },
+  { id: 'check-error', ...thesisLedgerIdentity(2), condition_id: 'condition-2-2', due_at: '2026-04-01T01:00:00Z', checked_at: '2026-04-01T01:04:00Z', result: 'error', observed_value: null, unit: 'ratio', cadence: 'quarterly', evidence_label: '安全检查错误', evidence_fingerprint: LONG_ID },
+  { id: 'check-old-version', ...thesisLedgerIdentity(1), condition_id: 'condition-1-1', due_at: '2026-03-01T01:00:00Z', checked_at: '2026-03-01T01:05:00Z', result: 'not_matched', observed_value: 900, unit: 'CNY', cadence: 'weekly', evidence_label: '旧版本受治理批价', evidence_fingerprint: LONG_ID },
 ]
 
 const pending = {
   thesis_id: 'thesis-ledger-1',
   id: 'pending-server-1',
   instrument: STOCK.symbol,
+  version: 2,
+  version_created_at: '2026-07-12T09:00:00Z',
+  version_official_state: 'active',
   version_id: 'thesis-version-2',
   condition_id: 'condition-2-1',
   check_id: 'check-matched',
@@ -1386,6 +1399,86 @@ test.describe('Phase 05 optional enhancement browser contracts', () => {
     expectNoAuthorityRequests(telemetry)
   })
 
+  test('WR-03 paged Thesis history renders before version page', async ({ page }) => {
+    const telemetry = await installPhase5Fixture(page, { thesisState: 'populated' })
+    const routeOffsets: Record<string, number[]> = { versions: [], checks: [], pending: [], history: [] }
+    let versionDetailHits = 0
+    await page.route(`**/api/theses/versions/**`, route => {
+      versionDetailHits += 1
+      const id = route.request().url().split('/').pop() ?? ''
+      if (id === 'thesis-version-1') return json(route, { version: thesisVersion(1) })
+      return json(route, { detail: 'thesis resource not found' }, 404)
+    })
+    await page.route(`**/api/theses/instruments/${STOCK.symbol}/**`, route => {
+      const url = new URL(route.request().url())
+      const resource = url.pathname.split('/').at(-1) as keyof typeof routeOffsets
+      const offset = Number(url.searchParams.get('offset') ?? 0)
+      const limit = Number(url.searchParams.get('limit') ?? 1)
+      routeOffsets[resource].push(offset)
+      if (resource === 'versions') {
+        // First page only exposes the current version; older version remains unloaded.
+        const items = offset === 0 ? [thesisVersion(2)] : [thesisVersion(1)]
+        return json(route, { items, current_version_id: 'thesis-version-2', offset, limit, total: 2, has_more: offset === 0 })
+      }
+      if (resource === 'checks') {
+        // First checks page includes an old-version row before version 1 is loaded.
+        const firstPage = [
+          { ...thesisChecks[0] },
+          { ...thesisChecks[4] },
+        ]
+        const secondPage = thesisChecks.slice(1, 4)
+        const items = offset === 0 ? firstPage : secondPage
+        return json(route, { items, offset, limit, total: 5, has_more: offset === 0 })
+      }
+      if (resource === 'pending') return json(route, { items: [], offset, limit, total: 0, has_more: false })
+      if (resource === 'history') {
+        const current = {
+          ...pending,
+          id: 'history-current',
+          status: 'pending',
+          state: 'actionable',
+          version: 2,
+          version_id: 'thesis-version-2',
+        }
+        const superseded = {
+          ...pending,
+          id: 'history-superseded',
+          status: 'confirmed',
+          state: 'confirmed',
+          version: 1,
+          version_id: 'thesis-version-1',
+          version_created_at: '2026-07-11T09:00:00Z',
+          condition_id: 'condition-1-1',
+          check_id: 'check-old-version',
+        }
+        const items = offset === 0 ? [current, superseded] : []
+        return json(route, { items, offset, limit, total: 2, has_more: false })
+      }
+      return json(route, { detail: 'unknown thesis page' }, 404)
+    })
+
+    await selectStock(page)
+    await page.goto('/stock-analysis')
+    const panel = await openAnalysisTab(page, THESIS_TAB)
+
+    // Old ledger facts are visible while only version 2 is loaded.
+    await expect(panel.getByText('旧版本受治理批价')).toBeVisible()
+    await expect(panel.getByRole('row', { name: /history-superseded/ })).toBeVisible()
+    await expect(panel.getByRole('row', { name: /history-superseded/ })).toContainText('版本 1')
+    await expect(panel.getByRole('row', { name: /^版本 1 / })).toHaveCount(0)
+    expect(routeOffsets.versions).toEqual([0])
+
+    await panel.getByRole('button', { name: '加载更多论点版本' }).click()
+    await expect(panel.getByRole('row', { name: /^版本 1 / })).toBeVisible()
+    // History/check rows remain stable (no silent drop or duplicate).
+    await expect(panel.getByText('旧版本受治理批价')).toHaveCount(1)
+    await expect(panel.getByRole('row', { name: /history-superseded/ })).toHaveCount(1)
+    await expect(panel.getByRole('row', { name: /history-current/ })).toHaveCount(1)
+    expect(routeOffsets.versions).toEqual(expect.arrayContaining([0, 1]))
+    expectNoAuthorityRequests(telemetry)
+    expect(versionDetailHits).toBe(0)
+  })
+
   test('paged Thesis history and strict condition review', async ({ page }) => {
     const telemetry = await installPhase5Fixture(page, { thesisState: 'populated' })
     const routeOffsets: Record<string, number[]> = { versions: [], checks: [], pending: [], history: [] }
@@ -1400,12 +1493,22 @@ test.describe('Phase 05 optional enhancement browser contracts', () => {
         return json(route, { items, current_version_id: 'thesis-version-2', offset, limit, total: 2, has_more: offset === 0 })
       }
       if (resource === 'checks') {
-        const items = offset === 0 ? thesisChecks.slice(0, 2) : thesisChecks.slice(2)
+        const first = thesisChecks.filter(item => item.version === 2).slice(0, 2)
+        const second = thesisChecks.filter(item => item.version === 2).slice(2)
+        const items = offset === 0 ? first : second
         return json(route, { items, offset, limit, total: 4, has_more: offset === 0 })
       }
       if (resource === 'pending') return json(route, { items: [], offset, limit, total: 0, has_more: false })
       if (resource === 'history') {
-        const item = { ...pending, id: offset === 0 ? 'history-current' : 'history-superseded', status: offset === 0 ? 'pending' : 'confirmed', actionable: offset === 0, superseded: offset > 0 }
+        const item = {
+          ...pending,
+          id: offset === 0 ? 'history-current' : 'history-superseded',
+          status: offset === 0 ? 'pending' : 'confirmed',
+          state: offset === 0 ? 'actionable' : 'confirmed',
+          version: offset === 0 ? 2 : 1,
+          version_id: offset === 0 ? 'thesis-version-2' : 'thesis-version-1',
+          version_created_at: offset === 0 ? '2026-07-12T09:00:00Z' : '2026-07-11T09:00:00Z',
+        }
         return json(route, { items: [item], offset, limit, total: 2, has_more: offset === 0 })
       }
       return json(route, { detail: 'unknown thesis page' }, 404)
