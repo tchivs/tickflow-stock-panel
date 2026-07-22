@@ -458,7 +458,22 @@ class ThesisRepository:
         with self._connection() as connection:
             total = int(connection.execute(f"SELECT COUNT(*) {joins}", (canonical,)).fetchone()[0])
             rows = connection.execute(
-                f"""SELECT condition_check.* {joins}
+                f"""SELECT condition_check.*,
+                           thesis.instrument AS instrument,
+                           version.thesis_id AS thesis_id,
+                           version.id AS version_id,
+                           version.version AS version,
+                           version.created_at AS version_created_at,
+                           CASE WHEN EXISTS (
+                               SELECT 1
+                               FROM thesis_review_events AS review
+                               JOIN thesis_pending_conclusions AS pending
+                                 ON pending.id = review.pending_id
+                               WHERE pending.thesis_id = version.thesis_id
+                                 AND pending.version_id = version.id
+                                 AND review.decision = 'confirmed'
+                           ) THEN 'invalidated' ELSE 'active' END AS version_official_state
+                    {joins}
                     ORDER BY condition_check.due_at DESC,
                              condition_check.checked_at DESC,
                              condition_check.id DESC
@@ -616,6 +631,7 @@ class ThesisRepository:
         page_offset, page_limit = _page_bounds(offset, limit)
         predicate = """FROM thesis_pending_conclusions AS pending
                        JOIN theses AS thesis ON thesis.id = pending.thesis_id
+                       JOIN thesis_versions AS version ON version.id = pending.version_id
                        WHERE thesis.instrument = ?
                          AND pending.status = 'pending'
                          AND NOT EXISTS (
@@ -632,7 +648,20 @@ class ThesisRepository:
                 connection.execute(f"SELECT COUNT(*) {predicate}", (canonical,)).fetchone()[0]
             )
             rows = connection.execute(
-                f"""SELECT pending.* {predicate}
+                f"""SELECT pending.*,
+                           thesis.instrument AS instrument,
+                           version.version AS version,
+                           version.created_at AS version_created_at,
+                           CASE WHEN EXISTS (
+                               SELECT 1
+                               FROM thesis_review_events AS review
+                               JOIN thesis_pending_conclusions AS other
+                                 ON other.id = review.pending_id
+                               WHERE other.thesis_id = version.thesis_id
+                                 AND other.version_id = version.id
+                                 AND review.decision = 'confirmed'
+                           ) THEN 'invalidated' ELSE 'active' END AS version_official_state
+                    {predicate}
                     ORDER BY pending.created_at DESC, pending.id DESC
                     LIMIT ? OFFSET ?""",
                 (canonical, page_limit, page_offset),
@@ -658,6 +687,18 @@ class ThesisRepository:
             )
             rows = connection.execute(
                 """SELECT pending.*,
+                          thesis.instrument AS instrument,
+                          version.version AS version,
+                          version.created_at AS version_created_at,
+                          CASE WHEN EXISTS (
+                              SELECT 1
+                              FROM thesis_review_events AS review_state
+                              JOIN thesis_pending_conclusions AS state_pending
+                                ON state_pending.id = review_state.pending_id
+                              WHERE state_pending.thesis_id = version.thesis_id
+                                AND state_pending.version_id = version.id
+                                AND review_state.decision = 'confirmed'
+                          ) THEN 'invalidated' ELSE 'active' END AS version_official_state,
                           review.id AS review_id,
                           review.decision AS review_decision,
                           review.reviewer_principal AS review_principal,
@@ -670,6 +711,7 @@ class ThesisRepository:
                           ) THEN 1 ELSE 0 END AS is_current
                    FROM thesis_pending_conclusions AS pending
                    JOIN theses AS thesis ON thesis.id = pending.thesis_id
+                   JOIN thesis_versions AS version ON version.id = pending.version_id
                    LEFT JOIN thesis_review_events AS review ON review.pending_id = pending.id
                    WHERE thesis.instrument = ?
                    ORDER BY pending.created_at DESC, pending.id DESC
@@ -1011,7 +1053,7 @@ class ThesisRepository:
 
     @staticmethod
     def _check_projection(row: sqlite3.Row) -> dict[str, Any]:
-        return {
+        value = {
             "id": row["id"],
             "version_id": row["version_id"],
             "condition_id": row["condition_id"],
@@ -1025,10 +1067,11 @@ class ThesisRepository:
             "safe_reason": row["safe_reason"],
             "checked_at": row["checked_at"],
         }
+        return {**value, **_row_display_identity(row)}
 
     @staticmethod
     def _pending_projection(row: sqlite3.Row) -> dict[str, Any]:
-        return {
+        value = {
             "id": row["id"],
             "thesis_id": row["thesis_id"],
             "version_id": row["version_id"],
@@ -1040,6 +1083,7 @@ class ThesisRepository:
             "status": row["status"],
             "created_at": row["created_at"],
         }
+        return {**value, **_row_display_identity(row)}
 
     @staticmethod
     def _review_projection(row: sqlite3.Row) -> dict[str, Any]:
@@ -1056,6 +1100,23 @@ class ThesisRepository:
             "rationale": row["rationale"],
             "created_at": row["created_at"],
         }
+
+
+def _row_display_identity(row: sqlite3.Row) -> dict[str, Any]:
+    """Copy safe instrument/version display identity when the page join selected it."""
+    keys = row.keys()
+    identity: dict[str, Any] = {}
+    if "instrument" in keys and row["instrument"] is not None:
+        identity["instrument"] = str(row["instrument"])
+    if "thesis_id" in keys and row["thesis_id"] is not None:
+        identity["thesis_id"] = str(row["thesis_id"])
+    if "version" in keys and row["version"] is not None:
+        identity["version"] = int(row["version"])
+    if "version_created_at" in keys and row["version_created_at"] is not None:
+        identity["version_created_at"] = str(row["version_created_at"])
+    if "version_official_state" in keys and row["version_official_state"] is not None:
+        identity["version_official_state"] = str(row["version_official_state"])
+    return identity
 
 
 def _required_instrument(value: str) -> str:

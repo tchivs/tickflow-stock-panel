@@ -85,6 +85,7 @@ def check(record: Mapping[str, Any]) -> dict[str, Any]:
         "evidence_fingerprint": str(record["evidence_fingerprint"]),
         "evidence": [_evidence_summary(item) for item in _mappings(record.get("evidence"))],
         "safe_reason": _optional_text(record.get("safe_reason")),
+        **_display_identity(record),
     }
 
 
@@ -102,6 +103,7 @@ def pending(record: Mapping[str, Any], *, review: Mapping[str, Any] | None = Non
         "status": "pending" if review is None else str(review["decision"]),
         "created_at": str(record["created_at"]),
         "review": None if review is None else review_event(review),
+        **_display_identity(record),
     }
 
 
@@ -163,6 +165,27 @@ def _evidence_summary(record: Mapping[str, Any]) -> dict[str, Any]:
     allowed = ("source_id", "source_revision", "source_kind", "field", "observed_value", "unit", "as_of")
     return {field: record[field] for field in allowed if field in record}
 
+
+
+def _display_identity(record: Mapping[str, Any]) -> dict[str, Any]:
+    """Allowlist instrument/thesis/version display identity for independent ledger pages."""
+    identity: dict[str, Any] = {}
+    instrument = record.get("instrument")
+    if isinstance(instrument, str) and instrument:
+        identity["instrument"] = instrument
+    thesis_id = record.get("thesis_id")
+    if isinstance(thesis_id, str) and thesis_id:
+        identity["thesis_id"] = thesis_id
+    version = record.get("version")
+    if isinstance(version, bool) is False and isinstance(version, int):
+        identity["version"] = version
+    version_created_at = record.get("version_created_at")
+    if isinstance(version_created_at, str) and version_created_at:
+        identity["version_created_at"] = version_created_at
+    version_official_state = record.get("version_official_state")
+    if isinstance(version_official_state, str) and version_official_state:
+        identity["version_official_state"] = version_official_state
+    return identity
 
 def _optional_text(value: object) -> str | None:
     return value if isinstance(value, str) else None
