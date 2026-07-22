@@ -27,7 +27,7 @@ class ShadowWorkflowRepository(Protocol):
         *,
         principal: str,
         included_batch_ids: list[str],
-        included_trade_ids: list[str],
+        membership_mode: str,
         exclusions: list[Mapping[str, object]],
     ) -> dict[str, object]: ...
 
@@ -59,15 +59,16 @@ class ShadowService:
         *,
         principal: str,
         included_batch_ids: list[str],
-        included_trade_ids: list[str],
+        membership_mode: str,
         exclusions: list[Mapping[str, object]],
     ) -> dict[str, object]:
         return self.repository.create_evidence_set(
             principal=self._text(principal, "principal", 128),
             included_batch_ids=included_batch_ids,
-            included_trade_ids=included_trade_ids,
+            membership_mode=membership_mode,
             exclusions=exclusions,
         )
+
 
     def distill_candidate(self, **request: object) -> dict[str, object]:
         assumptions = validate_assumption_pair(

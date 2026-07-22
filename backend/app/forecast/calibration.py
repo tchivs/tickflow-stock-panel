@@ -213,10 +213,11 @@ class ForecastMaturityScanner:
         close = float(value)
         return close if math.isfinite(close) else None
 
-    @staticmethod
-    def _quantiles(record: Mapping[str, object], horizon: int) -> tuple[float, float, float] | None:
-        all_quantiles = record.get("quantiles")
-        if not isinstance(all_quantiles, Mapping):
+    def _quantiles(
+        self, record: Mapping[str, object], horizon: int
+    ) -> tuple[float, float, float] | None:
+        all_quantiles = self.repository.load_verified_quantiles(record)
+        if all_quantiles is None:
             return None
         values = all_quantiles.get(str(horizon))
         if not isinstance(values, Mapping):

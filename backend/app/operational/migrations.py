@@ -1373,6 +1373,50 @@ MIGRATIONS: tuple[str, ...] = (
     BEFORE DELETE ON forecast_job_transitions
     BEGIN SELECT RAISE(ABORT, 'forecast job transitions are immutable'); END;
     """,
+    """
+    ALTER TABLE forecast_records ADD COLUMN quantile_availability TEXT NOT NULL
+        DEFAULT 'legacy_unavailable'
+        CHECK (quantile_availability IN ('legacy_unavailable', 'available'));
+    ALTER TABLE forecast_records ADD COLUMN quantiles_artifact_descriptor_json TEXT;
+    ALTER TABLE forecast_records ADD COLUMN quantiles_checksum_sha256 TEXT
+        CHECK (quantiles_checksum_sha256 IS NULL OR length(quantiles_checksum_sha256) = 64);
+    ALTER TABLE forecast_records ADD COLUMN quantiles_source_paths_sha256 TEXT
+        CHECK (quantiles_source_paths_sha256 IS NULL OR length(quantiles_source_paths_sha256) = 64);
+    ALTER TABLE forecast_records ADD COLUMN quantiles_provenance_digest_sha256 TEXT
+        CHECK (quantiles_provenance_digest_sha256 IS NULL OR length(quantiles_provenance_digest_sha256) = 64);
+    ALTER TABLE forecast_records ADD COLUMN quantile_row_count INTEGER
+        CHECK (quantile_row_count IS NULL OR quantile_row_count > 0);
+    ALTER TABLE forecast_records ADD COLUMN quantile_session_count INTEGER
+        CHECK (quantile_session_count IS NULL OR quantile_session_count IN (5, 20, 60));
+    ALTER TABLE forecast_records ADD COLUMN quantile_feature_count INTEGER
+        CHECK (quantile_feature_count IS NULL OR quantile_feature_count > 0);
+
+    CREATE TRIGGER forecast_quantile_metadata_insert_guard
+    BEFORE INSERT ON forecast_records
+    WHEN NOT (
+        (
+            NEW.quantile_availability = 'legacy_unavailable'
+            AND NEW.quantiles_artifact_descriptor_json IS NULL
+            AND NEW.quantiles_checksum_sha256 IS NULL
+            AND NEW.quantiles_source_paths_sha256 IS NULL
+            AND NEW.quantiles_provenance_digest_sha256 IS NULL
+            AND NEW.quantile_row_count IS NULL
+            AND NEW.quantile_session_count IS NULL
+            AND NEW.quantile_feature_count IS NULL
+        )
+        OR
+        (
+            NEW.quantile_availability = 'available'
+            AND NEW.quantiles_artifact_descriptor_json IS NOT NULL
+            AND NEW.quantiles_checksum_sha256 IS NOT NULL
+            AND NEW.quantiles_source_paths_sha256 IS NOT NULL
+            AND NEW.quantiles_provenance_digest_sha256 IS NOT NULL
+            AND NEW.quantile_row_count = 3 * NEW.horizon * NEW.quantile_feature_count
+            AND NEW.quantile_session_count = NEW.horizon
+        )
+    )
+    BEGIN SELECT RAISE(ABORT, 'forecast quantile metadata is incomplete'); END;
+    """,
 )
 
 

@@ -31,7 +31,7 @@ class StrictShadowRequest(BaseModel):
 
 class EvidenceSetCreateRequest(StrictShadowRequest):
     included_batch_ids: list[str] = Field(min_length=1, max_length=128)
-    included_trade_ids: list[str] = Field(max_length=100_000)
+    membership_mode: Literal["all_authorized_batch_trades"]
     exclusions: list[EvidenceExclusion] = Field(max_length=100_000)
 
 
@@ -289,15 +289,14 @@ def get_batch(batch_id: str, request: Request) -> dict[str, object]:
 
 @router.post("/evidence-sets", status_code=201)
 def create_evidence_set(payload: EvidenceSetCreateRequest, request: Request) -> dict[str, object]:
-    for batch_id in payload.included_batch_ids:
-        _owned_batch(request, batch_id)
     try:
         record = _service(request).create_evidence_set(
             principal=_principal(request),
             included_batch_ids=payload.included_batch_ids,
-            included_trade_ids=payload.included_trade_ids,
+            membership_mode=payload.membership_mode,
             exclusions=[item.model_dump() for item in payload.exclusions],
         )
+
     except (ShadowEvidenceError, ShadowRepositoryError, ValueError) as error:
         raise _translate(error) from error
     return {"evidence_set": projections.evidence_set(record)}

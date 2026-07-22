@@ -198,7 +198,7 @@ def create_job(instrument: str, payload: ForecastJobRequest, request: Request) -
         raise HTTPException(
             status_code=422, detail="Forecast request failed governed validation"
         ) from error
-    result = projections.job(record, record_id=_record_id_for_job(request, str(record["id"])))
+    result = projections.job(record, record_id=_record_id_for_job(request, record))
     _hub(request).publish(record)
     return {"job": result}
 
@@ -222,7 +222,7 @@ def retry_job(job_id: str, payload: ForecastRetryRequest, request: Request) -> d
 def job_detail(job_id: str, request: Request) -> dict[str, object]:
     record = _owned_job(request, job_id)
     return {
-        "job": projections.job(record, record_id=_record_id_for_job(request, str(record["id"])))
+        "job": projections.job(record, record_id=_record_id_for_job(request, record))
     }
 
 
@@ -234,13 +234,17 @@ def list_jobs(
     limit: int = Query(default=25, ge=1, le=100),
 ) -> dict[str, object]:
     canonical = _require_instrument(request, instrument)
-    rows = [
-        projections.job(row, record_id=_record_id_for_job(request, str(row["id"])))
-        for row in reversed(_repository(request).list_jobs())
-        if row.get("instrument_id") == canonical
+    page = _repository(request).page_owned_jobs(
+        principal=_principal(request),
+        instrument_id=canonical,
+        offset=offset,
+        limit=limit,
+    )
+    items = [
+        projections.job(row, record_id=row.get("record_id"))
+        for row in page.pop("items")
     ]
-    page = projections.page(rows, offset=offset, limit=limit)
-    return {"jobs": page.pop("items"), "page": page}
+    return {"jobs": items, "page": page}
 
 
 @router.get("/instruments/{instrument}/records")
@@ -251,14 +255,16 @@ def list_records(
     limit: int = Query(default=25, ge=1, le=100),
 ) -> dict[str, object]:
     canonical = _require_instrument(request, instrument)
-    rows = [
-        projections.record(row)
-        for row in _repository(request).list_forecasts_for_instrument(canonical)
-    ]
-    page = projections.page(rows, offset=offset, limit=limit)
+    page = _repository(request).page_owned_forecasts(
+        principal=_principal(request),
+        instrument_id=canonical,
+        offset=offset,
+        limit=limit,
+    )
+    items = [projections.record(row) for row in page.pop("items")]
     latest_governed_session_id = _latest_governed_session_id(request)
     return {
-        "records": page.pop("items"),
+        "records": items,
         "page": page,
         "latest_governed_session_id": latest_governed_session_id,
     }
@@ -433,8 +439,13 @@ async def _event_stream(
         for _poll in range(120):
             if await request.is_disconnected():
                 return
-            transitions = repository.job_transitions_after(
-                job_id, after_version=after_version, limit=128
+            current = _owned_job(request, job_id)
+            transitions = repository.owned_job_transitions_after(
+                job_id,
+                principal=principal,
+                instrument_id=str(current["instrument_id"]),
+                after_version=after_version,
+                limit=128,
             )
             for persisted in transitions:
                 version = int(persisted["transition_version"])
@@ -485,8 +496,14 @@ def _latest_governed_session_id(request: Request) -> str | None:
 
 def _calibration_payload(request: Request, record: Mapping[str, object]) -> dict[str, object]:
     repository = _repository(request)
-    outcomes = repository.outcomes_for_forecast(str(record["id"]))
-    facts = repository.calibration_facts_for_forecast(str(record["id"]))
+    principal = _principal(request)
+    scope = {
+        "forecast_id": str(record["id"]),
+        "principal": principal,
+        "instrument_id": str(record["instrument_id"]),
+    }
+    outcomes = repository.outcomes_for_owned_forecast(**scope)
+    facts = repository.calibration_facts_for_owned_forecast(**scope)
     return {
         "outcomes": [projections.outcome(item) for item in outcomes],
         "calibration": [projections.calibration(item) for item in facts],
@@ -545,7 +562,9 @@ def _require_instrument(request: Request, instrument: str) -> str:
 
 
 def _owned_job(request: Request, job_id: str) -> dict[str, Any]:
-    record = _repository(request).get_job(job_id)
+    record = _repository(request).get_owned_job(
+        job_id=job_id, principal=_principal(request)
+    )
     if not isinstance(record, dict):
         raise _not_found()
     _require_instrument(request, str(record["instrument_id"]))
@@ -553,15 +572,21 @@ def _owned_job(request: Request, job_id: str) -> dict[str, Any]:
 
 
 def _owned_record(request: Request, record_id: str) -> dict[str, Any]:
-    record = _repository(request).get_forecast(record_id)
+    record = _repository(request).get_owned_forecast(
+        forecast_id=record_id, principal=_principal(request)
+    )
     if not isinstance(record, dict):
         raise _not_found()
     _require_instrument(request, str(record["instrument_id"]))
     return record
 
 
-def _record_id_for_job(request: Request, job_id: str) -> str | None:
-    record = _repository(request).forecast_for_job(job_id)
+def _record_id_for_job(request: Request, job: Mapping[str, object]) -> str | None:
+    record = _repository(request).record_for_owned_job(
+        job_id=str(job["id"]),
+        principal=_principal(request),
+        instrument_id=str(job["instrument_id"]),
+    )
     return None if record is None else str(record["id"])
 
 

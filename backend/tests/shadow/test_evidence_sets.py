@@ -20,6 +20,8 @@ MAPPING = {
     "currency": "币种",
     "account_alias": "账户别名",
 }
+MEMBERSHIP_MODE = "all_authorized_batch_trades"
+
 
 
 def _stack(tmp_path, *, evidence_member_limit: int | None = None):
@@ -67,7 +69,7 @@ def _confirm(importer, fixture: str = "executions_utf8.csv", **overrides):
     return importer.confirm_import(**payload)
 
 
-def test_evidence_set_freezes_exact_batch_trade_manifest_and_stable_fingerprint(tmp_path):
+def test_server_resolved_membership_freezes_complete_manifest_and_stable_fingerprint(tmp_path):
     repository, importer = _stack(tmp_path)
     batch = _confirm(importer)
     trade_ids = [item["id"] for item in repository.list_trade_facts(batch_id=batch["id"])]
@@ -75,13 +77,13 @@ def test_evidence_set_freezes_exact_batch_trade_manifest_and_stable_fingerprint(
     first = repository.create_evidence_set(
         principal="shadow-user-opaque",
         included_batch_ids=[batch["id"]],
-        included_trade_ids=list(reversed(trade_ids)),
+        membership_mode=MEMBERSHIP_MODE,
         exclusions=[],
     )
     replay = repository.create_evidence_set(
         principal="shadow-user-opaque",
         included_batch_ids=[batch["id"]],
-        included_trade_ids=trade_ids,
+        membership_mode=MEMBERSHIP_MODE,
         exclusions=[],
     )
 
@@ -110,7 +112,7 @@ def test_evidence_set_preserves_partial_fills_duplicate_groups_and_row_identity(
     evidence = repository.create_evidence_set(
         principal="shadow-user-opaque",
         included_batch_ids=[batch["id"]],
-        included_trade_ids=[item["id"] for item in trades],
+        membership_mode=MEMBERSHIP_MODE,
         exclusions=[],
     )
     resolved = repository.resolve_evidence_trades(evidence_set_id=evidence["id"])
@@ -142,7 +144,7 @@ def test_rejected_or_partial_batch_cannot_enter_evidence_set_silently(tmp_path):
     assert repository.list_evidence_sets(principal="shadow-user-opaque") == []
 
 
-def test_evidence_exclusions_name_exact_trade_and_nonempty_reason(tmp_path):
+def test_server_resolved_membership_exclusion_names_exact_trade_and_nonempty_reason(tmp_path):
     from app.shadow.repository import ShadowEvidenceError
 
     repository, importer = _stack(tmp_path)
@@ -154,7 +156,7 @@ def test_evidence_exclusions_name_exact_trade_and_nonempty_reason(tmp_path):
     evidence = repository.create_evidence_set(
         principal="shadow-user-opaque",
         included_batch_ids=[batch["id"]],
-        included_trade_ids=included,
+        membership_mode=MEMBERSHIP_MODE,
         exclusions=[{"trade_id": excluded, "reason": "hostile note excluded after review"}],
     )
 
@@ -166,9 +168,60 @@ def test_evidence_exclusions_name_exact_trade_and_nonempty_reason(tmp_path):
         repository.create_evidence_set(
             principal="shadow-user-opaque",
             included_batch_ids=[batch["id"]],
-            included_trade_ids=included,
+            membership_mode=MEMBERSHIP_MODE,
             exclusions=[{"trade_id": excluded, "reason": ""}],
         )
+
+
+def test_server_resolved_membership_rejects_foreign_partial_and_cross_batch_selection(tmp_path):
+    from app.shadow.repository import ShadowEvidenceError
+
+    repository, importer = _stack(tmp_path)
+    owned = _confirm(importer)
+    other_owned = _confirm(importer, "executions_gb18030.csv")
+    foreign = _confirm(importer, principal="other-shadow-user")
+    foreign_trade_id = repository.list_trade_facts(batch_id=foreign["id"])[0]["id"]
+    cross_batch_trade_id = repository.list_trade_facts(batch_id=other_owned["id"])[0]["id"]
+    for batch_ids, membership_mode, exclusions, message in (
+        ([owned["id"], "missing-batch"], MEMBERSHIP_MODE, [], "attributable completed batch"),
+        ([foreign["id"]], MEMBERSHIP_MODE, [], "attributable completed batch"),
+        ([owned["id"]], "explicit_trade_ids", [], "membership mode"),
+        (
+            [owned["id"]],
+            MEMBERSHIP_MODE,
+            [{"trade_id": cross_batch_trade_id, "reason": "belongs to another batch"}],
+            "available in selected batches",
+        ),
+        (
+            [owned["id"]],
+            MEMBERSHIP_MODE,
+            [{"trade_id": foreign_trade_id, "reason": "belongs to another principal"}],
+            "available in selected batches",
+        ),
+        (
+            [owned["id"]],
+            MEMBERSHIP_MODE,
+            [{"trade_id": "missing-trade", "reason": "does not exist"}],
+            "available in selected batches",
+        ),
+        (
+            [owned["id"]],
+            MEMBERSHIP_MODE,
+            [
+                {"trade_id": cross_batch_trade_id, "reason": "first duplicate"},
+                {"trade_id": cross_batch_trade_id, "reason": "second duplicate"},
+            ],
+            "exclusions must be unique",
+        ),
+    ):
+        with pytest.raises(ShadowEvidenceError, match=message):
+            repository.create_evidence_set(
+                principal="shadow-user-opaque",
+                included_batch_ids=batch_ids,
+                membership_mode=membership_mode,
+                exclusions=exclusions,
+            )
+    assert repository.list_evidence_sets(principal="shadow-user-opaque") == []
 
 
 def test_evidence_set_and_membership_reject_direct_update_and_delete(tmp_path):
@@ -178,7 +231,7 @@ def test_evidence_set_and_membership_reject_direct_update_and_delete(tmp_path):
     evidence = repository.create_evidence_set(
         principal="shadow-user-opaque",
         included_batch_ids=[batch["id"]],
-        included_trade_ids=[item["id"] for item in trades],
+        membership_mode=MEMBERSHIP_MODE,
         exclusions=[],
     )
 
@@ -206,7 +259,7 @@ def test_correction_creates_new_manifest_while_earlier_evidence_remains_readable
     first_set = repository.create_evidence_set(
         principal="shadow-user-opaque",
         included_batch_ids=[first_batch["id"]],
-        included_trade_ids=[item["id"] for item in first_trades],
+        membership_mode=MEMBERSHIP_MODE,
         exclusions=[],
     )
 
@@ -219,7 +272,7 @@ def test_correction_creates_new_manifest_while_earlier_evidence_remains_readable
     corrected_set = repository.create_evidence_set(
         principal="shadow-user-opaque",
         included_batch_ids=[corrected_batch["id"]],
-        included_trade_ids=[item["id"] for item in corrected_trades],
+        membership_mode=MEMBERSHIP_MODE,
         exclusions=[],
     )
 
@@ -249,7 +302,7 @@ def test_aggregate_member_limit_rejects_before_evidence_materialization(tmp_path
         repository.create_evidence_set(
             principal="shadow-user-opaque",
             included_batch_ids=[first["id"], second["id"]],
-            included_trade_ids=trade_ids,
+            membership_mode=MEMBERSHIP_MODE,
             exclusions=[],
         )
 
@@ -267,7 +320,7 @@ def test_repository_pagination_is_owned_deterministic_and_bounded(tmp_path):
             repository.create_evidence_set(
                 principal="shadow-user-opaque",
                 included_batch_ids=[batch["id"]],
-                included_trade_ids=trade_ids,
+                membership_mode=MEMBERSHIP_MODE,
                 exclusions=[],
             )["id"]
         )

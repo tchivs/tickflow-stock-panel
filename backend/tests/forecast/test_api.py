@@ -183,11 +183,13 @@ def test_record_scoped_calibration_refresh_never_scans_unrelated_forecasts() -> 
         records = {
             "record-a": {
                 "id": "record-a",
+                "principal": "server-principal",
                 "instrument_id": "600000.SH",
                 "horizon": 20,
             },
             "record-b": {
                 "id": "record-b",
+                "principal": "other-principal",
                 "instrument_id": "000001.SZ",
                 "horizon": 60,
             },
@@ -196,13 +198,24 @@ def test_record_scoped_calibration_refresh_never_scans_unrelated_forecasts() -> 
         def get_forecast(self, forecast_id: str):
             return self.records.get(forecast_id)
 
+        def get_owned_forecast(self, *, forecast_id: str, principal: str):
+            record = self.records.get(forecast_id)
+            return record if record is not None and record["principal"] == principal else None
+
         @staticmethod
-        def outcomes_for_forecast(_forecast_id: str):
+        def outcomes_for_owned_forecast(
+            *, forecast_id: str, principal: str, instrument_id: str
+        ):
+            del forecast_id, principal, instrument_id
             return []
 
         @staticmethod
-        def calibration_facts_for_forecast(_forecast_id: str):
+        def calibration_facts_for_owned_forecast(
+            *, forecast_id: str, principal: str, instrument_id: str
+        ):
+            del forecast_id, principal, instrument_id
             return []
+
 
     class Scanner:
         def __init__(self) -> None:
@@ -240,6 +253,312 @@ def test_record_scoped_calibration_refresh_never_scans_unrelated_forecasts() -> 
         ("record-a", 5, "CNA-20250530"),
         ("record-a", 20, "CNA-20250530"),
     ]
+
+
+def _seed_cr03_record(
+    repository, *, principal: str, record_id: str, created_at: str
+) -> tuple[dict[str, object], dict[str, object]]:
+    record = repository.insert_fixture_forecast(
+        {
+            "id": record_id,
+            "principal": principal,
+            "instrument_id": "600000.SH",
+            "origin_session_id": "CNA-20250430",
+            "calendar_revision": "cn-a-calendar-2025-v1",
+            "future_session_ids": [f"CNA-202505{day:02}" for day in range(1, 6)],
+            "input_fingerprint": ("a" if principal == "principal-a" else "b") * 64,
+            "horizon": 5,
+            "paths_checksum_sha256": ("c" if principal == "principal-a" else "d") * 64,
+            "checkpoint_provenance": {
+                "source_revision": "source-revision",
+                "model_revision": "model-revision",
+                "tokenizer_revision": "tokenizer-revision",
+            },
+            "created_at": created_at,
+        }
+    )
+    job = repository.get_job(str(record["job_id"]))
+    assert job is not None
+    repository.append_maturity_fact(
+        forecast_id=record_id,
+        horizon=5,
+        status="evaluated",
+        actual_session_id="CNA-20250505",
+        actual_close=12.5,
+        actual_fingerprint="e" * 64,
+        reason=None,
+        observed_at="2025-05-05T08:00:00Z",
+        metric_schema="forecast-calibration-v1",
+        close_mae=0.25,
+        interval_covered=True,
+        pinball_p10=0.1,
+        pinball_p50=0.2,
+        pinball_p90=0.1,
+    )
+    return job, record
+
+
+def test_forecast_owned_pages_filter_principal_and_instrument_before_pagination(
+    tmp_path: Path,
+) -> None:
+    from app.forecast.repository import ForecastRepository
+
+    repository = ForecastRepository(tmp_path / "operational.db")
+    repository.migrate()
+    owner_a_job, owner_a_record = _seed_cr03_record(
+        repository,
+        principal="principal-a",
+        record_id="record-a",
+        created_at="2025-05-01T08:00:00Z",
+    )
+    owner_b_job, owner_b_record = _seed_cr03_record(
+        repository,
+        principal="principal-b",
+        record_id="record-b",
+        created_at="2025-05-02T08:00:00Z",
+    )
+    repository.create_or_get_active_job(
+        principal="principal-a",
+        instrument_id="000001.SZ",
+        horizon=5,
+        catalog_id="fixture-catalog",
+        idempotency_key="other-instrument",
+        input_fingerprint="f" * 64,
+    )
+
+    jobs_a = repository.page_owned_jobs(
+        principal="principal-a", instrument_id="600000.SH", offset=0, limit=1
+    )
+    jobs_b = repository.page_owned_jobs(
+        principal="principal-b", instrument_id="600000.SH", offset=0, limit=1
+    )
+    assert jobs_a["total"] == 1
+    assert jobs_a["items"] == [{**owner_a_job, "record_id": owner_a_record["id"]}]
+    assert jobs_b["total"] == 1
+    assert jobs_b["items"] == [{**owner_b_job, "record_id": owner_b_record["id"]}]
+
+    records_a = repository.page_owned_forecasts(
+        principal="principal-a", instrument_id="600000.SH", offset=0, limit=1
+    )
+    records_b = repository.page_owned_forecasts(
+        principal="principal-b", instrument_id="600000.SH", offset=0, limit=1
+    )
+    assert records_a["total"] == 1
+    assert [item["id"] for item in records_a["items"]] == [owner_a_record["id"]]
+    assert records_b["total"] == 1
+    assert [item["id"] for item in records_b["items"]] == [owner_b_record["id"]]
+    assert repository.get_owned_job(job_id=str(owner_a_job["id"]), principal="principal-b") is None
+    assert (
+        repository.get_owned_forecast(
+            forecast_id=str(owner_a_record["id"]), principal="principal-b"
+        )
+        is None
+    )
+    assert (
+        repository.record_for_owned_job(
+            job_id=str(owner_a_job["id"]),
+            principal="principal-b",
+            instrument_id="600000.SH",
+        )
+        is None
+    )
+    assert repository.owned_job_transitions_after(
+        str(owner_a_job["id"]),
+        principal="principal-b",
+        instrument_id="600000.SH",
+        after_version=-1,
+    ) == []
+    assert repository.outcomes_for_owned_forecast(
+        forecast_id=str(owner_a_record["id"]),
+        principal="principal-b",
+        instrument_id="600000.SH",
+    ) == []
+    assert repository.calibration_facts_for_owned_forecast(
+        forecast_id=str(owner_a_record["id"]),
+        principal="principal-b",
+        instrument_id="600000.SH",
+    ) == []
+
+
+def test_cr03_same_instrument_cross_principal_matrix_denies_every_surface(
+    tmp_path: Path,
+) -> None:
+    from fastapi import FastAPI, Request
+    from fastapi.testclient import TestClient
+
+    from app.forecast.api import ForecastProgressHub, router
+    from app.forecast.repository import ForecastRepository
+
+    repository = ForecastRepository(tmp_path / "operational.db")
+    repository.migrate()
+    owner_a_job, owner_a_record = _seed_cr03_record(
+        repository,
+        principal="principal-a",
+        record_id="record-a",
+        created_at="2025-05-01T08:00:00Z",
+    )
+    owner_b_job, owner_b_record = _seed_cr03_record(
+        repository,
+        principal="principal-b",
+        record_id="record-b",
+        created_at="2025-05-02T08:00:00Z",
+    )
+
+    class Scope:
+        @staticmethod
+        def allows(subject_kind: str, subject_key: str) -> bool:
+            return (subject_kind, subject_key) == ("instrument", "600000.SH")
+
+    class CountingHub(ForecastProgressHub):
+        def __init__(self) -> None:
+            super().__init__()
+            self.publish_calls = 0
+            self.subscribe_calls = 0
+
+        def publish(self, event):  # type: ignore[no-untyped-def]
+            self.publish_calls += 1
+            return super().publish(event)
+
+        def subscribe(self, *, principal: str, job_id: str):
+            self.subscribe_calls += 1
+            return super().subscribe(principal=principal, job_id=job_id)
+
+    class CountingPathReader:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def read_page(self, *, record, offset: int, limit: int):  # type: ignore[no-untyped-def]
+            del record, offset, limit
+            self.calls += 1
+            return [], 0
+
+    class CountingScanner:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def evaluate(self, **_kwargs):  # type: ignore[no-untyped-def]
+            self.calls += 1
+            return {"status": "evaluated"}
+
+    class CountingRunner:
+        calls = 0
+
+        def __call__(self, **_kwargs):  # type: ignore[no-untyped-def]
+            self.calls += 1
+            raise AssertionError("foreign Forecast request invoked runner")
+
+    app = FastAPI()
+    app.include_router(router)
+    app.state.forecast_repository = repository
+    hub = CountingHub()
+    path_reader = CountingPathReader()
+    scanner = CountingScanner()
+    runner = CountingRunner()
+    app.state.forecast_progress_hub = hub
+    app.state.forecast_path_reader = path_reader
+    app.state.forecast_maturity_scanner = scanner
+    app.state.forecast_runner = runner
+    app.state.forecast_current_session = lambda: "CNA-20250505"
+    app.state.resolve_forecast_subject_scope = lambda _request: Scope()
+
+    @app.middleware("http")
+    async def bind_principal(request: Request, call_next):  # type: ignore[no-untyped-def]
+        request.state.reviewer_principal = request.headers.get(
+            "x-test-principal", "principal-a"
+        )
+        return await call_next(request)
+
+    client = TestClient(app, raise_server_exceptions=False)
+    owner_a = {"X-Test-Principal": "principal-a"}
+    owner_b = {"X-Test-Principal": "principal-b"}
+
+    jobs = client.get(
+        "/api/forecast/instruments/600000.SH/jobs?offset=0&limit=1", headers=owner_b
+    )
+    records = client.get(
+        "/api/forecast/instruments/600000.SH/records?offset=0&limit=1", headers=owner_b
+    )
+    assert jobs.status_code == 200
+    assert jobs.json()["page"] == {"offset": 0, "limit": 1, "total": 1, "has_more": False}
+    assert [item["id"] for item in jobs.json()["jobs"]] == [owner_b_job["id"]]
+    assert records.status_code == 200
+    assert records.json()["page"] == {
+        "offset": 0,
+        "limit": 1,
+        "total": 1,
+        "has_more": False,
+    }
+    assert [item["id"] for item in records.json()["records"]] == [owner_b_record["id"]]
+
+    foreign_job_id = str(owner_a_job["id"])
+    foreign_record_id = str(owner_a_record["id"])
+    foreign_requests = (
+        ("get", f"/api/forecast/jobs/{foreign_job_id}", None),
+        ("post", f"/api/forecast/jobs/{foreign_job_id}/retry", {"idempotency_key": "foreign"}),
+        ("get", f"/api/forecast/jobs/{foreign_job_id}/events", None),
+        ("get", f"/api/forecast/jobs/{foreign_job_id}/stream", None),
+        ("get", f"/api/forecast/records/{foreign_record_id}", None),
+        ("get", f"/api/forecast/records/{foreign_record_id}/paths", None),
+        ("get", f"/api/forecast/records/{foreign_record_id}/calibration", None),
+        ("post", f"/api/forecast/records/{foreign_record_id}/calibration", {}),
+    )
+    job_count_before = len(repository.list_jobs())
+    for method, path, payload in foreign_requests:
+        response = client.request(method, path, headers=owner_b, json=payload)
+        assert response.status_code == 404, (method, path, response.text)
+        assert response.json() == {"detail": "Forecast resource not found"}
+    assert len(repository.list_jobs()) == job_count_before
+    assert hub.publish_calls == 0
+    assert hub.subscribe_calls == 0
+    assert hub.active_count == 0
+    assert path_reader.calls == 0
+    assert scanner.calls == 0
+    assert runner.calls == 0
+
+    detail = client.get(f"/api/forecast/jobs/{foreign_job_id}", headers=owner_a)
+    assert detail.status_code == 200
+    assert detail.json()["job"]["record_id"] == foreign_record_id
+    owner_records = client.get(
+        "/api/forecast/instruments/600000.SH/records?offset=0&limit=1", headers=owner_a
+    )
+    assert [item["id"] for item in owner_records.json()["records"]] == [foreign_record_id]
+    resumed = client.get(
+        f"/api/forecast/jobs/{foreign_job_id}/events",
+        headers={**owner_a, "Last-Event-ID": "0"},
+    )
+    assert resumed.status_code == 200
+    assert "id: 1" in resumed.text
+    assert "event: done" in resumed.text
+    retry = client.post(
+        f"/api/forecast/jobs/{foreign_job_id}/retry",
+        headers=owner_a,
+        json={"idempotency_key": "owner-retry"},
+    )
+    assert retry.status_code == 201
+    assert retry.json()["job"]["retry_of_job_id"] == foreign_job_id
+    paths = client.get(f"/api/forecast/records/{foreign_record_id}/paths", headers=owner_a)
+    assert paths.status_code == 200
+    calibration = client.get(
+        f"/api/forecast/records/{foreign_record_id}/calibration", headers=owner_a
+    )
+    assert calibration.status_code == 200
+    assert [item["forecast_id"] for item in calibration.json()["outcomes"]] == [
+        foreign_record_id
+    ]
+    assert [item["forecast_id"] for item in calibration.json()["calibration"]] == [
+        foreign_record_id
+    ]
+    refreshed = client.post(
+        f"/api/forecast/records/{foreign_record_id}/calibration", headers=owner_a, json={}
+    )
+    assert refreshed.status_code == 200
+    assert path_reader.calls == 1
+    assert scanner.calls == 1
+    assert hub.subscribe_calls == 1
+    assert hub.active_count == 0
+    assert hub.publish_calls == 1
+    assert runner.calls == 0
+
 
 
 def _terminal_sse_repository(tmp_path: Path):

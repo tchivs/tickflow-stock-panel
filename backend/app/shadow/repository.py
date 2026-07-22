@@ -19,6 +19,8 @@ from app.shadow.schemas import (
     validate_persisted_assumption_pair,
 )
 
+SERVER_RESOLVED_MEMBERSHIP_MODE = "all_authorized_batch_trades"
+
 
 class ShadowRepositoryError(RuntimeError):
     """A Shadow fact could not be persisted or safely reconstructed."""
@@ -368,19 +370,19 @@ class ShadowRepository:
         *,
         principal: str,
         included_batch_ids: Sequence[str],
-        included_trade_ids: Sequence[str],
+        membership_mode: str,
         exclusions: Sequence[Mapping[str, object]],
     ) -> dict[str, Any]:
         batch_ids = sorted(self._unique_nonempty(included_batch_ids, "batch"))
         if not batch_ids:
             raise ShadowEvidenceError("evidence requires at least one completed batch")
-        requested_trade_ids = self._unique_nonempty(included_trade_ids, "trade")
+        if membership_mode != SERVER_RESOLVED_MEMBERSHIP_MODE:
+            raise ShadowEvidenceError("evidence membership mode is invalid")
         exclusion_items = self._normalize_exclusions(exclusions)
-        excluded_ids = [item["trade_id"] for item in exclusion_items]
-        if set(requested_trade_ids) & set(excluded_ids):
-            raise ShadowEvidenceError("included and excluded trades must be disjoint")
+        excluded_ids = {item["trade_id"] for item in exclusion_items}
 
-        with self._connection() as connection:
+        with self._connection() as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
             placeholders = ",".join("?" for _ in batch_ids)
             batch_rows = connection.execute(
                 f"""SELECT * FROM shadow_import_batches
@@ -402,35 +404,35 @@ class ShadowRepository:
                     ORDER BY batch_id, source_row_ordinal, id""",
                 batch_ids,
             ).fetchall()
-
-        available_ids = {str(row["id"]) for row in all_trade_rows}
-        selected_ids = set(requested_trade_ids) | set(excluded_ids)
-        if selected_ids != available_ids:
-            raise ShadowEvidenceError(
-                "every trade in an included batch must be explicitly included or excluded"
-            )
-        included_id_set = set(requested_trade_ids)
-        trade_ids = [str(row["id"]) for row in all_trade_rows if str(row["id"]) in included_id_set]
-        if self._artifact_verifier is not None:
-            for row in batch_rows:
-                descriptor = _json_object(
-                    row["raw_artifact_descriptor_json"], "raw artifact descriptor"
+            available_ids = {str(row["id"]) for row in all_trade_rows}
+            if not excluded_ids <= available_ids:
+                raise ShadowEvidenceError(
+                    "evidence exclusions must name trades available in selected batches"
                 )
-                try:
-                    self._artifact_verifier(descriptor)
-                except Exception as error:
-                    raise ShadowEvidenceError(
-                        "completed batch artifact failed integrity verification"
-                    ) from error
+            trade_ids = [
+                str(row["id"])
+                for row in all_trade_rows
+                if str(row["id"]) not in excluded_ids
+            ]
+            if self._artifact_verifier is not None:
+                for row in batch_rows:
+                    descriptor = _json_object(
+                        row["raw_artifact_descriptor_json"], "raw artifact descriptor"
+                    )
+                    try:
+                        self._artifact_verifier(descriptor)
+                    except Exception as error:
+                        raise ShadowEvidenceError(
+                            "completed batch artifact failed integrity verification"
+                        ) from error
 
-        manifest = {
-            "included_batch_ids": batch_ids,
-            "included_trade_ids": trade_ids,
-            "exclusions": exclusion_items,
-        }
-        manifest_json = _canonical_json(manifest, "evidence manifest")
-        fingerprint = sha256(manifest_json.encode("utf-8")).hexdigest()
-        with self._connection() as connection, connection:
+            manifest = {
+                "included_batch_ids": batch_ids,
+                "included_trade_ids": trade_ids,
+                "exclusions": exclusion_items,
+            }
+            manifest_json = _canonical_json(manifest, "evidence manifest")
+            fingerprint = sha256(manifest_json.encode("utf-8")).hexdigest()
             existing = connection.execute(
                 "SELECT id FROM shadow_evidence_sets WHERE principal = ? AND fingerprint = ?",
                 (principal, fingerprint),

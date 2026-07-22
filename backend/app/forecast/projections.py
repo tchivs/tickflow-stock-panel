@@ -1,6 +1,8 @@
 """Deny-by-default public projections for immutable Forecast state."""
 
 from __future__ import annotations
+import math
+import re
 
 from collections.abc import Mapping, Sequence
 
@@ -93,6 +95,56 @@ def progress(record: Mapping[str, object]) -> dict[str, str]:
     return event
 
 
+def _verified_quantiles(value: Mapping[str, object]) -> dict[str, dict[str, float]] | None:
+    quantiles = value.get("quantiles")
+    sessions = value.get("future_session_ids")
+    horizon = value.get("horizon")
+    descriptor = value.get("quantiles_artifact_descriptor")
+    digests = (
+        value.get("paths_checksum_sha256"),
+        value.get("quantiles_checksum_sha256"),
+        value.get("quantiles_source_paths_sha256"),
+        value.get("quantiles_provenance_digest_sha256"),
+    )
+    if (
+        value.get("quantile_availability") != "available"
+        or not isinstance(descriptor, Mapping)
+        or not isinstance(quantiles, Mapping)
+        or isinstance(horizon, bool)
+        or not isinstance(horizon, int)
+        or not isinstance(sessions, list)
+        or len(sessions) != horizon
+        or value.get("quantile_session_count") != horizon
+        or isinstance(value.get("quantile_feature_count"), bool)
+        or not isinstance(value.get("quantile_feature_count"), int)
+        or value.get("quantile_row_count")
+        != 3 * horizon * int(value["quantile_feature_count"])
+        or any(not isinstance(item, str) or re.fullmatch(r"[0-9a-f]{64}", item) is None for item in digests)
+        or digests[0] != digests[2]
+    ):
+        return None
+    projected: dict[str, dict[str, float]] = {}
+    if set(quantiles) != {str(index) for index in range(1, horizon + 1)}:
+        return None
+    for index in range(1, horizon + 1):
+        values = quantiles.get(str(index))
+        if not isinstance(values, Mapping) or set(values) != {"p10", "p50", "p90"}:
+            return None
+        raw = (values["p10"], values["p50"], values["p90"])
+        if any(
+            isinstance(number, bool)
+            or not isinstance(number, (int, float))
+            or not math.isfinite(float(number))
+            for number in raw
+        ):
+            return None
+        p10, p50, p90 = (float(number) for number in raw)
+        if p10 > p50 or p50 > p90:
+            return None
+        projected[str(index)] = {"p10": p10, "p50": p50, "p90": p90}
+    return projected
+
+
 def record(value: Mapping[str, object]) -> dict[str, object]:
     result: dict[str, object] = {
         "id": str(value["id"]),
@@ -129,18 +181,9 @@ def record(value: Mapping[str, object]) -> dict[str, object]:
         result["input_artifact"] = input_descriptor
     if output_descriptor is not None:
         result["output_artifact"] = output_descriptor
-    quantiles = value.get("quantiles")
-    if isinstance(quantiles, Mapping):
-        result["quantiles"] = {
-            str(horizon): {
-                label: float(number)
-                for label in ("p10", "p50", "p90")
-                if isinstance((number := values.get(label)), (int, float))
-                and not isinstance(number, bool)
-            }
-            for horizon, values in quantiles.items()
-            if isinstance(values, Mapping)
-        }
+    quantiles = _verified_quantiles(value)
+    if quantiles is not None:
+        result["quantiles"] = quantiles
     return result
 
 

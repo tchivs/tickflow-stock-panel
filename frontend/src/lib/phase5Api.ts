@@ -130,7 +130,7 @@ export interface ShadowEvidenceExclusionInput {
 
 export interface ShadowEvidenceSetInput {
   included_batch_ids: string[]
-  included_trade_ids: string[]
+  membership_mode: 'all_authorized_batch_trades'
   exclusions: ShadowEvidenceExclusionInput[]
 }
 

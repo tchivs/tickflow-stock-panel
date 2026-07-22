@@ -7,6 +7,7 @@ import math
 import re
 import shutil
 import sqlite3
+from io import BytesIO
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from copy import deepcopy
@@ -15,6 +16,15 @@ from hashlib import sha256
 from pathlib import Path, PurePosixPath
 from typing import Any
 from uuid import uuid4
+
+import numpy as np
+import polars as pl
+
+from app.optional_artifacts import (
+    ArtifactDescriptor,
+    ManagedArtifactError,
+    ManagedImmutableArtifactStore,
+)
 
 from app.operational.migrations import migrate_operational_db
 
@@ -47,6 +57,31 @@ _LEGAL_TRANSITIONS = {
 }
 _SAFE_REASON = re.compile(r"[a-z][a-z0-9_]{0,63}\Z")
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+_ARTIFACT_DESCRIPTOR_FIELDS = {
+    "artifact_id",
+    "relative_path",
+    "content_type",
+    "byte_size",
+    "checksum_sha256",
+    "schema_version",
+    "scope_sha256",
+    "created_at",
+}
+_PATH_ARTIFACT_COLUMNS = {
+    "sample_index",
+    "horizon_index",
+    "session_id",
+    "feature",
+    "value",
+}
+_QUANTILE_ARTIFACT_COLUMNS = {
+    "quantile",
+    "horizon_index",
+    "session_id",
+    "feature",
+    "value",
+}
+_QUANTILE_LABELS = ("P10", "P50", "P90")
 
 
 def _canonical_json(value: object) -> str:
@@ -192,6 +227,221 @@ class ForecastRepository:
 
     def now(self) -> str:
         return _timestamp(_as_utc(self._clock()))
+
+    @staticmethod
+    def _owned_page_window(offset: int, limit: int) -> tuple[int, int]:
+        if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+            raise ValueError("forecast page offset is invalid")
+        if (
+            isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or not 1 <= limit <= 100
+        ):
+            raise ValueError("forecast page limit is invalid")
+        return offset, limit
+
+    @staticmethod
+    def _owned_page_result(
+        items: list[dict[str, Any]], *, offset: int, limit: int, total: int
+    ) -> dict[str, Any]:
+        return {
+            "items": items,
+            "offset": offset,
+            "limit": limit,
+            "total": total,
+            "has_more": offset + len(items) < total,
+        }
+
+    @staticmethod
+    def _require_owner_scope(principal: str, instrument_id: str) -> None:
+        if not isinstance(principal, str) or not principal:
+            raise ValueError("forecast principal scope is invalid")
+        if not isinstance(instrument_id, str) or not instrument_id:
+            raise ValueError("forecast instrument scope is invalid")
+
+    def page_owned_jobs(
+        self,
+        *,
+        principal: str,
+        instrument_id: str,
+        offset: int,
+        limit: int,
+    ) -> dict[str, Any]:
+        """Page jobs only after principal and instrument filtering in SQLite."""
+        self._require_owner_scope(principal, instrument_id)
+        offset, limit = self._owned_page_window(offset, limit)
+        with self.connection() as connection:
+            total = int(
+                connection.execute(
+                    """SELECT COUNT(*) FROM forecast_jobs
+                       WHERE principal = ? AND instrument_id = ?""",
+                    (principal, instrument_id),
+                ).fetchone()[0]
+            )
+            rows = connection.execute(
+                """SELECT j.*, r.id AS record_id
+                   FROM forecast_jobs AS j
+                   LEFT JOIN forecast_records AS r ON r.job_id = j.id
+                   WHERE j.principal = ? AND j.instrument_id = ?
+                   ORDER BY j.created_at DESC, j.id DESC
+                   LIMIT ? OFFSET ?""",
+                (principal, instrument_id, limit, offset),
+            ).fetchall()
+        return self._owned_page_result(
+            [dict(row) for row in rows], offset=offset, limit=limit, total=total
+        )
+
+    def page_owned_forecasts(
+        self,
+        *,
+        principal: str,
+        instrument_id: str,
+        offset: int,
+        limit: int,
+    ) -> dict[str, Any]:
+        """Page records through their immutable owning job before pagination."""
+        self._require_owner_scope(principal, instrument_id)
+        offset, limit = self._owned_page_window(offset, limit)
+        ownership = """FROM forecast_records AS r
+                       JOIN forecast_jobs AS j ON j.id = r.job_id
+                       WHERE j.principal = ? AND j.instrument_id = ?
+                         AND r.instrument_id = j.instrument_id"""
+        with self.connection() as connection:
+            total = int(
+                connection.execute(
+                    f"SELECT COUNT(*) {ownership}", (principal, instrument_id)
+                ).fetchone()[0]
+            )
+            rows = connection.execute(
+                f"""SELECT r.* {ownership}
+                    ORDER BY r.created_at DESC, r.id DESC
+                    LIMIT ? OFFSET ?""",
+                (principal, instrument_id, limit, offset),
+            ).fetchall()
+        items = [self._record_with_quantiles(self._record_row(row)) for row in rows]
+        return self._owned_page_result(items, offset=offset, limit=limit, total=total)
+
+    def get_owned_job(self, *, job_id: str, principal: str) -> dict[str, Any] | None:
+        if (
+            not isinstance(job_id, str)
+            or not job_id
+            or not isinstance(principal, str)
+            or not principal
+        ):
+            return None
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM forecast_jobs WHERE id = ? AND principal = ?",
+                (job_id, principal),
+            ).fetchone()
+        return None if row is None else dict(row)
+
+    def get_owned_forecast(
+        self, *, forecast_id: str, principal: str
+    ) -> dict[str, Any] | None:
+        if (
+            not isinstance(forecast_id, str)
+            or not forecast_id
+            or not isinstance(principal, str)
+            or not principal
+        ):
+            return None
+        with self.connection() as connection:
+            row = connection.execute(
+                """SELECT r.* FROM forecast_records AS r
+                   JOIN forecast_jobs AS j ON j.id = r.job_id
+                   WHERE r.id = ? AND j.principal = ?
+                     AND r.instrument_id = j.instrument_id""",
+                (forecast_id, principal),
+            ).fetchone()
+        return (
+            None if row is None else self._record_with_quantiles(self._record_row(row))
+        )
+
+    def record_for_owned_job(
+        self, *, job_id: str, principal: str, instrument_id: str
+    ) -> dict[str, Any] | None:
+        self._require_owner_scope(principal, instrument_id)
+        with self.connection() as connection:
+            row = connection.execute(
+                """SELECT r.* FROM forecast_records AS r
+                   JOIN forecast_jobs AS j ON j.id = r.job_id
+                   WHERE r.job_id = ? AND j.principal = ? AND j.instrument_id = ?
+                     AND r.instrument_id = j.instrument_id""",
+                (job_id, principal, instrument_id),
+            ).fetchone()
+        return (
+            None if row is None else self._record_with_quantiles(self._record_row(row))
+        )
+
+    def owned_job_transitions_after(
+        self,
+        job_id: str,
+        *,
+        principal: str,
+        instrument_id: str,
+        after_version: int,
+        limit: int = 128,
+    ) -> list[dict[str, Any]]:
+        self._require_owner_scope(principal, instrument_id)
+        if (
+            not isinstance(job_id, str)
+            or not job_id
+            or isinstance(after_version, bool)
+            or not isinstance(after_version, int)
+            or after_version < -1
+            or isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or not 1 <= limit <= 256
+        ):
+            raise ValueError("forecast transition resume request is invalid")
+        with self.connection() as connection:
+            rows = connection.execute(
+                """SELECT j.id, t.job_id, j.instrument_id, j.horizon, j.catalog_id,
+                          j.attempt, j.created_at, t.status, t.transition_version,
+                          t.terminal_reason, t.recorded_at AS updated_at
+                   FROM forecast_job_transitions AS t
+                   JOIN forecast_jobs AS j ON j.id = t.job_id
+                   WHERE t.job_id = ? AND j.principal = ? AND j.instrument_id = ?
+                     AND t.transition_version > ?
+                   ORDER BY t.transition_version
+                   LIMIT ?""",
+                (job_id, principal, instrument_id, after_version, limit),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def outcomes_for_owned_forecast(
+        self, *, forecast_id: str, principal: str, instrument_id: str
+    ) -> list[dict[str, Any]]:
+        self._require_owner_scope(principal, instrument_id)
+        with self.connection() as connection:
+            rows = connection.execute(
+                """SELECT o.*, r.calendar_revision
+                   FROM forecast_outcomes AS o
+                   JOIN forecast_records AS r ON r.id = o.forecast_id
+                   JOIN forecast_jobs AS j ON j.id = r.job_id
+                   WHERE o.forecast_id = ? AND j.principal = ? AND j.instrument_id = ?
+                     AND r.instrument_id = j.instrument_id
+                   ORDER BY o.horizon, o.observed_at, o.id""",
+                (forecast_id, principal, instrument_id),
+            ).fetchall()
+        return [self._outcome_row(row) for row in rows]
+
+    def calibration_facts_for_owned_forecast(
+        self, *, forecast_id: str, principal: str, instrument_id: str
+    ) -> list[dict[str, Any]]:
+        self._require_owner_scope(principal, instrument_id)
+        with self.connection() as connection:
+            rows = connection.execute(
+                """SELECT c.* FROM forecast_calibration_facts AS c
+                   JOIN forecast_records AS r ON r.id = c.forecast_id
+                   JOIN forecast_jobs AS j ON j.id = r.job_id
+                   WHERE c.forecast_id = ? AND j.principal = ? AND j.instrument_id = ?
+                     AND r.instrument_id = j.instrument_id
+                   ORDER BY c.coverage_start, c.id""",
+                (forecast_id, principal, instrument_id),
+            ).fetchall()
+        return [self._calibration_row(row) for row in rows]
 
     @staticmethod
     def _append_job_transition(connection: sqlite3.Connection, row: sqlite3.Row | None) -> None:
@@ -560,7 +810,7 @@ class ForecastRepository:
                 "SELECT * FROM forecast_records WHERE job_id = ?", (job_id,)
             ).fetchone()
             if canonical is not None:
-                return self._record_row(canonical)
+                return self._record_with_quantiles(self._record_row(canonical))
             job = connection.execute(
                 "SELECT * FROM forecast_jobs WHERE id = ?", (job_id,)
             ).fetchone()
@@ -592,7 +842,7 @@ class ForecastRepository:
             }
             if record_comparable != expected_comparable:
                 raise ValueError("forecast record diverges from its server-bound identity")
-            descriptor = self._validated_output_descriptor(output_descriptor, record=record)
+            bundle = self._validated_output_descriptor(output_descriptor, record=record)
 
             record_id = str(uuid4())
             values = (
@@ -619,8 +869,16 @@ class ForecastRepository:
                 record["model_digest_sha256"],
                 record["tokenizer_revision"],
                 record["tokenizer_digest_sha256"],
-                _canonical_json(descriptor),
-                descriptor["checksum_sha256"],
+                _canonical_json(bundle["paths_artifact"]),
+                bundle["source_paths_sha256"],
+                "available",
+                _canonical_json(bundle["quantiles_artifact"]),
+                bundle["quantiles_artifact"]["checksum_sha256"],
+                bundle["source_paths_sha256"],
+                bundle["provenance_digest_sha256"],
+                bundle["quantile_row_count"],
+                bundle["quantile_session_count"],
+                bundle["quantile_feature_count"],
                 _canonical_json(record["validation_warnings"]),
                 now,
             )
@@ -631,8 +889,13 @@ class ForecastRepository:
                     horizon, lookback, seed, temperature, top_k, top_p, sample_count, catalog_id,
                     source_revision, source_digest_sha256, model_revision, model_digest_sha256,
                     tokenizer_revision, tokenizer_digest_sha256, output_artifact_descriptor_json,
-                    paths_checksum_sha256, validation_warnings_json, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    paths_checksum_sha256, quantile_availability,
+                    quantiles_artifact_descriptor_json, quantiles_checksum_sha256,
+                    quantiles_source_paths_sha256, quantiles_provenance_digest_sha256,
+                    quantile_row_count, quantile_session_count, quantile_feature_count,
+                    validation_warnings_json, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                           ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 values,
             )
             changed = connection.execute(
@@ -653,7 +916,7 @@ class ForecastRepository:
             ).fetchone()
         self._commit_identities.pop(job_id, None)
         assert canonical is not None
-        return self._record_row(canonical)
+        return self._record_with_quantiles(self._record_row(canonical))
 
     @staticmethod
     def _validated_immutable_record(
@@ -786,66 +1049,367 @@ class ForecastRepository:
     def _validated_output_descriptor(
         self, value: Mapping[str, object], *, record: Mapping[str, object]
     ) -> dict[str, object]:
-        if not isinstance(value, Mapping):
-            raise ValueError("forecast output descriptor is invalid")
+        """Verify both managed Parquet byte streams and their immutable binding."""
         required = {
-            "artifact_id",
-            "relative_path",
-            "schema_version",
-            "byte_size",
-            "checksum_sha256",
+            "paths_artifact",
+            "quantiles_artifact",
+            "path_shape",
+            "quantile_shape",
             "sample_count",
-            "horizon",
-            "feature_count",
+            "quantile_labels",
+            "warning_codes",
         }
-        if set(value) != required:
-            raise ValueError("forecast output descriptor is incomplete")
-        relative = value["relative_path"]
+        if not isinstance(value, Mapping) or set(value) != required:
+            raise ValueError("forecast output artifact bundle is incomplete")
+        horizon = int(record["horizon"])
+        features = list(record["feature_schema"])
+        expected_path_shape = [32, horizon, len(features)]
+        expected_quantile_shape = [3, horizon, len(features)]
         if (
-            not isinstance(relative, str)
-            or not relative
-            or relative == "."
-            or ":" in relative
-            or "\\" in relative
+            value["path_shape"] != expected_path_shape
+            or value["quantile_shape"] != expected_quantile_shape
+            or value["sample_count"] != 32
+            or value["quantile_labels"] != list(_QUANTILE_LABELS)
         ):
-            raise ValueError("forecast output descriptor path is invalid")
-        pure = PurePosixPath(relative)
-        if pure.is_absolute() or ".." in pure.parts or pure.as_posix() != relative:
-            raise ValueError("forecast output descriptor path is invalid")
-        unresolved = self.artifact_root / Path(*pure.parts)
-        if unresolved.is_symlink():
-            raise ValueError("forecast output artifact symlinks are forbidden")
-        try:
-            candidate = unresolved.resolve(strict=True)
-            candidate.relative_to(self.artifact_root)
-        except (OSError, ValueError) as error:
-            raise ValueError("forecast output artifact escapes its managed root") from error
-        if not candidate.is_file() or candidate.is_symlink():
-            raise ValueError("forecast output artifact is not a regular file")
-        payload = candidate.read_bytes()
-        byte_size = _strict_int(value["byte_size"], "output byte size", minimum=1)
-        checksum = _digest(value["checksum_sha256"], "output checksum")
-        if byte_size != len(payload) or sha256(payload).hexdigest() != checksum:
-            raise ValueError("forecast output artifact checksum or size diverges")
-        sample_count = _strict_int(
-            value["sample_count"], "output sample count", minimum=32, maximum=32
+            raise ValueError("forecast output artifact bundle shape or labels diverge")
+        warning_codes = value["warning_codes"]
+        if (
+            not isinstance(warning_codes, list)
+            or len(warning_codes) > 64
+            or any(
+                not isinstance(code, str) or _SAFE_REASON.fullmatch(code) is None
+                for code in warning_codes
+            )
+            or warning_codes != record["validation_warnings"]
+        ):
+            raise ValueError("forecast output warning codes diverge")
+
+        paths_descriptor, paths_scope, paths_frame = self._verified_artifact_frame(
+            value["paths_artifact"],
+            schema_version="forecast-paths-v1",
+            field="paths",
         )
-        horizon = _strict_int(value["horizon"], "output horizon", minimum=1, maximum=60)
-        feature_count = _strict_int(value["feature_count"], "output feature count", minimum=1)
-        if horizon != record["horizon"] or sample_count != record["sample_count"]:
-            raise ValueError("forecast output descriptor shape diverges from its record")
-        if feature_count != len(record["feature_schema"]):
-            raise ValueError("forecast output features diverge from its record")
-        return {
-            "artifact_id": _nonempty_text(value["artifact_id"], "output artifact"),
-            "relative_path": relative,
-            "schema_version": _immutable_text(value["schema_version"], "output schema"),
-            "byte_size": byte_size,
-            "checksum_sha256": checksum,
-            "sample_count": sample_count,
-            "horizon": horizon,
-            "feature_count": feature_count,
+        quantiles_descriptor, quantiles_scope, quantiles_frame = self._verified_artifact_frame(
+            value["quantiles_artifact"],
+            schema_version="forecast-quantiles-v1",
+            field="quantiles",
+        )
+        paths = self._validated_path_tensor(
+            paths_frame,
+            sessions=list(record["future_session_ids"]),
+            features=features,
+        )
+        quantiles, _mapping, _features = self._validated_quantile_tensor(
+            quantiles_frame,
+            sessions=list(record["future_session_ids"]),
+            features=features,
+            feature_count=len(features),
+        )
+        expected_quantiles = np.asarray(
+            np.quantile(paths, q=(0.10, 0.50, 0.90), axis=0), dtype=np.float64
+        )
+        if not np.allclose(
+            quantiles,
+            expected_quantiles,
+            rtol=1e-12,
+            atol=1e-12,
+            equal_nan=False,
+        ):
+            raise ValueError("forecast quantile bytes diverge from the complete path tensor")
+        if (
+            paths_scope.get("kind") != "sampled_paths"
+            or paths_scope.get("shape") != expected_path_shape
+            or quantiles_scope.get("kind") != "path_axis_quantiles"
+            or quantiles_scope.get("shape") != expected_quantile_shape
+            or quantiles_scope.get("source_paths_sha256")
+            != paths_descriptor["checksum_sha256"]
+        ):
+            raise ValueError("forecast artifact scope or source binding diverges")
+        path_base = {
+            key: item for key, item in paths_scope.items() if key not in {"kind", "shape"}
         }
+        quantile_base = {
+            key: item
+            for key, item in quantiles_scope.items()
+            if key not in {"kind", "shape", "source_paths_sha256"}
+        }
+        if path_base != quantile_base:
+            raise ValueError("forecast path and quantile artifact scopes diverge")
+        provenance = self._quantile_provenance_digest(
+            record=record,
+            paths_descriptor=paths_descriptor,
+            quantiles_descriptor=quantiles_descriptor,
+        )
+        return {
+            "paths_artifact": paths_descriptor,
+            "quantiles_artifact": quantiles_descriptor,
+            "source_paths_sha256": paths_descriptor["checksum_sha256"],
+            "provenance_digest_sha256": provenance,
+            "quantile_row_count": 3 * horizon * len(features),
+            "quantile_session_count": horizon,
+            "quantile_feature_count": len(features),
+        }
+
+    def _verified_artifact_frame(
+        self,
+        value: object,
+        *,
+        schema_version: str,
+        field: str,
+    ) -> tuple[dict[str, object], dict[str, object], pl.DataFrame]:
+        if not isinstance(value, Mapping) or set(value) != _ARTIFACT_DESCRIPTOR_FIELDS:
+            raise ValueError(f"forecast {field} artifact descriptor is incomplete")
+        if isinstance(value.get("byte_size"), bool):
+            raise ValueError(f"forecast {field} artifact size is invalid")
+        try:
+            descriptor = ArtifactDescriptor(**dict(value))
+            if (
+                descriptor.schema_version != schema_version
+                or descriptor.content_type != "application/vnd.apache.parquet"
+            ):
+                raise ValueError(f"forecast {field} artifact schema is invalid")
+            store = ManagedImmutableArtifactStore(self.artifact_root)
+            persisted, scope, payload_path = store._verified_payload(descriptor)
+            if persisted != descriptor:
+                raise ValueError(f"forecast {field} artifact metadata diverges")
+            payload = payload_path.read_bytes()
+            if (
+                len(payload) != descriptor.byte_size
+                or sha256(payload).hexdigest() != descriptor.checksum_sha256
+            ):
+                raise ValueError(f"forecast {field} artifact bytes diverge")
+            frame = pl.read_parquet(BytesIO(payload))
+        except (ManagedArtifactError, OSError, TypeError, ValueError, pl.exceptions.PolarsError) as error:
+            if isinstance(error, ValueError) and str(error).startswith("forecast "):
+                raise
+            raise ValueError(f"forecast {field} artifact cannot be verified") from error
+        return descriptor.as_dict(), dict(scope), frame
+
+    @staticmethod
+    def _validated_path_tensor(
+        frame: pl.DataFrame,
+        *,
+        sessions: list[str],
+        features: list[str],
+    ) -> np.ndarray:
+        if set(frame.columns) != _PATH_ARTIFACT_COLUMNS:
+            raise ValueError("forecast path artifact relation schema is invalid")
+        horizon = len(sessions)
+        expected_rows = 32 * horizon * len(features)
+        rows = frame.to_dicts()
+        if len(rows) != expected_rows:
+            raise ValueError("forecast path artifact relation shape is invalid")
+        session_position = {session: index for index, session in enumerate(sessions)}
+        feature_position = {feature: index for index, feature in enumerate(features)}
+        tensor = np.empty((32, horizon, len(features)), dtype=np.float64)
+        seen: set[tuple[int, int, int]] = set()
+        for row in rows:
+            sample = row.get("sample_index")
+            session = row.get("session_id")
+            feature = row.get("feature")
+            value = row.get("value")
+            if (
+                isinstance(sample, bool)
+                or not isinstance(sample, int)
+                or not 0 <= sample < 32
+                or session not in session_position
+                or feature not in feature_position
+                or isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(float(value))
+            ):
+                raise ValueError("forecast path artifact relation contains an invalid value")
+            session_index = session_position[session]
+            feature_index = feature_position[feature]
+            if row.get("horizon_index") != session_index:
+                raise ValueError("forecast path artifact session order diverges")
+            identity = (sample, session_index, feature_index)
+            if identity in seen:
+                raise ValueError("forecast path artifact relation contains duplicates")
+            seen.add(identity)
+            tensor[identity] = float(value)
+        if len(seen) != expected_rows:
+            raise ValueError("forecast path artifact relation is incomplete")
+        return tensor
+
+    @staticmethod
+    def _validated_quantile_tensor(
+        frame: pl.DataFrame,
+        *,
+        sessions: list[str],
+        features: list[str] | None,
+        feature_count: int,
+    ) -> tuple[np.ndarray, dict[str, dict[str, float]], list[str]]:
+        if set(frame.columns) != _QUANTILE_ARTIFACT_COLUMNS:
+            raise ValueError("forecast quantile artifact relation schema is invalid")
+        if features is None:
+            features = sorted(
+                {item for item in frame["feature"].to_list() if isinstance(item, str)}
+            )
+        if len(features) != feature_count or len(set(features)) != feature_count or "close" not in features:
+            raise ValueError("forecast quantile artifact feature relation is invalid")
+        horizon = len(sessions)
+        expected_rows = 3 * horizon * feature_count
+        rows = frame.to_dicts()
+        if len(rows) != expected_rows:
+            raise ValueError("forecast quantile artifact relation shape is invalid")
+        label_position = {label: index for index, label in enumerate(_QUANTILE_LABELS)}
+        session_position = {session: index for index, session in enumerate(sessions)}
+        feature_position = {feature: index for index, feature in enumerate(features)}
+        tensor = np.empty((3, horizon, feature_count), dtype=np.float64)
+        seen: set[tuple[int, int, int]] = set()
+        for row in rows:
+            label = row.get("quantile")
+            session = row.get("session_id")
+            feature = row.get("feature")
+            value = row.get("value")
+            if (
+                label not in label_position
+                or session not in session_position
+                or feature not in feature_position
+                or isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(float(value))
+            ):
+                raise ValueError("forecast quantile artifact relation contains an invalid value")
+            session_index = session_position[session]
+            if row.get("horizon_index") != session_index:
+                raise ValueError("forecast quantile artifact session order diverges")
+            identity = (label_position[label], session_index, feature_position[feature])
+            if identity in seen:
+                raise ValueError("forecast quantile artifact relation contains duplicates")
+            seen.add(identity)
+            tensor[identity] = float(value)
+        if len(seen) != expected_rows:
+            raise ValueError("forecast quantile artifact relation is incomplete")
+        close_index = feature_position["close"]
+        if np.any(tensor[0, :, close_index] > tensor[1, :, close_index]) or np.any(
+            tensor[1, :, close_index] > tensor[2, :, close_index]
+        ):
+            raise ValueError("forecast close quantiles are crossed")
+        mapping = {
+            str(index + 1): {
+                "p10": float(tensor[0, index, close_index]),
+                "p50": float(tensor[1, index, close_index]),
+                "p90": float(tensor[2, index, close_index]),
+            }
+            for index in range(horizon)
+        }
+        return tensor, mapping, features
+
+    @staticmethod
+    def _quantile_provenance_digest(
+        *,
+        record: Mapping[str, object],
+        paths_descriptor: Mapping[str, object],
+        quantiles_descriptor: Mapping[str, object],
+    ) -> str:
+        identity = {
+            key: record[key]
+            for key in (
+                "origin_session_id",
+                "calendar_id",
+                "calendar_revision",
+                "future_session_ids",
+                "input_fingerprint",
+                "horizon",
+                "lookback",
+                "seed",
+                "temperature",
+                "top_k",
+                "top_p",
+                "sample_count",
+                "catalog_id",
+                "source_revision",
+                "source_digest_sha256",
+                "model_revision",
+                "model_digest_sha256",
+                "tokenizer_revision",
+                "tokenizer_digest_sha256",
+            )
+        }
+        identity["paths_artifact"] = dict(paths_descriptor)
+        identity["quantiles_artifact"] = dict(quantiles_descriptor)
+        return sha256(_canonical_json(identity).encode("utf-8")).hexdigest()
+
+    def load_verified_quantiles(
+        self, record: Mapping[str, object]
+    ) -> dict[str, dict[str, float]] | None:
+        """Reload canonical close quantiles from checksum-verified Parquet bytes."""
+        availability = record.get("quantile_availability")
+        if availability == "legacy_unavailable":
+            return None
+        if availability != "available":
+            raise ValueError("forecast quantile availability state is invalid")
+        descriptor_value = record.get("quantiles_artifact_descriptor")
+        paths_descriptor = record.get("output_artifact_descriptor")
+        if not isinstance(descriptor_value, Mapping) or not isinstance(paths_descriptor, Mapping):
+            raise ValueError("forecast quantile artifact metadata is unavailable")
+        descriptor, scope, frame = self._verified_artifact_frame(
+            descriptor_value,
+            schema_version="forecast-quantiles-v1",
+            field="quantiles",
+        )
+        expected_checksum = _digest(
+            record.get("quantiles_checksum_sha256"), "quantiles checksum"
+        )
+        source_checksum = _digest(
+            record.get("quantiles_source_paths_sha256"), "quantile source paths checksum"
+        )
+        paths_checksum = _digest(record.get("paths_checksum_sha256"), "paths checksum")
+        if (
+            descriptor["checksum_sha256"] != expected_checksum
+            or source_checksum != paths_checksum
+            or scope.get("source_paths_sha256") != paths_checksum
+            or scope.get("kind") != "path_axis_quantiles"
+        ):
+            raise ValueError("forecast quantile artifact identity or source binding diverges")
+        sessions = record.get("future_session_ids")
+        if not isinstance(sessions, list) or len(sessions) != record.get("horizon"):
+            raise ValueError("forecast quantile sessions are unavailable")
+        session_count = _strict_int(
+            record.get("quantile_session_count"),
+            "quantile session count",
+            minimum=1,
+            maximum=60,
+        )
+        feature_count = _strict_int(
+            record.get("quantile_feature_count"),
+            "quantile feature count",
+            minimum=1,
+        )
+        row_count = _strict_int(
+            record.get("quantile_row_count"), "quantile row count", minimum=1
+        )
+        if (
+            session_count != len(sessions)
+            or row_count != 3 * session_count * feature_count
+            or scope.get("shape") != [3, session_count, feature_count]
+        ):
+            raise ValueError("forecast quantile bounded shape metadata diverges")
+        _tensor, mapping, _features = self._validated_quantile_tensor(
+            frame,
+            sessions=sessions,
+            features=None,
+            feature_count=feature_count,
+        )
+        provenance = self._quantile_provenance_digest(
+            record=record,
+            paths_descriptor=paths_descriptor,
+            quantiles_descriptor=descriptor,
+        )
+        if provenance != _digest(
+            record.get("quantiles_provenance_digest_sha256"),
+            "quantile provenance digest",
+        ):
+            raise ValueError("forecast quantile provenance digest diverges")
+        return mapping
+
+    def _record_with_quantiles(self, record: dict[str, Any]) -> dict[str, Any]:
+        quantiles = self.load_verified_quantiles(record)
+        if quantiles is not None:
+            record["quantiles"] = quantiles
+        return record
 
     def recover_after_restart(
         self,
@@ -940,21 +1504,21 @@ class ForecastRepository:
             row = connection.execute(
                 "SELECT * FROM forecast_records WHERE job_id = ?", (job_id,)
             ).fetchone()
-        return None if row is None else self._record_row(row)
+        return None if row is None else self._record_with_quantiles(self._record_row(row))
 
     def list_forecasts(self) -> list[dict[str, Any]]:
         with self.connection() as connection:
             rows = connection.execute(
                 "SELECT * FROM forecast_records ORDER BY created_at, id"
             ).fetchall()
-        return [self._record_row(row) for row in rows]
+        return [self._record_with_quantiles(self._record_row(row)) for row in rows]
 
     def get_forecast(self, forecast_id: str) -> dict[str, Any] | None:
         with self.connection() as connection:
             row = connection.execute(
                 "SELECT * FROM forecast_records WHERE id = ?", (forecast_id,)
             ).fetchone()
-        return None if row is None else self._record_row(row)
+        return None if row is None else self._record_with_quantiles(self._record_row(row))
 
     def list_forecasts_for_instrument(self, instrument_id: str) -> list[dict[str, Any]]:
         with self.connection() as connection:
@@ -963,7 +1527,7 @@ class ForecastRepository:
                    WHERE instrument_id = ? ORDER BY created_at DESC, id DESC""",
                 (instrument_id,),
             ).fetchall()
-        return [self._record_row(row) for row in rows]
+        return [self._record_with_quantiles(self._record_row(row)) for row in rows]
 
     def outcomes_for_forecast(self, forecast_id: str) -> list[dict[str, Any]]:
         with self.connection() as connection:
@@ -1282,10 +1846,13 @@ class ForecastRepository:
     def insert_fixture_forecast(self, payload: Mapping[str, object]) -> dict[str, Any]:
         """Insert one complete immutable record for focused governed-boundary tests."""
         forecast_id = str(payload["id"])
+        principal = str(payload.get("principal", "fixture-principal"))
         instrument_id = str(payload["instrument_id"])
         horizon = int(payload["horizon"])
         fingerprint = str(payload["input_fingerprint"])
         created_at = str(payload["created_at"])
+        if not principal:
+            raise ValueError("fixture forecast principal is invalid")
         job_id = f"fixture-job-{forecast_id}"
         descriptor = {
             "artifact_id": f"fixture-{forecast_id}",
@@ -1311,9 +1878,18 @@ class ForecastRepository:
                    (id, principal, instrument_id, horizon, catalog_id, idempotency_key,
                     input_fingerprint, status, transition_version, retry_of_job_id, attempt,
                     lease_owner, lease_until, terminal_reason, created_at, updated_at)
-                   VALUES (?, 'fixture-principal', ?, ?, 'fixture-catalog', ?, ?, 'completed',
+                   VALUES (?, ?, ?, ?, 'fixture-catalog', ?, ?, 'completed',
                            1, NULL, 1, NULL, NULL, NULL, ?, ?)""",
-                (job_id, instrument_id, horizon, job_id, fingerprint, created_at, created_at),
+                (
+                    job_id,
+                    principal,
+                    instrument_id,
+                    horizon,
+                    job_id,
+                    fingerprint,
+                    created_at,
+                    created_at,
+                ),
             )
             fixture_job = connection.execute(
                 "SELECT * FROM forecast_jobs WHERE id = ?", (job_id,)
@@ -1395,13 +1971,10 @@ class ForecastRepository:
             "validation_warnings_json",
         ):
             record[field.removesuffix("_json")] = json.loads(record.pop(field))
-        output = record["output_artifact_descriptor"]
-        if isinstance(output, dict):
-            for field in (
-                "quantiles",
-                "quantiles_checksum_sha256",
-                "checkpoint_provenance",
-            ):
-                if field in output:
-                    record[field] = output[field]
+        raw_quantiles_descriptor = record.pop("quantiles_artifact_descriptor_json", None)
+        record["quantiles_artifact_descriptor"] = (
+            json.loads(raw_quantiles_descriptor)
+            if isinstance(raw_quantiles_descriptor, str)
+            else None
+        )
         return record

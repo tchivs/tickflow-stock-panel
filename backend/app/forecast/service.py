@@ -14,6 +14,7 @@ from app.forecast.input import ForecastInputFreezer, ForecastRequest, FrozenFore
 
 
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+_WARNING_CODE = re.compile(r"[a-z][a-z0-9_]{0,63}\Z")
 _SESSION = re.compile(r"CNA-(\d{4})(\d{2})(\d{2})\Z")
 _REQUIRED_CHECKPOINT_FIELDS = (
     "catalog_id",
@@ -230,7 +231,7 @@ class ForecastService:
 
 
 class ContextualForecastWorker:
-    """Give the child only parent-frozen identities and accept only its output descriptor."""
+    """Forward only bounded child artifact identities to the parent commit."""
 
     def __init__(
         self,
@@ -248,18 +249,21 @@ class ContextualForecastWorker:
         output = self.delegate(job=dict(job), context=dict(context), limits=dict(limits))
         if not isinstance(output, Mapping):
             raise RuntimeError("Forecast worker output is invalid")
-        descriptor = output.get("output_descriptor", output)
+        descriptor = output.get("artifacts", output.get("output_descriptor"))
         if not isinstance(descriptor, Mapping):
-            raise RuntimeError("Forecast worker descriptor is invalid")
+            raise RuntimeError("Forecast worker artifact bundle is unavailable")
         immutable = context.get("immutable_record")
         if not isinstance(immutable, Mapping):
             raise RuntimeError("Forecast immutable context is unavailable")
         record = dict(immutable)
         warnings = output.get("validation_warnings")
         if isinstance(warnings, list):
-            record["validation_warnings"] = [
-                value for value in warnings[:64] if isinstance(value, str)
-            ]
+            codes: list[str] = []
+            for warning in warnings[:64]:
+                code = warning.get("code") if isinstance(warning, Mapping) else warning
+                if isinstance(code, str) and _WARNING_CODE.fullmatch(code):
+                    codes.append(code)
+            record["validation_warnings"] = codes
         return {"output_descriptor": dict(descriptor), "immutable_record": record}
 
 
@@ -370,32 +374,39 @@ class GovernedForecastActuals:
 
 
 def verify_output_artifact(*, root: Path, manifest: Mapping[str, object], job: Mapping[str, object]) -> bool:
-    """Verify one regular, non-symlink output payload beneath its configured root."""
+    """Precheck both regular artifact payloads before strict transactional validation."""
     del job
     try:
-        descriptor = manifest["output_descriptor"]
-        if not isinstance(descriptor, Mapping):
-            return False
-        relative = descriptor["relative_path"]
-        expected_digest = descriptor["checksum_sha256"]
-        expected_size = descriptor["byte_size"]
-        if not isinstance(relative, str) or not isinstance(expected_digest, str):
+        bundle = manifest["output_descriptor"]
+        if not isinstance(bundle, Mapping):
             return False
         configured = Path(root).resolve(strict=True)
-        unresolved = configured / relative
-        if unresolved.is_symlink():
-            return False
-        candidate = unresolved.resolve(strict=True)
-        candidate.relative_to(configured)
-        if not candidate.is_file() or candidate.is_symlink():
-            return False
-        payload = candidate.read_bytes()
-        return (
-            isinstance(expected_size, int)
-            and expected_size == len(payload)
-            and _SHA256.fullmatch(expected_digest) is not None
-            and sha256(payload).hexdigest() == expected_digest
-        )
+        for field in ("paths_artifact", "quantiles_artifact"):
+            descriptor = bundle[field]
+            if not isinstance(descriptor, Mapping):
+                return False
+            relative = descriptor["relative_path"]
+            expected_digest = descriptor["checksum_sha256"]
+            expected_size = descriptor["byte_size"]
+            if not isinstance(relative, str) or not isinstance(expected_digest, str):
+                return False
+            unresolved = configured / relative
+            if unresolved.is_symlink():
+                return False
+            candidate = unresolved.resolve(strict=True)
+            candidate.relative_to(configured)
+            if not candidate.is_file() or candidate.is_symlink():
+                return False
+            payload = candidate.read_bytes()
+            if (
+                isinstance(expected_size, bool)
+                or not isinstance(expected_size, int)
+                or expected_size != len(payload)
+                or _SHA256.fullmatch(expected_digest) is None
+                or sha256(payload).hexdigest() != expected_digest
+            ):
+                return False
+        return True
     except (KeyError, OSError, RuntimeError, TypeError, ValueError):
         return False
 

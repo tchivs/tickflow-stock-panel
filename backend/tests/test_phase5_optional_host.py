@@ -616,15 +616,23 @@ def test_production_shadow_browser_contract_distills_and_evaluates_with_complete
         )
         assert imported.status_code == 201, imported.text
         batch_id = imported.json()["batch"]["id"]
-        trade_ids = [
-            item["id"]
-            for item in app.state.shadow_repository.list_trade_facts(batch_id=batch_id)
-        ]
+        rejected_browser_membership = client.post(
+            "/api/shadow/evidence-sets",
+            json={
+                "included_batch_ids": [batch_id],
+                "membership_mode": "all_authorized_batch_trades",
+                "included_trade_ids": ["browser-authored-trade-id"],
+                "exclusions": [],
+            },
+        )
+        assert rejected_browser_membership.status_code == 422
+        assert client.get("/api/shadow/evidence-sets").json()["page"]["total"] == 0
+
         frozen = client.post(
             "/api/shadow/evidence-sets",
             json={
                 "included_batch_ids": [batch_id],
-                "included_trade_ids": trade_ids,
+                "membership_mode": "all_authorized_batch_trades",
                 "exclusions": [],
             },
         )

@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
 
+import numpy as np
+import polars as pl
 import pytest
 
 
@@ -42,22 +44,34 @@ def _acquire(repository, job, *, owner: str = "worker-1"):
     )
 
 
-def _descriptor(tmp_path: Path, *, horizon: int = 20, feature_count: int = 6) -> dict[str, object]:
-    artifact = tmp_path / "forecast-outputs" / "forecast" / "artifact-1" / "output.parquet"
-    artifact.parent.mkdir(parents=True, exist_ok=True)
-    artifact.write_bytes(b"verified-forecast-output")
-    from hashlib import sha256
+def _path_tensor(*, horizon: int, feature_count: int) -> np.ndarray:
+    return np.fromfunction(
+        lambda sample, session, feature: 8.0
+        + (sample * 0.1)
+        + (session * 0.2)
+        + (feature * 0.01),
+        (32, horizon, feature_count),
+        dtype=float,
+    )
 
-    return {
-        "artifact_id": "artifact-1",
-        "relative_path": "forecast/artifact-1/output.parquet",
-        "schema_version": "forecast-output-v1",
-        "byte_size": artifact.stat().st_size,
-        "checksum_sha256": sha256(artifact.read_bytes()).hexdigest(),
-        "sample_count": 32,
-        "horizon": horizon,
-        "feature_count": feature_count,
-    }
+
+def _descriptor(tmp_path: Path, *, horizon: int = 20, feature_count: int = 6) -> dict[str, object]:
+    from app.forecast.artifacts import ForecastArtifactStore
+
+    paths = _path_tensor(horizon=horizon, feature_count=feature_count)
+    features = ("open", "high", "low", "close", "volume", "amount")[:feature_count]
+    sessions = tuple(
+        (date(2025, 4, 30) + timedelta(days=index + 1)).strftime("CNA-%Y%m%d")
+        for index in range(horizon)
+    )
+    bundle = ForecastArtifactStore.at(tmp_path / "forecast-outputs").persist(
+        paths=paths,
+        quantiles=np.quantile(paths, q=(0.10, 0.50, 0.90), axis=0),
+        future_session_ids=sessions,
+        feature_names=features,
+        scope={"forecast_id": "strict-commit", "horizon": horizon},
+    )
+    return bundle.capped_manifest()
 
 
 def _immutable(job) -> dict[str, object]:
@@ -296,6 +310,146 @@ def test_restart_returns_completed_record_without_rewriting_it(tmp_path):
     assert json.dumps(repository.forecast_for_job(running["id"]), sort_keys=True) == before
 
 
+def test_quantile_bundle_commit_reloads_verified_artifact_after_restart(tmp_path):
+    from app.forecast.repository import ForecastRepository
+
+    repository = _repository(tmp_path)
+    running = _acquire(
+        repository,
+        _create(repository, idempotency_key="quantile-bundle-commit"),
+    )
+    committed = _commit(repository, running, tmp_path)
+
+    restarted = ForecastRepository(
+        tmp_path / "operational.db", artifact_root=tmp_path / "forecast-outputs"
+    )
+    restarted.migrate()
+    reloaded = restarted.get_forecast(committed["id"])
+    assert reloaded is not None
+    assert reloaded["quantile_availability"] == "available"
+    assert reloaded["quantiles"]["5"] == pytest.approx(
+        {"p10": 9.14, "p50": 10.38, "p90": 11.62}
+    )
+    assert reloaded["quantiles_source_paths_sha256"] == reloaded["paths_checksum_sha256"]
+    assert reloaded["quantile_row_count"] == 3 * 20 * 6
+    with restarted.connection() as connection:
+        row = connection.execute(
+            """SELECT quantiles_artifact_descriptor_json, quantiles_checksum_sha256,
+                      quantiles_source_paths_sha256, quantiles_provenance_digest_sha256
+               FROM forecast_records WHERE id = ?""",
+            (committed["id"],),
+        ).fetchone()
+        columns = {item[1] for item in connection.execute("PRAGMA table_info(forecast_records)")}
+    assert row is not None and all(row)
+    assert not ({"p10", "p50", "p90", "quantiles_json", "quantile_values_json"} & columns)
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    (
+        "missing_artifact",
+        "altered_bytes",
+        "wrong_shape",
+        "wrong_session",
+        "wrong_label",
+        "nonfinite",
+        "crossed_relabel",
+        "source_divergence",
+    ),
+)
+def test_quantile_artifact_divergence_rolls_back_strict_commit(tmp_path, corruption):
+    from app.optional_artifacts import ManagedImmutableArtifactStore
+
+    case_root = tmp_path / corruption
+    repository = _repository(case_root)
+    running = _acquire(
+        repository,
+        _create(repository, idempotency_key=f"quantile-artifact-{corruption}"),
+    )
+    immutable = _immutable(running)
+    repository.bind_commit_identity(job_id=str(running["id"]), immutable_record=immutable)
+    bundle = _descriptor(case_root)
+    quantile = bundle["quantiles_artifact"]
+    assert isinstance(quantile, dict)
+    payload_path = case_root / "forecast-outputs" / str(quantile["relative_path"])
+
+    if corruption == "missing_artifact":
+        payload_path.unlink()
+    elif corruption == "altered_bytes":
+        payload_path.write_bytes(payload_path.read_bytes() + b"tampered")
+    else:
+        frame = pl.read_parquet(payload_path)
+        if corruption == "wrong_shape":
+            frame = frame.slice(0, frame.height - 1)
+        elif corruption == "wrong_session":
+            frame = frame.with_columns(
+                pl.when(pl.int_range(pl.len()) == 0)
+                .then(pl.lit("CNA-20990101"))
+                .otherwise(pl.col("session_id"))
+                .alias("session_id")
+            )
+        elif corruption == "wrong_label":
+            frame = frame.with_columns(
+                pl.when(pl.col("quantile") == "P10")
+                .then(pl.lit("P01"))
+                .otherwise(pl.col("quantile"))
+                .alias("quantile")
+            )
+        elif corruption == "nonfinite":
+            frame = frame.with_columns(
+                pl.when(pl.int_range(pl.len()) == 0)
+                .then(float("nan"))
+                .otherwise(pl.col("value"))
+                .alias("value")
+            )
+        elif corruption == "crossed_relabel":
+            frame = frame.with_columns(
+                pl.when(pl.col("quantile") == "P10")
+                .then(pl.lit("P90"))
+                .when(pl.col("quantile") == "P90")
+                .then(pl.lit("P10"))
+                .otherwise(pl.col("quantile"))
+                .alias("quantile")
+            )
+        source = (
+            "0" * 64
+            if corruption == "source_divergence"
+            else str(bundle["paths_artifact"]["checksum_sha256"])
+        )
+        replacement = ManagedImmutableArtifactStore(
+            case_root / "forecast-outputs"
+        ).create_parquet(
+            frame,
+            schema_version="forecast-quantiles-v1",
+            scope={
+                "forecast_id": "strict-commit",
+                "horizon": 20,
+                "kind": "path_axis_quantiles",
+                "source_paths_sha256": source,
+                "shape": [3, 20, 6],
+            },
+        )
+        bundle["quantiles_artifact"] = replacement.as_dict()
+
+    with pytest.raises(ValueError):
+        repository.commit_completed_forecast(
+            job_id=running["id"],
+            expected_status="running",
+            expected_version=running["transition_version"],
+            lease_owner="worker-1",
+            output_descriptor=bundle,
+            immutable_record=immutable,
+        )
+    assert repository.forecast_for_job(running["id"]) is None
+    assert repository.get_job(running["id"])["status"] == "running"
+    assert "completed" not in {
+        row["status"]
+        for row in repository.job_transitions_after(
+            running["id"], after_version=-1, limit=256
+        )
+    }
+
+
 @dataclass
 class CountingBoundary:
     calls: int = 0
@@ -312,15 +466,9 @@ class CommitArtifactBoundary:
 
     def __call__(self, *, manifest, job):
         self.calls += 1
-        descriptor = manifest["output_descriptor"]
-        target = self.root / "forecast-outputs" / descriptor["relative_path"]
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(b"verified-runner-output")
-        from hashlib import sha256
-
-        payload = target.read_bytes()
-        descriptor["byte_size"] = len(payload)
-        descriptor["checksum_sha256"] = sha256(payload).hexdigest()
+        manifest["output_descriptor"] = _descriptor(
+            self.root, horizon=int(job["horizon"])
+        )
         self.repository.bind_commit_identity(
             job_id=str(job["id"]), immutable_record=manifest["immutable_record"]
         )
@@ -536,6 +684,36 @@ def test_production_service_revalidation_reloads_catalog_and_frozen_input_before
     assert freezer.freezes >= 3
 
 
+def test_contextual_worker_forwards_only_bounded_quantile_artifact_bundle(tmp_path):
+    from app.forecast.service import ContextualForecastWorker
+
+    bundle = _descriptor(tmp_path)
+    immutable = {"identity": "server-bound"}
+
+    def delegate(**_kwargs):
+        return {
+            "artifacts": bundle,
+            "validation_warnings": [
+                {"code": "flat_quantile_band", "message": "untrusted detail"}
+            ],
+            "paths": [["must-not-cross"]],
+            "quantiles": [["must-not-cross"]],
+        }
+
+    worker = ContextualForecastWorker(
+        delegate=delegate,
+        contexts={"job-1": {"immutable_record": immutable}},
+    )
+    result = worker(job={"id": "job-1"}, limits={})
+    assert result == {
+        "output_descriptor": bundle,
+        "immutable_record": {
+            "identity": "server-bound",
+            "validation_warnings": ["flat_quantile_band"],
+        },
+    }
+
+
 
 def test_commit_rejects_missing_or_divergent_provenance_and_shape(tmp_path):
     cases = (
@@ -543,7 +721,7 @@ def test_commit_rejects_missing_or_divergent_provenance_and_shape(tmp_path):
         lambda record, descriptor: record.__setitem__("catalog_id", "kronos-small"),
         lambda record, descriptor: record.__setitem__("temperature", float("nan")),
         lambda record, descriptor: record.__setitem__("future_session_ids", record["future_session_ids"][:-1]),
-        lambda record, descriptor: descriptor.__setitem__("horizon", 5),
+        lambda record, descriptor: descriptor["path_shape"].__setitem__(1, 5),
         lambda record, descriptor: record["input_artifact_descriptor"].__setitem__("checksum_sha256", "f" * 64),
     )
     for index, mutate in enumerate(cases):
@@ -578,7 +756,9 @@ def test_output_path_containment_requires_regular_verified_artifact(tmp_path):
         immutable = _immutable(running)
         repository.bind_commit_identity(job_id=str(running["id"]), immutable_record=immutable)
         descriptor = _descriptor(case_root)
-        descriptor["relative_path"] = relative_path
+        paths_descriptor = descriptor["paths_artifact"]
+        assert isinstance(paths_descriptor, dict)
+        paths_descriptor["relative_path"] = relative_path
         if symlink:
             outside = case_root / "outside.parquet"
             outside.write_bytes(b"verified-forecast-output")
@@ -587,7 +767,7 @@ def test_output_path_containment_requires_regular_verified_artifact(tmp_path):
             link.unlink(missing_ok=True)
             link.symlink_to(outside)
         if checksum is not None:
-            descriptor["checksum_sha256"] = checksum
+            paths_descriptor["checksum_sha256"] = checksum
         with pytest.raises(ValueError):
             repository.commit_completed_forecast(
                 job_id=running["id"],

@@ -34,6 +34,7 @@ type FixtureOptions = {
   chartFailure?: boolean
   forecastGate?: 'verified' | 'missing' | 'pair_mismatch' | 'digest_mismatch' | 'calendar_short' | 'coverage_short'
   retentionFailure?: boolean
+  evidenceFailure?: boolean
 }
 
 type Telemetry = {
@@ -298,7 +299,36 @@ async function installPhase5Fixture(page: Page, options: FixtureOptions = {}): P
       return json(route, { preview_identity: `preview-server-${previewCounter}`, original_filename: 'executions.csv', format: 'CSV', timezone: 'Asia/Shanghai', mapping: [{ target: 'symbol', source: '证券代码', sample: '600519.SH', unit_timezone: '代码', status: 'mapped' }], rows: [{ symbol: STOCK.symbol, side: 'buy', executed_at: '2026-07-15T09:31:00+08:00', quantity: 100, price: 1450 }], diagnostics: [] })
     }
     if (path.endsWith('/imports/confirm')) { batchCounter += 1; return json(route, { batch: shadowBatch(`batch-server-${batchCounter}`, `不可变批次 ${batchCounter}`) }, 201) }
-    if (path.endsWith('/evidence-sets')) return request.method() === 'POST' ? json(route, { evidence_set: { id: 'evidence-server-1', included_batch_ids: ['batch-server-1'], excluded_trade_ids: [], trade_count: 4, duplicate_groups: 1, partial_fills: 2, fingerprint: LONG_ID, created_at: '2026-07-15T09:10:00Z' } }, 201) : json(route, { evidence_sets: [{ id: 'evidence-server-1', fingerprint: LONG_ID, batch_count: 1, trade_count: 4 }] })
+    if (path.endsWith('/evidence-sets')) {
+      if (request.method() === 'POST') {
+        const body = request.postDataJSON() as Record<string, unknown>
+        if (
+          body.membership_mode !== 'all_authorized_batch_trades'
+          || 'included_trade_ids' in body
+          || !Array.isArray(body.included_batch_ids)
+          || !Array.isArray(body.exclusions)
+        ) return json(route, { detail: 'strict server-resolved membership is required' }, 422)
+        if (options.evidenceFailure) return json(route, { detail: 'evidence ownership changed' }, 409)
+        return json(route, {
+          evidence_set: {
+            id: 'evidence-server-1',
+            fingerprint: LONG_ID,
+            included_batch_ids: body.included_batch_ids,
+            included_trade_ids: ['server-resolved-trade-1', 'server-resolved-trade-2', 'server-resolved-trade-3', 'server-resolved-trade-4'],
+            included_trade_count: 4,
+            exclusions: body.exclusions,
+            created_at: '2026-07-15T09:10:00Z',
+          },
+        }, 201)
+      }
+      return json(route, {
+        evidence_sets: [{
+          id: 'evidence-server-1', fingerprint: LONG_ID, included_batch_ids: ['batch-server-1'],
+          included_trade_ids: ['server-resolved-trade-1', 'server-resolved-trade-2', 'server-resolved-trade-3', 'server-resolved-trade-4'],
+          included_trade_count: 4, exclusions: [], created_at: '2026-07-15T09:10:00Z',
+        }],
+      })
+    }
     if (path.includes('/candidates') && path.endsWith('/retain')) {
       if (options.retentionFailure) {
         const { promise, resolve } = Promise.withResolvers<void>()
@@ -556,10 +586,39 @@ test.describe('Phase 05 optional enhancement browser contracts', () => {
     for (const text of ['原始批次 1', '同内容批次 2', '修正批次 3', 'same content', '修正自']) await expect(panel.getByText(text).first()).toBeVisible()
     await expect(panel.getByText(/1 行未纳入/).first()).toBeVisible()
     await expect(panel.getByText(/\/tmp\/|C:\\|account_secret|broker_token|raw_path/i)).toHaveCount(0)
-    const evidence = await panel.getByRole('button', { name: '创建新证据集' })
+    const evidence = panel.getByRole('button', { name: '创建新证据集' })
     await evidence.click()
-    await expect(panel.getByText(LONG_ID).first()).toBeVisible()
+    await expect(panel.getByText('证据集已冻结：evidence-server-1。后续变更需创建新证据集。')).toBeVisible()
+    await expect(panel.getByText('1 / 4')).toBeVisible()
+    const evidenceRequest = telemetry.mutationBodies.find(
+      entry => entry.method === 'POST' && entry.path.endsWith('/evidence-sets'),
+    )
+    expect(evidenceRequest?.body).toEqual({
+      included_batch_ids: ['batch-server-4'],
+      membership_mode: 'all_authorized_batch_trades',
+      exclusions: [],
+    })
+    expect(Object.keys(evidenceRequest?.body as Record<string, unknown>)).not.toEqual(expect.arrayContaining([
+      'included_trade_ids', 'principal', 'fingerprint', 'verdict', 'strategy', 'monitor', 'plan',
+      'position', 'broker', 'market_action',
+    ]))
+    await panel.getByRole('button', { name: '基于相同证据集创建新蒸馏运行' }).click()
+    await expect(panel.getByText(/已创建可解释候选/)).toBeVisible()
     expect(telemetry.mutationBodies.some(entry => entry.path.endsWith('/imports/confirm'))).toBeTruthy()
+    expectNoAuthorityRequests(telemetry)
+  })
+
+  test('Shadow evidence rejection preserves selected batches and immutable history', async ({ page }) => {
+    const telemetry = await installPhase5Fixture(page, { shadowState: 'populated', evidenceFailure: true })
+    await page.goto('/backtest')
+    const panel = page.getByRole('region', { name: SHADOW_HEADING })
+    await requireSurface(panel.getByRole('heading', { name: SHADOW_HEADING, exact: true }))
+    const selectedBatch = panel.getByLabel('纳入批次 修正批次 3')
+    await selectedBatch.check()
+    await panel.getByRole('button', { name: '创建新证据集' }).click()
+    await expect(panel.getByRole('alert')).toContainText('批次选择保持不变')
+    await expect(selectedBatch).toBeChecked()
+    await expect(panel.getByText(LONG_ID).first()).toBeVisible()
     expectNoAuthorityRequests(telemetry)
   })
 
