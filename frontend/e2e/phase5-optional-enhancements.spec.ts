@@ -924,7 +924,9 @@ test.describe('Phase 05 optional enhancement browser contracts', () => {
     await selectStock(page)
     await page.goto('/stock-analysis')
     const panel = await openAnalysisTab(page, THESIS_TAB)
-    for (const result of ['命中', '未命中', '证据不足', '检查错误']) await expect(panel.getByText(result, { exact: true })).toBeVisible()
+    for (const result of ['命中', '未命中', '证据不足', '检查错误']) {
+      await expect(panel.getByRole('rowheader', { name: result, exact: true }).first()).toBeVisible()
+    }
     await expectSemanticTable(panel, '投资论点证据检查历史')
     const insufficient = panel.getByRole('row', { name: /证据不足/ })
     await expect(insufficient).toContainText(/缺少已披露季度值/)
