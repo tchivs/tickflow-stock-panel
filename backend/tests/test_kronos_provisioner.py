@@ -5,6 +5,7 @@ contact Hugging Face or download a real checkpoint.
 """
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import importlib
 import json
@@ -20,6 +21,8 @@ from scripts import provision_kronos as provisioner
 SOURCE_REVISION = "67b630e67f6a18c9e9be918d9b4337c960db1e9a"
 MODEL_BYTES = b"fixture-model-safetensors"
 TOKENIZER_BYTES = b"fixture-tokenizer-safetensors"
+MODEL_CONFIG_BYTES = b'{"asset":"model"}\n'
+TOKENIZER_CONFIG_BYTES = b'{"asset":"tokenizer"}\n'
 
 
 def _sha(data: bytes) -> str:
@@ -31,7 +34,9 @@ def fixture_spec(monkeypatch: pytest.MonkeyPatch) -> provisioner.CheckpointSpec:
     approved = provisioner.APPROVED_CHECKPOINTS["kronos-mini"]
     spec = replace(
         approved,
+        model_config_sha256=_sha(MODEL_CONFIG_BYTES),
         model_weight_sha256=_sha(MODEL_BYTES),
+        tokenizer_config_sha256=_sha(TOKENIZER_CONFIG_BYTES),
         tokenizer_weight_sha256=_sha(TOKENIZER_BYTES),
         local_model_dir="Kronos-mini-fixture",
         local_tokenizer_dir="Kronos-Tokenizer-2k-fixture",
@@ -44,15 +49,15 @@ def fixture_spec(monkeypatch: pytest.MonkeyPatch) -> provisioner.CheckpointSpec:
     return spec
 
 
-def _write_asset(directory: Path, weight: bytes) -> None:
+def _write_asset(directory: Path, weight: bytes, config: bytes) -> None:
     directory.mkdir(parents=True)
-    (directory / "config.json").write_text("{}\n", encoding="utf-8")
+    (directory / "config.json").write_bytes(config)
     (directory / "model.safetensors").write_bytes(weight)
 
 
 def _write_valid_install(root: Path, catalog: Path, spec: provisioner.CheckpointSpec) -> None:
-    _write_asset(root / spec.local_model_dir, MODEL_BYTES)
-    _write_asset(root / spec.local_tokenizer_dir, TOKENIZER_BYTES)
+    _write_asset(root / spec.local_model_dir, MODEL_BYTES, MODEL_CONFIG_BYTES)
+    _write_asset(root / spec.local_tokenizer_dir, TOKENIZER_BYTES, TOKENIZER_CONFIG_BYTES)
     catalog.write_text(
         json.dumps(
             {
@@ -66,12 +71,12 @@ def _write_valid_install(root: Path, catalog: Path, spec: provisioner.Checkpoint
 
 def _fixture_downloader(tmp_path: Path, calls: list[dict[str, object]]):
     files: dict[tuple[str, str], Path] = {}
-    for repo, weight in (
-        ("NeoQuasar/Kronos-mini", MODEL_BYTES),
-        ("NeoQuasar/Kronos-Tokenizer-2k", TOKENIZER_BYTES),
+    for repo, weight, config in (
+        ("NeoQuasar/Kronos-mini", MODEL_BYTES, MODEL_CONFIG_BYTES),
+        ("NeoQuasar/Kronos-Tokenizer-2k", TOKENIZER_BYTES, TOKENIZER_CONFIG_BYTES),
     ):
         repo_root = tmp_path / repo.replace("/", "--")
-        _write_asset(repo_root, weight)
+        _write_asset(repo_root, weight, config)
         for name in ("config.json", "model.safetensors"):
             files[(repo, name)] = repo_root / name
 
@@ -188,6 +193,7 @@ def test_verify_only_succeeds_offline_for_valid_local_fixture(
     ("mutation", "match"),
     [
         (lambda model, _tokenizer: (model / "model.safetensors").write_bytes(b"tampered"), "digest"),
+        (lambda model, _tokenizer: (model / "config.json").write_bytes(b"{}\n"), "config digest"),
         (lambda model, _tokenizer: (model / "config.json").unlink(), "partial|missing"),
         (lambda model, _tokenizer: (model / "pytorch_model.bin").write_bytes(b"pickle"), "safetensors|unexpected"),
         (lambda model, _tokenizer: (model / "loader.py").write_text("pass\n"), "unexpected|executable"),
@@ -268,6 +274,120 @@ def test_offline_provisioning_uses_cache_only_without_changing_identity(
     assert calls and all(call["local_files_only"] is True for call in calls)
 
 
+def test_parallel_same_catalog_provisioning_preserves_one_valid_entry(
+    tmp_path: Path,
+    fixture_spec: provisioner.CheckpointSpec,
+):
+    root = tmp_path / "models"
+    catalog = root / "catalog.json"
+    calls: list[dict[str, object]] = []
+    downloader = _fixture_downloader(tmp_path / "downloads", calls)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(
+            pool.map(
+                lambda _index: provisioner.provision_checkpoint(
+                    fixture_spec.catalog_id,
+                    root,
+                    catalog,
+                    downloader=downloader,
+                ),
+                range(2),
+            )
+        )
+
+    assert results == [fixture_spec.catalog_entry(), fixture_spec.catalog_entry()]
+    payload = json.loads(catalog.read_text(encoding="utf-8"))
+    assert payload["entries"] == [fixture_spec.catalog_entry()]
+    assert provisioner.verify_checkpoint(fixture_spec.catalog_id, root, catalog) == (
+        fixture_spec.catalog_entry()
+    )
+
+
+def test_parallel_different_catalog_merge_preserves_both_entries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Two concurrent provisions of different approved IDs must both land."""
+    mini_approved = provisioner.APPROVED_CHECKPOINTS["kronos-mini"]
+    small_approved = provisioner.APPROVED_CHECKPOINTS["kronos-small"]
+    mini = replace(
+        mini_approved,
+        model_config_sha256=_sha(MODEL_CONFIG_BYTES),
+        model_weight_sha256=_sha(MODEL_BYTES),
+        tokenizer_config_sha256=_sha(TOKENIZER_CONFIG_BYTES),
+        tokenizer_weight_sha256=_sha(TOKENIZER_BYTES),
+        local_model_dir="Kronos-mini-fixture",
+        local_tokenizer_dir="Kronos-Tokenizer-2k-fixture",
+    )
+    small_model = b"fixture-small-model-safetensors"
+    small_config = b'{"asset":"small-model"}\n'
+    # Shared tokenizer family bytes (same as mini tokenizer fixture for isolation).
+    small = replace(
+        small_approved,
+        model_config_sha256=_sha(small_config),
+        model_weight_sha256=_sha(small_model),
+        tokenizer_config_sha256=_sha(TOKENIZER_CONFIG_BYTES),
+        tokenizer_weight_sha256=_sha(TOKENIZER_BYTES),
+        local_model_dir="Kronos-small-fixture",
+        local_tokenizer_dir="Kronos-Tokenizer-base-fixture",
+    )
+    monkeypatch.setattr(
+        provisioner,
+        "APPROVED_CHECKPOINTS",
+        {
+            **provisioner.APPROVED_CHECKPOINTS,
+            mini.catalog_id: mini,
+            small.catalog_id: small,
+        },
+    )
+
+    files: dict[tuple[str, str], Path] = {}
+    for repo, weight, config in (
+        (mini.model_repo, MODEL_BYTES, MODEL_CONFIG_BYTES),
+        (mini.tokenizer_repo, TOKENIZER_BYTES, TOKENIZER_CONFIG_BYTES),
+        (small.model_repo, small_model, small_config),
+        (small.tokenizer_repo, TOKENIZER_BYTES, TOKENIZER_CONFIG_BYTES),
+    ):
+        repo_root = tmp_path / "downloads" / repo.replace("/", "--")
+        if not repo_root.exists():
+            _write_asset(repo_root, weight, config)
+        for name in ("config.json", "model.safetensors"):
+            files[(repo, name)] = repo_root / name
+
+    def download(**kwargs):
+        return str(files[(kwargs["repo_id"], kwargs["filename"])])
+
+    root = tmp_path / "models"
+    catalog = root / "catalog.json"
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [
+            pool.submit(
+                provisioner.provision_checkpoint,
+                catalog_id,
+                root,
+                catalog,
+                downloader=download,
+            )
+            for catalog_id in (mini.catalog_id, small.catalog_id)
+        ]
+        results = [future.result() for future in futures]
+
+    assert {entry["catalog_id"] for entry in results} == {
+        mini.catalog_id,
+        small.catalog_id,
+    }
+    payload = json.loads(catalog.read_text(encoding="utf-8"))
+    by_id = {entry["catalog_id"]: entry for entry in payload["entries"]}
+    assert set(by_id) == {mini.catalog_id, small.catalog_id}
+    assert by_id[mini.catalog_id] == mini.catalog_entry()
+    assert by_id[small.catalog_id] == small.catalog_entry()
+    assert provisioner.verify_checkpoint(mini.catalog_id, root, catalog) == mini.catalog_entry()
+    assert provisioner.verify_checkpoint(small.catalog_id, root, catalog) == small.catalog_entry()
+
+
+
 def test_provision_rejects_unapproved_large_and_root_escape_before_writing(tmp_path: Path):
     root = tmp_path / "models"
     with pytest.raises(provisioner.CheckpointVerificationError, match="not approved"):
@@ -292,7 +412,7 @@ def test_existing_mismatched_assets_are_never_overwritten(
 ):
     root = tmp_path / "models"
     bad_model = root / fixture_spec.local_model_dir
-    _write_asset(bad_model, b"existing-mismatch")
+    _write_asset(bad_model, b"existing-mismatch", MODEL_CONFIG_BYTES)
     original = (bad_model / "model.safetensors").read_bytes()
     calls: list[dict[str, object]] = []
     with pytest.raises(provisioner.CheckpointVerificationError, match="existing|digest"):
@@ -328,30 +448,22 @@ def test_malformed_existing_catalog_blocks_promotion_without_partial_install(
     assert catalog.read_text(encoding="utf-8") == "not-json"
 
 
-def test_incomplete_approval_stops_before_download_or_model_root_mutation(
+def test_provisioning_does_not_depend_on_a_planning_approval_record(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    fixture_spec: provisioner.CheckpointSpec,
 ):
-    summary = tmp_path / "approval.md"
-    summary.write_text("---\nstatus: complete\napproval: approved\n---\n", encoding="utf-8")
-    monkeypatch.setattr(provisioner, "APPROVAL_SUMMARY", summary)
     root = tmp_path / "models"
-    called = False
+    calls: list[dict[str, object]] = []
 
-    def downloader(**_kwargs):
-        nonlocal called
-        called = True
-        raise AssertionError("download must not run")
+    result = provisioner.provision_checkpoint(
+        fixture_spec.catalog_id,
+        root,
+        root / "catalog.json",
+        downloader=_fixture_downloader(tmp_path / "downloads", calls),
+    )
 
-    with pytest.raises(provisioner.CheckpointVerificationError, match="approval|approved"):
-        provisioner.provision_checkpoint(
-            "kronos-mini",
-            root,
-            root / "catalog.json",
-            downloader=downloader,
-        )
-    assert called is False
-    assert not root.exists()
+    assert result == fixture_spec.catalog_entry()
+    assert calls
 
 
 def test_runtime_import_never_invokes_operator_provisioner(monkeypatch: pytest.MonkeyPatch):

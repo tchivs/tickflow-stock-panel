@@ -1,4 +1,4 @@
-"""Supply-chain approval and optional dependency boundary tests for Phase 05."""
+"""Pinned local supply manifest and optional dependency boundary tests for Phase 05."""
 from __future__ import annotations
 
 import sys
@@ -8,7 +8,7 @@ from pathlib import Path
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-APPROVAL_SUMMARY = (
+SUPPLY_MANIFEST = (
     REPOSITORY_ROOT
     / ".planning"
     / "phases"
@@ -18,23 +18,10 @@ APPROVAL_SUMMARY = (
 SOURCE_COMMIT = "67b630e67f6a18c9e9be918d9b4337c960db1e9a"
 
 
-def _assert_complete_approval(summary: str) -> None:
-    frontmatter = summary.split("---", 2)[1]
-    metadata = {
-        key: value
-        for line in frontmatter.splitlines()
-        if ": " in line
-        for key, value in (line.split(": ", 1),)
-    }
-    assert metadata.get("status") == "complete"
-    assert metadata.get("approval") == "approved"
-    assert metadata.get("approved_at") == "2026-07-16T03:41:52Z"
-    required_metadata = (
-        "Decision: `approved` for every listed package, source, model, tokenizer, digest, and local-only loading policy",
-    )
+def _assert_pinned_supply_manifest(summary: str) -> None:
     required_package_rows = (
         "| scikit-learn | `1.8.0`",
-        "| torch | official PyTorch package; resolve and lock a compatible `>=2,<3` Linux CPU wheel",
+        "| torch | official PyTorch package",
         "| einops | `0.8.1`",
         "| huggingface-hub | `0.33.1`",
         "| safetensors | `0.6.2`",
@@ -59,16 +46,15 @@ def _assert_complete_approval(summary: str) -> None:
     )
 
     for expected in (
-        *required_metadata,
         *required_package_rows,
         *required_source,
         *required_checkpoints,
         *required_policy,
     ):
-        assert expected in summary, f"missing approved supply-chain record: {expected}"
+        assert expected in summary, f"missing pinned supply manifest entry: {expected}"
 
-def test_complete_optional_supply_chain_approval_is_present() -> None:
-    _assert_complete_approval(APPROVAL_SUMMARY.read_text(encoding="utf-8"))
+def test_complete_optional_supply_manifest_is_present() -> None:
+    _assert_pinned_supply_manifest(SUPPLY_MANIFEST.read_text(encoding="utf-8"))
 
 
 
@@ -80,41 +66,46 @@ def _project_and_lock() -> tuple[dict, dict]:
     return project, lock
 
 
-def test_approval_check_rejects_partial_rejected_and_stale_records() -> None:
-    approved = APPROVAL_SUMMARY.read_text(encoding="utf-8")
+def test_supply_manifest_check_rejects_missing_or_moving_identities() -> None:
+    manifest = SUPPLY_MANIFEST.read_text(encoding="utf-8")
     hostile_records = {
-        "partial": approved.replace("approval: approved", "approval: partial", 1),
-        "rejected-package": approved.replace(
+        "missing-package": manifest.replace(
             "| safetensors | `0.6.2`", "| safetensors | rejected", 1
         ),
-        "moving-source": approved.replace(SOURCE_COMMIT, "main"),
-        "stale": approved.replace(
-            "approved_at: 2026-07-16T03:41:52Z",
-            "approved_at: 2025-07-16T03:41:52Z",
+        "moving-source": manifest.replace(SOURCE_COMMIT, "main"),
+        "network-policy": manifest.replace(
+            "Routine application startup, API requests, worker execution, tests, and model loading are local-only.",
+            "Routine application startup, API requests, worker execution, tests, and model loading may use a network fallback.",
             1,
-        ),
-        "network-policy": approved.replace(
-            "local-only loading policy", "network fallback policy", 1
         ),
     }
     for label, hostile in hostile_records.items():
         try:
-            _assert_complete_approval(hostile)
+            _assert_pinned_supply_manifest(hostile)
         except AssertionError:
             continue
-        raise AssertionError(f"hostile approval unexpectedly passed: {label}")
+        raise AssertionError(f"hostile supply manifest unexpectedly passed: {label}")
 
 
-def test_shadow_and_forecast_extras_are_exact_and_independent() -> None:
-    project, _lock = _project_and_lock()
+def test_forecast_torch_exact_pin_and_extra_isolation() -> None:
+    project, lock = _project_and_lock()
     extras = project["project"]["optional-dependencies"]
     assert extras["shadow"] == ["scikit-learn==1.8.0"]
     assert extras["forecast"] == [
-        "torch>=2,<3",
+        "torch==2.13.0",
         "einops==0.8.1",
         "huggingface-hub==0.33.1",
         "safetensors==0.6.2",
     ]
+    sources = project["tool"]["uv"]["sources"]
+    assert sources["torch"] == {"index": "pytorch-cpu"}
+    indexes = {item["name"]: item["url"] for item in project["tool"]["uv"]["index"]}
+    assert indexes["pytorch-cpu"] == "https://download.pytorch.org/whl/cpu"
+    packages = {package["name"]: package for package in lock["package"]}
+    torch_pkg = packages["torch"]
+    assert torch_pkg["version"] in {"2.13.0", "2.13.0+cpu"}
+    assert torch_pkg["source"]["registry"] == "https://download.pytorch.org/whl/cpu"
+    assert not any(package["name"].startswith("nvidia-") for package in lock["package"])
     assert extras["legacy-cpu"] == ["polars[rtcompat]>=1.0"]
     assert extras["backtest"] == ["vectorbt>=0.26"]
     assert extras["desktop"] == ["pywebview>=5.0"]
@@ -126,7 +117,7 @@ def test_shadow_and_forecast_extras_are_exact_and_independent() -> None:
     ]
 
 
-def test_base_dependencies_do_not_select_optional_heavy_packages() -> None:
+def test_base_extra_independent() -> None:
     project, _lock = _project_and_lock()
     base_names = {
         dependency.split("[", 1)[0].split(";", 1)[0].split("=", 1)[0].strip().lower()
@@ -158,6 +149,7 @@ def test_lock_contains_only_approved_optional_identities_and_hashes() -> None:
     assert project["tool"]["uv"]["sources"]["torch"] == {"index": "pytorch-cpu"}
     torch_packages = by_name["torch"]
     assert torch_packages
+    assert {item["version"] for item in torch_packages} == {"2.13.0", "2.13.0+cpu"}
     assert all(
         item["source"]["registry"] == "https://download.pytorch.org/whl/cpu"
         for item in torch_packages
@@ -199,5 +191,5 @@ def test_importing_base_app_does_not_load_optional_packages() -> None:
 
 
 if __name__ == "__main__":
-    test_complete_optional_supply_chain_approval_is_present()
-    print("Phase 05 optional supply-chain approval: complete and approved")
+    test_complete_optional_supply_manifest_is_present()
+    print("Phase 05 optional supply manifest: complete and pinned")

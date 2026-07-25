@@ -3113,7 +3113,7 @@ requires-dist = [
     { name = "scikit-learn", marker = "extra == 'shadow'", specifier = "==1.8.0" },
     { name = "sse-starlette", specifier = ">=2.0" },
     { name = "tickflow", extras = ["all"], specifier = ">=0.1.23" },
-    { name = "torch", marker = "extra == 'forecast'", specifier = ">=2,<3", index = "https://download.pytorch.org/whl/cpu" },
+    { name = "torch", marker = "extra == 'forecast'", specifier = "==2.13.0", index = "https://download.pytorch.org/whl/cpu" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
     { name = "vectorbt", marker = "extra == 'backtest'", specifier = ">=0.26" },
     { name = "winotify", marker = "sys_platform == 'win32'", specifier = ">=1.1" },

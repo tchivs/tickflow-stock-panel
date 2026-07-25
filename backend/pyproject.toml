@@ -66,7 +66,7 @@ shadow = [
 # Forecast inference is optional and uses the official CPU-only PyTorch index.
 # Enable with: uv sync --extra forecast
 forecast = [
-    "torch>=2,<3",
+    "torch==2.13.0",
     "einops==0.8.1",
     "huggingface-hub==0.33.1",
     "safetensors==0.6.2",
