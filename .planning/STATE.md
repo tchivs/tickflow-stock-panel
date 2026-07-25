@@ -5,15 +5,15 @@ milestone_name: milestone
 current_phase: 05
 current_phase_name: optional-enhancements
 status: executing
-stopped_at: "05-27 complete; executing 05-39 CR-06/CR-07"
-last_updated: "2026-07-25T15:13:34.000Z"
+stopped_at: "Completed 05-39-PLAN.md"
+last_updated: "2026-07-25T15:34:25.542Z"
 last_activity: 2026-07-24
-last_activity_desc: "Completed 05-27 runtime byte bind and bounded IPC"
+last_activity_desc: Removed personal-project human approval gate
 progress:
   total_phases: 5
   completed_phases: 4
   total_plans: 103
-  completed_plans: 101
+  completed_plans: 102
 ---
 
 # Project State
@@ -28,11 +28,11 @@ See: .planning/PROJECT.md (updated 2026-07-10)
 ## Current Position
 
 Phase: 05 (optional-enhancements) — EXECUTING
-Plan: 05-39 recovery dispatch and PGID finalizer
+Plan: 05-39 complete; remaining incomplete 05-29
 Status: executing
 Last activity: 2026-07-24 — Removed personal-project human approval gate
 
-Progress: [██████████] 98%
+Progress: [██████████] 99%
 
 ## Performance Metrics
 
@@ -99,6 +99,7 @@ Progress: [██████████] 98%
 | Phase 05 P40 | 1m | 1 tasks | 3 files |
 | Phase 05 P36 | 25min | 2 tasks | 6 files |
 | Phase 05 P27 | 45min | 2 tasks | 6 files |
+| Phase 05 P39 | 19min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -194,6 +195,9 @@ No implementation decision was explicitly locked by the architecture intake. Req
 - [Phase ?]: Executable Kronos identity is destination SHA-256 map + config/weight digests, not UPSTREAM revision alone.
 - [Phase ?]: Modules load via unique _athena_kronos_* package names from source_dir; preloaded shadows outside source are rejected.
 - [Phase ?]: IPC is length-capped JSON frames over a one-way Pipe; cleanup terminate/kill reaps process group.
+- [Phase ?]: Recovery reuses normal runner CAS/global-lease path via run_recovered_job
+- [Phase ?]: Handshake PGID is the only post-spawn group identity; leader exit never proves cleanup
+- [Phase ?]: Host recovery outcomes stay path/principal-free; recovery failure marks only Forecast unavailable
 
 ### Pending Todos
 
@@ -213,6 +217,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-07-25T15:13:34.000Z
-Stopped at: Executing 05-39 after 05-27
+Last session: 2026-07-25T15:34:25.521Z
+Stopped at: Completed 05-39-PLAN.md
 Resume file: None

@@ -246,7 +246,7 @@ Plans:
   2. User can view an investment thesis with its valuation anchor, invalidation conditions, and periodic evidence checks.
   3. Researcher can request and inspect a time-series forecast that includes quantiles, sampled paths, and the associated model checkpoint.
 
-**Plans**: 39/41 plans executed
+**Plans**: 40/41 plans executed
 
 Plans:
 
@@ -345,7 +345,7 @@ Plans:
 **Gap Closure Wave 11** *(blocked on relevant Wave 10 plans)*
 
 - [x] 05-36-PLAN.md — Make Thesis ledger rows self-identifying and independent of versions pagination.
-- [ ] 05-39-PLAN.md — Execute queued recovery once and reap the saved process group on every post-spawn return.
+- [x] 05-39-PLAN.md — Execute queued recovery once and reap the saved process group on every post-spawn return.
 
 **Gap Closure Wave 12 — unique final post-gap acceptance** *(blocked on every terminal gap plan)*
 
@@ -363,4 +363,4 @@ Plans:
 | 2. Factor And Strategy Research | 8/8 | Complete    | 2026-07-11 |
 | 3. AI Analysis | 12/12 | Complete    | 2026-07-12 |
 | 4. Advanced Capabilities | 27/27 | Complete    | 2026-07-15 |
-| 5. Optional Enhancements | 39/41 | In Progress|  |
+| 5. Optional Enhancements | 40/41 | In Progress|  |
