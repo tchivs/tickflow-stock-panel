@@ -683,6 +683,7 @@ def install_optional_module_host(app: Any, host: OptionalModuleHost) -> None:
         else:
             _clear_module_state(app, name)
 
+    app.state.forecast_recovery_outcomes = ()
     forecast = host.service(OptionalModuleName.FORECAST)
     if isinstance(forecast, _RuntimeBundle):
         if OPTIONAL_MODULE_TEST_FAILURES.get("recovery") == "forecast":
@@ -690,9 +691,33 @@ def install_optional_module_host(app: Any, host: OptionalModuleHost) -> None:
             _clear_module_state(app, OptionalModuleName.FORECAST)
         else:
             try:
-                forecast.repository.recover_after_restart(
+                recovery = forecast.repository.recover_after_restart(
                     revalidate=forecast.request_service.revalidate
                 )
+                outcomes: list[dict[str, str]] = []
+                for outcome in recovery:
+                    job_id = outcome.get("job_id")
+                    action = outcome.get("action")
+                    if not isinstance(job_id, str) or not isinstance(action, str):
+                        raise RuntimeError("Forecast recovery outcome is invalid")
+                    if action == "requeue":
+                        dispatched = forecast.request_service.run_recovered_job(job_id)
+                        outcomes.append(
+                            {
+                                "job_id": job_id,
+                                "action": str(dispatched.get("action")),
+                                "status": str(dispatched.get("status")),
+                            }
+                        )
+                    else:
+                        outcomes.append(
+                            {
+                                "job_id": job_id,
+                                "action": action,
+                                "status": str(outcome.get("status", "")),
+                            }
+                        )
+                app.state.forecast_recovery_outcomes = tuple(outcomes)
             except Exception:
                 host.mark_unavailable(OptionalModuleName.FORECAST, code="forecast_recovery_failed")
                 _clear_module_state(app, OptionalModuleName.FORECAST)
@@ -782,6 +807,7 @@ def _clear_module_state(app: Any, name: OptionalModuleName) -> None:
             "forecast_maturity_scanner",
             "forecast_path_reader",
             "forecast_progress_hub",
+            "forecast_recovery_outcomes",
         ),
     }[name]
     for attribute in names:

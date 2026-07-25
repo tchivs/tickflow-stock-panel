@@ -293,6 +293,29 @@ def test_restart_requeues_only_valid_never_started_queued_jobs(tmp_path):
     assert repository.get_job(queued["id"])["status"] == "queued"
 
 
+def test_concurrent_recovery_one_winner_dispatches_queued_job(tmp_path):
+    from app.forecast.service import ForecastService
+    from app.forecast.runner import FixedWorker
+
+    runner, repository, _boundaries = _runner(tmp_path, worker=FixedWorker(valid=True))
+    service = ForecastService(
+        repository=repository,
+        catalog=object(),
+        freezer=object(),
+        runner=runner,
+        as_of_session=lambda _instrument: "CNA-20250430",
+    )
+    job = _create(repository, idempotency_key="recovery-one-winner")
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(lambda _index: service.run_recovered_job(job["id"]), range(2)))
+
+    current = repository.get_job(job["id"])
+    assert current is not None and current["status"] == "completed"
+    assert len(repository.list_forecasts()) == 1
+    assert {outcome["action"] for outcome in outcomes} <= {"dispatched", "observed"}
+
+
 def test_restart_terminalizes_expired_running_job_without_native_resume(tmp_path):
     repository = _repository(tmp_path)
     running = _acquire(repository, _create(repository))
@@ -1292,3 +1315,143 @@ def test_runner_lease_loss_reaps_worker_tree(tmp_path):
     result = runner.run_job(job["id"])
     assert result["status"] == "interrupted"
     assert repository.forecast_for_job(job["id"]) is None
+
+
+def test_restart_dispatches_queued_job_via_recovered_service_path(tmp_path):
+    """CR-07 unit: requeue outcomes are consumed by ForecastService.run_recovered_job."""
+    from app.forecast.service import ForecastService
+
+    runner, repository, boundaries = _runner(tmp_path)
+    queued = _create(repository, idempotency_key="restart-dispatch-queued")
+    outcomes = repository.recover_after_restart(revalidate=lambda _job: True)
+    assert outcomes == [{"job_id": queued["id"], "action": "requeue"}]
+
+    class _Service:
+        def __init__(self):
+            self.repository = repository
+            self.runner = runner
+
+        run_recovered_job = ForecastService.run_recovered_job
+
+    service = _Service()
+    dispatched = ForecastService.run_recovered_job(service, queued["id"])
+    assert dispatched["action"] == "dispatched"
+    assert dispatched["status"] == "completed"
+    assert repository.get_job(queued["id"])["status"] == "completed"
+    assert repository.forecast_for_job(queued["id"]) is not None
+    # Spawned workers do not share the parent CountingBoundary call counter.
+    assert boundaries["worker"].calls <= 1
+
+
+def test_concurrent_recovery_one_winner(tmp_path):
+    """CR-07: two concurrent recovered dispatches produce one worker winner."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from app.forecast.service import ForecastService
+
+    runner, repository, boundaries = _runner(tmp_path)
+    queued = _create(repository, idempotency_key="concurrent-recovery-one-winner")
+
+    class _Service:
+        def __init__(self):
+            self.repository = repository
+            self.runner = runner
+
+        run_recovered_job = ForecastService.run_recovered_job
+
+    service = _Service()
+    barrier = threading.Barrier(2)
+
+    def recover(_index: int):
+        barrier.wait()
+        return ForecastService.run_recovered_job(service, queued["id"])
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(recover, (1, 2)))
+
+    statuses = {item["status"] for item in results}
+    actions = {item["action"] for item in results}
+    assert "completed" in statuses
+    assert actions <= {"dispatched", "observed"}
+    assert repository.get_job(queued["id"])["status"] == "completed"
+    assert len(repository.list_forecasts()) == 1
+    # At most one spawn-side execution; parent-side call counters are not shared.
+    assert boundaries["worker"].calls <= 1
+
+
+def test_restart_terminalizes_invalid_queued_and_expired_running(tmp_path):
+    repository = _repository(tmp_path)
+    invalid = _create(repository, idempotency_key="restart-terminalizes-invalid")
+    running = _acquire(repository, _create(repository, idempotency_key="restart-terminalizes-running"))
+    outcomes = repository.recover_after_restart(
+        now="2099-01-01T00:00:00Z",
+        revalidate=lambda job: job["id"] != invalid["id"],
+    )
+    by_id = {item["job_id"]: item for item in outcomes}
+    assert by_id[invalid["id"]] == {
+        "job_id": invalid["id"],
+        "action": "terminalized",
+        "status": "validation_failed",
+    }
+    assert by_id[running["id"]] == {
+        "job_id": running["id"],
+        "action": "terminalized",
+        "status": "interrupted",
+    }
+    assert repository.get_job(invalid["id"])["status"] == "validation_failed"
+    assert repository.get_job(running["id"])["status"] == "interrupted"
+
+
+def test_cr06_normal_leader_exit_reaps_process_group_before_commit(tmp_path):
+    """CR-06 primary: successful leader exit still reaps the handshake process group."""
+    import os
+    import time
+
+    from app.forecast.runner import SuccessWithDescendantWorker
+
+    marker = tmp_path / "descendant.pid"
+    runner, repository, _boundaries = _runner(
+        tmp_path,
+        worker=SuccessWithDescendantWorker(marker_path=str(marker)),
+    )
+    job = _create(repository, idempotency_key="cr06-normal-leader-exit")
+    result = runner.run_job(job["id"])
+    assert result["status"] == "completed"
+    assert result["process_group_reaped"] is True
+    assert repository.get_job(job["id"])["status"] == "completed"
+    # Descendant PID written by the worker must be gone before completion is observable.
+    deadline = time.monotonic() + 2.0
+    descendant_pid = None
+    if marker.exists():
+        descendant_pid = int(marker.read_text(encoding="utf-8").strip())
+        while time.monotonic() < deadline:
+            try:
+                os.kill(descendant_pid, 0)
+            except ProcessLookupError:
+                descendant_pid = None
+                break
+            time.sleep(0.05)
+    assert descendant_pid is None
+
+
+def test_normal_exit_descendants_reaped(tmp_path):
+    from app.forecast.runner import SuccessWithDescendantWorker
+
+    runner, repository, _boundaries = _runner(
+        tmp_path, worker=SuccessWithDescendantWorker()
+    )
+    result = runner.run_job(_create(repository, idempotency_key="normal-exit-descendants")["id"])
+    assert result["status"] == "completed"
+    assert result["process_group_reaped"] is True
+
+
+def test_every_return_reaps_group_on_malformed_success_manifest(tmp_path):
+    from app.forecast.runner import FixedWorker
+
+    runner, repository, _boundaries = _runner(
+        tmp_path, worker=FixedWorker(manifest={"checksum_sha256": "0" * 64})
+    )
+    result = runner.run_job(_create(repository, idempotency_key="every-return-reaps")["id"])
+    assert result["status"] == "artifact_failed"
+    # Finally reaps even when the terminal payload omits the flag.
+    assert repository.forecast_for_job(result["job_id"]) is None

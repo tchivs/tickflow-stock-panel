@@ -208,6 +208,21 @@ class ForecastService:
             and self.input_revalidate(job=job)
         )
 
+    def run_recovered_job(self, job_id: str) -> dict[str, object]:
+        """Dispatch one persisted queued recovery cursor through the normal runner."""
+        job = self.repository.get_job(job_id)
+        if not isinstance(job, Mapping):
+            raise ValueError("recovered Forecast job does not exist")
+        if job.get("status") != "queued":
+            return {"job_id": job_id, "action": "observed", "status": str(job.get("status"))}
+        if self.runner is None:
+            raise RuntimeError("Forecast recovery runner is unavailable")
+        self.runner.run_job(job_id)
+        current = self.repository.get_job(job_id)
+        if not isinstance(current, Mapping):
+            raise RuntimeError("recovered Forecast job disappeared")
+        return {"job_id": job_id, "action": "dispatched", "status": str(current.get("status"))}
+
     def _prepare_for_job(self, job: Mapping[str, object]) -> PreparedForecastRun:
         return self._prepare(
             principal=_text(job.get("principal"), "principal"),
@@ -662,4 +677,3 @@ def _open_read_only_input_handle(descriptor: object) -> Mapping[str, object]:
         "descriptor": dict(public) if isinstance(public, Mapping) else public,
         "writable": False,
     }
-

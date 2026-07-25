@@ -170,39 +170,31 @@ class HostForecastWorker:
         limits: dict[str, int],
     ) -> dict[str, object]:
         del limits
+        import numpy as np
+        from app.forecast.artifacts import ForecastArtifactStore
+
         future = [str(value) for value in context["future_session_ids"]]
         features = [str(value) for value in context["feature_schema"]]
-        rows = [
-            {
-                "sample_index": sample,
-                "session_id": session,
-                "feature": feature,
-                "value": float(sample + horizon_index + feature_index),
-            }
-            for sample in range(32)
-            for horizon_index, session in enumerate(future)
-            for feature_index, feature in enumerate(features)
-        ]
-        relative = f"{job['id']}/paths.parquet"
-        target = self.root / relative
-        target.parent.mkdir(parents=True, exist_ok=False)
-        pl.DataFrame(rows).write_parquet(target)
-        payload = target.read_bytes()
-        from hashlib import sha256
-
+        horizon = len(future)
+        feature_count = len(features)
+        paths = (
+            np.arange(32, dtype=float)[:, None, None]
+            + np.arange(horizon, dtype=float)[None, :, None]
+            + np.arange(feature_count, dtype=float)[None, None, :]
+        )
+        store = ForecastArtifactStore.at(self.root)
+        bundle = store.persist(
+            paths=paths,
+            quantiles=np.quantile(paths, q=(0.10, 0.50, 0.90), axis=0),
+            future_session_ids=tuple(future),
+            feature_names=tuple(features),
+            scope={"forecast_id": str(job["id"]), "horizon": horizon},
+        )
         return {
-            "output_descriptor": {
-                "artifact_id": f"forecast-{job['id']}",
-                "relative_path": relative,
-                "schema_version": "forecast-paths-v1",
-                "byte_size": len(payload),
-                "checksum_sha256": sha256(payload).hexdigest(),
-                "sample_count": 32,
-                "horizon": len(future),
-                "feature_count": len(features),
-            },
+            "output_descriptor": bundle.capped_manifest(),
             "validation_warnings": [],
         }
+
 
 
 def _forecast_components(data_dir: Path) -> dict[str, object]:
@@ -962,3 +954,150 @@ def test_hostile_origin_denied(
         denied = client.get(CAPABILITY_PATH, headers={"origin": trusted_origin})
         assert denied.status_code == 403
         assert denied.headers.get("access-control-allow-origin") != "*"
+
+
+def _seed_queued_forecast_job(
+    data_dir: Path,
+    *,
+    idempotency_key: str,
+    principal: str = "local_owner_v1",
+) -> dict[str, object]:
+    """Persist a never-started queued job with a revalidation-compatible input fingerprint."""
+    from app.forecast.calendar import GovernedTradingCalendar
+    from app.forecast.input import ForecastInputFreezer, ForecastRequest
+    from app.forecast.repository import ForecastRepository
+    from app.forecast.service import _checkpoint_identity
+    from tests.forecast.test_input import _calendar_frame
+
+    output_root = data_dir / "forecast-outputs"
+    input_root = data_dir / "forecast-inputs"
+    output_root.mkdir(parents=True, exist_ok=True)
+    input_root.mkdir(parents=True, exist_ok=True)
+    repository = ForecastRepository(data_dir / "operational.db", artifact_root=output_root)
+    repository.migrate()
+    catalog = ApprovedForecastCatalogFixture()
+    checkpoint = catalog.require_local("kronos-mini", device="cpu")
+    freezer = ForecastInputFreezer(
+        repository=HostForecastInputRepository(),
+        calendar=GovernedTradingCalendar(_calendar_frame()),
+        artifact_root=input_root,
+    )
+    request = ForecastRequest.model_validate(
+        {"instrument_id": "600000.SH", "horizon": 5, "catalog_id": "kronos-mini"}
+    )
+    frozen = freezer.freeze(
+        request=request,
+        principal=principal,
+        as_of_session_id="CNA-20250430",
+        max_context=int(checkpoint.max_context),
+    )
+    job = repository.create_or_get_active_job(
+        principal=principal,
+        instrument_id="600000.SH",
+        horizon=5,
+        catalog_id="kronos-mini",
+        idempotency_key=idempotency_key,
+        input_fingerprint=frozen.input_fingerprint,
+    )
+    identity = _checkpoint_identity(checkpoint)
+    immutable_record = {
+        "instrument_id": frozen.instrument_id,
+        "origin_session_id": frozen.as_of_session_id,
+        "calendar_id": "cn-a-v1",
+        "calendar_revision": frozen.calendar_revision,
+        "future_session_ids": list(frozen.future_session_ids),
+        "input_fingerprint": frozen.input_fingerprint,
+        "input_artifact_descriptor": frozen.descriptor.public(),
+        "horizon": frozen.horizon,
+        "lookback": frozen.lookback,
+        "seed": 0,
+        "temperature": 1.0,
+        "top_k": 1,
+        "top_p": 1.0,
+        "sample_count": 32,
+        "catalog_id": frozen.catalog_id,
+        "source_revision": identity["source_revision"],
+        "source_digest_sha256": identity["source_digest_sha256"],
+        "model_revision": identity["model_revision"],
+        "model_digest_sha256": identity["model_digest_sha256"],
+        "tokenizer_revision": identity["tokenizer_revision"],
+        "tokenizer_digest_sha256": identity["tokenizer_digest_sha256"],
+        "feature_schema": list(frozen.feature_schema),
+        "validation_warnings": [],
+    }
+    repository.bind_commit_identity(job_id=str(job["id"]), immutable_record=immutable_record)
+    assert job["status"] == "queued"
+    return job
+
+
+def test_cr07_real_host_queued_restart_executes_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CR-07 primary: durable queued job left before run_job executes once on host restart."""
+    spies = LiveActionSpies()
+    data_dir = tmp_path / "governed-data"
+    data_dir.mkdir()
+    seed = _seed_queued_forecast_job(
+        data_dir, idempotency_key="cr07-queued-restart-once"
+    )
+
+    with _real_host(tmp_path, monkeypatch, frozenset({"forecast"}), spies=spies) as (app, client):
+        _authenticate(client)
+        outcomes = list(getattr(app.state, "forecast_recovery_outcomes", ()))
+        assert outcomes, "recovery outcomes must be published for operators/tests"
+        matched = [item for item in outcomes if item.get("job_id") == seed["id"]]
+        assert len(matched) == 1
+        assert matched[0]["action"] in {"dispatched", "observed"}
+        assert matched[0]["status"] == "completed"
+        job = app.state.forecast_repository.get_job(seed["id"])
+        assert job is not None
+        assert job["status"] == "completed"
+        forecasts = app.state.forecast_repository.list_forecasts()
+        assert len(forecasts) == 1
+        assert forecasts[0]["job_id"] == seed["id"]
+        capabilities = client.get(CAPABILITY_PATH)
+        assert capabilities.status_code == 200
+        _assert_typed_status(capabilities.json(), "forecast", True)
+        spies.assert_zero_calls()
+
+
+def test_forecast_queued_restart_executes_or_terminalizes_safely(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data_dir = tmp_path / "governed-data"
+    data_dir.mkdir()
+    queued = _seed_queued_forecast_job(
+        data_dir, idempotency_key="forecast-queued-restart-executes"
+    )
+    with _real_host(tmp_path, monkeypatch, frozenset({"forecast"})) as (app, client):
+        _authenticate(client)
+        job = app.state.forecast_repository.get_job(queued["id"])
+        assert job is not None
+        assert job["status"] not in {"queued", "running"}
+        outcomes = app.state.forecast_recovery_outcomes
+        assert any(item["job_id"] == queued["id"] for item in outcomes)
+        _assert_completed_v1_loop(app, client)
+
+
+def test_forecast_recovery_failure_is_local(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spies = LiveActionSpies()
+    with _real_host(
+        tmp_path,
+        monkeypatch,
+        frozenset(MODULE_NAMES),
+        fail_recovery="forecast",
+        spies=spies,
+    ) as (app, client):
+        _authenticate(client)
+        payload = client.get(CAPABILITY_PATH).json()
+        _assert_typed_status(payload, "forecast", False)
+        _assert_typed_status(payload, "shadow", True)
+        _assert_typed_status(payload, "thesis", True)
+        assert app.state.forecast_request_service is None
+        assert client.get(BUSINESS_PATHS["forecast"]).status_code == 503
+        assert client.get(BUSINESS_PATHS["shadow"]).status_code == 200
+        spies.assert_zero_calls()
+        _assert_completed_v1_loop(app, client)
+
