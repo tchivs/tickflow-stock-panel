@@ -246,7 +246,7 @@ Plans:
   2. User can view an investment thesis with its valuation anchor, invalidation conditions, and periodic evidence checks.
   3. Researcher can request and inspect a time-series forecast that includes quantiles, sampled paths, and the associated model checkpoint.
 
-**Plans**: 37/41 plans executed
+**Plans**: 38/41 plans executed
 
 Plans:
 
@@ -305,7 +305,7 @@ Plans:
 
 - [x] 05-19-PLAN.md — Make Shadow candidate, paired evaluation, and retention replay conflict-safe and restart-idempotent.
 - [x] 05-21-PLAN.md — Correct Thesis resolver/timezone/actionable history and repository-owned public pagination.
-- [ ] 05-26-PLAN.md — Consume only the complete independently approved 05-40 config/Torch identities and serialize concurrency-safe provisioning. *(owner hold 2026-07-22: personal project; no fabricated identities)*
+- [x] 05-26-PLAN.md — Complete pinned config/Torch identity verification and concurrency-safe provisioning.
 
 **Gap Closure Wave 4** *(blocked on relevant Wave 3 plans)*
 
@@ -320,7 +320,7 @@ Plans:
 **Gap Closure Wave 6** *(blocked on relevant Wave 5 plans)*
 
 - [x] 05-25-PLAN.md — Make migrations atomic and secure the local principal/Origin/readiness boundary.
-- [ ] 05-27-PLAN.md — Bind Kronos runtime imports/bytes and harden pre-IPC bounds plus process cleanup. *(blocked on 05-26 / owner supply hold)*
+- [ ] 05-27-PLAN.md — Bind Kronos runtime imports/bytes and harden pre-IPC bounds plus process cleanup.
 
 **Gap Closure Wave 7** *(blocked on Wave 6 migration ownership)*
 
@@ -345,11 +345,11 @@ Plans:
 **Gap Closure Wave 11** *(blocked on relevant Wave 10 plans)*
 
 - [x] 05-36-PLAN.md — Make Thesis ledger rows self-identifying and independent of versions pagination.
-- [ ] 05-39-PLAN.md — Execute queued recovery once and reap the saved process group on every post-spawn return. *(blocked on 05-27 / owner supply hold)*
+- [ ] 05-39-PLAN.md — Execute queued recovery once and reap the saved process group on every post-spawn return. *(blocked on 05-27 implementation)*
 
-**Gap Closure Wave 12 — unique final post-gap acceptance** *(blocked on every terminal gap plan and complete approved 05-40 supply identity)*
+**Gap Closure Wave 12 — unique final post-gap acceptance** *(blocked on every terminal gap plan)*
 
-- [ ] 05-29-PLAN.md — Parse backend and both browser machine reports with fail-on-skip one-to-one CR/WR coverage and zero action/external requests. *(blocked on terminal gaps + approved supply / owner hold)*
+- [ ] 05-29-PLAN.md — Parse backend and both browser machine reports with fail-on-skip one-to-one CR/WR coverage and zero action/external requests. *(blocked on terminal gaps)*
 
 **UI hint**: yes
 
@@ -363,4 +363,4 @@ Plans:
 | 2. Factor And Strategy Research | 8/8 | Complete    | 2026-07-11 |
 | 3. AI Analysis | 12/12 | Complete    | 2026-07-12 |
 | 4. Advanced Capabilities | 27/27 | Complete    | 2026-07-15 |
-| 5. Optional Enhancements | 37/41 | In Progress|  |
+| 5. Optional Enhancements | 38/41 | In Progress|  |

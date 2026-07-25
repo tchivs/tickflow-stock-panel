@@ -4,16 +4,16 @@ milestone: v1.0
 milestone_name: milestone
 current_phase: 05
 current_phase_name: optional-enhancements
-status: blocked
-stopped_at: "Owner-accepted supply hold; independent code gaps closed; 05-26/27/39/29 intentionally unexecuted"
-last_updated: "2026-07-23T00:50:37.000Z"
-last_activity: 2026-07-22
-last_activity_desc: "Recorded personal-project owner-accepted Kronos supply hold; no identity authorship"
+status: executing
+stopped_at: "05-26 complete; executing 05-27 runtime bind"
+last_updated: "2026-07-25T14:52:47.000Z"
+last_activity: 2026-07-24
+last_activity_desc: "Completed 05-26 config digests and lock-safe provisioning"
 progress:
   total_phases: 5
   completed_phases: 4
   total_plans: 103
-  completed_plans: 99
+  completed_plans: 100
 ---
 
 # Project State
@@ -28,9 +28,9 @@ See: .planning/PROJECT.md (updated 2026-07-10)
 ## Current Position
 
 Phase: 05 (optional-enhancements) — EXECUTING
-Plan: owner hold on 05-26 supply identity (personal project)
-Status: blocked
-Last activity: 2026-07-22 — Owner-accepted supply hold after independent gap closure
+Plan: 05-27 runtime bind / IPC / cleanup
+Status: executing
+Last activity: 2026-07-24 — Removed personal-project human approval gate
 
 Progress: [█████████░] 90%
 
@@ -187,9 +187,8 @@ No implementation decision was explicitly locked by the architecture intake. Req
 - [Phase ?]: Lazy optional imports are checked against the process baseline so full-suite order cannot invalidate the real lifespan no-new-heavy-runtime guarantee.
 - [Phase ?]: Forecast freshness is projected from the existing governed Kline repository; no second calendar, store, or browser-authored as-of authority is introduced.
 - [Phase ?]: Real Kronos acceptance stays opt-in and local-only: absent approved assets report unavailable, while provisioned assets must pass exact provenance, network denial, and resource observation.
-- [Phase ?]: 05-40：完整且独立人工撰写的六行供应身份记录不可用，因此 approval: rejected、gate_status: blocked。
-- [Phase ?]: 05-40：执行器不得发现、获取、推断、选择、修复、替代、哈希或批准任何供应身份值；05-28 保持不可变拒绝历史。
-- [Phase ?]: 05-40：05-26 继续 fail-closed，FORE-01 不因本决策记录完成而标记完成。
+- [Phase ?]: Personal-project exception: 05-26 no longer requires a human supply approval record. Existing rejected 05-28/05-40 summaries remain historical records only.
+- [Phase ?]: Forecast supply remains fail-closed on missing or mismatched immutable revision and SHA-256 values, but those values are no longer gated by reviewer identity or approval paperwork.
 - [Phase ?]: Thesis check/history pages self-identify with instrument/version display identity (WR-03)
 
 ### Pending Todos
@@ -199,19 +198,17 @@ None yet.
 ### Blockers/Concerns
 
 - Phase 1 planning must map the existing tickflow, PanWatch, and Hermes extension points before choosing package and synchronization boundaries.
-- 05-26 仍被 05-40 rejected/blocked 供应身份 gate 阻断；所有者选择个人项目路径：暂不填写六行身份，保持 fail-closed。
-- 05-27/05-39 依赖 05-26；05-29 依赖全部 terminal gap 与 approved supply — 均为有意未执行，非执行器故障。
-- 若将来要真实 Kronos 权重：所有者本人提供六行表并追加 approved 记录后，再执行 05-26 链路。
+- 05-26, 05-27, 05-39, and 05-29 remain to be implemented and verified; their former 05-40 approval dependency was removed for this personal project.
 
 ## Deferred Items
 
 | Category | Item | Status | Deferred At |
 |----------|------|--------|-------------|
 | Optional enhancement | Shadow Account, thesis tracking, and Kronos forecasting | Phase 5 / v2 | 2026-07-10 |
-| Supply identity | Six-row Kronos config + PyTorch CPU human approval (05-26 chain) | Owner hold / optional later | 2026-07-22 |
+| Supply identity | Human approval paperwork | Removed for personal project | 2026-07-24 |
 
 ## Session Continuity
 
-Last session: 2026-07-23T00:50:37.000Z
-Stopped at: Owner-accepted supply hold; 05-26→05-27→05-39→05-29 remain intentionally blocked without fabricated identities
+Last session: 2026-07-25T14:52:47.000Z
+Stopped at: Executing 05-27 after 05-26
 Resume file: None
