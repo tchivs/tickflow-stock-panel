@@ -104,6 +104,39 @@ class BlockingWorker:
         return {}
 
 
+
+class SuccessWithDescendantWorker:
+    """Return a valid success manifest while leaving a long-lived process-group child."""
+
+    def __init__(self, marker_path: str | None = None) -> None:
+        self._marker_path = marker_path
+
+    def __call__(self, *, job: Mapping[str, object], limits: Mapping[str, int]) -> object:
+        del limits
+        script = (
+            "import os, time, pathlib\n"
+            "marker = %r\n"
+            "if marker:\n"
+            "    pathlib.Path(marker).write_text(str(os.getpid()), encoding='utf-8')\n"
+            "time.sleep(300)\n"
+        ) % (self._marker_path,)
+        child = subprocess.Popen(
+            [sys.executable, "-c", script],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            close_fds=True,
+        )
+        if self._marker_path:
+            try:
+                from pathlib import Path as _Path
+
+                _Path(self._marker_path).write_text(str(child.pid), encoding="utf-8")
+            except Exception:
+                pass
+        return _default_manifest(job)
+
+
 class _CappedTextSink:
     """Streaming diagnostic sink that refuses bytes beyond the output budget."""
 
@@ -201,7 +234,7 @@ def _child_entry(
         os.setsid()
         _configure_child_runtime(limits["thread_count"])
         _install_child_limits(limits)
-        _send_frame(output, {"kind": "ready"}, limits["output_bytes"])
+        _send_frame(output, {"kind": "ready", "pgid": os.getpgrp()}, limits["output_bytes"])
         captured = _CappedTextSink(limits["output_bytes"])
         with redirect_stdout(captured), redirect_stderr(captured):
             result = worker(job=job, limits=limits)
@@ -359,6 +392,7 @@ class ForecastRunner:
         process: multiprocessing.Process | None = None
         input_pipe: Any | None = None
         output_pipe: Any | None = None
+        process_group_id: int | None = None
         running: dict[str, Any] | None = None
         reaped = False
         try:
@@ -413,10 +447,18 @@ class ForecastRunner:
                 remaining = startup_deadline - time.monotonic()
                 if input_pipe.poll(min(remaining, 0.1)):
                     startup_message = _receive_frame(input_pipe, self.limits.output_bytes)
-                    if startup_message is not None and startup_message.get("kind") == "ready":
+                    reported_pgid = None if startup_message is None else startup_message.get("pgid")
+                    if (
+                        startup_message is not None
+                        and startup_message.get("kind") == "ready"
+                        and isinstance(reported_pgid, int)
+                        and reported_pgid > 0
+                        and reported_pgid == process.pid
+                    ):
+                        process_group_id = reported_pgid
                         ready = True
                         break
-                    reaped = self._reap(process)
+                    reaped = self._reap(process, process_group_id)
                     terminal = self._terminalize_current(
                         running,
                         owner=owner,
@@ -430,7 +472,7 @@ class ForecastRunner:
                         process_group_reaped=reaped,
                     )
                 if not process.is_alive():
-                    reaped = self._reap(process)
+                    reaped = self._reap(process, process_group_id)
                     terminal = self._terminalize_current(
                         running,
                         owner=owner,
@@ -444,7 +486,7 @@ class ForecastRunner:
                         process_group_reaped=reaped,
                     )
             if not ready:
-                reaped = self._reap(process)
+                reaped = self._reap(process, process_group_id)
                 terminal = self._terminalize_current(
                     running,
                     owner=owner,
@@ -464,7 +506,7 @@ class ForecastRunner:
             while message is None:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    reaped = self._reap(process)
+                    reaped = self._reap(process, process_group_id)
                     terminal = self._terminalize_current(
                         running,
                         owner=owner,
@@ -480,7 +522,7 @@ class ForecastRunner:
                 if input_pipe.poll(min(remaining, 0.1)):
                     message = _receive_frame(input_pipe, self.limits.output_bytes)
                     if message is None:
-                        reaped = self._reap(process)
+                        reaped = self._reap(process, process_group_id)
                         terminal = self._terminalize_current(
                             running,
                             owner=owner,
@@ -495,7 +537,7 @@ class ForecastRunner:
                         )
                 else:
                     if not process.is_alive():
-                        reaped = self._reap(process)
+                        reaped = self._reap(process, process_group_id)
                         terminal = self._terminalize_current(
                             running,
                             owner=owner,
@@ -519,7 +561,7 @@ class ForecastRunner:
                         if not self.repository.heartbeat_global_lease(owner=owner, ttl_seconds=lease_ttl):
                             raise ValueError("global lease lost")
                     except ValueError:
-                        reaped = self._reap(process)
+                        reaped = self._reap(process, process_group_id)
                         terminal = self._terminalize_current(
                             running,
                             owner=owner,
@@ -535,7 +577,20 @@ class ForecastRunner:
                     next_heartbeat = time.monotonic() + 0.5
 
             process.join(0.5)
-            reaped = self._reap(process)
+            reaped = self._reap(process, process_group_id)
+            if not reaped:
+                terminal = self._terminalize_current(
+                    running,
+                    owner=owner,
+                    status="resource_limited",
+                    reason="process_group_reap_failed",
+                )
+                return self._result(
+                    terminal,
+                    "resource_terminated",
+                    reason="process_group_reap_failed",
+                    process_group_reaped=False,
+                )
 
             if not isinstance(message, Mapping) or message.get("kind") != "success":
                 terminal = self._terminalize_current(
@@ -623,10 +678,18 @@ class ForecastRunner:
                 )
                 return self._result(terminal, "artifact_failed", reason="artifact_commit_failed")
             completed = self.repository.get_job(job_id) or running
-            return self._result(completed, "completed", manifest=manifest_payload, record=record)
+            return self._result(
+                completed,
+                "completed",
+                manifest=manifest_payload,
+                record=record,
+                process_group_reaped=reaped,
+            )
         finally:
-            if process is not None and process.is_alive():
-                self._reap(process)
+            if process is not None:
+                # Always finalize the saved handshake group; leader exit is not proof of cleanup.
+                if not reaped:
+                    reaped = self._reap(process, process_group_id)
             if input_pipe is not None:
                 with suppress(Exception):
                     input_pipe.close()
@@ -698,33 +761,45 @@ class ForecastRunner:
         return result
 
     @staticmethod
-    def _reap(process: multiprocessing.Process) -> bool:
-        if process.pid is None:
+    def _reap(process: multiprocessing.Process, process_group_id: int | None = None) -> bool:
+        """Terminate then confirm the handshake PGID is gone regardless of leader liveness."""
+        if process.pid is None and process_group_id is None:
             return True
-        process_group_exists = False
-        with suppress(ProcessLookupError, PermissionError):
-            os.killpg(process.pid, 0)
-            process_group_exists = True
-        with suppress(ProcessLookupError, PermissionError):
-            os.killpg(process.pid, signal.SIGTERM)
-        with suppress(ProcessLookupError, PermissionError):
-            process.terminate()
-        process.join(0.5)
-        if process.is_alive() or process_group_exists:
-            with suppress(ProcessLookupError, PermissionError):
-                os.killpg(process.pid, signal.SIGKILL)
-            with suppress(ProcessLookupError, PermissionError):
-                process.kill()
-            process.join(1.0)
-        deadline = time.monotonic() + 1.0
+        pgid = process_group_id if process_group_id is not None else process.pid
+        if pgid is None:
+            return True
+        with suppress(ProcessLookupError, PermissionError, OSError):
+            os.killpg(pgid, signal.SIGTERM)
+        with suppress(ProcessLookupError, PermissionError, OSError):
+            if process.pid is not None:
+                process.terminate()
+        if process.pid is not None:
+            process.join(0.5)
+        group_alive = False
+        with suppress(ProcessLookupError, PermissionError, OSError):
+            os.killpg(pgid, 0)
+            group_alive = True
+        if (process.pid is not None and process.is_alive()) or group_alive:
+            with suppress(ProcessLookupError, PermissionError, OSError):
+                os.killpg(pgid, signal.SIGKILL)
+            with suppress(ProcessLookupError, PermissionError, OSError):
+                if process.pid is not None:
+                    process.kill()
+            if process.pid is not None:
+                process.join(1.0)
+        deadline = time.monotonic() + 1.5
         while time.monotonic() < deadline:
-            alive = process.is_alive()
+            alive = process.pid is not None and process.is_alive()
             group_alive = False
-            with suppress(ProcessLookupError, PermissionError):
-                os.killpg(process.pid, 0)
+            with suppress(ProcessLookupError, PermissionError, OSError):
+                os.killpg(pgid, 0)
                 group_alive = True
             if not alive and not group_alive:
                 return True
             time.sleep(0.05)
-        return not process.is_alive()
-
+        alive = process.pid is not None and process.is_alive()
+        group_alive = False
+        with suppress(ProcessLookupError, PermissionError, OSError):
+            os.killpg(pgid, 0)
+            group_alive = True
+        return not alive and not group_alive
