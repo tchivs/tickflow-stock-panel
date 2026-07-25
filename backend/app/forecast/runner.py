@@ -1,7 +1,6 @@
 """Spawn-only, resource-bounded orchestration for immutable Forecast inference."""
 from __future__ import annotations
 
-import io
 import json
 import multiprocessing
 import os
@@ -13,7 +12,6 @@ from contextlib import redirect_stderr, redirect_stdout, suppress
 from dataclasses import asdict, dataclass
 from datetime import date, timedelta
 from hashlib import sha256
-from queue import Empty
 from typing import Any, Callable, Mapping
 from uuid import uuid4
 
@@ -106,6 +104,57 @@ class BlockingWorker:
         return {}
 
 
+class _CappedTextSink:
+    """Streaming diagnostic sink that refuses bytes beyond the output budget."""
+
+    def __init__(self, limit: int) -> None:
+        self._limit = limit
+        self._size = 0
+        self.exceeded = False
+
+    def write(self, value: str) -> int:
+        encoded = value.encode("utf-8", errors="replace")
+        remaining = self._limit - self._size
+        if remaining <= 0:
+            self.exceeded = True
+            return len(value)
+        if len(encoded) > remaining:
+            self._size = self._limit
+            self.exceeded = True
+        else:
+            self._size += len(encoded)
+        return len(value)
+
+    def flush(self) -> None:
+        return None
+
+
+
+
+def _send_frame(output: Any, payload: Mapping[str, object], limit: int) -> None:
+    try:
+        encoded = json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    except (TypeError, ValueError):
+        encoded = b'{"code":"worker_resource_or_checkpoint_failure","kind":"failure"}'
+    if len(encoded) > limit:
+        encoded = b'{"code":"worker_output_exceeded","kind":"failure"}'
+    output.send_bytes(encoded)
+
+
+def _receive_frame(input_pipe: Any, limit: int) -> Mapping[str, object] | None:
+    try:
+        encoded = input_pipe.recv_bytes(maxlength=limit)
+        payload = json.loads(encoded.decode("utf-8"))
+    except (EOFError, OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
 def _configure_child_runtime(thread_count: int) -> None:
     value = str(thread_count)
     for name in (
@@ -145,27 +194,39 @@ def _child_entry(
     worker: Callable[..., object],
     job: dict[str, object],
     limits: dict[str, int],
-    output: multiprocessing.queues.Queue[Any],
+    output: Any,
 ) -> None:
     """Run in a new process group and return one capped manifest-shaped message."""
     try:
         os.setsid()
         _configure_child_runtime(limits["thread_count"])
         _install_child_limits(limits)
-        captured = io.StringIO()
+        _send_frame(output, {"kind": "ready"}, limits["output_bytes"])
+        captured = _CappedTextSink(limits["output_bytes"])
         with redirect_stdout(captured), redirect_stderr(captured):
             result = worker(job=job, limits=limits)
-        if len(captured.getvalue().encode("utf-8")) > limits["output_bytes"]:
-            output.put({"kind": "failure", "code": "worker_output_exceeded"})
+        if captured.exceeded:
+            _send_frame(
+                output,
+                {"kind": "failure", "code": "worker_output_exceeded"},
+                limits["output_bytes"],
+            )
             return
         if result is True:
             result = _default_manifest(job)
-        output.put({"kind": "success", "manifest": result})
+        _send_frame(output, {"kind": "success", "manifest": result}, limits["output_bytes"])
     except BaseException:
         # Native diagnostics can contain paths, environment data, commands, tokens,
         # and tracebacks. Only this fixed code crosses the process boundary.
         with suppress(BaseException):
-            output.put({"kind": "failure", "code": "worker_resource_or_checkpoint_failure"})
+            _send_frame(
+                output,
+                {"kind": "failure", "code": "worker_resource_or_checkpoint_failure"},
+                limits["output_bytes"],
+            )
+    finally:
+        with suppress(BaseException):
+            output.close()
 
 
 def _default_manifest(job: Mapping[str, object]) -> dict[str, object]:
@@ -296,7 +357,8 @@ class ForecastRunner:
             return self._result(job, "interrupted", reason="global_lease_unavailable")
 
         process: multiprocessing.Process | None = None
-        output: multiprocessing.queues.Queue[Any] | None = None
+        input_pipe: Any | None = None
+        output_pipe: Any | None = None
         running: dict[str, Any] | None = None
         reaped = False
         try:
@@ -321,7 +383,7 @@ class ForecastRunner:
                 return self._result(terminal, "resource_terminated")
 
             context = multiprocessing.get_context("spawn")
-            output = context.Queue(maxsize=1)
+            input_pipe, output_pipe = context.Pipe(duplex=False)
             child_limits = {
                 "cpu_seconds": self.limits.cpu_seconds,
                 "address_space_bytes": self.limits.address_space_bytes,
@@ -330,7 +392,7 @@ class ForecastRunner:
             }
             process = context.Process(
                 target=_child_entry,
-                args=(self.worker, dict(running), child_limits, output),
+                args=(self.worker, dict(running), child_limits, output_pipe),
             )
             try:
                 process.start()
@@ -342,6 +404,59 @@ class ForecastRunner:
                     reason="worker_spawn_failed",
                 )
                 return self._result(terminal, "validation_failed")
+            output_pipe.close()
+            output_pipe = None
+
+            startup_deadline = time.monotonic() + min(5.0, self.limits.wall_clock_seconds)
+            ready = False
+            while time.monotonic() < startup_deadline:
+                remaining = startup_deadline - time.monotonic()
+                if input_pipe.poll(min(remaining, 0.1)):
+                    startup_message = _receive_frame(input_pipe, self.limits.output_bytes)
+                    if startup_message is not None and startup_message.get("kind") == "ready":
+                        ready = True
+                        break
+                    reaped = self._reap(process)
+                    terminal = self._terminalize_current(
+                        running,
+                        owner=owner,
+                        status="resource_limited",
+                        reason="worker_startup_failed",
+                    )
+                    return self._result(
+                        terminal,
+                        "resource_terminated",
+                        reason="worker_startup_failed",
+                        process_group_reaped=reaped,
+                    )
+                if not process.is_alive():
+                    reaped = self._reap(process)
+                    terminal = self._terminalize_current(
+                        running,
+                        owner=owner,
+                        status="resource_limited",
+                        reason="worker_startup_failed",
+                    )
+                    return self._result(
+                        terminal,
+                        "resource_terminated",
+                        reason="worker_startup_failed",
+                        process_group_reaped=reaped,
+                    )
+            if not ready:
+                reaped = self._reap(process)
+                terminal = self._terminalize_current(
+                    running,
+                    owner=owner,
+                    status="timed_out",
+                    reason="worker_startup_timeout",
+                )
+                return self._result(
+                    terminal,
+                    "timeout",
+                    reason="worker_startup_timeout",
+                    process_group_reaped=reaped,
+                )
 
             deadline = time.monotonic() + self.limits.wall_clock_seconds
             next_heartbeat = time.monotonic() + min(0.5, self.limits.wall_clock_seconds / 3)
@@ -362,11 +477,25 @@ class ForecastRunner:
                         reason="wall_clock_timeout",
                         process_group_reaped=reaped,
                     )
-                try:
-                    message = output.get(timeout=min(remaining, 0.1))
-                except Empty:
+                if input_pipe.poll(min(remaining, 0.1)):
+                    message = _receive_frame(input_pipe, self.limits.output_bytes)
+                    if message is None:
+                        reaped = self._reap(process)
+                        terminal = self._terminalize_current(
+                            running,
+                            owner=owner,
+                            status="resource_limited",
+                            reason="worker_ipc_invalid",
+                        )
+                        return self._result(
+                            terminal,
+                            "resource_terminated",
+                            reason="worker_ipc_invalid",
+                            process_group_reaped=reaped,
+                        )
+                else:
                     if not process.is_alive():
-                        process.join(0.1)
+                        reaped = self._reap(process)
                         terminal = self._terminalize_current(
                             running,
                             owner=owner,
@@ -377,7 +506,7 @@ class ForecastRunner:
                             terminal,
                             "resource_terminated",
                             reason="worker_exited_without_manifest",
-                            process_group_reaped=True,
+                            process_group_reaped=reaped,
                         )
                 if message is None and time.monotonic() >= next_heartbeat:
                     try:
@@ -406,10 +535,7 @@ class ForecastRunner:
                     next_heartbeat = time.monotonic() + 0.5
 
             process.join(0.5)
-            if process.is_alive():
-                reaped = self._reap(process)
-            else:
-                reaped = True
+            reaped = self._reap(process)
 
             if not isinstance(message, Mapping) or message.get("kind") != "success":
                 terminal = self._terminalize_current(
@@ -435,8 +561,9 @@ class ForecastRunner:
                 )
                 return self._result(terminal, "artifact_failed", reason="artifact_manifest_invalid")
             assert isinstance(manifest, Mapping)
+            manifest_payload = dict(manifest)
 
-            if manifest.get("lose_lease_before_result") is True:
+            if manifest_payload.get("lose_lease_before_result") is True:
                 terminal = self._terminalize_current(
                     running,
                     owner=owner,
@@ -446,7 +573,7 @@ class ForecastRunner:
                 return self._result(terminal, "interrupted", reason="lease_lost_before_commit")
 
             try:
-                verified = self.artifact_verify(manifest=dict(manifest), job=dict(running))
+                verified = self.artifact_verify(manifest=manifest_payload, job=dict(running))
             except BaseException:
                 verified = False
             if verified is not True:
@@ -484,8 +611,8 @@ class ForecastRunner:
                     expected_status="running",
                     expected_version=int(running["transition_version"]),
                     lease_owner=owner,
-                    output_descriptor=manifest["output_descriptor"],
-                    immutable_record=manifest["immutable_record"],
+                    output_descriptor=manifest_payload["output_descriptor"],
+                    immutable_record=manifest_payload["immutable_record"],
                 )
             except (KeyError, TypeError, ValueError):
                 terminal = self._terminalize_current(
@@ -496,14 +623,16 @@ class ForecastRunner:
                 )
                 return self._result(terminal, "artifact_failed", reason="artifact_commit_failed")
             completed = self.repository.get_job(job_id) or running
-            return self._result(completed, "completed", manifest=dict(manifest), record=record)
+            return self._result(completed, "completed", manifest=manifest_payload, record=record)
         finally:
             if process is not None and process.is_alive():
                 self._reap(process)
-            if output is not None:
+            if input_pipe is not None:
                 with suppress(Exception):
-                    output.close()
-                    output.join_thread()
+                    input_pipe.close()
+            if output_pipe is not None:
+                with suppress(Exception):
+                    output_pipe.close()
             self.repository.release_global_lease(owner=owner)
 
     def _manifest_is_capped(self, manifest: object) -> bool:
@@ -572,11 +701,30 @@ class ForecastRunner:
     def _reap(process: multiprocessing.Process) -> bool:
         if process.pid is None:
             return True
+        process_group_exists = False
+        with suppress(ProcessLookupError, PermissionError):
+            os.killpg(process.pid, 0)
+            process_group_exists = True
         with suppress(ProcessLookupError, PermissionError):
             os.killpg(process.pid, signal.SIGTERM)
+        with suppress(ProcessLookupError, PermissionError):
+            process.terminate()
         process.join(0.5)
-        if process.is_alive():
+        if process.is_alive() or process_group_exists:
             with suppress(ProcessLookupError, PermissionError):
                 os.killpg(process.pid, signal.SIGKILL)
+            with suppress(ProcessLookupError, PermissionError):
+                process.kill()
             process.join(1.0)
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline:
+            alive = process.is_alive()
+            group_alive = False
+            with suppress(ProcessLookupError, PermissionError):
+                os.killpg(process.pid, 0)
+                group_alive = True
+            if not alive and not group_alive:
+                return True
+            time.sleep(0.05)
         return not process.is_alive()
+

@@ -520,7 +520,7 @@ def test_runner_enforces_wall_cpu_address_thread_output_and_manifest_bounds(tmp_
     result = runner.run_job(_create(repository)["id"])
     assert result["resources"] == {
         "start_method": "spawn", "new_process_group": True, "wall_clock_seconds": 3,
-        "cpu_seconds": 2, "address_space_bytes": 512 * 1024 * 1024,
+        "cpu_seconds": 2, "address_space_bytes": 1024 * 1024 * 1024,
         "thread_count": 2, "output_bytes": 16 * 1024, "queue_items": 1,
     }
     assert len(json.dumps(result["manifest"]).encode()) <= 16 * 1024
@@ -539,11 +539,14 @@ def test_runner_timeout_kills_reaps_descendants_and_cleans_temporary_files(tmp_p
 
 def test_runner_rejects_tampered_or_oversized_manifest_without_record(tmp_path):
     from app.forecast.runner import FixedWorker
-    for manifest in ({"checksum_sha256": "0" * 64}, {"payload": "x" * (17 * 1024)}):
+    for manifest, expected_status in (
+        ({"checksum_sha256": "0" * 64}, "artifact_failed"),
+        ({"payload": "x" * (17 * 1024)}, "resource_terminated"),
+    ):
         runner, repository, _boundaries = _runner(tmp_path, worker=FixedWorker(manifest=manifest))
         job = _create(repository, idempotency_key=f"manifest-{len(json.dumps(manifest))}")
         result = runner.run_job(job["id"])
-        assert result["status"] == "artifact_failed"
+        assert result["status"] == expected_status
         assert repository.forecast_for_job(job["id"]) is None
 
 
@@ -1147,3 +1150,145 @@ def test_idempotent_input_namespace_and_orphan_cleanup_on_failure(tmp_path):
     assert store.load_bytes(shared) == b"shared-committed"
     remaining = [p.name for p in store.root.iterdir() if p.is_dir() and not p.name.startswith(".")]
     assert shared.artifact_id in remaining
+
+
+
+class HostileOutputWorker:
+    """Emit more stdout than the parent budget allows before returning."""
+
+    def __call__(self, *, job, limits):
+        import sys
+
+        sys.stdout.write("x" * (int(limits["output_bytes"]) + 64))
+        sys.stdout.flush()
+        return True
+
+
+class NeverReadyWorker:
+    """Worker body is never reached if ready fails; used only for spawn races."""
+
+    def __call__(self, **_kwargs):
+        import time
+
+        time.sleep(300)
+        return {}
+
+
+class OversizedManifestWorker:
+    def __call__(self, *, job, limits):
+        return {"payload": "y" * (int(limits["output_bytes"]) + 8)}
+
+
+def _silent_child_no_ready(worker, job, limits, output):
+    """Picklable child that setsid then never emits ready."""
+    import os
+    import time
+
+    del worker, job, limits, output
+    os.setsid()
+    time.sleep(30)
+
+
+
+
+def test_runner_output_cap_before_allocation_rejects_hostile_stdout(tmp_path):
+    runner, repository, _boundaries = _runner(tmp_path, worker=HostileOutputWorker())
+    result = runner.run_job(_create(repository, idempotency_key="hostile-output")["id"])
+    assert result["status"] == "resource_terminated"
+    assert repository.forecast_for_job(result["job_id"]) is None
+    serialized = json.dumps(result)
+    assert "xxxx" not in serialized
+
+
+def test_runner_byte_ipc_rejects_oversized_manifest_frame(tmp_path):
+    runner, repository, _boundaries = _runner(tmp_path, worker=OversizedManifestWorker())
+    result = runner.run_job(_create(repository, idempotency_key="byte-ipc")["id"])
+    assert result["status"] == "resource_terminated"
+    assert repository.forecast_for_job(result["job_id"]) is None
+
+
+def test_runner_child_ready_handshake_precedes_work_deadline(monkeypatch):
+    from app.forecast import runner as runner_module
+
+    events: list[str] = []
+
+    class _Pipe:
+        def send_bytes(self, payload: bytes) -> None:
+            events.append(json.loads(payload.decode("utf-8"))["kind"])
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(runner_module.os, "setsid", lambda: None)
+    monkeypatch.setattr(runner_module, "_configure_child_runtime", lambda *_a, **_k: None)
+    monkeypatch.setattr(runner_module, "_install_child_limits", lambda *_a, **_k: None)
+    job = {
+        "id": "job-ready",
+        "instrument_id": "instrument-600000",
+        "horizon": 20,
+        "catalog_id": "kronos-mini",
+        "input_fingerprint": "a" * 64,
+    }
+    limits = {
+        "cpu_seconds": 1,
+        "address_space_bytes": 1024 * 1024,
+        "thread_count": 1,
+        "output_bytes": 16 * 1024,
+    }
+    runner_module._child_entry(runner_module.FixedWorker(valid=True), job, limits, _Pipe())
+    assert events[0] == "ready"
+    assert "success" in events
+
+
+
+
+def test_runner_startup_race_timeout_before_ready_reaps_process(tmp_path, monkeypatch):
+    from app.forecast import runner as runner_module
+    from app.forecast.runner import ForecastRunner, ForecastRunnerLimits
+
+    monkeypatch.setattr(runner_module, "_child_entry", _silent_child_no_ready)
+    repository = _repository(tmp_path)
+    runner = ForecastRunner(
+        repository=repository,
+        limits=ForecastRunnerLimits(
+            wall_clock_seconds=1,
+            cpu_seconds=1,
+            address_space_bytes=1024 * 1024 * 1024,
+            thread_count=1,
+            output_bytes=4096,
+            queue_items=1,
+        ),
+        reauthorize=CountingBoundary(),
+        catalog_revalidate=CountingBoundary(),
+        input_revalidate=CountingBoundary(),
+        worker=NeverReadyWorker(),
+        artifact_verify=CommitArtifactBoundary(tmp_path, repository),
+    )
+    job = _create(repository, idempotency_key="startup-race")
+    result = runner.run_job(job["id"])
+    assert result["status"] == "timeout"
+    assert result.get("reason") == "worker_startup_timeout"
+    assert result.get("process_group_reaped") is True
+
+
+
+
+def test_runner_terminate_kill_fallback_reaps_descendants(tmp_path):
+    from app.forecast.runner import BlockingWorker
+
+    runner, repository, _boundaries = _runner(tmp_path, worker=BlockingWorker(descendant=True))
+    result = runner.run_job(_create(repository, idempotency_key="descendants-reaped")["id"])
+    assert result["status"] == "timeout"
+    assert result["process_group_reaped"] is True
+
+
+def test_runner_lease_loss_reaps_worker_tree(tmp_path):
+    from app.forecast.runner import FixedWorker
+
+    runner, repository, _boundaries = _runner(
+        tmp_path, worker=FixedWorker(lose_lease_before_result=True)
+    )
+    job = _create(repository, idempotency_key="lease-loss-reap")
+    result = runner.run_job(job["id"])
+    assert result["status"] == "interrupted"
+    assert repository.forecast_for_job(job["id"]) is None
