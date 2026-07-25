@@ -1,6 +1,8 @@
 """RED contracts for the pinned pre-mean Kronos adapter and quantile axis."""
 from __future__ import annotations
 
+import hashlib
+
 import json
 from pathlib import Path
 
@@ -176,3 +178,125 @@ def test_adapter_result_manifest_is_bounded_and_contains_no_model_or_local_path(
     assert "model_object" not in serialized
     assert "paths" not in manifest
     assert manifest["sample_count"] == 32
+
+
+def _write_verified_source(root: Path) -> Path:
+    source = root / "source"
+    source.mkdir(parents=True)
+    files = {
+        "LICENSE": b"MIT\n",
+        "__init__.py": (
+            b"from .kronos import Kronos, KronosTokenizer, sample_from_logits\n"
+            b"__all__ = ['Kronos', 'KronosTokenizer', 'sample_from_logits']\n"
+        ),
+        "kronos.py": (
+            b"class Kronos:\n"
+            b"    @classmethod\n"
+            b"    def from_pretrained(cls, path, local_files_only=True):\n"
+            b"        return cls()\n"
+            b"class KronosTokenizer:\n"
+            b"    @classmethod\n"
+            b"    def from_pretrained(cls, path, local_files_only=True):\n"
+            b"        return cls()\n"
+            b"def sample_from_logits(*args, **kwargs):\n"
+            b"    raise RuntimeError('sampler-not-for-unit')\n"
+        ),
+        "module.py": b"# helper\n",
+    }
+    for name, content in files.items():
+        (source / name).write_bytes(content)
+    import hashlib
+    import json
+
+    (source / "UPSTREAM.json").write_text(
+        json.dumps(
+            {
+                "revision": "67b630e67f6a18c9e9be918d9b4337c960db1e9a",
+                "files": {
+                    name: {
+                        "destination": name,
+                        "vendored_sha256": hashlib.sha256(content).hexdigest(),
+                    }
+                    for name, content in files.items()
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    return source
+
+
+def _checkpoint_for_source(source: Path, model_dir: Path, tokenizer_dir: Path):
+    from types import SimpleNamespace
+
+    from app.forecast.catalog import _verify_source
+
+    model_dir.mkdir(parents=True, exist_ok=True)
+    tokenizer_dir.mkdir(parents=True, exist_ok=True)
+    (model_dir / "config.json").write_text("{}", encoding="utf-8")
+    (model_dir / "model.safetensors").write_bytes(b"model")
+    (tokenizer_dir / "config.json").write_text("{}", encoding="utf-8")
+    (tokenizer_dir / "model.safetensors").write_bytes(b"tok")
+    manifest_sha, file_digests = _verify_source(
+        source, "67b630e67f6a18c9e9be918d9b4337c960db1e9a"
+    )
+    return SimpleNamespace(
+        local_files_only=True,
+        trust_remote_code=False,
+        allowed_devices=("cpu",),
+        model_dir=model_dir,
+        tokenizer_dir=tokenizer_dir,
+        max_context=64,
+        source_dir=source,
+        source_revision="67b630e67f6a18c9e9be918d9b4337c960db1e9a",
+        source_manifest_sha256=manifest_sha,
+        source_file_digests=file_digests,
+        model_config_sha256=hashlib.sha256(b"{}").hexdigest(),
+        model_weight_sha256=hashlib.sha256(b"model").hexdigest(),
+        tokenizer_config_sha256=hashlib.sha256(b"{}").hexdigest(),
+        tokenizer_weight_sha256=hashlib.sha256(b"tok").hexdigest(),
+    )
+
+
+def test_adapter_loads_from_verified_source_directory(tmp_path):
+    from app.forecast.kronos_adapter import PinnedLocalKronosRunner, _load_verified_kronos_package
+
+    source = _write_verified_source(tmp_path)
+    package, sampler = _load_verified_kronos_package(source)
+    assert callable(getattr(package, "Kronos", None))
+    assert callable(sampler)
+    module_file = Path(package.__file__).resolve()
+    assert module_file.is_relative_to(source.resolve())
+
+    checkpoint = _checkpoint_for_source(source, tmp_path / "model", tmp_path / "tokenizer")
+    runner = PinnedLocalKronosRunner(checkpoint=checkpoint, device="cpu")
+    pair = runner._pair()
+    assert pair.model is not None and pair.tokenizer is not None
+
+
+def test_adapter_import_shadow_rejected_for_preloaded_module(tmp_path, monkeypatch):
+    import sys
+    import types
+
+    from app.forecast.kronos_adapter import _load_verified_kronos_package
+
+    source = _write_verified_source(tmp_path)
+    shadow = types.ModuleType("app.vendor.kronos")
+    shadow.__file__ = str(tmp_path / "evil" / "kronos.py")
+    (tmp_path / "evil").mkdir()
+    (tmp_path / "evil" / "kronos.py").write_text("raise SystemExit('shadow')\n", encoding="utf-8")
+    monkeypatch.setitem(sys.modules, "app.vendor.kronos", shadow)
+    with pytest.raises(ValueError, match="import shadow rejected|origin"):
+        _load_verified_kronos_package(source)
+
+
+def test_adapter_child_revalidates_bytes_before_load(tmp_path):
+    from app.forecast.kronos_adapter import PinnedLocalKronosRunner
+
+    source = _write_verified_source(tmp_path)
+    checkpoint = _checkpoint_for_source(source, tmp_path / "model", tmp_path / "tokenizer")
+    (source / "kronos.py").write_bytes(b"print('tampered')\n")
+    runner = PinnedLocalKronosRunner(checkpoint=checkpoint, device="cpu")
+    with pytest.raises(Exception, match="digest|source"):
+        runner._pair()
+

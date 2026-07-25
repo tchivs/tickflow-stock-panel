@@ -43,13 +43,17 @@ class ResolvedCheckpoint:
     catalog_id: str
     source_repository: str
     source_revision: str
+    source_manifest_sha256: str
+    source_file_digests: tuple[tuple[str, str], ...]
     source_dir: Path
     model_repo: str
     model_revision: str
+    model_config_sha256: str
     model_weight_sha256: str
     model_dir: Path
     tokenizer_repo: str
     tokenizer_revision: str
+    tokenizer_config_sha256: str
     tokenizer_weight_sha256: str
     tokenizer_dir: Path
     pairing: str
@@ -58,6 +62,8 @@ class ResolvedCheckpoint:
     weight_format: str
     trust_remote_code: bool
     local_files_only: bool
+
+
 
 
 class ApprovedCheckpointCatalog:
@@ -155,9 +161,7 @@ class ApprovedCheckpointCatalog:
         if current != entry:
             raise ValueError("checkpoint catalog identity changed")
         try:
-            _verify_source(entry.source_dir, entry.source_revision)
-            _verify_asset(entry.model_dir, entry.model_weight_sha256, "model")
-            _verify_asset(entry.tokenizer_dir, entry.tokenizer_weight_sha256, "tokenizer")
+            verify_resolved_checkpoint(entry)
         except ForecastCatalogError as error:
             raise ValueError(str(error)) from error
         return entry
@@ -193,8 +197,12 @@ def _resolve_entry(
 
     if raw.get("weight_format") != "safetensors":
         raise ForecastCatalogError("only safetensors checkpoint weights are approved")
+    model_config_file = raw.get("model_config_file", "config.json")
+    tokenizer_config_file = raw.get("tokenizer_config_file", "config.json")
     model_weight_file = raw.get("model_weight_file", "model.safetensors")
     tokenizer_weight_file = raw.get("tokenizer_weight_file", "model.safetensors")
+    if model_config_file != "config.json" or tokenizer_config_file != "config.json":
+        raise ForecastCatalogError("only config.json checkpoint configuration is approved")
     if model_weight_file != "model.safetensors" or tokenizer_weight_file != "model.safetensors":
         raise ForecastCatalogError("only model.safetensors checkpoint weights are approved")
     if raw.get("trust_remote_code") is not False or raw.get("local_files_only") is not True:
@@ -223,7 +231,9 @@ def _resolve_entry(
                 raise ForecastCatalogError("checkpoint pairing does not match approved identity")
             raise ForecastCatalogError("checkpoint entry does not match approved identity")
 
+    model_config_digest = _digest(raw.get("model_config_sha256"), "model config digest")
     model_digest = _digest(raw.get("model_weight_sha256"), "model digest")
+    tokenizer_config_digest = _digest(raw.get("tokenizer_config_sha256"), "tokenizer config digest")
     tokenizer_digest = _digest(raw.get("tokenizer_weight_sha256"), "tokenizer digest")
     model_dir = _contained_directory(root, raw.get("local_model_dir"), "local model path")
     tokenizer_dir = _contained_directory(
@@ -235,20 +245,24 @@ def _resolve_entry(
     else:
         source_dir = _contained_directory(root, source_value, "local source path")
 
-    _verify_source(source_dir, source_revision)
-    _verify_asset(model_dir, model_digest, "model")
-    _verify_asset(tokenizer_dir, tokenizer_digest, "tokenizer")
+    source_manifest_sha256, source_file_digests = _verify_source(source_dir, source_revision)
+    _verify_asset(model_dir, model_digest, model_config_digest, "model")
+    _verify_asset(tokenizer_dir, tokenizer_digest, tokenizer_config_digest, "tokenizer")
     return ResolvedCheckpoint(
         catalog_id=catalog_id,
         source_repository=str(raw.get("source_repository", _SOURCE_REPOSITORY)),
         source_revision=source_revision,
+        source_manifest_sha256=source_manifest_sha256,
+        source_file_digests=source_file_digests,
         source_dir=source_dir,
         model_repo=str(raw["model_repo"]),
         model_revision=model_revision,
+        model_config_sha256=model_config_digest,
         model_weight_sha256=model_digest,
         model_dir=model_dir,
         tokenizer_repo=str(raw["tokenizer_repo"]),
         tokenizer_revision=tokenizer_revision,
+        tokenizer_config_sha256=tokenizer_config_digest,
         tokenizer_weight_sha256=tokenizer_digest,
         tokenizer_dir=tokenizer_dir,
         pairing=pairing,
@@ -258,6 +272,8 @@ def _resolve_entry(
         trust_remote_code=False,
         local_files_only=True,
     )
+
+
 
 
 def _existing_directory(path: Path, field: str) -> Path:
@@ -300,7 +316,28 @@ def _contained_directory(root: Path, value: object, field: str) -> Path:
     return resolved
 
 
-def _verify_source(source_dir: Path, revision: str) -> None:
+def verify_resolved_checkpoint(entry: ResolvedCheckpoint) -> None:
+    """Revalidate the exact local source and asset bytes before worker import."""
+    manifest_digest, source_file_digests = _verify_source(entry.source_dir, entry.source_revision)
+    if manifest_digest != entry.source_manifest_sha256:
+        raise ForecastCatalogError("approved source manifest digest mismatch")
+    if source_file_digests != entry.source_file_digests:
+        raise ForecastCatalogError("approved source file digest map mismatch")
+    _verify_asset(
+        entry.model_dir,
+        entry.model_weight_sha256,
+        entry.model_config_sha256,
+        "model",
+    )
+    _verify_asset(
+        entry.tokenizer_dir,
+        entry.tokenizer_weight_sha256,
+        entry.tokenizer_config_sha256,
+        "tokenizer",
+    )
+
+
+def _verify_source(source_dir: Path, revision: str) -> tuple[str, tuple[tuple[str, str], ...]]:
     manifest = source_dir / "UPSTREAM.json"
     if manifest.is_symlink() or not manifest.is_file():
         raise ForecastCatalogError("approved source manifest is missing")
@@ -310,6 +347,43 @@ def _verify_source(source_dir: Path, revision: str) -> None:
         raise ForecastCatalogError("approved source manifest is invalid") from error
     if not isinstance(payload, dict) or payload.get("revision", payload.get("commit")) != revision:
         raise ForecastCatalogError("approved source revision does not match")
+    files = payload.get("files")
+    if not isinstance(files, dict) or not files:
+        raise ForecastCatalogError("approved source manifest files are invalid")
+    expected_paths: set[str] = set()
+    digests: list[tuple[str, str]] = []
+    for value in files.values():
+        if not isinstance(value, dict):
+            raise ForecastCatalogError("approved source manifest files are invalid")
+        destination = value.get("destination")
+        digest = value.get("vendored_sha256")
+        if (
+            not isinstance(destination, str)
+            or not destination
+            or Path(destination).is_absolute()
+            or ".." in Path(destination).parts
+            or len(Path(destination).parts) != 1
+            or not _SHA256.fullmatch(digest if isinstance(digest, str) else "")
+            or destination in expected_paths
+        ):
+            raise ForecastCatalogError("approved source manifest files are invalid")
+        expected_paths.add(destination)
+        candidate = source_dir / destination
+        if candidate.is_symlink() or not candidate.is_file():
+            raise ForecastCatalogError("approved source file is missing")
+        if _file_sha256(candidate) != digest:
+            raise ForecastCatalogError("approved source file digest mismatch")
+        digests.append((destination, digest))
+    unexpected_files = {
+        path.name
+        for path in source_dir.iterdir()
+        if path.name not in expected_paths | {"UPSTREAM.json"} and (path.is_file() or path.is_symlink())
+    }
+    if unexpected_files:
+        raise ForecastCatalogError("approved source file set is invalid")
+    digests.sort(key=lambda item: item[0])
+    return _file_sha256(manifest), tuple(digests)
+
 
 
 def _verify_asset_shape(directory: Path, kind: str) -> None:
@@ -325,9 +399,16 @@ def _verify_asset_shape(directory: Path, kind: str) -> None:
             raise ForecastCatalogError(f"{kind} checkpoint file type is invalid")
 
 
-def _verify_asset(directory: Path, expected_digest: str, kind: str) -> None:
+def _verify_asset(
+    directory: Path,
+    expected_weight_digest: str,
+    expected_config_digest: str,
+    kind: str,
+) -> None:
     _verify_asset_shape(directory, kind)
-    if _file_sha256(directory / "model.safetensors") != expected_digest:
+    if _file_sha256(directory / "config.json") != expected_config_digest:
+        raise ForecastCatalogError(f"{kind} config digest mismatch")
+    if _file_sha256(directory / "model.safetensors") != expected_weight_digest:
         raise ForecastCatalogError(f"{kind} checkpoint digest mismatch")
 
 

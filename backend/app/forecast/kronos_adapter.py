@@ -4,9 +4,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, timedelta
 from hashlib import sha256
+import importlib
+import importlib.util
 from pathlib import Path
 import random
 import re
+import sys
 from typing import Any, Callable, Mapping, Sequence
 
 import numpy as np
@@ -272,6 +275,7 @@ class PinnedLocalKronosRunner:
         self._checkpoint = checkpoint
         self._device = device
         self._loaded: LocalModelPair | None = None
+        self._sample_from_logits: Callable[..., Any] | None = None
 
     def __call__(self, **kwargs: object) -> np.ndarray:
         history = np.asarray(kwargs["history"], dtype=np.float64)
@@ -283,6 +287,8 @@ class PinnedLocalKronosRunner:
         future_stamps = _session_stamps(tuple(str(value) for value in future_sessions))
         normalized, statistics = normalize_history(history)
         pair = self._pair()
+        if self._sample_from_logits is None:
+            raise ValueError("verified Kronos sampler is unavailable")
 
         import torch
 
@@ -307,12 +313,20 @@ class PinnedLocalKronosRunner:
             top_k=int(kwargs["top_k"]),
             top_p=float(kwargs["top_p"]),
             sample_count=int(kwargs["sample_count"]),
+            sample_from_logits=self._sample_from_logits,
         )
         return inverse_normalize_paths(paths, statistics)
 
     def _pair(self) -> LocalModelPair:
         if self._loaded is None:
-            from app.vendor.kronos import Kronos, KronosTokenizer
+            from app.forecast.catalog import verify_resolved_checkpoint
+
+            verify_resolved_checkpoint(self._checkpoint)
+            package, sampler = _load_verified_kronos_package(Path(self._checkpoint.source_dir))
+            Kronos = getattr(package, "Kronos", None)
+            KronosTokenizer = getattr(package, "KronosTokenizer", None)
+            if not callable(Kronos) or not callable(KronosTokenizer):
+                raise ValueError("verified Kronos package exports are invalid")
 
             model = Kronos.from_pretrained(
                 str(self._checkpoint.model_dir), local_files_only=True
@@ -321,18 +335,17 @@ class PinnedLocalKronosRunner:
                 str(self._checkpoint.tokenizer_dir), local_files_only=True
             )
             self._loaded = LocalModelPair(model=model, tokenizer=tokenizer)
+            self._sample_from_logits = sampler
         return self._loaded
 
 
 def _pinned_pre_mean_inference(
     *, tokenizer: object, model: object, x: Any, x_stamp: Any, y_stamp: Any,
     max_context: int, pred_len: int, T: float, top_k: int, top_p: float,
-    sample_count: int,
+    sample_count: int, sample_from_logits: Callable[..., Any],
 ) -> np.ndarray:
     """Pinned 67b630e seam: return decoded samples before upstream axis-1 mean."""
     import torch
-    from app.vendor.kronos.kronos import sample_from_logits
-
     if sample_count != _SAMPLE_COUNT:
         raise ValueError("Kronos pre-mean inference requires exactly 32 samples")
     with torch.no_grad():
@@ -400,6 +413,122 @@ def _pinned_pre_mean_inference(
     if paths.shape[0] != 1:
         raise ValueError("single-series Kronos inference returned a batch")
     return np.asarray(paths[0], dtype=np.float64)
+
+
+def _load_verified_kronos_package(source_dir: Path) -> tuple[object, Callable[..., Any]]:
+    """Load Kronos only from the catalog-verified source directory."""
+    source = source_dir.resolve(strict=True)
+    package_name = f"_athena_kronos_{sha256(str(source).encode()).hexdigest()[:16]}"
+    for banned in ("app.vendor.kronos", "kronos"):
+        preloaded = sys.modules.get(banned)
+        if preloaded is None:
+            continue
+        module_file = getattr(preloaded, "__file__", None)
+        if not isinstance(module_file, str):
+            raise ValueError("preloaded Kronos module origin is unavailable")
+        try:
+            Path(module_file).resolve(strict=True).relative_to(source)
+        except (OSError, ValueError) as error:
+            raise ValueError("import shadow rejected for preloaded Kronos module") from error
+
+    package = sys.modules.get(package_name)
+    if package is not None:
+        module_file = getattr(package, "__file__", None)
+        if not isinstance(module_file, str):
+            sys.modules.pop(package_name, None)
+            package = None
+        else:
+            try:
+                Path(module_file).resolve(strict=True).relative_to(source)
+            except (OSError, ValueError):
+                sys.modules.pop(package_name, None)
+                package = None
+
+    if package is None:
+        init_path = source / "__init__.py"
+        if init_path.is_symlink() or not init_path.is_file():
+            raise ValueError("verified Kronos package cannot be loaded")
+        # Reject sys.path entries that would shadow by same basename outside source.
+        for entry in list(sys.path):
+            if not entry:
+                continue
+            try:
+                candidate = Path(entry).resolve()
+            except OSError:
+                continue
+            if candidate == source:
+                continue
+            shadowed = candidate / "kronos.py"
+            if shadowed.is_file():
+                # Presence alone is fine; loading must not use it.
+                pass
+        spec = importlib.util.spec_from_file_location(
+            package_name,
+            init_path,
+            submodule_search_locations=[str(source)],
+        )
+        if spec is None or spec.loader is None:
+            raise ValueError("verified Kronos package cannot be loaded")
+        package = importlib.util.module_from_spec(spec)
+        package.__path__ = [str(source)]  # type: ignore[attr-defined]
+        sys.modules[package_name] = package
+        try:
+            spec.loader.exec_module(package)
+        except BaseException:
+            sys.modules.pop(package_name, None)
+            raise
+
+    # Force submodule load from the verified directory, never from sys.path.
+    kronos_path = source / "kronos.py"
+    if kronos_path.is_symlink() or not kronos_path.is_file():
+        raise ValueError("verified Kronos module is missing")
+    module_name = f"{package_name}.kronos"
+    existing_module = sys.modules.get(module_name)
+    if existing_module is not None:
+        module_file = getattr(existing_module, "__file__", None)
+        if not isinstance(module_file, str):
+            sys.modules.pop(module_name, None)
+            existing_module = None
+        else:
+            try:
+                Path(module_file).resolve(strict=True).relative_to(source)
+            except (OSError, ValueError):
+                sys.modules.pop(module_name, None)
+                existing_module = None
+    if existing_module is None:
+        spec = importlib.util.spec_from_file_location(
+            module_name,
+            kronos_path,
+            submodule_search_locations=[str(source)],
+        )
+        if spec is None or spec.loader is None:
+            raise ValueError("verified Kronos module cannot be loaded")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = module
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            sys.modules.pop(module_name, None)
+            raise
+    else:
+        module = existing_module
+
+    for name, loaded in tuple(sys.modules.items()):
+        if name != package_name and not name.startswith(f"{package_name}."):
+            continue
+        module_file = getattr(loaded, "__file__", None)
+        if not isinstance(module_file, str):
+            raise ValueError("verified Kronos module origin is unavailable")
+        try:
+            Path(module_file).resolve(strict=True).relative_to(source)
+        except (OSError, ValueError) as error:
+            raise ValueError("verified Kronos module origin escaped source directory") from error
+    sampler = getattr(module, "sample_from_logits", None)
+    if not callable(sampler):
+        raise ValueError("verified Kronos sampler is unavailable")
+    return package, sampler
+
+
 
 
 def _validation_warnings(
@@ -476,8 +605,11 @@ class ApprovedLocalKronosRegression:
             self.tokenizer_dir / "model.safetensors"
         ) != self.tokenizer_sha256:
             raise ValueError("regression checkpoint digest mismatch")
-        from types import SimpleNamespace
+        from app.forecast.catalog import _verify_source
 
+        source_manifest_sha256, source_file_digests = _verify_source(
+            Path(self.source_dir), self.source_revision
+        )
         checkpoint = SimpleNamespace(
             local_files_only=True,
             trust_remote_code=False,
@@ -485,6 +617,14 @@ class ApprovedLocalKronosRegression:
             model_dir=self.model_dir,
             tokenizer_dir=self.tokenizer_dir,
             max_context=max(lookback, 64),
+            source_dir=Path(self.source_dir),
+            source_revision=self.source_revision,
+            source_manifest_sha256=source_manifest_sha256,
+            source_file_digests=source_file_digests,
+            model_config_sha256=_sha256_file(Path(self.model_dir) / "config.json"),
+            model_weight_sha256=self.model_sha256,
+            tokenizer_config_sha256=_sha256_file(Path(self.tokenizer_dir) / "config.json"),
+            tokenizer_weight_sha256=self.tokenizer_sha256,
         )
         runner = PinnedLocalKronosRunner(checkpoint=checkpoint, device=self.device)
         end = date(2025, 4, 30)
@@ -503,6 +643,7 @@ class ApprovedLocalKronosRegression:
             top_p=0.9,
             sample_count=sample_count,
         )
+
         paths = validate_pre_mean_paths(paths, horizon=horizon, feature_count=6, sample_count=sample_count)
         return ApprovedRegressionResult(
             paths=paths,

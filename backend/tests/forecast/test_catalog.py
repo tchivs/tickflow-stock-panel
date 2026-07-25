@@ -30,7 +30,29 @@ def _approved_catalog(tmp_path: Path):
     root = tmp_path / "approved-checkpoints"
     source = root / "source"
     source.mkdir(parents=True)
-    (source / "UPSTREAM.json").write_text(json.dumps({"revision": SOURCE_REVISION}), encoding="utf-8")
+    source_files = {
+        "LICENSE": b"MIT\n",
+        "__init__.py": b"",
+        "kronos.py": b"",
+        "module.py": b"",
+    }
+    for destination, content in source_files.items():
+        (source / destination).write_bytes(content)
+    (source / "UPSTREAM.json").write_text(
+        json.dumps(
+            {
+                "revision": SOURCE_REVISION,
+                "files": {
+                    destination: {
+                        "destination": destination,
+                        "vendored_sha256": hashlib.sha256(content).hexdigest(),
+                    }
+                    for destination, content in source_files.items()
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
     profiles: dict[str, dict[str, object]] = {}
     approved: dict[str, dict[str, object]] = {}
     for model_size, tokenizer_size, max_context, devices in (
@@ -44,10 +66,12 @@ def _approved_catalog(tmp_path: Path):
         tokenizer_dir.mkdir(exist_ok=True)
         model_weight = model_dir / "model.safetensors"
         tokenizer_weight = tokenizer_dir / "model.safetensors"
+        model_config = model_dir / "config.json"
+        tokenizer_config = tokenizer_dir / "config.json"
         model_weight.write_bytes(f"fixture-model-{model_size}".encode())
         tokenizer_weight.write_bytes(f"fixture-tokenizer-{tokenizer_size}".encode())
-        (model_dir / "config.json").write_text("{}", encoding="utf-8")
-        (tokenizer_dir / "config.json").write_text("{}", encoding="utf-8")
+        model_config.write_text("{}", encoding="utf-8")
+        tokenizer_config.write_text("{}", encoding="utf-8")
         catalog_id = f"kronos-{model_size}"
         entry = {
             "catalog_id": catalog_id,
@@ -55,10 +79,14 @@ def _approved_catalog(tmp_path: Path):
             "source_dir": "source",
             "model_repo": f"NeoQuasar/Kronos-{model_size}",
             "model_revision": MODEL_REVISIONS[model_size],
+            "model_config_file": "config.json",
+            "model_config_sha256": _sha(model_config),
             "model_weight_sha256": _sha(model_weight),
             "local_model_dir": f"Kronos-{model_size}",
             "tokenizer_repo": f"NeoQuasar/Kronos-Tokenizer-{tokenizer_size}",
             "tokenizer_revision": TOKENIZER_REVISIONS[tokenizer_size],
+            "tokenizer_config_file": "config.json",
+            "tokenizer_config_sha256": _sha(tokenizer_config),
             "tokenizer_weight_sha256": _sha(tokenizer_weight),
             "local_tokenizer_dir": f"Kronos-Tokenizer-{tokenizer_size}",
             "pairing": f"{model_size}:{tokenizer_size}",
@@ -127,6 +155,63 @@ def test_catalog_rejects_missing_partial_and_tampered_files(tmp_path):
     (root / "Kronos-small" / "config.json").unlink()
     with pytest.raises(ForecastCatalogError, match="missing|partial"):
         ApprovedCheckpointCatalog.from_file(manifest_path=manifest, approved_root=root, approved_profiles=approved)
+
+
+def test_catalog_rejects_config_digest_tamper_and_source_byte_tamper(tmp_path):
+    _catalog, root, manifest, approved = _approved_catalog(tmp_path)
+    (root / "Kronos-mini" / "config.json").write_text('{"tampered":true}', encoding="utf-8")
+    from app.forecast.catalog import ApprovedCheckpointCatalog, ForecastCatalogError
+    with pytest.raises(ForecastCatalogError, match="config digest"):
+        ApprovedCheckpointCatalog.from_file(manifest_path=manifest, approved_root=root, approved_profiles=approved)
+
+    (root / "Kronos-mini" / "config.json").write_text("{}", encoding="utf-8")
+    (root / "source" / "kronos.py").write_text("tampered", encoding="utf-8")
+    with pytest.raises(ForecastCatalogError, match="source file digest"):
+        ApprovedCheckpointCatalog.from_file(manifest_path=manifest, approved_root=root, approved_profiles=approved)
+
+
+def test_catalog_vendored_byte_manifest_freezes_source_file_digests(tmp_path):
+    catalog, root, _manifest, _approved = _approved_catalog(tmp_path)
+    resolved = catalog.require_local("kronos-mini", device="cpu")
+    assert resolved.source_manifest_sha256 == _sha(root / "source" / "UPSTREAM.json")
+    assert resolved.source_file_digests == tuple(
+        sorted(
+            (name, hashlib.sha256((root / "source" / name).read_bytes()).hexdigest())
+            for name in ("LICENSE", "__init__.py", "kronos.py", "module.py")
+        )
+    )
+    assert resolved.model_config_sha256 == _sha(root / "Kronos-mini" / "config.json")
+    assert resolved.tokenizer_config_sha256 == _sha(root / "Kronos-Tokenizer-2k" / "config.json")
+
+
+def test_catalog_source_tamper_rejects_revision_label_with_changed_bytes(tmp_path):
+    _catalog, root, manifest, approved = _approved_catalog(tmp_path)
+    # Keep the self-reported revision label, change only the destination bytes after catalog write.
+    (root / "source" / "module.py").write_bytes(b"tampered-module")
+    from app.forecast.catalog import ApprovedCheckpointCatalog, ForecastCatalogError
+
+    with pytest.raises(ForecastCatalogError, match="source file digest"):
+        ApprovedCheckpointCatalog.from_file(
+            manifest_path=manifest, approved_root=root, approved_profiles=approved
+        )
+
+
+def test_catalog_config_digest_required_for_model_and_tokenizer(tmp_path):
+    _catalog, root, manifest, approved = _approved_catalog(tmp_path)
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    del payload["entries"][0]["model_config_sha256"]
+    # Keep approved profiles from blocking before digest validation.
+    del approved["kronos-mini"]["model_config_sha256"]
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    from app.forecast.catalog import ApprovedCheckpointCatalog, ForecastCatalogError
+
+    with pytest.raises(ForecastCatalogError, match="model config digest"):
+        ApprovedCheckpointCatalog.from_file(
+            manifest_path=manifest, approved_root=root, approved_profiles=approved
+        )
+
+
+
 
 
 def test_catalog_rejects_model_tokenizer_pair_mismatch(tmp_path):
