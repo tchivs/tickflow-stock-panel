@@ -246,7 +246,7 @@ Plans:
   2. User can view an investment thesis with its valuation anchor, invalidation conditions, and periodic evidence checks.
   3. Researcher can request and inspect a time-series forecast that includes quantiles, sampled paths, and the associated model checkpoint.
 
-**Plans**: 40/41 plans executed
+**Plans**: 41/41 plans executed
 
 Plans:
 
@@ -349,7 +349,7 @@ Plans:
 
 **Gap Closure Wave 12 — unique final post-gap acceptance** *(blocked on every terminal gap plan)*
 
-- [ ] 05-29-PLAN.md — Parse backend and both browser machine reports with fail-on-skip one-to-one CR/WR coverage and zero action/external requests. *(blocked on terminal gaps)*
+- [x] 05-29-PLAN.md — Parse backend and both browser machine reports with fail-on-skip one-to-one CR/WR coverage and zero action/external requests.
 
 **UI hint**: yes
 
@@ -363,4 +363,4 @@ Plans:
 | 2. Factor And Strategy Research | 8/8 | Complete    | 2026-07-11 |
 | 3. AI Analysis | 12/12 | Complete    | 2026-07-12 |
 | 4. Advanced Capabilities | 27/27 | Complete    | 2026-07-15 |
-| 5. Optional Enhancements | 40/41 | In Progress|  |
+| 5. Optional Enhancements | 41/41 | Complete | 2026-07-25 |
