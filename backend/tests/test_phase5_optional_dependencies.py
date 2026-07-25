@@ -182,12 +182,33 @@ def test_project_lock_metadata_keeps_extras_separate_and_approved() -> None:
 
 
 def test_importing_base_app_does_not_load_optional_packages() -> None:
-    import app
+    """Base package import must not pull optional heavy deps in a clean interpreter.
 
-    assert app is not None
-    assert "torch" not in sys.modules
-    assert "sklearn" not in sys.modules
-    assert "huggingface_hub" not in sys.modules
+    Suite-level pollution from prior Shadow/Forecast tests can leave sklearn in
+    sys.modules of the parent process; the contract is cold-import isolation.
+    """
+    import os
+    import subprocess
+
+    script = (
+        "import sys\n"
+        "import app\n"
+        "assert app is not None\n"
+        "missing = [name for name in ('torch', 'sklearn', 'huggingface_hub') "
+        "if name in sys.modules]\n"
+        "raise SystemExit(0 if not missing else f'loaded:{missing}')\n"
+    )
+    env = os.environ.copy()
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+        cwd=str(Path(__file__).resolve().parents[1]),
+        env=env,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
 
 
 if __name__ == "__main__":

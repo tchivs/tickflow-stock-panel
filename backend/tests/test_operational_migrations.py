@@ -81,13 +81,17 @@ def test_forecast_maturity_cursor_upgrade_is_forward_only_and_idempotent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     planned = migrations.MIGRATIONS
-    assert "forecast_maturity_cursor" in planned[-1]
+    cursor_indexes = [
+        index for index, script in enumerate(planned) if "forecast_maturity_cursor" in script
+    ]
+    assert cursor_indexes, "forecast_maturity_cursor migration is missing"
+    cursor_index = cursor_indexes[0]
     connection = sqlite3.connect(":memory:")
     connection.execute("PRAGMA foreign_keys = ON")
 
-    monkeypatch.setattr(migrations, "MIGRATIONS", planned[:-1])
+    monkeypatch.setattr(migrations, "MIGRATIONS", planned[:cursor_index])
     migrations.migrate_operational_db(connection)
-    previous_version = len(planned) - 1
+    previous_version = cursor_index
     assert connection.execute("PRAGMA user_version").fetchone() == (previous_version,)
     assert (
         connection.execute(
@@ -112,15 +116,20 @@ def test_maturity_cursor_mid_migration_rollback_restores_schema_and_version(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     planned = migrations.MIGRATIONS
-    assert "forecast_maturity_cursor" in planned[-1]
+    cursor_indexes = [
+        index for index, script in enumerate(planned) if "forecast_maturity_cursor" in script
+    ]
+    assert cursor_indexes, "forecast_maturity_cursor migration is missing"
+    cursor_index = cursor_indexes[0]
+    cursor_script = planned[cursor_index]
     connection = sqlite3.connect(":memory:")
     connection.execute("PRAGMA foreign_keys = ON")
-    monkeypatch.setattr(migrations, "MIGRATIONS", planned[:-1])
+    monkeypatch.setattr(migrations, "MIGRATIONS", planned[:cursor_index])
     migrations.migrate_operational_db(connection)
-    previous_version = len(planned) - 1
+    previous_version = cursor_index
 
-    failing = planned[:-1] + (
-        planned[-1] + "INSERT INTO injected_maturity_migration_failure(value) VALUES ('boom');",
+    failing = planned[:cursor_index] + (
+        cursor_script + "INSERT INTO injected_maturity_migration_failure(value) VALUES ('boom');",
     )
     monkeypatch.setattr(migrations, "MIGRATIONS", failing)
     with pytest.raises(sqlite3.DatabaseError):

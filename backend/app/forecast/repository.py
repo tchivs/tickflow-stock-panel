@@ -1892,7 +1892,15 @@ class ForecastRepository:
         return int(changed)
 
     def insert_fixture_forecast(self, payload: Mapping[str, object]) -> dict[str, Any]:
-        """Insert one complete immutable record for focused governed-boundary tests."""
+        """Insert one complete immutable record for focused governed-boundary tests.
+
+        When ``quantiles`` is supplied, persist real path/quantile Parquet under the
+        managed artifact root and mark ``quantile_availability='available'`` so
+        calibration loaders match production verified-byte semantics. Omitting
+        quantiles keeps the explicit legacy_unavailable path for missing-quantile tests.
+        """
+        from app.forecast.artifacts import ForecastArtifactStore
+
         forecast_id = str(payload["id"])
         principal = str(payload.get("principal", "fixture-principal"))
         instrument_id = str(payload["instrument_id"])
@@ -1901,20 +1909,132 @@ class ForecastRepository:
         created_at = str(payload["created_at"])
         if not principal:
             raise ValueError("fixture forecast principal is invalid")
+        sessions = payload.get("future_session_ids")
+        if (
+            not isinstance(sessions, list)
+            or len(sessions) != horizon
+            or not all(isinstance(item, str) and item for item in sessions)
+        ):
+            raise ValueError("fixture forecast future sessions are invalid")
+
+        quantiles_payload = payload.get("quantiles")
+        quantile_availability = "legacy_unavailable"
+        paths_descriptor: dict[str, object]
+        quantiles_descriptor: dict[str, object] | None = None
+        quantiles_checksum: str | None = None
+        quantiles_source: str | None = None
+        quantiles_provenance: str | None = None
+        quantile_row_count: int | None = None
+        quantile_session_count: int | None = None
+        quantile_feature_count: int | None = None
+        paths_checksum = str(payload["paths_checksum_sha256"])
+
+        features = ("open", "high", "low", "close", "volume", "amount")
+        provenance = payload.get("checkpoint_provenance", {})
+        if not isinstance(provenance, Mapping):
+            provenance = {}
+        source_revision = str(provenance.get("source_revision", "fixture-source"))
+        model_revision = str(provenance.get("model_revision", "fixture-model"))
+        tokenizer_revision = str(provenance.get("tokenizer_revision", "fixture-tokenizer"))
+
+        if isinstance(quantiles_payload, Mapping) and quantiles_payload:
+            # Build a finite path tensor whose close-axis quantiles match the fixture map
+            # at each declared horizon key; other sessions use a stable finite fill.
+            paths = np.fromfunction(
+                lambda sample, session, feature: (
+                    8.0 + (sample * 0.1) + (session * 0.2) + (feature * 0.01)
+                ),
+                (32, horizon, len(features)),
+                dtype=float,
+            )
+            close_index = features.index("close")
+            for session_index in range(horizon):
+                key = str(session_index + 1)
+                raw = quantiles_payload.get(key)
+                if not isinstance(raw, Mapping):
+                    continue
+                try:
+                    p10 = float(raw["p10"])
+                    p50 = float(raw["p50"])
+                    p90 = float(raw["p90"])
+                except (KeyError, TypeError, ValueError) as error:
+                    raise ValueError("fixture forecast quantiles are invalid") from error
+                if not all(math.isfinite(value) for value in (p10, p50, p90)) or not (
+                    p10 <= p50 <= p90
+                ):
+                    raise ValueError("fixture forecast quantiles are invalid")
+                # 32-sample empirical quantiles at 0.1/0.5/0.9 land on ranks ~3/16/29.
+                column = np.full(32, p50, dtype=float)
+                column[:4] = p10
+                column[4:16] = p10 + (p50 - p10) * 0.5
+                column[16] = p50
+                column[17:29] = p50 + (p90 - p50) * 0.5
+                column[29:] = p90
+                paths[:, session_index, close_index] = column
+            quantiles = np.quantile(paths, q=(0.10, 0.50, 0.90), axis=0)
+            store = ForecastArtifactStore.at(self.artifact_root)
+            bundle = store.persist(
+                paths=paths,
+                quantiles=quantiles,
+                future_session_ids=tuple(sessions),
+                feature_names=features,
+                scope={
+                    "job_id": f"fixture-job-{forecast_id}",
+                    "input_fingerprint": fingerprint,
+                    "kind": "fixture_forecast",
+                },
+            )
+            paths_descriptor = bundle.paths.as_dict()
+            quantiles_descriptor = bundle.quantiles.as_dict()
+            paths_checksum = str(paths_descriptor["checksum_sha256"])
+            quantiles_checksum = str(quantiles_descriptor["checksum_sha256"])
+            quantiles_source = paths_checksum
+            quantile_availability = "available"
+            quantile_session_count = horizon
+            quantile_feature_count = len(features)
+            quantile_row_count = 3 * horizon * len(features)
+            record_for_digest = {
+                "origin_session_id": str(payload["origin_session_id"]),
+                "calendar_id": "cn-a",
+                "calendar_revision": str(payload["calendar_revision"]),
+                "future_session_ids": list(sessions),
+                "input_fingerprint": fingerprint,
+                "horizon": horizon,
+                "lookback": 1,
+                "seed": 0,
+                "temperature": 1.0,
+                "top_k": 1,
+                "top_p": 1.0,
+                "sample_count": 32,
+                "catalog_id": "fixture-catalog",
+                "source_revision": source_revision,
+                "source_digest_sha256": fingerprint,
+                "model_revision": model_revision,
+                "model_digest_sha256": fingerprint,
+                "tokenizer_revision": tokenizer_revision,
+                "tokenizer_digest_sha256": fingerprint,
+            }
+            quantiles_provenance = self._quantile_provenance_digest(
+                record=record_for_digest,
+                paths_descriptor=paths_descriptor,
+                quantiles_descriptor=quantiles_descriptor,
+            )
+        else:
+            paths_descriptor = {
+                "artifact_id": f"fixture-{forecast_id}",
+                "relative_path": f"forecast/{forecast_id}/paths.parquet",
+                "content_type": "application/vnd.apache.parquet",
+                "byte_size": 1,
+                "checksum_sha256": paths_checksum,
+                "schema_version": "forecast-paths-v1",
+                "scope_sha256": "f" * 64,
+                "created_at": created_at,
+                "sample_count": 32,
+                "horizon": horizon,
+                "feature_count": 6,
+            }
+
         job_id = f"fixture-job-{forecast_id}"
-        descriptor = {
-            "artifact_id": f"fixture-{forecast_id}",
-            "relative_path": f"forecast/{forecast_id}/paths.parquet",
-            "schema_version": "forecast-output-v1",
-            "byte_size": 1,
-            "checksum_sha256": str(payload["paths_checksum_sha256"]),
-            "sample_count": 32,
-            "horizon": horizon,
-            "feature_count": 6,
-            "quantiles": payload.get("quantiles", {}),
-            "quantiles_checksum_sha256": payload.get("quantiles_checksum_sha256"),
-            "checkpoint_provenance": payload.get("checkpoint_provenance", {}),
-        }
         with self._immediate() as connection:
             existing = connection.execute(
                 "SELECT * FROM forecast_records WHERE id = ?", (forecast_id,)
@@ -1950,38 +2070,40 @@ class ForecastRepository:
                     horizon, lookback, seed, temperature, top_k, top_p, sample_count, catalog_id,
                     source_revision, source_digest_sha256, model_revision, model_digest_sha256,
                     tokenizer_revision, tokenizer_digest_sha256, output_artifact_descriptor_json,
-                    paths_checksum_sha256, validation_warnings_json, created_at)
+                    paths_checksum_sha256, quantile_availability,
+                    quantiles_artifact_descriptor_json, quantiles_checksum_sha256,
+                    quantiles_source_paths_sha256, quantiles_provenance_digest_sha256,
+                    quantile_row_count, quantile_session_count, quantile_feature_count,
+                    validation_warnings_json, created_at)
                    VALUES (?, ?, ?, ?, 'cn-a', ?, ?, ?, '{}', ?, 1, 0, 1.0, 1, 1.0, 32,
-                           'fixture-catalog', ?, ?, ?, ?, ?, ?, ?, ?, '[]', ?)""",
+                           'fixture-catalog', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', ?)""",
                 (
                     forecast_id,
                     job_id,
                     instrument_id,
                     str(payload["origin_session_id"]),
                     str(payload["calendar_revision"]),
-                    _canonical_json(payload["future_session_ids"]),
+                    _canonical_json(list(sessions)),
                     fingerprint,
                     horizon,
-                    str(
-                        payload.get("checkpoint_provenance", {}).get(
-                            "source_revision", "fixture-source"
-                        )
-                    ),
+                    source_revision,
                     fingerprint,
-                    str(
-                        payload.get("checkpoint_provenance", {}).get(
-                            "model_revision", "fixture-model"
-                        )
-                    ),
+                    model_revision,
                     fingerprint,
-                    str(
-                        payload.get("checkpoint_provenance", {}).get(
-                            "tokenizer_revision", "fixture-tokenizer"
-                        )
-                    ),
+                    tokenizer_revision,
                     fingerprint,
-                    _canonical_json(descriptor),
-                    str(payload["paths_checksum_sha256"]),
+                    _canonical_json(paths_descriptor),
+                    paths_checksum,
+                    quantile_availability,
+                    None
+                    if quantiles_descriptor is None
+                    else _canonical_json(quantiles_descriptor),
+                    quantiles_checksum,
+                    quantiles_source,
+                    quantiles_provenance,
+                    quantile_row_count,
+                    quantile_session_count,
+                    quantile_feature_count,
                     created_at,
                 ),
             )
@@ -1989,7 +2111,7 @@ class ForecastRepository:
                 "SELECT * FROM forecast_records WHERE id = ?", (forecast_id,)
             ).fetchone()
         assert row is not None
-        return self._record_row(row)
+        return self._record_with_quantiles(self._record_row(row))
 
     @staticmethod
     def _outcome_row(row: sqlite3.Row) -> dict[str, Any]:

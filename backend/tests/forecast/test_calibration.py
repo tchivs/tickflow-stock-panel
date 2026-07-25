@@ -40,35 +40,35 @@ class AuthoritySpy:
         raise AssertionError("calibration acquired downstream authority")
 
 
-def _repository(tmp_path: Path):
+def _repository(tmp_path: Path, *, include_quantiles: bool = True):
     from app.forecast.repository import ForecastRepository
 
     repository = ForecastRepository(tmp_path / "operational.db")
     repository.migrate()
-    repository.insert_fixture_forecast(
-        {
-            "id": "forecast-1",
-            "instrument_id": "instrument-600000",
-            "origin_session_id": "CNA-20250430",
-            "calendar_revision": "cn-a-calendar-2025-v1",
-            "future_session_ids": [f"CNA-FUTURE-{index:02}" for index in range(1, 61)],
-            "horizon": 60,
-            "input_fingerprint": "a" * 64,
-            "paths_checksum_sha256": "b" * 64,
-            "quantiles_checksum_sha256": "c" * 64,
-            "checkpoint_provenance": {
-                "source_revision": "67b630e",
-                "model_revision": "f4e6869",
-                "tokenizer_revision": "26966d0",
-            },
-            "created_at": "2025-04-30T08:00:00Z",
-            "quantiles": {
-                "5": {"p10": 9.0, "p50": 10.0, "p90": 11.0},
-                "20": {"p10": 10.0, "p50": 12.0, "p90": 14.0},
-                "60": {"p10": 11.0, "p50": 14.0, "p90": 17.0},
-            },
+    payload = {
+        "id": "forecast-1",
+        "instrument_id": "instrument-600000",
+        "origin_session_id": "CNA-20250430",
+        "calendar_revision": "cn-a-calendar-2025-v1",
+        "future_session_ids": [f"CNA-FUTURE-{index:02}" for index in range(1, 61)],
+        "horizon": 60,
+        "input_fingerprint": "a" * 64,
+        "paths_checksum_sha256": "b" * 64,
+        "quantiles_checksum_sha256": "c" * 64,
+        "checkpoint_provenance": {
+            "source_revision": "67b630e",
+            "model_revision": "f4e6869",
+            "tokenizer_revision": "26966d0",
+        },
+        "created_at": "2025-04-30T08:00:00Z",
+    }
+    if include_quantiles:
+        payload["quantiles"] = {
+            "5": {"p10": 9.0, "p50": 10.0, "p90": 11.0},
+            "20": {"p10": 10.0, "p50": 12.0, "p90": 14.0},
+            "60": {"p10": 11.0, "p50": 14.0, "p90": 17.0},
         }
-    )
+    repository.insert_fixture_forecast(payload)
     return repository
 
 
@@ -271,10 +271,15 @@ def _production_scanner(tmp_path: Path, *, actual_close: float | None = 14.0):
     return scanner, repository, record, payload_path, spies
 
 
-def _scanner(tmp_path: Path, *, actuals: GovernedActuals | None = None):
+def _scanner(
+    tmp_path: Path,
+    *,
+    actuals: GovernedActuals | None = None,
+    include_quantiles: bool = True,
+):
     from app.forecast.calibration import ForecastMaturityScanner
 
-    repository = _repository(tmp_path)
+    repository = _repository(tmp_path, include_quantiles=include_quantiles)
     governed = actuals or GovernedActuals()
     spies = {
         name: AuthoritySpy()
@@ -369,7 +374,9 @@ def test_production_committed_quantiles_keep_missing_actual_pending_and_legacy_e
     assert repository.outcomes_for_forecast(record["id"]) == []
     assert repository.calibration_facts_for_forecast(record["id"]) == []
 
-    legacy_scanner, legacy_repository, _actuals, _legacy_spies = _scanner(tmp_path / "legacy")
+    legacy_scanner, legacy_repository, _actuals, _legacy_spies = _scanner(
+        tmp_path / "legacy", include_quantiles=False
+    )
     legacy = legacy_scanner.evaluate(
         forecast_id="forecast-1", horizon=20, as_of_session_id="CNA-FUTURE-60"
     )
