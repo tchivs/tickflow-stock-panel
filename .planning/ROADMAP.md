@@ -246,7 +246,7 @@ Plans:
   2. User can view an investment thesis with its valuation anchor, invalidation conditions, and periodic evidence checks.
   3. Researcher can request and inspect a time-series forecast that includes quantiles, sampled paths, and the associated model checkpoint.
 
-**Plans**: 38/41 plans executed
+**Plans**: 39/41 plans executed
 
 Plans:
 
@@ -320,7 +320,7 @@ Plans:
 **Gap Closure Wave 6** *(blocked on relevant Wave 5 plans)*
 
 - [x] 05-25-PLAN.md — Make migrations atomic and secure the local principal/Origin/readiness boundary.
-- [ ] 05-27-PLAN.md — Bind Kronos runtime imports/bytes and harden pre-IPC bounds plus process cleanup.
+- [x] 05-27-PLAN.md — Bind Kronos runtime imports/bytes and harden pre-IPC bounds plus process cleanup.
 
 **Gap Closure Wave 7** *(blocked on Wave 6 migration ownership)*
 
@@ -363,4 +363,4 @@ Plans:
 | 2. Factor And Strategy Research | 8/8 | Complete    | 2026-07-11 |
 | 3. AI Analysis | 12/12 | Complete    | 2026-07-12 |
 | 4. Advanced Capabilities | 27/27 | Complete    | 2026-07-15 |
-| 5. Optional Enhancements | 38/41 | In Progress|  |
+| 5. Optional Enhancements | 39/41 | In Progress|  |

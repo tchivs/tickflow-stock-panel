@@ -5,15 +5,15 @@ milestone_name: milestone
 current_phase: 05
 current_phase_name: optional-enhancements
 status: executing
-stopped_at: "05-26 complete; executing 05-27 runtime bind"
-last_updated: "2026-07-25T14:52:47.000Z"
+stopped_at: Completed 05-27-PLAN.md
+last_updated: "2026-07-25T15:10:24.510Z"
 last_activity: 2026-07-24
-last_activity_desc: "Completed 05-26 config digests and lock-safe provisioning"
+last_activity_desc: Removed personal-project human approval gate
 progress:
   total_phases: 5
   completed_phases: 4
   total_plans: 103
-  completed_plans: 100
+  completed_plans: 101
 ---
 
 # Project State
@@ -32,7 +32,7 @@ Plan: 05-27 runtime bind / IPC / cleanup
 Status: executing
 Last activity: 2026-07-24 — Removed personal-project human approval gate
 
-Progress: [█████████░] 90%
+Progress: [██████████] 98%
 
 ## Performance Metrics
 
@@ -98,6 +98,7 @@ Progress: [█████████░] 90%
 | Phase 05 P17 | 14m25s | 2 tasks | 11 files |
 | Phase 05 P40 | 1m | 1 tasks | 3 files |
 | Phase 05 P36 | 25min | 2 tasks | 6 files |
+| Phase 05 P27 | 45min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -190,6 +191,9 @@ No implementation decision was explicitly locked by the architecture intake. Req
 - [Phase ?]: Personal-project exception: 05-26 no longer requires a human supply approval record. Existing rejected 05-28/05-40 summaries remain historical records only.
 - [Phase ?]: Forecast supply remains fail-closed on missing or mismatched immutable revision and SHA-256 values, but those values are no longer gated by reviewer identity or approval paperwork.
 - [Phase ?]: Thesis check/history pages self-identify with instrument/version display identity (WR-03)
+- [Phase ?]: Executable Kronos identity is destination SHA-256 map + config/weight digests, not UPSTREAM revision alone.
+- [Phase ?]: Modules load via unique _athena_kronos_* package names from source_dir; preloaded shadows outside source are rejected.
+- [Phase ?]: IPC is length-capped JSON frames over a one-way Pipe; cleanup terminate/kill reaps process group.
 
 ### Pending Todos
 
@@ -209,6 +213,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-07-25T14:52:47.000Z
-Stopped at: Executing 05-27 after 05-26
+Last session: 2026-07-25T15:10:24.500Z
+Stopped at: Completed 05-27-PLAN.md
 Resume file: None
