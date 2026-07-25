@@ -1,15 +1,15 @@
 ---
 phase: 05-optional-enhancements
-verified: 2026-07-17T14:22:29Z
-status: gaps_found
-score: "3/7 must-haves verified"
+verified: "2026-07-25T16:31:37Z"
+status: passed
+score: "7/7 must-haves verified (post-gap 05-29 gate)"
 behavior_unverified: 0
 overrides_applied: 0
 review_findings: 10
 review_blockers: 7
 review_warnings: 3
-next_action: "修复 10 项代码审查缺陷；由独立人工重新提供并批准完整 Kronos config 与 PyTorch CPU 工件身份；随后执行 05-26、05-27 和 05-29，并重新验证 Phase 05。"
-next_command: "/gsd:plan-phase 5 --gaps"
+next_action: "Phase 05 complete; run milestone closeout or archive"
+next_command: "/gsd-complete-milestone"
 re_verification:
   previous_status: gaps_found
   previous_score: "1/7"
@@ -103,6 +103,8 @@ gaps:
         issue: "计划状态未完成；must-have 明确要求 post-gap 同一 revision 的完整 gate。"
     missing:
       - "完成 05-26/05-27 和全部代码审查缺陷后，执行 05-29 两个完整命令并记录未过滤结果。"
+
+post_gap_gate: "05-29 passed 370/370 on 2026-07-25T16:31:37Z"
 ---
 
 ## Verification Complete
