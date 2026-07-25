@@ -345,7 +345,7 @@ Plans:
 **Gap Closure Wave 11** *(blocked on relevant Wave 10 plans)*
 
 - [x] 05-36-PLAN.md — Make Thesis ledger rows self-identifying and independent of versions pagination.
-- [ ] 05-39-PLAN.md — Execute queued recovery once and reap the saved process group on every post-spawn return. *(blocked on 05-27 implementation)*
+- [ ] 05-39-PLAN.md — Execute queued recovery once and reap the saved process group on every post-spawn return.
 
 **Gap Closure Wave 12 — unique final post-gap acceptance** *(blocked on every terminal gap plan)*
 
