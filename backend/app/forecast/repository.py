@@ -1218,10 +1218,9 @@ class ForecastRepository:
             ):
                 raise ValueError(f"forecast {field} artifact schema is invalid")
             store = ManagedImmutableArtifactStore(self.artifact_root)
-            persisted, scope, payload_path = store._verified_payload(descriptor)
+            persisted, scope, payload = store._verified_payload(descriptor)
             if persisted != descriptor:
                 raise ValueError(f"forecast {field} artifact metadata diverges")
-            payload = payload_path.read_bytes()
             if (
                 len(payload) != descriptor.byte_size
                 or sha256(payload).hexdigest() != descriptor.checksum_sha256
