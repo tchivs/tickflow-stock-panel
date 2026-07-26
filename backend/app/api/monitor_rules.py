@@ -106,7 +106,8 @@ def get_options(request: Request):
         "scopes": [
             {"key": "symbols", "label": "指定股票"},
             {"key": "all", "label": "全市场"},
-            {"key": "sector", "label": "板块"},
+            # sector 不下发: 板块 JOIN 未实现, validate 对 scope=sector fail-closed,
+            # 选项下发只会引导用户建出必然保存失败的规则。
             {"key": "positions", "label": "指定持仓"},
         ],
         "logics": [

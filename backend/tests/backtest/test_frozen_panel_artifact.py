@@ -5,6 +5,7 @@ from datetime import date
 
 import polars as pl
 import pytest
+from polars.testing import assert_frame_equal
 
 
 def _scope() -> dict[str, object]:
@@ -38,7 +39,7 @@ def test_frozen_panel_artifact_round_trips_only_when_scope_and_checksums_match(t
 
     restored = store.load(reference=reference, expected_scope=_scope())
 
-    assert restored.frame_equal(_panel())
+    assert_frame_equal(restored, _panel())
     assert reference["schema_version"] == "frozen-panel-artifact-v1"
     assert reference["scope_checksum"]
     assert reference["panel_checksum"]

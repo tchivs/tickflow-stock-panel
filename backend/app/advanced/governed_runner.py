@@ -11,9 +11,9 @@ from collections.abc import Mapping
 from contextlib import redirect_stderr, redirect_stdout, suppress
 from datetime import date, timedelta
 from hashlib import sha256
+from pathlib import Path
 from queue import Empty
 from typing import Any, Protocol
-from pathlib import Path
 
 try:
     import resource
@@ -50,12 +50,14 @@ class StrategyBacktestExperimentCollaborator:
     def _service(self) -> Any:
         """Rebuild non-pickleable governed data access inside the spawned worker."""
         from app.backtest.engine import BacktestEngine
+        from app.backtest.frozen_panel import FrozenPanelArtifactStore
         from app.backtest.strategy import StrategyBacktestService
         from app.services.screener import ScreenerService
         from app.strategy.engine import StrategyEngine
         from app.tickflow.repository import DataStore, KlineRepository
 
-        store = DataStore(Path(self._data_dir))
+        data_dir = Path(self._data_dir)
+        store = DataStore(data_dir)
         repository = KlineRepository(store)
         screener = ScreenerService(repository)
         strategy_engine = StrategyEngine(
@@ -63,23 +65,66 @@ class StrategyBacktestExperimentCollaborator:
             enriched_history_loader=screener._load_enriched_history,
             strategy_dirs=[
                 Path(__file__).resolve().parents[1] / "strategy" / "builtin",
-                Path(self._data_dir) / "strategies" / "custom",
-                Path(self._data_dir) / "strategies" / "ai",
+                data_dir / "strategies" / "custom",
+                data_dir / "strategies" / "ai",
             ],
         )
-        return StrategyBacktestService(BacktestEngine(repository), strategy_engine)
+        return StrategyBacktestService(
+            BacktestEngine(repository),
+            strategy_engine,
+            frozen_panel_store=FrozenPanelArtifactStore(data_dir / "research-artifacts"),
+        )
+
+    def prepare(self, *, specification: dict[str, object]) -> dict[str, object]:
+        """Freeze aggregate and split panels in the parent before process spawning."""
+        from app.backtest.frozen_panel import FrozenPanelArtifactStore
+
+        scope = _bound_scope(specification)
+        in_sample_scope, out_of_sample_scope = self._split_scopes(scope)
+        backtest = self._service()
+        store = FrozenPanelArtifactStore(Path(self._data_dir) / "research-artifacts")
+        artifacts = [
+            backtest.freeze_panel_artifact(self._config(window), store)
+            for window in (scope, in_sample_scope, out_of_sample_scope)
+        ]
+        return {**specification, "_frozen_panel_artifacts": artifacts}
 
     def run(self, *, specification: dict[str, object]) -> dict[str, object]:
         scope = _bound_scope(specification)
+        prepared = specification.get("_frozen_panel_artifacts")
+        if prepared is None:
+            artifacts: list[Mapping[str, object] | None] = [None, None, None]
+        elif (
+            isinstance(prepared, list)
+            and len(prepared) == 3
+            and all(isinstance(item, Mapping) for item in prepared)
+        ):
+            artifacts = list(prepared)  # type: ignore[list-item]
+        else:
+            raise ValueError("prepared governed panels are invalid")
 
         backtest = self._service()
-        aggregate_result = self._run_backtest(backtest=backtest, scope=scope)
+        aggregate_result = self._run_backtest(
+            backtest=backtest,
+            scope=scope,
+            frozen_panel_artifact=artifacts[0],
+        )
         in_sample_scope, out_of_sample_scope = self._split_scopes(scope)
         in_sample = self._split_evaluation(
-            result=self._run_backtest(backtest=backtest, scope=in_sample_scope), scope=in_sample_scope
+            result=self._run_backtest(
+                backtest=backtest,
+                scope=in_sample_scope,
+                frozen_panel_artifact=artifacts[1],
+            ),
+            scope=in_sample_scope,
         )
         out_of_sample = self._split_evaluation(
-            result=self._run_backtest(backtest=backtest, scope=out_of_sample_scope), scope=out_of_sample_scope
+            result=self._run_backtest(
+                backtest=backtest,
+                scope=out_of_sample_scope,
+                frozen_panel_artifact=artifacts[2],
+            ),
+            scope=out_of_sample_scope,
         )
 
         metrics = self._compact_metrics(aggregate_result.stats)
@@ -102,7 +147,10 @@ class StrategyBacktestExperimentCollaborator:
         }
 
     @staticmethod
-    def _config(scope: Mapping[str, object]) -> Any:
+    def _config(
+        scope: Mapping[str, object],
+        frozen_panel_artifact: Mapping[str, object] | None = None,
+    ) -> Any:
         from app.backtest.strategy import StrategyBacktestConfig
 
         strategy_id = scope.get("strategy_id")
@@ -124,10 +172,17 @@ class StrategyBacktestExperimentCollaborator:
             params=scope.get("parameters") if isinstance(scope.get("parameters"), dict) else None,
             mode="full",
             asset_type=str(scope.get("asset_type", "stock")),
+            frozen_panel_artifact=dict(frozen_panel_artifact) if frozen_panel_artifact else None,
         )
 
-    def _run_backtest(self, *, backtest: Any, scope: Mapping[str, object]) -> Any:
-        result = backtest.run(self._config(scope))
+    def _run_backtest(
+        self,
+        *,
+        backtest: Any,
+        scope: Mapping[str, object],
+        frozen_panel_artifact: Mapping[str, object] | None,
+    ) -> Any:
+        result = backtest.run(self._config(scope, frozen_panel_artifact))
         if result.error:
             raise ValueError("governed backtest could not complete")
         return result
@@ -330,11 +385,27 @@ class GovernedExperimentRunner:
         if resource is None or os.name != "posix" or "spawn" not in multiprocessing.get_all_start_methods():
             return self._failure(manifest, "resource_limited", "governed spawned process limits are unavailable")
 
+        prepared_specification = specification
+        prepare = getattr(self.collaborator, "prepare", None)
+        if callable(prepare):
+            try:
+                candidate = prepare(specification=dict(specification))
+                if not isinstance(candidate, dict):
+                    raise ValueError("governed collaborator returned invalid prepared specification")
+                _bound_scope(candidate)
+                prepared_specification = candidate
+            except Exception as error:
+                return self._failure(
+                    manifest,
+                    "validation_failed",
+                    _safe_text(str(error), fallback="governed panel preparation failed"),
+                )
+
         # Native data libraries create thread pools; fork would inherit a possibly
         # locked ASGI-host pool. A fresh interpreter is the safe isolation boundary.
         context = multiprocessing.get_context("spawn")
         output = context.Queue(maxsize=1)
-        worker = context.Process(target=_worker, args=(self.collaborator, specification, self._limits, output))
+        worker = context.Process(target=_worker, args=(self.collaborator, prepared_specification, self._limits, output))
         started = time.monotonic()
         try:
             worker.start()

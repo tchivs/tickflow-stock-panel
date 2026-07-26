@@ -1337,6 +1337,8 @@ export interface Preferences {
   feishu_webhook_url?: string
   feishu_webhook_secret?: string
   wecom_webhook_url?: string
+  telegram_bot_token?: string
+  telegram_chat_id?: string
   wecom_bot_id?: string
   wecom_bot_secret?: string
   wecom_bot_enabled?: boolean
@@ -1706,6 +1708,11 @@ export const api = {
     request<{ wecom_webhook_url: string }>('/api/settings/preferences/wecom-webhook', {
       method: 'PUT',
       body: JSON.stringify({ url }),
+    }),
+  updateTelegramBot: (botToken: string, chatId: string) =>
+    request<{ telegram_bot_token: string; telegram_chat_id: string }>('/api/settings/preferences/telegram-bot', {
+      method: 'PUT',
+      body: JSON.stringify({ bot_token: botToken, chat_id: chatId }),
     }),
   updateWecomBot: (botId: string, secret: string, enabled: boolean = true) =>
     request<{

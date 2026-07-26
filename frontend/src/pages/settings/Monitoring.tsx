@@ -71,7 +71,13 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
   const [feishuDraft, setFeishuDraft] = useState(feishuWebhookUrl)
   const [feishuSecretDraft, setFeishuSecretDraft] = useState(feishuWebhookSecret)
   const [feishuError, setFeishuError] = useState('')
-  // 企业微信 webhook
+  // Telegram Bot (告警投递渠道, 与飞书并列)
+  const telegramBotToken = prefs?.telegram_bot_token ?? ''
+  const telegramChatId = prefs?.telegram_chat_id ?? ''
+  const [telegramTokenDraft, setTelegramTokenDraft] = useState(telegramBotToken)
+  const [telegramChatDraft, setTelegramChatDraft] = useState(telegramChatId)
+  const [telegramError, setTelegramError] = useState('')
+  // 企业微信 webhook (复盘推送用 — 告警投递已不支持企业微信)
   const wecomWebhookUrl = prefs?.wecom_webhook_url ?? ''
   const [wecomDraft, setWecomDraft] = useState(wecomWebhookUrl)
   const [wecomError, setWecomError] = useState('')
@@ -85,6 +91,8 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
   const [botStatus, setBotStatus] = useState<{connected: boolean; last_error: string} | null>(null)
   // 飞书渠道配置区展开态 (推送通知卡片内)
   const [channelOpen, setChannelOpen] = useState(false)
+  // Telegram 渠道配置区展开态
+  const [telegramOpen, setTelegramOpen] = useState(false)
   // 企业微信渠道配置区展开态
   const [wecomOpen, setWecomOpen] = useState(false)
   // 智能机器人配置区展开态
@@ -93,6 +101,10 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
     setFeishuDraft(feishuWebhookUrl)
     setFeishuSecretDraft(feishuWebhookSecret)
   }, [feishuWebhookUrl, feishuWebhookSecret])
+  useEffect(() => {
+    setTelegramTokenDraft(telegramBotToken)
+    setTelegramChatDraft(telegramChatId)
+  }, [telegramBotToken, telegramChatId])
   useEffect(() => {
     setWecomDraft(wecomWebhookUrl)
   }, [wecomWebhookUrl])
@@ -171,6 +183,30 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
     }
     saveFeishuWebhook.mutate({ url, secret })
   }, [feishuDraft, feishuSecretDraft, saveFeishuWebhook])
+
+  const saveTelegramBot = useMutation({
+    mutationFn: ({ token, chatId }: { token: string; chatId: string }) => api.updateTelegramBot(token, chatId),
+    onSuccess: () => {
+      setTelegramError('')
+      toast('Telegram Bot 已保存', 'success')
+      qc.invalidateQueries({ queryKey: QK.preferences })
+    },
+    onError: (err: any) => setTelegramError(String(err?.message ?? '保存失败')),
+  })
+  const submitTelegram = useCallback(() => {
+    const token = telegramTokenDraft.trim()
+    const chatId = telegramChatDraft.trim()
+    // 投递适配器 token/chat_id 缺一不可 — 半配置会被静默跳过, 这里前置拦截。
+    if (Boolean(token) !== Boolean(chatId)) {
+      setTelegramError('Bot Token 与 Chat ID 需同时填写 (或同时留空以清除配置)')
+      return
+    }
+    if (token && !token.includes(':')) {
+      setTelegramError('Bot Token 格式形如 123456789:AAxxxxxxxx (BotFather 下发)')
+      return
+    }
+    saveTelegramBot.mutate({ token, chatId })
+  }, [telegramTokenDraft, telegramChatDraft, saveTelegramBot])
 
   const saveWecomWebhook = useMutation({
     mutationFn: (url: string) => api.updateWecomWebhook(url),
@@ -475,7 +511,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
         </div>
 
         {/* 推送通知 — 监控告警的外部推送渠道 (全局配置)。
-            飞书 / 企业微信已实现; QMT/ptrade 待定。
+            告警投递: 飞书 / Telegram; 企业微信 Webhook 仅用于复盘推送; QMT/ptrade 待定。
             每个渠道合并成一行: 勾选=新建规则默认推送, 点行展开地址配置。 */}
         <Card icon={Webhook} title="推送通知">
           <p className="text-xs text-secondary mb-3">
@@ -571,25 +607,98 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
               )}
             </div>
 
-            {/* 企业微信群推送 Webhook (可用): 与飞书并列, 勾选默认 + 展开地址配置 */}
+            {/* Telegram Bot (可用): 与飞书并列, 勾选默认 + 展开凭证配置 */}
+            <div className="rounded-btn border border-border/60 bg-base/40 overflow-hidden">
+              <div
+                onClick={() => setTelegramOpen(o => !o)}
+                className="flex items-center gap-2 px-2.5 py-2 cursor-pointer transition-colors hover:bg-base/60"
+              >
+                <input
+                  type="checkbox"
+                  checked={webhookDefaultChannels.includes('telegram')}
+                  onChange={e => { e.stopPropagation(); toggleDefaultChannel('telegram', e.target.checked) }}
+                  onClick={e => e.stopPropagation()}
+                  title="作为新建规则的默认推送渠道"
+                  className="h-3 w-3 accent-accent cursor-pointer"
+                />
+                <span className="text-[11px] font-medium text-foreground">Telegram</span>
+                <span className="text-[9px] text-muted">Bot API 推送</span>
+                {webhookDefaultChannels.includes('telegram') && (
+                  <span className="rounded bg-accent/15 px-1 py-px text-[9px] text-accent">默认</span>
+                )}
+                <span className={`ml-auto text-[9px] ${telegramBotToken && telegramChatId ? 'text-emerald-500' : 'text-warning'}`}>
+                  {telegramBotToken && telegramChatId ? '已配置' : '未配置'}
+                </span>
+                <ChevronDown className={`h-3 w-3 text-muted transition-transform ${telegramOpen ? 'rotate-180' : ''}`} />
+              </div>
+
+              {telegramOpen && (
+                <div className="border-t border-border/60 bg-base/30 p-3">
+                  <label className="block space-y-1.5">
+                    <span className="text-[11px] text-muted">Bot Token</span>
+                    <input
+                      type="password"
+                      value={telegramTokenDraft}
+                      onChange={e => setTelegramTokenDraft(e.target.value)}
+                      placeholder="123456789:AAxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                      className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs font-mono text-foreground focus:outline-none focus:border-accent/50"
+                    />
+                  </label>
+
+                  <label className="block mt-2 space-y-1.5">
+                    <span className="text-[11px] text-muted">Chat ID (个人 / 群 / 频道)</span>
+                    <input
+                      value={telegramChatDraft}
+                      onChange={e => setTelegramChatDraft(e.target.value)}
+                      placeholder="123456789 或 -1001234567890"
+                      className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs font-mono text-foreground focus:outline-none focus:border-accent/50"
+                    />
+                  </label>
+
+                  {telegramError && (
+                    <div className="mt-2 text-[11px] text-danger">{telegramError}</div>
+                  )}
+
+                  <div className="mt-2 flex items-center gap-2">
+                    <button
+                      onClick={submitTelegram}
+                      disabled={saveTelegramBot.isPending || (telegramTokenDraft.trim() === telegramBotToken && telegramChatDraft.trim() === telegramChatId)}
+                      className="px-3 py-1.5 rounded-btn bg-accent text-base text-xs font-medium disabled:opacity-50 cursor-pointer hover:bg-accent/90 transition-colors"
+                    >
+                      {saveTelegramBot.isPending ? '保存中…' : '保存'}
+                    </button>
+                    {telegramBotToken && telegramChatId && (
+                      <span className="text-[10px] text-emerald-500">● 已配置</span>
+                    )}
+                  </div>
+
+                  <details className="mt-3 text-[10px] text-muted">
+                    <summary className="cursor-pointer hover:text-secondary">如何获取 Bot Token 和 Chat ID?</summary>
+                    <ol className="mt-1.5 space-y-1 pl-4 list-decimal leading-relaxed">
+                      <li>在 Telegram 搜索 <b>@BotFather</b> → 发送 <b>/newbot</b> 创建机器人, 复制下发的 Token</li>
+                      <li>把机器人拉进目标群 (或直接私聊机器人发一条消息)</li>
+                      <li>在 Telegram 搜索 <b>@userinfobot</b> 获取个人 Chat ID; 群 ID 可用 @RawDataBot 等工具查看 (负数, 形如 -100 开头)</li>
+                      <li>把 Token 和 Chat ID 填到上方输入框并保存</li>
+                    </ol>
+                    <p className="mt-1.5 pl-4 text-muted/70">
+                      📖 官方文档:
+                      <a href="https://core.telegram.org/bots/features#botfather" target="_blank" rel="noreferrer" className="text-accent hover:text-accent/80">
+                        BotFather 使用指南 ↗
+                      </a>
+                    </p>
+                  </details>
+                </div>
+              )}
+            </div>
+
+            {/* 企业微信群推送 Webhook — 仅复盘推送使用; 告警投递已不支持企业微信, 不再提供默认渠道勾选 */}
             <div className="rounded-btn border border-border/60 bg-base/40 overflow-hidden">
               <div
                 onClick={() => setWecomOpen(o => !o)}
                 className="flex items-center gap-2 px-2.5 py-2 cursor-pointer transition-colors hover:bg-base/60"
               >
-                <input
-                  type="checkbox"
-                  checked={webhookDefaultChannels.includes('wecom')}
-                  onChange={e => { e.stopPropagation(); toggleDefaultChannel('wecom', e.target.checked) }}
-                  onClick={e => e.stopPropagation()}
-                  title="作为新建规则的默认推送渠道"
-                  className="h-3 w-3 accent-accent cursor-pointer"
-                />
                 <span className="text-[11px] font-medium text-foreground">企业微信</span>
-                <span className="text-[9px] text-muted">群推送 Webhook</span>
-                {webhookDefaultChannels.includes('wecom') && (
-                  <span className="rounded bg-accent/15 px-1 py-px text-[9px] text-accent">默认</span>
-                )}
+                <span className="text-[9px] text-muted">群推送 Webhook · 仅复盘推送</span>
                 <span className={`ml-auto text-[9px] ${wecomWebhookUrl ? 'text-emerald-500' : 'text-warning'}`}>
                   {wecomWebhookUrl ? '已配置' : '未配置'}
                 </span>

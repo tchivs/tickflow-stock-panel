@@ -1,8 +1,8 @@
 """RED contracts for immutable experiment specifications, runs, and feedback."""
 from __future__ import annotations
 
-import sqlite3
 import pickle
+import sqlite3
 from types import SimpleNamespace
 
 import pytest
@@ -115,18 +115,22 @@ def test_strategy_backtest_collaborator_derives_split_evidence_from_distinct_gov
     assert split["in_sample"] == {
         "start": "2024-01-01",
         "end": "2024-07-01",
-        "metrics": {"sharpe": 1.1},
+        "metrics": {"sharpe": 1.1, "eligible_buy_count": 0, "completed_trade_count": 0},
         "evaluation": {
             "run_id": "governed-window-2",
             "governed_input_fingerprint": "window-fingerprint-2",
             "window": {"start": "2024-01-01", "end": "2024-07-01"},
             "artifact": {
                 "reference": "strategy-backtest:governed-window-2:metrics",
-                "checksum": "bfd12c5dd3cc13eb901a234f260136d154154e9fdafb00b7582a23dac9598cb4",
+                "checksum": "f570450ca70605eecdda86313575118904ccc6811f8948973dbf281e26c86b9f",
             },
         },
     }
-    assert split["out_of_sample"]["metrics"] == {"sharpe": 2.2}
+    assert split["out_of_sample"]["metrics"] == {
+        "sharpe": 2.2,
+        "eligible_buy_count": 0,
+        "completed_trade_count": 0,
+    }
     assert split["out_of_sample"]["evaluation"]["run_id"] == "governed-window-3"
 
 
@@ -224,12 +228,14 @@ def test_experiment_specification_freezes_reproducible_research_contract_and_is_
     assert specification["success_criteria"] == {"out_of_sample_return_gt": 0.03}
     assert specification["failure_criteria"] == {"max_drawdown_lt": -0.2}
 
-    with sqlite3.connect(repository.database_path) as connection:
-        with pytest.raises(sqlite3.DatabaseError, match="immutable"):
-            connection.execute(
-                "UPDATE advanced_experiment_specs SET hypothesis = 'after-the-fact rewrite' WHERE id = ?",
-                (specification["id"],),
-            )
+    with (
+        sqlite3.connect(repository.database_path) as connection,
+        pytest.raises(sqlite3.DatabaseError, match="immutable"),
+    ):
+        connection.execute(
+            "UPDATE advanced_experiment_specs SET hypothesis = 'after-the-fact rewrite' WHERE id = ?",
+            (specification["id"],),
+        )
 
 
 
@@ -260,13 +266,13 @@ def test_server_resolved_binding_is_immutable_and_denials_precede_all_experiment
     assert _experiment_evidence_counts(repository)["advanced_experiment_specs"] == 1
 
     baseline = _experiment_evidence_counts(repository)
-    with pytest.raises(ValueError, match="binding|bound strategy"):
+    with pytest.raises(ValueError, match=r"binding|bound strategy"):
         _specification(service, data_scope=_strategy_scope(strategy_id="different_installed_strategy"))
     assert _experiment_evidence_counts(repository) == baseline
     assert runner.calls == []
 
     unbound_repository, unbound_service = _service(tmp_path / "unbound", FakeGovernedBacktest(), lambda _asset_id: None)
-    with pytest.raises(ValueError, match="binding|bound strategy"):
+    with pytest.raises(ValueError, match=r"binding|bound strategy"):
         _specification(unbound_service)
     assert _experiment_evidence_counts(unbound_repository) == {
         table: 0 for table in _experiment_evidence_counts(unbound_repository)
@@ -292,7 +298,7 @@ def test_legacy_specifications_remain_readable_but_lack_executable_binding(tmp_p
 
     assert legacy is not None
     assert legacy["bound_strategy_id"] is None
-    with pytest.raises(ValueError, match="binding|bound strategy"):
+    with pytest.raises(ValueError, match=r"binding|bound strategy"):
         service.run_specification(specification_id="legacy-spec")
 
 
@@ -333,7 +339,7 @@ def test_service_rechecks_persisted_binding_before_runner_or_terminal_evidence(t
     baseline = _experiment_evidence_counts(repository)
     binding["strategy_id"] = "replacement-strategy"
 
-    with pytest.raises(ValueError, match="binding|bound strategy"):
+    with pytest.raises(ValueError, match=r"binding|bound strategy"):
         service.run_specification(specification_id=specification["id"])
 
     assert runner.calls == []
@@ -384,11 +390,11 @@ def test_constraint_failures_are_auditable_but_ineligible_for_feedback(tmp_path,
     assert run["status"] == status
     assert run["constraint_reason"] == constraint_reason
     assert run["diagnostic"] == {"summary": constraint_reason, "raw_output": None}
-    with pytest.raises(ValueError, match="completed|eligible"):
+    with pytest.raises(ValueError, match=r"completed|eligible"):
         service.record_feedback(
             run_id=run["id"],
             conclusion="refuted",
-            notes="失败是运行约束，不构成研究结论。",
+            notes="失败是运行约束, 不构成研究结论。",
         )
     assert service.list_feedback(run_id=run["id"]) == []
 
@@ -407,11 +413,13 @@ def test_completed_run_accepts_exactly_one_append_only_structured_feedback(tmp_p
     assert feedback["conclusion"] == "needs_replication"
     assert feedback["metrics"] == {"sharpe": 1.2, "out_of_sample_return": 0.08}
     assert feedback["artifacts"] == [{"reference": "research_artifacts/run-1/metrics.json", "checksum": "a" * 64}]
-    with pytest.raises(ValueError, match="already|one feedback"):
+    with pytest.raises(ValueError, match=r"already|one feedback"):
         service.record_feedback(run_id=run["id"], conclusion="supported", notes="不得覆盖已有结论")
-    with sqlite3.connect(repository.database_path) as connection:
-        with pytest.raises(sqlite3.DatabaseError, match="immutable"):
-            connection.execute("DELETE FROM advanced_experiment_feedback WHERE id = ?", (feedback["id"],))
+    with (
+        sqlite3.connect(repository.database_path) as connection,
+        pytest.raises(sqlite3.DatabaseError, match="immutable"),
+    ):
+        connection.execute("DELETE FROM advanced_experiment_feedback WHERE id = ?", (feedback["id"],))
 
 
 def test_retry_appends_a_new_run_and_configuration_change_appends_a_new_specification_version(tmp_path):

@@ -32,7 +32,8 @@ LOGICS = {"and", "or"}
 DIRECTIONS = {"entry", "exit", "both"}
 SEVERITIES = {"info", "warn", "critical"}
 OPS = {">", ">=", "<", "<=", "==", "!="}
-DELIVERY_CHANNELS = {"feishu", "telegram", "wecom"}
+# 告警投递渠道白名单 — 投递适配器仅实现飞书/Telegram; 旧规则的 wecom 在 normalize 时剥离。
+DELIVERY_CHANNELS = {"feishu", "telegram"}
 TIME_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
 # ladder 规则: 封单监控的指标 (量=手, 额=元)
 LADDER_METRICS = {"sealed_vol", "sealed_amount"}
@@ -189,7 +190,7 @@ def validate(rule: dict) -> None:
         raise ValueError("bypass_quiet_period 必须是布尔值")
     channels = rule.get("webhook_channels", [])
     if not isinstance(channels, list) or any(channel not in DELIVERY_CHANNELS for channel in channels):
-        raise ValueError("channel 必须是已批准的 Feishu、Telegram 或企业微信渠道")
+        raise ValueError("channel 必须是已批准的 Feishu 或 Telegram 渠道")
 
 
 def normalize(rule: dict) -> dict:
@@ -217,11 +218,13 @@ def normalize(rule: dict) -> dict:
     r.setdefault("message", "")
     r.setdefault("webhook_url", "")
     r.setdefault("webhook_enabled", False)
-    # 兼容旧规则的企业微信渠道；新持仓规则可明确选择 Feishu/Telegram。
+    # 渠道规范化: 企业微信告警投递已下线, 定向剥离旧规则里的 wecom —
+    # 避免编辑器出现不可见渠道、投递层出现无记录的静默丢弃。
+    # 其余未知渠道保留原样, 交给 validate fail-closed 拒绝, 不静默吞掉调用方错误。
     if r.get("webhook_channels") is None:
-        r["webhook_channels"] = ["feishu", "wecom"] if r.get("webhook_enabled") else []
+        r["webhook_channels"] = ["feishu"] if r.get("webhook_enabled") else []
     else:
-        r["webhook_channels"] = list(r["webhook_channels"])
+        r["webhook_channels"] = [c for c in r["webhook_channels"] if c != "wecom"]
     r.setdefault("created_at", datetime.now(timezone.utc).isoformat())
     return r
 

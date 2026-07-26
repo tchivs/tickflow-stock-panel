@@ -3,12 +3,12 @@ from __future__ import annotations
 
 import json
 import time
-from datetime import date, datetime, time as clock, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
+from datetime import time as clock
 from hashlib import sha256
 from types import SimpleNamespace
 
 import pytest
-
 from fastapi.testclient import TestClient
 
 
@@ -84,7 +84,7 @@ def _write_governed_backtest_fixture(fixtures_dir) -> None:  # type: ignore[no-u
             bars.append({
                 "symbol": "600000.SH", "date": cursor.isoformat(), "open": close - 0.15,
                 "high": close + 0.35, "low": close - 0.4, "close": close, "volume": volume,
-                "amount": volume * close, "quote_ts": int(datetime.combine(cursor, clock(1, 30), timezone.utc).timestamp() * 1000),
+                "amount": volume * close, "quote_ts": int(datetime.combine(cursor, clock(1, 30), UTC).timestamp() * 1000),
             })
             business_day += 1
         cursor += timedelta(days=1)
@@ -374,9 +374,8 @@ def test_main_host_rejects_invalid_fixture_readiness_before_lake_sync(tmp_path, 
 
     from app.main import app
 
-    with pytest.raises(RuntimeError, match="fixture readiness is malformed"):
-        with TestClient(app):
-            pass
+    with pytest.raises(RuntimeError, match="fixture readiness is malformed"), TestClient(app):
+        pass
 
     assert not list(data_dir.rglob("*.parquet"))
     assert not (data_dir / "operational.db").exists()
@@ -415,9 +414,11 @@ def test_main_host_rejects_same_provenance_stale_research_asset_binding(tmp_path
     })
     advanced_fixture.write_text(json.dumps(conflicting_fixture), encoding="utf-8")
 
-    with pytest.raises(RuntimeError, match="research asset binding conflicts with persisted lifecycle binding"):
-        with TestClient(app):
-            pass
+    with (
+        pytest.raises(RuntimeError, match="research asset binding conflicts with persisted lifecycle binding"),
+        TestClient(app),
+    ):
+        pass
 
 def test_main_host_fixture_revokes_selected_job_before_execution(tmp_path, monkeypatch):
     from app.config import settings
@@ -559,6 +560,11 @@ def test_governed_runner_persists_applied_limits_and_completed_feedback(tmp_path
             memory_limit_bytes=512 * 1024 * 1024,
             output_limit_bytes=16 * 1024,
         ),
+        binding_resolver=lambda research_asset_id: {
+            "strategy_id": "fixture_momentum",
+            "research_asset_id": research_asset_id,
+            "revision": research_asset_id,
+        },
     )
     specification = service.create_specification(
         research_asset_id="fixture-asset-v1",
@@ -597,7 +603,10 @@ def test_governed_runner_persists_applied_limits_and_completed_feedback(tmp_path
 
 
 def test_spawned_governed_backtest_completes_split_evidence_within_budget(tmp_path, monkeypatch):
-    from app.advanced.governed_runner import GovernedExperimentRunner, StrategyBacktestExperimentCollaborator
+    from app.advanced.governed_runner import (
+        GovernedExperimentRunner,
+        StrategyBacktestExperimentCollaborator,
+    )
     from app.jobs.daily_pipeline import run_phase1_fixture_sync
 
     fixture_dir = tmp_path / "phase1-fixtures"
@@ -613,6 +622,7 @@ def test_spawned_governed_backtest_completes_split_evidence_within_budget(tmp_pa
         memory_limit_bytes=2 * 1024 * 1024 * 1024,
     ).run(specification={
         "research_asset_id": "fixture-asset", "version": 1, "method": "bounded-backtest",
+        "bound_strategy_id": "bullish_alignment",
         "data_scope": {
             "market": "CN-A", "strategy_id": "bullish_alignment", "start": "2024-01-02", "end": "2024-06-28",
             "symbols": ["600000.SH"], "asset_type": "stock", "parameters": {"require_ma_alignment": True},
@@ -646,6 +656,11 @@ def test_governed_runner_reaps_blocked_work_and_rejects_feedback(tmp_path):
             memory_limit_bytes=512 * 1024 * 1024,
             output_limit_bytes=16 * 1024,
         ),
+        binding_resolver=lambda research_asset_id: {
+            "strategy_id": "fixture_momentum",
+            "research_asset_id": research_asset_id,
+            "revision": research_asset_id,
+        },
     )
     specification = service.create_specification(
         research_asset_id="fixture-asset",

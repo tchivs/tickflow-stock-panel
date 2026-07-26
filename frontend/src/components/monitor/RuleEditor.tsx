@@ -22,6 +22,10 @@ const TYPE_DEFAULT_NAME: Record<string, string> = {
   signal: '个股信号监控', price: '价格监控', market: '市场异动监控', strategy: '策略监控', position: '持仓监控',
 }
 
+// 告警投递渠道白名单 — 与后端 monitor_rules.DELIVERY_CHANNELS 对齐。
+// 旧规则里已下线的 wecom 渠道在装载草稿时剥离, 避免出现"看不见也取消不掉"的隐形渠道。
+const RULE_DELIVERY_CHANNELS = ['feishu', 'telegram']
+
 const emptyRule = (preset?: Partial<MonitorRule>): MonitorRule => ({
   id: genRuleId(),
   name: '',
@@ -46,16 +50,23 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
   const options = useQuery({ queryKey: QK.monitorRuleOptions, queryFn: api.monitorRuleOptions })
   const { data: prefs } = usePreferences()
   const feishuConfigured = !!(prefs?.feishu_webhook_url)
-  const telegramConfigured = Boolean((prefs as { telegram_bot_token?: string } | undefined)?.telegram_bot_token)
+  // 投递适配器 token/chat_id 缺一不可, 只配一半仍会被跳过 — 就绪判定必须两者同时存在。
+  const telegramConfigured = !!(prefs?.telegram_bot_token && prefs?.telegram_chat_id)
   const [editing] = useState(!!rule)
   // 新建规则: 预填全局「默认推送渠道」(多选数组), preset 显式指定时以 preset 为准。
-  // 编辑规则: 完全沿用规则自身配置, 不受默认值影响。
+  // 编辑规则: 沿用规则自身配置, 仅做兼容规范化 (剥离下线渠道、持仓 ID 统一为数字)。
   const [draft, setDraft] = useState<MonitorRule>(
     rule
-      ? { ...rule, conditions: rule.conditions.map(c => ({ ...c })) }
+      ? {
+          ...rule,
+          conditions: rule.conditions.map(c => ({ ...c })),
+          webhook_channels: (rule.webhook_channels ?? []).filter(c => RULE_DELIVERY_CHANNELS.includes(c)),
+          // 后端接受 str|int 持仓 ID; 统一为数字, 保证与持仓列表的勾选匹配、避免混型重复。
+          position_ids: (rule.position_ids ?? []).map(Number),
+        }
       : {
           ...emptyRule(preset),
-          webhook_channels: preset?.webhook_channels ?? (prefs?.webhook_default_channels ?? []),
+          webhook_channels: (preset?.webhook_channels ?? prefs?.webhook_default_channels ?? []).filter(c => RULE_DELIVERY_CHANNELS.includes(c)),
         },
   )
   const holdings = useQuery({
@@ -69,6 +80,10 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
     enabled: draft.type === 'position',
   })
   const accountNames = new Map((accounts.data?.accounts ?? []).map(account => [account.id, account.name]))
+  // 规则引用、但当前持仓列表中不存在的持仓 (通常已归档/删除): 明确显示并允许一键移除,
+  // 避免计数包含"幽灵持仓"、用户却无处取消勾选。
+  const holdingIds = new Set((holdings.data?.positions ?? []).map(position => position.id))
+  const unavailablePositionIds = holdings.data ? (draft.position_ids ?? []).map(Number).filter(id => !holdingIds.has(id)) : []
   const assetType = draft.asset_type ?? 'stock'
   // 策略列表跟随资产类型: ETF 只列技术类策略。
   const strategies = useQuery({
@@ -301,13 +316,26 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
             ))}
           </div>
           <p id="position-selection-help" className="text-[10px] text-muted">已选择 {(draft.position_ids ?? []).length} 笔持仓。</p>
+          {unavailablePositionIds.length > 0 && (
+            <p className="text-[10px] text-warning">
+              {unavailablePositionIds.length} 笔已选持仓不在当前列表 (可能已归档或删除)，保存后仍会保留。
+              <button
+                type="button"
+                onClick={() => setDraft(d => ({ ...d, position_ids: (d.position_ids ?? []).map(Number).filter(id => holdingIds.has(id)) }))}
+                className="ml-1 text-accent hover:text-accent/80"
+              >
+                移除失效持仓
+              </button>
+            </p>
+          )}
         </fieldset>
       ) : (
         <div className="space-y-2">
           <span className="text-[11px] text-muted">作用范围</span>
           <div className="flex flex-wrap items-center gap-2">
             <select value={draft.scope} onChange={e => setDraft(d => ({ ...d, scope: e.target.value as MonitorRule['scope'] }))} className="h-9 w-32 rounded-btn border border-border bg-base px-3 text-xs text-foreground">
-              {(options.data?.scopes ?? []).filter(scope => scope.key !== 'positions').map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
+              {/* positions 有专属选择器; sector 后端 fail-closed (板块 JOIN 未实现), 均不下拉可选 */}
+              {(options.data?.scopes ?? []).filter(scope => scope.key !== 'positions' && scope.key !== 'sector').map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
             </select>
             {draft.scope === 'symbols' && (
               <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">

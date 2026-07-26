@@ -1106,8 +1106,7 @@ class QuoteService:
             # 快照日期必须是北京当日: 节假日或数据未刷新时 enriched_date 会落后于当日,
             # 说明市场未在交易 → 跳过。无需维护 A股交易日历即可挡住节假日与陈旧价告警。
             if not fixture_mode and enriched_date != cn_today():
-                logger.debug("监控评估跳过: enriched 快照日期 %s 非当日 %s (节假日/数据未刷新)",
-                             enriched_date, cn_today())
+                logger.debug("监控评估跳过: enriched 快照日期 %s 非当日 %s (节假日/数据刷新)", enriched_date, cn_today())
                 return
 
             all_alerts: list[dict] = []
@@ -1282,6 +1281,7 @@ class QuoteService:
     def _maybe_send_webhook(self, rule_events: list[dict], engine) -> None:
         """Enqueue approved, durable Feishu and Telegram delivery after SSE fan-out."""
         try:
+
             from app.notifications.delivery import DeliveryConfig
             from app.services import preferences
 

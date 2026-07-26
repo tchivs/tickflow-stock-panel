@@ -74,6 +74,8 @@ COPY backend/pyproject.toml backend/uv.lock* ./
 # 比逐个重试更稳健 —— 任一源缺包时另一源补位。
 RUN if [ "$USE_CN_MIRROR" = "1" ]; then \
       export UV_DEFAULT_INDEX="$PYPI_INDEX" UV_EXTRA_INDEX_URL="$PYPI_FALLBACK"; \
+    else \
+      UV_INDEX_URL=https://pypi.org/simple uv lock --refresh; \
     fi; \
     set -- --no-dev; \
     for extra in $BACKEND_EXTRAS; do \

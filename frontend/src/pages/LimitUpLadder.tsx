@@ -404,9 +404,10 @@ function MonitorMenu({ stock, direction, sealMode, monitorRule, anchorRect, hasD
     const mult = units.find(u => u.key === initUnit)?.mult ?? 1
     return String(existing.threshold / mult)
   })
-  // 推送渠道 (多选): 新建取全局默认, 已有规则沿用其 webhook_channels
+  // 推送渠道 (多选): 新建取全局默认, 已有规则沿用其 webhook_channels。
+  // 告警投递仅支持飞书/Telegram; 旧规则里的 wecom 在装载时剥离 (后端 normalize 同步剥离)。
   const [pushChannels, setPushChannels] = useState<string[]>(
-    existing?.webhook_channels ?? webhookDefaultChannels,
+    (existing?.webhook_channels ?? webhookDefaultChannels).filter(ch => ch === 'feishu' || ch === 'telegram'),
   )
   const togglePushChannel = (ch: string) =>
     setPushChannels(cur => cur.includes(ch) ? cur.filter(c => c !== ch) : [...cur, ch])
@@ -536,12 +537,12 @@ function MonitorMenu({ stock, direction, sealMode, monitorRule, anchorRect, hasD
             </select>
           </div>
 
-          {/* 推送渠道: 胶囊标签 (飞书 / 企业微信 各自独立勾选), 选中带强调色 */}
+          {/* 推送渠道: 胶囊标签 (飞书 / Telegram 各自独立勾选), 选中带强调色 */}
           <div className="flex items-center gap-2">
             <span className="text-[10px] text-muted shrink-0 w-8">推送</span>
             {([
               { key: 'feishu', label: '飞书' },
-              { key: 'wecom', label: '企业微信' },
+              { key: 'telegram', label: 'Telegram' },
             ] as const).map(ch => {
               const on = pushChannels.includes(ch.key)
               return (

@@ -55,8 +55,8 @@ export function DeliveryDetailDialog({ eventId, onClose }: { eventId: string; on
   const detail = useQuery({
     queryKey: QK.monitorDelivery(eventId),
     queryFn: () => api.alertDeliveryDetails(eventId),
+    // 弹窗开着时轮询跟进 pending→sent/failed; 标签页切后台无人在看, 不必继续
     refetchInterval: 10_000,
-    refetchIntervalInBackground: true,
   })
   const deliveries = detail.data?.deliveries ?? []
 

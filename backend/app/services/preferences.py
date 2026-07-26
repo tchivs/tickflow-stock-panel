@@ -287,6 +287,11 @@ def set_depth_finalize_time(hour: int, minute: int) -> dict:
 # 多选: 不推送 = 空数组, 而非 'none'
 REVIEW_PUSH_CHANNELS = {"feishu", "wecom"}
 
+# 监控规则告警投递渠道白名单 — 与复盘推送独立。
+# 告警投递由 notification_delivery 服务执行, 目前仅支持飞书与 Telegram;
+# 旧规则里的 wecom 渠道在 monitor_rules.normalize 时被剥离。
+RULE_DELIVERY_CHANNELS = {"feishu", "telegram"}
+
 
 def get_review_schedule() -> dict:
     """定时复盘调度 {"enabled": False, "hour": 15, "minute": 10}。默认关闭。
@@ -476,6 +481,25 @@ def set_feishu_webhook_secret(secret: str) -> str:
     return get_feishu_webhook_secret()
 
 
+def get_telegram_bot_token() -> str:
+    """Telegram Bot Token — 告警投递用, 与飞书并列的外部渠道。全局共用一处。"""
+    return load().get("telegram_bot_token", "")
+
+
+def get_telegram_chat_id() -> str:
+    """Telegram Chat ID — 告警发送的目标会话 (个人/群/频道)。与 Bot Token 成对配置。"""
+    return load().get("telegram_chat_id", "")
+
+
+def set_telegram_bot(token: str, chat_id: str) -> tuple[str, str]:
+    """保存 Telegram Bot 凭证 (token + chat_id 成对保存)。两者均传空串表示清空配置。"""
+    save({
+        "telegram_bot_token": str(token or "").strip(),
+        "telegram_chat_id": str(chat_id or "").strip(),
+    })
+    return get_telegram_bot_token(), get_telegram_chat_id()
+
+
 def get_wecom_webhook_url() -> str:
     """企业微信群推送 Webhook 地址 — 与飞书并列的第二推送通道。
 
@@ -543,9 +567,10 @@ def get_webhook_enabled_default() -> bool:
 def set_webhook_enabled_default(enabled: bool) -> bool:
     """保存推送默认勾选态 (老布尔兼容入口)。
 
-    新数据模型为渠道数组; 此处把老布尔转译: True→['feishu','wecom'], False→[]。
+    新数据模型为渠道数组; 此处把老布尔转译: True→['feishu'], False→[]。
+    (告警投递已不再支持企业微信, 老的双推行为退化为仅飞书。)
     """
-    set_webhook_default_channels(["feishu", "wecom"] if enabled else [])
+    set_webhook_default_channels(["feishu"] if enabled else [])
     return get_webhook_enabled_default()
 
 
@@ -556,15 +581,15 @@ def get_webhook_default_channels() -> list[str]:
     此默认值供规则编辑器新建规则时预填, 单条规则仍可独立修改。
 
     向后兼容: 老版本只有布尔 webhook_enabled_default (勾选即飞书+企业微信双推),
-    这里把 True 迁移为 ['feishu','wecom'], 还原当时的实际行为。
+    企业微信告警投递已下线, True 迁移为 ['feishu']; 存量数组里的 wecom 同样被过滤。
     """
     d = load()
     raw = d.get("webhook_default_channels")
     if isinstance(raw, list):
-        return [c for c in raw if c in REVIEW_PUSH_CHANNELS]
-    # 兼容老布尔开关 (勾选即双推)
+        return [c for c in raw if c in RULE_DELIVERY_CHANNELS]
+    # 兼容老布尔开关 (勾选即推飞书)
     if d.get("webhook_enabled_default") is True:
-        return ["feishu", "wecom"]
+        return ["feishu"]
     return []
 
 
@@ -573,7 +598,7 @@ def set_webhook_default_channels(channels: list[str]) -> list[str]:
     seen: set[str] = set()
     cleaned: list[str] = []
     for c in channels or []:
-        if c in REVIEW_PUSH_CHANNELS and c not in seen:
+        if c in RULE_DELIVERY_CHANNELS and c not in seen:
             seen.add(c)
             cleaned.append(c)
     save({"webhook_default_channels": cleaned})

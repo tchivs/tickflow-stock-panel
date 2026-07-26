@@ -97,7 +97,8 @@ const _SEVERITY_BAR: Record<string, string> = {
 function MonitorWidget() {
   const [previewEv, setPreviewEv] = useState<AlertEvent | null>(null)
   const alerts = useQuery({
-    queryKey: ['alerts', ''],
+    // 独立 key: 与监控中心的全量列表 (limit 500) 参数不同, 共用 key 会互相覆盖缓存
+    queryKey: QK.alertsRecent(10),
     queryFn: () => api.alertsList({ days: 7, limit: 10 }),
     refetchInterval: 10000,
     refetchIntervalInBackground: true,

@@ -1,23 +1,26 @@
 """策略回测服务 — 复用 StrategyDef 体系做全周期回测。
 
-核心优化: 向量化 filter_fn，不逐日调用 StrategyEngine.run()。
+核心优化: 向量化 filter_fn, 不逐日调用 StrategyEngine.run()。
 """
 from __future__ import annotations
-import json
 
+import json
 import logging
-from hashlib import sha256
+import threading
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, timedelta
-from typing import Callable, Literal
+from hashlib import sha256
+from typing import Literal
 
 import numpy as np
 import polars as pl
 
 from app.backtest.engine import BacktestEngine, MatcherConfig, SimResult
-from app.strategy.engine import StrategyEngine, StrategyDef
+from app.backtest.frozen_panel import FrozenPanelArtifactError, FrozenPanelArtifactStore
+from app.strategy.engine import StrategyDef, StrategyEngine
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +50,7 @@ class StrategyBacktestConfig:
     mode: Literal["position", "full"] = "position"
     asset_type: str = "stock"
     holding_days: int = 5
+    frozen_panel_artifact: dict[str, object] | None = None
 
     def __post_init__(self) -> None:
         if self.entry_fill is None:
@@ -76,15 +80,69 @@ class StrategyBacktestService:
         self,
         engine: BacktestEngine,
         strategy_engine: StrategyEngine,
+        frozen_panel_store: FrozenPanelArtifactStore | None = None,
     ) -> None:
         self.engine = engine
         self.strategy_engine = strategy_engine
+        self.frozen_panel_store = frozen_panel_store
+
+    def freeze_panel_artifact(
+        self,
+        config: StrategyBacktestConfig,
+        store: FrozenPanelArtifactStore | None = None,
+    ) -> dict[str, str]:
+        """Load one governed panel in the parent and persist it for a spawned worker."""
+        artifact_store = store or self.frozen_panel_store
+        if artifact_store is None:
+            raise FrozenPanelArtifactError("frozen governed panel store is unavailable")
+        strategy = self.strategy_engine.get(config.strategy_id)
+        overrides = config.overrides or {}
+        max_hold_days = self._override_value(overrides, "max_hold_days", strategy.max_hold_days)
+        load_start, load_end, _full_horizon_days = self._panel_window(
+            config,
+            strategy.lookback_days,
+            max_hold_days,
+        )
+        panel = self.engine.load_panel(
+            config.symbols,
+            load_start,
+            load_end,
+            asset_type=config.asset_type,
+        )
+        if panel.is_empty():
+            raise FrozenPanelArtifactError("cannot freeze an empty governed panel")
+        return artifact_store.create(scope=self._frozen_panel_scope(config), panel=panel)
+
+    @staticmethod
+    def _panel_window(
+        config: StrategyBacktestConfig,
+        lookback_days: object,
+        max_hold_days: object,
+    ) -> tuple[date, date, int]:
+        warmup_days = max(120, int(max(int(lookback_days or 1), 1) * 1.5))
+        load_start = config.start - timedelta(days=warmup_days)
+        load_end = config.end
+        full_horizon_days = max(int(max_hold_days or config.holding_days or 5), 1)
+        if config.mode == "full":
+            load_end = config.end + timedelta(days=(full_horizon_days + 5) * 2)
+        return load_start, load_end, full_horizon_days
+
+    @staticmethod
+    def _frozen_panel_scope(config: StrategyBacktestConfig) -> dict[str, object]:
+        return {
+            "strategy_id": config.strategy_id,
+            "symbols": config.symbols,
+            "start": config.start.isoformat(),
+            "end": config.end.isoformat(),
+            "asset_type": config.asset_type,
+            "mode": config.mode,
+        }
 
     def run(
         self,
         config: StrategyBacktestConfig,
-        progress_cb: "Callable[[dict], None] | None" = None,
-        cancel_event: "threading.Event | None" = None,
+        progress_cb: Callable[[dict], None] | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> StrategyBacktestResult:
         t0 = time.perf_counter()
         run_id = uuid.uuid4().hex[:10]
@@ -139,25 +197,38 @@ class StrategyBacktestService:
 
         timing_ms: dict[str, float] = {}
 
-        # 加载面板 (含 warmup + 全量指标 + 信号)。warmup 只用于指标/形态计算, 不参与正式交易。
-        warmup_days = max(120, int(max(s.lookback_days or 1, 1) * 1.5))
-        load_start = config.start - timedelta(days=warmup_days)
-
-        # 全量模式: entries 只在正式区间触发, exits 需要 end 之后的尾部数据继续执行策略卖点。
-        # 若策略有 max_hold_days, 用它决定尾部窗口；否则 holding_days 只作为兜底观察上限。
-        full_horizon_days = int(max_hold_days or config.holding_days or 5)
-        full_horizon_days = max(full_horizon_days, 1)
-        load_end = config.end
-        if config.mode == "full":
-            fwd_buffer = full_horizon_days + 5  # 多取几天, 容错停牌缺口/open_t+1
-            load_end = config.end + timedelta(days=fwd_buffer * 2)  # 日历日放宽, 确保覆盖 N 个交易日
+        load_start, load_end, full_horizon_days = self._panel_window(
+            config,
+            s.lookback_days,
+            max_hold_days,
+        )
 
         t_load = time.perf_counter()
-        panel = self.engine.load_panel(config.symbols, load_start, load_end, asset_type=config.asset_type)
+        if config.frozen_panel_artifact is None:
+            panel = self.engine.load_panel(
+                config.symbols,
+                load_start,
+                load_end,
+                asset_type=config.asset_type,
+            )
+        elif self.frozen_panel_store is None:
+            return _err("冻结的受治理面板存储不可用")
+        else:
+            try:
+                panel = self.frozen_panel_store.load(
+                    reference=config.frozen_panel_artifact,
+                    expected_scope=self._frozen_panel_scope(config),
+                )
+            except FrozenPanelArtifactError as error:
+                return _err(str(error))
         timing_ms["load_panel"] = round((time.perf_counter() - t_load) * 1000, 1)
         if panel.is_empty():
-            return _err("无数据，请检查日期范围或先运行盘后管道")
-        governed_input_manifest = self._governed_input_manifest(panel, config)
+            return _err("无数据, 请检查日期范围或先运行盘后管道")
+        governed_input_manifest = self._governed_input_manifest(
+            panel,
+            config,
+            frozen_reference=config.frozen_panel_artifact,
+        )
 
         formal_range = self._date_range_mask(panel, config.start, config.end)
         if not formal_range.any():
@@ -172,11 +243,11 @@ class StrategyBacktestService:
             if expr is not None:
                 try:
                     basic_mask = panel.select(expr.alias("_basic"))["_basic"].fill_null(False).cast(pl.Boolean)
-                except Exception as e:  # noqa: BLE001
+                except Exception as e:
                     logger.warning("basic_filter mask failed: %s", e)
                     return _err(f"基础过滤计算失败: {e}")
 
-        # 策略候选层用于评分归一化；entry_signals 只是买点层, 不参与 score universe。
+        # 策略候选层用于评分归一化; entry_signals 只是买点层, 不参与 score universe。
         candidate_filter_mask = self._build_candidate_filter_mask(panel, s, params)
         candidate_mask = basic_mask & candidate_filter_mask
         panel = self._apply_score(panel, s, overrides, universe_mask=candidate_mask)
@@ -190,7 +261,7 @@ class StrategyBacktestService:
         if not entry_mask.any():
             return _err("在指定区间内未产生买入信号")
 
-        # warmup 之后才交给撮合；full mode 保留 end 之后前瞻段用于 shift(-N)。
+        # warmup 之后才交给撮合; full mode 保留 end 之后前瞻段用于 shift(-N)。
         sim_end = load_end if config.mode == "full" else config.end
         sim_range = self._date_range_mask(panel, config.start, sim_end)
         sim_panel = panel.filter(sim_range)
@@ -221,7 +292,7 @@ class StrategyBacktestService:
             initial_capital=config.initial_capital,
             position_sizing=config.position_sizing,
         )
-        # 撮合 — full 为全候选独立执行；position 为账户级仓位模拟。
+        # 撮合 — full 为全候选独立执行; position 为账户级仓位模拟。
         if config.mode == "full":
             result = self.engine.simulate_independent_candidates(
                 sim_panel,
@@ -289,21 +360,31 @@ class StrategyBacktestService:
         )
 
     @staticmethod
-    def _governed_input_manifest(loaded: pl.DataFrame, config: StrategyBacktestConfig) -> dict[str, object]:
+    def _governed_input_manifest(
+        loaded: pl.DataFrame,
+        config: StrategyBacktestConfig,
+        *,
+        frozen_reference: dict[str, object] | None = None,
+    ) -> dict[str, object]:
         """Summarize the exact governed panel loaded for reproducible strategy runs."""
         schema = {name: str(dtype) for name, dtype in loaded.schema.items()}
         observed_start = loaded.select(pl.col("date").min()).item()
         observed_end = loaded.select(pl.col("date").max()).item()
         source_reference = {
-            "loader": "BacktestEngine.load_panel",
-            "source_kind": "governed_enriched_parquet",
+            "loader": "FrozenPanelArtifactStore" if frozen_reference else "BacktestEngine.load_panel",
+            "source_kind": "frozen_governed_panel" if frozen_reference else "governed_enriched_parquet",
             "asset_type": config.asset_type,
             "schema": schema,
             "observed_start": str(observed_start),
             "observed_end": str(observed_end),
             "loaded_row_count": loaded.height,
         }
-        encode = lambda value: json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        if frozen_reference:
+            source_reference["panel_checksum"] = frozen_reference.get("panel_checksum")
+            source_reference["scope_checksum"] = frozen_reference.get("scope_checksum")
+
+        def encode(value):
+            return json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
         return {
             **source_reference,
             "source": "governed_backtest_engine",
@@ -496,7 +577,7 @@ class StrategyBacktestService:
         s: StrategyDef,
         entry_signals: list[str],
     ) -> pl.Series:
-        """向量化生成买入掩码：候选层 AND 买点层；无买点时只用策略候选层。"""
+        """向量化生成买入掩码: 候选层 AND 买点层; 无买点时只用策略候选层。"""
         signal_mask = self._build_signal_mask(panel, entry_signals, "_entry_signal")
         if entry_signals:
             return candidate_mask & signal_mask
@@ -517,10 +598,10 @@ class StrategyBacktestService:
 
     @staticmethod
     def _build_signal_mask(panel: pl.DataFrame, signals: list[str], name: str) -> pl.Series:
-        """向量化合并信号列，多个信号 OR。支持内置 signal_ 与自定义 csg_ 前缀。"""
+        """向量化合并信号列, 多个信号 OR。支持内置 signal_ 与自定义 csg_ 前缀。"""
         masks: list[pl.Series] = []
         for sig in signals:
-            # csg_ (自定义信号) 直接用；否则按 signal_ 解析
+            # csg_ (自定义信号) 直接用; 否则按 signal_ 解析
             col = sig if (sig.startswith("signal_") or sig.startswith("csg_")) else f"signal_{sig}"
             if col in panel.columns:
                 masks.append(panel[col].fill_null(False).cast(pl.Boolean))
@@ -648,8 +729,8 @@ class StrategyBacktestService:
         return {
             "symbol": t.symbol,
             "name": t.name,
-            "entry_date": str(t.entry_date) if isinstance(t.entry_date, date) else str(t.entry_date),
-            "exit_date": str(t.exit_date) if isinstance(t.exit_date, date) else str(t.exit_date),
+            "entry_date": str(t.entry_date),
+            "exit_date": str(t.exit_date),
             "entry_price": t.entry_price,
             "exit_price": t.exit_price,
             "pnl_pct": t.pnl_pct,

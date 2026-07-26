@@ -399,6 +399,8 @@ def get_preferences() -> dict:
         "feishu_webhook_url": preferences.get_feishu_webhook_url(),
         "feishu_webhook_secret": preferences.get_feishu_webhook_secret(),
         "wecom_webhook_url": preferences.get_wecom_webhook_url(),
+        "telegram_bot_token": preferences.get_telegram_bot_token(),
+        "telegram_chat_id": preferences.get_telegram_chat_id(),
         "wecom_bot_id": preferences.get_wecom_bot_id(),
         "wecom_bot_secret": preferences.get_wecom_bot_secret(),
         "wecom_bot_enabled": preferences.get_wecom_bot_enabled(),
@@ -852,6 +854,37 @@ def update_wecom_webhook(req: WecomWebhookPrefsIn) -> dict:
         )
     saved_url = preferences.set_wecom_webhook_url(url)
     return {"wecom_webhook_url": saved_url}
+
+
+class TelegramBotPrefsIn(BaseModel):
+    bot_token: str
+    chat_id: str
+
+
+@router.put("/preferences/telegram-bot")
+def update_telegram_bot(req: TelegramBotPrefsIn) -> dict:
+    """Telegram Bot 凭证 — 告警投递渠道, 全局一处配置, 所有勾选 Telegram 的规则共用。
+
+    - bot_token + chat_id 必须成对: 投递适配器两者缺一不可, 半配置会被静默跳过,
+      因此这里 fail-fast 拒绝只填一项的请求。
+    - 两者均传空串表示清空配置。
+    """
+    from app.services import preferences
+
+    token = (req.bot_token or "").strip()
+    chat_id = (req.chat_id or "").strip()
+    if bool(token) != bool(chat_id):
+        raise HTTPException(
+            status_code=400,
+            detail="Bot Token 与 Chat ID 必须同时填写 (或同时留空以清除配置)",
+        )
+    if token and ":" not in token:
+        raise HTTPException(
+            status_code=400,
+            detail="Bot Token 格式非法, 应形如 123456789:AAxxxxxxxx (BotFather 下发)",
+        )
+    saved_token, saved_chat_id = preferences.set_telegram_bot(token, chat_id)
+    return {"telegram_bot_token": saved_token, "telegram_chat_id": saved_chat_id}
 
 
 class WecomBotPrefsIn(BaseModel):
