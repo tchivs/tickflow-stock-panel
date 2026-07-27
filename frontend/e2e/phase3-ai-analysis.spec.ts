@@ -46,6 +46,8 @@ const history = {
 }
 
 async function installAnalysisFixture(page: import('@playwright/test').Page) {
+  const activeHistory = structuredClone(history)
+  const capturedOutcomes: Array<Record<string, unknown>> = []
   await page.route('**/api/**', route => route.fulfill({
     status: 500,
     contentType: 'application/json',
@@ -71,7 +73,7 @@ async function installAnalysisFixture(page: import('@playwright/test').Page) {
     if (path.endsWith(`/reports/${portfolioReport.id}`)) return json({ report: portfolioReport })
     if (path.endsWith(`/reports/${report.id}/evidence`)) return json(evidence)
     if (path.endsWith(`/reports/${portfolioReport.id}/evidence`)) return json({ ...evidence, report_id: portfolioReport.id })
-    if (path.endsWith(`/signals/${history.signal_id}/history`)) return json(history)
+    if (path.endsWith(`/signals/${history.signal_id}/history`)) return json(activeHistory)
     if (path.endsWith('/runs') && request.method() === 'POST') {
       const body = request.postDataJSON() as { subject_kind?: string }
       if (body.subject_kind !== 'instrument' && body.subject_kind !== 'account') return route.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify({ detail: 'subject kind must be server-owned instrument or account' }) })
@@ -85,8 +87,26 @@ async function installAnalysisFixture(page: import('@playwright/test').Page) {
       expect(request.postData()).toBeNull()
       return json({ review: { id: 'review-server-issued', status: 'rejected' } })
     }
+    if (path.endsWith('/plans/plan-server-issued/outcomes') && request.method() === 'POST') {
+      const body = request.postDataJSON() as Record<string, unknown>
+      capturedOutcomes.push(body)
+      const outcome = {
+        id: `outcome-server-${activeHistory.plans[0].outcomes.length + 1}`,
+        plan_id: 'plan-server-issued',
+        observed_at: '2024-09-30T10:00:00Z',
+        created_at: '2024-09-30T10:00:00Z',
+        outcome: body,
+      }
+      activeHistory.plans[0].outcomes.push(outcome)
+      activeHistory.outcome = {
+        status: 'recorded',
+        outcomes: activeHistory.plans[0].outcomes,
+      }
+      return json({ outcome })
+    }
     return route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ detail: `Unhandled fixture route: ${path}` }) })
   })
+  return { capturedOutcomes }
 }
 
 test.describe('Phase 3 evidence-first analysis contracts', () => {
@@ -123,6 +143,29 @@ test.describe('Phase 3 evidence-first analysis contracts', () => {
     await expect(confirm).toBeVisible()
     await confirm.click()
     await expect(page.getByText('信号已计价').first()).toBeVisible()
+  })
+
+  test('observation plan appends a user-captured outcome and refreshes immutable history', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-chromium only')
+    const fixture = await installAnalysisFixture(page)
+    await page.goto('/portfolio')
+    await page.getByLabel('选择账户').selectOption('1')
+    await page.getByRole('tab', { name: '信号历史' }).click()
+
+    const plan = page.getByRole('region', { name: '60 个交易日观察计划' })
+    await plan.getByRole('button', { name: '记录观察结果' }).click()
+    const form = plan.getByRole('form', { name: '60 个交易日观察结果录入' })
+    await form.getByLabel('结果状态').selectOption('incomplete')
+    await form.getByLabel('观察值（可选）').fill('-0.04')
+    await form.getByLabel('结果备注').fill('样本尚未覆盖完整观察窗口')
+    await form.getByRole('button', { name: '保存观察结果' }).click()
+
+    await expect(plan.getByText(/不完整结果：-0.04；样本尚未覆盖完整观察窗口/)).toBeVisible()
+    expect(fixture.capturedOutcomes).toEqual([{
+      status: 'incomplete',
+      observed_value: -0.04,
+      notes: '样本尚未覆盖完整观察窗口',
+    }])
   })
 
   test('responsive keyboard controls retain accessible analysis panels', async ({ page }, testInfo) => {

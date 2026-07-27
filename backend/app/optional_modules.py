@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import re
 import sqlite3
+import threading
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -166,6 +167,22 @@ class OptionalModuleServices:
     governed_repository: object | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class OptionalModuleCloseOutcome:
+    """Caller-visible bounded shutdown result."""
+
+    stopped: tuple[str, ...]
+    unresolved: tuple[str, ...]
+
+
+class OptionalModuleCloseIncomplete(RuntimeError):
+    """Retryable shutdown result that retains every unresolved owner."""
+
+    def __init__(self, outcome: OptionalModuleCloseOutcome) -> None:
+        super().__init__("optional module shutdown is incomplete")
+        self.outcome = outcome
+
+
 @runtime_checkable
 class OptionalModuleFactory(Protocol):
     """Deployment adapter that probes and lazily creates one module service."""
@@ -176,7 +193,7 @@ class OptionalModuleFactory(Protocol):
     def create(self, services: OptionalModuleServices) -> object:
         """Create the module service only after its independent probe succeeds."""
 
-    def close(self, service: object) -> None:
+    def close(self, service: object) -> object:
         """Release a previously created module service."""
 
 
@@ -190,6 +207,7 @@ class _RuntimeBundle:
     scanner: object | None = None
     request_service: object | None = None
     path_reader: object | None = None
+    dispatcher: object | None = None
 
 
 class _ConcreteFactory:
@@ -323,6 +341,7 @@ class _ConcreteFactory:
         from app.forecast.runner import ForecastRunner, ForecastRunnerLimits
         from app.forecast.service import (
             ContextualForecastWorker,
+            DurableForecastDispatcher,
             ForecastService,
             GovernedForecastActuals,
             GovernedForecastDataSource,
@@ -377,6 +396,7 @@ class _ConcreteFactory:
         verifier = components.get("artifact_verify")
         if not callable(verifier):
             verifier = partial(verify_output_artifact, root=output_root)
+        stop_token = threading.Event()
         runner = ForecastRunner(
             repository=repository,
             limits=limits,
@@ -387,9 +407,15 @@ class _ConcreteFactory:
             artifact_verify=verifier,
             action_collaborators=OPTIONAL_MODULE_ACTION_COLLABORATORS,
             final_input_revalidate=request_service.final_input_revalidate,
+            stop_token=stop_token,
         )
         request_service.attach_runner(runner)
         request_service.assert_ready()
+        dispatcher = DurableForecastDispatcher(
+            repository=repository,
+            runner=runner,
+            stop_token=stop_token,
+        )
 
         actuals = components.get("actuals")
         if actuals is None:
@@ -421,10 +447,16 @@ class _ConcreteFactory:
             scanner=scanner,
             request_service=request_service,
             path_reader=ForecastPathReader(output_root),
+            dispatcher=dispatcher,
         )
 
     def close(self, service: object) -> None:
-        del service
+        if isinstance(service, _RuntimeBundle):
+            close = getattr(service.dispatcher, "close", None)
+            if callable(close):
+                outcome = close()
+                if getattr(outcome, "value", outcome) == "timed_out":
+                    raise RuntimeError("forecast_dispatcher_close_incomplete")
 
 
 def production_optional_factories() -> dict[OptionalModuleName, OptionalModuleFactory]:
@@ -449,6 +481,7 @@ class OptionalModuleHost:
             self._factories[name] = factory
         self._statuses: dict[OptionalModuleName, OptionalModuleStatus] = {}
         self._module_services: dict[OptionalModuleName, object] = {}
+        self._closing_services: dict[OptionalModuleName, object] = {}
         self._closed = False
 
     @property
@@ -473,7 +506,13 @@ class OptionalModuleHost:
 
     @property
     def initialized_services(self) -> tuple[object, ...]:
-        return tuple(self._module_services.values())
+        active = tuple(self._module_services.values())
+        closing = tuple(
+            service
+            for module, service in self._closing_services.items()
+            if module not in self._module_services
+        )
+        return active + closing
 
     @property
     def external_databases(self) -> tuple[()]:
@@ -493,12 +532,31 @@ class OptionalModuleHost:
 
     def mark_unavailable(self, name: OptionalModuleName, *, code: str) -> None:
         module = _coerce_name(name)
+        service = self._module_services.get(module)
+        if service is None:
+            service = self._closing_services.get(module)
+        unresolved = False
+        if service is not None:
+            factory = self._factories.get(module)
+            if factory is not None:
+                try:
+                    factory.close(service)
+                except Exception:
+                    unresolved = True
+                    self._module_services.pop(module, None)
+                    self._closing_services[module] = service
+                else:
+                    self._module_services.pop(module, None)
+                    self._closing_services.pop(module, None)
         self._statuses[module] = OptionalModuleStatus.unavailable(
             module,
             code=code,
             reason=f"{module.value} optional capability failed safely",
         )
-        self._module_services.pop(module, None)
+        if unresolved:
+            raise OptionalModuleCloseIncomplete(
+                OptionalModuleCloseOutcome(stopped=(), unresolved=(module.value,))
+            )
 
     def status(self, name: OptionalModuleName | str) -> OptionalModuleStatus:
         """Probe one capability only, caching deployment availability afterward."""
@@ -555,19 +613,33 @@ class OptionalModuleHost:
         self._module_services[module] = created
         return created
 
-    def close(self) -> None:
+    def close(self) -> OptionalModuleCloseOutcome:
         """Close each initialized service independently and make the host unavailable."""
-        if self._closed:
-            return
         self._closed = True
-        for module, service in reversed(tuple(self._module_services.items())):
+        stopped: list[str] = []
+        unresolved: list[str] = []
+        owned: dict[OptionalModuleName, object] = dict(self._module_services)
+        owned.update(self._closing_services)
+        for module, service in reversed(tuple(owned.items())):
             factory = self._factories[module]
             try:
                 factory.close(service)
             except Exception:
-                pass
-        self._module_services.clear()
+                self._module_services.pop(module, None)
+                self._closing_services[module] = service
+                unresolved.append(module.value)
+            else:
+                self._module_services.pop(module, None)
+                self._closing_services.pop(module, None)
+                stopped.append(module.value)
+        outcome = OptionalModuleCloseOutcome(
+            stopped=tuple(stopped),
+            unresolved=tuple(unresolved),
+        )
+        if unresolved:
+            raise OptionalModuleCloseIncomplete(outcome)
         self._statuses.clear()
+        return outcome
 
     @staticmethod
     def _validated_status(name: OptionalModuleName, status: object) -> OptionalModuleStatus:
@@ -697,7 +769,18 @@ def install_optional_module_host(app: Any, host: OptionalModuleHost) -> None:
                 outcomes: list[dict[str, str]] = []
                 for outcome in recovery:
                     job_id = outcome.get("job_id")
+                    operation_id = outcome.get("operation_id")
                     action = outcome.get("action")
+                    if action == "aborted" and isinstance(operation_id, str):
+                        _cleanup_expired_retry_artifact(forecast, outcome)
+                        outcomes.append(
+                            {
+                                "operation_id": operation_id,
+                                "action": action,
+                                "status": str(outcome.get("status", "")),
+                            }
+                        )
+                        continue
                     if not isinstance(job_id, str) or not isinstance(action, str):
                         raise RuntimeError("Forecast recovery outcome is invalid")
                     if action == "requeue":
@@ -718,6 +801,8 @@ def install_optional_module_host(app: Any, host: OptionalModuleHost) -> None:
                             }
                         )
                 app.state.forecast_recovery_outcomes = tuple(outcomes)
+                if forecast.dispatcher is not None:
+                    forecast.request_service.attach_dispatcher(forecast.dispatcher)
             except Exception:
                 host.mark_unavailable(OptionalModuleName.FORECAST, code="forecast_recovery_failed")
                 _clear_module_state(app, OptionalModuleName.FORECAST)
@@ -736,6 +821,24 @@ def install_optional_module_host(app: Any, host: OptionalModuleHost) -> None:
             host.mark_unavailable(name, code=f"{name.value}_scanner_failed")
             _clear_module_state(app, name)
 
+    # Background consumption begins only after the scanner and all readiness
+    # registrations succeed. A failed module is never published with a live worker.
+    forecast = host.service(OptionalModuleName.FORECAST)
+    if isinstance(forecast, _RuntimeBundle) and forecast.dispatcher is not None:
+        try:
+            forecast.dispatcher.start()
+        except Exception:
+            scheduler = host.scheduler
+            if scheduler is not None:
+                try:
+                    scheduler.remove_job("phase5_forecast_maturity_scan")
+                except Exception:
+                    pass
+            host.mark_unavailable(
+                OptionalModuleName.FORECAST, code="forecast_dispatcher_failed"
+            )
+            _clear_module_state(app, OptionalModuleName.FORECAST)
+
     for name in OptionalModuleName:
         _publish_module_status(app, host, name)
 
@@ -752,6 +855,31 @@ def shutdown_optional_module_host(app: Any) -> None:
             except Exception:
                 pass
     host.close()
+
+
+def _cleanup_expired_retry_artifact(
+    bundle: _RuntimeBundle, outcome: Mapping[str, object]
+) -> None:
+    """Reference-check and discard only an expired operation-owned input."""
+    artifact_id = outcome.get("input_artifact_id")
+    if not isinstance(artifact_id, str) or not artifact_id:
+        return
+    repository = bundle.repository
+    referenced = getattr(repository, "input_artifact_is_referenced", None)
+    if not callable(referenced) or referenced(artifact_id):
+        return
+    freezer = getattr(bundle.request_service, "freezer", None)
+    store = getattr(freezer, "_store", None)
+    descriptor = getattr(store, "descriptor", None)
+    discard = getattr(store, "discard_unbound_invocation_owned", None)
+    if not callable(descriptor) or not callable(discard):
+        return
+    managed = descriptor(artifact_id)
+    discard(
+        managed,
+        owned_artifact_ids={artifact_id},
+        is_referenced=referenced,
+    )
 
 
 def _register_scanner(

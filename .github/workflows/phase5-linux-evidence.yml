@@ -1,0 +1,129 @@
+name: Phase 5 Linux Evidence
+
+on:
+  push:
+    branches:
+      - gsd/v1.0-milestone
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: Exact 40-character commit SHA to attest
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  attest-linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TARGET_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.commit_sha || github.sha }}
+      ATHENA_ALLOW_NETWORK: "0"
+      PYTHONDONTWRITEBYTECODE: "1"
+      LINUX_NATIVE_PYTEST_COMMAND: >-
+        uv run --isolated --frozen --extra dev pytest -p no:cacheprovider tests/advanced/test_sandbox.py tests/forecast/test_runner.py tests/test_operational_migrations.py tests/test_phase5_optional_host.py -m linux_process_group -q
+      LINUX_REPORT_PYTEST_COMMAND: >-
+        uv run --isolated --frozen --extra dev --extra shadow pytest -p no:cacheprovider --import-mode=importlib tests/shadow tests/theses tests/forecast tests/advanced/test_sandbox.py tests/test_operational_migrations.py tests/test_phase5_foundation.py tests/test_phase5_optional_dependencies.py tests/test_kronos_vendor_sync.py tests/test_kronos_provisioner.py tests/test_phase5_optional_host.py --deselect=tests/forecast/test_kronos_regression.py::test_pinned_local_kronos_mini_regression_denies_network_and_proves_exact_provenance -o xfail_strict=true -m 'not windows_only' --junitxml=.phase5-evidence/pytest-linux.xml -x
+
+    steps:
+      - name: Validate requested commit identity
+        run: |
+          if [[ ! "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "commit_sha must be a full lowercase 40-character SHA" >&2
+            exit 1
+          fi
+
+      - name: Checkout exact commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify checked-out HEAD and tree
+        id: identity
+        run: |
+          ACTUAL_HEAD="$(git rev-parse HEAD)"
+          ACTUAL_TREE="$(git rev-parse 'HEAD^{tree}')"
+          test "$ACTUAL_HEAD" = "$TARGET_SHA"
+          test -n "$ACTUAL_TREE"
+          echo "head=$ACTUAL_HEAD" >> "$GITHUB_OUTPUT"
+          echo "tree=$ACTUAL_TREE" >> "$GITHUB_OUTPUT"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@e92bafb6253dcd438e0484186d7669ea7a8ca1cc # v6.4.3
+        with:
+          enable-cache: true
+
+      - name: Install locked backend dependencies
+        working-directory: backend
+        run: uv sync --frozen --extra dev
+
+      - name: Run native and complete Linux evidence
+        id: tests
+        working-directory: backend
+        run: |
+          rm -rf .phase5-evidence
+          mkdir -p .phase5-evidence
+          echo "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          bash -lc "$LINUX_NATIVE_PYTEST_COMMAND"
+          bash -lc "$LINUX_REPORT_PYTEST_COMMAND"
+          echo "completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      - name: Generate bound attestation
+        working-directory: backend
+        env:
+          EXPECTED_HEAD: ${{ steps.identity.outputs.head }}
+          EXPECTED_TREE: ${{ steps.identity.outputs.tree }}
+          STARTED_AT: ${{ steps.tests.outputs.started_at }}
+          COMPLETED_AT: ${{ steps.tests.outputs.completed_at }}
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          report = Path(".phase5-evidence/pytest-linux.xml")
+          report_hash = hashlib.sha256(report.read_bytes()).hexdigest()
+          run_id = os.environ["GITHUB_RUN_ID"]
+          payload = {
+              "schemaVersion": "athena.phase5-linux-evidence/v1",
+              "repository": "tchivs/AthenaQuant",
+              "workflow": ".github/workflows/phase5-linux-evidence.yml",
+              "githubRunId": run_id,
+              "githubRunAttempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
+              "artifactName": f"phase5-linux-evidence-{run_id}",
+              "expectedHead": os.environ["EXPECTED_HEAD"],
+              "expectedTree": os.environ["EXPECTED_TREE"],
+              "runnerOS": os.environ["RUNNER_OS"],
+              "pytestCommand": os.environ["LINUX_REPORT_PYTEST_COMMAND"],
+              "pytestMarker": "not windows_only",
+              "nativeMarkerCommand": os.environ["LINUX_NATIVE_PYTEST_COMMAND"],
+              "nativeMarker": "linux_process_group",
+              "startedAt": os.environ["STARTED_AT"],
+              "completedAt": os.environ["COMPLETED_AT"],
+              "junitSha256": report_hash,
+          }
+          target = Path(".phase5-evidence/attestation.json")
+          temporary = target.with_suffix(".json.tmp")
+          temporary.write_text(
+              json.dumps(payload, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          os.replace(temporary, target)
+          PY
+
+      - name: Upload Linux evidence artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: phase5-linux-evidence-${{ github.run_id }}
+          path: |
+            backend/.phase5-evidence/pytest-linux.xml
+            backend/.phase5-evidence/attestation.json
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+          overwrite: false

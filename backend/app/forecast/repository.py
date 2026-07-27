@@ -7,6 +7,7 @@ import math
 import re
 import shutil
 import sqlite3
+from dataclasses import dataclass
 from io import BytesIO
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
@@ -29,7 +30,7 @@ from app.optional_artifacts import (
 from app.operational.migrations import migrate_operational_db
 
 _ACTIVE_STATUSES = frozenset({"queued", "running"})
-_TERMINAL_STATUSES = frozenset(
+TERMINAL_JOB_STATUSES = frozenset(
     {
         "completed",
         "validation_failed",
@@ -40,6 +41,7 @@ _TERMINAL_STATUSES = frozenset(
         "interrupted",
     }
 )
+_TERMINAL_STATUSES = TERMINAL_JOB_STATUSES
 _LEGAL_TRANSITIONS = {
     "queued": frozenset({"running", "validation_failed", "model_unavailable", "interrupted"}),
     "running": frozenset(
@@ -82,6 +84,22 @@ _QUANTILE_ARTIFACT_COLUMNS = {
     "value",
 }
 _QUANTILE_LABELS = ("P10", "P50", "P90")
+
+
+def is_retryable_terminal(status: object) -> bool:
+    """Return the repository-owned retry eligibility contract."""
+    return isinstance(status, str) and status in TERMINAL_JOB_STATUSES
+
+
+@dataclass(frozen=True, slots=True)
+class RetryOperationReservation:
+    """Owner-first reservation result; only newly acquired owners receive a token."""
+
+    created: bool
+    operation_id: str
+    owner_token: str | None
+    state: str
+    canonical_job: dict[str, Any] | None
 
 
 def _canonical_json(value: object) -> str:
@@ -224,6 +242,54 @@ class ForecastRepository:
     def migrate(self) -> None:
         with self.connection() as connection:
             migrate_operational_db(connection)
+            self._install_retry_owner_reclamation_guard(connection)
+
+    @staticmethod
+    def _install_retry_owner_reclamation_guard(
+        connection: sqlite3.Connection,
+    ) -> None:
+        """Upgrade the retry trigger to permit lease-only same-state takeover."""
+        connection.executescript(
+            """
+            DROP TRIGGER IF EXISTS forecast_retry_operations_guarded_update;
+            CREATE TRIGGER forecast_retry_operations_guarded_update
+            BEFORE UPDATE ON forecast_retry_operations
+            WHEN NEW.id IS NOT OLD.id
+              OR NEW.source_job_id IS NOT OLD.source_job_id
+              OR NEW.idempotency_key IS NOT OLD.idempotency_key
+              OR NEW.created_at IS NOT OLD.created_at
+              OR NEW.transition_version != OLD.transition_version + 1
+              OR NEW.updated_at < OLD.updated_at
+              OR NOT (
+                  (
+                      NEW.owner_token IS OLD.owner_token
+                      AND NEW.owner_lease_until IS OLD.owner_lease_until
+                      AND (
+                          (OLD.state = 'reserved' AND NEW.state IN ('bound', 'aborted'))
+                          OR (OLD.state = 'bound' AND NEW.state IN ('published', 'aborted'))
+                      )
+                  )
+                  OR
+                  (
+                      OLD.state IN ('reserved', 'bound')
+                      AND NEW.state = OLD.state
+                      AND NEW.owner_token IS NOT OLD.owner_token
+                      AND julianday(OLD.owner_lease_until)
+                          <= julianday(NEW.updated_at)
+                      AND NEW.owner_lease_until > OLD.owner_lease_until
+                      AND NEW.immutable_record_json IS OLD.immutable_record_json
+                      AND NEW.input_artifact_id IS OLD.input_artifact_id
+                      AND NEW.canonical_job_id IS OLD.canonical_job_id
+                      AND NEW.terminal_reason IS OLD.terminal_reason
+                  )
+              )
+            BEGIN
+                SELECT RAISE(
+                    ABORT, 'forecast retry operation transition is invalid'
+                );
+            END;
+            """
+        )
 
     def now(self) -> str:
         return _timestamp(_as_utc(self._clock()))
@@ -497,6 +563,14 @@ class ForecastRepository:
             if isinstance(descriptor, Mapping) and descriptor.get("artifact_id") == artifact_id:
                 return True
         with self._immediate() as connection:
+            operation = connection.execute(
+                """SELECT 1 FROM forecast_retry_operations
+                   WHERE input_artifact_id = ? AND state IN ('bound', 'published')
+                   LIMIT 1""",
+                (artifact_id,),
+            ).fetchone()
+            if operation is not None:
+                return True
             rows = connection.execute(
                 "SELECT input_artifact_descriptor_json FROM forecast_records"
             ).fetchall()
@@ -545,8 +619,9 @@ class ForecastRepository:
                     """INSERT INTO forecast_jobs
                        (id, principal, instrument_id, horizon, catalog_id, idempotency_key,
                         input_fingerprint, status, transition_version, retry_of_job_id, attempt,
-                        lease_owner, lease_until, terminal_reason, created_at, updated_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', 0, NULL, 1, NULL, NULL, NULL, ?, ?)""",
+                        lease_owner, lease_until, terminal_reason, created_at, updated_at,
+                        dispatch_ready)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', 0, NULL, 1, NULL, NULL, NULL, ?, ?, 1)""",
                     (
                         identifier,
                         principal,
@@ -610,8 +685,9 @@ class ForecastRepository:
                 """INSERT INTO forecast_jobs
                    (id, principal, instrument_id, horizon, catalog_id, idempotency_key,
                     input_fingerprint, status, transition_version, retry_of_job_id, attempt,
-                    lease_owner, lease_until, terminal_reason, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?, NULL, NULL, NULL, ?, ?)""",
+                    lease_owner, lease_until, terminal_reason, created_at, updated_at,
+                    dispatch_ready)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?, NULL, NULL, NULL, ?, ?, 1)""",
                 (
                     identifier,
                     source["principal"],
@@ -630,6 +706,349 @@ class ForecastRepository:
                 "SELECT * FROM forecast_jobs WHERE id = ?", (identifier,)
             ).fetchone()
             self._append_job_transition(connection, row)
+        assert row is not None
+        return dict(row)
+
+    def reserve_retry_operation(
+        self,
+        *,
+        source_job_id: str,
+        idempotency_key: str,
+        owner_ttl_seconds: int = 30,
+    ) -> RetryOperationReservation:
+        """Make canonical operation ownership the first retry mutation."""
+        if (
+            not isinstance(source_job_id, str)
+            or not source_job_id
+            or not isinstance(idempotency_key, str)
+            or not idempotency_key
+            or isinstance(owner_ttl_seconds, bool)
+            or not isinstance(owner_ttl_seconds, int)
+            or not 1 <= owner_ttl_seconds <= 3600
+        ):
+            raise ValueError("forecast retry reservation is invalid")
+        now_dt = _as_utc(self._clock())
+        now = _timestamp(now_dt)
+        lease_until = _timestamp(now_dt + timedelta(seconds=owner_ttl_seconds))
+        with self._immediate() as connection:
+            source = connection.execute(
+                "SELECT * FROM forecast_jobs WHERE id = ?", (source_job_id,)
+            ).fetchone()
+            if source is None:
+                raise ValueError("forecast retry source does not exist")
+            if not is_retryable_terminal(source["status"]):
+                raise ValueError("forecast retry requires a terminal source")
+            existing = connection.execute(
+                """SELECT * FROM forecast_retry_operations
+                   WHERE source_job_id = ? AND idempotency_key = ?""",
+                (source_job_id, idempotency_key),
+            ).fetchone()
+            if existing is not None:
+                canonical = None
+                if existing["canonical_job_id"] is not None:
+                    row = connection.execute(
+                        "SELECT * FROM forecast_jobs WHERE id = ?",
+                        (existing["canonical_job_id"],),
+                    ).fetchone()
+                    canonical = None if row is None else dict(row)
+                state = str(existing["state"])
+                lease = existing["owner_lease_until"]
+                if (
+                    state in {"reserved", "bound"}
+                    and isinstance(lease, str)
+                    and _as_utc(lease) <= now_dt
+                ):
+                    owner_token = str(uuid4())
+                    changed = connection.execute(
+                        """UPDATE forecast_retry_operations
+                           SET owner_token = ?, owner_lease_until = ?,
+                               transition_version = transition_version + 1,
+                               updated_at = ?
+                           WHERE id = ? AND state = ? AND transition_version = ?
+                             AND owner_lease_until = ?
+                             AND julianday(owner_lease_until)
+                                 <= julianday(?)""",
+                        (
+                            owner_token,
+                            lease_until,
+                            now,
+                            existing["id"],
+                            state,
+                            int(existing["transition_version"]),
+                            lease,
+                            now,
+                        ),
+                    ).rowcount
+                    if changed != 1:
+                        raise RuntimeError(
+                            "forecast retry ownership reclamation lost its race"
+                        )
+                    return RetryOperationReservation(
+                        created=True,
+                        operation_id=str(existing["id"]),
+                        owner_token=owner_token,
+                        state=state,
+                        canonical_job=None,
+                    )
+                return RetryOperationReservation(
+                    created=False,
+                    operation_id=str(existing["id"]),
+                    owner_token=None,
+                    state=state,
+                    canonical_job=canonical,
+                )
+            operation_id = str(uuid4())
+            owner_token = str(uuid4())
+            connection.execute(
+                """INSERT INTO forecast_retry_operations
+                   (id, source_job_id, idempotency_key, state, owner_token,
+                    owner_lease_until, transition_version, immutable_record_json,
+                    input_artifact_id, canonical_job_id, terminal_reason,
+                    created_at, updated_at)
+                   VALUES (?, ?, ?, 'reserved', ?, ?, 0, NULL, NULL, NULL, NULL, ?, ?)""",
+                (
+                    operation_id,
+                    source_job_id,
+                    idempotency_key,
+                    owner_token,
+                    lease_until,
+                    now,
+                    now,
+                ),
+            )
+        return RetryOperationReservation(
+            created=True,
+            operation_id=operation_id,
+            owner_token=owner_token,
+            state="reserved",
+            canonical_job=None,
+        )
+
+    def get_retry_operation(self, operation_id: str) -> dict[str, Any] | None:
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM forecast_retry_operations WHERE id = ?", (operation_id,)
+            ).fetchone()
+        return None if row is None else dict(row)
+
+    def get_retry_operation_for(
+        self, *, source_job_id: str, idempotency_key: str
+    ) -> dict[str, Any] | None:
+        with self.connection() as connection:
+            row = connection.execute(
+                """SELECT * FROM forecast_retry_operations
+                   WHERE source_job_id = ? AND idempotency_key = ?""",
+                (source_job_id, idempotency_key),
+            ).fetchone()
+        return None if row is None else dict(row)
+
+    def bind_retry_operation(
+        self,
+        *,
+        operation_id: str,
+        owner_token: str,
+        immutable_record: Mapping[str, object],
+        input_artifact_id: str,
+    ) -> dict[str, Any]:
+        """Persist the complete immutable binding under the reservation owner."""
+        now = self.now()
+        with self._immediate() as connection:
+            operation = connection.execute(
+                "SELECT * FROM forecast_retry_operations WHERE id = ?", (operation_id,)
+            ).fetchone()
+            if operation is None:
+                raise ValueError("forecast retry operation does not exist")
+            if (
+                operation["state"] != "reserved"
+                or operation["owner_token"] != owner_token
+                or _as_utc(operation["owner_lease_until"]) <= _as_utc(now)
+            ):
+                raise ValueError("forecast retry operation owner is stale")
+            source = connection.execute(
+                "SELECT * FROM forecast_jobs WHERE id = ?",
+                (operation["source_job_id"],),
+            ).fetchone()
+            if source is None or not is_retryable_terminal(source["status"]):
+                raise ValueError("forecast retry source is no longer terminal")
+            validated = self._validated_immutable_record(
+                immutable_record, job=dict(source)
+            )
+            descriptor = validated["input_artifact_descriptor"]
+            if (
+                not isinstance(input_artifact_id, str)
+                or not input_artifact_id
+                or not isinstance(descriptor, Mapping)
+                or descriptor.get("artifact_id") != input_artifact_id
+            ):
+                raise ValueError("forecast retry input artifact binding diverges")
+            changed = connection.execute(
+                """UPDATE forecast_retry_operations
+                   SET state = 'bound', transition_version = transition_version + 1,
+                       immutable_record_json = ?, input_artifact_id = ?, updated_at = ?
+                   WHERE id = ? AND state = 'reserved' AND owner_token = ?
+                     AND transition_version = ?""",
+                (
+                    _canonical_json(validated),
+                    input_artifact_id,
+                    now,
+                    operation_id,
+                    owner_token,
+                    int(operation["transition_version"]),
+                ),
+            ).rowcount
+            if changed != 1:
+                raise ValueError("forecast retry binding lost ownership")
+            row = connection.execute(
+                "SELECT * FROM forecast_retry_operations WHERE id = ?", (operation_id,)
+            ).fetchone()
+        assert row is not None
+        return dict(row)
+
+    def publish_retry_operation(
+        self, *, operation_id: str, owner_token: str
+    ) -> dict[str, Any]:
+        """Atomically publish one fully bound, dispatch-ready retry job."""
+        now = self.now()
+        validated: dict[str, object] | None = None
+        with self._immediate() as connection:
+            operation = connection.execute(
+                "SELECT * FROM forecast_retry_operations WHERE id = ?", (operation_id,)
+            ).fetchone()
+            if operation is None:
+                raise ValueError("forecast retry operation does not exist")
+            if operation["state"] == "published":
+                canonical = connection.execute(
+                    "SELECT * FROM forecast_jobs WHERE id = ?",
+                    (operation["canonical_job_id"],),
+                ).fetchone()
+                if canonical is None:
+                    raise RuntimeError("forecast retry canonical job is unavailable")
+                return dict(canonical)
+            if (
+                operation["state"] != "bound"
+                or operation["owner_token"] != owner_token
+                or _as_utc(operation["owner_lease_until"]) <= _as_utc(now)
+            ):
+                raise ValueError("forecast retry publish owner is stale")
+            source = connection.execute(
+                "SELECT * FROM forecast_jobs WHERE id = ?",
+                (operation["source_job_id"],),
+            ).fetchone()
+            if source is None or not is_retryable_terminal(source["status"]):
+                raise ValueError("forecast retry source is no longer terminal")
+            try:
+                decoded = json.loads(str(operation["immutable_record_json"]))
+            except (TypeError, json.JSONDecodeError) as error:
+                raise ValueError("forecast retry binding is invalid") from error
+            validated = self._validated_immutable_record(decoded, job=dict(source))
+            descriptor = validated["input_artifact_descriptor"]
+            if (
+                not isinstance(descriptor, Mapping)
+                or descriptor.get("artifact_id") != operation["input_artifact_id"]
+            ):
+                raise ValueError("forecast retry binding is incomplete")
+
+            canonical = connection.execute(
+                """SELECT * FROM forecast_jobs
+                   WHERE principal = ? AND instrument_id = ? AND horizon = ?
+                     AND catalog_id = ? AND idempotency_key = ?""",
+                (
+                    source["principal"],
+                    source["instrument_id"],
+                    source["horizon"],
+                    source["catalog_id"],
+                    operation["idempotency_key"],
+                ),
+            ).fetchone()
+            if canonical is None:
+                job_id = str(uuid4())
+                connection.execute(
+                    """INSERT INTO forecast_jobs
+                       (id, principal, instrument_id, horizon, catalog_id,
+                        idempotency_key, input_fingerprint, status,
+                        transition_version, retry_of_job_id, attempt, lease_owner,
+                        lease_until, terminal_reason, created_at, updated_at,
+                        dispatch_ready, bound_identity_json,
+                        bound_input_artifact_id)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?, NULL, NULL,
+                               NULL, ?, ?, 1, ?, ?)""",
+                    (
+                        job_id,
+                        source["principal"],
+                        source["instrument_id"],
+                        source["horizon"],
+                        source["catalog_id"],
+                        operation["idempotency_key"],
+                        source["input_fingerprint"],
+                        source["id"],
+                        int(source["attempt"]) + 1,
+                        now,
+                        now,
+                        _canonical_json(validated),
+                        operation["input_artifact_id"],
+                    ),
+                )
+                canonical = connection.execute(
+                    "SELECT * FROM forecast_jobs WHERE id = ?", (job_id,)
+                ).fetchone()
+                self._append_job_transition(connection, canonical)
+            elif canonical["retry_of_job_id"] != source["id"]:
+                raise ValueError("forecast retry identity conflicts")
+            changed = connection.execute(
+                """UPDATE forecast_retry_operations
+                   SET state = 'published', transition_version = transition_version + 1,
+                       canonical_job_id = ?, updated_at = ?
+                   WHERE id = ? AND state = 'bound' AND owner_token = ?
+                     AND transition_version = ?""",
+                (
+                    canonical["id"],
+                    now,
+                    operation_id,
+                    owner_token,
+                    int(operation["transition_version"]),
+                ),
+            ).rowcount
+            if changed != 1:
+                raise ValueError("forecast retry publication lost ownership")
+        assert canonical is not None and validated is not None
+        self._commit_identities[str(canonical["id"])] = deepcopy(validated)
+        return dict(canonical)
+
+    def abort_retry_operation(
+        self, *, operation_id: str, owner_token: str, reason: str
+    ) -> dict[str, Any]:
+        """Abort only an unpublished operation owned by this invocation."""
+        now = self.now()
+        safe_reason = _safe_terminal_reason(reason)
+        with self._immediate() as connection:
+            operation = connection.execute(
+                "SELECT * FROM forecast_retry_operations WHERE id = ?", (operation_id,)
+            ).fetchone()
+            if operation is None:
+                raise ValueError("forecast retry operation does not exist")
+            if operation["state"] == "published":
+                raise ValueError("published forecast retry operation cannot be aborted")
+            if operation["state"] == "aborted":
+                return dict(operation)
+            changed = connection.execute(
+                """UPDATE forecast_retry_operations
+                   SET state = 'aborted', transition_version = transition_version + 1,
+                       terminal_reason = ?, updated_at = ?
+                   WHERE id = ? AND owner_token = ? AND state IN ('reserved', 'bound')
+                     AND transition_version = ?""",
+                (
+                    safe_reason,
+                    now,
+                    operation_id,
+                    owner_token,
+                    int(operation["transition_version"]),
+                ),
+            ).rowcount
+            if changed != 1:
+                raise ValueError("forecast retry abort lost ownership")
+            row = connection.execute(
+                "SELECT * FROM forecast_retry_operations WHERE id = ?", (operation_id,)
+            ).fetchone()
         assert row is not None
         return dict(row)
 
@@ -827,6 +1246,14 @@ class ForecastRepository:
         if job is None:
             raise ValueError("forecast job does not exist")
         validated = self._validated_immutable_record(immutable_record, job=job)
+        persisted = job.get("bound_identity_json")
+        if persisted is not None:
+            try:
+                bound = json.loads(str(persisted))
+            except json.JSONDecodeError as error:
+                raise ValueError("forecast persisted binding is invalid") from error
+            if bound != validated:
+                raise ValueError("forecast persisted binding diverges")
         self._commit_identities[job_id] = deepcopy(validated)
 
     def mark_interrupted_before_commit(self, *, job_id: str, lease_owner: str) -> dict[str, Any]:
@@ -879,6 +1306,17 @@ class ForecastRepository:
 
             record = self._validated_immutable_record(immutable_record, job=dict(job))
             expected_identity = self._commit_identities.get(job_id)
+            if expected_identity is None and job["bound_identity_json"] is not None:
+                try:
+                    persisted_identity = json.loads(str(job["bound_identity_json"]))
+                except json.JSONDecodeError as error:
+                    raise ValueError(
+                        "forecast persisted binding is invalid"
+                    ) from error
+                expected_identity = self._validated_immutable_record(
+                    persisted_identity, job=dict(job)
+                )
+                self._commit_identities[job_id] = deepcopy(expected_identity)
             if expected_identity is None:
                 raise ValueError("forecast commit has no server-bound immutable identity")
             expected_comparable = {
@@ -1468,9 +1906,41 @@ class ForecastRepository:
         """Recover only durable cursors; a prior native process is never resumed."""
         observed = _as_utc(now or self._clock())
         outcomes: list[dict[str, Any]] = []
+        observed_text = _timestamp(observed)
+        with self._immediate() as connection:
+            expired = connection.execute(
+                """SELECT * FROM forecast_retry_operations
+                   WHERE state IN ('reserved', 'bound') AND owner_lease_until <= ?
+                   ORDER BY created_at, id""",
+                (observed_text,),
+            ).fetchall()
+            for operation in expired:
+                changed = connection.execute(
+                    """UPDATE forecast_retry_operations
+                       SET state = 'aborted',
+                           transition_version = transition_version + 1,
+                           terminal_reason = 'restart_expired_retry_owner',
+                           updated_at = ?
+                       WHERE id = ? AND state IN ('reserved', 'bound')
+                         AND transition_version = ?""",
+                    (
+                        observed_text,
+                        operation["id"],
+                        int(operation["transition_version"]),
+                    ),
+                ).rowcount
+                if changed == 1:
+                    outcomes.append(
+                        {
+                            "operation_id": operation["id"],
+                            "action": "aborted",
+                            "status": "aborted",
+                            "input_artifact_id": operation["input_artifact_id"],
+                        }
+                    )
         for job in self.list_jobs():
             status = job["status"]
-            if status == "queued":
+            if status == "queued" and int(job.get("dispatch_ready", 0)) == 1:
                 if revalidate(job):
                     outcomes.append({"job_id": job["id"], "action": "requeue"})
                 else:
@@ -1510,7 +1980,11 @@ class ForecastRepository:
             row = connection.execute(
                 "SELECT * FROM forecast_jobs WHERE id = ?", (job_id,)
             ).fetchone()
-        return None if row is None else dict(row)
+        if row is None:
+            return None
+        result = dict(row)
+        self._hydrate_bound_identity(result)
+        return result
 
     def job_transitions_after(
         self, job_id: str, *, after_version: int, limit: int = 128
@@ -1545,7 +2019,26 @@ class ForecastRepository:
             rows = connection.execute(
                 "SELECT * FROM forecast_jobs ORDER BY created_at, id"
             ).fetchall()
-        return [dict(row) for row in rows]
+        result = [dict(row) for row in rows]
+        for job in result:
+            self._hydrate_bound_identity(job)
+        return result
+
+    def _hydrate_bound_identity(self, job: Mapping[str, object]) -> None:
+        job_id = job.get("id")
+        encoded = job.get("bound_identity_json")
+        if (
+            not isinstance(job_id, str)
+            or not isinstance(encoded, str)
+            or job_id in self._commit_identities
+        ):
+            return
+        try:
+            decoded = json.loads(encoded)
+            validated = self._validated_immutable_record(decoded, job=job)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return
+        self._commit_identities[job_id] = deepcopy(validated)
 
     def forecast_for_job(self, job_id: str) -> dict[str, Any] | None:
         with self.connection() as connection:

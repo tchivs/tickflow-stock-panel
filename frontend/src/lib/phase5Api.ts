@@ -562,6 +562,14 @@ export interface ForecastOutcome {
   reason?: string
 }
 
+export interface ForecastPriceContext {
+  as_of_close: number
+  history: Array<{
+    session_id: string
+    close: number
+  }>
+}
+
 export interface ForecastCalibration {
   id: string
   forecast_id: string
@@ -793,7 +801,7 @@ export const phase5Api = {
     return response.paths
   },
   forecastCalibration: (recordId: string) =>
-    request<{ outcomes: ForecastOutcome[]; calibration: ForecastCalibration[] }>(`/api/forecast/records/${encodeURIComponent(recordId)}/calibration`),
+    request<{ outcomes: ForecastOutcome[]; calibration: ForecastCalibration[]; price_context?: ForecastPriceContext }>(`/api/forecast/records/${encodeURIComponent(recordId)}/calibration`),
   forecastRefreshCalibration: (recordId: string) =>
-    request<{ outcomes: ForecastOutcome[]; calibration: ForecastCalibration[] }>(`/api/forecast/records/${encodeURIComponent(recordId)}/calibration`, { method: 'POST', body: JSON.stringify({}) }),
+    request<{ outcomes: ForecastOutcome[]; calibration: ForecastCalibration[]; price_context?: ForecastPriceContext }>(`/api/forecast/records/${encodeURIComponent(recordId)}/calibration`, { method: 'POST', body: JSON.stringify({}) }),
 } as const

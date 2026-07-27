@@ -1417,6 +1417,93 @@ MIGRATIONS: tuple[str, ...] = (
     )
     BEGIN SELECT RAISE(ABORT, 'forecast quantile metadata is incomplete'); END;
     """,
+    """
+    -- A retry is not runnable until one durable operation owner has bound and
+    -- atomically published the canonical job.
+    ALTER TABLE forecast_jobs
+        ADD COLUMN dispatch_ready INTEGER NOT NULL DEFAULT 0
+        CHECK (dispatch_ready IN (0, 1));
+    ALTER TABLE forecast_jobs ADD COLUMN bound_identity_json TEXT;
+    ALTER TABLE forecast_jobs ADD COLUMN bound_input_artifact_id TEXT;
+
+    CREATE TABLE forecast_retry_operations (
+        id TEXT PRIMARY KEY,
+        source_job_id TEXT NOT NULL REFERENCES forecast_jobs(id) ON DELETE RESTRICT,
+        idempotency_key TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('reserved', 'bound', 'published', 'aborted')),
+        owner_token TEXT NOT NULL,
+        owner_lease_until TEXT NOT NULL,
+        transition_version INTEGER NOT NULL CHECK (transition_version >= 0),
+        immutable_record_json TEXT,
+        input_artifact_id TEXT,
+        canonical_job_id TEXT UNIQUE REFERENCES forecast_jobs(id) ON DELETE RESTRICT,
+        terminal_reason TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(source_job_id, idempotency_key),
+        CHECK (
+            (state = 'reserved' AND immutable_record_json IS NULL
+                                AND input_artifact_id IS NULL
+                                AND canonical_job_id IS NULL
+                                AND terminal_reason IS NULL)
+            OR
+            (state = 'bound' AND immutable_record_json IS NOT NULL
+                             AND input_artifact_id IS NOT NULL
+                             AND canonical_job_id IS NULL
+                             AND terminal_reason IS NULL)
+            OR
+            (state = 'published' AND immutable_record_json IS NOT NULL
+                                 AND input_artifact_id IS NOT NULL
+                                 AND canonical_job_id IS NOT NULL
+                                 AND terminal_reason IS NULL)
+            OR
+            (state = 'aborted' AND canonical_job_id IS NULL
+                               AND terminal_reason IS NOT NULL)
+        )
+    );
+    CREATE INDEX idx_forecast_retry_operations_recovery
+        ON forecast_retry_operations(state, owner_lease_until, id);
+
+    -- No prior release persisted a complete job binding. Conservatively
+    -- quarantine every legacy queued row before recovery can observe it.
+    UPDATE forecast_jobs
+       SET status = 'interrupted',
+           transition_version = transition_version + 1,
+           terminal_reason = 'legacy_unbound_quarantined',
+           dispatch_ready = 0
+     WHERE status = 'queued';
+    INSERT INTO forecast_job_transitions
+        (job_id, transition_version, status, terminal_reason, recorded_at)
+    SELECT id, transition_version, status, terminal_reason, updated_at
+      FROM forecast_jobs
+     WHERE terminal_reason = 'legacy_unbound_quarantined';
+
+    CREATE TRIGGER forecast_jobs_dispatch_binding_immutable
+    BEFORE UPDATE ON forecast_jobs
+    WHEN NEW.dispatch_ready IS NOT OLD.dispatch_ready
+      OR NEW.bound_identity_json IS NOT OLD.bound_identity_json
+      OR NEW.bound_input_artifact_id IS NOT OLD.bound_input_artifact_id
+    BEGIN SELECT RAISE(ABORT, 'forecast dispatch binding is immutable'); END;
+
+    CREATE TRIGGER forecast_retry_operations_guarded_update
+    BEFORE UPDATE ON forecast_retry_operations
+    WHEN NEW.id IS NOT OLD.id
+      OR NEW.source_job_id IS NOT OLD.source_job_id
+      OR NEW.idempotency_key IS NOT OLD.idempotency_key
+      OR NEW.owner_token IS NOT OLD.owner_token
+      OR NEW.owner_lease_until IS NOT OLD.owner_lease_until
+      OR NEW.created_at IS NOT OLD.created_at
+      OR NEW.transition_version != OLD.transition_version + 1
+      OR NEW.updated_at < OLD.updated_at
+      OR NOT (
+          (OLD.state = 'reserved' AND NEW.state IN ('bound', 'aborted'))
+          OR (OLD.state = 'bound' AND NEW.state IN ('published', 'aborted'))
+      )
+    BEGIN SELECT RAISE(ABORT, 'forecast retry operation transition is invalid'); END;
+    CREATE TRIGGER forecast_retry_operations_no_delete
+    BEFORE DELETE ON forecast_retry_operations
+    BEGIN SELECT RAISE(ABORT, 'forecast retry operations are durable'); END;
+    """,
 )
 
 

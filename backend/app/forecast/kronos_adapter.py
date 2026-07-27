@@ -10,6 +10,7 @@ from pathlib import Path
 import random
 import re
 import sys
+from types import SimpleNamespace
 from typing import Any, Callable, Mapping, Sequence
 
 import numpy as np

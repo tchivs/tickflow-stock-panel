@@ -1,7 +1,7 @@
 """CORE-04 contract tests for holding-aware rules in the existing Monitor domain."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import polars as pl
 import pytest
@@ -82,7 +82,9 @@ def test_position_rules_preserve_generic_symbol_deduplication_and_scope_each_hol
         "cooldown_seconds": 0,
         "enabled": True,
     }
-    engine = MonitorRuleEngine()
+    engine = MonitorRuleEngine(
+        clock=lambda: datetime(2026, 7, 10, 10, 0, tzinfo=UTC)
+    )
     engine.set_rules([generic_rule, _position_rule(cooldown_seconds=0)])
 
     generic_events = engine.evaluate(_quote_frame())
@@ -100,7 +102,7 @@ def test_position_rules_preserve_generic_symbol_deduplication_and_scope_each_hol
 
 
 def test_position_rule_cooldown_and_active_time_suppress_only_the_matching_position_events():
-    clock = [datetime(2026, 7, 10, 10, 0, tzinfo=timezone.utc)]
+    clock = [datetime(2026, 7, 10, 10, 0, tzinfo=UTC)]
     engine = MonitorRuleEngine(clock=lambda: clock[0])
     engine.set_rules([_position_rule()])
 
@@ -108,10 +110,10 @@ def test_position_rule_cooldown_and_active_time_suppress_only_the_matching_posit
     assert len(first) == 2
     assert engine.evaluate_positions(_position_projection()) == []
 
-    clock[0] = datetime(2026, 7, 10, 10, 6, tzinfo=timezone.utc)
+    clock[0] = datetime(2026, 7, 10, 10, 6, tzinfo=UTC)
     assert len(engine.evaluate_positions(_position_projection())) == 2
 
-    clock[0] = datetime(2026, 7, 10, 15, 1, tzinfo=timezone.utc)
+    clock[0] = datetime(2026, 7, 10, 15, 1, tzinfo=UTC)
     assert engine.evaluate_positions(_position_projection()) == []
 
 

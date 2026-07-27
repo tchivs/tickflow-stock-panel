@@ -416,6 +416,7 @@ class ManagedImmutableArtifactStore:
     def _read_verified_payload_bytes(path: Path, *, expected_size: int) -> bytes:
         """Open once with O_RDONLY|O_NOFOLLOW; fstat, hash, and read the same FD."""
         flags = os.O_RDONLY
+        flags |= getattr(os, "O_BINARY", 0)
         nofollow = getattr(os, "O_NOFOLLOW", 0)
         if nofollow:
             flags |= nofollow
@@ -456,11 +457,13 @@ class ManagedImmutableArtifactStore:
 
     @staticmethod
     def _fsync_file(path: Path) -> None:
-        with path.open("rb") as handle:
+        with path.open("rb+") as handle:
             os.fsync(handle.fileno())
 
     @staticmethod
     def _fsync_directory(path: Path) -> None:
+        if os.name != "posix":
+            return
         descriptor = os.open(path, os.O_RDONLY)
         try:
             os.fsync(descriptor)

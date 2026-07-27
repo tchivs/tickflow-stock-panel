@@ -340,6 +340,12 @@ export interface AnalysisObservationOutcome {
   }
 }
 
+export interface AnalysisObservationOutcomeInput {
+  status: 'complete' | 'incomplete'
+  observed_value: number | null
+  notes: string
+}
+
 export interface AnalysisObservationPlan {
   id: string
   review_id: string
@@ -983,6 +989,23 @@ export interface AdjustmentAudit {
   rationale: string
 }
 
+export interface DecisionAdjustmentProposal {
+  field: string
+  value: string
+  rationale: string
+}
+
+export interface DecisionReviewProposal {
+  provider: string
+  model: string
+  adjustments: DecisionAdjustmentProposal[]
+}
+
+export interface DecisionReviewResult {
+  review_status: 'available' | 'unavailable'
+  final: PlaybookSnapshot
+}
+
 export interface DecisionRun {
   id: string
   symbol: string
@@ -991,7 +1014,7 @@ export interface DecisionRun {
   created_at: string
   baseline: PlaybookSnapshot
   final: PlaybookSnapshot
-  proposal: Record<string, unknown> | null
+  proposal: DecisionReviewProposal | null
   adjustments: AdjustmentAudit[]
 }
 
@@ -2654,6 +2677,11 @@ export const api = {
     request<{ review: { id: string; status: 'rejected' } }>(`/api/analysis/reviews/${encodeURIComponent(reviewId)}/reject`, {
       method: 'POST',
     }),
+  analysisRecordOutcome: (planId: string, payload: AnalysisObservationOutcomeInput) =>
+    request<{ outcome: AnalysisObservationOutcome }>(`/api/analysis/plans/${encodeURIComponent(planId)}/outcomes`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
 
   // ===== Controlled advanced research =====
   advancedViewpoints: (subject: AnalysisRequestSubject) =>
@@ -2720,10 +2748,10 @@ export const api = {
   decisionRun: (runId: string) =>
     request<DecisionRun>(`/api/decision/runs/${encodeURIComponent(runId)}`),
   decisionReview: (runId: string) =>
-    request<{ review_status: string; final: PlaybookSnapshot }>(`/api/decision/runs/${encodeURIComponent(runId)}/review`, {
+    request<DecisionReviewResult>(`/api/decision/runs/${encodeURIComponent(runId)}/review`, {
       method: 'POST',
     }),
-  decisionAdjustments: (runId: string, proposal: Record<string, Record<string, unknown>>) =>
+  decisionAdjustments: (runId: string, proposal: Record<string, { value: string; rationale: string }>) =>
     request<DecisionRun>(`/api/decision/runs/${encodeURIComponent(runId)}/adjustments`, {
       method: 'POST',
       body: JSON.stringify({ proposal }),

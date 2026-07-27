@@ -106,4 +106,6 @@ ignore = ["E501"]   # 长行交给 fmt
 asyncio_mode = "auto"
 markers = [
     "kronos_model: opt-in smoke requiring human-approved pinned local Kronos assets",
+    "linux_process_group: native Linux setsid/killpg/descendant ownership evidence",
+    "windows_only: Windows fail-closed process-group and portable lifecycle evidence",
 ]

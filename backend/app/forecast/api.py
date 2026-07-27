@@ -206,8 +206,12 @@ def create_job(instrument: str, payload: ForecastJobRequest, request: Request) -
 @router.post("/jobs/{job_id}/retry", status_code=status.HTTP_201_CREATED)
 def retry_job(job_id: str, payload: ForecastRetryRequest, request: Request) -> dict[str, object]:
     source = _owned_job(request, job_id)
+    service = getattr(request.app.state, "forecast_request_service", None)
+    retry = getattr(service, "retry_job", None)
+    if not callable(retry):
+        raise HTTPException(status_code=503, detail=_module_status(request, available=False))
     try:
-        record = _repository(request).create_retry_job(
+        record = retry(
             source_job_id=str(source["id"]), idempotency_key=payload.idempotency_key
         )
     except ValueError as error:
@@ -504,10 +508,20 @@ def _calibration_payload(request: Request, record: Mapping[str, object]) -> dict
     }
     outcomes = repository.outcomes_for_owned_forecast(**scope)
     facts = repository.calibration_facts_for_owned_forecast(**scope)
-    return {
+    payload: dict[str, object] = {
         "outcomes": [projections.outcome(item) for item in outcomes],
         "calibration": [projections.calibration(item) for item in facts],
     }
+    service = getattr(request.app.state, "forecast_request_service", None)
+    public_price_context = getattr(service, "public_price_context", None)
+    if callable(public_price_context):
+        try:
+            context = public_price_context(record)
+        except (OSError, RuntimeError, ValueError):
+            context = None
+        if isinstance(context, Mapping):
+            payload["price_context"] = dict(context)
+    return payload
 
 
 def _module_status(request: Request, *, available: bool | None = None) -> dict[str, object]:

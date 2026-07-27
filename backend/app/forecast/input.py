@@ -1,11 +1,13 @@
 """Parent-side freezer for authorized governed Forecast inputs."""
 from __future__ import annotations
 
+import json
+from collections.abc import Mapping
+from contextlib import suppress
 from dataclasses import dataclass
 from hashlib import sha256
-import json
 from pathlib import Path
-from typing import Any, Literal, Mapping, Protocol
+from typing import Any, Literal, Protocol
 
 import numpy as np
 import polars as pl
@@ -14,10 +16,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.forecast.calendar import GovernedTradingCalendar
 from app.optional_artifacts import (
     ArtifactDescriptor as ManagedDescriptor,
+)
+from app.optional_artifacts import (
     ManagedArtifactError,
     ManagedImmutableArtifactStore,
 )
-
 
 _REQUIRED_COLUMNS = {
     "instrument_id",
@@ -205,40 +208,50 @@ class ForecastInputFreezer:
                 "frame_payload_sha256": frame_payload_sha256,
             },
         )
-        fingerprint_payload = {
-            **base_identity,
-            "frame_payload_sha256": frame_payload_sha256,
-            "artifact_checksum_sha256": managed.checksum_sha256,
-        }
-        input_fingerprint = sha256(_canonical_json(fingerprint_payload)).hexdigest()
-        metadata_json = _canonical_json(
-            {"fingerprint_payload": fingerprint_payload}
-        ).decode("utf-8")
-        descriptor = ForecastInputDescriptor(
-            artifact_id=managed.artifact_id,
-            schema_version=managed.schema_version,
-            byte_size=managed.byte_size,
-            checksum_sha256=managed.checksum_sha256,
-            managed_path=str(self._store.root / managed.relative_path),
-            metadata_json=metadata_json,
-            _managed=managed,
-        )
-        return FrozenForecastInput(
-            instrument_id=instrument_id,
-            symbol=symbol,
-            catalog_id=request.catalog_id,
-            horizon=request.horizon,
-            as_of_session_id=as_of_session_id,
-            lookback=lookback,
-            adjustment_policy=adjustment_policy,
-            adjustment_revision=adjustment_revision,
-            calendar_revision=calendar_revision,
-            historical_session_ids=historical_ids,
-            future_session_ids=future_ids,
-            feature_schema=feature_schema,
-            input_fingerprint=input_fingerprint,
-            descriptor=descriptor,
-        )
+        try:
+            fingerprint_payload = {
+                **base_identity,
+                "frame_payload_sha256": frame_payload_sha256,
+                "artifact_checksum_sha256": managed.checksum_sha256,
+            }
+            input_fingerprint = sha256(_canonical_json(fingerprint_payload)).hexdigest()
+            metadata_json = _canonical_json(
+                {"fingerprint_payload": fingerprint_payload}
+            ).decode("utf-8")
+            descriptor = ForecastInputDescriptor(
+                artifact_id=managed.artifact_id,
+                schema_version=managed.schema_version,
+                byte_size=managed.byte_size,
+                checksum_sha256=managed.checksum_sha256,
+                managed_path=str(self._store.root / managed.relative_path),
+                metadata_json=metadata_json,
+                _managed=managed,
+            )
+            return FrozenForecastInput(
+                instrument_id=instrument_id,
+                symbol=symbol,
+                catalog_id=request.catalog_id,
+                horizon=request.horizon,
+                as_of_session_id=as_of_session_id,
+                lookback=lookback,
+                adjustment_policy=adjustment_policy,
+                adjustment_revision=adjustment_revision,
+                calendar_revision=calendar_revision,
+                historical_session_ids=historical_ids,
+                future_session_ids=future_ids,
+                feature_schema=feature_schema,
+                input_fingerprint=input_fingerprint,
+                descriptor=descriptor,
+            )
+        except Exception:
+            # Promotion succeeded but no caller can own this namespace until the
+            # complete frozen identity exists.
+            with suppress(Exception):
+                self._store.discard_unbound_invocation_owned(
+                    managed,
+                    owned_artifact_ids={managed.artifact_id},
+                )
+            raise
 
     def load(self, descriptor: ForecastInputDescriptor) -> pl.DataFrame:
         if not isinstance(descriptor, ForecastInputDescriptor):
@@ -247,6 +260,56 @@ class ForecastInputFreezer:
             return self._store.load_parquet(descriptor._managed)
         except ManagedArtifactError as error:
             raise ValueError("Forecast input checksum verification failed") from error
+
+    def public_close_history(
+        self, descriptor: Mapping[str, object], *, limit: int = 512
+    ) -> list[dict[str, object]]:
+        """Project bounded close history only from an independently verified input."""
+        if not isinstance(descriptor, Mapping):
+            raise ValueError("Forecast input descriptor is invalid")
+        artifact_id = descriptor.get("artifact_id")
+        schema_version = descriptor.get("schema_version")
+        byte_size = descriptor.get("byte_size")
+        checksum = descriptor.get("checksum_sha256")
+        if (
+            not isinstance(artifact_id, str)
+            or not artifact_id
+            or not isinstance(schema_version, str)
+            or not schema_version
+            or isinstance(byte_size, bool)
+            or not isinstance(byte_size, int)
+            or byte_size <= 0
+            or not isinstance(checksum, str)
+            or len(checksum) != 64
+            or isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or limit <= 0
+            or limit > 512
+        ):
+            raise ValueError("Forecast input descriptor is invalid")
+        try:
+            managed = self._store.descriptor(artifact_id)
+            if (
+                managed.schema_version != schema_version
+                or managed.byte_size != byte_size
+                or managed.checksum_sha256 != checksum
+            ):
+                raise ValueError("Forecast input descriptor checksum identity diverges")
+            frame = self._store.load_parquet(managed)
+        except ManagedArtifactError as error:
+            raise ValueError("Forecast input checksum verification failed") from error
+        if not {"session_id", "close"}.issubset(frame.columns) or frame.height < 1:
+            raise ValueError("Forecast input history schema is invalid")
+        bounded = frame.select(["session_id", "close"]).tail(limit)
+        if not np.isfinite(bounded["close"].to_numpy()).all():
+            raise ValueError("Forecast input close history is invalid")
+        sessions = bounded["session_id"].to_list()
+        if any(not isinstance(item, str) or not item for item in sessions):
+            raise ValueError("Forecast input session history is invalid")
+        return [
+            {"session_id": session_id, "close": float(close)}
+            for session_id, close in bounded.iter_rows()
+        ]
 
 
 def _validate_daily_frame(

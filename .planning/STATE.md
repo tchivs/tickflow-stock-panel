@@ -2,18 +2,18 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_phase: 05
-current_phase_name: optional-enhancements
-status: phase_complete
-stopped_at: "Phase 05 complete: 05-29 final gate passed (370/370)"
-last_updated: "2026-07-25T16:30:59.000Z"
-last_activity: 2026-07-25
-last_activity_desc: "Completed 05-29 final post-gap acceptance gate"
+status: Awaiting next milestone
+stopped_at: Completed 05-44-PLAN.md
+last_updated: "2026-07-27T02:02:22.337Z"
+last_activity: 2026-07-27
+last_activity_desc: Milestone v1.0 completed and archived
 progress:
   total_phases: 5
   completed_phases: 5
-  total_plans: 103
-  completed_plans: 103
+  total_plans: 106
+  completed_plans: 106
+current_phase: 05
+current_phase_name: optional-enhancements
 ---
 
 # Project State
@@ -27,12 +27,10 @@ See: .planning/PROJECT.md (updated 2026-07-10)
 
 ## Current Position
 
-Phase: 05 (optional-enhancements) — EXECUTING
-Plan: Phase 05 complete (41/41)
-Status: phase_complete
-Last activity: 2026-07-24 — Removed personal-project human approval gate
-
-Progress: [██████████] 100%
+Phase: Milestone v1.0 complete
+Plan: —
+Status: Awaiting next milestone
+Last activity: 2026-07-27 — Milestone v1.0 completed and archived
 
 ## Performance Metrics
 
@@ -100,6 +98,9 @@ Progress: [██████████] 100%
 | Phase 05 P36 | 25min | 2 tasks | 6 files |
 | Phase 05 P27 | 45min | 2 tasks | 6 files |
 | Phase 05 P39 | 19min | 2 tasks | 6 files |
+| Phase 05 P42 | 20m | 3 tasks | 6 files |
+| Phase 05 P43 | 30m | 3 tasks | 12 files |
+| Phase 05 P44 | 1h34m47s | 2 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -198,6 +199,17 @@ No implementation decision was explicitly locked by the architecture intake. Req
 - [Phase ?]: Recovery reuses normal runner CAS/global-lease path via run_recovered_job
 - [Phase ?]: Handshake PGID is the only post-spawn group identity; leader exit never proves cleanup
 - [Phase ?]: Host recovery outcomes stay path/principal-free; recovery failure marks only Forecast unavailable
+- [Phase 05]: Missing POSIX resource support makes custom-strategy isolation unavailable and blocks limits/spawn; no unbounded fallback is permitted.
+- [Phase 05]: Windows managed artifacts use binary writable file descriptors and skip unsupported directory fsync while POSIX durability remains unchanged.
+- [Phase 05]: Phase 05 availability combinations run as five top-level Playwright tests with stable case IDs and fresh Page fixtures.
+- [Phase 05]: ChecksTable consumes the canonical ThesisCheck[] contract.
+- [Phase ?]: Submitted strategy source is provenance only; controlled execution consumes immutable positive-parser IR.
+- [Phase ?]: Forecast retry reservation is the first mutation and only its persisted owner token may bind or publish.
+- [Phase ?]: Durable fully-bound publication is dispatch acceptance; wake-up is only a best-effort hint.
+- [Phase ?]: Timed-out shutdown retains exact ownership and returns a retryable aggregate until bounded close succeeds.
+- [Phase 05]: 05-44 closeout is bound to local run 7d7ce3ad-c09b-4bb8-8b4b-31d28f7aadef at HEAD 2c313c1c59f1d43699f034624bee1751f114f06d and tree c79e902d29f0de40125d9d43542c4d2973ed8cb9.
+- [Phase 05]: GitHub Actions run 30221237357 is the accepted exact-tree native Linux evidence for the final four-report bundle.
+- [Phase 05]: Only R43/Wave 15 was approved; global validation, historical rows, 05-28, 05-40, and 05-GC-44-1 remain unchanged.
 
 ### Pending Todos
 
@@ -205,8 +217,7 @@ None yet.
 
 ### Blockers/Concerns
 
-- Phase 1 planning must map the existing tickflow, PanWatch, and Hermes extension points before choosing package and synchronization boundaries.
-- 05-26, 05-27, 05-39, and 05-29 remain to be implemented and verified; their former 05-40 approval dependency was removed for this personal project.
+None.
 
 ## Deferred Items
 
@@ -217,6 +228,10 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-07-25T16:30:59.000Z
-Stopped at: Phase 05 final gate green; ready for re-verify/milestone closeout
+Last session: 2026-07-26T21:41:28.046Z
+Stopped at: Completed 05-44-PLAN.md
 Resume file: None
+
+## Operator Next Steps
+
+- Start the next milestone with /gsd-new-milestone

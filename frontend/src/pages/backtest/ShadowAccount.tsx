@@ -17,8 +17,8 @@ import {
 import { QK } from '@/lib/queryKeys'
 
 const PAGE_SIZE = 50
-const CONTROL_CLASS = 'min-h-11 rounded-input border border-border bg-base px-3 py-2 text-sm text-foreground transition-colors duration-150 ease-smooth focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none'
-const BUTTON_CLASS = 'inline-flex min-h-11 items-center justify-center gap-2 rounded-btn border border-border bg-base px-3 py-2 text-sm text-foreground transition-colors duration-150 ease-smooth hover:bg-elevated focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none'
+const CONTROL_CLASS = 'min-h-11 rounded-input border border-border bg-base px-4 py-2 text-sm text-foreground transition-colors duration-150 ease-smooth focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none'
+const BUTTON_CLASS = 'inline-flex min-h-11 items-center justify-center gap-2 rounded-btn border border-border bg-base px-4 py-2 text-sm text-foreground transition-colors duration-150 ease-smooth hover:bg-elevated focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none'
 const PRIMARY_CLASS = `${BUTTON_CLASS} border-accent bg-accent font-semibold text-white hover:bg-accent/90`
 const TABLE_HEADER_CLASS = 'border-b border-border bg-elevated/60 text-left text-xs font-normal text-secondary'
 const TABLE_CELL_CLASS = 'border-b border-border/60 px-3 py-2 align-top text-xs'
@@ -70,12 +70,12 @@ function ConfirmationDialog({ open, title, description, confirmLabel, pending, c
       onClose={closeWhenSafe}
       closeOnBackdrop={!pending}
       overlayClassName="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4"
-      panelClassName="max-h-[calc(100vh-2rem)] w-full max-w-xl overflow-y-auto rounded-dialog border border-border bg-surface p-5"
+      panelClassName="max-h-[calc(100vh-2rem)] w-full max-w-xl overflow-y-auto rounded-dialog border border-border bg-surface p-6"
     >
       <h3 id="shadow-confirmation-title" className="text-base font-semibold text-foreground">{title}</h3>
       <div className="mt-3 max-w-[70ch] text-sm leading-relaxed text-secondary">{description}</div>
       {children}
-      <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+      <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
         <button type="button" className={BUTTON_CLASS} disabled={pending} onClick={closeWhenSafe}>返回审阅</button>
         <button type="button" className={PRIMARY_CLASS} disabled={pending || confirmDisabled} onClick={() => { if (!pending && !confirmDisabled) onConfirm() }}>{pending ? '正在记录…' : confirmLabel}</button>
       </div>
@@ -400,14 +400,14 @@ export function ShadowAccount() {
 
   return (
     <section role="region" aria-labelledby="shadow-account-heading" className="rounded-card border border-border bg-surface p-4 text-sm lg:p-6">
-      <header className="flex flex-col gap-3 border-b border-border pb-4 sm:flex-row sm:items-start sm:justify-between">
+      <header className="flex flex-col gap-4 border-b border-border pb-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <div className="flex flex-wrap items-center gap-2">
             <h2 id="shadow-account-heading" className="text-base font-semibold text-foreground">Shadow 成交证据与策略候选</h2>
             {capabilityQuery.isLoading ? (
               <span role="status" className="inline-flex items-center gap-1 text-xs text-secondary"><LoaderCircle aria-hidden="true" className="h-4 w-4 motion-safe:animate-spin motion-reduce:animate-none" />正在确认模块状态</span>
             ) : capability?.available ? (
-              <span role="status" className="inline-flex items-center gap-1 text-xs text-foreground"><CheckCircle2 aria-hidden="true" className="h-4 w-4 text-accent" />可用</span>
+              <span role="status" className="inline-flex items-center gap-1 text-xs text-foreground"><CheckCircle2 aria-hidden="true" className="h-4 w-4 text-foreground" />可用</span>
             ) : (
               <span role="status" className="inline-flex items-center gap-1 text-xs text-warning"><AlertTriangle aria-hidden="true" className="h-4 w-4" />不可用</span>
             )}
@@ -434,7 +434,7 @@ export function ShadowAccount() {
 
       {capability?.available ? (
         <div className="mt-6 space-y-8">
-          {statusMessage ? <p role="status" aria-live="polite" className="rounded-card border border-accent/40 bg-accent/10 p-3 text-sm text-foreground">{statusMessage}</p> : null}
+          {statusMessage ? <p role="status" aria-live="polite" className="rounded-card border border-border bg-elevated p-4 text-sm text-foreground">{statusMessage}</p> : null}
 
           {loadFailed ? (
             <div ref={errorRef} tabIndex={-1} role="alert" className="rounded-card border border-danger/40 bg-danger/10 p-4 focus:outline-none">
@@ -450,9 +450,9 @@ export function ShadowAccount() {
             <p className="mt-2 max-w-[70ch] text-sm text-secondary">支持 CSV 与 XLSX；文件大小上限 8 MB、预览行数最多 50 行。每次文件、映射或源时区变更都会重新生成服务端确认标识。文件仅发送到当前自托管服务，不提供手工逐笔录入。</p>
             <div className="mt-4 grid gap-4 lg:grid-cols-2">
               <label className="text-sm text-secondary">选择本地成交日志
-                <input aria-label="选择本地成交日志" type="file" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" className={`${CONTROL_CLASS} mt-1 block w-full cursor-pointer file:mr-3 file:rounded-btn file:border-0 file:bg-accent file:px-3 file:py-2 file:text-sm file:font-semibold file:text-white`} onChange={event => chooseFile(event.target.files?.[0] ?? null)} />
+                <input aria-label="选择本地成交日志" type="file" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" className={`${CONTROL_CLASS} mt-1 block w-full cursor-pointer file:mr-4 file:rounded-btn file:border-0 file:bg-accent file:px-4 file:py-2 file:text-sm file:font-semibold file:text-white`} onChange={event => chooseFile(event.target.files?.[0] ?? null)} />
               </label>
-              <div className="grid gap-3 sm:grid-cols-2">
+              <div className="grid gap-4 sm:grid-cols-2">
                 <label className="text-sm text-secondary">来源标签
                   <input value={sourceLabel} maxLength={256} className={`${CONTROL_CLASS} mt-1 w-full`} onChange={event => setSourceLabel(event.target.value)} />
                 </label>
@@ -473,7 +473,7 @@ export function ShadowAccount() {
             ) : null}
 
             {file ? (
-              <div className="mt-5">
+              <div className="mt-6">
                 <OverflowTable instructionId="shadow-mapping-scroll-instruction">
                   <table className="min-w-[760px] w-full">
                     <caption className="sr-only">Shadow 字段映射预览</caption>
@@ -490,7 +490,7 @@ export function ShadowAccount() {
             ) : null}
 
             {currentPreview ? (
-              <div className="mt-5 space-y-5">
+              <div className="mt-6 space-y-6">
                 <p className="text-xs text-secondary">仅为预览；重复组和 partial fill（部分成交）不会自动删除或合并。</p>
                 <OverflowTable instructionId="shadow-preview-scroll-instruction">
                   <table className="min-w-[760px] w-full">
@@ -505,7 +505,7 @@ export function ShadowAccount() {
           </section>
 
           <section aria-labelledby="shadow-batches-heading" className="border-t border-border pt-6">
-            <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center justify-between gap-4">
               <div><h3 id="shadow-batches-heading" className="text-base font-semibold">不可变导入批次</h3><p className="mt-1 text-xs text-secondary">每次导入追加新行；无编辑、覆盖或删除。</p></div>
               {batchesQuery.isFetching ? <span role="status" className="text-xs text-secondary">正在刷新批次历史…</span> : null}
             </div>
@@ -521,7 +521,7 @@ export function ShadowAccount() {
                     <thead className={TABLE_HEADER_CLASS}><tr><th scope="col" className="px-3 py-2">纳入</th><th scope="col" className="px-3 py-2">批次与原文件</th><th scope="col" className="px-3 py-2">来源/导入人</th><th scope="col" className="px-3 py-2">创建时间</th><th scope="col" className="px-3 py-2">内容摘要/映射</th><th scope="col" className="px-3 py-2">总行/有效/诊断</th><th scope="col" className="px-3 py-2">谱系</th><th scope="col" className="px-3 py-2">状态与诊断</th></tr></thead>
                     <tbody>{batches.map(batch => {
                       const counts = batchCounts(batch)
-                      return <tr key={batch.id}><td className={TABLE_CELL_CLASS}><input aria-label={`纳入批次 ${batch.label ?? batch.id}`} type="checkbox" className="h-5 w-5 accent-accent" checked={selectedBatchIds.has(batch.id)} onChange={event => setSelectedBatchIds(previous => { const next = new Set(previous); if (event.target.checked) next.add(batch.id); else next.delete(batch.id); return next })} /></td><th scope="row" className={`${TABLE_CELL_CLASS} min-w-56 font-normal`}><span className="block font-semibold text-foreground">{batch.label ?? batch.source_label}</span><span className="mt-1 block break-words">{batch.original_filename ?? '服务端未投影原文件名'}</span><span className="mt-1 block break-all font-mono">{batch.id}</span></th><td className={TABLE_CELL_CLASS}>{batch.source_label}<br />{batch.imported_by ?? '服务端会话身份'}</td><td className={`${TABLE_CELL_CLASS} font-mono`}>{displayTime(batch.created_at)}</td><td className={TABLE_CELL_CLASS}><span className="block break-all font-mono">{batch.content_digest ?? batch.content_sha256}</span><span className="mt-1 block">映射 {batch.mapping_version}</span></td><td className={`${TABLE_CELL_CLASS} font-mono tabular-nums`}>{counts.total} / {counts.valid} / {counts.invalid}<br />重复组 {batch.duplicate_groups ?? '未提供'}；partial fill {batch.partial_fills ?? '未提供'}</td><td className={TABLE_CELL_CLASS}>{batch.same_content_as ? <>same content：<span className="break-all font-mono">{batch.same_content_as}</span></> : batch.supersedes_batch_id ? <>修正自 <span className="break-all font-mono">{batch.supersedes_batch_id}</span></> : '首个批次'}</td><td className={TABLE_CELL_CLASS}>{statusText(batch.status)}{counts.invalid > 0 ? <p className="mt-1 text-warning">导入包含需要处理的诊断：{counts.valid} 行有效，{counts.invalid} 行未纳入。</p> : null}<details className="mt-1"><summary className="min-h-11 cursor-pointer py-2 text-accent">查看导入诊断</summary>{batch.diagnostics.length ? <ul className="space-y-1">{batch.diagnostics.map((diagnostic, index) => <li key={`${diagnostic.code ?? 'diagnostic'}-${index}`} className="max-w-[65ch] break-words">{diagnostic.message}</li>)}</ul> : <p>无服务端诊断。</p>}</details></td></tr>
+                      return <tr key={batch.id}><td className={TABLE_CELL_CLASS}><label data-testid="shadow-batch-selection-target" className="inline-flex min-h-11 min-w-11 cursor-pointer items-center justify-center rounded-input focus-within:ring-2 focus-within:ring-accent focus-within:ring-offset-2 focus-within:ring-offset-surface"><input aria-label={`纳入批次 ${batch.label ?? batch.id}`} type="checkbox" className="h-5 w-5 accent-accent focus-visible:outline-none" checked={selectedBatchIds.has(batch.id)} onChange={event => setSelectedBatchIds(previous => { const next = new Set(previous); if (event.target.checked) next.add(batch.id); else next.delete(batch.id); return next })} /></label></td><th scope="row" className={`${TABLE_CELL_CLASS} min-w-56 font-normal`}><span className="block font-semibold text-foreground">{batch.label ?? batch.source_label}</span><span className="mt-1 block break-words">{batch.original_filename ?? '服务端未投影原文件名'}</span><span className="mt-1 block break-all font-mono">{batch.id}</span></th><td className={TABLE_CELL_CLASS}>{batch.source_label}<br />{batch.imported_by ?? '服务端会话身份'}</td><td className={`${TABLE_CELL_CLASS} font-mono`}>{displayTime(batch.created_at)}</td><td className={TABLE_CELL_CLASS}><span className="block break-all font-mono">{batch.content_digest ?? batch.content_sha256}</span><span className="mt-1 block">映射 {batch.mapping_version}</span></td><td className={`${TABLE_CELL_CLASS} font-mono tabular-nums`}>{counts.total} / {counts.valid} / {counts.invalid}<br />重复组 {batch.duplicate_groups ?? '未提供'}；partial fill {batch.partial_fills ?? '未提供'}</td><td className={TABLE_CELL_CLASS}>{batch.same_content_as ? <>same content：<span className="break-all font-mono">{batch.same_content_as}</span></> : batch.supersedes_batch_id ? <>修正自 <span className="break-all font-mono">{batch.supersedes_batch_id}</span></> : '首个批次'}</td><td className={TABLE_CELL_CLASS}>{statusText(batch.status)}{counts.invalid > 0 ? <p className="mt-1 text-warning">导入包含需要处理的诊断：{counts.valid} 行有效，{counts.invalid} 行未纳入。</p> : null}<details className="mt-1"><summary className="min-h-11 cursor-pointer py-2 text-accent">查看导入诊断</summary>{batch.diagnostics.length ? <ul className="space-y-1">{batch.diagnostics.map((diagnostic, index) => <li key={`${diagnostic.code ?? 'diagnostic'}-${index}`} className="max-w-[65ch] break-words">{diagnostic.message}</li>)}</ul> : <p>无服务端诊断。</p>}</details></td></tr>
                     })}</tbody>
                   </table>
                 </OverflowTable>
@@ -534,7 +534,7 @@ export function ShadowAccount() {
             <section aria-labelledby="shadow-evidence-heading" className="border-t border-border pt-6">
               <h3 id="shadow-evidence-heading" className="text-base font-semibold">冻结证据集</h3>
               {!currentEvidence ? <div className="mt-4"><h4 className="text-base font-semibold">尚未创建 Shadow 证据集</h4><p className="mt-2 max-w-[70ch] text-sm text-secondary">已有完成的成交批次，但尚未冻结用于候选蒸馏的证据。请选择要纳入的已完成批次和排除项；创建后证据集不可修改。</p><p className="mt-2 text-xs text-secondary">未勾选时将纳入当前页最近的已完成批次；重复组与 partial fill 保持原样。</p></div> : null}
-              {currentEvidence ? <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto]"><div className="rounded-card border border-border bg-base/30 p-4"><label className="text-sm text-secondary">当前只读证据集<select className={`${CONTROL_CLASS} mt-1 w-full`} value={currentEvidence.id} onChange={event => setSelectedEvidenceId(event.target.value)}>{evidenceSets.map(item => <option key={item.id} value={item.id}>{item.id}</option>)}</select></label><dl className="mt-3 grid gap-2 text-xs sm:grid-cols-2"><div><dt className="text-secondary">纳入批次 / 成交</dt><dd>{currentEvidence.included_batch_ids.length || currentEvidence.batch_count || 0} / {currentEvidence.included_trade_count || currentEvidence.trade_count || 0}</dd></div><div><dt className="text-secondary">重复组 / partial fill</dt><dd>{currentEvidence.duplicate_groups ?? '未提供'} / {currentEvidence.partial_fills ?? '未提供'}</dd></div><div className="sm:col-span-2"><dt className="text-secondary">冻结 fingerprint</dt><dd className="break-all font-mono" style={{ overflowWrap: 'anywhere' }}>{currentEvidence.fingerprint}</dd></div></dl></div>{staleEvidence ? <p className="rounded-card border border-warning/40 bg-warning/10 p-4 text-sm text-foreground">存在较新成交批次；当前候选仍基于已冻结证据。</p> : null}</div> : null}
+              {currentEvidence ? <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto]"><div className="rounded-card border border-border bg-base/30 p-4"><label className="text-sm text-secondary">当前只读证据集<select className={`${CONTROL_CLASS} mt-1 w-full`} value={currentEvidence.id} onChange={event => setSelectedEvidenceId(event.target.value)}>{evidenceSets.map(item => <option key={item.id} value={item.id}>{item.id}</option>)}</select></label><dl className="mt-4 grid gap-2 text-xs sm:grid-cols-2"><div><dt className="text-secondary">纳入批次 / 成交</dt><dd>{currentEvidence.included_batch_ids.length || currentEvidence.batch_count || 0} / {currentEvidence.included_trade_count || currentEvidence.trade_count || 0}</dd></div><div><dt className="text-secondary">重复组 / partial fill</dt><dd>{currentEvidence.duplicate_groups ?? '未提供'} / {currentEvidence.partial_fills ?? '未提供'}</dd></div><div className="sm:col-span-2"><dt className="text-secondary">冻结 fingerprint</dt><dd className="break-all font-mono" style={{ overflowWrap: 'anywhere' }}>{currentEvidence.fingerprint}</dd></div></dl></div>{staleEvidence ? <p className="rounded-card border border-warning/40 bg-warning/10 p-4 text-sm text-foreground">存在较新成交批次；当前候选仍基于已冻结证据。</p> : null}</div> : null}
               <button type="button" className={`${PRIMARY_CLASS} mt-4`} disabled={!evidenceBatchIds.length || createEvidence.isPending} onClick={() => createEvidence.mutate({ included_batch_ids: evidenceBatchIds, membership_mode: 'all_authorized_batch_trades', exclusions: [] })}>{createEvidence.isPending ? '正在冻结证据集…' : '创建新证据集'}</button>
               {createEvidence.isError ? <p role="alert" className="mt-2 text-sm text-danger">无法创建证据集：{safeReason(createEvidence.error)}。批次选择保持不变。</p> : null}
               <Pagination page={evidenceQuery.data?.page} offset={evidenceOffset} onOffset={setEvidenceOffset} />
@@ -548,8 +548,8 @@ export function ShadowAccount() {
               {distillCandidate.isError ? <div role="alert" className="mt-4 rounded-card border border-danger/40 bg-danger/10 p-4"><h4 className="text-base font-semibold">Shadow 候选蒸馏失败</h4><p className="mt-1">Shadow 候选蒸馏失败：{safeReason(distillCandidate.error)}。</p><p className="mt-1 text-secondary">本次未创建候选，冻结证据集及其 fingerprint 保持不变。失败运行作为只读终态保留；重试必须基于相同冻结证据集创建新运行，不复用或覆盖失败运行。</p><button type="button" className={`${BUTTON_CLASS} mt-3`} onClick={() => distillCandidate.mutate({ evidenceSetId: currentEvidence.id })}>基于相同证据集创建新蒸馏运行</button></div> : null}
 
               {currentCandidate ? (
-                <article className="mt-4 space-y-5">
-                  <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between"><label className="text-sm text-secondary">当前只读候选<select value={currentCandidate.id} className={`${CONTROL_CLASS} mt-1 w-full min-w-64`} onChange={event => setSelectedCandidateId(event.target.value)}>{candidates.map(item => <option key={item.id} value={item.id}>{item.label ?? item.id}</option>)}</select></label><p className="text-xs text-secondary">资格：{retainable ? '服务端证据满足保留前提' : '尚不具备保留资格'}</p></div>
+                <article className="mt-4 space-y-6">
+                  <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between"><label className="text-sm text-secondary">当前只读候选<select value={currentCandidate.id} className={`${CONTROL_CLASS} mt-1 w-full min-w-64`} onChange={event => setSelectedCandidateId(event.target.value)}>{candidates.map(item => <option key={item.id} value={item.id}>{item.label ?? item.id}</option>)}</select></label><p className="text-xs text-secondary">资格：{retainable ? '服务端证据满足保留前提' : '尚不具备保留资格'}</p></div>
                   {!distillCandidate.isError ? <button type="button" className={BUTTON_CLASS} disabled={distillCandidate.isPending} onClick={() => distillCandidate.mutate({ evidenceSetId: currentEvidence.id })}>{distillCandidate.isPending ? '正在蒸馏候选…' : '基于相同证据集创建新蒸馏运行'}</button> : null}
                   <OverflowTable instructionId="shadow-rules-scroll-instruction">
                     <table className="min-w-[980px] w-full">
@@ -569,7 +569,7 @@ export function ShadowAccount() {
             <section aria-labelledby="shadow-evaluation-heading" className="border-t border-border pt-6">
               <h3 id="shadow-evaluation-heading" className="text-base font-semibold">独立样本内 / 样本外评估</h3>
               <p className="mt-2 text-sm text-secondary">必须先完成相互独立的样本内与样本外评估，且两者均通过。</p>
-              <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                 <label className="text-xs text-secondary">样本内开始<input type="date" value={inSampleStart} className={`${CONTROL_CLASS} mt-1 w-full`} onChange={event => setInSampleStart(event.target.value)} /></label>
                 <label className="text-xs text-secondary">样本内结束<input type="date" value={inSampleEnd} className={`${CONTROL_CLASS} mt-1 w-full`} onChange={event => setInSampleEnd(event.target.value)} /></label>
                 <label className="text-xs text-secondary">样本外开始<input type="date" value={outSampleStart} className={`${CONTROL_CLASS} mt-1 w-full`} onChange={event => setOutSampleStart(event.target.value)} /></label>
@@ -593,7 +593,7 @@ export function ShadowAccount() {
               {actualEvaluationRows.filter(row => row.status !== 'passed' && row.status !== 'completed').map(row => <div key={`${row.id}-terminal`} className="mt-4 rounded-card border border-danger/40 bg-danger/10 p-4"><h4 className="text-base font-semibold">Shadow 样本内/样本外评估失败</h4><p className="mt-1 break-words">{statusText(row.status)}：{row.terminalReason ?? '运行未产生可保留评估证据'}。</p><p className="mt-1 text-secondary">失败运行只读保留；重试创建新评估运行。</p><button type="button" className={`${BUTTON_CLASS} mt-3`} disabled={retryEvaluation.isPending} onClick={() => retryEvaluation.mutate(row.id)}>创建新评估运行</button></div>)}
               <Pagination page={evaluationsQuery.data?.page} offset={evaluationOffset} onOffset={setEvaluationOffset} />
 
-              <div className="mt-5 border-t border-border pt-5">
+              <div className="mt-6 border-t border-border pt-6">
                 <button type="button" className={PRIMARY_CLASS} disabled={!retainable || Boolean(retained) || retainCandidate.isPending} onClick={() => { retainCandidate.reset(); setRetainConfirmationOpen(true) }}>保留为 Shadow 研究候选</button>
                 {!retainable ? <p className="mt-2 text-sm text-warning">必须先完成相互独立的样本内与样本外评估，且两者均通过。</p> : null}
                 {retained ? <p role="status" className="mt-2 text-sm text-foreground">已保留为研究候选：{retained.id}。不会注册或启用策略。</p> : null}
@@ -610,11 +610,11 @@ export function ShadowAccount() {
         </div>
       ) : null}
 
-      <ConfirmationDialog open={importConfirmationOpen} title="确认不可变导入" confirmLabel="确认不可变导入" pending={confirmImport.isPending || !currentPreview} onClose={() => setImportConfirmationOpen(false)} onConfirm={() => file && currentPreview && confirmImport.mutate({ file, mapping, source_timezone: sourceTimezone, source_label: sourceLabel, preview_identity: currentPreview.preview_identity })} description={<dl className="grid gap-2"><div><dt className="font-semibold text-foreground">原文件名</dt><dd className="break-words">{file?.name ?? '未选择'}</dd></div><div><dt className="font-semibold text-foreground">来源标签 / 时区</dt><dd>{sourceLabel} / {sourceTimezone}</dd></div><div><dt className="font-semibold text-foreground">映射 / 行数</dt><dd className="break-all font-mono">{currentPreview?.preview_identity ?? '预览未就绪'} / {currentPreview?.source_row_count ?? currentPreview?.rows?.length ?? 0}</dd></div></dl>} />
+      <ConfirmationDialog open={importConfirmationOpen} title="确认不可变导入" confirmLabel="确认不可变导入" pending={confirmImport.isPending || !currentPreview} onClose={() => setImportConfirmationOpen(false)} onConfirm={() => file && currentPreview && confirmImport.mutate({ file, mapping, source_timezone: sourceTimezone, source_label: sourceLabel, preview_identity: currentPreview.preview_identity })} description={<dl className="grid gap-2"><div><dt className="text-foreground">原文件名</dt><dd className="break-words">{file?.name ?? '未选择'}</dd></div><div><dt className="text-foreground">来源标签 / 时区</dt><dd>{sourceLabel} / {sourceTimezone}</dd></div><div><dt className="text-foreground">映射 / 行数</dt><dd className="break-all font-mono">{currentPreview?.preview_identity ?? '预览未就绪'} / {currentPreview?.source_row_count ?? currentPreview?.rows?.length ?? 0}</dd></div></dl>} />
 
       <ConfirmationDialog open={retainConfirmationOpen} title="保留为 Shadow 研究候选" confirmLabel="保留为 Shadow 研究候选" pending={retainCandidate.isPending} confirmDisabled={!retentionRationaleValid} onClose={() => setRetainConfirmationOpen(false)} onConfirm={() => { const rationale = retentionRationale.trim(); if (rationale.length < 10 || rationale.length > 4_000) return; if (currentCandidate && inSample && outOfSample) retainCandidate.mutate({ evidenceSetId: currentCandidate.evidence_set_id, candidateId: currentCandidate.id, inSampleId: inSample.id, outSampleId: outOfSample.id, rationale }) }} description={<>确认保留候选 {currentCandidate?.label ?? currentCandidate?.id}？系统将记录冻结证据集和样本内/样本外评估；不会注册或启用策略，也不会创建监控、计划或市场动作。</>}>
         <label className="mt-4 block text-sm text-secondary">保留理由（至少 10 个字符）<textarea value={retentionRationale} minLength={10} maxLength={4_000} className={`${CONTROL_CLASS} mt-1 min-h-24 w-full`} onChange={event => setRetentionRationale(event.target.value)} /></label>
-        <div className="mt-3 min-h-5 text-sm" aria-live="polite" aria-atomic="true">
+        <div className="mt-4 min-h-5 text-sm" aria-live="polite" aria-atomic="true">
           {retainCandidate.isPending ? <p role="status" className="text-secondary">正在记录保留决定…</p> : null}
           {retainCandidate.isError ? <p role="alert" className="text-danger">保留请求未完成：{safeReason(retainCandidate.error)}。候选、评估与理由均保持不变。</p> : null}
         </div>

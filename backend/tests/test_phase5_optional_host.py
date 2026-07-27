@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
+import threading
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -50,6 +53,16 @@ FORGED_AUTHORITY_FIELDS = {
     "verdict": "passed",
     "status": "completed",
 }
+
+
+def _posix_resource_limits_available() -> bool:
+    if os.name != "posix":
+        return False
+    try:
+        import resource  # noqa: F401
+    except ImportError:
+        return False
+    return True
 
 
 @dataclass
@@ -403,6 +416,31 @@ def test_eight_module_combinations_preserve_v1_and_runtime_boundaries(
         assert {name for name in ("torch", "sklearn", "kronos") if name in sys.modules} == heavy_modules_before
 
 
+def test_resource_absence_is_sandbox_local_and_real_lifespan_starts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.advanced import sandbox
+
+    monkeypatch.setattr(sandbox, "resource", None)
+
+    with _real_host(tmp_path, monkeypatch, frozenset(MODULE_NAMES)) as (app, client):
+        _authenticate(client)
+        capabilities = client.get(CAPABILITY_PATH)
+        assert capabilities.status_code == 200
+        for module in MODULE_NAMES:
+            _assert_typed_status(capabilities.json(), module, True)
+
+        launcher = app.state.advanced_sandbox_service._launcher
+        proof = launcher.capability_probe(
+            governed_input=app.state.datastore.data_dir,
+            workdir=tmp_path / "sandbox-work",
+        )
+        assert proof == {field: False for field in sandbox._PROBE_FIELDS}
+        with pytest.raises(OSError, match="resource"):
+            launcher._limits(3, 128)
+        _assert_completed_v1_loop(app, client)
+
+
 def test_complete_operational_readiness_failures_are_typed_local_and_independent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -440,6 +478,129 @@ def test_complete_operational_readiness_failures_are_typed_local_and_independent
             for attribute in state_attributes[failed_module]:
                 assert getattr(app.state, attribute) is None
             _assert_completed_v1_loop(app, client)
+
+
+def test_forecast_scanner_failure_closes_dispatcher_and_shutdown_is_idempotent(
+    tmp_path: Path,
+) -> None:
+    from fastapi import FastAPI
+
+    from app.optional_modules import (
+        OptionalModuleName,
+        OptionalModuleStatus,
+        _RuntimeBundle,
+        build_optional_module_host,
+        install_optional_module_host,
+        shutdown_optional_module_host,
+    )
+
+    class DelayedDispatcher:
+        def __init__(self) -> None:
+            self.close_calls = 0
+            self.processed: list[str] = []
+            self._stop = threading.Event()
+            self._thread: threading.Thread | None = None
+
+        def start(self) -> None:
+            def run() -> None:
+                if not self._stop.wait(0.05):
+                    self.processed.append("queued-job")
+                self._stop.wait()
+
+            self._thread = threading.Thread(target=run, daemon=True)
+            self._thread.start()
+
+        def close(self) -> None:
+            self.close_calls += 1
+            self._stop.set()
+            if self._thread is not None:
+                self._thread.join(timeout=1)
+
+        @property
+        def is_alive(self) -> bool:
+            return self._thread is not None and self._thread.is_alive()
+
+    class Repository:
+        def recover_after_restart(self, *, revalidate):
+            assert callable(revalidate)
+            return []
+
+        def list_forecasts(self):
+            return []
+
+    class RequestService:
+        def __init__(self) -> None:
+            self.dispatcher = None
+
+        def revalidate(self, _job):
+            return True
+
+        def attach_dispatcher(self, dispatcher) -> None:
+            self.dispatcher = dispatcher
+
+    class Scanner:
+        def scan(self, *, as_of_session_id: str):
+            raise AssertionError(f"scanner must not run: {as_of_session_id}")
+
+    class FailingScheduler:
+        def add_job(self, *_args, **_kwargs) -> None:
+            raise RuntimeError("scanner registration failed")
+
+        def remove_job(self, _job_id: str) -> None:
+            return None
+
+    dispatcher = DelayedDispatcher()
+    repository = Repository()
+    request_service = RequestService()
+    bundle = _RuntimeBundle(
+        name=OptionalModuleName.FORECAST,
+        database_path=tmp_path / "operational.db",
+        data_root=tmp_path / "data",
+        repository=repository,
+        service=request_service,
+        scanner=Scanner(),
+        request_service=request_service,
+        dispatcher=dispatcher,
+    )
+
+    class Factory:
+        def __init__(self) -> None:
+            self.close_calls = 0
+
+        def probe(self):
+            return OptionalModuleStatus.ready(OptionalModuleName.FORECAST)
+
+        def create(self, _services):
+            return bundle
+
+        def close(self, service) -> None:
+            assert service is bundle
+            self.close_calls += 1
+            dispatcher.close()
+
+    factory = Factory()
+    host = build_optional_module_host(
+        database_path=tmp_path / "operational.db",
+        data_root=tmp_path / "data",
+        factories={OptionalModuleName.FORECAST: factory},
+        scheduler=FailingScheduler(),
+    )
+    app = FastAPI()
+
+    install_optional_module_host(app, host)
+    time.sleep(0.1)
+
+    assert host.status(OptionalModuleName.FORECAST).available is False
+    assert factory.close_calls == 1
+    assert dispatcher.close_calls == 1
+    assert dispatcher.is_alive is False
+    assert dispatcher.processed == []
+
+    shutdown_optional_module_host(app)
+    shutdown_optional_module_host(app)
+
+    assert factory.close_calls == 1
+    assert dispatcher.close_calls == 1
 
 
 def test_optional_routes_reject_browser_authority_and_foreign_ids(
@@ -648,6 +809,14 @@ def test_production_shadow_browser_contract_distills_and_evaluates_with_complete
         distilled = client.post(
             f"/api/shadow/evidence-sets/{evidence['id']}/candidates", json=strict_body
         )
+        if not _posix_resource_limits_available():
+            assert distilled.status_code == 422, distilled.text
+            candidates = client.get("/api/shadow/candidates")
+            assert candidates.status_code == 200
+            assert candidates.json()["page"]["total"] == 0
+            spies.assert_zero_calls()
+            _assert_completed_v1_loop(app, client)
+            return
         assert distilled.status_code == 201, distilled.text
         candidate = distilled.json()["candidate"]
         assert candidate["features"] == strict_body["feature_names"]
@@ -833,6 +1002,23 @@ def test_production_forecast_factory_completes_approved_request_and_stays_indepe
         )
         assert created.status_code == 201, created.text
         job = created.json()["job"]
+        deadline = time.monotonic() + 3
+        while job["status"] in {"queued", "running"} and time.monotonic() < deadline:
+            time.sleep(0.01)
+            job = client.get(f"/api/forecast/jobs/{job['id']}").json()["job"]
+        if not _posix_resource_limits_available():
+            assert job["status"] == "resource_terminated"
+            assert "record_id" not in job
+            assert client.get("/api/forecast/instruments/600000.SH/records").json()[
+                "page"
+            ]["total"] == 0
+            assert (
+                app.state.forecast_request_service.__class__.__name__
+                == "ForecastService"
+            )
+            spies.assert_zero_calls()
+            _assert_completed_v1_loop(app, client)
+            return
         assert job["status"] == "completed"
         assert job["record_id"]
 
@@ -1048,13 +1234,19 @@ def test_cr07_real_host_queued_restart_executes_once(
         matched = [item for item in outcomes if item.get("job_id") == seed["id"]]
         assert len(matched) == 1
         assert matched[0]["action"] in {"dispatched", "observed"}
-        assert matched[0]["status"] == "completed"
+        expected_status = (
+            "completed" if _posix_resource_limits_available() else "resource_limited"
+        )
+        assert matched[0]["status"] == expected_status
         job = app.state.forecast_repository.get_job(seed["id"])
         assert job is not None
-        assert job["status"] == "completed"
+        assert job["status"] == expected_status
         forecasts = app.state.forecast_repository.list_forecasts()
-        assert len(forecasts) == 1
-        assert forecasts[0]["job_id"] == seed["id"]
+        if expected_status == "completed":
+            assert len(forecasts) == 1
+            assert forecasts[0]["job_id"] == seed["id"]
+        else:
+            assert forecasts == []
         capabilities = client.get(CAPABILITY_PATH)
         assert capabilities.status_code == 200
         _assert_typed_status(capabilities.json(), "forecast", True)
@@ -1100,4 +1292,111 @@ def test_forecast_recovery_failure_is_local(
         assert client.get(BUSINESS_PATHS["shadow"]).status_code == 200
         spies.assert_zero_calls()
         _assert_completed_v1_loop(app, client)
+
+
+def test_r43_cr04_host_close_surfaces_unresolved_owner_and_bounded_retry_succeeds(
+    tmp_path: Path,
+) -> None:
+    from app.optional_modules import (
+        OptionalModuleCloseIncomplete,
+        OptionalModuleName,
+        OptionalModuleStatus,
+        build_optional_module_host,
+    )
+
+    bundle = object()
+
+    class BlockingFactory:
+        def __init__(self) -> None:
+            self.blocked = True
+            self.close_calls = 0
+
+        def probe(self):
+            return OptionalModuleStatus.ready(OptionalModuleName.FORECAST)
+
+        def create(self, _services):
+            return bundle
+
+        def close(self, service):
+            assert service is bundle
+            self.close_calls += 1
+            if self.blocked:
+                raise RuntimeError("forecast_close_incomplete")
+
+    factory = BlockingFactory()
+    host = build_optional_module_host(
+        database_path=tmp_path / "operational.db",
+        data_root=tmp_path / "data",
+        factories={OptionalModuleName.FORECAST: factory},
+    )
+    assert host.service(OptionalModuleName.FORECAST) is bundle
+
+    with pytest.raises(OptionalModuleCloseIncomplete) as captured:
+        host.close()
+    assert captured.value.outcome.stopped == ()
+    assert captured.value.outcome.unresolved == ("forecast",)
+    assert host.initialized_services == (bundle,)
+
+    factory.blocked = False
+    outcome = host.close()
+    assert outcome.stopped == ("forecast",)
+    assert outcome.unresolved == ()
+    assert host.initialized_services == ()
+    assert factory.close_calls == 2
+
+
+def test_mark_unavailable_retains_timed_out_forecast_bundle_until_stopped(
+    tmp_path: Path,
+) -> None:
+    from app.optional_modules import (
+        OptionalModuleCloseIncomplete,
+        OptionalModuleName,
+        OptionalModuleStatus,
+        build_optional_module_host,
+    )
+
+    bundles = {name: object() for name in OptionalModuleName}
+
+    class Factory:
+        def __init__(self, name: OptionalModuleName) -> None:
+            self.name = name
+            self.blocked = name is OptionalModuleName.FORECAST
+            self.close_calls = 0
+
+        def probe(self):
+            return OptionalModuleStatus.ready(self.name)
+
+        def create(self, _services):
+            return bundles[self.name]
+
+        def close(self, service):
+            assert service is bundles[self.name]
+            self.close_calls += 1
+            if self.blocked:
+                raise RuntimeError("forecast_close_incomplete")
+
+    factories = {name: Factory(name) for name in OptionalModuleName}
+    host = build_optional_module_host(
+        database_path=tmp_path / "operational.db",
+        data_root=tmp_path / "data",
+        factories=factories,
+    )
+    for name in OptionalModuleName:
+        assert host.service(name) is bundles[name]
+
+    with pytest.raises(OptionalModuleCloseIncomplete) as captured:
+        host.mark_unavailable(
+            OptionalModuleName.FORECAST, code="forecast_runtime_failed"
+        )
+    assert captured.value.outcome.unresolved == ("forecast",)
+    assert host.status(OptionalModuleName.FORECAST).available is False
+    assert bundles[OptionalModuleName.FORECAST] in host.initialized_services
+    assert host.service(OptionalModuleName.SHADOW) is bundles[OptionalModuleName.SHADOW]
+    assert host.service(OptionalModuleName.THESIS) is bundles[OptionalModuleName.THESIS]
+
+    factories[OptionalModuleName.FORECAST].blocked = False
+    outcome = host.close()
+    assert outcome.unresolved == ()
+    assert set(outcome.stopped) == {"shadow", "thesis", "forecast"}
+    assert host.initialized_services == ()
 

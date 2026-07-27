@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import os
 import threading
+import time
 from contextlib import suppress
+from enum import Enum
 from hashlib import sha256
 
 from dataclasses import dataclass
@@ -15,6 +17,7 @@ from typing import Any, Callable, Mapping, MutableMapping
 import polars as pl
 
 from app.forecast.input import ForecastInputFreezer, ForecastRequest, FrozenForecastInput
+from app.forecast.repository import is_retryable_terminal
 
 
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
@@ -42,6 +45,130 @@ class PreparedForecastRun:
     immutable_record: Mapping[str, object]
 
 
+@dataclass(frozen=True, slots=True)
+class RetryOperationInProgress:
+    """Safe bounded-wait result for a retry owned by another invocation."""
+
+    operation_id: str
+    state: str
+    canonical_job_id: str | None
+    retry_after_seconds: float
+
+
+class DispatcherCloseOutcome(str, Enum):
+    STOPPED = "stopped"
+    TIMED_OUT = "timed_out"
+
+
+class DurableForecastDispatcher:
+    """Single consumer over persisted queued jobs; memory contains wakeups only."""
+
+    def __init__(
+        self,
+        *,
+        repository: Any,
+        runner: Any,
+        poll_interval_seconds: float = 0.25,
+        retry_backoff_seconds: float = 0.1,
+        stop_token: threading.Event | None = None,
+    ) -> None:
+        if (
+            not callable(getattr(repository, "list_jobs", None))
+            or not callable(getattr(repository, "get_job", None))
+            or not callable(getattr(runner, "run_job", None))
+            or poll_interval_seconds <= 0
+            or retry_backoff_seconds <= 0
+        ):
+            raise ValueError("Forecast dispatcher dependencies are invalid")
+        self.repository = repository
+        self.runner = runner
+        self.poll_interval_seconds = float(poll_interval_seconds)
+        self.retry_backoff_seconds = float(retry_backoff_seconds)
+        self._wake = threading.Event()
+        self._stop = stop_token if stop_token is not None else threading.Event()
+        self._lifecycle_lock = threading.Lock()
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        with self._lifecycle_lock:
+            if self._stop.is_set():
+                raise RuntimeError("Forecast dispatcher is closed")
+            if self._thread is not None and self._thread.is_alive():
+                return
+            self._thread = threading.Thread(
+                target=self._run,
+                name="forecast-durable-dispatcher",
+                daemon=True,
+            )
+            self._thread.start()
+
+    def submit(self, job_id: str) -> None:
+        if not isinstance(job_id, str) or not job_id:
+            raise ValueError("Forecast dispatch identity is invalid")
+        self.start()
+        self.wake()
+
+    def wake(self) -> bool:
+        """Best-effort hint only; durable polling remains authoritative."""
+        try:
+            with self._lifecycle_lock:
+                self._wake.set()
+            return True
+        except Exception:
+            return False
+
+    def close(
+        self, *, timeout_seconds: float = 2.0
+    ) -> DispatcherCloseOutcome:
+        with self._lifecycle_lock:
+            self._stop.set()
+            self._wake.set()
+            thread = self._thread
+        if thread is not None:
+            thread.join(timeout=max(float(timeout_seconds), 0.0))
+        with self._lifecycle_lock:
+            if thread is not None and thread.is_alive():
+                self._thread = thread
+                return DispatcherCloseOutcome.TIMED_OUT
+            if self._thread is thread:
+                self._thread = None
+            return DispatcherCloseOutcome.STOPPED
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            if self._drain_one():
+                continue
+            self._wake.wait(self.poll_interval_seconds)
+            self._wake.clear()
+
+    def _drain_one(self) -> bool:
+        try:
+            queued = [
+                job
+                for job in self.repository.list_jobs()
+                if isinstance(job, Mapping)
+                and job.get("status") == "queued"
+                and int(job.get("dispatch_ready", 0)) == 1
+            ]
+        except Exception:
+            self._stop.wait(self.retry_backoff_seconds)
+            return False
+        if not queued:
+            return False
+        job_id = str(queued[0]["id"])
+        try:
+            self.runner.run_job(job_id)
+        except Exception:
+            # The authoritative cursor remains queued and will be retried.
+            self._stop.wait(self.retry_backoff_seconds)
+            return True
+        current = self.repository.get_job(job_id)
+        if isinstance(current, Mapping) and current.get("status") == "queued":
+            # Includes a busy global lease; retry after a bounded backoff.
+            self._stop.wait(self.retry_backoff_seconds)
+        return True
+
+
 class ForecastService:
     """Authorize, freeze, allocate, revalidate, execute, and reload one forecast."""
 
@@ -64,11 +191,31 @@ class ForecastService:
         self.device = device
         self.worker_contexts = worker_contexts if worker_contexts is not None else {}
         self._create_lock = threading.Lock()
+        self.dispatcher: DurableForecastDispatcher | None = None
 
     def attach_runner(self, runner: Any) -> None:
         if self.runner is not None:
             raise RuntimeError("Forecast runner is already configured")
         self.runner = runner
+
+    def attach_dispatcher(self, dispatcher: DurableForecastDispatcher) -> None:
+        if self.dispatcher is not None:
+            raise RuntimeError("Forecast dispatcher is already configured")
+        self.dispatcher = dispatcher
+
+    def public_price_context(self, record: Mapping[str, object]) -> dict[str, object]:
+        """Return chart context derived only from the record's verified governed input."""
+        history = self.freezer.public_close_history(
+            record.get("input_artifact_descriptor")
+        )
+        origin = record.get("origin_session_id")
+        if (
+            not history
+            or not isinstance(origin, str)
+            or history[-1].get("session_id") != origin
+        ):
+            raise ValueError("Forecast governed input does not end at the record as-of session")
+        return {"as_of_close": history[-1]["close"], "history": history}
 
     def assert_ready(self) -> None:
         required = (
@@ -166,12 +313,170 @@ class ForecastService:
                         owned_artifact_ids.discard(prepared.frozen.descriptor.artifact_id)
 
             if job.get("status") == "queued":
-                assert self.runner is not None
-                self.runner.run_job(str(job["id"]))
+                self._dispatch(str(job["id"]))
             canonical = self.repository.get_job(str(job["id"]))
             if not isinstance(canonical, dict):
                 raise RuntimeError("Forecast job disappeared after execution")
             return canonical
+
+    def retry_job(
+        self,
+        *,
+        source_job_id: str,
+        idempotency_key: str,
+    ) -> dict[str, Any] | RetryOperationInProgress:
+        """Reserve ownership before governed reads, then durably publish once."""
+        self.assert_ready()
+        reserve = getattr(self.repository, "reserve_retry_operation", None)
+        bind_operation = getattr(self.repository, "bind_retry_operation", None)
+        publish_operation = getattr(self.repository, "publish_retry_operation", None)
+        abort_operation = getattr(self.repository, "abort_retry_operation", None)
+        if not all(
+            callable(method)
+            for method in (reserve, bind_operation, publish_operation, abort_operation)
+        ):
+            raise RuntimeError("Forecast retry repository is unavailable")
+        with self._create_lock:
+            reservation = reserve(
+                source_job_id=source_job_id,
+                idempotency_key=idempotency_key,
+                owner_ttl_seconds=30,
+            )
+            if not reservation.created:
+                if isinstance(reservation.canonical_job, dict):
+                    return reservation.canonical_job
+                return self._wait_for_retry_operation(reservation.operation_id)
+
+            source = self.repository.get_job(source_job_id)
+            if not isinstance(source, Mapping):
+                raise ValueError("forecast retry source does not exist")
+            if not is_retryable_terminal(source.get("status")):
+                raise ValueError("forecast retry requires a terminal source")
+            owner_token = reservation.owner_token
+            if not isinstance(owner_token, str) or not owner_token:
+                raise RuntimeError("Forecast retry owner token is unavailable")
+            prepared: PreparedForecastRun | None = None
+            artifact_id: object = None
+            owned_artifact_ids: set[str] = set()
+            published = False
+            try:
+                if reservation.state == "bound":
+                    job = publish_operation(
+                        operation_id=reservation.operation_id,
+                        owner_token=owner_token,
+                    )
+                else:
+                    prepared = self._prepare_for_job(source)
+                    artifact_id = getattr(
+                        prepared.frozen.descriptor, "artifact_id", None
+                    )
+                    if isinstance(artifact_id, str) and artifact_id:
+                        owned_artifact_ids.add(artifact_id)
+                    if prepared.frozen.input_fingerprint != source.get(
+                        "input_fingerprint"
+                    ):
+                        raise ValueError(
+                            "Forecast retry governed input no longer matches source"
+                        )
+                    bind_operation(
+                        operation_id=reservation.operation_id,
+                        owner_token=owner_token,
+                        immutable_record=prepared.immutable_record,
+                        input_artifact_id=artifact_id,
+                    )
+                    job = publish_operation(
+                        operation_id=reservation.operation_id,
+                        owner_token=owner_token,
+                    )
+                published = True
+                if not isinstance(job, Mapping):
+                    raise RuntimeError(
+                        "Forecast retry repository returned an invalid job"
+                    )
+                if prepared is not None:
+                    try:
+                        self._bind(job, prepared)
+                    except Exception:
+                        # Publication is acceptance. Recovery can reconstruct the
+                        # context; never revoke or delete accepted canonical work.
+                        pass
+                dispatcher = getattr(self, "dispatcher", None)
+                if dispatcher is not None:
+                    with suppress(Exception):
+                        dispatcher.wake()
+                elif self.runner is not None:
+                    with suppress(Exception):
+                        self.runner.run_job(str(job["id"]))
+                canonical = self.repository.get_job(str(job["id"]))
+                if not isinstance(canonical, dict):
+                    raise RuntimeError(
+                        "Forecast retry job disappeared after publication"
+                    )
+                return canonical
+            except Exception:
+                if published:
+                    operation = self.repository.get_retry_operation(
+                        reservation.operation_id
+                    )
+                    if (
+                        isinstance(operation, Mapping)
+                        and isinstance(operation.get("canonical_job_id"), str)
+                    ):
+                        canonical = self.repository.get_job(
+                            str(operation["canonical_job_id"])
+                        )
+                        if isinstance(canonical, dict):
+                            return canonical
+                    raise
+                with suppress(Exception):
+                    abort_operation(
+                        operation_id=reservation.operation_id,
+                        owner_token=owner_token,
+                        reason="retry_prepublication_failed",
+                    )
+                if (
+                    prepared is not None
+                    and isinstance(artifact_id, str)
+                    and artifact_id
+                    and not self._artifact_is_referenced(artifact_id)
+                ):
+                    with suppress(Exception):
+                        self._discard_unbound_input(
+                            prepared.frozen.descriptor, owned_artifact_ids
+                        )
+                raise
+
+    def _wait_for_retry_operation(
+        self, operation_id: str
+    ) -> dict[str, Any] | RetryOperationInProgress:
+        wait_seconds = max(
+            min(float(getattr(self, "_retry_wait_seconds", 0.05)), 0.25), 0.0
+        )
+        deadline = time.monotonic() + wait_seconds
+        while True:
+            operation = self.repository.get_retry_operation(operation_id)
+            if not isinstance(operation, Mapping):
+                raise RuntimeError("Forecast retry operation disappeared")
+            canonical_job_id = operation.get("canonical_job_id")
+            if operation.get("state") == "published" and isinstance(
+                canonical_job_id, str
+            ):
+                canonical = self.repository.get_job(canonical_job_id)
+                if isinstance(canonical, dict):
+                    return canonical
+                raise RuntimeError("Forecast retry canonical job is unavailable")
+            if operation.get("state") == "aborted":
+                raise ValueError("forecast retry operation was aborted")
+            if time.monotonic() >= deadline:
+                return RetryOperationInProgress(
+                    operation_id=operation_id,
+                    state=str(operation.get("state")),
+                    canonical_job_id=canonical_job_id
+                    if isinstance(canonical_job_id, str)
+                    else None,
+                    retry_after_seconds=max(wait_seconds, 0.01),
+                )
+            time.sleep(min(0.01, max(deadline - time.monotonic(), 0.0)))
 
     def reauthorize(self, *, job: Mapping[str, object]) -> bool:
         try:
@@ -217,11 +522,24 @@ class ForecastService:
             return {"job_id": job_id, "action": "observed", "status": str(job.get("status"))}
         if self.runner is None:
             raise RuntimeError("Forecast recovery runner is unavailable")
-        self.runner.run_job(job_id)
+        dispatch = getattr(self, "_dispatch", None)
+        if callable(dispatch):
+            dispatch(job_id)
+        else:
+            self.runner.run_job(job_id)
         current = self.repository.get_job(job_id)
         if not isinstance(current, Mapping):
             raise RuntimeError("recovered Forecast job disappeared")
         return {"job_id": job_id, "action": "dispatched", "status": str(current.get("status"))}
+
+    def _dispatch(self, job_id: str) -> None:
+        dispatcher = getattr(self, "dispatcher", None)
+        if dispatcher is not None:
+            dispatcher.submit(job_id)
+            return
+        if self.runner is None:
+            raise RuntimeError("Forecast runner is unavailable")
+        self.runner.run_job(job_id)
 
     def _prepare_for_job(self, job: Mapping[str, object]) -> PreparedForecastRun:
         return self._prepare(

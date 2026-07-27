@@ -1,21 +1,21 @@
 """CORE-04 contract tests for bounded, credential-safe notification delivery."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from threading import Event
+
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.api.alerts import router as alerts_router
-
-import pytest
-
 from app.notifications.delivery import (
     DeliveryConfig,
     FeishuChannel,
     NotificationDeliveryService,
     TelegramChannel,
 )
+from app.operational import repository as operational_repository_module
 from app.operational.repository import OperationalRepository
 from app.services.quote_service import QuoteService
 
@@ -161,7 +161,9 @@ def test_quiet_period_records_skipped_outcome_but_cooldown_non_event_has_no_deli
     assert repository.get_alert_event("alert_01")["id"] == "alert_01"
     assert repository.list_delivery_outcomes("cooldown_suppressed") == []
 
-def test_operational_alert_history_filters_and_delivery_detail_are_safe(tmp_path):
+def test_operational_alert_history_filters_and_delivery_detail_are_safe(
+    tmp_path, monkeypatch,
+):
     repository = OperationalRepository(tmp_path / "operational.db")
     repository.migrate()
     repository.record_alert_event({
@@ -180,6 +182,13 @@ def test_operational_alert_history_filters_and_delivery_detail_are_safe(tmp_path
     app.state.operational = repository
     client = TestClient(app)
 
+    class _FixedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            frozen = cls(2026, 7, 10, 2, 0, tzinfo=UTC)
+            return frozen if tz is None else frozen.astimezone(tz)
+
+    monkeypatch.setattr(operational_repository_module, "datetime", _FixedDatetime)
     history = client.get("/api/alerts?severity=warn&delivery_status=failed")
     assert history.status_code == 200
     event = history.json()["alerts"][0]

@@ -300,3 +300,44 @@ def test_adapter_child_revalidates_bytes_before_load(tmp_path):
     with pytest.raises(Exception, match="digest|source"):
         runner._pair()
 
+
+def test_approved_local_regression_constructs_verified_checkpoint_before_model_load(
+    tmp_path, monkeypatch
+):
+    from app.forecast import kronos_adapter
+
+    source = _write_verified_source(tmp_path)
+    model_dir = tmp_path / "approved-model"
+    tokenizer_dir = tmp_path / "approved-tokenizer"
+    checkpoint = _checkpoint_for_source(source, model_dir, tokenizer_dir)
+    captured: list[object] = []
+
+    class LocalRunner:
+        def __init__(self, *, checkpoint, device):
+            assert device == "cpu"
+            captured.append(checkpoint)
+
+        def __call__(self, **kwargs):
+            return np.ones((kwargs["sample_count"], len(kwargs["future_session_ids"]), 6))
+
+    monkeypatch.setattr(kronos_adapter, "PinnedLocalKronosRunner", LocalRunner)
+    regression = kronos_adapter.ApprovedLocalKronosRegression(
+        source_dir=source,
+        source_revision=checkpoint.source_revision,
+        model_dir=model_dir,
+        model_revision="f4e68697d9d5aed55cef5c96aabc3376bcad9f81",
+        model_sha256=checkpoint.model_weight_sha256,
+        tokenizer_dir=tokenizer_dir,
+        tokenizer_revision="26966d0035065a0cae0ebad7af8ece35bc1fb51c",
+        tokenizer_sha256=checkpoint.tokenizer_weight_sha256,
+        device="cpu",
+    )
+
+    result = regression.run(seed=20250715, horizon=5, lookback=64, sample_count=32)
+
+    assert result.paths.shape == (32, 5, 6)
+    assert len(captured) == 1
+    assert captured[0].local_files_only is True
+    assert captured[0].trust_remote_code is False
+    assert captured[0].model_weight_sha256 == checkpoint.model_weight_sha256
+

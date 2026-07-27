@@ -255,6 +255,82 @@ def test_record_scoped_calibration_refresh_never_scans_unrelated_forecasts() -> 
     ]
 
 
+def test_calibration_payload_projects_only_verified_governed_price_context() -> None:
+    from fastapi import FastAPI, Request
+    from fastapi.testclient import TestClient
+
+    from app.forecast.api import router
+
+    class Scope:
+        @staticmethod
+        def allows(subject_kind: str, subject_key: str) -> bool:
+            return (subject_kind, subject_key) == ("instrument", "600000.SH")
+
+    record = {
+        "id": "record-a",
+        "principal": "server-principal",
+        "instrument_id": "600000.SH",
+        "origin_session_id": "CNA-20250430",
+        "horizon": 5,
+        "input_artifact_descriptor": {
+            "artifact_id": "input-a",
+            "schema_version": "forecast-input-v1",
+            "byte_size": 128,
+            "checksum_sha256": "a" * 64,
+        },
+    }
+
+    class Repository:
+        @staticmethod
+        def get_owned_forecast(*, forecast_id: str, principal: str):
+            return record if (forecast_id, principal) == ("record-a", "server-principal") else None
+
+        @staticmethod
+        def outcomes_for_owned_forecast(**_scope):
+            return []
+
+        @staticmethod
+        def calibration_facts_for_owned_forecast(**_scope):
+            return []
+
+    class Service:
+        seen: dict[str, object] | None = None
+
+        def public_price_context(self, value):
+            self.seen = value
+            return {
+                "as_of_close": 10.5,
+                "history": [
+                    {"session_id": "CNA-20250429", "close": 10.0},
+                    {"session_id": "CNA-20250430", "close": 10.5},
+                ],
+            }
+
+    app = FastAPI()
+    app.include_router(router)
+    app.state.forecast_repository = Repository()
+    service = Service()
+    app.state.forecast_request_service = service
+    app.state.resolve_forecast_subject_scope = lambda _request: Scope()
+
+    @app.middleware("http")
+    async def bind_principal(request: Request, call_next):  # type: ignore[no-untyped-def]
+        request.state.reviewer_principal = "server-principal"
+        return await call_next(request)
+
+    response = TestClient(app).get("/api/forecast/records/record-a/calibration")
+
+    assert response.status_code == 200
+    assert response.json()["price_context"] == {
+        "as_of_close": 10.5,
+        "history": [
+            {"session_id": "CNA-20250429", "close": 10.0},
+            {"session_id": "CNA-20250430", "close": 10.5},
+        ],
+    }
+    assert service.seen is record
+
+
 def _seed_cr03_record(
     repository, *, principal: str, record_id: str, created_at: str
 ) -> tuple[dict[str, object], dict[str, object]]:
@@ -447,6 +523,17 @@ def test_cr03_same_instrument_cross_principal_matrix_denies_every_surface(
             self.calls += 1
             raise AssertionError("foreign Forecast request invoked runner")
 
+    class RetryService:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str]] = []
+
+        def retry_job(self, *, source_job_id: str, idempotency_key: str):
+            self.calls.append((source_job_id, idempotency_key))
+            return repository.create_retry_job(
+                source_job_id=source_job_id,
+                idempotency_key=idempotency_key,
+            )
+
     app = FastAPI()
     app.include_router(router)
     app.state.forecast_repository = repository
@@ -454,10 +541,12 @@ def test_cr03_same_instrument_cross_principal_matrix_denies_every_surface(
     path_reader = CountingPathReader()
     scanner = CountingScanner()
     runner = CountingRunner()
+    retry_service = RetryService()
     app.state.forecast_progress_hub = hub
     app.state.forecast_path_reader = path_reader
     app.state.forecast_maturity_scanner = scanner
     app.state.forecast_runner = runner
+    app.state.forecast_request_service = retry_service
     app.state.forecast_current_session = lambda: "CNA-20250505"
     app.state.resolve_forecast_subject_scope = lambda _request: Scope()
 
@@ -536,6 +625,7 @@ def test_cr03_same_instrument_cross_principal_matrix_denies_every_surface(
     )
     assert retry.status_code == 201
     assert retry.json()["job"]["retry_of_job_id"] == foreign_job_id
+    assert retry_service.calls == [(foreign_job_id, "owner-retry")]
     paths = client.get(f"/api/forecast/records/{foreign_record_id}/paths", headers=owner_a)
     assert paths.status_code == 200
     calibration = client.get(

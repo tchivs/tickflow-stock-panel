@@ -2,7 +2,7 @@
 
 ## What This Is
 
-AthenaQuant is a self-hosted quantitative research platform for individual A-share investors. It brings governed market data, portfolio monitoring, deterministic decision plans, factor research, and AI-assisted analysis into a progressively adoptable system.
+AthenaQuant is a shipped, self-hosted quantitative research platform for individual A-share investors. Its v1.0 MVP unifies governed market data, portfolio monitoring, deterministic decision plans, factor and strategy research, evidence-grounded AI analysis, controlled advanced workflows, and independently activatable optional research modules.
 
 ## Core Value
 
@@ -10,23 +10,27 @@ An investor can turn reliable market data and their own holdings into an auditab
 
 ## Success Metric
 
-Phase 1 starts with a single Docker Compose command and completes the data-sync, position-maintenance, price-rule-trigger, and real-time notification/SSE display loop in one single-container deployment.
+The v1.0 release is successful when all 23 requirements are verified end to end, the five phases pass Nyquist validation, and one provenance-bound final gate proves the backend and browser contracts against the frozen release source. This was achieved on 2026-07-27.
 
 ## Requirements
 
 ### Active
 
-- [ ] An investor can synchronize governed market data, maintain holdings, receive rule-based alerts, and inspect real-time updates from one deployment.
-- [ ] An investor can generate an auditable deterministic trade plan and distinguish it from any bounded AI adjustment.
-- [ ] A researcher can create and evaluate factors and strategies against reproducible governed data.
-- [ ] An investor can assess AI-assisted research using visible data quality, numerical validation, and signal-lifecycle evidence.
-- [ ] An operator can use advanced agent and strategy workflows only within explicit authorization and sandbox controls.
+- [ ] Release evidence is reproducible from current Windows and Linux environments without relying on historical attestations.
+- [ ] Runtime, data-stack, and frontend validation complete without avoidable deprecation or sortedness warnings.
+- [ ] Optional local-model supply remains fail-closed while an explicit operator approval path is documented and testable.
+- [ ] Critical responsive workflows have durable screenshot-based visual regression evidence.
 
-### Optional After v1
+### Validated in v1.0
 
-- Shadow Account strategy distillation and evaluation.
-- Investment-thesis tracking and evidence review.
-- Kronos time-series forecasting.
+- [x] An investor can synchronize governed market data, maintain holdings, receive rule-based alerts, and inspect real-time updates from one deployment.
+- [x] An investor can generate an auditable deterministic trade plan and distinguish it from bounded AI adjustments.
+- [x] A researcher can create and evaluate factors and strategies against reproducible governed data.
+- [x] An investor can assess AI-assisted research using visible data quality, numerical validation, and signal-lifecycle evidence.
+- [x] An operator can use advanced agent and strategy workflows only within explicit authorization and sandbox controls.
+- [x] Shadow Account strategy distillation and evaluation is independently activatable and research-only.
+- [x] Investment-thesis tracking and evidence review preserves immutable lineage and human authority.
+- [x] Kronos forecasting is local-only, provenance-bound, principal-scoped, and fail-closed when supply identity is incomplete.
 
 ### Out of Scope
 
@@ -45,13 +49,14 @@ Phase 1 starts with a single Docker Compose command and completes the data-sync,
 
 ## Decision Status
 
-No architecture implementation decisions were explicitly locked by the intake. The constraints above are required delivery boundaries from the user and source architecture; concrete host-application, package-boundary, and integration choices remain to be validated during phase planning.
+v1.0 validated the host architecture and locked its safety boundaries: one FastAPI host, Parquet/DuckDB/Polars governed data, SQLite operational state, server-owned authorization and identity, append-only audit facts, bounded AI proposals, research-only promotion, and independently activatable optional modules. Future milestones may harden or simplify these seams but must not weaken their fail-closed behavior.
 
 ## Source Context
 
 - Architecture source: `docs/ARCHITECTURE.md`
 - Synthesized intake: `.planning/intel/SYNTHESIS.md`
-- No ADR, PRD, or specification supplied a locked implementation decision.
+- Shipped milestone archive: `.planning/milestones/v1.0-ROADMAP.md`
+- Canonical release audit: `.planning/milestones/v1.0-MILESTONE-AUDIT.md`
 
 ---
-*Last updated: 2026-07-10 during roadmap generation from architecture ingest*
+*Last updated: 2026-07-27 after shipping v1.0 MVP and preparing v1.1 operational hardening*

@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import json
+import os
+import sqlite3
+import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -11,6 +14,12 @@ from pathlib import Path
 import numpy as np
 import polars as pl
 import pytest
+
+
+_LINUX_ONLY = pytest.mark.skipif(
+    os.name != "posix" or sys.platform != "linux",
+    reason="native Linux process-group evidence",
+)
 
 
 JOB = {
@@ -180,6 +189,115 @@ def test_global_inference_lease_allows_exactly_one_parallel_winner(tmp_path):
     assert sorted(outcomes) == [False, True]
 
 
+def test_durable_dispatcher_drains_two_concurrent_create_requests(tmp_path, monkeypatch):
+    import time
+    from types import SimpleNamespace
+
+    from app.forecast.service import (
+        DurableForecastDispatcher,
+        ForecastService,
+        PreparedForecastRun,
+    )
+
+    repository = _repository(tmp_path)
+    entered = threading.Event()
+    release = threading.Event()
+
+    class Runner:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+            self.lock = threading.Lock()
+
+        def run_job(self, job_id: str):
+            with self.lock:
+                self.calls.append(job_id)
+                call_count = len(self.calls)
+            if call_count == 1:
+                entered.set()
+                assert release.wait(timeout=2)
+            job = repository.get_job(job_id)
+            assert job is not None
+            terminal = repository.terminalize(
+                job_id=job_id,
+                expected_status="queued",
+                expected_version=int(job["transition_version"]),
+                lease_owner=None,
+                status="validation_failed",
+                reason="test_dispatch_completed",
+            )
+            return {"status": terminal["status"]}
+
+    class Catalog:
+        require_local = revalidate_before_spawn = lambda *_args, **_kwargs: None
+
+    class Freezer:
+        freeze = load = lambda *_args, **_kwargs: None
+
+    runner = Runner()
+    dispatcher = DurableForecastDispatcher(
+        repository=repository,
+        runner=runner,
+        poll_interval_seconds=0.01,
+        retry_backoff_seconds=0.01,
+    )
+    service = ForecastService(
+        repository=repository,
+        catalog=Catalog(),
+        freezer=Freezer(),
+        runner=runner,
+        as_of_session=lambda _instrument: "CNA-20250430",
+    )
+    frozen = SimpleNamespace(
+        instrument_id="instrument-600000",
+        input_fingerprint="a" * 64,
+        descriptor=SimpleNamespace(artifact_id="input-artifact"),
+    )
+    prepared = PreparedForecastRun(
+        principal="researcher-1",
+        checkpoint=object(),
+        frozen=frozen,
+        immutable_record={},
+    )
+    monkeypatch.setattr(service, "_prepare", lambda **_kwargs: prepared)
+    monkeypatch.setattr(service, "_bind", lambda _job, _prepared: None)
+    service.attach_dispatcher(dispatcher)
+    dispatcher.start()
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [
+                pool.submit(
+                    service.create_or_get_job,
+                    principal="researcher-1",
+                    instrument="instrument-600000",
+                    horizon=20,
+                    catalog_id="kronos-mini",
+                    idempotency_key=f"concurrent-dispatch-{index}",
+                )
+                for index in range(2)
+            ]
+            assert entered.wait(timeout=2)
+            created = [future.result(timeout=2) for future in futures]
+        assert {job["status"] for job in created} == {"queued"}
+        release.set()
+
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            current = [repository.get_job(str(job["id"])) for job in created]
+            if all(job is not None and job["status"] == "validation_failed" for job in current):
+                break
+            time.sleep(0.01)
+
+        assert [repository.get_job(str(job["id"]))["status"] for job in created] == [
+            "validation_failed",
+            "validation_failed",
+        ]
+        assert set(runner.calls) == {str(job["id"]) for job in created}
+    finally:
+        release.set()
+        dispatcher.close()
+
+
 def test_two_parallel_job_acquisitions_have_one_cas_winner(tmp_path):
     repository = _repository(tmp_path)
     job = _create(repository)
@@ -209,6 +327,187 @@ def test_explicit_retry_creates_new_job_and_lineage(tmp_path):
     assert retry["id"] != job["id"]
     assert retry["retry_of_job_id"] == job["id"]
     assert retry["attempt"] == job["attempt"] + 1
+
+
+def test_service_retry_rebinds_governed_input_and_dispatches_queued_job(
+    tmp_path, monkeypatch
+):
+    from types import SimpleNamespace
+
+    from app.forecast.service import ForecastService, PreparedForecastRun
+
+    repository = _repository(tmp_path)
+    source = _terminal_source_for_retry(repository, key="retry-service-source")
+
+    class Catalog:
+        require_local = revalidate_before_spawn = lambda *_args, **_kwargs: None
+
+    class Freezer:
+        freeze = load = lambda *_args, **_kwargs: None
+
+    class Runner:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def run_job(self, job_id: str):
+            self.calls.append(job_id)
+            return {"status": "queued"}
+
+    runner = Runner()
+    service = ForecastService(
+        repository=repository,
+        catalog=Catalog(),
+        freezer=Freezer(),
+        runner=runner,
+        as_of_session=lambda _instrument: "CNA-20250430",
+    )
+    prepared = PreparedForecastRun(
+        principal="researcher-1",
+        checkpoint=object(),
+        frozen=SimpleNamespace(
+            input_fingerprint="a" * 64,
+            descriptor=SimpleNamespace(artifact_id="input-artifact"),
+        ),
+        immutable_record=_immutable(source),
+    )
+    binds: list[tuple[dict[str, object], PreparedForecastRun]] = []
+    monkeypatch.setattr(service, "_prepare_for_job", lambda job: prepared)
+    monkeypatch.setattr(service, "_bind", lambda job, value: binds.append((dict(job), value)))
+
+    result = service.retry_job(
+        source_job_id=source["id"],
+        idempotency_key="explicit-retry-service",
+    )
+
+    assert len(binds) == 1
+    assert binds[0][0]["id"] == result["id"]
+    assert binds[0][1] is prepared
+    assert runner.calls == [result["id"]]
+    assert result["status"] == "queued"
+    assert result["dispatch_ready"] == 1
+
+
+def test_service_retry_prevalidates_fingerprint_before_lineage_and_discards_artifact(
+    tmp_path, monkeypatch,
+):
+    from types import SimpleNamespace
+
+    from app.forecast.service import ForecastService, PreparedForecastRun
+
+    repository = _repository(tmp_path)
+    source = _terminal_source_for_retry(repository, key="retry-prevalidate-source")
+
+    class Store:
+        def __init__(self) -> None:
+            self.live = {"retry-input-artifact"}
+
+        def discard_unbound_invocation_owned(
+            self, descriptor, *, owned_artifact_ids, is_referenced
+        ):
+            assert descriptor.artifact_id in owned_artifact_ids
+            assert is_referenced(descriptor.artifact_id) is False
+            self.live.remove(descriptor.artifact_id)
+
+    class Freezer:
+        freeze = load = lambda *_args, **_kwargs: None
+
+        def __init__(self) -> None:
+            self._store = Store()
+
+    class Catalog:
+        require_local = revalidate_before_spawn = lambda *_args, **_kwargs: None
+
+    class Runner:
+        def run_job(self, *_args, **_kwargs):
+            return None
+
+    freezer = Freezer()
+    service = ForecastService(
+        repository=repository,
+        catalog=Catalog(),
+        freezer=freezer,
+        runner=Runner(),
+        as_of_session=lambda _instrument: "CNA-20250430",
+    )
+    managed = SimpleNamespace(artifact_id="retry-input-artifact")
+    descriptor = SimpleNamespace(
+        artifact_id=managed.artifact_id,
+        _managed=managed,
+    )
+    prepared = PreparedForecastRun(
+        principal="researcher-1",
+        checkpoint=object(),
+        frozen=SimpleNamespace(
+            input_fingerprint="b" * 64,
+            descriptor=descriptor,
+        ),
+        immutable_record={},
+    )
+    monkeypatch.setattr(service, "_prepare_for_job", lambda _job: prepared)
+
+    with pytest.raises(
+        ValueError, match="Forecast retry governed input no longer matches source"
+    ):
+        service.retry_job(
+            source_job_id=source["id"],
+            idempotency_key="retry-prevalidation-mismatch",
+        )
+
+    operation = repository.get_retry_operation_for(
+        source_job_id=source["id"],
+        idempotency_key="retry-prevalidation-mismatch",
+    )
+    assert operation is not None and operation["state"] == "aborted"
+    assert repository.list_jobs() == [source]
+    assert freezer._store.live == set()
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        RuntimeError("approved Forecast catalog is unavailable"),
+        ValueError("governed Forecast input freezer failed"),
+    ],
+)
+def test_service_retry_prevalidation_failure_creates_no_queued_lineage(
+    tmp_path, monkeypatch, error
+):
+    from app.forecast.service import ForecastService
+
+    repository = _repository(tmp_path)
+    source = _terminal_source_for_retry(repository, key=f"retry-failure-{type(error).__name__}")
+
+    class Catalog:
+        require_local = revalidate_before_spawn = lambda *_args, **_kwargs: None
+
+    class Freezer:
+        freeze = load = lambda *_args, **_kwargs: None
+
+    class Runner:
+        def run_job(self, *_args, **_kwargs):
+            return None
+
+    service = ForecastService(
+        repository=repository,
+        catalog=Catalog(),
+        freezer=Freezer(),
+        runner=Runner(),
+        as_of_session=lambda _instrument: "CNA-20250430",
+    )
+    monkeypatch.setattr(service, "_prepare_for_job", lambda _job: (_ for _ in ()).throw(error))
+
+    with pytest.raises(type(error), match=str(error)):
+        service.retry_job(
+            source_job_id=source["id"],
+            idempotency_key="retry-prevalidation-failure",
+        )
+
+    operation = repository.get_retry_operation_for(
+        source_job_id=source["id"],
+        idempotency_key="retry-prevalidation-failure",
+    )
+    assert operation is not None and operation["state"] == "aborted"
+    assert repository.list_jobs() == [source]
 
 
 def test_retry_never_reuses_completed_forecast_record(tmp_path):
@@ -293,6 +592,8 @@ def test_restart_requeues_only_valid_never_started_queued_jobs(tmp_path):
     assert repository.get_job(queued["id"])["status"] == "queued"
 
 
+@pytest.mark.linux_process_group
+@_LINUX_ONLY
 def test_concurrent_recovery_one_winner_dispatches_queued_job(tmp_path):
     from app.forecast.service import ForecastService
     from app.forecast.runner import FixedWorker
@@ -549,6 +850,8 @@ def test_runner_enforces_wall_cpu_address_thread_output_and_manifest_bounds(tmp_
     assert len(json.dumps(result["manifest"]).encode()) <= 16 * 1024
 
 
+@pytest.mark.linux_process_group
+@_LINUX_ONLY
 def test_runner_timeout_kills_reaps_descendants_and_cleans_temporary_files(tmp_path):
     from app.forecast.runner import BlockingWorker
     runner, repository, _boundaries = _runner(tmp_path, worker=BlockingWorker(descendant=True))
@@ -560,6 +863,8 @@ def test_runner_timeout_kills_reaps_descendants_and_cleans_temporary_files(tmp_p
     assert repository.forecast_for_job(job["id"]) is None
 
 
+@pytest.mark.linux_process_group
+@_LINUX_ONLY
 def test_runner_rejects_tampered_or_oversized_manifest_without_record(tmp_path):
     from app.forecast.runner import FixedWorker
     for manifest, expected_status in (
@@ -582,6 +887,8 @@ def test_runner_maps_worker_failures_to_safe_path_free_terminal_reasons(tmp_path
     assert "/secret" not in serialized and "Traceback" not in serialized and "token=abc" not in serialized
 
 
+@pytest.mark.linux_process_group
+@_LINUX_ONLY
 def test_runner_lost_lease_rejects_late_output_and_creates_no_record(tmp_path):
     from app.forecast.runner import FixedWorker
     runner, repository, _boundaries = _runner(tmp_path, worker=FixedWorker(lose_lease_before_result=True))
@@ -591,6 +898,8 @@ def test_runner_lost_lease_rejects_late_output_and_creates_no_record(tmp_path):
     assert repository.forecast_for_job(job["id"]) is None
 
 
+@pytest.mark.linux_process_group
+@_LINUX_ONLY
 def test_runner_success_commits_once_and_never_invokes_downstream_authority(tmp_path):
     from app.forecast.runner import FixedWorker
     action_spies = {name: CountingBoundary() for name in ("thesis", "strategy", "decision_plan", "monitor", "position", "broker")}
@@ -826,6 +1135,8 @@ class CommitSpyRepository:
         return self.inner.commit_completed_forecast(**kwargs)
 
 
+@pytest.mark.linux_process_group
+@_LINUX_ONLY
 def test_cr05_final_input_revalidation_precedes_commit_and_commit_spy_zero(tmp_path):
     """CR-05: post-worker/pre-commit input divergence terminalizes with commit spy 0."""
     from app.forecast.runner import FixedWorker, ForecastRunner, ForecastRunnerLimits
@@ -1242,7 +1553,8 @@ def test_runner_child_ready_handshake_precedes_work_deadline(monkeypatch):
         def close(self) -> None:
             return None
 
-    monkeypatch.setattr(runner_module.os, "setsid", lambda: None)
+    monkeypatch.setattr(runner_module.os, "setsid", lambda: None, raising=False)
+    monkeypatch.setattr(runner_module.os, "getpgrp", lambda: 1234, raising=False)
     monkeypatch.setattr(runner_module, "_configure_child_runtime", lambda *_a, **_k: None)
     monkeypatch.setattr(runner_module, "_install_child_limits", lambda *_a, **_k: None)
     job = {
@@ -1265,6 +1577,8 @@ def test_runner_child_ready_handshake_precedes_work_deadline(monkeypatch):
 
 
 
+@pytest.mark.linux_process_group
+@_LINUX_ONLY
 def test_runner_startup_race_timeout_before_ready_reaps_process(tmp_path, monkeypatch):
     from app.forecast import runner as runner_module
     from app.forecast.runner import ForecastRunner, ForecastRunnerLimits
@@ -1296,6 +1610,8 @@ def test_runner_startup_race_timeout_before_ready_reaps_process(tmp_path, monkey
 
 
 
+@pytest.mark.linux_process_group
+@_LINUX_ONLY
 def test_runner_terminate_kill_fallback_reaps_descendants(tmp_path):
     from app.forecast.runner import BlockingWorker
 
@@ -1305,6 +1621,8 @@ def test_runner_terminate_kill_fallback_reaps_descendants(tmp_path):
     assert result["process_group_reaped"] is True
 
 
+@pytest.mark.linux_process_group
+@_LINUX_ONLY
 def test_runner_lease_loss_reaps_worker_tree(tmp_path):
     from app.forecast.runner import FixedWorker
 
@@ -1317,6 +1635,8 @@ def test_runner_lease_loss_reaps_worker_tree(tmp_path):
     assert repository.forecast_for_job(job["id"]) is None
 
 
+@pytest.mark.linux_process_group
+@_LINUX_ONLY
 def test_restart_dispatches_queued_job_via_recovered_service_path(tmp_path):
     """CR-07 unit: requeue outcomes are consumed by ForecastService.run_recovered_job."""
     from app.forecast.service import ForecastService
@@ -1343,6 +1663,8 @@ def test_restart_dispatches_queued_job_via_recovered_service_path(tmp_path):
     assert boundaries["worker"].calls <= 1
 
 
+@pytest.mark.linux_process_group
+@_LINUX_ONLY
 def test_concurrent_recovery_one_winner(tmp_path):
     """CR-07: two concurrent recovered dispatches produce one worker winner."""
     from concurrent.futures import ThreadPoolExecutor
@@ -1402,6 +1724,8 @@ def test_restart_terminalizes_invalid_queued_and_expired_running(tmp_path):
     assert repository.get_job(running["id"])["status"] == "interrupted"
 
 
+@pytest.mark.linux_process_group
+@_LINUX_ONLY
 def test_cr06_normal_leader_exit_reaps_process_group_before_commit(tmp_path):
     """CR-06 primary: successful leader exit still reaps the handshake process group."""
     import os
@@ -1434,6 +1758,8 @@ def test_cr06_normal_leader_exit_reaps_process_group_before_commit(tmp_path):
     assert descendant_pid is None
 
 
+@pytest.mark.linux_process_group
+@_LINUX_ONLY
 def test_normal_exit_descendants_reaped(tmp_path):
     from app.forecast.runner import SuccessWithDescendantWorker
 
@@ -1445,6 +1771,8 @@ def test_normal_exit_descendants_reaped(tmp_path):
     assert result["process_group_reaped"] is True
 
 
+@pytest.mark.linux_process_group
+@_LINUX_ONLY
 def test_every_return_reaps_group_on_malformed_success_manifest(tmp_path):
     from app.forecast.runner import FixedWorker
 
@@ -1455,3 +1783,573 @@ def test_every_return_reaps_group_on_malformed_success_manifest(tmp_path):
     assert result["status"] == "artifact_failed"
     # Finally reaps even when the terminal payload omits the flag.
     assert repository.forecast_for_job(result["job_id"]) is None
+
+
+def _terminal_source_for_retry(repository, *, key: str = "r43-source"):
+    source = _create(repository, idempotency_key=key)
+    return repository.terminalize(
+        job_id=source["id"],
+        expected_status="queued",
+        expected_version=int(source["transition_version"]),
+        lease_owner=None,
+        status="validation_failed",
+        reason="safe_validation_failed",
+    )
+
+
+def test_r43_cr02_retryable_terminal_matrix_uses_repository_contract():
+    from app.forecast.repository import TERMINAL_JOB_STATUSES, is_retryable_terminal
+
+    expected = {
+        "completed",
+        "validation_failed",
+        "model_unavailable",
+        "artifact_failed",
+        "timed_out",
+        "resource_limited",
+        "interrupted",
+    }
+    assert TERMINAL_JOB_STATUSES == frozenset(expected)
+    assert all(is_retryable_terminal(status) for status in expected)
+    assert not is_retryable_terminal("queued")
+    assert not is_retryable_terminal("running")
+    assert not is_retryable_terminal("cancelled")
+
+
+def test_r43_cr03_owner_first_retry_publishes_once_without_orphan(tmp_path):
+    repository = _repository(tmp_path)
+    source = _terminal_source_for_retry(repository)
+
+    first = repository.reserve_retry_operation(
+        source_job_id=source["id"],
+        idempotency_key="r43-owner-first",
+        owner_ttl_seconds=30,
+    )
+    replay = repository.reserve_retry_operation(
+        source_job_id=source["id"],
+        idempotency_key="r43-owner-first",
+        owner_ttl_seconds=30,
+    )
+
+    assert first.created is True and first.owner_token
+    assert replay.created is False and replay.owner_token is None
+    assert repository.list_jobs() == [source]
+
+    repository.bind_retry_operation(
+        operation_id=first.operation_id,
+        owner_token=first.owner_token,
+        immutable_record=_immutable(source),
+        input_artifact_id="input-artifact",
+    )
+    canonical = repository.publish_retry_operation(
+        operation_id=first.operation_id,
+        owner_token=first.owner_token,
+    )
+    replayed = repository.reserve_retry_operation(
+        source_job_id=source["id"],
+        idempotency_key="r43-owner-first",
+        owner_ttl_seconds=30,
+    )
+
+    assert canonical["status"] == "queued"
+    assert canonical["dispatch_ready"] == 1
+    assert canonical["retry_of_job_id"] == source["id"]
+    assert replayed.canonical_job == canonical
+    assert len(repository.list_jobs()) == 2
+    assert repository.get_retry_operation(first.operation_id)["state"] == "published"
+
+
+def test_r43_cr03_loser_waits_or_returns_canonical_without_freeze(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from app.forecast.service import ForecastService, RetryOperationInProgress
+
+    repository = _repository(tmp_path)
+    source = _terminal_source_for_retry(repository, key="r43-loser-source")
+    repository.reserve_retry_operation(
+        source_job_id=source["id"],
+        idempotency_key="r43-loser",
+        owner_ttl_seconds=30,
+    )
+
+    class Catalog:
+        require_local = revalidate_before_spawn = lambda *_args, **_kwargs: None
+
+    class Freezer:
+        def __init__(self):
+            self.freezes = 0
+
+        def freeze(self, **_kwargs):
+            self.freezes += 1
+            raise AssertionError("retry loser must not freeze")
+
+        load = lambda *_args, **_kwargs: None
+
+    freezer = Freezer()
+    service = ForecastService(
+        repository=repository,
+        catalog=Catalog(),
+        freezer=freezer,
+        runner=SimpleNamespace(run_job=lambda _job_id: None),
+        as_of_session=lambda _instrument: "CNA-20250430",
+    )
+    monkeypatch.setattr(service, "_retry_wait_seconds", 0.01, raising=False)
+
+    outcome = service.retry_job(
+        source_job_id=source["id"],
+        idempotency_key="r43-loser",
+    )
+
+    assert isinstance(outcome, RetryOperationInProgress)
+    assert outcome.operation_id
+    assert outcome.retry_after_seconds > 0
+    assert freezer.freezes == 0
+    assert repository.list_jobs() == [source]
+
+
+@pytest.mark.parametrize("state", ["reserved", "bound"])
+@pytest.mark.parametrize(
+    "clock_kind", ["past-injected-clock", "future-injected-clock"]
+)
+def test_expired_retry_owner_is_atomically_reclaimed_without_restart(
+    tmp_path, state, clock_kind
+):
+    from datetime import UTC, datetime, timedelta
+
+    observed = (
+        datetime(2000, 5, 1, tzinfo=UTC)
+        if clock_kind == "past-injected-clock"
+        else datetime(2099, 5, 1, tzinfo=UTC)
+    )
+    repository = _repository(tmp_path)
+    repository._clock = lambda: observed
+    source = _terminal_source_for_retry(repository, key=f"reclaim-{state}-source")
+    first = repository.reserve_retry_operation(
+        source_job_id=source["id"],
+        idempotency_key=f"reclaim-{state}",
+        owner_ttl_seconds=3600,
+    )
+    if state == "bound":
+        repository.bind_retry_operation(
+            operation_id=first.operation_id,
+            owner_token=first.owner_token,
+            immutable_record=_immutable(source),
+            input_artifact_id="input-artifact",
+        )
+    before = repository.get_retry_operation(first.operation_id)
+
+    repository._clock = lambda: observed + timedelta(seconds=3601)
+    reclaimed = repository.reserve_retry_operation(
+        source_job_id=source["id"],
+        idempotency_key=f"reclaim-{state}",
+        owner_ttl_seconds=30,
+    )
+
+    after = repository.get_retry_operation(first.operation_id)
+    assert reclaimed.created is True
+    assert reclaimed.operation_id == first.operation_id
+    assert reclaimed.owner_token not in {None, first.owner_token}
+    assert reclaimed.state == state
+    assert after["state"] == state
+    assert after["owner_token"] == reclaimed.owner_token
+    assert after["transition_version"] == before["transition_version"] + 1
+    if state == "bound":
+        assert after["immutable_record_json"] == before["immutable_record_json"]
+        assert after["input_artifact_id"] == before["input_artifact_id"]
+
+
+@pytest.mark.parametrize("state", ["reserved", "bound"])
+def test_mixed_precision_expired_retry_owner_is_reclaimed(
+    tmp_path, state
+):
+    from datetime import UTC, datetime, timedelta
+
+    observed = datetime(2099, 1, 1, tzinfo=UTC)
+    repository = _repository(tmp_path)
+    repository._clock = lambda: observed
+    source = _terminal_source_for_retry(
+        repository, key=f"mixed-precision-{state}-source"
+    )
+    first = repository.reserve_retry_operation(
+        source_job_id=source["id"],
+        idempotency_key=f"mixed-precision-{state}",
+        owner_ttl_seconds=1,
+    )
+    if state == "bound":
+        repository.bind_retry_operation(
+            operation_id=first.operation_id,
+            owner_token=first.owner_token,
+            immutable_record=_immutable(source),
+            input_artifact_id="input-artifact",
+        )
+    before = repository.get_retry_operation(first.operation_id)
+    assert before["owner_lease_until"] == "2099-01-01T00:00:01Z"
+
+    repository._clock = lambda: observed + timedelta(seconds=1.5)
+    assert repository.now() == "2099-01-01T00:00:01.500000Z"
+    reclaimed = repository.reserve_retry_operation(
+        source_job_id=source["id"],
+        idempotency_key=f"mixed-precision-{state}",
+        owner_ttl_seconds=30,
+    )
+
+    after = repository.get_retry_operation(first.operation_id)
+    assert reclaimed.created is True
+    assert reclaimed.operation_id == first.operation_id
+    assert reclaimed.owner_token not in {None, first.owner_token}
+    assert reclaimed.state == state
+    assert after["owner_token"] == reclaimed.owner_token
+    assert after["transition_version"] == before["transition_version"] + 1
+
+
+@pytest.mark.parametrize("state", ["reserved", "bound"])
+def test_retry_guard_rejects_unexpired_direct_sql_owner_takeover(
+    tmp_path, state
+):
+    from datetime import UTC, datetime, timedelta
+
+    observed = datetime(2099, 1, 1, tzinfo=UTC)
+    repository = _repository(tmp_path)
+    repository._clock = lambda: observed
+    source = _terminal_source_for_retry(
+        repository, key=f"unexpired-{state}-source"
+    )
+    first = repository.reserve_retry_operation(
+        source_job_id=source["id"],
+        idempotency_key=f"unexpired-{state}",
+        owner_ttl_seconds=3600,
+    )
+    if state == "bound":
+        repository.bind_retry_operation(
+            operation_id=first.operation_id,
+            owner_token=first.owner_token,
+            immutable_record=_immutable(source),
+            input_artifact_id="input-artifact",
+        )
+    before = repository.get_retry_operation(first.operation_id)
+    early_now = (observed + timedelta(seconds=1)).isoformat().replace(
+        "+00:00", "Z"
+    )
+    stolen_lease = (observed + timedelta(hours=2)).isoformat().replace(
+        "+00:00", "Z"
+    )
+
+    with repository.connection() as connection, pytest.raises(
+        sqlite3.IntegrityError,
+        match=r"forecast retry operation transition is invalid",
+    ):
+        connection.execute(
+            """UPDATE forecast_retry_operations
+               SET owner_token = ?, owner_lease_until = ?,
+                   transition_version = transition_version + 1,
+                   updated_at = ?
+               WHERE id = ?""",
+            ("stolen-owner", stolen_lease, early_now, first.operation_id),
+        )
+
+    assert repository.get_retry_operation(first.operation_id) == before
+
+
+def test_expired_bound_retry_resumes_publication_without_refreezing(tmp_path):
+    from datetime import UTC, datetime, timedelta
+    from types import SimpleNamespace
+
+    from app.forecast.service import ForecastService
+
+    observed = datetime(2025, 5, 1, tzinfo=UTC)
+    repository = _repository(tmp_path)
+    repository._clock = lambda: observed
+    source = _terminal_source_for_retry(repository, key="bound-resume-source")
+    first = repository.reserve_retry_operation(
+        source_job_id=source["id"],
+        idempotency_key="bound-resume",
+        owner_ttl_seconds=1,
+    )
+    repository.bind_retry_operation(
+        operation_id=first.operation_id,
+        owner_token=first.owner_token,
+        immutable_record=_immutable(source),
+        input_artifact_id="input-artifact",
+    )
+    repository._clock = lambda: observed + timedelta(seconds=2)
+
+    class Catalog:
+        require_local = revalidate_before_spawn = lambda *_args, **_kwargs: None
+
+    class Freezer:
+        def freeze(self, **_kwargs):
+            raise AssertionError("bound takeover must not repeat governed reads")
+
+        def load(self, *_args, **_kwargs):
+            return None
+
+    service = ForecastService(
+        repository=repository,
+        catalog=Catalog(),
+        freezer=Freezer(),
+        runner=SimpleNamespace(run_job=lambda _job_id: None),
+        as_of_session=lambda _instrument: "CNA-20250430",
+    )
+
+    canonical = service.retry_job(
+        source_job_id=source["id"],
+        idempotency_key="bound-resume",
+    )
+
+    assert canonical["retry_of_job_id"] == source["id"]
+    assert canonical["dispatch_ready"] == 1
+    operation = repository.get_retry_operation(first.operation_id)
+    assert operation["state"] == "published"
+    assert operation["canonical_job_id"] == canonical["id"]
+
+
+def test_r43_cr03_wake_failure_keeps_durable_canonical_work(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from app.forecast.service import ForecastService, PreparedForecastRun
+
+    repository = _repository(tmp_path)
+    source = _terminal_source_for_retry(repository, key="r43-wake-source")
+    descriptor = SimpleNamespace(
+        artifact_id="input-artifact",
+        checksum_sha256="b" * 64,
+        byte_size=1024,
+        public=lambda: _immutable(source)["input_artifact_descriptor"],
+    )
+    frozen = SimpleNamespace(
+        instrument_id=source["instrument_id"],
+        input_fingerprint=source["input_fingerprint"],
+        descriptor=descriptor,
+        feature_schema=["open", "high", "low", "close", "volume", "amount"],
+        historical_session_ids=[],
+        future_session_ids=_immutable(source)["future_session_ids"],
+    )
+    prepared = PreparedForecastRun(
+        principal=source["principal"],
+        checkpoint=object(),
+        frozen=frozen,
+        immutable_record=_immutable(source),
+    )
+
+    class Catalog:
+        require_local = revalidate_before_spawn = lambda *_args, **_kwargs: None
+
+    class Freezer:
+        freeze = load = lambda *_args, **_kwargs: None
+
+    class FailingWake:
+        def wake(self):
+            raise RuntimeError("synthetic wake failure")
+
+    service = ForecastService(
+        repository=repository,
+        catalog=Catalog(),
+        freezer=Freezer(),
+        runner=SimpleNamespace(run_job=lambda _job_id: None),
+        as_of_session=lambda _instrument: "CNA-20250430",
+    )
+    service.dispatcher = FailingWake()
+    monkeypatch.setattr(service, "_prepare_for_job", lambda _job: prepared)
+
+    canonical = service.retry_job(
+        source_job_id=source["id"],
+        idempotency_key="r43-wake",
+    )
+
+    persisted = repository.get_job(canonical["id"])
+    assert persisted is not None
+    assert persisted["status"] == "queued"
+    assert persisted["dispatch_ready"] == 1
+    assert repository.get_retry_operation_for(
+        source_job_id=source["id"], idempotency_key="r43-wake"
+    )["state"] == "published"
+
+
+def test_r43_cr03_restart_aborts_stale_unpublished_operation_without_dispatch(tmp_path):
+    from datetime import UTC, datetime, timedelta
+
+    observed = datetime(2025, 5, 1, tzinfo=UTC)
+    repository = _repository(tmp_path)
+    repository._clock = lambda: observed
+    source = _terminal_source_for_retry(repository, key="r43-restart-source")
+    reservation = repository.reserve_retry_operation(
+        source_job_id=source["id"],
+        idempotency_key="r43-stale-operation",
+        owner_ttl_seconds=1,
+    )
+    repository.bind_retry_operation(
+        operation_id=reservation.operation_id,
+        owner_token=reservation.owner_token,
+        immutable_record=_immutable(source),
+        input_artifact_id="input-artifact",
+    )
+
+    outcomes = repository.recover_after_restart(
+        revalidate=lambda _job: True,
+        now=observed + timedelta(seconds=2),
+    )
+
+    operation = repository.get_retry_operation(reservation.operation_id)
+    assert operation["state"] == "aborted"
+    assert operation["terminal_reason"] == "restart_expired_retry_owner"
+    assert all(row["action"] != "requeue" for row in outcomes)
+    assert repository.list_jobs() == [source]
+
+
+def test_dispatcher_close_timeout_retains_live_worker_until_retry():
+    from app.forecast.service import (
+        DispatcherCloseOutcome,
+        DurableForecastDispatcher,
+    )
+
+    entered = threading.Event()
+    release = threading.Event()
+
+    class Repository:
+        def list_jobs(self):
+            entered.set()
+            release.wait(timeout=2)
+            return []
+
+        def get_job(self, _job_id):
+            return None
+
+    dispatcher = DurableForecastDispatcher(
+        repository=Repository(),
+        runner=type("Runner", (), {"run_job": lambda _self, _job_id: None})(),
+        poll_interval_seconds=0.01,
+        retry_backoff_seconds=0.01,
+    )
+    dispatcher.start()
+    assert entered.wait(timeout=1)
+    live_thread = dispatcher._thread
+
+    assert dispatcher.close(timeout_seconds=0.01) is DispatcherCloseOutcome.TIMED_OUT
+    assert dispatcher._thread is live_thread
+    assert live_thread is not None and live_thread.is_alive()
+    with pytest.raises(RuntimeError, match="closed"):
+        dispatcher.submit("late-job")
+
+    release.set()
+    assert dispatcher.close(timeout_seconds=1) is DispatcherCloseOutcome.STOPPED
+    assert dispatcher._thread is None
+
+
+def test_dispatcher_cancellation_reaps_group_before_commit(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from app.forecast import runner as runner_module
+    from app.forecast.runner import ForecastRunner, ForecastRunnerLimits
+
+    stop_token = threading.Event()
+    repository = _repository(tmp_path)
+    job = _create(repository, idempotency_key="r43-cancel-before-commit")
+    immutable = _immutable(job)
+    repository.bind_commit_identity(job_id=job["id"], immutable_record=immutable)
+    messages = [
+        {"kind": "ready", "pgid": 4242},
+        {
+            "kind": "success",
+            "manifest": {
+                "output_descriptor": _descriptor(tmp_path),
+                "immutable_record": immutable,
+            },
+        },
+    ]
+
+    class InputPipe:
+        def poll(self, _timeout):
+            return bool(messages)
+
+        def recv_bytes(self, maxlength=None):
+            payload = json.dumps(messages.pop(0)).encode("utf-8")
+            assert maxlength is None or len(payload) <= maxlength
+            return payload
+
+        def close(self):
+            return None
+
+    class OutputPipe:
+        def close(self):
+            return None
+
+    class Process:
+        pid = 4242
+
+        def start(self):
+            return None
+
+        def is_alive(self):
+            return True
+
+        def join(self, _timeout=None):
+            return None
+
+    class Context:
+        def Pipe(self, *, duplex):
+            assert duplex is False
+            return InputPipe(), OutputPipe()
+
+        def Process(self, *, target, args):
+            assert target is runner_module._child_entry
+            assert args
+            return Process()
+
+    reaped: list[tuple[object, int | None]] = []
+    monkeypatch.setattr(runner_module, "resource", object())
+    monkeypatch.setattr(runner_module.os, "name", "posix")
+    monkeypatch.setattr(
+        runner_module.multiprocessing, "get_all_start_methods", lambda: ["spawn"]
+    )
+    monkeypatch.setattr(
+        runner_module.multiprocessing, "get_context", lambda _method: Context()
+    )
+    monkeypatch.setattr(
+        ForecastRunner,
+        "_reap",
+        lambda _self, process, pgid: reaped.append((process, pgid)) or True,
+    )
+
+    def verify_then_cancel(**_kwargs):
+        stop_token.set()
+        return True
+
+    runner = ForecastRunner(
+        repository=repository,
+        limits=ForecastRunnerLimits(),
+        reauthorize=CountingBoundary(),
+        catalog_revalidate=CountingBoundary(),
+        input_revalidate=CountingBoundary(),
+        worker=object(),
+        artifact_verify=verify_then_cancel,
+        stop_token=stop_token,
+    )
+    result = runner.run_job(job["id"])
+
+    assert result["status"] == "interrupted"
+    assert result["process_group_reaped"] is True
+    assert repository.forecast_for_job(job["id"]) is None
+    assert any(pgid == 4242 for _process, pgid in reaped)
+
+
+@pytest.mark.windows_only
+@pytest.mark.skipif(os.name != "nt", reason="Windows fail-closed evidence")
+def test_r43_wr01_windows_fail_closed_and_linux_process_group_nodes_are_explicit(
+    request, tmp_path
+):
+    import os
+
+    markers = "\n".join(request.config.getini("markers"))
+    assert "linux_process_group:" in markers
+    assert "windows_only:" in markers
+    if os.name == "nt":
+        runner, repository, _boundaries = _runner(tmp_path)
+        result = runner.run_job(
+            _create(repository, idempotency_key="r43-windows-fail-closed")["id"]
+        )
+        assert result["status"] == "resource_terminated"
+        assert result["reason"] == "spawn_limits_unavailable"
+        assert repository.forecast_for_job(result["job_id"]) is None
+    else:
+        assert hasattr(os, "setsid")
+        assert hasattr(os, "killpg")

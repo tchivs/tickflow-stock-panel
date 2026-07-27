@@ -24,10 +24,11 @@ coverage:
     description: "Every SUS optional package and Kronos source/checkpoint row received an explicit human decision after official-source review."
     requirement: SHDW-01, FORE-01
     verification:
-      - kind: human
+      - kind: manual_procedural
         ref: "User selected 全部批准 after the exact package/source/checkpoint table was presented"
         status: pass
     human_judgment: true
+    rationale: "Package and supply-chain approval is an independent human trust decision; the summary preserves the exact reviewed table and recorded user dispositions."
 metrics:
   completed: 2026-07-16
 status: complete

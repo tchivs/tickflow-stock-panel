@@ -10,24 +10,22 @@ import { fileURLToPath } from 'node:url'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(__dirname, '..')
 const backendRoot = path.join(repoRoot, 'backend')
-const pythonBin = path.join(backendRoot, '.venv', 'bin', 'python3')
 const browserUrl = 'http://127.0.0.1:4175'
 const apiUrl = 'http://127.0.0.1:3018'
 const password = process.env.PHASE5_REAL_HOST_PASSWORD ?? 'phase5-real-host-password'
-const venvBin = path.join(backendRoot, '.venv', 'bin')
-
 const backendCommand = [
-  `export PATH="${venvBin}:$PATH"`,
-  `cd "${backendRoot}"`,
-  'export PHASE5_REAL_HOST_PORT=3018',
-  `export PHASE5_REAL_HOST_PASSWORD='${password}'`,
-  'export ATHENA_ALLOW_NETWORK=0',
-  'export PYTHONPATH=.',
-  `"${pythonBin}" -m uvicorn tests.phase5_real_host_harness:create_app --factory --host 127.0.0.1 --port 3018`,
-].join(' && ')
+  'uv run --isolated --frozen --extra dev --extra shadow',
+  'python -m uvicorn tests.phase5_real_host_harness:create_app',
+  '--factory --host 127.0.0.1 --port 3018',
+].join(' ')
+const inheritedEnvironment = Object.fromEntries(
+  Object.entries(process.env).filter((entry): entry is [string, string] => (
+    typeof entry[1] === 'string'
+  )),
+)
 
 export default defineConfig({
-  testDir: './e2e',
+  testDir: '.',
   testMatch: /phase5-shadow-real-host\.spec\.ts$/,
   fullyParallel: false,
   workers: 1,
@@ -47,6 +45,14 @@ export default defineConfig({
   webServer: [
     {
       command: backendCommand,
+      cwd: backendRoot,
+      env: {
+        ...inheritedEnvironment,
+        PHASE5_REAL_HOST_PORT: '3018',
+        PHASE5_REAL_HOST_PASSWORD: password,
+        ATHENA_ALLOW_NETWORK: '0',
+        PYTHONPATH: backendRoot,
+      },
       url: `${apiUrl}/health`,
       reuseExistingServer: false,
       timeout: 180_000,
@@ -54,7 +60,7 @@ export default defineConfig({
       stderr: 'pipe',
     },
     {
-      command: 'npx --no-install vite --host 127.0.0.1 --port 4175 --strictPort',
+      command: 'node ./node_modules/vite/bin/vite.js --host 127.0.0.1 --port 4175 --strictPort',
       url: browserUrl,
       reuseExistingServer: false,
       timeout: 120_000,

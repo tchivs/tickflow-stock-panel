@@ -3,15 +3,15 @@ from __future__ import annotations
 
 import ast
 import json
+import math
 import os
-import resource
 import shutil
 import signal
 import subprocess
 import sys
 import tempfile
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from hashlib import sha256
 from pathlib import Path
 from typing import Protocol
@@ -20,6 +20,17 @@ from pydantic import ValidationError
 
 from app.advanced.repository import AdvancedRepository
 from app.advanced.schemas import CustomStrategyContract
+from app.advanced.strategy_policy import (
+    CompiledStrategyProgram,
+    StrategyInstruction,
+    StrategyProgramPolicy,
+    StrategyProgramViolation,
+)
+
+try:
+    import resource
+except ImportError:  # pragma: no cover - exercised by a fresh interpreter regression
+    resource = None  # type: ignore[assignment]
 
 _PROBE_FIELDS = (
     "user_namespace",
@@ -33,7 +44,14 @@ _PROBE_FIELDS = (
     "resource_limits",
     "cleanup_verified",
 )
-_ALLOWED_IMPORTS = frozenset({"json", "math", "socket", "statistics", "subprocess"})
+_ALLOWED_IMPORTS = frozenset({"json", "math", "statistics"})
+_REFLECTION_BUILTINS = frozenset(
+    {"delattr", "dir", "getattr", "globals", "locals", "setattr", "vars"}
+)
+_MAX_PANEL_ITEMS = 64
+_MAX_PANEL_INT_BITS = 256
+_MAX_PANEL_TEXT_BYTES = 4 * 1024
+_MAX_PANEL_BYTES = 16 * 1024
 
 
 class Launcher(Protocol):
@@ -58,6 +76,7 @@ class LinuxIsolationLauncher:
     """Linux namespace launcher that refuses execution without a fresh full probe."""
 
     _PROBE_TIMEOUT_SECONDS = 3
+    _REAP_TIMEOUT_SECONDS = 1.0
     terminal_outcome_contract = True
 
     def __init__(self) -> None:
@@ -65,7 +84,12 @@ class LinuxIsolationLauncher:
 
     def capability_probe(self, *, governed_input: Path, workdir: Path) -> dict[str, object]:
         evidence = {field: False for field in _PROBE_FIELDS}
-        if sys.platform != "linux" or shutil.which("unshare") is None or not os.access("/bin/mount", os.X_OK):
+        if (
+            sys.platform != "linux"
+            or resource is None
+            or shutil.which("unshare") is None
+            or not os.access("/bin/mount", os.X_OK)
+        ):
             return evidence
         probe_root = workdir / "probe-root"
         shutil.rmtree(probe_root, ignore_errors=True)
@@ -154,7 +178,13 @@ class LinuxIsolationLauncher:
         return all(checks.values())
 
     def spawn(self, **kwargs: object) -> dict[str, object]:
-        source_path = Path(str(kwargs["source_path"]))
+        if resource is None:
+            raise OSError("POSIX resource limits are unavailable")
+        program = kwargs.get("program")
+        panel = kwargs.get("panel")
+        if not isinstance(program, CompiledStrategyProgram) or not isinstance(panel, dict):
+            raise OSError("controlled strategy program handoff is invalid")
+        StrategyProgramPolicy.validate(program)
         governed_input = Path(str(kwargs["governed_input"]))
         workdir = Path(str(kwargs["workdir"]))
         timeout_seconds = int(kwargs["timeout_seconds"])
@@ -164,6 +194,12 @@ class LinuxIsolationLauncher:
             raise OSError("isolation proof is unavailable or stale")
         private_root = workdir / "root"
         private_root.mkdir(mode=0o700, exist_ok=True)
+        source_path = workdir / "strategy.py"
+        source_path.write_text(
+            self._interpreter_script(program=program, panel=panel),
+            encoding="utf-8",
+        )
+        source_path.chmod(0o400)
         bootstrap = workdir / "bootstrap.py"
         bootstrap.write_text(self._bootstrap_script(), encoding="utf-8")
         bootstrap.chmod(0o500)
@@ -185,8 +221,7 @@ class LinuxIsolationLauncher:
             )
             stdout, stderr = process.communicate(timeout=timeout_seconds)
         except subprocess.TimeoutExpired:
-            os.killpg(process.pid, signal.SIGKILL)
-            process.communicate()
+            self._terminate_with_deadline(process)
             return self._outcome("failed", "timeout_exceeded", proof, timeout_seconds, memory_limit_mb)
         finally:
             shutil.rmtree(private_root, ignore_errors=True)
@@ -195,8 +230,35 @@ class LinuxIsolationLauncher:
         reason = None if process.returncode == 0 else "runner_failed"
         return self._outcome("completed" if reason is None else "failed", reason, proof, timeout_seconds, memory_limit_mb)
 
+    def _terminate_with_deadline(self, process: object) -> None:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        try:
+            process.communicate(timeout=self._REAP_TIMEOUT_SECONDS)
+            return
+        except subprocess.TimeoutExpired:
+            # A descendant that escaped the process group can retain inherited
+            # stdout/stderr descriptors. Closing our pipe endpoints prevents
+            # that descendant from turning timeout cleanup into an unbounded wait.
+            for pipe in (getattr(process, "stdout", None), getattr(process, "stderr", None)):
+                if pipe is not None:
+                    pipe.close()
+        try:
+            process.kill()
+        except ProcessLookupError:
+            pass
+        try:
+            process.wait(timeout=self._REAP_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            pass
+
     @staticmethod
     def _limits(timeout_seconds: int, memory_limit_mb: int):
+        if resource is None:
+            raise OSError("POSIX resource limits are unavailable")
+
         def apply() -> None:
             resource.setrlimit(resource.RLIMIT_CPU, (timeout_seconds, timeout_seconds))
             resource.setrlimit(resource.RLIMIT_AS, (memory_limit_mb * 1024 * 1024, memory_limit_mb * 1024 * 1024))
@@ -353,6 +415,133 @@ except Exception:
     raise SystemExit(126)
 """
 
+    @staticmethod
+    def _interpreter_script(
+        *, program: CompiledStrategyProgram, panel: dict[str, object]
+    ) -> str:
+        """Return a fixed interpreter with the immutable IR embedded only as JSON data."""
+        payload = json.dumps(
+            {"program": program.to_payload(), "panel": panel},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        encoded_payload = json.dumps(payload)
+        return f"""import json, math
+PAYLOAD = json.loads({encoded_payload})
+MAX_CONTAINER_ITEMS = 64
+MAX_INSTRUCTIONS = 256
+MAX_INT_BITS = 256
+MAX_TEXT_BYTES = 4096
+MAX_RESULT_BYTES = 16384
+steps = 0
+
+def primitive(value):
+    if value is None or isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        if value.bit_length() > MAX_INT_BITS:
+            raise ValueError('integer limit exceeded')
+        return value
+    if isinstance(value, str):
+        if len(value.encode('utf-8')) > MAX_TEXT_BYTES:
+            raise ValueError('text limit exceeded')
+        return value
+    if isinstance(value, float) and math.isfinite(value):
+        return value
+    raise ValueError('non-primitive value')
+
+def interpret(node, panel):
+    global steps
+    steps += 1
+    if steps > MAX_INSTRUCTIONS:
+        raise ValueError('instruction limit exceeded')
+    if not isinstance(node, dict) or set(node) != {{'opcode', 'operands'}}:
+        raise ValueError('invalid instruction')
+    opcode = node['opcode']
+    operands = node['operands']
+    if not isinstance(opcode, str) or not isinstance(operands, list):
+        raise ValueError('invalid instruction shape')
+    if opcode == 'literal' and len(operands) == 1:
+        return primitive(operands[0])
+    if opcode == 'mapping' and operands and len(operands) % 2 == 0:
+        return {{str(operands[index]): interpret(operands[index + 1], panel) for index in range(0, len(operands), 2)}}
+    if opcode == 'panel_value' and len(operands) == 1 and isinstance(operands[0], str):
+        if operands[0] not in panel:
+            raise ValueError('panel field unavailable')
+        return primitive(panel[operands[0]])
+    if opcode == 'intrinsic' and operands and isinstance(operands[0], str):
+        name = operands[0]
+        values = [interpret(item, panel) for item in operands[1:]]
+        if name == 'abs' and len(values) == 1:
+            return primitive(abs(values[0]))
+        if name == 'min' and 1 <= len(values) <= 8:
+            return primitive(min(values))
+        if name == 'max' and 1 <= len(values) <= 8:
+            return primitive(max(values))
+        if name == 'round' and 1 <= len(values) <= 2:
+            return primitive(round(*values))
+        raise ValueError('invalid intrinsic')
+    values = [interpret(item, panel) for item in operands]
+    if opcode == 'positive' and len(values) == 1:
+        return primitive(+values[0])
+    if opcode == 'negative' and len(values) == 1:
+        return primitive(-values[0])
+    if opcode == 'not' and len(values) == 1:
+        return not values[0]
+    if opcode == 'all' and 2 <= len(values) <= 8:
+        return all(values)
+    if opcode == 'any' and 2 <= len(values) <= 8:
+        return any(values)
+    if opcode == 'choose' and len(values) == 3:
+        return values[1] if values[0] else values[2]
+    if len(values) != 2:
+        raise ValueError('invalid opcode arity')
+    if opcode == 'multiply':
+        left, right = values
+        text = left if isinstance(left, str) else right if isinstance(right, str) else None
+        count = right if isinstance(left, str) else left if isinstance(right, str) else None
+        if isinstance(text, str) and isinstance(count, int) and not isinstance(count, bool):
+            if max(count, 0) * len(text.encode('utf-8')) > MAX_TEXT_BYTES:
+                raise ValueError('text multiplication limit exceeded')
+    binary = {{
+        'add': lambda: values[0] + values[1],
+        'subtract': lambda: values[0] - values[1],
+        'multiply': lambda: values[0] * values[1],
+        'divide': lambda: values[0] / values[1],
+        'modulo': lambda: values[0] % values[1],
+        'equal': lambda: values[0] == values[1],
+        'not_equal': lambda: values[0] != values[1],
+        'less': lambda: values[0] < values[1],
+        'less_equal': lambda: values[0] <= values[1],
+        'greater': lambda: values[0] > values[1],
+        'greater_equal': lambda: values[0] >= values[1],
+    }}
+    if opcode not in binary:
+        raise ValueError('invalid opcode')
+    return primitive(binary[opcode]())
+
+program = PAYLOAD['program']
+if program.get('schema_version') != 'strategy-program-v1' or set(program) != {{'schema_version', 'result'}}:
+    raise SystemExit(126)
+try:
+    panel = PAYLOAD['panel']
+    if not isinstance(panel, dict) or len(panel) > MAX_CONTAINER_ITEMS:
+        raise ValueError('panel limit exceeded')
+    panel = {{str(key): primitive(value) for key, value in panel.items()}}
+    if any(not key or len(key) > 64 for key in panel):
+        raise ValueError('panel key invalid')
+    result = interpret(program['result'], panel)
+    if not isinstance(result, dict) or not result or 'signal' not in result or len(result) > MAX_CONTAINER_ITEMS:
+        raise ValueError('result invalid')
+    result = {{str(key): primitive(value) for key, value in result.items()}}
+    encoded = json.dumps(result, sort_keys=True, separators=(',', ':'))
+    if len(encoded.encode('utf-8')) > MAX_RESULT_BYTES:
+        raise ValueError('result limit exceeded')
+except (ArithmeticError, KeyError, MemoryError, TypeError, ValueError):
+    raise SystemExit(126)
+print(encoded)
+"""
+
 
 class CustomStrategySandboxService:
     """Validates untrusted source then runs only through an affirmatively proven launcher."""
@@ -363,6 +552,7 @@ class CustomStrategySandboxService:
         audit_path: Path,
         governed_input: Path,
         launcher: Launcher | None = None,
+        governed_panel_resolver: Callable[..., Mapping[str, object]] | None = None,
         feedback_recorder: Callable[..., None] | None = None,
         promotion_service: Callable[..., None] | None = None,
         broker: Callable[..., None] | None = None,
@@ -373,6 +563,7 @@ class CustomStrategySandboxService:
         self._repository.migrate()
         self._governed_input = Path(governed_input)
         self._launcher = launcher or LinuxIsolationLauncher()
+        self._governed_panel_resolver = governed_panel_resolver
         # Dependencies are accepted solely to make their absence from this boundary explicit.
         self._feedback_recorder = feedback_recorder
         self._promotion_service = promotion_service
@@ -380,6 +571,7 @@ class CustomStrategySandboxService:
         self._provider = provider
         self._strategy_engine = strategy_engine
         self._temporary_handoffs: list[Path] = []
+        self._strategy_policy = StrategyProgramPolicy()
 
     def submit(self, payload: object) -> dict[str, object]:
         source, source_hash = self._source_hash(payload)
@@ -389,9 +581,22 @@ class CustomStrategySandboxService:
             return self._reject("contract_invalid", source_hash=source_hash, contract_fingerprint="invalid", parent_asset_id="")
         if source_hash != contract.source_sha256:
             return self._reject("source_hash_mismatch", source_hash=source_hash, contract_fingerprint=self._fingerprint(contract), parent_asset_id=contract.parent_asset_id)
-        reason = self._validate_ast(source, contract)
-        if reason is not None:
+        try:
+            program = self._strategy_policy.compile(source)
+        except StrategyProgramViolation:
+            # Legacy diagnostic codes remain presentation compatibility only.
+            # Admission authority is exclusively the positive compiler above.
+            reason = self._validate_ast(source, contract) or StrategyProgramViolation.code
             return self._reject(reason, source_hash=source_hash, contract_fingerprint=self._fingerprint(contract), parent_asset_id=contract.parent_asset_id)
+        try:
+            panel = self._resolve_governed_panel(program, contract)
+        except Exception:
+            return self._reject(
+                "governed_panel_unavailable",
+                source_hash=source_hash,
+                contract_fingerprint=self._fingerprint(contract),
+                parent_asset_id=contract.parent_asset_id,
+            )
 
         workdir = Path(tempfile.mkdtemp(prefix="advanced-sandbox-"))
         try:
@@ -399,12 +604,10 @@ class CustomStrategySandboxService:
                 return self._reject("isolation_unavailable", source_hash=source_hash, contract_fingerprint=self._fingerprint(contract), parent_asset_id=contract.parent_asset_id)
             if not getattr(self._launcher, "terminal_outcome_contract", False) and not hasattr(self._launcher, "runtime_outcome"):
                 return self._reject("isolation_unavailable", source_hash=source_hash, contract_fingerprint=self._fingerprint(contract), parent_asset_id=contract.parent_asset_id)
-            source_path = workdir / "strategy.py"
-            source_path.write_text(source, encoding="utf-8")
-            source_path.chmod(0o400)
             self._temporary_handoffs.append(workdir)
             outcome = self._launcher.spawn(
-                source_path=source_path,
+                program=program,
+                panel=panel,
                 governed_input=self._governed_input,
                 workdir=workdir,
                 timeout_seconds=contract.timeout_seconds,
@@ -501,6 +704,86 @@ class CustomStrategySandboxService:
             return False
         return all(bool(getattr(probe, field, False) if not isinstance(probe, dict) else probe.get(field, False)) for field in _PROBE_FIELDS)
 
+    def _resolve_governed_panel(
+        self,
+        program: CompiledStrategyProgram,
+        contract: CustomStrategyContract,
+    ) -> dict[str, object]:
+        required_fields = self._required_panel_fields(program.result)
+        resolver = self._governed_panel_resolver
+        if resolver is None:
+            if required_fields:
+                raise ValueError("authoritative governed panel is unavailable")
+            return {}
+        raw_panel = resolver(
+            contract=contract,
+            parent_asset_id=contract.parent_asset_id,
+            governed_input=self._governed_input,
+        )
+        panel = self._bounded_primitive_panel(raw_panel)
+        if not required_fields <= panel.keys():
+            raise ValueError("authoritative governed panel is incomplete")
+        return panel
+
+    @staticmethod
+    def _required_panel_fields(
+        instruction: StrategyInstruction,
+    ) -> frozenset[str]:
+        fields: set[str] = set()
+        pending = [instruction]
+        while pending:
+            current = pending.pop()
+            if current.opcode == "panel_value":
+                field = current.operands[0]
+                if not isinstance(field, str):
+                    raise ValueError("governed panel instruction is invalid")
+                fields.add(field)
+            pending.extend(
+                operand
+                for operand in current.operands
+                if isinstance(operand, StrategyInstruction)
+            )
+        return frozenset(fields)
+
+    @staticmethod
+    def _bounded_primitive_panel(
+        value: Mapping[str, object],
+    ) -> dict[str, object]:
+        if not isinstance(value, Mapping) or len(value) > _MAX_PANEL_ITEMS:
+            raise ValueError("governed panel mapping is invalid")
+        panel: dict[str, object] = {}
+        for key, item in value.items():
+            if (
+                not isinstance(key, str)
+                or not key
+                or len(key) > 64
+                or not key.replace("_", "").isalnum()
+            ):
+                raise ValueError("governed panel key is invalid")
+            if item is None or isinstance(item, bool):
+                primitive = item
+            elif isinstance(item, int):
+                if item.bit_length() > _MAX_PANEL_INT_BITS:
+                    raise ValueError("governed panel integer is too large")
+                primitive = item
+            elif isinstance(item, float):
+                if not math.isfinite(item):
+                    raise ValueError("governed panel number is not finite")
+                primitive = item
+            elif isinstance(item, str):
+                if len(item.encode("utf-8")) > _MAX_PANEL_TEXT_BYTES:
+                    raise ValueError("governed panel text is too large")
+                primitive = item
+            else:
+                raise ValueError("governed panel value is not primitive")
+            panel[key] = primitive
+        encoded = json.dumps(
+            panel, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+        if len(encoded) > _MAX_PANEL_BYTES:
+            raise ValueError("governed panel mapping is too large")
+        return panel
+
     @staticmethod
     def _source_hash(payload: object) -> tuple[str, str]:
         source = payload.get("source", "") if isinstance(payload, dict) else ""
@@ -532,9 +815,15 @@ class CustomStrategySandboxService:
                     return "dynamic_execution_forbidden"
                 if node.func.id == "__import__":
                     return "dynamic_import_forbidden"
+                if node.func.id in _REFLECTION_BUILTINS:
+                    return "module_reflection_forbidden"
                 if node.func.id in {"open", "compile", "input"}:
                     return "file_access_forbidden"
+            if isinstance(node, ast.Name) and node.id.startswith("__"):
+                return "module_reflection_forbidden"
             if isinstance(node, ast.Attribute):
+                if node.attr.startswith("__") or node.attr.endswith("__"):
+                    return "module_reflection_forbidden"
                 if node.attr in {"system", "popen", "fork", "__globals__", "__subclasses__"}:
                     return "attribute_chain_forbidden"
                 if node.attr in {"create_connection", "connect", "urlopen", "request"}:

@@ -1,3 +1,6 @@
+import { existsSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 import type { Locator, Page, Route } from '@playwright/test'
 import { expect, test } from '@playwright/test'
 
@@ -6,6 +9,11 @@ const THESIS_TAB = '投资论点'
 const FORECAST_TAB = '概率预测'
 const STOCK = { symbol: '600519.SH', name: '贵州茅台' }
 const LONG_ID = `sha256:${'a'.repeat(96)}`
+const BACKEND_DIRECTORY = fileURLToPath(new URL('../../backend/', import.meta.url))
+const BUNDLED_BACKEND_PYTHON = fileURLToPath(new URL(
+  process.platform === 'win32' ? '../../backend/.venv/Scripts/python.exe' : '../../backend/.venv/bin/python',
+  import.meta.url,
+))
 
 const SCENARIO_TITLES = [
   'scenario 1: 独立能力与 v1 不回归',
@@ -37,6 +45,7 @@ type FixtureOptions = {
   evidenceFailure?: boolean
   /** CR-04 identity join fixtures: default healthy 5/20/60 outcomes; malformed modes fail closed. */
   calibrationIdentity?: 'healthy' | 'missing' | 'duplicate' | 'foreign' | 'out_of_range'
+  forecastPriceContext?: 'available' | 'missing'
 }
 
 type Telemetry = {
@@ -46,6 +55,32 @@ type Telemetry = {
   mutationBodies: Array<{ method: string; path: string; body: unknown }>
   requestsFor(pathPrefix: string): number
 }
+
+const SCENARIO_1_AVAILABILITY_CASES = [
+  {
+    id: 'all-available',
+    availability: { shadow: true, thesis: true, forecast: true },
+  },
+  {
+    id: 'shadow-unavailable',
+    availability: { shadow: false, thesis: true, forecast: true },
+  },
+  {
+    id: 'thesis-unavailable',
+    availability: { shadow: true, thesis: false, forecast: true },
+  },
+  {
+    id: 'forecast-unavailable',
+    availability: { shadow: true, thesis: true, forecast: false },
+  },
+  {
+    id: 'all-unavailable',
+    availability: { shadow: false, thesis: false, forecast: false },
+  },
+] as const satisfies ReadonlyArray<{
+  id: string
+  availability: ModuleAvailability
+}>
 
 const defaultAvailability: ModuleAvailability = { shadow: true, thesis: true, forecast: true }
 const capability = (name: ModuleName, available: boolean) => ({
@@ -121,10 +156,10 @@ const thesisVersion = (version: number, overrides: Record<string, unknown> = {})
   created_by: 'server-session-user',
   created_at: `2026-07-${10 + version}T09:00:00Z`,
   effective_at: `2026-07-${10 + version}T09:00:00Z`,
-  anchors: [{ method: 'DCF', currency: 'CNY', as_of: '2026-07-15', low: 1380, high: 1720, assumptions: [{ name: '收入复合增长', value: 8, unit: '%' }, { name: '终值增长', value: 3, unit: '%' }], limitations: ['未计入极端渠道库存冲击'] }],
+  anchors: [{ method: 'dcf', currency: 'CNY', as_of: '2026-07-15', low: 1380, high: 1720, assumptions: [{ name: 'revenue_cagr', value: 8, unit: 'percent' }, { name: 'terminal_growth', value: 3, unit: 'percent' }], limitations: ['未计入极端渠道库存冲击'] }],
   conditions: [
-    { id: `condition-${version}-1`, name: '核心单品批价跌破阈值', source_kind: 'market', field: 'wholesale_price', operator: '<', threshold: 850, unit: 'CNY', lookback: 20, cadence: 'weekly', timezone: 'Asia/Shanghai', next_due_at: '2026-07-22T01:00:00Z' },
-    { id: `condition-${version}-2`, name: '经营现金流恶化', source_kind: 'financial', field: 'operating_cash_flow_yoy', operator: '<', threshold: -0.2, unit: 'ratio', lookback: 4, cadence: 'quarterly', timezone: 'Asia/Shanghai', next_due_at: '2026-10-01T01:00:00Z' },
+    { id: `condition-${version}-1`, name: '核心单品批价跌破阈值', source_kind: 'market', field: 'close', operator: '<', threshold: 850, unit: 'CNY', lookback: 20, cadence: 'weekly', timezone: 'Asia/Shanghai', next_due_at: '2026-07-22T01:00:00Z' },
+    { id: `condition-${version}-2`, name: '经营现金流恶化', source_kind: 'financial', field: 'revenue_growth_yoy', operator: '<', threshold: -0.2, unit: 'ratio', lookback: 4, cadence: 'quarterly', timezone: 'Asia/Shanghai', next_due_at: '2026-10-01T01:00:00Z' },
   ],
   ...overrides,
 })
@@ -476,12 +511,14 @@ async function installPhase5Fixture(page: Page, options: FixtureOptions = {}): P
     })
     if (path.endsWith('/jobs') && request.method() === 'GET') return json(route, {
       jobs: options.forecastState === 'terminal' ? [
-        { id: 'job-timeout', instrument: STOCK.symbol, status: 'timeout', stage: 'timeout', safe_reason: 'timeout', record_id: null, created_at: '2026-07-15T10:01:00Z' },
-        { id: 'job-oom', instrument: STOCK.symbol, status: 'resource_terminated', stage: 'resource_terminated', safe_reason: 'OOM', record_id: null, created_at: '2026-07-15T10:02:00Z' },
-        { id: 'job-shape', instrument: STOCK.symbol, status: 'validation_failed', stage: 'validation_failed', safe_reason: 'shape failure', record_id: null, created_at: '2026-07-15T10:03:00Z' },
-        { id: 'job-artifact', instrument: STOCK.symbol, status: 'artifact_failed', stage: 'artifact_failed', safe_reason: 'artifact failure', record_id: null, created_at: '2026-07-15T10:04:00Z' },
+        { id: 'job-timeout', instrument: STOCK.symbol, horizon: 20, catalog_id: 'kronos-mini-approved', status: 'timeout', stage: 'timeout', safe_reason: 'timeout', record_id: null, created_at: '2026-07-15T10:01:00Z' },
+        { id: 'job-oom', instrument: STOCK.symbol, horizon: 20, catalog_id: 'kronos-mini-approved', status: 'resource_terminated', stage: 'resource_terminated', safe_reason: 'OOM', record_id: null, created_at: '2026-07-15T10:02:00Z' },
+        { id: 'job-shape', instrument: STOCK.symbol, horizon: 20, catalog_id: 'kronos-mini-approved', status: 'validation_failed', stage: 'validation_failed', safe_reason: 'shape failure', record_id: null, created_at: '2026-07-15T10:03:00Z' },
+        { id: 'job-artifact', instrument: STOCK.symbol, horizon: 20, catalog_id: 'kronos-mini-approved', status: 'artifact_failed', stage: 'artifact_failed', safe_reason: 'artifact failure', record_id: null, created_at: '2026-07-15T10:04:00Z' },
+        { id: 'job-catalog', instrument: STOCK.symbol, horizon: 20, catalog_id: 'kronos-mini-approved', status: 'checkpoint_mismatch', stage: 'checkpoint_mismatch', safe_reason: 'checkpoint mismatch', record_id: null, created_at: '2026-07-15T10:05:00Z' },
+        { id: 'job-input', instrument: STOCK.symbol, horizon: 20, catalog_id: 'kronos-mini-approved', status: 'validation_failed', stage: 'validation_failed', safe_reason: 'final input revalidation failed', record_id: null, created_at: '2026-07-15T10:06:00Z' },
       ] : [],
-      page: { offset: 0, limit: 25, total: options.forecastState === 'terminal' ? 4 : 0, has_more: false },
+      page: { offset: 0, limit: 25, total: options.forecastState === 'terminal' ? 6 : 0, has_more: false },
     })
     if (path.endsWith('/jobs') && request.method() === 'POST') {
       forecastCounter += 1
@@ -491,16 +528,26 @@ async function installPhase5Fixture(page: Page, options: FixtureOptions = {}): P
     if (path.includes('/records/') && path.endsWith('/paths')) return json(route, { paths: { items: [], offset: 0, limit: 12, total: 32, has_more: true } })
     if (path.includes('/records/') && path.endsWith('/calibration')) {
       const mode = options.calibrationIdentity ?? 'healthy'
+      const price_context = options.forecastPriceContext === 'missing' ? undefined : {
+        as_of_close: 1450,
+        history: [
+          { session_id: 'CNA-20260711', close: 1438 },
+          { session_id: 'CNA-20260714', close: 1444 },
+          { session_id: 'CNA-20260715', close: 1450 },
+        ],
+      }
       if (mode === 'missing') {
         return json(route, {
           outcomes: forecastOutcomes.filter(item => item.id !== 'outcome-h5'),
           calibration: forecastCalibrationFacts,
+          price_context,
         })
       }
       if (mode === 'duplicate') {
         return json(route, {
           outcomes: [...forecastOutcomes, { ...forecastOutcomes[0], status: 'evaluated' }],
           calibration: forecastCalibrationFacts,
+          price_context,
         })
       }
       if (mode === 'foreign') {
@@ -509,6 +556,7 @@ async function installPhase5Fixture(page: Page, options: FixtureOptions = {}): P
             ? { ...item, forecast_id: 'foreign-forecast' }
             : item),
           calibration: forecastCalibrationFacts,
+          price_context,
         })
       }
       if (mode === 'out_of_range') {
@@ -517,9 +565,10 @@ async function installPhase5Fixture(page: Page, options: FixtureOptions = {}): P
             ? { ...item, horizon: 120 as any }
             : item),
           calibration: forecastCalibrationFacts,
+          price_context,
         })
       }
-      return json(route, { outcomes: forecastOutcomes, calibration: forecastCalibrationFacts })
+      return json(route, { outcomes: forecastOutcomes, calibration: forecastCalibrationFacts, price_context })
     }
     if (path.includes('/records/')) return json(route, { record: forecastRecord })
     if (path.includes('/jobs/')) return json(route, { job: { id: path.split('/').at(-1), instrument: STOCK.symbol, horizon: 20, catalog_id: 'kronos-mini-approved', status: options.forecastState === 'terminal' ? 'running' : 'completed', stage: options.forecastState === 'terminal' ? 'generating_paths' : 'completed', stage_recorded_at: '2026-07-15T10:00:00Z', attempt: 1, safe_reason: null, record_id: options.forecastState === 'terminal' ? null : forecastRecord.id, created_at: '2026-07-15T10:00:00Z', updated_at: '2026-07-15T10:00:00Z' } })
@@ -655,15 +704,31 @@ function expectNoAuthorityRequests(telemetry: Telemetry) {
   expect(telemetry.unexpectedRequests).toEqual([])
 }
 
+function expectBackendThesisSchemaAccepts(schemaName: 'ThesisVersionRequest' | 'ThesisRevisionRequest', payload: Record<string, unknown>) {
+  const python = process.env.ATHENAQUANT_BACKEND_PYTHON
+    ?? (existsSync(BUNDLED_BACKEND_PYTHON) ? BUNDLED_BACKEND_PYTHON : 'python')
+  const validation = spawnSync(python, [
+    '-c',
+    [
+      'import sys',
+      'from app.theses import schemas',
+      'schema = getattr(schemas, sys.argv[1])',
+      'validated = schema.model_validate_json(sys.stdin.read())',
+      'sys.stdout.write(validated.model_dump_json())',
+    ].join('; '),
+    schemaName,
+  ], {
+    cwd: BACKEND_DIRECTORY,
+    env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' },
+    input: JSON.stringify(payload),
+    encoding: 'utf8',
+  })
+  expect(validation.status, validation.stderr || validation.stdout).toBe(0)
+}
+
 test.describe('Phase 05 optional enhancement browser contracts', () => {
-  test(SCENARIO_TITLES[0], async ({ page }) => {
-    for (const availability of [
-      { shadow: true, thesis: true, forecast: true },
-      { shadow: false, thesis: true, forecast: true },
-      { shadow: true, thesis: false, forecast: true },
-      { shadow: true, thesis: true, forecast: false },
-      { shadow: false, thesis: false, forecast: false },
-    ]) {
+  for (const { id, availability } of SCENARIO_1_AVAILABILITY_CASES) {
+    test(`${SCENARIO_TITLES[0]} [${id}]`, async ({ page }) => {
       const telemetry = await installPhase5Fixture(page, { availability })
       await page.goto('/backtest')
       const shadow = page.getByRole('heading', { name: SHADOW_HEADING, exact: true })
@@ -683,8 +748,8 @@ test.describe('Phase 05 optional enhancement browser contracts', () => {
       await expect(page.getByRole('navigation').getByText(/Shadow|投资论点|概率预测|可选模块总览/)).toHaveCount(0)
       await expect(page.locator('aside').filter({ hasText: /高级研究中心|可选模块总览/ })).toHaveCount(0)
       expect(telemetry.externalRequests).toEqual([])
-    }
-  })
+    })
+  }
 
   test(SCENARIO_TITLES[1], async ({ page }) => {
     const telemetry = await installPhase5Fixture(page, { shadowState: 'populated' })
@@ -908,7 +973,8 @@ test.describe('Phase 05 optional enhancement browser contracts', () => {
     await panel.getByLabel('估值上限').fill('1720')
     await expect(panel.getByLabel('估值币种')).toHaveValue('CNY')
     await expect(panel.getByLabel('估值截至日')).toHaveValue('2026-07-15')
-    await expect(panel.getByLabel(/估值假设/)).not.toHaveValue('')
+    await expect(panel.getByLabel('估值假设 1')).toHaveValue('revenue_cagr')
+    await expect(panel.getByLabel('估值假设 2')).toHaveValue('terminal_growth')
     await expect(panel.getByLabel('条件 1 检查周期')).toHaveValue('weekly')
     await expect(panel.getByLabel('条件 2 检查周期')).toHaveValue('quarterly')
     await expect(panel.getByLabel(/统一检查周期|全局 cadence/i)).toHaveCount(0)
@@ -916,6 +982,67 @@ test.describe('Phase 05 optional enhancement browser contracts', () => {
     await expect(panel.getByText('历史版本，不再执行定期检查')).toBeVisible()
     await expectSemanticTable(panel, '投资论点版本历史')
     await expect(panel.getByText(/目标价|自由文本条件/)).toHaveCount(0)
+    expectNoAuthorityRequests(telemetry)
+  })
+
+  test('first Thesis version blocks non-canonical anchors and the browser payload passes the real backend schema', async ({ page }) => {
+    const telemetry = await installPhase5Fixture(page, { thesisState: 'empty' })
+    let submitted: Record<string, unknown> | null = null
+    await page.route(`**/api/theses/instruments/${STOCK.symbol}/versions**`, route => {
+      if (route.request().method() !== 'POST') return route.fallback()
+      submitted = route.request().postDataJSON() as Record<string, unknown>
+      return json(route, { version: thesisVersion(1, { predecessor_id: null }) }, 201)
+    })
+    await page.route('**/api/theses/versions/thesis-version-1', route => json(route, {
+      version: thesisVersion(1, { predecessor_id: null }),
+    }))
+
+    await selectStock(page)
+    await page.goto('/stock-analysis')
+    const panel = await openAnalysisTab(page, THESIS_TAB)
+    await panel.getByRole('button', { name: '创建第一版投资论点' }).click()
+    await expect(panel.getByLabel('估值方法')).toHaveValue('dcf')
+    await expect(panel.getByLabel('估值方法').locator('option:checked')).toHaveText('DCF')
+
+    await panel.getByLabel('核心判断').fill('收入与现金流质量支持长期价值增长。')
+    await panel.getByLabel('判断理由').fill('渠道、产品与现金流证据相互印证。')
+    await panel.getByLabel('估值下限').fill('1380')
+    await panel.getByLabel('估值上限').fill('1720')
+    await panel.getByLabel('估值假设 1').fill('收入增长')
+    await panel.getByLabel('假设数值').fill('8')
+    await panel.getByLabel('条件 1 说明').fill('收盘价跌破风险阈值')
+    await panel.getByLabel('阈值').fill('1200')
+
+    await panel.getByRole('button', { name: '进入审阅' }).click()
+    await expect(panel.getByRole('alert')).toContainText('估值假设名称必须以字母开头')
+    await expect(panel.getByLabel('估值假设 1')).toBeFocused()
+    await expect(panel.getByLabel('估值假设 1')).toHaveAttribute('aria-invalid', 'true')
+    await expect(panel.getByRole('button', { name: '创建不可变论点版本' })).toHaveCount(0)
+
+    await panel.getByLabel('估值假设 1').fill('revenue_growth')
+    await panel.getByLabel('假设单位').fill('%')
+    await panel.getByRole('button', { name: '进入审阅' }).click()
+    await expect(panel.getByRole('alert')).toContainText('估值假设单位必须以字母开头')
+    await expect(panel.getByLabel('假设单位')).toBeFocused()
+
+    await panel.getByLabel('假设单位').fill('percent')
+    await panel.getByRole('button', { name: '进入审阅' }).click()
+    await expect(panel.getByRole('alert')).toContainText('至少填写一项非空估值限制')
+    await expect(panel.getByLabel('估值限制 1')).toBeFocused()
+
+    await panel.getByLabel('估值限制 1').fill('尚未覆盖极端渠道库存冲击。')
+    await panel.getByRole('button', { name: '进入审阅' }).click()
+    await panel.getByRole('button', { name: '创建不可变论点版本' }).click()
+    await page.getByRole('dialog', { name: '创建不可变论点版本' }).getByRole('button', { name: '创建不可变论点版本' }).click()
+    await expect.poll(() => submitted).not.toBeNull()
+
+    const payload = submitted!
+    expect(payload.anchors).toEqual([expect.objectContaining({
+      method: 'dcf',
+      assumptions: [{ name: 'revenue_growth', value: 8, unit: 'percent' }],
+      limitations: ['尚未覆盖极端渠道库存冲击。'],
+    })])
+    expectBackendThesisSchemaAccepts('ThesisVersionRequest', payload)
     expectNoAuthorityRequests(telemetry)
   })
 
@@ -927,14 +1054,66 @@ test.describe('Phase 05 optional enhancement browser contracts', () => {
     for (const result of ['命中', '未命中', '证据不足', '检查错误']) {
       await expect(panel.getByRole('rowheader', { name: result, exact: true }).first()).toBeVisible()
     }
+    const conditionsTable = panel.getByRole('table', { name: '结构化失效条件' })
+    const marketCondition = conditionsTable.getByRole('row', { name: /核心单品批价跌破阈值/ })
+    await expect(marketCondition).toContainText('最近检查：命中')
+    await expect(marketCondition).toContainText('检查已逾期，等待调度恢复。')
+    const financialCondition = conditionsTable.getByRole('row', { name: /经营现金流恶化/ })
+    await expect(financialCondition).toContainText('最近检查：证据不足')
     await expectSemanticTable(panel, '投资论点证据检查历史')
-    const insufficient = panel.getByRole('row', { name: /证据不足/ })
+    const checksTable = panel.getByRole('table', { name: '投资论点证据检查历史' })
+    const insufficient = checksTable.getByRole('row', { name: /证据不足/ })
     await expect(insufficient).toContainText(/缺少已披露季度值/)
     await expect(insufficient.getByText(/^0(?:\.0+)?$/)).toHaveCount(0)
-    for (const label of ['到期时间', '检查时间', '观测值', '证据', '版本', '检查周期']) await expect(panel.getByRole('table', { name: '投资论点证据检查历史' }).getByRole('columnheader', { name: label, exact: true })).toBeVisible()
+    for (const label of ['到期时间', '检查时间', '观测值', '证据', '版本', '检查周期']) await expect(checksTable.getByRole('columnheader', { name: label, exact: true })).toBeVisible()
     await expect(panel.getByRole('heading', { name: '待确认失效结论' })).toHaveCount(1)
     await expect(panel.getByText('当前官方状态未改变，等待你的确认。')).toBeVisible()
     expect(telemetry.mutationBodies).toEqual([])
+    expectNoAuthorityRequests(telemetry)
+  })
+
+  test('Thesis source registry resets dependent values and condition errors focus the first invalid control', async ({ page }) => {
+    const telemetry = await installPhase5Fixture(page, { thesisState: 'populated' })
+    await selectStock(page)
+    await page.goto('/stock-analysis')
+    const panel = await openAnalysisTab(page, THESIS_TAB)
+    await panel.getByRole('button', { name: '基于此版本创建新版本' }).click()
+
+    const source = panel.getByLabel('来源类型').first()
+    const field = panel.getByLabel('字段').first()
+    const unit = panel.locator('#thesis-condition-0-unit')
+    const operator = panel.getByLabel('运算符').first()
+    const threshold = panel.getByLabel('阈值').first()
+
+    await operator.selectOption('between')
+    await threshold.fill('800,900')
+    await source.selectOption('financial')
+    await expect(panel.getByRole('status')).toContainText('条件 1 来源已改为财务')
+    await expect(field).toHaveValue('revenue_growth_yoy')
+    await expect(field.locator('option')).toHaveText([
+      '营收同比增长',
+      '净利润同比增长',
+      '毛利率',
+      '净资产收益率',
+    ])
+    await expect(unit).toHaveValue('ratio')
+    await expect(operator).toHaveValue('lt')
+    await expect(threshold).toHaveValue('')
+
+    await source.selectOption('analysis')
+    await expect(field).toHaveValue('report_score')
+    await expect(unit).toHaveValue('score')
+
+    const description = panel.getByLabel('条件 1 说明')
+    await description.fill('')
+    await panel.getByRole('button', { name: '进入审阅' }).click()
+    const alert = panel.getByRole('alert')
+    await expect(alert).toContainText('每个失效条件都必须包含结构字段、阈值、单位、lookback、说明和独立检查周期。')
+    await expect(description).toBeFocused()
+    await expect(description).toHaveAttribute('aria-invalid', 'true')
+    const errorId = await alert.getAttribute('id')
+    expect(errorId).not.toBeNull()
+    await expect(description).toHaveAttribute('aria-describedby', errorId!)
     expectNoAuthorityRequests(telemetry)
   })
 
@@ -1001,6 +1180,7 @@ test.describe('Phase 05 optional enhancement browser contracts', () => {
     await expect(panel.getByRole('radio', { name: '20 个交易日', exact: true })).toBeChecked()
     await expectSemanticTable(panel, '逐日 P10 P50 P90 分位数')
     await expect(panel.getByRole('img', { name: /历史 close.*P10.*P90.*P50.*actual/i })).toBeVisible()
+    await expect(panel.getByText('目标交易日 2026-08-20 · +49.00 CNY (+3.38%)')).toBeVisible()
     const pathChoices = panel.getByRole('checkbox', { name: /采样路径/ })
     expect(await pathChoices.count()).toBeLessThanOrEqual(12)
     await panel.getByRole('button', { name: '查看采样路径' }).click()
@@ -1022,14 +1202,21 @@ test.describe('Phase 05 optional enhancement browser contracts', () => {
     const panel = await openAnalysisTab(page, FORECAST_TAB)
     await expect(panel.getByText('已有更新行情；此预测仍保留其原始数据截至日。')).toBeVisible()
     const immutableBefore = await panel.getByRole('table', { name: '逐日 P10 P50 P90 分位数' }).textContent()
-    await panel.getByRole('button', { name: '基于相同配置创建新预测' }).click()
+    await panel.getByRole('button', { name: '基于相同配置创建新预测' }).first().click()
     await expect(panel.getByRole('heading', { name: '预测 F-001', exact: true })).toBeVisible()
     expect(await panel.getByRole('table', { name: '逐日 P10 P50 P90 分位数' }).textContent()).toBe(immutableBefore)
     await expect(panel.getByText('进度连接已中断，正在按记录状态重新连接。')).toBeVisible()
-    await expect(panel.getByText('预测未完成', { exact: true })).toBeVisible()
-    const terminalRows = panel.getByRole('row', { name: /timeout|OOM|shape failure|artifact failure/i })
-    expect(await terminalRows.count()).toBe(4)
-    for (const terminal of ['timeout', 'OOM', 'shape failure', 'artifact failure']) {
+    for (const heading of ['预测工作进程未完成', '预测输出结构无效', '预测工件完整性校验失败', '无法读取批准检查点目录', '受治理日线输入不可用']) {
+      await expect(panel.getByText(heading, { exact: true }).first()).toBeVisible()
+    }
+    await expect(panel.getByRole('button', { name: '基于相同配置创建新预测' }).first()).toBeVisible()
+    await expect(panel.getByRole('button', { name: '复制输出诊断' })).toBeVisible()
+    await expect(panel.getByRole('button', { name: '复制完整性诊断' })).toBeVisible()
+    await expect(panel.getByRole('button', { name: '重新加载批准检查点目录' })).toBeVisible()
+    await expect(panel.getByRole('button', { name: '重新检查受治理输入' })).toBeVisible()
+    const terminalRows = panel.getByRole('row', { name: /timeout|OOM|shape failure|artifact failure|checkpoint mismatch|final input revalidation failed/i })
+    expect(await terminalRows.count()).toBe(6)
+    for (const terminal of ['timeout', 'OOM', 'shape failure', 'artifact failure', 'checkpoint mismatch', 'final input revalidation failed']) {
       await expect(terminalRows.filter({ hasText: new RegExp(terminal, 'i') })).toHaveCount(1)
     }
     for (let index = 0; index < await terminalRows.count(); index += 1) {
@@ -1037,6 +1224,20 @@ test.describe('Phase 05 optional enhancement browser contracts', () => {
     }
     expect(telemetry.mutationBodies.filter(entry => entry.path.endsWith('/jobs'))).toHaveLength(1)
     expectNoAuthorityRequests(telemetry)
+  })
+
+  test('Forecast chart omits unavailable governed history claims', async ({ page }) => {
+    await installPhase5Fixture(page, {
+      forecastState: 'populated',
+      forecastPriceContext: 'missing',
+    })
+    await selectStock(page)
+    await page.goto('/stock-analysis')
+    const panel = await openAnalysisTab(page, FORECAST_TAB)
+    const chart = panel.getByRole('img', { name: /P10.*P90.*P50.*actual/i })
+    await expect(chart).toBeVisible()
+    await expect(chart).not.toHaveAttribute('aria-label', /历史 close/)
+    await expect(panel.getByText(/缺少受治理 as-of close，无法计算变化/).first()).toBeVisible()
   })
 
   test(SCENARIO_TITLES[10], async ({ page }) => {
@@ -1137,7 +1338,14 @@ test.describe('Phase 05 optional enhancement browser contracts', () => {
       const shadow = page.getByRole('region', { name: SHADOW_HEADING })
       await requireSurface(shadow.getByRole('heading', { name: SHADOW_HEADING, exact: true }))
       const file = shadow.getByLabel('选择本地成交日志')
-      if (viewport.width === 375) await expectTouchTarget(file)
+      if (viewport.width === 375) {
+        await expectTouchTarget(file)
+        const batchCheckbox = shadow.getByLabel('纳入批次 修正批次 3')
+        await expect(batchCheckbox).toHaveAccessibleName('纳入批次 修正批次 3')
+        await batchCheckbox.focus()
+        await expect(batchCheckbox).toBeFocused()
+        await expectTouchTarget(shadow.getByTestId('shadow-batch-selection-target').first())
+      }
       await expectSemanticTable(shadow, 'Shadow 不可变导入批次')
 
       await selectStock(page)
@@ -1479,6 +1687,140 @@ test.describe('Phase 05 optional enhancement browser contracts', () => {
     expect(routeOffsets.versions).toEqual(expect.arrayContaining([0, 1]))
     expectNoAuthorityRequests(telemetry)
     expect(versionDetailHits).toBe(0)
+  })
+
+  test('CR-05 Thesis revision round-trips every anchor, assumption, and limitation', async ({ page }) => {
+    const telemetry = await installPhase5Fixture(page, { thesisState: 'populated' })
+    const source = thesisVersion(2, {
+      anchors: [
+        {
+          method: 'dcf',
+          currency: 'CNY',
+          as_of: '2026-07-15',
+          low: 1380,
+          high: 1720,
+          assumptions: [
+            { name: 'revenue_cagr', value: 8, unit: 'percent' },
+            { name: 'terminal_growth', value: 3, unit: 'percent' },
+          ],
+          limitations: ['未计入极端渠道库存冲击', '折现率需要季度复核'],
+        },
+        {
+          method: 'relative',
+          currency: 'CNY',
+          as_of: '2026-07-15',
+          low: 1420,
+          high: 1680,
+          assumptions: [
+            { name: 'target_pe', value: 24, unit: 'multiple' },
+            { name: 'forecast_eps', value: 62, unit: 'CNY' },
+          ],
+          limitations: ['同业估值可能受市场风格扰动'],
+        },
+      ],
+    })
+    let submitted: Record<string, unknown> | null = null
+    await page.route(`**/api/theses/instruments/${STOCK.symbol}/versions**`, route => {
+      if (route.request().method() !== 'GET') return route.fallback()
+      return json(route, {
+        items: [source],
+        current_version_id: source.id,
+        offset: 0,
+        limit: 25,
+        total: 1,
+        has_more: false,
+      })
+    })
+    await page.route('**/api/theses/versions/**', route => {
+      if (route.request().method() === 'POST') {
+        submitted = route.request().postDataJSON() as Record<string, unknown>
+        return json(route, { version: thesisVersion(3, { anchors: source.anchors }) }, 201)
+      }
+      const id = new URL(route.request().url()).pathname.split('/').at(-1)
+      return json(route, {
+        version: id === 'thesis-version-3'
+          ? thesisVersion(3, { anchors: source.anchors })
+          : source,
+      })
+    })
+
+    await selectStock(page)
+    await page.goto('/stock-analysis')
+    const panel = await openAnalysisTab(page, THESIS_TAB)
+    await expect(panel.getByText(/revenue_cagr 8 percent/)).toBeVisible()
+    await expect(panel.getByText(/terminal_growth 3 percent/)).toBeVisible()
+    await expect(panel.getByText(/target_pe 24 multiple/)).toBeVisible()
+    await expect(panel.getByText(/forecast_eps 62 CNY/)).toBeVisible()
+
+    await panel.getByRole('button', { name: '基于此版本创建新版本' }).click()
+    await panel.getByLabel('版本变更理由').fill('验证多锚点与多假设完整往返')
+    await panel.getByRole('button', { name: '进入审阅' }).click()
+    await panel.getByRole('button', { name: '创建不可变论点版本' }).click()
+    await page.getByRole('dialog', { name: '创建不可变论点版本' }).getByRole('button', { name: '创建不可变论点版本' }).click()
+    await expect.poll(() => submitted).not.toBeNull()
+
+    expect(submitted?.anchors).toEqual(source.anchors)
+    expectBackendThesisSchemaAccepts('ThesisRevisionRequest', submitted!)
+    expectNoAuthorityRequests(telemetry)
+  })
+
+  test('CR-06 historical Thesis content revises the current predecessor', async ({ page }) => {
+    const telemetry = await installPhase5Fixture(page, { thesisState: 'populated' })
+    const current = thesisVersion(2)
+    const historical = thesisVersion(1, {
+      core_judgment: '历史版本模板判断，提交时仍必须衔接当前版本。',
+      rationale: '复制历史内容不等于把历史版本作为并发前驱。',
+    })
+    let submittedPath = ''
+    let submitted: Record<string, unknown> | null = null
+    await page.route(`**/api/theses/instruments/${STOCK.symbol}/versions**`, route => {
+      if (route.request().method() !== 'GET') return route.fallback()
+      return json(route, {
+        items: [current, historical],
+        current_version_id: current.id,
+        offset: 0,
+        limit: 25,
+        total: 2,
+        has_more: false,
+      })
+    })
+    await page.route('**/api/theses/versions/**', route => {
+      const request = route.request()
+      const id = new URL(request.url()).pathname.split('/').at(-1)
+      if (request.method() === 'POST') {
+        submittedPath = new URL(request.url()).pathname
+        submitted = request.postDataJSON() as Record<string, unknown>
+        return json(route, {
+          version: thesisVersion(3, {
+            predecessor_id: current.id,
+            core_judgment: historical.core_judgment,
+            rationale: historical.rationale,
+          }),
+        }, 201)
+      }
+      return json(route, {
+        version: id === current.id ? current : id === historical.id ? historical : thesisVersion(3),
+      })
+    })
+
+    await selectStock(page)
+    await page.goto('/stock-analysis')
+    const panel = await openAnalysisTab(page, THESIS_TAB)
+    const historicalRow = panel.getByRole('row', { name: /^版本 1 / })
+    await historicalRow.getByRole('button', { name: '查看完整版本' }).click()
+    await expect(panel.getByRole('heading', { name: '论点版本 1' })).toBeVisible()
+    await panel.getByRole('button', { name: '基于此版本创建新版本' }).click()
+    await panel.getByLabel('版本变更理由').fill('从历史内容模板创建下一版')
+    await panel.getByRole('button', { name: '进入审阅' }).click()
+    await panel.getByRole('button', { name: '创建不可变论点版本' }).click()
+    await page.getByRole('dialog', { name: '创建不可变论点版本' }).getByRole('button', { name: '创建不可变论点版本' }).click()
+    await expect.poll(() => submitted).not.toBeNull()
+
+    expect(submittedPath).toBe(`/api/theses/versions/${current.id}`)
+    expect(submitted?.expected_predecessor_id).toBe(current.id)
+    expect(submitted?.core_judgment).toBe(historical.core_judgment)
+    expect(submitted?.rationale).toBe(historical.rationale)
+    expectNoAuthorityRequests(telemetry)
   })
 
   test('paged Thesis history and strict condition review', async ({ page }) => {

@@ -4,6 +4,9 @@ from __future__ import annotations
 import json
 import io
 import sqlite3
+import subprocess
+import sys
+import textwrap
 from dataclasses import dataclass, field
 from hashlib import sha256
 from pathlib import Path
@@ -41,9 +44,11 @@ class Probe:
 class FakeLauncher:
     def __init__(self, probe: Probe | None = None) -> None:
         self.probe = probe or Probe()
+        self.probed: list[dict[str, Path]] = []
         self.spawned: list[dict[str, object]] = []
 
     def capability_probe(self, *, governed_input: Path, workdir: Path) -> Probe:
+        self.probed.append({"governed_input": governed_input, "workdir": workdir})
         return self.probe
 
     def spawn(self, **kwargs: object) -> None:
@@ -110,6 +115,7 @@ def _assert_safe_rejection(result: dict[str, object], launcher: FakeLauncher, *s
         "source_hash_mismatch",
         "dynamic_execution_forbidden",
         "dynamic_import_forbidden",
+        "module_reflection_forbidden",
         "attribute_chain_forbidden",
         "undeclared_import",
         "file_access_forbidden",
@@ -119,6 +125,8 @@ def _assert_safe_rejection(result: dict[str, object], launcher: FakeLauncher, *s
         "timeout_exceeded",
         "memory_limit_exceeded",
         "output_limit_exceeded",
+        "strategy_program_forbidden",
+        "governed_panel_unavailable",
     }
     assert launcher.spawned == []
     assert all(spy.calls == [] for spy in spies)
@@ -133,11 +141,58 @@ def _assert_safe_rejection(result: dict[str, object], launcher: FakeLauncher, *s
         (_submission(source="print('different')\n", source_sha256="0" * 64), "source_hash_mismatch"),
         (_submission("eval('1 + 1')\n"), "dynamic_execution_forbidden"),
         (_submission("__import__('os')\n"), "dynamic_import_forbidden"),
+        (
+            _submission(
+                textwrap.dedent(
+                    """
+                    import json
+
+                    builtins = getattr(json, "__builtins__")
+                    importer = builtins["__import__"]
+                    module = importer("subprocess")
+                    constructor = getattr(module, "Popen")
+                    constructor(
+                        ["/usr/bin/python3", "-c", "import os,time; os.setsid(); time.sleep(60)"]
+                    )
+                    """
+                ),
+                declared_imports=["json"],
+            ),
+            "module_reflection_forbidden",
+        ),
+        (
+            _submission(
+                "import json\nbuiltins = json.__builtins__\n",
+                declared_imports=["json"],
+            ),
+            "module_reflection_forbidden",
+        ),
+        (
+            _submission(
+                "import json\nmodule_namespace = vars(json)\n",
+                declared_imports=["json"],
+            ),
+            "module_reflection_forbidden",
+        ),
         (_submission("import os\nos.system('id')\n"), "attribute_chain_forbidden"),
         (_submission("import json\ndef run(panel): return json.dumps({})\n"), "undeclared_import"),
         (_submission("def run(panel):\n    return open('/etc/passwd').read()\n"), "file_access_forbidden"),
         (_submission("import socket\ndef run(panel): return socket.create_connection(('example.test', 80))\n", declared_imports=["socket"]), "network_access_forbidden"),
         (_submission("import subprocess\ndef run(panel): return subprocess.run(['id'])\n", declared_imports=["subprocess"]), "child_process_forbidden"),
+        (
+            _submission(
+                "import subprocess\ndef run(panel):\n    return getattr(subprocess, 'Popen')(['sleep', '60'], start_new_session=True)\n",
+                declared_imports=["subprocess"],
+            ),
+            "module_reflection_forbidden",
+        ),
+        (
+            _submission(
+                "import socket\ndef run(panel):\n    return socket\n",
+                declared_imports=["socket"],
+            ),
+            "undeclared_import",
+        ),
     ],
 )
 def test_hostile_submission_is_rejected_before_any_host_execution(tmp_path, payload, expected_reason):
@@ -147,6 +202,295 @@ def test_hostile_submission_is_rejected_before_any_host_execution(tmp_path, payl
 
     _assert_safe_rejection(result, launcher, feedback, promotion, broker, provider, strategy_engine)
     assert result["reason"] == expected_reason
+
+
+def test_r43_cr01_positive_interpreter_hold_program_runs_without_python_authority(tmp_path):
+    from app.advanced.sandbox import CustomStrategySandboxService
+    from app.advanced.strategy_policy import CompiledStrategyProgram
+
+    launcher = TerminalLauncher()
+    service = CustomStrategySandboxService(
+        audit_path=tmp_path / "operational.db",
+        governed_input=tmp_path / "governed-panel",
+        launcher=launcher,
+    )
+
+    result = service.submit(_submission())
+
+    assert result["status"] == "completed"
+    assert len(launcher.spawned) == 1
+    handoff = launcher.spawned[0]
+    assert set(handoff) == {
+        "program",
+        "panel",
+        "governed_input",
+        "workdir",
+        "timeout_seconds",
+        "memory_limit_mb",
+        "environment",
+        "start_new_session",
+    }
+    assert handoff["panel"] == {}
+    program = handoff["program"]
+    assert isinstance(program, CompiledStrategyProgram)
+    assert program.schema_version == "strategy-program-v1"
+    assert program.interpret({}) == {"signal": "hold"}
+    assert SOURCE not in repr(handoff)
+    assert all(
+        not callable(value) and not isinstance(value, type(sys))
+        for key, value in handoff.items()
+        if key not in {"program"}
+    )
+
+
+def test_strategy_panel_lookup_is_structurally_admitted_and_uses_the_governed_panel_once(
+    tmp_path,
+):
+    from app.advanced.sandbox import CustomStrategySandboxService
+    from app.advanced.strategy_policy import StrategyProgramPolicy
+
+    source = "def run(panel):\n    return {'signal': panel['decision']}\n"
+    program = StrategyProgramPolicy().compile(source)
+
+    assert program.interpret({"decision": "buy"}) == {"signal": "buy"}
+
+    class ChildInterpreterLauncher(TerminalLauncher):
+        child_result: dict[str, object] | None = None
+
+        def spawn(self, **kwargs: object) -> dict[str, object]:
+            from app.advanced.sandbox import LinuxIsolationLauncher
+
+            self.spawned.append(kwargs)
+            script = LinuxIsolationLauncher._interpreter_script(
+                program=kwargs["program"],
+                panel=kwargs["panel"],
+            )
+            completed = subprocess.run(
+                [sys.executable, "-c", script],
+                capture_output=True,
+                check=False,
+                text=True,
+                timeout=3,
+            )
+            assert completed.returncode == 0
+            assert completed.stderr == ""
+            self.child_result = json.loads(completed.stdout)
+            return {
+                "status": "completed",
+                "terminal_reason": None,
+                "proof_fingerprint": "safe-proof",
+                "resources": {
+                    "wall_clock_seconds": 5,
+                    "memory_limit_mb": 128,
+                },
+            }
+
+    resolved: list[dict[str, object]] = []
+
+    def governed_panel_resolver(**context: object) -> dict[str, object]:
+        resolved.append(context)
+        assert context["parent_asset_id"] == "registered-research-asset-v1"
+        assert context["governed_input"] == tmp_path / "governed-panel"
+        return {"decision": "buy"}
+
+    launcher = ChildInterpreterLauncher()
+    service = CustomStrategySandboxService(
+        audit_path=tmp_path / "operational.db",
+        governed_input=tmp_path / "governed-panel",
+        launcher=launcher,
+        governed_panel_resolver=governed_panel_resolver,
+    )
+    result = service.submit(_submission(source))
+
+    assert result["status"] == "completed"
+    assert len(launcher.spawned) == 1
+    assert launcher.spawned[0]["program"] == program
+    assert launcher.spawned[0]["panel"] == {"decision": "buy"}
+    assert launcher.child_result == {"signal": "buy"}
+    assert len(resolved) == 1
+
+
+def test_panel_lookup_without_authoritative_resolver_fails_before_probe(tmp_path):
+    from app.advanced.sandbox import CustomStrategySandboxService
+
+    launcher = TerminalLauncher()
+    source = "def run(panel):\n    return {'signal': panel['decision']}\n"
+    service = CustomStrategySandboxService(
+        audit_path=tmp_path / "operational.db",
+        governed_input=tmp_path / "governed-panel",
+        launcher=launcher,
+    )
+
+    result = service.submit(_submission(source))
+
+    assert result["status"] == "rejected"
+    assert result["reason"] == "governed_panel_unavailable"
+    assert launcher.probed == []
+    assert launcher.spawned == []
+
+
+def test_compile_submit_and_launcher_handoff_never_interpret_in_the_parent(
+    tmp_path, monkeypatch
+):
+    from app.advanced import strategy_policy
+    from app.advanced.sandbox import CustomStrategySandboxService
+
+    def forbidden_parent_interpret(*_args, **_kwargs):
+        raise AssertionError("strategy evaluation escaped the resource-limited child")
+
+    monkeypatch.setattr(strategy_policy, "_interpret", forbidden_parent_interpret)
+    source = "def run(panel):\n    return {'signal': panel['decision']}\n"
+    program = strategy_policy.StrategyProgramPolicy().compile(source)
+
+    launcher = TerminalLauncher()
+    service = CustomStrategySandboxService(
+        audit_path=tmp_path / "operational.db",
+        governed_input=tmp_path / "governed-panel",
+        launcher=launcher,
+        governed_panel_resolver=lambda **_context: {"decision": "buy"},
+    )
+    result = service.submit(_submission(source))
+
+    assert result["status"] == "completed"
+    assert launcher.spawned[0]["program"] == program
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "def run(panel):\n    return {'signal': " + ("9" * 100) + "}\n",
+        "def run(panel):\n    return {'signal': 'x' * 100_000}\n",
+        (
+            "def run(panel):\n    return {"
+            + ", ".join(
+                f"'value_{index}': 1 + 1 + 1 + 1" for index in range(64)
+            )
+            + "}\n"
+        ),
+    ],
+)
+def test_strategy_ir_rejects_integer_string_and_instruction_budget_overflow(source):
+    from app.advanced.strategy_policy import (
+        StrategyProgramPolicy,
+        StrategyProgramViolation,
+    )
+
+    with pytest.raises(StrategyProgramViolation):
+        StrategyProgramPolicy().compile(source)
+
+
+def test_strategy_runtime_bounds_panel_result_and_translates_memory_error(monkeypatch):
+    from app.advanced import strategy_policy
+
+    program = strategy_policy.StrategyProgramPolicy().compile(
+        "def run(panel):\n    return {'signal': panel['signal']}\n"
+    )
+    with pytest.raises(strategy_policy.StrategyProgramViolation):
+        program.interpret({"signal": "x" * 5_000})
+    with pytest.raises(strategy_policy.StrategyProgramViolation):
+        program.interpret({"signal": 1 << 300})
+
+    monkeypatch.setattr(
+        strategy_policy,
+        "_interpret",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(MemoryError()),
+    )
+    with pytest.raises(strategy_policy.StrategyProgramViolation):
+        program.interpret({"signal": "hold"})
+
+
+def test_resource_limited_child_rejects_amplifying_string_multiplication():
+    from app.advanced.sandbox import LinuxIsolationLauncher
+    from app.advanced.strategy_policy import StrategyProgramPolicy
+
+    program = StrategyProgramPolicy().compile(
+        "def run(panel):\n    return {'signal': panel['text'] * panel['count']}\n"
+    )
+    script = LinuxIsolationLauncher._interpreter_script(
+        program=program,
+        panel={"text": "x" * 4_096, "count": 1_000_000},
+    )
+
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        check=False,
+        timeout=3,
+    )
+
+    assert completed.returncode == 126
+    assert completed.stdout == b""
+    assert completed.stderr == b""
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "def run(panel):\n    alias = abs\n    return {'signal': alias(-1)}\n",
+        "def run(panel=globals()):\n    return {'signal': 'hold'}\n",
+        "def run(panel):\n    return (lambda: {'signal': 'hold'})()\n",
+        "def outer():\n    def run(panel):\n        return {'signal': 'hold'}\n    return run\n",
+        "def run(panel):\n    box = [getattr]\n    return box[0](panel, '__class__')\n",
+        "def run(panel):\n    left, right = (globals, locals)\n    return {'signal': 'hold'}\n",
+        "import json\ndef run(panel):\n    return {'signal': json.dumps(panel)}\n",
+        "def run(panel):\n    return getattr(panel, '__' + 'class__')\n",
+        "def run(panel):\n    return __builtins__['__import__']('subprocess')\n",
+        "def run(panel):\n    return globals()\n",
+        "class Run:\n    pass\n",
+        "def run(panel):\n    return panel.__class__.__mro__\n",
+    ],
+)
+def test_r43_cr01_alias_capture_storage_matrix_rejected_before_spawn(tmp_path, source):
+    from app.advanced.sandbox import CustomStrategySandboxService
+
+    launcher = TerminalLauncher()
+    spies = [Spy() for _ in range(5)]
+    service = CustomStrategySandboxService(
+        audit_path=tmp_path / "operational.db",
+        governed_input=tmp_path / "governed-panel",
+        launcher=launcher,
+        feedback_recorder=spies[0],
+        promotion_service=spies[1],
+        broker=spies[2],
+        provider=spies[3],
+        strategy_engine=spies[4],
+    )
+
+    result = service.submit(_submission(source))
+
+    assert result["status"] == "rejected"
+    assert result["reason"] in {
+        "strategy_program_forbidden",
+        "module_reflection_forbidden",
+        "undeclared_import",
+    }
+    assert launcher.probed == []
+    assert launcher.spawned == []
+    assert all(spy.calls == [] for spy in spies)
+
+
+def test_r43_cr01_linux_limits_remain_defense_in_depth(monkeypatch):
+    from app.advanced import sandbox
+    from app.advanced.strategy_policy import StrategyProgramPolicy
+
+    calls: list[tuple[object, tuple[int, int]]] = []
+    fake_resource = SimpleNamespace(
+        RLIMIT_CPU="cpu",
+        RLIMIT_AS="address-space",
+        RLIMIT_FSIZE="file-size",
+        setrlimit=lambda limit, values: calls.append((limit, values)),
+    )
+    monkeypatch.setattr(sandbox, "resource", fake_resource)
+
+    program = StrategyProgramPolicy().compile(SOURCE)
+    sandbox.LinuxIsolationLauncher._limits(5, 128)()
+
+    assert program.interpret({}) == {"signal": "hold"}
+    assert calls == [
+        ("cpu", (5, 5)),
+        ("address-space", (128 * 1024 * 1024, 128 * 1024 * 1024)),
+        ("file-size", (16 * 1024, 16 * 1024)),
+    ]
 
 
 @pytest.mark.parametrize(
@@ -198,13 +542,202 @@ def test_linux_probe_rejects_legacy_boolean_claims_without_observable_evidence(t
     assert proof == {field: False for field in _PROBE_FIELDS}
 
 
+def test_resource_unavailable_import_and_probe_fail_closed(tmp_path):
+    """A missing POSIX resource module is import-safe and can never reach child creation."""
+    backend_root = Path(__file__).resolve().parents[2]
+    script = textwrap.dedent(
+        """
+        from __future__ import annotations
+
+        import importlib.abc
+        import json
+        import sys
+        import tempfile
+        import time
+        from pathlib import Path
+
+        class BlockResource(importlib.abc.MetaPathFinder):
+            def find_spec(self, fullname, path, target=None):
+                del path, target
+                if fullname == "resource":
+                    raise ImportError("resource intentionally unavailable")
+                return None
+
+        sys.meta_path.insert(0, BlockResource())
+
+        from app.advanced import sandbox
+
+        def unexpected_platform_probe(_name):
+            raise AssertionError("resource absence must deny before platform binaries are inspected")
+
+        sandbox.shutil.which = unexpected_platform_probe
+        launcher = sandbox.LinuxIsolationLauncher()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            proof = launcher.capability_probe(
+                governed_input=root / "governed-input",
+                workdir=root,
+            )
+            try:
+                launcher._limits(3, 128)
+            except OSError:
+                limits_denied = True
+            else:
+                limits_denied = False
+
+            launcher._proof = {
+                **{field: True for field in sandbox._PROBE_FIELDS},
+                "proof_fingerprint": "test-proof",
+                "probed_at": time.monotonic(),
+            }
+            popen_calls = []
+            sandbox.subprocess.Popen = lambda *args, **kwargs: popen_calls.append((args, kwargs))
+            try:
+                launcher.spawn(
+                    source_path=root / "strategy.py",
+                    governed_input=root / "governed-input",
+                    workdir=root,
+                    timeout_seconds=3,
+                    memory_limit_mb=128,
+                )
+            except OSError:
+                spawn_denied = True
+            else:
+                spawn_denied = False
+
+        print(json.dumps({
+            "resource_unavailable": sandbox.resource is None,
+            "proof": proof,
+            "limits_denied": limits_denied,
+            "spawn_denied": spawn_denied,
+            "popen_calls": len(popen_calls),
+        }, sort_keys=True))
+        """
+    )
+
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=backend_root,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    payload = json.loads(completed.stdout)
+    from app.advanced.sandbox import _PROBE_FIELDS
+
+    assert payload == {
+        "resource_unavailable": True,
+        "proof": {field: False for field in _PROBE_FIELDS},
+        "limits_denied": True,
+        "spawn_denied": True,
+        "popen_calls": 0,
+    }
+
+
+def test_linux_limit_callback_sets_cpu_address_space_and_file_size(monkeypatch):
+    """The portable guard must not weaken the exact Linux resource-limit contract."""
+    from app.advanced import sandbox
+
+    calls: list[tuple[object, tuple[int, int]]] = []
+    fake_resource = SimpleNamespace(
+        RLIMIT_CPU="cpu",
+        RLIMIT_AS="address-space",
+        RLIMIT_FSIZE="file-size",
+        setrlimit=lambda limit, values: calls.append((limit, values)),
+    )
+    monkeypatch.setattr(sandbox, "resource", fake_resource)
+
+    sandbox.LinuxIsolationLauncher._limits(7, 256)()
+
+    assert calls == [
+        ("cpu", (7, 7)),
+        ("address-space", (256 * 1024 * 1024, 256 * 1024 * 1024)),
+        ("file-size", (16 * 1024, 16 * 1024)),
+    ]
+
+
+def test_linux_timeout_reap_has_a_final_deadline_when_descendant_holds_pipes(tmp_path, monkeypatch):
+    """A detached descendant retaining inherited pipes cannot block request cleanup forever."""
+    from app.advanced import sandbox
+
+    class Pipe:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    class Process:
+        pid = 4242
+        returncode = None
+
+        def __init__(self) -> None:
+            self.stdout = Pipe()
+            self.stderr = Pipe()
+            self.communicate_timeouts: list[float] = []
+            self.wait_timeouts: list[float] = []
+            self.kill_calls = 0
+
+        def communicate(self, *, timeout):
+            self.communicate_timeouts.append(timeout)
+            raise subprocess.TimeoutExpired("sandbox", timeout)
+
+        def wait(self, *, timeout):
+            self.wait_timeouts.append(timeout)
+            return -9
+
+        def kill(self) -> None:
+            self.kill_calls += 1
+
+    process = Process()
+    killed_groups: list[tuple[int, object]] = []
+    launcher = sandbox.LinuxIsolationLauncher()
+    launcher._proof = {
+        **{field: True for field in sandbox._PROBE_FIELDS},
+        "proof_fingerprint": "test-proof",
+        "probed_at": sandbox.time.monotonic(),
+    }
+    monkeypatch.setattr(
+        sandbox,
+        "resource",
+        SimpleNamespace(
+            RLIMIT_CPU=1,
+            RLIMIT_AS=2,
+            RLIMIT_FSIZE=3,
+            setrlimit=lambda *_args: None,
+        ),
+    )
+    monkeypatch.setattr(sandbox.subprocess, "Popen", lambda *_args, **_kwargs: process)
+    monkeypatch.setattr(sandbox.os, "killpg", lambda pid, sig: killed_groups.append((pid, sig)), raising=False)
+    monkeypatch.setattr(sandbox.signal, "SIGKILL", 9, raising=False)
+    from app.advanced.strategy_policy import StrategyProgramPolicy
+
+    outcome = launcher.spawn(
+        program=StrategyProgramPolicy().compile(SOURCE),
+        panel={},
+        governed_input=tmp_path / "governed-input",
+        workdir=tmp_path,
+        timeout_seconds=3,
+        memory_limit_mb=128,
+    )
+
+    assert outcome["status"] == "failed"
+    assert outcome["terminal_reason"] == "timeout_exceeded"
+    assert process.communicate_timeouts == [3, launcher._REAP_TIMEOUT_SECONDS]
+    assert process.wait_timeouts == [launcher._REAP_TIMEOUT_SECONDS]
+    assert process.stdout.closed is process.stderr.closed is True
+    assert killed_groups == [(process.pid, 9)]
+
+
 
 class _BootstrapExecveReached(BaseException):
     """Sentinel proving the bootstrap reached execve without running a child."""
 
 
 def _bootstrap_state(monkeypatch, *, failed_mount: int | None = None, mountinfo: str | None = None) -> dict[str, object]:
-    from app.advanced.sandbox import LinuxIsolationLauncher
+    from app.advanced import sandbox
 
     root = "/sandbox/root"
     mount_calls: list[tuple[str, ...]] = []
@@ -234,12 +767,14 @@ def _bootstrap_state(monkeypatch, *, failed_mount: int | None = None, mountinfo:
     monkeypatch.setattr("app.advanced.sandbox.os.close", lambda _descriptor: None)
     monkeypatch.setattr("app.advanced.sandbox.os.path.exists", lambda _path: True)
     monkeypatch.setattr("app.advanced.sandbox.os.path.ismount", lambda path: path == root)
-    monkeypatch.setattr("app.advanced.sandbox.os.chroot", lambda path: chroot_calls.append(path))
+    monkeypatch.setattr(
+        sandbox.os, "chroot", lambda path: chroot_calls.append(path), raising=False
+    )
     monkeypatch.setattr("app.advanced.sandbox.os.chdir", lambda _path: None)
-    monkeypatch.setattr("app.advanced.sandbox.os.execve", fake_execve)
+    monkeypatch.setattr(sandbox.os, "execve", fake_execve, raising=False)
 
     return {
-        "script": LinuxIsolationLauncher._bootstrap_script(),
+        "script": sandbox.LinuxIsolationLauncher._bootstrap_script(),
         "namespace": {
             "__name__": "__main__",
             "open": lambda path, **_kwargs: io.StringIO(mountinfo) if path == "/proc/self/mountinfo" else None,

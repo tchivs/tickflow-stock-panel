@@ -263,6 +263,34 @@ def test_input_artifact_is_atomic_immutable_and_checksum_verified(tmp_path):
     assert freezer.load(frozen.descriptor).height > 0
 
 
+def test_freezer_failure_after_artifact_promotion_leaves_no_namespace(
+    tmp_path, monkeypatch
+):
+    from app.forecast import input as forecast_input
+
+    freezer, _repo, _calendar = _services(tmp_path)
+    original_sha256 = forecast_input.sha256
+    calls = 0
+
+    def fail_after_promotion(payload):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("fingerprint construction failed")
+        return original_sha256(payload)
+
+    monkeypatch.setattr(forecast_input, "sha256", fail_after_promotion)
+
+    with pytest.raises(RuntimeError, match="fingerprint construction failed"):
+        freezer.freeze(
+            request=_request(),
+            principal="researcher-1",
+            as_of_session_id="CNA-20250430",
+        )
+
+    assert list((tmp_path / "forecast-inputs").iterdir()) == []
+
+
 def test_input_artifact_descriptor_is_root_contained_and_public_path_free(tmp_path):
     freezer, _repo, _calendar = _services(tmp_path)
     frozen = freezer.freeze(request=_request(), principal="researcher-1", as_of_session_id="CNA-20250430")
@@ -270,6 +298,36 @@ def test_input_artifact_descriptor_is_root_contained_and_public_path_free(tmp_pa
     serialized = json.dumps(public)
     assert str(tmp_path) not in serialized
     assert set(public) == {"artifact_id", "schema_version", "byte_size", "checksum_sha256"}
+
+
+def test_verified_input_projects_bounded_public_close_history(tmp_path):
+    freezer, _repo, _calendar = _services(tmp_path)
+    frozen = freezer.freeze(
+        request=_request(),
+        principal="researcher-1",
+        as_of_session_id="CNA-20250430",
+    )
+
+    history = freezer.public_close_history(frozen.descriptor.public())
+
+    assert len(history) == frozen.lookback
+    assert set(history[-1]) == {"session_id", "close"}
+    assert history[-1]["session_id"] == frozen.as_of_session_id
+    assert history[-1]["close"] == freezer.load(frozen.descriptor)["close"][-1]
+    assert all(isinstance(item["close"], float) for item in history)
+
+
+def test_public_close_history_rejects_unverified_descriptor_identity(tmp_path):
+    freezer, _repo, _calendar = _services(tmp_path)
+    frozen = freezer.freeze(
+        request=_request(),
+        principal="researcher-1",
+        as_of_session_id="CNA-20250430",
+    )
+    forged = {**frozen.descriptor.public(), "checksum_sha256": "0" * 64}
+
+    with pytest.raises(ValueError, match=r"descriptor|checksum"):
+        freezer.public_close_history(forged)
 
 
 def test_input_frame_bytes_and_artifact_checksum_bind_the_fingerprint(tmp_path):

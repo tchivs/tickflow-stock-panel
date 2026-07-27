@@ -34,9 +34,10 @@ coverage:
     description: "Pinned local config/weight/Torch identities with concurrency-safe provisioning."
     requirement: FORE-01
     verification:
-      - kind: automated
+      - kind: integration
         ref: "tests/test_kronos_provisioner.py + tests/test_phase5_optional_dependencies.py + uv lock --check"
         status: pass
+    human_judgment: false
 status: complete
 completed: 2026-07-24
 ---

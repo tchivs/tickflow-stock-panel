@@ -344,6 +344,7 @@ class ForecastRunner:
         artifact_verify: Callable[..., object],
         action_collaborators: Mapping[str, Callable[..., object]] | None = None,
         final_input_revalidate: Callable[..., object] | None = None,
+        stop_token: object | None = None,
     ) -> None:
         self.repository = repository
         self.limits = limits
@@ -357,6 +358,11 @@ class ForecastRunner:
         self.action_collaborators = dict(action_collaborators or {})
         # Parent authority: mandatory checksum/fingerprint check immediately before commit.
         self.final_input_revalidate = final_input_revalidate
+        self.stop_token = stop_token
+
+    def _stop_requested(self) -> bool:
+        is_set = getattr(self.stop_token, "is_set", None)
+        return callable(is_set) and is_set() is True
 
     def run_job(self, job_id: str) -> dict[str, object]:
         job = self.repository.get_job(job_id)
@@ -367,6 +373,21 @@ class ForecastRunner:
             return self._result(job, "completed", record=record)
         if job["status"] != "queued":
             return self._result(job, str(job["status"]))
+        if self._stop_requested():
+            terminal = self.repository.terminalize(
+                job_id=job_id,
+                expected_status="queued",
+                expected_version=int(job["transition_version"]),
+                lease_owner=None,
+                status="interrupted",
+                reason="dispatcher_cancelled",
+            )
+            return self._result(
+                terminal,
+                "interrupted",
+                reason="dispatcher_cancelled",
+                process_group_reaped=True,
+            )
 
         for boundary in (self.reauthorize, self.catalog_revalidate, self.input_revalidate):
             try:
@@ -407,6 +428,20 @@ class ForecastRunner:
             except ValueError:
                 return self._result(job, "interrupted", reason="job_lease_unavailable")
 
+            if self._stop_requested():
+                terminal = self._terminalize_current(
+                    running,
+                    owner=owner,
+                    status="interrupted",
+                    reason="dispatcher_cancelled",
+                )
+                return self._result(
+                    terminal,
+                    "interrupted",
+                    reason="dispatcher_cancelled",
+                    process_group_reaped=True,
+                )
+
             if resource is None or os.name != "posix" or "spawn" not in multiprocessing.get_all_start_methods():
                 terminal = self._terminalize_current(
                     running,
@@ -414,7 +449,11 @@ class ForecastRunner:
                     status="resource_limited",
                     reason="spawn_limits_unavailable",
                 )
-                return self._result(terminal, "resource_terminated")
+                return self._result(
+                    terminal,
+                    "resource_terminated",
+                    reason="spawn_limits_unavailable",
+                )
 
             context = multiprocessing.get_context("spawn")
             input_pipe, output_pipe = context.Pipe(duplex=False)
@@ -444,6 +483,20 @@ class ForecastRunner:
             startup_deadline = time.monotonic() + min(5.0, self.limits.wall_clock_seconds)
             ready = False
             while time.monotonic() < startup_deadline:
+                if self._stop_requested():
+                    reaped = self._reap(process, process_group_id)
+                    terminal = self._terminalize_current(
+                        running,
+                        owner=owner,
+                        status="interrupted",
+                        reason="dispatcher_cancelled",
+                    )
+                    return self._result(
+                        terminal,
+                        "interrupted",
+                        reason="dispatcher_cancelled",
+                        process_group_reaped=reaped,
+                    )
                 remaining = startup_deadline - time.monotonic()
                 if input_pipe.poll(min(remaining, 0.1)):
                     startup_message = _receive_frame(input_pipe, self.limits.output_bytes)
@@ -504,6 +557,20 @@ class ForecastRunner:
             next_heartbeat = time.monotonic() + min(0.5, self.limits.wall_clock_seconds / 3)
             message: object | None = None
             while message is None:
+                if self._stop_requested():
+                    reaped = self._reap(process, process_group_id)
+                    terminal = self._terminalize_current(
+                        running,
+                        owner=owner,
+                        status="interrupted",
+                        reason="dispatcher_cancelled",
+                    )
+                    return self._result(
+                        terminal,
+                        "interrupted",
+                        reason="dispatcher_cancelled",
+                        process_group_reaped=reaped,
+                    )
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     reaped = self._reap(process, process_group_id)
@@ -640,6 +707,20 @@ class ForecastRunner:
                 )
                 return self._result(terminal, "artifact_failed", reason="artifact_verification_failed")
 
+            if self._stop_requested():
+                terminal = self._terminalize_current(
+                    running,
+                    owner=owner,
+                    status="interrupted",
+                    reason="dispatcher_cancelled_before_commit",
+                )
+                return self._result(
+                    terminal,
+                    "interrupted",
+                    reason="dispatcher_cancelled_before_commit",
+                    process_group_reaped=reaped,
+                )
+
             # CR-05: revalidate the same server-bound input identity immediately before
             # the sole commit. Failure terminalizes with zero commit and zero actions.
             if self.final_input_revalidate is not None:
@@ -659,6 +740,20 @@ class ForecastRunner:
                         "validation_failed",
                         reason="final_input_revalidation_failed",
                     )
+
+            if self._stop_requested():
+                terminal = self._terminalize_current(
+                    running,
+                    owner=owner,
+                    status="interrupted",
+                    reason="dispatcher_cancelled_before_commit",
+                )
+                return self._result(
+                    terminal,
+                    "interrupted",
+                    reason="dispatcher_cancelled_before_commit",
+                    process_group_reaped=reaped,
+                )
 
             try:
                 record = self.repository.commit_completed_forecast(
