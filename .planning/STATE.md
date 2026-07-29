@@ -6,7 +6,7 @@ status: planning
 last_updated: "2026-07-29T16:25:56.777Z"
 last_activity: 2026-07-29
 progress:
-  total_phases: 0
+  total_phases: 4
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -20,14 +20,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-10)
 
 **Core value:** An investor can turn reliable market data and their own holdings into an auditable, actionable research and monitoring workflow without operating multiple disconnected tools.
-**Current focus:** Phase 05 — optional-enhancements
+**Current focus:** v1.1 Operational Hardening — Phase 6 Release Reproducibility
 
 ## Current Position
 
-Phase: Not started (defining requirements)
+Phase: 6 (Release Reproducibility) — not started (roadmap defined)
 Plan: —
-Status: Defining requirements
-Last activity: 2026-07-29 — Milestone v1.1 started
+Status: Roadmap approved — ready for /gsd-plan-phase 6
+Last activity: 2026-07-29 — Milestone v1.1 roadmap created (4 phases)
 
 ## Performance Metrics
 

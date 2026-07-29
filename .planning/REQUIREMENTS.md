@@ -41,15 +41,15 @@ None deferred. v1.1 scope is intentionally tight; any enhancement beyond hardeni
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| REL-01 | — | Pending |
-| VAL-01 | — | Pending |
-| SUP-01 | — | Pending |
-| VIS-01 | — | Pending |
+| REL-01 | Phase 6 | Pending |
+| VAL-01 | Phase 7 | Pending |
+| SUP-01 | Phase 8 | Pending |
+| VIS-01 | Phase 9 | Pending |
 
 **Coverage:**
 
 - v1.1 requirements: 4 total
-- Mapped to phases: 0 (filled by roadmap)
+- Mapped to phases: 4
 - Unmapped: 0
 
 ---
