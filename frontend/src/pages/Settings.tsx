@@ -55,17 +55,17 @@ export function Settings() {
         subtitle="管理账户、数据刷新策略和高级功能配置。"
       />
 
-      <div className="px-8 py-6">
-        <div className="flex gap-6 items-stretch">
-          {/* ===== 竖向 Tab 侧栏（内容垂直居中） ===== */}
-          <nav className="w-36 shrink-0">
-            <div className="flex flex-col gap-0.5 justify-center min-h-[60vh] sticky top-6">
+      <div className="px-4 py-4 sm:px-6 sm:py-5 lg:px-8 lg:py-6">
+        <div className="flex flex-col gap-4 md:flex-row md:gap-6 md:items-stretch">
+          {/* ===== 设置分类：手机横向滚动，桌面竖向侧栏 ===== */}
+          <nav className="w-full min-w-0 md:w-36 md:shrink-0">
+            <div className="flex gap-1 overflow-x-auto pb-1 md:sticky md:top-6 md:min-h-[60vh] md:flex-col md:justify-center md:overflow-visible md:pb-0">
               {TABS.map(({ key, label, icon: Icon, badge }) => (
                 <button
                   key={key}
                   onClick={() => setSearchParams({ tab: key }, { replace: true })}
                   className={cn(
-                    'relative flex items-center gap-2 px-3 py-2 rounded-btn text-sm transition-colors duration-150 ease-smooth text-left',
+                    'relative flex min-h-11 shrink-0 items-center gap-2 rounded-btn px-3 py-2 text-left text-sm transition-colors duration-150 ease-smooth md:min-h-0',
                     activeTab.key === key
                       ? 'bg-accent/10 text-accent font-medium'
                       : 'text-secondary hover:text-foreground hover:bg-elevated/60',

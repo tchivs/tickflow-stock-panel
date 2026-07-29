@@ -7,7 +7,7 @@ services:
       dockerfile: Dockerfile
       args:
         BACKEND_EXTRAS: ${BACKEND_EXTRAS:-}
-    container_name: TickFlow_Stock_Panel
+    container_name: athenaquant
     ports:
       - "${PORT:-3018}:3018"
     env_file:

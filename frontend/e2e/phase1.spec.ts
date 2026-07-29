@@ -21,7 +21,7 @@ test.describe('Phase 1 isolated investor workflow', () => {
     await accountDialog.getByRole('button', { name: '保存账户' }).click()
     await expect(accountDialog).toBeHidden()
 
-    await page.getByRole('button', { name: '添加持仓' }).click()
+    await page.getByLabel('账户与持仓').getByRole('button', { name: '添加持仓' }).click()
     const holdingDialog = page.getByRole('dialog', { name: '添加持仓' })
     await holdingDialog.getByLabel('账户').selectOption({ label: '验收账户' })
     await holdingDialog.getByRole('combobox', { name: '标的搜索' }).fill(FIXTURE_SYMBOL)

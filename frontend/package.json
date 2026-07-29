@@ -1,7 +1,7 @@
 {
-  "name": "tickflow-stock-panel-frontend",
+  "name": "athenaquant-frontend",
   "private": true,
-  "version": "0.1.83",
+  "version": "1.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -39,5 +39,5 @@
     "typescript": "^5.5.4",
     "vite": "^5.4.3"
   },
-  "packageManager": "pnpm@9.10.0"
+  "packageManager": "pnpm@11.17.0"
 }

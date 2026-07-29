@@ -108,7 +108,7 @@ export function Onboarding() {
             className="shrink-0"
             style={{ color: BRAND, filter: `drop-shadow(0 0 8px ${BRAND}55)` }}
           />
-          <span className="text-sm font-semibold tracking-tight">TickFlow Stock Panel</span>
+          <span className="text-sm font-semibold tracking-tight">AthenaQuant</span>
         </div>
         {/* 步骤进度条 —— 胶囊式 */}
         <div className="flex items-center gap-1.5">
@@ -237,10 +237,10 @@ function WelcomeStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => voi
       </motion.div>
 
       <h1 className="mt-6 text-3xl font-bold text-foreground tracking-tight">
-        欢迎使用 TickFlow Stock Panel
+        欢迎使用 AthenaQuant
       </h1>
       <p className="mt-3 text-sm text-secondary leading-relaxed max-w-md mx-auto">
-        一个本地化的 A 股量化分析面板 —— 行情、选股、回测、监控、财务一体化。
+        一个本地化的 A 股量化研究平台，覆盖行情、组合、因子、策略、监控与研究工件。
         花一分钟配置,即可开始使用。
       </p>
 
@@ -321,15 +321,7 @@ function KeyStep({ onNext, onSkip, onBack }: { onNext: () => void; onSkip: () =>
         <h2 className="text-xl font-bold text-foreground">配置 TickFlow API Key</h2>
       </div>
       <p className="mt-2.5 text-sm text-secondary leading-relaxed">
-        本项目基于 TickFlow 这款稳定的数据源为基座进行开发,正在适配其他第三方数据源。
-        如果有任何建议或意见,欢迎发送邮件至{' '}
-        <a
-          href="mailto:415333856@qq.com"
-          className="text-accent hover:underline font-medium"
-        >
-          415333856@qq.com
-        </a>
-        。
+        TickFlow 是默认市场数据提供方；其他数据源可按数据集逐项接入与切换。
       </p>
 
       {/* 档位对比说明 —— None 档 vs Free 档 */}

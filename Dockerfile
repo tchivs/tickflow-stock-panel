@@ -8,7 +8,7 @@ ARG PYPI_FALLBACK=https://mirrors.aliyun.com/pypi/simple
 ARG BACKEND_EXTRAS=
 
 # === Stage 1: 前端构建 ===
-FROM node:20-alpine AS frontend-builder
+FROM node:22-alpine AS frontend-builder
 ARG USE_CN_MIRROR=1
 ARG NPM_REGISTRY=https://registry.npmmirror.com
 WORKDIR /build
@@ -16,10 +16,10 @@ WORKDIR /build
 # 因此国内网络下最稳的做法是直接用 npm 安装 pnpm(npm 会读取 .npmrc 镜像源),
 # 彻底绕开 corepack 再次联网下载 pnpm 的问题。
 RUN if [ "$USE_CN_MIRROR" = "1" ]; then npm config set registry "$NPM_REGISTRY"; fi && \
-    npm install -g pnpm@9
+    npm install -g pnpm@11.17.0
 # 让 pnpm 走镜像源安装依赖
 RUN if [ "$USE_CN_MIRROR" = "1" ]; then pnpm config set registry "$NPM_REGISTRY"; fi
-COPY frontend/package.json frontend/pnpm-lock.yaml* ./
+COPY frontend/package.json frontend/pnpm-lock.yaml frontend/pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile || pnpm install
 COPY frontend/ ./
 RUN pnpm build

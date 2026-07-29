@@ -409,7 +409,7 @@ AthenaQuant/
 - Purpose: PyInstaller spec + Inno Setup installer configuration for desktop distribution
 - Generated: No (source)
 - Committed: Yes
-- Key files: `tickflow.spec` (PyInstaller spec), `tickflow.iss` (Inno Setup script), icon files
+- Key files: `athenaquant.spec` (PyInstaller spec), `athenaquant.iss` (Inno Setup script), icon files
 
 **`frontend/dist/`:**
 - Purpose: Built static assets for production

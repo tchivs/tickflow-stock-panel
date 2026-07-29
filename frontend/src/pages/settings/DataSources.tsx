@@ -131,7 +131,7 @@ export function SettingsDataSourcesPanel() {
   return (
     <div className="space-y-5 max-w-5xl">
       {/* ===== 顶部: 当前数据源 + 数据源选择 (一个大卡片) ===== */}
-      <section className="rounded-card border border-border bg-surface p-5">
+      <section className="rounded-card border border-border bg-surface p-4 sm:p-5">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2.5">
             <Database className="h-4 w-4 text-secondary" />
@@ -146,7 +146,7 @@ export function SettingsDataSourcesPanel() {
           <button
             onClick={() => reload.mutate()}
             disabled={reload.isPending}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-btn text-xs text-muted hover:text-foreground hover:bg-elevated transition-colors disabled:opacity-50"
+            className="inline-flex min-h-11 items-center gap-1.5 rounded-btn px-2.5 py-1 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50 sm:min-h-0"
           >
             <RefreshCw className={`h-3 w-3 ${reload.isPending ? 'animate-spin' : ''}`} />
             重新加载
@@ -213,7 +213,7 @@ export function SettingsDataSourcesPanel() {
                       <button
                         onClick={(e) => { e.stopPropagation(); installMut.mutate(item.name) }}
                         disabled={installMut.isPending}
-                        className="shrink-0 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium bg-accent/10 text-accent hover:bg-accent/20 transition-colors disabled:opacity-50"
+                        className="inline-flex min-h-11 shrink-0 items-center gap-1 rounded bg-accent/10 px-2.5 text-xs font-medium text-accent transition-colors hover:bg-accent/20 disabled:opacity-50 sm:min-h-0 sm:px-1.5 sm:py-0.5 sm:text-[10px]"
                       >
                         <Zap className="h-2.5 w-2.5" /> 安装
                       </button>
@@ -228,7 +228,7 @@ export function SettingsDataSourcesPanel() {
                       <button
                         onClick={(e) => { e.stopPropagation(); switchProvider.mutate(item.name) }}
                         disabled={switchProvider.isPending}
-                        className="rounded px-1.5 py-0.5 text-[10px] font-medium bg-accent/10 text-accent hover:bg-accent/20 transition-colors disabled:opacity-50"
+                        className="min-h-11 rounded bg-accent/10 px-2.5 text-xs font-medium text-accent transition-colors hover:bg-accent/20 disabled:opacity-50 sm:min-h-0 sm:px-1.5 sm:py-0.5 sm:text-[10px]"
                       >
                         使用
                       </button>
@@ -238,7 +238,7 @@ export function SettingsDataSourcesPanel() {
                         <button
                           onClick={(e) => { e.stopPropagation(); uninstallMut.mutate(item.name) }}
                           disabled={uninstallMut.isPending}
-                          className="text-[10px] text-muted/50 hover:text-danger transition-colors disabled:opacity-40"
+                          className="min-h-11 px-2 text-xs text-muted/60 transition-colors hover:text-danger disabled:opacity-40 sm:min-h-0 sm:px-0 sm:text-[10px]"
                           title="卸载依赖"
                         >
                           卸载
@@ -249,7 +249,7 @@ export function SettingsDataSourcesPanel() {
                     <button
                       onClick={(e) => { e.stopPropagation(); switchProvider.mutate(item.name) }}
                       disabled={switchProvider.isPending}
-                      className="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium bg-accent/10 text-accent hover:bg-accent/20 transition-colors disabled:opacity-50"
+                      className="min-h-11 shrink-0 rounded bg-accent/10 px-2.5 text-xs font-medium text-accent transition-colors hover:bg-accent/20 disabled:opacity-50 sm:min-h-0 sm:px-1.5 sm:py-0.5 sm:text-[10px]"
                     >
                       使用
                     </button>
@@ -303,7 +303,7 @@ export function SettingsDataSourcesPanel() {
           </div>
         )}
 
-        <div className="mt-3 flex items-center gap-3 text-[10px] text-muted/50">
+        <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-muted/50">
           <span>单击编辑</span>
           <span className="text-muted/30">·</span>
           <span>点「使用」切换为当前数据源</span>

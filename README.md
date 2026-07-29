@@ -46,7 +46,7 @@ Installing a Forecast extra does not download or activate a model checkpoint. Pr
 
 ### Local Development
 
-Prerequisites: Python 3.11+, Node 20+, [uv](https://docs.astral.sh/uv/), and pnpm 9.
+Prerequisites: Python 3.11+, Node 20+, [uv](https://docs.astral.sh/uv/), and pnpm 11.
 
 ```bash
 cd backend
@@ -126,6 +126,10 @@ The repository also includes Compose, real-host, and final machine-report verifi
 
 - [Architecture](docs/ARCHITECTURE.md)
 - [Upstream synchronization notes](docs/UPSTREAM-SYNC.md)
+- [Deployment and operations](docs/deployment.md)
+- [Configuration reference](docs/configuration.md)
+- [Contributing](CONTRIBUTING.md)
+- [Security policy](SECURITY.md)
 - [Project scope and constraints](.planning/PROJECT.md)
 - [Phase roadmap](.planning/ROADMAP.md)
 

@@ -402,9 +402,10 @@ export function ForecastPanel({ instrument, title }: ForecastPanelProps) {
   const operationRef = useRef<ForecastOperation | null>(null)
 
   const capabilityQuery = useQuery({ queryKey: QK.phase5Capabilities, queryFn: phase5Api.capabilities, staleTime: 60_000 })
-  const catalogQuery = useQuery({ queryKey: QK.forecast.catalog, queryFn: phase5Api.forecastCatalog, placeholderData: keepPreviousData })
-  const recordsQuery = useQuery({ queryKey: QK.forecast.records(instrument, recordOffset, HISTORY_PAGE_SIZE), queryFn: () => phase5Api.forecastRecords(instrument, recordOffset, HISTORY_PAGE_SIZE), placeholderData: keepPreviousData })
-  const jobsQuery = useQuery({ queryKey: QK.forecast.jobs(instrument, jobOffset, HISTORY_PAGE_SIZE), queryFn: () => phase5Api.forecastJobs(instrument, jobOffset, HISTORY_PAGE_SIZE), placeholderData: keepPreviousData })
+  const forecastAvailable = capabilityQuery.data?.modules?.forecast.available === true
+  const catalogQuery = useQuery({ queryKey: QK.forecast.catalog, queryFn: phase5Api.forecastCatalog, enabled: forecastAvailable, placeholderData: keepPreviousData })
+  const recordsQuery = useQuery({ queryKey: QK.forecast.records(instrument, recordOffset, HISTORY_PAGE_SIZE), queryFn: () => phase5Api.forecastRecords(instrument, recordOffset, HISTORY_PAGE_SIZE), enabled: forecastAvailable, placeholderData: keepPreviousData })
+  const jobsQuery = useQuery({ queryKey: QK.forecast.jobs(instrument, jobOffset, HISTORY_PAGE_SIZE), queryFn: () => phase5Api.forecastJobs(instrument, jobOffset, HISTORY_PAGE_SIZE), enabled: forecastAvailable, placeholderData: keepPreviousData })
 
   const catalogEntries = catalogQuery.data?.entries ?? []
   const selectedCatalog = catalogEntries.find(entry => entry.catalog_id === catalogId) ?? catalogEntries[0]
