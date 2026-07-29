@@ -8,6 +8,16 @@ AthenaQuant is a shipped, self-hosted quantitative research platform for individ
 
 An investor can turn reliable market data and their own holdings into an auditable, actionable research and monitoring workflow without operating multiple disconnected tools.
 
+## Current Milestone: v1.1 Operational Hardening
+
+**Goal:** Make release evidence routinely reproducible across supported hosts, remove avoidable runtime and data-stack warnings, formalize the operator-controlled optional-model supply path, and add durable visual-regression evidence — without weakening v1.0 fail-closed safety boundaries.
+
+**Target features:**
+- Reproducible release evidence from current Windows and Linux environments without historical attestations
+- Runtime, data-stack, and frontend validation free of avoidable deprecation and sortedness warnings
+- Optional local-model supply stays fail-closed with an explicit, documented, testable operator approval path
+- Durable screenshot-based visual regression for critical desktop and 375px responsive workflows
+
 ## Success Metric
 
 The v1.0 release is successful when all 23 requirements are verified end to end, the five phases pass Nyquist validation, and one provenance-bound final gate proves the backend and browser contracts against the frozen release source. This was achieved on 2026-07-27.
@@ -58,5 +68,22 @@ v1.0 validated the host architecture and locked its safety boundaries: one FastA
 - Shipped milestone archive: `.planning/milestones/v1.0-ROADMAP.md`
 - Canonical release audit: `.planning/milestones/v1.0-MILESTONE-AUDIT.md`
 
+## Evolution
+
+This document evolves at phase transitions and milestone boundaries.
+
+**After each phase transition** (via `/gsd-transition`):
+1. Requirements invalidated? → Move to Out of Scope with reason
+2. Requirements validated? → Move to Validated with phase reference
+3. New requirements emerged? → Add to Active
+4. Decisions to log? → Add to Key Decisions
+5. "What This Is" still accurate? → Update if drifted
+
+**After each milestone** (via `/gsd:complete-milestone`):
+1. Full review of all sections
+2. Core Value check — still the right priority?
+3. Audit Out of Scope — reasons still valid?
+4. Update Context with current state
+
 ---
-*Last updated: 2026-07-27 after shipping v1.0 MVP and preparing v1.1 operational hardening*
+*Last updated: 2026-07-29 — started milestone v1.1 Operational Hardening*
