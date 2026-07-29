@@ -31,6 +31,23 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+def _find_phase05_dir(repo_root: Path) -> Path:
+    """Resolve the Phase 05 planning directory independent of archival layout."""
+    milestones = repo_root / ".planning" / "milestones"
+    if milestones.is_dir():
+        for candidate in sorted(milestones.iterdir()):
+            phase_dir = candidate / "05-optional-enhancements"
+            if phase_dir.is_dir():
+                return phase_dir
+    return repo_root / ".planning" / "phases" / "05-optional-enhancements"
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_PHASE05_DIR = _find_phase05_dir(_REPO_ROOT)
+
+def _phase05_rel(filename: str) -> str:
+    """Phase 05 artifact path relative to repository root."""
+    return str((_PHASE05_DIR / filename).relative_to(_REPO_ROOT))
+
 REPORT_LABELS: tuple[str, ...] = (
     "pytest-windows",
     "pytest-linux",
@@ -48,9 +65,9 @@ RELEVANT_PATHS: tuple[str, ...] = (
     "frontend",
     "backend/scripts/verify_phase5_final_gate.py",
     "backend/tests/test_phase5_final_gate.py",
-    ".planning/phases/05-optional-enhancements/05-VALIDATION.md",
-    ".planning/phases/05-optional-enhancements/05-43-SUMMARY.md",
-    ".planning/phases/05-optional-enhancements/05-44-PLAN.md",
+    _phase05_rel("05-VALIDATION.md"),
+    _phase05_rel("05-43-SUMMARY.md"),
+    _phase05_rel("05-44-PLAN.md"),
     ".github/workflows/phase5-linux-evidence.yml",
 )
 
@@ -2151,16 +2168,11 @@ def orchestrate(
     validation_path = _canonical(validation_path)
     phase43_summary = _canonical(phase43_summary)
     plan_path = _canonical(plan_path)
-    expected_plan = (
-        repo_root
-        / ".planning/phases/05-optional-enhancements/05-44-PLAN.md"
-    ).resolve()
+    phase05_dir = _find_phase05_dir(repo_root)
+    expected_plan = (phase05_dir / "05-44-PLAN.md").resolve()
     if plan_path != expected_plan or not plan_path.is_file():
         raise ReportError("05-44 plan path is missing or not canonical")
-    expected_validation = (
-        repo_root
-        / ".planning/phases/05-optional-enhancements/05-VALIDATION.md"
-    ).resolve()
+    expected_validation = (phase05_dir / "05-VALIDATION.md").resolve()
     if validation_path != expected_validation or not validation_path.is_file():
         raise ReportError("05-VALIDATION path is missing or not canonical")
     if linux_evidence_dir is not None:

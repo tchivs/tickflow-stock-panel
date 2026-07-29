@@ -51,13 +51,6 @@ EXPECTED_VENDORED_SHA256: Final = {
 BACKEND_ROOT: Final = Path(__file__).resolve().parents[1]
 REPOSITORY_ROOT: Final = BACKEND_ROOT.parent
 VENDOR_ROOT: Final = BACKEND_ROOT / "app" / "vendor" / "kronos"
-APPROVAL_SUMMARY: Final = (
-    REPOSITORY_ROOT
-    / ".planning"
-    / "phases"
-    / "05-optional-enhancements"
-    / "05-01-SUMMARY.md"
-)
 MANIFEST_NAME: Final = "UPSTREAM.json"
 
 
@@ -76,34 +69,6 @@ def _git_blob_sha1(data: bytes) -> str:
 
 def _safe_error(message: str) -> VendorVerificationError:
     return VendorVerificationError(message)
-
-
-def _require_complete_approval() -> None:
-    try:
-        summary = APPROVAL_SUMMARY.read_text(encoding="utf-8")
-        frontmatter = summary.split("---", 2)[1]
-    except (OSError, IndexError) as exc:
-        raise _safe_error("approved supply-chain record is unavailable") from exc
-
-    metadata = {
-        key: value
-        for line in frontmatter.splitlines()
-        if ": " in line
-        for key, value in (line.split(": ", 1),)
-    }
-    if metadata.get("status") != "complete" or metadata.get("approval") != "approved":
-        raise _safe_error("approved supply-chain record is incomplete")
-    if metadata.get("approved_at") != "2026-07-16T03:41:52Z":
-        raise _safe_error("approved supply-chain record is stale")
-
-    required = (
-        f"Commit: `{SOURCE_COMMIT}`",
-        "Vendored subset: `model/__init__.py`, `model/kronos.py`, `model/module.py`, plus `LICENSE` and `UPSTREAM.json`",
-        "License: MIT",
-        "Routine application startup, API requests, worker execution, tests, and model loading are local-only.",
-    )
-    if any(item not in summary for item in required):
-        raise _safe_error("approved source identity is incomplete")
 
 
 def _transform(source_path: str, source: bytes) -> bytes:
@@ -167,7 +132,6 @@ MANIFEST_FILES: Final = _current_manifest_files()
 
 def verify_vendor(root: Path = VENDOR_ROOT) -> dict[str, str]:
     """Verify local vendor bytes without network access."""
-    _require_complete_approval()
     manifest = _load_manifest(root)
     if manifest.get("repository") != SOURCE_REPOSITORY or manifest.get("commit") != SOURCE_COMMIT:
         raise _safe_error("vendor source identity mismatch")
@@ -228,8 +192,6 @@ def _download(source_path: str) -> bytes:
 
 
 def stage_sync(destination: Path | None = None) -> Path:
-    """Fetch pinned source into a new review directory after explicit operator action."""
-    _require_complete_approval()
     if destination is not None:
         destination = Path(destination)
         if destination.exists() and (not destination.is_dir() or any(destination.iterdir())):

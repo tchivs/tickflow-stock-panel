@@ -392,10 +392,8 @@ def _git_repo(tmp_path: Path) -> Path:
         "backend/scripts/verify_phase5_final_gate.py",
         "backend/tests/test_phase5_final_gate.py",
         "frontend/package.json",
-        ".planning/phases/05-optional-enhancements/05-VALIDATION.md",
-        ".planning/phases/05-optional-enhancements/05-43-SUMMARY.md",
-        ".planning/phases/05-optional-enhancements/05-44-PLAN.md",
     ]
+    tracked.extend(p for p in RELEVANT_PATHS if "05-optional-enhancements" in p)
     for relative in tracked:
         path = repo / relative
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -718,7 +716,9 @@ def test_run_producer_default_popen_path_bounds_every_tree_reap(
     else:
         def fake_killpg(pid: int, sig: int) -> None:
             assert pid == 424242
-            killed.append(signal.Signals(sig).name)
+            if sig == 0 and "SIGKILL" in killed:
+                raise ProcessLookupError("process group gone after SIGKILL")
+            killed.append(signal.Signals(sig).name if sig else "SIG0")
 
         monkeypatch.setattr(os, "killpg", fake_killpg)
 
@@ -730,7 +730,10 @@ def test_run_producer_default_popen_path_bounds_every_tree_reap(
             started_at=datetime.now(UTC).isoformat(),
         )
     assert waits == [30 * 60, 10, 10]
-    assert "process" in killed
+    if os.name == "nt":
+        assert "tree" in killed
+    else:
+        assert "SIGKILL" in killed
     assert not spec.sidecar_path.exists()
 
 
@@ -861,7 +864,7 @@ def test_git_provenance_rejects_dirty_relevant_paths(
     repo = _git_repo(tmp_path)
     provenance = capture_git_provenance(
         repo,
-        repo / ".planning/phases/05-optional-enhancements/05-43-SUMMARY.md",
+        repo / final_gate._phase05_rel("05-43-SUMMARY.md"),
     )
     path = repo / relative
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -879,7 +882,7 @@ def test_git_provenance_excludes_repository_memory_and_rejects_tree_drift(
     repo = _git_repo(tmp_path)
     provenance = capture_git_provenance(
         repo,
-        repo / ".planning/phases/05-optional-enhancements/05-43-SUMMARY.md",
+        repo / final_gate._phase05_rel("05-43-SUMMARY.md"),
     )
     memory = repo / ".codebase-memory/graph.db.zst"
     memory.parent.mkdir()
@@ -900,7 +903,7 @@ def test_git_provenance_rejects_head_drift(tmp_path: Path) -> None:
     repo = _git_repo(tmp_path)
     provenance = capture_git_provenance(
         repo,
-        repo / ".planning/phases/05-optional-enhancements/05-43-SUMMARY.md",
+        repo / final_gate._phase05_rel("05-43-SUMMARY.md"),
     )
     tracked = repo / "backend/scripts/verify_phase5_final_gate.py"
     tracked.write_text("next\n", encoding="utf-8")
@@ -1072,10 +1075,7 @@ def test_scoped_validation_dry_run_and_atomic_replace(
     tmp_path: Path,
     source_status: str,
 ) -> None:
-    source = (
-        Path(__file__).parents[2]
-        / ".planning/phases/05-optional-enhancements/05-VALIDATION.md"
-    )
+    source = final_gate._PHASE05_DIR / "05-VALIDATION.md"
     target = tmp_path / "05-VALIDATION.md"
     target.write_bytes(source.read_bytes())
     original = _pending_validation_fixture(
@@ -1124,10 +1124,7 @@ def test_scoped_validation_dry_run_and_atomic_replace(
 def test_scoped_validation_rejects_global_diff_and_partial_transition(
     tmp_path: Path,
 ) -> None:
-    source = (
-        Path(__file__).parents[2]
-        / ".planning/phases/05-optional-enhancements/05-VALIDATION.md"
-    )
+    source = final_gate._PHASE05_DIR / "05-VALIDATION.md"
     original = _pending_validation_fixture(source.read_text(encoding="utf-8"))
     provenance = GitProvenance("a" * 40, "b" * 40, "c" * 40)
     candidate = build_scoped_validation_candidate(
