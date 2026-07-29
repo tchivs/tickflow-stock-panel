@@ -1,11 +1,5 @@
 {
-  "label": "Phase 05 complete \u2014 run re-verification or milestone closeout",
-  "command": "/gsd-verify-work 5  or  /gsd-complete-milestone",
-  "requiresFreshContext": false,
-  "status": "phase_complete",
-  "gate": {
-    "discovered": 370,
-    "passed": 370,
-    "status": "passed"
-  }
+  "label": "查看当前 v1.1 状态及下一项 GSD 动作：",
+  "command": "/gsd-progress",
+  "requiresFreshContext": false
 }
