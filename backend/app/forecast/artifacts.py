@@ -134,20 +134,15 @@ class ForecastPathReader:
             _PATH_COLUMNS | {"horizon_index"}
         ):
             raise ValueError("Forecast path relation schema is invalid")
-        sample_count = descriptor.get("sample_count")
-        horizon = descriptor.get("horizon")
-        feature_count = descriptor.get("feature_count")
+        sample_count = record.get("sample_count")
+        horizon = record.get("horizon")
         if (
             sample_count != 32
-            or record.get("sample_count") != 32
             or isinstance(horizon, bool)
             or not isinstance(horizon, int)
-            or horizon != record.get("horizon")
-            or isinstance(feature_count, bool)
-            or not isinstance(feature_count, int)
-            or feature_count <= 0
+            or horizon not in {5, 20, 60}
         ):
-            raise ValueError("Forecast path descriptor shape is invalid")
+            raise ValueError("Forecast path record shape is invalid")
         sessions = record.get("future_session_ids")
         if (
             not isinstance(sessions, list)
@@ -160,9 +155,10 @@ class ForecastPathReader:
         features = sorted(
             {row.get("feature") for row in rows if isinstance(row.get("feature"), str)}
         )
-        if len(features) != feature_count or any(not feature for feature in features):
+        feature_count = len(features)
+        if feature_count <= 0 or any(not feature for feature in features):
             raise ValueError("Forecast path features are invalid")
-        expected_size = 32 * horizon * feature_count
+        expected_size = sample_count * horizon * feature_count
         if len(rows) != expected_size:
             raise ValueError("Forecast path relation is incomplete")
 

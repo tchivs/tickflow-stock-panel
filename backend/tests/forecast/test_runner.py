@@ -1,4 +1,5 @@
 """RED contracts for durable Forecast CAS jobs and bounded spawned inference."""
+
 from __future__ import annotations
 
 import json
@@ -49,16 +50,17 @@ def _create(repository, **overrides):
 def _acquire(repository, job, *, owner: str = "worker-1"):
     assert repository.acquire_global_lease(owner=owner, ttl_seconds=30)
     return repository.acquire_job(
-        job_id=job["id"], expected_status="queued", expected_version=job["transition_version"], lease_owner=owner, ttl_seconds=30
+        job_id=job["id"],
+        expected_status="queued",
+        expected_version=job["transition_version"],
+        lease_owner=owner,
+        ttl_seconds=30,
     )
 
 
 def _path_tensor(*, horizon: int, feature_count: int) -> np.ndarray:
     return np.fromfunction(
-        lambda sample, session, feature: 8.0
-        + (sample * 0.1)
-        + (session * 0.2)
-        + (feature * 0.01),
+        lambda sample, session, feature: 8.0 + (sample * 0.1) + (session * 0.2) + (feature * 0.01),
         (32, horizon, feature_count),
         dtype=float,
     )
@@ -92,8 +94,7 @@ def _immutable(job) -> dict[str, object]:
         "calendar_id": "cn-a-v1",
         "calendar_revision": "cn-a-calendar-2025-v1",
         "future_session_ids": [
-            (origin + timedelta(days=index + 1)).strftime("CNA-%Y%m%d")
-            for index in range(horizon)
+            (origin + timedelta(days=index + 1)).strftime("CNA-%Y%m%d") for index in range(horizon)
         ],
         "input_fingerprint": str(job["input_fingerprint"]),
         "input_artifact_descriptor": {
@@ -119,6 +120,15 @@ def _immutable(job) -> dict[str, object]:
         "feature_schema": ["open", "high", "low", "close", "volume", "amount"],
         "validation_warnings": [],
     }
+
+
+def test_default_cpu_worker_limit_loads_pytorch_safely() -> None:
+    from app.forecast.runner import ForecastRunnerLimits
+
+    limits = ForecastRunnerLimits()
+    assert limits.address_space_bytes == 8 * 1024 * 1024 * 1024
+    assert limits.thread_count == 2
+    assert limits.queue_items == 1
 
 
 def _commit(repository, job, tmp_path: Path, *, owner: str = "worker-1"):
@@ -155,7 +165,11 @@ def test_job_state_machine_rejects_illegal_cas_transition(tmp_path):
     job = _create(repository)
     with pytest.raises(ValueError, match="transition"):
         repository.compare_and_swap_job(
-            job_id=job["id"], expected_status="queued", expected_version=0, lease_owner=None, new_status="completed"
+            job_id=job["id"],
+            expected_status="queued",
+            expected_version=0,
+            lease_owner=None,
+            new_status="completed",
         )
 
 
@@ -164,8 +178,11 @@ def test_job_cas_rejects_stale_transition_version(tmp_path):
     job = _create(repository)
     with pytest.raises(ValueError, match="stale|version"):
         repository.acquire_job(
-            job_id=job["id"], expected_status="queued", expected_version=job["transition_version"] + 1,
-            lease_owner="worker-1", ttl_seconds=30,
+            job_id=job["id"],
+            expected_status="queued",
+            expected_version=job["transition_version"] + 1,
+            lease_owner="worker-1",
+            ttl_seconds=30,
         )
 
 
@@ -173,17 +190,29 @@ def test_job_lease_requires_owner_and_unexpired_heartbeat(tmp_path):
     repository = _repository(tmp_path)
     running = _acquire(repository, _create(repository))
     with pytest.raises(ValueError, match="owner"):
-        repository.heartbeat(job_id=running["id"], expected_version=running["transition_version"], lease_owner="worker-2", ttl_seconds=30)
-    refreshed = repository.heartbeat(job_id=running["id"], expected_version=running["transition_version"], lease_owner="worker-1", ttl_seconds=30)
+        repository.heartbeat(
+            job_id=running["id"],
+            expected_version=running["transition_version"],
+            lease_owner="worker-2",
+            ttl_seconds=30,
+        )
+    refreshed = repository.heartbeat(
+        job_id=running["id"],
+        expected_version=running["transition_version"],
+        lease_owner="worker-1",
+        ttl_seconds=30,
+    )
     assert refreshed["lease_owner"] == "worker-1"
 
 
 def test_global_inference_lease_allows_exactly_one_parallel_winner(tmp_path):
     repository = _repository(tmp_path)
     barrier = threading.Barrier(2)
+
     def acquire(owner: str):
         barrier.wait()
         return repository.acquire_global_lease(owner=owner, ttl_seconds=30)
+
     with ThreadPoolExecutor(max_workers=2) as pool:
         outcomes = list(pool.map(acquire, ("worker-a", "worker-b")))
     assert sorted(outcomes) == [False, True]
@@ -302,15 +331,20 @@ def test_two_parallel_job_acquisitions_have_one_cas_winner(tmp_path):
     repository = _repository(tmp_path)
     job = _create(repository)
     barrier = threading.Barrier(2)
+
     def acquire(owner: str):
         barrier.wait()
         try:
             return repository.acquire_job(
-                job_id=job["id"], expected_status="queued", expected_version=job["transition_version"],
-                lease_owner=owner, ttl_seconds=30,
+                job_id=job["id"],
+                expected_status="queued",
+                expected_version=job["transition_version"],
+                lease_owner=owner,
+                ttl_seconds=30,
             )["lease_owner"]
         except ValueError:
             return None
+
     with ThreadPoolExecutor(max_workers=2) as pool:
         outcomes = list(pool.map(acquire, ("worker-a", "worker-b")))
     assert sum(outcome is not None for outcome in outcomes) == 1
@@ -320,8 +354,12 @@ def test_explicit_retry_creates_new_job_and_lineage(tmp_path):
     repository = _repository(tmp_path)
     job = _create(repository)
     repository.terminalize(
-        job_id=job["id"], expected_status="queued", expected_version=job["transition_version"],
-        lease_owner=None, status="validation_failed", reason="safe_validation_failed",
+        job_id=job["id"],
+        expected_status="queued",
+        expected_version=job["transition_version"],
+        lease_owner=None,
+        status="validation_failed",
+        reason="safe_validation_failed",
     )
     retry = repository.create_retry_job(source_job_id=job["id"], idempotency_key="explicit-retry-1")
     assert retry["id"] != job["id"]
@@ -329,9 +367,7 @@ def test_explicit_retry_creates_new_job_and_lineage(tmp_path):
     assert retry["attempt"] == job["attempt"] + 1
 
 
-def test_service_retry_rebinds_governed_input_and_dispatches_queued_job(
-    tmp_path, monkeypatch
-):
+def test_service_retry_rebinds_governed_input_and_dispatches_queued_job(tmp_path, monkeypatch):
     from types import SimpleNamespace
 
     from app.forecast.service import ForecastService, PreparedForecastRun
@@ -388,7 +424,8 @@ def test_service_retry_rebinds_governed_input_and_dispatches_queued_job(
 
 
 def test_service_retry_prevalidates_fingerprint_before_lineage_and_discards_artifact(
-    tmp_path, monkeypatch,
+    tmp_path,
+    monkeypatch,
 ):
     from types import SimpleNamespace
 
@@ -445,9 +482,7 @@ def test_service_retry_prevalidates_fingerprint_before_lineage_and_discards_arti
     )
     monkeypatch.setattr(service, "_prepare_for_job", lambda _job: prepared)
 
-    with pytest.raises(
-        ValueError, match="Forecast retry governed input no longer matches source"
-    ):
+    with pytest.raises(ValueError, match="Forecast retry governed input no longer matches source"):
         service.retry_job(
             source_job_id=source["id"],
             idempotency_key="retry-prevalidation-mismatch",
@@ -514,7 +549,9 @@ def test_retry_never_reuses_completed_forecast_record(tmp_path):
     repository = _repository(tmp_path)
     running = _acquire(repository, _create(repository))
     record = _commit(repository, running, tmp_path)
-    retry = repository.create_retry_job(source_job_id=running["id"], idempotency_key="explicit-retry-2")
+    retry = repository.create_retry_job(
+        source_job_id=running["id"], idempotency_key="explicit-retry-2"
+    )
     assert retry["id"] != running["id"]
     assert repository.forecast_for_job(retry["id"]) is None
     assert repository.forecast_for_job(running["id"])["id"] == record["id"]
@@ -524,8 +561,12 @@ def test_interruption_before_artifact_creates_no_forecast(tmp_path):
     repository = _repository(tmp_path)
     running = _acquire(repository, _create(repository))
     repository.terminalize(
-        job_id=running["id"], expected_status="running", expected_version=running["transition_version"],
-        lease_owner="worker-1", status="interrupted", reason="worker_interrupted",
+        job_id=running["id"],
+        expected_status="running",
+        expected_version=running["transition_version"],
+        lease_owner="worker-1",
+        status="interrupted",
+        reason="worker_interrupted",
     )
     assert repository.forecast_for_job(running["id"]) is None
 
@@ -536,8 +577,12 @@ def test_interruption_after_temp_artifact_creates_no_forecast_and_cleans_temp(tm
     temporary = tmp_path / ".forecast-output.tmp"
     temporary.write_bytes(b"partial")
     repository.terminalize(
-        job_id=running["id"], expected_status="running", expected_version=running["transition_version"],
-        lease_owner="worker-1", status="artifact_failed", reason="artifact_verification_failed",
+        job_id=running["id"],
+        expected_status="running",
+        expected_version=running["transition_version"],
+        lease_owner="worker-1",
+        status="artifact_failed",
+        reason="artifact_verification_failed",
         temporary_paths=[temporary],
     )
     assert repository.forecast_for_job(running["id"]) is None
@@ -564,9 +609,11 @@ def test_parallel_completed_commits_return_one_canonical_forecast(tmp_path):
     repository = _repository(tmp_path)
     running = _acquire(repository, _create(repository))
     barrier = threading.Barrier(2)
+
     def commit(_index: int):
         barrier.wait()
         return _commit(repository, running, tmp_path)
+
     with ThreadPoolExecutor(max_workers=2) as pool:
         records = list(pool.map(commit, (1, 2)))
     assert records[0]["id"] == records[1]["id"]
@@ -579,7 +626,9 @@ def test_terminal_jobs_and_forecasts_are_immutable(tmp_path):
     record = _commit(repository, running, tmp_path)
     with repository.connection() as connection:
         with pytest.raises(Exception, match="immutable"):
-            connection.execute("UPDATE forecast_records SET horizon = 5 WHERE id = ?", (record["id"],))
+            connection.execute(
+                "UPDATE forecast_records SET horizon = 5 WHERE id = ?", (record["id"],)
+            )
         with pytest.raises(Exception, match="immutable"):
             connection.execute("DELETE FROM forecast_jobs WHERE id = ?", (running["id"],))
 
@@ -587,7 +636,9 @@ def test_terminal_jobs_and_forecasts_are_immutable(tmp_path):
 def test_restart_requeues_only_valid_never_started_queued_jobs(tmp_path):
     repository = _repository(tmp_path)
     queued = _create(repository)
-    outcomes = repository.recover_after_restart(revalidate=lambda job: job["input_fingerprint"] == "a" * 64)
+    outcomes = repository.recover_after_restart(
+        revalidate=lambda job: job["input_fingerprint"] == "a" * 64
+    )
     assert outcomes == [{"job_id": queued["id"], "action": "requeue"}]
     assert repository.get_job(queued["id"])["status"] == "queued"
 
@@ -620,8 +671,12 @@ def test_concurrent_recovery_one_winner_dispatches_queued_job(tmp_path):
 def test_restart_terminalizes_expired_running_job_without_native_resume(tmp_path):
     repository = _repository(tmp_path)
     running = _acquire(repository, _create(repository))
-    outcomes = repository.recover_after_restart(now="2099-01-01T00:00:00Z", revalidate=lambda _job: True)
-    assert outcomes == [{"job_id": running["id"], "action": "terminalized", "status": "interrupted"}]
+    outcomes = repository.recover_after_restart(
+        now="2099-01-01T00:00:00Z", revalidate=lambda _job: True
+    )
+    assert outcomes == [
+        {"job_id": running["id"], "action": "terminalized", "status": "interrupted"}
+    ]
     assert repository.get_job(running["id"])["status"] == "interrupted"
 
 
@@ -651,9 +706,7 @@ def test_quantile_bundle_commit_reloads_verified_artifact_after_restart(tmp_path
     reloaded = restarted.get_forecast(committed["id"])
     assert reloaded is not None
     assert reloaded["quantile_availability"] == "available"
-    assert reloaded["quantiles"]["5"] == pytest.approx(
-        {"p10": 9.14, "p50": 10.38, "p90": 11.62}
-    )
+    assert reloaded["quantiles"]["5"] == pytest.approx({"p10": 9.14, "p50": 10.38, "p90": 11.62})
     assert reloaded["quantiles_source_paths_sha256"] == reloaded["paths_checksum_sha256"]
     assert reloaded["quantile_row_count"] == 3 * 20 * 6
     with restarted.connection() as connection:
@@ -740,9 +793,7 @@ def test_quantile_artifact_divergence_rolls_back_strict_commit(tmp_path, corrupt
             if corruption == "source_divergence"
             else str(bundle["paths_artifact"]["checksum_sha256"])
         )
-        replacement = ManagedImmutableArtifactStore(
-            case_root / "forecast-outputs"
-        ).create_parquet(
+        replacement = ManagedImmutableArtifactStore(case_root / "forecast-outputs").create_parquet(
             frame,
             schema_version="forecast-quantiles-v1",
             scope={
@@ -768,15 +819,14 @@ def test_quantile_artifact_divergence_rolls_back_strict_commit(tmp_path, corrupt
     assert repository.get_job(running["id"])["status"] == "running"
     assert "completed" not in {
         row["status"]
-        for row in repository.job_transitions_after(
-            running["id"], after_version=-1, limit=256
-        )
+        for row in repository.job_transitions_after(running["id"], after_version=-1, limit=256)
     }
 
 
 @dataclass
 class CountingBoundary:
     calls: int = 0
+
     def __call__(self, **_kwargs):
         self.calls += 1
         return True
@@ -790,9 +840,7 @@ class CommitArtifactBoundary:
 
     def __call__(self, *, manifest, job):
         self.calls += 1
-        manifest["output_descriptor"] = _descriptor(
-            self.root, horizon=int(job["horizon"])
-        )
+        manifest["output_descriptor"] = _descriptor(self.root, horizon=int(job["horizon"]))
         self.repository.bind_commit_identity(
             job_id=str(job["id"]), immutable_record=manifest["immutable_record"]
         )
@@ -801,6 +849,7 @@ class CommitArtifactBoundary:
 
 def _runner(tmp_path: Path, **overrides):
     from app.forecast.runner import ForecastRunner, ForecastRunnerLimits
+
     repository = _repository(tmp_path)
     boundaries = {
         "reauthorize": CountingBoundary(),
@@ -813,8 +862,12 @@ def _runner(tmp_path: Path, **overrides):
     runner = ForecastRunner(
         repository=repository,
         limits=ForecastRunnerLimits(
-            wall_clock_seconds=3, cpu_seconds=2, address_space_bytes=1024 * 1024 * 1024,
-            thread_count=2, output_bytes=16 * 1024, queue_items=1,
+            wall_clock_seconds=3,
+            cpu_seconds=2,
+            address_space_bytes=1024 * 1024 * 1024,
+            thread_count=2,
+            output_bytes=16 * 1024,
+            queue_items=1,
         ),
         **boundaries,
     )
@@ -843,9 +896,14 @@ def test_runner_enforces_wall_cpu_address_thread_output_and_manifest_bounds(tmp_
     runner, repository, _boundaries = _runner(tmp_path)
     result = runner.run_job(_create(repository)["id"])
     assert result["resources"] == {
-        "start_method": "spawn", "new_process_group": True, "wall_clock_seconds": 3,
-        "cpu_seconds": 2, "address_space_bytes": 1024 * 1024 * 1024,
-        "thread_count": 2, "output_bytes": 16 * 1024, "queue_items": 1,
+        "start_method": "spawn",
+        "new_process_group": True,
+        "wall_clock_seconds": 3,
+        "cpu_seconds": 2,
+        "address_space_bytes": 1024 * 1024 * 1024,
+        "thread_count": 2,
+        "output_bytes": 16 * 1024,
+        "queue_items": 1,
     }
     assert len(json.dumps(result["manifest"]).encode()) <= 16 * 1024
 
@@ -854,6 +912,7 @@ def test_runner_enforces_wall_cpu_address_thread_output_and_manifest_bounds(tmp_
 @_LINUX_ONLY
 def test_runner_timeout_kills_reaps_descendants_and_cleans_temporary_files(tmp_path):
     from app.forecast.runner import BlockingWorker
+
     runner, repository, _boundaries = _runner(tmp_path, worker=BlockingWorker(descendant=True))
     job = _create(repository)
     result = runner.run_job(job["id"])
@@ -867,6 +926,7 @@ def test_runner_timeout_kills_reaps_descendants_and_cleans_temporary_files(tmp_p
 @_LINUX_ONLY
 def test_runner_rejects_tampered_or_oversized_manifest_without_record(tmp_path):
     from app.forecast.runner import FixedWorker
+
     for manifest, expected_status in (
         ({"checksum_sha256": "0" * 64}, "artifact_failed"),
         ({"payload": "x" * (17 * 1024)}, "resource_terminated"),
@@ -880,18 +940,28 @@ def test_runner_rejects_tampered_or_oversized_manifest_without_record(tmp_path):
 
 def test_runner_maps_worker_failures_to_safe_path_free_terminal_reasons(tmp_path):
     from app.forecast.runner import CrashingWorker
-    runner, repository, _boundaries = _runner(tmp_path, worker=CrashingWorker("/secret/model: token=abc\nTraceback"))
+
+    runner, repository, _boundaries = _runner(
+        tmp_path, worker=CrashingWorker("/secret/model: token=abc\nTraceback")
+    )
     result = runner.run_job(_create(repository)["id"])
     serialized = json.dumps(result)
     assert result["status"] in {"resource_terminated", "checkpoint_mismatch", "artifact_failed"}
-    assert "/secret" not in serialized and "Traceback" not in serialized and "token=abc" not in serialized
+    assert (
+        "/secret" not in serialized
+        and "Traceback" not in serialized
+        and "token=abc" not in serialized
+    )
 
 
 @pytest.mark.linux_process_group
 @_LINUX_ONLY
 def test_runner_lost_lease_rejects_late_output_and_creates_no_record(tmp_path):
     from app.forecast.runner import FixedWorker
-    runner, repository, _boundaries = _runner(tmp_path, worker=FixedWorker(lose_lease_before_result=True))
+
+    runner, repository, _boundaries = _runner(
+        tmp_path, worker=FixedWorker(lose_lease_before_result=True)
+    )
     job = _create(repository)
     result = runner.run_job(job["id"])
     assert result["status"] == "interrupted"
@@ -902,8 +972,14 @@ def test_runner_lost_lease_rejects_late_output_and_creates_no_record(tmp_path):
 @_LINUX_ONLY
 def test_runner_success_commits_once_and_never_invokes_downstream_authority(tmp_path):
     from app.forecast.runner import FixedWorker
-    action_spies = {name: CountingBoundary() for name in ("thesis", "strategy", "decision_plan", "monitor", "position", "broker")}
-    runner, repository, _boundaries = _runner(tmp_path, worker=FixedWorker(valid=True), action_collaborators=action_spies)
+
+    action_spies = {
+        name: CountingBoundary()
+        for name in ("thesis", "strategy", "decision_plan", "monitor", "position", "broker")
+    }
+    runner, repository, _boundaries = _runner(
+        tmp_path, worker=FixedWorker(valid=True), action_collaborators=action_spies
+    )
     result = runner.run_job(_create(repository)["id"])
     assert result["status"] == "completed"
     assert len(repository.list_forecasts()) == 1
@@ -963,8 +1039,7 @@ def test_production_service_revalidation_reloads_catalog_and_frozen_input_before
             for index in range(64)
         ),
         future_session_ids=tuple(
-            (date(2025, 5, 1) + timedelta(days=index)).strftime("CNA-%Y%m%d")
-            for index in range(20)
+            (date(2025, 5, 1) + timedelta(days=index)).strftime("CNA-%Y%m%d") for index in range(20)
         ),
         feature_schema=["open", "high", "low", "close", "volume"],
         input_fingerprint="a" * 64,
@@ -1028,9 +1103,7 @@ def test_contextual_worker_forwards_only_bounded_quantile_artifact_bundle(tmp_pa
     def delegate(**_kwargs):
         return {
             "artifacts": bundle,
-            "validation_warnings": [
-                {"code": "flat_quantile_band", "message": "untrusted detail"}
-            ],
+            "validation_warnings": [{"code": "flat_quantile_band", "message": "untrusted detail"}],
             "paths": [["must-not-cross"]],
             "quantiles": [["must-not-cross"]],
         }
@@ -1049,15 +1122,18 @@ def test_contextual_worker_forwards_only_bounded_quantile_artifact_bundle(tmp_pa
     }
 
 
-
 def test_commit_rejects_missing_or_divergent_provenance_and_shape(tmp_path):
     cases = (
         lambda record, descriptor: record.pop("source_digest_sha256"),
         lambda record, descriptor: record.__setitem__("catalog_id", "kronos-small"),
         lambda record, descriptor: record.__setitem__("temperature", float("nan")),
-        lambda record, descriptor: record.__setitem__("future_session_ids", record["future_session_ids"][:-1]),
+        lambda record, descriptor: record.__setitem__(
+            "future_session_ids", record["future_session_ids"][:-1]
+        ),
         lambda record, descriptor: descriptor["path_shape"].__setitem__(1, 5),
-        lambda record, descriptor: record["input_artifact_descriptor"].__setitem__("checksum_sha256", "f" * 64),
+        lambda record, descriptor: record["input_artifact_descriptor"].__setitem__(
+            "checksum_sha256", "f" * 64
+        ),
     )
     for index, mutate in enumerate(cases):
         case_root = tmp_path / f"case-{index}"
@@ -1117,7 +1193,6 @@ def test_output_path_containment_requires_regular_verified_artifact(tmp_path):
     rejected("/absolute/output.parquet")
     rejected("forecast/symlink/output.parquet", symlink=True)
     rejected("forecast/artifact-1/output.parquet", checksum="0" * 64)
-
 
 
 @dataclass
@@ -1194,9 +1269,7 @@ def test_cr05_worker_input_tamper_and_pre_commit_input_rejection(tmp_path, monke
 
     store = ManagedImmutableArtifactStore(tmp_path / "inputs")
     frame = pl.DataFrame({"session_id": ["S1"], "close": [1.0]})
-    managed = store.create_parquet(
-        frame, schema_version="forecast-input-v1", scope={"k": "v"}
-    )
+    managed = store.create_parquet(frame, schema_version="forecast-input-v1", scope={"k": "v"})
     descriptor = SimpleNamespace(
         artifact_id=managed.artifact_id,
         schema_version=managed.schema_version,
@@ -1372,9 +1445,7 @@ def test_wr01_operation_first_replay_race_leaves_no_orphan(tmp_path):
             results.append(future.result())
     job_ids = {row["id"] for row in results}
     assert len(job_ids) == 1
-    remaining = {
-        p.name for p in store_root.iterdir() if p.is_dir() and not p.name.startswith(".")
-    }
+    remaining = {p.name for p in store_root.iterdir() if p.is_dir() and not p.name.startswith(".")}
     # First job namespace + race canonical namespace only.
     assert len(remaining) == 2
     # Bound identity for race job must reference an existing namespace.
@@ -1486,7 +1557,6 @@ def test_idempotent_input_namespace_and_orphan_cleanup_on_failure(tmp_path):
     assert shared.artifact_id in remaining
 
 
-
 class HostileOutputWorker:
     """Emit more stdout than the parent budget allows before returning."""
 
@@ -1521,8 +1591,6 @@ def _silent_child_no_ready(worker, job, limits, output):
     del worker, job, limits, output
     os.setsid()
     time.sleep(30)
-
-
 
 
 def test_runner_output_cap_before_allocation_rejects_hostile_stdout(tmp_path):
@@ -1575,8 +1643,6 @@ def test_runner_child_ready_handshake_precedes_work_deadline(monkeypatch):
     assert "success" in events
 
 
-
-
 @pytest.mark.linux_process_group
 @_LINUX_ONLY
 def test_runner_startup_race_timeout_before_ready_reaps_process(tmp_path, monkeypatch):
@@ -1606,8 +1672,6 @@ def test_runner_startup_race_timeout_before_ready_reaps_process(tmp_path, monkey
     assert result["status"] == "timeout"
     assert result.get("reason") == "worker_startup_timeout"
     assert result.get("process_group_reaped") is True
-
-
 
 
 @pytest.mark.linux_process_group
@@ -1704,7 +1768,9 @@ def test_concurrent_recovery_one_winner(tmp_path):
 def test_restart_terminalizes_invalid_queued_and_expired_running(tmp_path):
     repository = _repository(tmp_path)
     invalid = _create(repository, idempotency_key="restart-terminalizes-invalid")
-    running = _acquire(repository, _create(repository, idempotency_key="restart-terminalizes-running"))
+    running = _acquire(
+        repository, _create(repository, idempotency_key="restart-terminalizes-running")
+    )
     outcomes = repository.recover_after_restart(
         now="2099-01-01T00:00:00Z",
         revalidate=lambda job: job["id"] != invalid["id"],
@@ -1763,9 +1829,7 @@ def test_cr06_normal_leader_exit_reaps_process_group_before_commit(tmp_path):
 def test_normal_exit_descendants_reaped(tmp_path):
     from app.forecast.runner import SuccessWithDescendantWorker
 
-    runner, repository, _boundaries = _runner(
-        tmp_path, worker=SuccessWithDescendantWorker()
-    )
+    runner, repository, _boundaries = _runner(tmp_path, worker=SuccessWithDescendantWorker())
     result = runner.run_job(_create(repository, idempotency_key="normal-exit-descendants")["id"])
     assert result["status"] == "completed"
     assert result["process_group_reaped"] is True
@@ -1908,12 +1972,8 @@ def test_r43_cr03_loser_waits_or_returns_canonical_without_freeze(tmp_path, monk
 
 
 @pytest.mark.parametrize("state", ["reserved", "bound"])
-@pytest.mark.parametrize(
-    "clock_kind", ["past-injected-clock", "future-injected-clock"]
-)
-def test_expired_retry_owner_is_atomically_reclaimed_without_restart(
-    tmp_path, state, clock_kind
-):
+@pytest.mark.parametrize("clock_kind", ["past-injected-clock", "future-injected-clock"])
+def test_expired_retry_owner_is_atomically_reclaimed_without_restart(tmp_path, state, clock_kind):
     from datetime import UTC, datetime, timedelta
 
     observed = (
@@ -1959,17 +2019,13 @@ def test_expired_retry_owner_is_atomically_reclaimed_without_restart(
 
 
 @pytest.mark.parametrize("state", ["reserved", "bound"])
-def test_mixed_precision_expired_retry_owner_is_reclaimed(
-    tmp_path, state
-):
+def test_mixed_precision_expired_retry_owner_is_reclaimed(tmp_path, state):
     from datetime import UTC, datetime, timedelta
 
     observed = datetime(2099, 1, 1, tzinfo=UTC)
     repository = _repository(tmp_path)
     repository._clock = lambda: observed
-    source = _terminal_source_for_retry(
-        repository, key=f"mixed-precision-{state}-source"
-    )
+    source = _terminal_source_for_retry(repository, key=f"mixed-precision-{state}-source")
     first = repository.reserve_retry_operation(
         source_job_id=source["id"],
         idempotency_key=f"mixed-precision-{state}",
@@ -2003,17 +2059,13 @@ def test_mixed_precision_expired_retry_owner_is_reclaimed(
 
 
 @pytest.mark.parametrize("state", ["reserved", "bound"])
-def test_retry_guard_rejects_unexpired_direct_sql_owner_takeover(
-    tmp_path, state
-):
+def test_retry_guard_rejects_unexpired_direct_sql_owner_takeover(tmp_path, state):
     from datetime import UTC, datetime, timedelta
 
     observed = datetime(2099, 1, 1, tzinfo=UTC)
     repository = _repository(tmp_path)
     repository._clock = lambda: observed
-    source = _terminal_source_for_retry(
-        repository, key=f"unexpired-{state}-source"
-    )
+    source = _terminal_source_for_retry(repository, key=f"unexpired-{state}-source")
     first = repository.reserve_retry_operation(
         source_job_id=source["id"],
         idempotency_key=f"unexpired-{state}",
@@ -2027,16 +2079,15 @@ def test_retry_guard_rejects_unexpired_direct_sql_owner_takeover(
             input_artifact_id="input-artifact",
         )
     before = repository.get_retry_operation(first.operation_id)
-    early_now = (observed + timedelta(seconds=1)).isoformat().replace(
-        "+00:00", "Z"
-    )
-    stolen_lease = (observed + timedelta(hours=2)).isoformat().replace(
-        "+00:00", "Z"
-    )
+    early_now = (observed + timedelta(seconds=1)).isoformat().replace("+00:00", "Z")
+    stolen_lease = (observed + timedelta(hours=2)).isoformat().replace("+00:00", "Z")
 
-    with repository.connection() as connection, pytest.raises(
-        sqlite3.IntegrityError,
-        match=r"forecast retry operation transition is invalid",
+    with (
+        repository.connection() as connection,
+        pytest.raises(
+            sqlite3.IntegrityError,
+            match=r"forecast retry operation transition is invalid",
+        ),
     ):
         connection.execute(
             """UPDATE forecast_retry_operations
@@ -2160,9 +2211,12 @@ def test_r43_cr03_wake_failure_keeps_durable_canonical_work(tmp_path, monkeypatc
     assert persisted is not None
     assert persisted["status"] == "queued"
     assert persisted["dispatch_ready"] == 1
-    assert repository.get_retry_operation_for(
-        source_job_id=source["id"], idempotency_key="r43-wake"
-    )["state"] == "published"
+    assert (
+        repository.get_retry_operation_for(source_job_id=source["id"], idempotency_key="r43-wake")[
+            "state"
+        ]
+        == "published"
+    )
 
 
 def test_r43_cr03_restart_aborts_stale_unpublished_operation_without_dispatch(tmp_path):
@@ -2298,12 +2352,8 @@ def test_dispatcher_cancellation_reaps_group_before_commit(tmp_path, monkeypatch
     reaped: list[tuple[object, int | None]] = []
     monkeypatch.setattr(runner_module, "resource", object())
     monkeypatch.setattr(runner_module.os, "name", "posix")
-    monkeypatch.setattr(
-        runner_module.multiprocessing, "get_all_start_methods", lambda: ["spawn"]
-    )
-    monkeypatch.setattr(
-        runner_module.multiprocessing, "get_context", lambda _method: Context()
-    )
+    monkeypatch.setattr(runner_module.multiprocessing, "get_all_start_methods", lambda: ["spawn"])
+    monkeypatch.setattr(runner_module.multiprocessing, "get_context", lambda _method: Context())
     monkeypatch.setattr(
         ForecastRunner,
         "_reap",
@@ -2334,9 +2384,7 @@ def test_dispatcher_cancellation_reaps_group_before_commit(tmp_path, monkeypatch
 
 @pytest.mark.windows_only
 @pytest.mark.skipif(os.name != "nt", reason="Windows fail-closed evidence")
-def test_r43_wr01_windows_fail_closed_and_linux_process_group_nodes_are_explicit(
-    request, tmp_path
-):
+def test_r43_wr01_windows_fail_closed_and_linux_process_group_nodes_are_explicit(request, tmp_path):
     import os
 
     markers = "\n".join(request.config.getini("markers"))

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 import polars as pl
 
@@ -21,6 +21,42 @@ from app.tickflow.rate_limits import chunked, resolve_limit, sleep_between_batch
 from app.tickflow.repository import KlineRepository
 
 logger = logging.getLogger(__name__)
+
+
+def get_custom_data_provider(dataset: str, provider_name: str | None = None):
+    """Return the selected custom provider when it implements ``dataset``."""
+    name = provider_name or preferences.get_daily_data_provider()
+    if name == "tickflow":
+        return None
+    from app.data_providers import custom as custom_sources
+    if not custom_sources.provider_has_dataset(name, dataset):
+        return None
+    return custom_sources.get_provider(name)
+
+
+def can_sync_daily(capset: CapabilitySet) -> bool:
+    """Whether the selected daily provider or TickFlow can fetch batch daily data."""
+    return get_custom_data_provider("daily") is not None or capset.has(Cap.KLINE_DAILY_BATCH)
+
+
+def can_sync_adj_factor(capset: CapabilitySet) -> bool:
+    """Whether the resolved adjustment-factor provider can fetch factors."""
+    provider_name = preferences.get_adj_factor_provider()
+    if provider_name == "same_as_daily":
+        provider_name = preferences.get_daily_data_provider()
+    return (
+        get_custom_data_provider("adj_factor", provider_name) is not None
+        or capset.has(Cap.ADJ_FACTOR)
+    )
+
+
+def can_sync_minute(capset: CapabilitySet) -> bool:
+    """Whether the selected minute provider or TickFlow can fetch minute data."""
+    provider_name = preferences.get_minute_data_provider()
+    return (
+        get_custom_data_provider("minute", provider_name) is not None
+        or capset.has(Cap.KLINE_MINUTE_BATCH)
+    )
 
 
 def _atomic_write_parquet(df: pl.DataFrame, out) -> None:
@@ -92,7 +128,8 @@ def sync_daily_batch(symbols: list[str],
                      start_time: datetime | None = None,
                      end_time: datetime | None = None,
                      on_chunk_done: Callable[[int, int], None] | None = None,
-                     failed_out: list[str] | None = None) -> pl.DataFrame:
+                     failed_out: list[str] | None = None,
+                     asset_type: str = "stock") -> pl.DataFrame:
     """批量拉取多股日 K。
 
     优先使用 start_time / end_time 区间 + count=10000,确保覆盖完整时间段。
@@ -101,6 +138,15 @@ def sync_daily_batch(symbols: list[str],
     failed_out: 可选出参。拉取失败的分块标的会追加进该 list, 供上层判定「部分失败」
                 而非静默当成功(某分块断网 → 这些标的本轮未更新, 保持旧数据)。
     """
+    custom_provider = get_custom_data_provider("daily")
+    if custom_provider is not None:
+        return custom_provider.get_daily(
+            symbols,
+            start_time=start_time,
+            end_time=end_time,
+            asset_type=asset_type,
+            on_chunk_done=on_chunk_done,
+        )
     tf = get_client()
     out: list[pl.DataFrame] = []
     chunks = chunked(symbols, batch_size)
@@ -563,11 +609,24 @@ def sync_minute_batch(
     return pl.concat(out, how="diagonal_relaxed")
 
 
-def fetch_minute_single(symbol: str, trade_date: date) -> pl.DataFrame:
-    """从 TickFlow 实时拉取单股单日分钟 K（不写入本地）。"""
-    from datetime import datetime
+def fetch_minute_single(
+    symbol: str,
+    trade_date: date,
+    asset_type: str = "stock",
+) -> pl.DataFrame:
+    """Fetch one trading day's minute bars from the selected provider."""
     start_time = datetime(trade_date.year, trade_date.month, trade_date.day, 9, 25, 0)
     end_time = datetime(trade_date.year, trade_date.month, trade_date.day, 15, 5, 0)
+    provider_name = preferences.get_minute_data_provider()
+    custom_provider = get_custom_data_provider("minute", provider_name)
+    if custom_provider is not None:
+        return custom_provider.get_minute(
+            [symbol],
+            start_time=start_time,
+            end_time=end_time,
+            asset_type=asset_type,
+        )
+
     tf = get_client()
     try:
         raw = tf.klines.batch(
@@ -589,12 +648,20 @@ def fetch_minute_single(symbol: str, trade_date: date) -> pl.DataFrame:
     return pl.DataFrame()
 
 
-def fetch_adj_factor_single(symbol: str) -> pl.DataFrame:
-    """从 TickFlow 实时拉取单股除权因子(不写入本地), 用于单股 K 线即时前复权。
+def fetch_adj_factor_single(symbol: str, asset_type: str = "stock") -> pl.DataFrame:
+    """Fetch one symbol's adjustment factors from the resolved provider."""
+    provider_name = preferences.get_adj_factor_provider()
+    if provider_name == "same_as_daily":
+        provider_name = preferences.get_daily_data_provider()
+    custom_provider = get_custom_data_provider("adj_factor", provider_name)
+    if custom_provider is not None:
+        return custom_provider.get_adj_factors(
+            [symbol],
+            start_time=None,
+            end_time=None,
+            asset_type=asset_type,
+        )
 
-    返回结构: symbol, trade_date, ex_factor (空 DataFrame 表示无除权事件或拉取失败)。
-    与 _apply_adj_factor / compute_enriched 的 factors 参数格式一致。
-    """
     tf = get_client()
     try:
         raw = tf.klines.ex_factors([symbol], as_dataframe=True, show_progress=False)
@@ -737,17 +804,27 @@ def sync_and_persist_minute(
         start_time = now - timedelta(days=days)
     end_time = now
 
-    limit = resolve_limit(
-        capset,
-        Cap.KLINE_MINUTE_BATCH,
-        default_batch=100,
-        default_rpm=30,
-        default_rpm_when_unset=False,
-    )
+    batch_size = None
+    rpm = None
+    if not minute_is_custom:
+        limit = resolve_limit(
+            capset,
+            Cap.KLINE_MINUTE_BATCH,
+            default_batch=100,
+            default_rpm=30,
+            default_rpm_when_unset=False,
+        )
+        batch_size = limit.batch
+        rpm = limit.rpm
 
-    df = sync_minute_batch(symbols, start_time=start_time, end_time=end_time,
-                           batch_size=limit.batch, rpm=limit.rpm,
-                           on_chunk_done=on_chunk_done)
+    df = sync_minute_batch(
+        symbols,
+        start_time=start_time,
+        end_time=end_time,
+        batch_size=batch_size,
+        rpm=rpm,
+        on_chunk_done=on_chunk_done,
+    )
     if df.is_empty():
         return 0
 

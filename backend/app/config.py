@@ -1,4 +1,5 @@
 """全局配置 — 从环境变量 / .env 读取。"""
+
 from __future__ import annotations
 
 import sys
@@ -32,7 +33,7 @@ def _user_data_root() -> Path:
       - 用户体验: 用户选了安装目录, 自然期望「程序和数据都在这」, 单一总目录更直观。
       - 数据安全: Inno Setup 覆盖安装(升级)时只往 {app} 写新程序文件, 不会清空
         目录里不在安装清单上的运行时文件 (data/ 即此类), 故覆盖安装不丢数据。
-        (注意: 卸载时需在 .iss 中豁免 data/, 见 packaging/tickflow.iss 的 [UninstallDelete]。)
+        (注意: 卸载时需在 .iss 中豁免 data/, 见 packaging/athenaquant.iss 的 [UninstallDelete]。)
     旧版本数据迁移: 见 DataStore._migrate_legacy_data_dir(), 老用户首次启动自动搬迁。
     """
     # 打包桌面版: exe 同级的 data/ 子目录 (与程序同一总目录, 覆盖安装不丢数据)
@@ -103,24 +104,39 @@ class Settings(BaseSettings):
     # (均可被环境变量 DATA_DIR 覆盖, pydantic-settings 自动注入)
     data_dir: Path = _user_data_root()
 
+    # Forecast — disabled until an operator provisions a pinned local catalog.
+    forecast_enabled: bool = False
+    forecast_checkpoint_root: Path | None = None
+    forecast_device: str = "cpu"
+
     # tiers.yaml 路径 — frozen: 资源目录内; 非 frozen: 项目根目录
     tiers_yaml: Path = _RESOURCE_ROOT / "tiers.yaml" if _IS_FROZEN else _PROJECT_ROOT / "tiers.yaml"
 
     # 静态文件(前端 dist) — frozen: 资源目录的 static/; 非 frozen: frontend/dist
-    static_dir: Path = _RESOURCE_ROOT / "static" if _IS_FROZEN else (_PROJECT_ROOT / "frontend" / "dist")
+    static_dir: Path = (
+        _RESOURCE_ROOT / "static" if _IS_FROZEN else (_PROJECT_ROOT / "frontend" / "dist")
+    )
 
     @model_validator(mode="after")
     def _resolve_paths(self) -> Settings:
-        """确保 data_dir 是绝对路径（环境变量传入的相对路径基于项目根目录解析）。"""
+        """Resolve writable paths and validate server-owned Forecast controls."""
         if not self.data_dir.is_absolute():
-            # 相对路径基于项目根目录解析，而非 CWD
             self.data_dir = (_PROJECT_ROOT / self.data_dir).resolve()
+        if self.forecast_checkpoint_root is None:
+            self.forecast_checkpoint_root = self.data_dir / "forecast-checkpoints"
+        elif not self.forecast_checkpoint_root.is_absolute():
+            self.forecast_checkpoint_root = (
+                _PROJECT_ROOT / self.forecast_checkpoint_root
+            ).resolve()
+        if self.forecast_device not in {"cpu", "cuda:0"}:
+            raise ValueError("FORECAST_DEVICE must be cpu or cuda:0")
         return self
 
     @property
     def use_free_mode(self) -> bool:
         """是否走 Free 模式。优先看 secrets.json,其次看 .env。"""
         from app import secrets_store
+
         return not secrets_store.get_tickflow_key()
 
 

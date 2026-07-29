@@ -327,10 +327,7 @@ def run_now(
     #     (这两类分支不拉历史日K, 除权不能用日K范围, 只能兜底最近几日)
     written_adj = 0
     affected_symbols: list[str] = []
-    adj_provider = _prefs.get_adj_factor_provider()
-    if adj_provider == "same_as_daily":
-        adj_provider = _prefs.get_daily_data_provider()
-    can_sync_adj = capset.has(Cap.ADJ_FACTOR) or adj_provider != "tickflow"
+    can_sync_adj = kline_sync.can_sync_adj_factor(capset)
     if can_sync_adj:
         from datetime import datetime, timedelta
         adj_end = datetime.now()
@@ -448,7 +445,7 @@ def run_now(
     pull_index = _prefs.get_pipeline_pull_index()
     pull_etf = _prefs.get_pipeline_pull_etf()
 
-    if capset.has(Cap.KLINE_DAILY_BATCH) and (pull_index or pull_etf):
+    if kline_sync.can_sync_daily(capset) and (pull_index or pull_etf):
         _types = []
         if pull_index:
             _types.append("指数")
@@ -496,7 +493,7 @@ def run_now(
                 etf_inst = repo.get_etf_instruments()
                 if not etf_inst.is_empty() and "symbol" in etf_inst.columns:
                     etf_symbols = sorted(set(etf_inst["symbol"].to_list()))
-                if etf_symbols and capset.has(Cap.ADJ_FACTOR):
+                if etf_symbols and kline_sync.can_sync_adj_factor(capset):
                     try:
                         emit("sync_index", 88, "同步 ETF 除权因子…")
                         from datetime import datetime, timedelta
@@ -566,7 +563,7 @@ def run_now(
     minute_on = preferences.get_minute_sync_enabled()
     minute_days = preferences.get_minute_sync_days()
     written_minute = 0
-    if minute_on and capset.has(Cap.KLINE_MINUTE_BATCH):
+    if minute_on and kline_sync.can_sync_minute(capset):
         minute_start = today - _td(days=minute_days)
         emit("sync_minute", 90, f"获取分钟K [{minute_start} ~ {today}]…")
         logger.info("sync_minute: [%s ~ %s] start", minute_start, today)
@@ -586,7 +583,7 @@ def run_now(
     else:
         skipped.append("sync_minute")
         if minute_on:
-            logger.info("sync_minute skipped: no KLINE_MINUTE_BATCH capability")
+            logger.info("sync_minute skipped: selected provider has no minute dataset")
         else:
             logger.info("sync_minute skipped: user disabled")
 
@@ -867,7 +864,7 @@ def _maybe_push_review(content: str, meta: dict) -> None:
                     continue
                 secret = preferences.get_feishu_webhook_secret()
                 ok = webhook_adapter.send_feishu_card(
-                    url, "TickFlow · 每日复盘", subtitle, content, secret
+                    url, "AthenaQuant · 每日复盘", subtitle, content, secret
                 )
                 logger.info("review push(feishu) %s", "sent" if ok else "failed")
             elif ch == "wecom":
@@ -878,7 +875,7 @@ def _maybe_push_review(content: str, meta: dict) -> None:
                 # 企业微信 markdown 标题已含一级标题, subtitle 拼到正文首行
                 full_body = (f"**{subtitle}**\n\n{content}" if subtitle else content)
                 ok = webhook_adapter.send_wecom_markdown(
-                    url, "TickFlow · 每日复盘", full_body
+                    url, "AthenaQuant · 每日复盘", full_body
                 )
                 logger.info("review push(wecom) %s", "sent" if ok else "failed")
             # 未来更多渠道在此追加分支

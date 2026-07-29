@@ -1,5 +1,5 @@
 {
-  "name": "tickflow-stocksdk-bridge",
+  "name": "athenaquant-stocksdk-bridge",
   "private": true,
   "version": "0.1.0",
   "description": "Node bridge that exposes stock-sdk to the Python backend as a data provider.",

@@ -2,7 +2,7 @@
 
 标的列表优先用免费的 exchanges.get_instruments(type=index/etf) 拉取
 (None/Free 档均可用,无需 quote.pool 权限);付费档可额外用
-quotes.get_by_universes 作为补充来源。日K统一走 klines.batch。
+quotes.get_by_universes 补充。日K跟随用户选择的数据源,缺失时回退 TickFlow。
 """
 from __future__ import annotations
 
@@ -204,8 +204,6 @@ def sync_and_persist_index_daily(
     否则取 index_instruments 表全量(指数+ETF 合并存储)。
     on_chunk_done(current, total) 每个批次完成后回调。
     """
-    if not capset.has(Cap.KLINE_DAILY_BATCH):
-        return 0
 
     if symbols_override:
         symbols = sorted(set(s for s in symbols_override if s))
@@ -221,11 +219,31 @@ def sync_and_persist_index_daily(
         if instruments.is_empty() or "symbol" not in instruments.columns:
             return 0
         symbols = sorted(set(instruments["symbol"].to_list()))
-    limit = resolve_limit(capset, Cap.KLINE_DAILY_BATCH)
-    batch_size = min_batch(preferences.get_index_daily_batch_size(), limit)
 
     end_time = end_date or datetime.now()
     start_time = start_date or (end_time - timedelta(days=365))
+    custom_provider = kline_sync.get_custom_data_provider("daily")
+    if custom_provider is not None:
+        raw = custom_provider.get_daily(
+            symbols,
+            start_time=start_time,
+            end_time=end_time,
+            asset_type="index",
+            on_chunk_done=on_chunk_done,
+        )
+        if raw.is_empty():
+            return 0
+        repo.append_index_daily(raw)
+        enriched = compute_enriched(raw, factors=None, instruments=None)
+        repo.append_index_enriched(enriched)
+        repo.refresh_index_views()
+        return raw.height
+
+    if not capset.has(Cap.KLINE_DAILY_BATCH):
+        return 0
+    limit = resolve_limit(capset, Cap.KLINE_DAILY_BATCH)
+    batch_size = min_batch(preferences.get_index_daily_batch_size(), limit)
+
 
     total_rows = 0
     chunks = chunked(symbols, batch_size)
@@ -297,8 +315,6 @@ def sync_and_persist_etf_daily(
     """同步 ETF 日K到独立 kline_etf_* parquet,并计算 ETF enriched。
     on_chunk_done(current, total) 每个批次完成后回调。
     """
-    if not capset.has(Cap.KLINE_DAILY_BATCH):
-        return 0
 
     if symbols_override:
         symbols = sorted(set(s for s in symbols_override if s))
@@ -313,11 +329,35 @@ def sync_and_persist_etf_daily(
     if not symbols:
         return 0
 
-    limit = resolve_limit(capset, Cap.KLINE_DAILY_BATCH)
-    batch_size = min_batch(preferences.get_index_daily_batch_size(), limit)
-
     end_time = end_date or datetime.now()
     start_time = start_date or (end_time - timedelta(days=365))
+    custom_provider = kline_sync.get_custom_data_provider("daily")
+    if custom_provider is not None:
+        raw = custom_provider.get_daily(
+            symbols,
+            start_time=start_time,
+            end_time=end_time,
+            asset_type="etf",
+            on_chunk_done=on_chunk_done,
+        )
+        if raw.is_empty():
+            return 0
+        factors = _load_etf_factors(repo)
+        repo.append_etf_daily(raw)
+        batch_factors = (
+            factors.filter(pl.col("symbol").is_in(symbols))
+            if not factors.is_empty()
+            else factors
+        )
+        enriched = compute_enriched(raw, factors=batch_factors, instruments=None)
+        repo.append_etf_enriched(enriched)
+        repo.refresh_index_views()
+        return raw.height
+
+    if not capset.has(Cap.KLINE_DAILY_BATCH):
+        return 0
+    limit = resolve_limit(capset, Cap.KLINE_DAILY_BATCH)
+    batch_size = min_batch(preferences.get_index_daily_batch_size(), limit)
 
     total_rows = 0
     chunks = chunked(symbols, batch_size)

@@ -1,4 +1,4 @@
-# 部署指南
+# AthenaQuant 部署指南
 
 本项目的几种运行方式，按推荐程度排序。配置项详解见 [configuration.md](./configuration.md)。
 
@@ -8,11 +8,11 @@
 
 ## 方式 A:Dev 模式(二次开发推荐)
 
-由于刚开源近期更新频繁,推荐开发模式运行,可随时 `git pull` 同步最新代码。
+开发环境适合二次开发与调试。生产运行优先使用下方的 Docker Compose 单容器方式。
 
 ```bash
-git clone https://github.com/shy3130/tickflow-stock-panel.git
-cd tickflow-stock-panel
+git clone https://github.com/tchivs/AthenaQuant.git
+cd AthenaQuant
 cp .env.example .env       # 按需填 TICKFLOW_API_KEY(留空 = None 模式)
 ./dev.sh                   # Windows: .\dev.ps1
 ```
@@ -45,6 +45,43 @@ docker compose up --build
 
 Docker 采用两阶段构建,前端 dist 拷进后端镜像,**单容器**运行,数据完全在自己手里。
 
+### 可选模块
+
+`BACKEND_EXTRAS` 控制镜像构建时安装的可选依赖，多个值以空格分隔：
+
+```ini
+BACKEND_EXTRAS=backtest shadow forecast
+```
+
+- `backtest`：安装 vectorbt 兼容层。
+- `shadow`：启用 Shadow Account 研究依赖。
+- `forecast`：安装本地 Forecast 推理依赖。它不会在应用启动时下载模型。
+- `legacy-cpu`：为不支持 AVX2/FMA 的旧主机安装 Polars 兼容运行时。
+
+#### 启用本地 Kronos Forecast
+
+当前生产批准配置为 CPU 可运行的 `kronos-mini`。先在 `.env` 中设置：
+
+```ini
+BACKEND_EXTRAS=forecast
+FORECAST_ENABLED=true
+FORECAST_DEVICE=cpu
+FORECAST_CHECKPOINT_ROOT=/app/data/forecast-checkpoints
+```
+
+显式构建、下载固定 revision、校验 SHA-256，并生成版本化 XSHG 交易日历：
+
+```bash
+docker compose build app
+docker compose run --rm app /app/.venv/bin/python -m app.forecast.provision \
+  --root /app/data/forecast-checkpoints
+docker compose up -d
+```
+
+Provisioning 命令可重复执行；摘要一致的现有文件不会重复下载。应用启动时只接受固定 revision、`safetensors`、`local_files_only=true`、`trust_remote_code=false` 且摘要完全匹配的本地资产。任一校验失败都会保持 Forecast 不可用，不影响核心应用。
+
+2027 覆盖采用[全国银行间同业拆借中心于 2025-12-19 发布的本币交易系统预设节假日](https://www.chinamoney.com.cn/chinese/bbjjr/20251219/3254570.html)，并与 `exchange-calendars` 的 XSHG 2010–2026 正式日历合并。该公告明确说明国务院正式通知发布后仍会调整；上交所发布 2027 年正式休市安排后，必须更新闭市日期并重新 provision。日历 revision 以 `xshg-cfets-preset-2027-` 标识，避免把预设日期误当成最终公告。
+
 > 💡 镜像已内置 Node.js 运行时并预装 **stock-sdk** 插件依赖,Docker 部署下开箱即用,无需手动 `npm install`。
 
 更新到新版本:
@@ -58,7 +95,7 @@ docker compose up --build -d
 
 ## 方式 C:GitHub Actions 自行构建
 
-Fork 本仓库后,手动触发 [Release 打包工作流](https://github.com/shy3130/tickflow-stock-panel/actions/workflows/release.yml) 自行构建桌面客户端安装包。
+Fork 本仓库后，手动触发 [Release 打包工作流](https://github.com/tchivs/AthenaQuant/actions/workflows/release.yml) 自行构建桌面客户端安装包。
 
 > ⚠️ 目前官方 Release 的安装包存在已知问题(修复中),如需桌面客户端请优先用此方式自行构建,或用上面的 Dev / Docker 方式运行。
 
@@ -82,15 +119,23 @@ vectorbt → numba 体积较大,作为可选 extras(`uv sync --extra backtest`)�
 
 ---
 
-## 更新代码(已部署用户必读)
+## 更新、备份与恢复
 
-拉取新版本只需一条命令:
+升级前先备份本地数据；升级容器时保留项目根目录的 `data/` 挂载目录。完成后再拉取代码并重建镜像：
 
 ```bash
 git pull
+docker compose up --build -d
 ```
 
-**整个 `data/` 目录都不纳入 git** —— 行情 K线、财务、自选、回测、监控记录,乃至概念/行业扩展数据,全部是程序运行时生成/拉取的用户数据,`git pull` 物理上无法影响它们。新用户首次启动时,概念/行业两份扩展数据会自动从远程接口拉取,无需任何手动操作。
+**整个 `data/` 目录都不纳入 git** —— 行情、财务、自选、回测、监控、研究工件与 operational SQLite 都是本地运行数据，`git pull` 不会覆盖它们。建议停服后归档该目录：
+
+```bash
+docker compose down
+tar -czf athenaquant-data-$(date +%F).tar.gz data
+```
+
+恢复时解压回项目根目录的 `data/`，然后重新执行 `docker compose up -d`。
 
 > ⚠️ **切勿使用以下命令"解决冲突"或"清理",它们会一次性删光 `data/` 下所有未被 git 跟踪的数据:**
 > - `git clean -fdx`(最危险,会删掉所有 `.gitignore` 忽略的文件)

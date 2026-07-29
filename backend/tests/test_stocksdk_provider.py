@@ -11,6 +11,7 @@ import shutil
 import subprocess
 
 import polars as pl
+import pytest
 
 from app.plugins.stocksdk import bridge
 from app.plugins.stocksdk import provider as sp
@@ -45,8 +46,9 @@ def test_get_daily_normalizes_and_echoes_symbol(monkeypatch):
     assert df.schema["close"] == pl.Float64
 
 
-def test_get_adj_factors_from_bridge_ratio(monkeypatch):
-    # 桥接内部已算好 ex_factor = close_hfq/close_none, 这里验证 Python 侧归一化。
+def test_get_adj_factors_converts_bridge_cumulative_ratio(monkeypatch):
+    # bridge returns cumulative close_hfq/close_none ratios; provider converts
+    # them to the event multipliers consumed by the adjustment pipeline.
     _patch_run_job(monkeypatch, {
         "adj": {"ok": True, "op": "adj", "rows": {
             "600519.SH": [
@@ -59,7 +61,36 @@ def test_get_adj_factors_from_bridge_ratio(monkeypatch):
     assert df.columns == ["symbol", "trade_date", "ex_factor"]
     assert df.height == 2
     assert df.schema["trade_date"] == pl.Date
-    assert abs(df["ex_factor"][0] - 5.29) < 1e-9
+    assert df["ex_factor"][0] == 1.0
+    assert abs(df["ex_factor"][1] - 5.30 / 5.29) < 1e-9
+
+
+def test_long_stocksdk_factor_history_keeps_adjusted_ohlc_finite(monkeypatch):
+    from app.indicators.pipeline import _apply_adj_factor
+
+    dates = [dt.date(2020, 1, 1) + dt.timedelta(days=i) for i in range(1200)]
+    factor_rows = [
+        {"symbol": "600519.SH", "trade_date": day.isoformat(), "ex_factor": 5.0 + i / 1000}
+        for i, day in enumerate(dates)
+    ]
+    _patch_run_job(monkeypatch, {
+        "adj": {"ok": True, "op": "adj", "rows": {"600519.SH": factor_rows}},
+    })
+    factors = StockSDKProvider().get_adj_factors(["600519.SH"], None, None)
+    raw = pl.DataFrame({
+        "symbol": ["600519.SH"] * len(dates),
+        "date": dates,
+        "open": [10.0] * len(dates),
+        "high": [11.0] * len(dates),
+        "low": [9.0] * len(dates),
+        "close": [10.5] * len(dates),
+    })
+
+    adjusted = _apply_adj_factor(raw, factors)
+
+    for column in ("open", "high", "low", "close"):
+        assert adjusted[column].null_count() == 0
+        assert adjusted[column].is_finite().all()
 
 
 def test_get_minute_datetime_is_beijing_wall_clock(monkeypatch):
@@ -226,3 +257,280 @@ def test_builtin_not_editable():
             raise AssertionError("expected ValueError for builtin")
         except ValueError:
             pass
+
+
+class _DailyRoutingProvider:
+    def __init__(self) -> None:
+        self.asset_types: list[str] = []
+        self.minute_asset_types: list[str] = []
+        self.adj_asset_types: list[str] = []
+
+    def get_daily(self, symbols, start_time, end_time, asset_type, on_chunk_done=None):
+        self.asset_types.append(asset_type)
+        if on_chunk_done:
+            on_chunk_done(1, 1)
+        return pl.DataFrame({
+            "symbol": symbols,
+            "date": [dt.date(2026, 1, 5)] * len(symbols),
+            "open": [10.0] * len(symbols),
+            "high": [11.0] * len(symbols),
+            "low": [9.0] * len(symbols),
+            "close": [10.5] * len(symbols),
+            "volume": [100.0] * len(symbols),
+            "amount": [1000.0] * len(symbols),
+        })
+
+    def get_minute(self, symbols, start_time, end_time, asset_type, on_chunk_done=None):
+        self.minute_asset_types.append(asset_type)
+        return pl.DataFrame({
+            "symbol": symbols,
+            "datetime": [dt.datetime(2026, 1, 5, 9, 30)] * len(symbols),
+            "open": [10.0] * len(symbols),
+            "high": [11.0] * len(symbols),
+            "low": [9.0] * len(symbols),
+            "close": [10.5] * len(symbols),
+            "volume": [100.0] * len(symbols),
+            "amount": [1000.0] * len(symbols),
+        })
+
+    def get_adj_factors(self, symbols, start_time, end_time, asset_type, on_chunk_done=None):
+        self.adj_asset_types.append(asset_type)
+        return pl.DataFrame({
+            "symbol": symbols,
+            "trade_date": [dt.date(2026, 1, 5)] * len(symbols),
+            "ex_factor": [1.2] * len(symbols),
+        })
+
+
+class _DailyRoutingRepo:
+    def __init__(self) -> None:
+        self.index_daily: list[pl.DataFrame] = []
+        self.index_enriched: list[pl.DataFrame] = []
+        self.etf_daily: list[pl.DataFrame] = []
+        self.etf_enriched: list[pl.DataFrame] = []
+        self.refreshes = 0
+
+    def append_index_daily(self, df):
+        self.index_daily.append(df)
+
+    def append_index_enriched(self, df):
+        self.index_enriched.append(df)
+
+    def append_etf_daily(self, df):
+        self.etf_daily.append(df)
+
+    def append_etf_enriched(self, df):
+        self.etf_enriched.append(df)
+
+    def refresh_index_views(self):
+        self.refreshes += 1
+
+
+@pytest.mark.parametrize(
+    ("sync_name", "asset_type", "daily_attr", "enriched_attr"),
+    [
+        ("sync_and_persist_index_daily", "index", "index_daily", "index_enriched"),
+        ("sync_and_persist_etf_daily", "etf", "etf_daily", "etf_enriched"),
+    ],
+)
+def test_index_and_etf_daily_route_to_custom_provider_without_tickflow_capability(
+    monkeypatch, sync_name, asset_type, daily_attr, enriched_attr,
+):
+    from app.services import index_sync
+    from app.tickflow.capabilities import CapabilitySet
+
+    provider = _DailyRoutingProvider()
+    repo = _DailyRoutingRepo()
+    progress = []
+    monkeypatch.setattr(index_sync.kline_sync, "get_custom_data_provider", lambda dataset: provider)
+    monkeypatch.setattr(index_sync, "compute_enriched", lambda raw, **kwargs: raw)
+    monkeypatch.setattr(index_sync, "_load_etf_factors", lambda repo: pl.DataFrame())
+    monkeypatch.setattr(
+        index_sync.kline_sync,
+        "sync_daily_batch",
+        lambda *args, **kwargs: pytest.fail("TickFlow must not be called"),
+    )
+
+    written = getattr(index_sync, sync_name)(
+        repo,
+        CapabilitySet(),
+        symbols_override=["000001.SH"],
+        on_chunk_done=lambda current, total: progress.append((current, total)),
+    )
+
+    assert written == 1
+    assert provider.asset_types == [asset_type]
+    assert len(getattr(repo, daily_attr)) == 1
+    assert len(getattr(repo, enriched_attr)) == 1
+    assert repo.refreshes == 1
+    assert progress == [(1, 1)]
+
+
+def test_custom_provider_capabilities_bypass_tickflow_caps(monkeypatch):
+    from app.data_providers import custom as custom_sources
+    from app.services import kline_sync
+    from app.tickflow.capabilities import CapabilitySet
+
+    provider = object()
+    monkeypatch.setattr(kline_sync.preferences, "get_daily_data_provider", lambda: "custom")
+    monkeypatch.setattr(kline_sync.preferences, "get_adj_factor_provider", lambda: "same_as_daily")
+    monkeypatch.setattr(kline_sync.preferences, "get_minute_data_provider", lambda: "custom")
+    monkeypatch.setattr(
+        custom_sources,
+        "provider_has_dataset",
+        lambda name, dataset: name == "custom" and dataset in {"daily", "adj_factor", "minute"},
+    )
+    monkeypatch.setattr(custom_sources, "get_provider", lambda name: provider)
+
+    capset = CapabilitySet()
+    assert kline_sync.can_sync_daily(capset)
+    assert kline_sync.can_sync_adj_factor(capset)
+    assert kline_sync.can_sync_minute(capset)
+    assert kline_sync.get_custom_data_provider("daily") is provider
+
+
+def test_on_demand_fetches_use_selected_providers(monkeypatch):
+    from app.services import kline_sync
+
+    provider = _DailyRoutingProvider()
+    monkeypatch.setattr(
+        kline_sync,
+        "get_custom_data_provider",
+        lambda dataset, provider_name=None: provider,
+    )
+    monkeypatch.setattr(kline_sync.preferences, "get_minute_data_provider", lambda: "custom")
+    monkeypatch.setattr(kline_sync.preferences, "get_adj_factor_provider", lambda: "custom")
+    monkeypatch.setattr(
+        kline_sync,
+        "get_client",
+        lambda: pytest.fail("TickFlow must not be used for custom on-demand fetches"),
+    )
+
+    daily = kline_sync.sync_daily_batch(["510300.SH"], count=30, asset_type="etf")
+    minute = kline_sync.fetch_minute_single(
+        "000001.SH", dt.date(2026, 1, 5), asset_type="index",
+    )
+    factors = kline_sync.fetch_adj_factor_single("510300.SH", asset_type="etf")
+
+    assert daily.height == minute.height == factors.height == 1
+    assert provider.asset_types == ["etf"]
+    assert provider.minute_asset_types == ["index"]
+    assert provider.adj_asset_types == ["etf"]
+
+
+def test_uninstall_plugin_resets_explicit_adj_factor_provider(monkeypatch):
+    from app.api import settings as settings_api
+    from app.data_providers import custom as custom_sources
+    from app.services import preferences
+
+    saved = []
+    monkeypatch.setattr(custom_sources, "is_builtin", lambda name: True)
+    monkeypatch.setattr(custom_sources, "uninstall_plugin", lambda name: (True, "ok"))
+    monkeypatch.setattr(custom_sources, "load_all", lambda: None)
+    monkeypatch.setattr(settings_api, "list_data_sources", lambda: {})
+    monkeypatch.setattr(preferences, "get_daily_data_provider", lambda: "tickflow")
+    monkeypatch.setattr(preferences, "get_minute_data_provider", lambda: "tickflow")
+    monkeypatch.setattr(preferences, "get_realtime_data_provider", lambda: "tickflow")
+    monkeypatch.setattr(preferences, "get_financial_provider", lambda: "tickflow")
+    monkeypatch.setattr(preferences, "get_adj_factor_provider", lambda: "stocksdk")
+    monkeypatch.setattr(preferences, "save", lambda update: saved.append(update))
+
+    result = settings_api.uninstall_plugin("stocksdk")
+
+    assert result["uninstall_ok"] is True
+    assert {"adj_factor_provider": "same_as_daily"} in saved
+
+
+def test_custom_minute_universe_uses_local_instruments_without_tickflow_capability():
+    from app.api.kline import _resolve_minute_universe
+    from app.tickflow.capabilities import CapabilitySet
+
+    class Repo:
+        @staticmethod
+        def get_instruments():
+            return pl.DataFrame({"symbol": ["600519.SH", "000001.SZ", "600519.SH"]})
+
+    assert _resolve_minute_universe(CapabilitySet(), Repo()) == ["000001.SZ", "600519.SH"]
+
+
+def test_custom_minute_persistence_skips_tickflow_limits(monkeypatch):
+    from app.services import kline_sync
+    from app.tickflow.capabilities import CapabilitySet
+
+    class Repo:
+        pass
+
+    calls = []
+    monkeypatch.setattr(kline_sync.preferences, "get_minute_data_provider", lambda: "custom")
+    monkeypatch.setattr(
+        "app.data_providers.custom.provider_has_dataset",
+        lambda name, dataset: name == "custom" and dataset == "minute",
+    )
+    monkeypatch.setattr(kline_sync, "_cleanup_null_datetime_minute", lambda repo: None)
+    monkeypatch.setattr(kline_sync, "_migrate_symbol_to_date_partition", lambda repo: None)
+    monkeypatch.setattr(kline_sync, "_latest_minute_datetime", lambda repo: None)
+    monkeypatch.setattr(
+        kline_sync,
+        "resolve_limit",
+        lambda *args, **kwargs: pytest.fail("custom providers must not resolve TickFlow limits"),
+    )
+    monkeypatch.setattr(
+        kline_sync,
+        "sync_minute_batch",
+        lambda *args, **kwargs: calls.append(kwargs) or pl.DataFrame(),
+    )
+
+    written = kline_sync.sync_and_persist_minute(
+        ["600519.SH"], Repo(), CapabilitySet(), days=2,
+    )
+
+    assert written == 0
+    assert calls[0]["batch_size"] is None
+    assert calls[0]["rpm"] is None
+
+
+def test_minute_http_route_uses_selected_custom_provider(monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.api import kline as kline_api
+    from app.services import kline_sync
+
+    class Repo:
+        @staticmethod
+        def resolve_asset_type(symbol):
+            return "stock"
+
+        @staticmethod
+        def execute_one(*args, **kwargs):
+            return ("贵州茅台", None, None)
+
+        @staticmethod
+        def latest_minute_date(symbol, asset_type):
+            return None
+
+        @staticmethod
+        def get_minute(symbol, trade_date, asset_type):
+            return pl.DataFrame()
+
+    provider = _DailyRoutingProvider()
+    monkeypatch.setattr(kline_sync.preferences, "get_minute_data_provider", lambda: "custom")
+    monkeypatch.setattr(
+        kline_sync,
+        "get_custom_data_provider",
+        lambda dataset, provider_name=None: provider if dataset == "minute" else None,
+    )
+
+    app = FastAPI()
+    app.state.repo = Repo()
+    app.include_router(kline_api.router)
+
+    response = TestClient(app).get(
+        "/api/kline/minute",
+        params={"symbol": "600519.SH", "date": "2026-01-05"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["source"] == "live"
+    assert response.json()["rows"][0]["symbol"] == "600519.SH"
+    assert provider.minute_asset_types == ["stock"]

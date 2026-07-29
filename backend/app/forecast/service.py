@@ -1,4 +1,5 @@
 """Server-owned production composition for governed Forecast requests."""
+
 from __future__ import annotations
 
 import os
@@ -117,9 +118,7 @@ class DurableForecastDispatcher:
         except Exception:
             return False
 
-    def close(
-        self, *, timeout_seconds: float = 2.0
-    ) -> DispatcherCloseOutcome:
+    def close(self, *, timeout_seconds: float = 2.0) -> DispatcherCloseOutcome:
         with self._lifecycle_lock:
             self._stop.set()
             self._wake.set()
@@ -205,15 +204,9 @@ class ForecastService:
 
     def public_price_context(self, record: Mapping[str, object]) -> dict[str, object]:
         """Return chart context derived only from the record's verified governed input."""
-        history = self.freezer.public_close_history(
-            record.get("input_artifact_descriptor")
-        )
+        history = self.freezer.public_close_history(record.get("input_artifact_descriptor"))
         origin = record.get("origin_session_id")
-        if (
-            not history
-            or not isinstance(origin, str)
-            or history[-1].get("session_id") != origin
-        ):
+        if not history or not isinstance(origin, str) or history[-1].get("session_id") != origin:
             raise ValueError("Forecast governed input does not end at the record as-of session")
         return {"as_of_close": history[-1]["close"], "history": history}
 
@@ -229,8 +222,7 @@ class ForecastService:
             (self.runner, "run_job"),
         )
         if not callable(self.as_of_session) or any(
-            not callable(getattr(collaborator, method, None))
-            for collaborator, method in required
+            not callable(getattr(collaborator, method, None)) for collaborator, method in required
         ):
             raise RuntimeError("Forecast production service is incomplete")
 
@@ -290,9 +282,7 @@ class ForecastService:
                             self._discard_unbound_input(
                                 prepared.frozen.descriptor, owned_artifact_ids
                             )
-                    raise ValueError(
-                        "Forecast idempotency identity conflicts with governed input"
-                    )
+                    raise ValueError("Forecast idempotency identity conflicts with governed input")
 
                 bound = getattr(self.repository, "_commit_identities", {}).get(str(job["id"]))
                 bound_id = None
@@ -307,9 +297,7 @@ class ForecastService:
                 elif bound_id != prepared.frozen.descriptor.artifact_id:
                     # Race loser: discard only this invocation's unbound namespace.
                     if not self._artifact_is_referenced(prepared.frozen.descriptor.artifact_id):
-                        self._discard_unbound_input(
-                            prepared.frozen.descriptor, owned_artifact_ids
-                        )
+                        self._discard_unbound_input(prepared.frozen.descriptor, owned_artifact_ids)
                         owned_artifact_ids.discard(prepared.frozen.descriptor.artifact_id)
 
             if job.get("status") == "queued":
@@ -367,17 +355,11 @@ class ForecastService:
                     )
                 else:
                     prepared = self._prepare_for_job(source)
-                    artifact_id = getattr(
-                        prepared.frozen.descriptor, "artifact_id", None
-                    )
+                    artifact_id = getattr(prepared.frozen.descriptor, "artifact_id", None)
                     if isinstance(artifact_id, str) and artifact_id:
                         owned_artifact_ids.add(artifact_id)
-                    if prepared.frozen.input_fingerprint != source.get(
-                        "input_fingerprint"
-                    ):
-                        raise ValueError(
-                            "Forecast retry governed input no longer matches source"
-                        )
+                    if prepared.frozen.input_fingerprint != source.get("input_fingerprint"):
+                        raise ValueError("Forecast retry governed input no longer matches source")
                     bind_operation(
                         operation_id=reservation.operation_id,
                         owner_token=owner_token,
@@ -390,9 +372,7 @@ class ForecastService:
                     )
                 published = True
                 if not isinstance(job, Mapping):
-                    raise RuntimeError(
-                        "Forecast retry repository returned an invalid job"
-                    )
+                    raise RuntimeError("Forecast retry repository returned an invalid job")
                 if prepared is not None:
                     try:
                         self._bind(job, prepared)
@@ -409,22 +389,15 @@ class ForecastService:
                         self.runner.run_job(str(job["id"]))
                 canonical = self.repository.get_job(str(job["id"]))
                 if not isinstance(canonical, dict):
-                    raise RuntimeError(
-                        "Forecast retry job disappeared after publication"
-                    )
+                    raise RuntimeError("Forecast retry job disappeared after publication")
                 return canonical
             except Exception:
                 if published:
-                    operation = self.repository.get_retry_operation(
-                        reservation.operation_id
-                    )
-                    if (
-                        isinstance(operation, Mapping)
-                        and isinstance(operation.get("canonical_job_id"), str)
+                    operation = self.repository.get_retry_operation(reservation.operation_id)
+                    if isinstance(operation, Mapping) and isinstance(
+                        operation.get("canonical_job_id"), str
                     ):
-                        canonical = self.repository.get_job(
-                            str(operation["canonical_job_id"])
-                        )
+                        canonical = self.repository.get_job(str(operation["canonical_job_id"]))
                         if isinstance(canonical, dict):
                             return canonical
                     raise
@@ -441,26 +414,20 @@ class ForecastService:
                     and not self._artifact_is_referenced(artifact_id)
                 ):
                     with suppress(Exception):
-                        self._discard_unbound_input(
-                            prepared.frozen.descriptor, owned_artifact_ids
-                        )
+                        self._discard_unbound_input(prepared.frozen.descriptor, owned_artifact_ids)
                 raise
 
     def _wait_for_retry_operation(
         self, operation_id: str
     ) -> dict[str, Any] | RetryOperationInProgress:
-        wait_seconds = max(
-            min(float(getattr(self, "_retry_wait_seconds", 0.05)), 0.25), 0.0
-        )
+        wait_seconds = max(min(float(getattr(self, "_retry_wait_seconds", 0.05)), 0.25), 0.0)
         deadline = time.monotonic() + wait_seconds
         while True:
             operation = self.repository.get_retry_operation(operation_id)
             if not isinstance(operation, Mapping):
                 raise RuntimeError("Forecast retry operation disappeared")
             canonical_job_id = operation.get("canonical_job_id")
-            if operation.get("state") == "published" and isinstance(
-                canonical_job_id, str
-            ):
+            if operation.get("state") == "published" and isinstance(canonical_job_id, str):
                 canonical = self.repository.get_job(canonical_job_id)
                 if isinstance(canonical, dict):
                     return canonical
@@ -650,7 +617,9 @@ class ForecastService:
         try:
             job_id = str(job.get("id"))
             expected_fingerprint = job.get("input_fingerprint")
-            if not isinstance(expected_fingerprint, str) or not _SHA256.fullmatch(expected_fingerprint):
+            if not isinstance(expected_fingerprint, str) or not _SHA256.fullmatch(
+                expected_fingerprint
+            ):
                 return False
 
             bound = getattr(self.repository, "_commit_identities", {}).get(job_id)
@@ -678,7 +647,9 @@ class ForecastService:
                     if handle.get("checksum_sha256") not in (None, expected_checksum):
                         return False
                     payload = handle.get("payload")
-                    if isinstance(payload, (bytes, bytearray)) and isinstance(expected_checksum, str):
+                    if isinstance(payload, (bytes, bytearray)) and isinstance(
+                        expected_checksum, str
+                    ):
                         if sha256(bytes(payload)).hexdigest() != expected_checksum:
                             return False
 
@@ -701,12 +672,14 @@ class ForecastService:
             managed_after = store.descriptor(expected_artifact_id)
             if managed_after.checksum_sha256 != managed.checksum_sha256:
                 return False
-            if isinstance(expected_checksum, str) and managed_after.checksum_sha256 != expected_checksum:
+            if (
+                isinstance(expected_checksum, str)
+                and managed_after.checksum_sha256 != expected_checksum
+            ):
                 return False
             return True
         except Exception:
             return False
-
 
     def _job_owns_artifact(self, job: Mapping[str, object], artifact_id: str) -> bool:
         bound = getattr(self.repository, "_commit_identities", {}).get(str(job.get("id")))
@@ -723,7 +696,9 @@ class ForecastService:
         if callable(checker):
             return bool(checker(artifact_id))
         for record in getattr(self.repository, "_commit_identities", {}).values():
-            descriptor = record.get("input_artifact_descriptor") if isinstance(record, Mapping) else None
+            descriptor = (
+                record.get("input_artifact_descriptor") if isinstance(record, Mapping) else None
+            )
             if isinstance(descriptor, Mapping) and descriptor.get("artifact_id") == artifact_id:
                 return True
         return False
@@ -799,7 +774,11 @@ class GovernedForecastDataSource:
         if not isinstance(principal, str) or not principal:
             raise LookupError("instrument not found")
         instruments = self.repository.get_instruments()
-        if not isinstance(instruments, pl.DataFrame) or instruments.is_empty() or "symbol" not in instruments.columns:
+        if (
+            not isinstance(instruments, pl.DataFrame)
+            or instruments.is_empty()
+            or "symbol" not in instruments.columns
+        ):
             raise LookupError("instrument not found")
         matched = instruments.filter(pl.col("symbol").cast(pl.Utf8) == instrument_id).head(1)
         if matched.height != 1:
@@ -829,7 +808,7 @@ class GovernedForecastDataSource:
             ["date", "open", "high", "low", "close", "volume"]
             + (["amount"] if "amount" in raw.columns else [])
         ).sort("date")
-        revision_payload = selected.write_json(row_oriented=True).encode("utf-8")
+        revision_payload = selected.write_json().encode("utf-8")
         revision = sha256(revision_payload).hexdigest()
         return selected.with_columns(
             pl.lit(symbol).alias("instrument_id"),
@@ -886,7 +865,9 @@ class GovernedForecastActuals:
         return {"close": float(exact["close"][0])}
 
 
-def verify_output_artifact(*, root: Path, manifest: Mapping[str, object], job: Mapping[str, object]) -> bool:
+def verify_output_artifact(
+    *, root: Path, manifest: Mapping[str, object], job: Mapping[str, object]
+) -> bool:
     """Precheck both regular artifact payloads before strict transactional validation."""
     del job
     try:

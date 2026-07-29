@@ -1367,7 +1367,7 @@ class QuoteService:
                 else:
                     body = message or name
 
-                title = f"TickFlow · {source_label}"
+                title = f"AthenaQuant · {source_label}"
                 notify_adapter.notify(title, body)
         except Exception as e:  # noqa: BLE001
             logger.debug("系统通知发送异常 (不影响告警主流程): %s", e)

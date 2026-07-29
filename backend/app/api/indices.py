@@ -10,7 +10,6 @@ from fastapi import APIRouter, HTTPException, Query, Request
 
 from app.indicators.pipeline import compute_enriched
 from app.services import index_sync, kline_sync
-from app.tickflow.capabilities import Cap
 
 logger = logging.getLogger(__name__)
 
@@ -88,13 +87,15 @@ def get_index_daily(
         return {"symbol": symbol, "name": info.get("name"), "index_info": info, "rows": df.to_dicts(), "source": "index_enriched"}
 
     capset = request.app.state.capabilities
-    if not capset.has(Cap.KLINE_DAILY_BATCH):
+    if not kline_sync.can_sync_daily(capset):
         return {"symbol": symbol, "name": info.get("name"), "index_info": info, "rows": [], "source": "none"}
 
     try:
-        raw = kline_sync.sync_daily_batch([symbol], count=days + 150)
+        raw = kline_sync.sync_daily_batch(
+            [symbol], count=days + 150, asset_type="index",
+        )
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(status_code=502, detail=f"TickFlow fetch failed: {e}") from e
+        raise HTTPException(status_code=502, detail=f"数据源拉取失败: {e}") from e
     if raw.is_empty():
         return {"symbol": symbol, "name": info.get("name"), "index_info": info, "rows": [], "source": "none"}
 
@@ -113,7 +114,7 @@ def get_index_minute(
     repo = request.app.state.repo
     info = _index_info(repo, symbol)
     day = trade_date or date.today()
-    df = kline_sync.fetch_minute_single(symbol, day)
+    df = kline_sync.fetch_minute_single(symbol, day, asset_type="index")
     return {
         "symbol": symbol,
         "name": info.get("name"),
@@ -140,8 +141,8 @@ def sync_index_daily(
     """同步指数日K到独立 parquet。"""
     repo = request.app.state.repo
     capset = request.app.state.capabilities
-    if not capset.has(Cap.KLINE_DAILY_BATCH):
-        raise HTTPException(status_code=403, detail="需要 Pro+ 权限 (batch K-line)")
+    if not kline_sync.can_sync_daily(capset):
+        raise HTTPException(status_code=403, detail="当前数据源不支持批量日 K")
     end = datetime.now()
     start = end - timedelta(days=days)
     count = index_sync.sync_index_instruments(repo)

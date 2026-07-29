@@ -11,7 +11,8 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 SUPPLY_MANIFEST = (
     REPOSITORY_ROOT
     / ".planning"
-    / "phases"
+    / "milestones"
+    / "v1.0-phases"
     / "05-optional-enhancements"
     / "05-01-SUMMARY.md"
 )
@@ -96,6 +97,7 @@ def test_forecast_torch_exact_pin_and_extra_isolation() -> None:
         "einops==0.8.1",
         "huggingface-hub==0.33.1",
         "safetensors==0.6.2",
+        "exchange-calendars==4.13.2",
     ]
     sources = project["tool"]["uv"]["sources"]
     assert sources["torch"] == {"index": "pytorch-cpu"}
@@ -168,7 +170,7 @@ def test_lock_contains_only_approved_optional_identities_and_hashes() -> None:
 def test_project_lock_metadata_keeps_extras_separate_and_approved() -> None:
     _project, lock = _project_and_lock()
     root = next(
-        package for package in lock["package"] if package["name"] == "tickflow-stock-panel-backend"
+        package for package in lock["package"] if package["name"] == "athenaquant-backend"
     )
     assert root["optional-dependencies"]["shadow"] == [{"name": "scikit-learn"}]
     forecast = root["optional-dependencies"]["forecast"]
@@ -177,6 +179,7 @@ def test_project_lock_metadata_keeps_extras_separate_and_approved() -> None:
         "einops",
         "huggingface-hub",
         "safetensors",
+        "exchange-calendars",
     }
     assert "matplotlib" not in {entry["name"] for entry in forecast}
 

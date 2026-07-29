@@ -44,6 +44,29 @@ def _yyyymmdd(dt: datetime | None) -> str | None:
     return dt.strftime("%Y%m%d") if dt else None
 
 
+def _incremental_adj_factors(df: pl.DataFrame) -> pl.DataFrame:
+    """Convert stock-sdk's daily cumulative HFQ/raw ratio to event multipliers.
+
+    The internal adjustment pipeline cumulatively multiplies ``ex_factor``.
+    Passing the bridge's cumulative ratio directly therefore overflows on long
+    histories and turns adjusted OHLC values into nulls.
+    """
+    if df.is_empty():
+        return df
+    return (
+        df.filter(pl.col("ex_factor").is_finite() & (pl.col("ex_factor") > 0))
+        .sort(["symbol", "trade_date"])
+        .with_columns(
+            (
+                pl.col("ex_factor")
+                / pl.col("ex_factor").shift(1).over("symbol")
+            )
+            .fill_null(1.0)
+            .alias("ex_factor")
+        )
+    )
+
+
 class StockSDKProvider:
     """内置 stock-sdk 数据源。"""
 
@@ -122,7 +145,7 @@ class StockSDKProvider:
             for rows in (result.get("rows") or {}).values():
                 flat.extend(rows or [])
             if flat:
-                df = normalize_adj_factors(flat, source=self.name)
+                df = _incremental_adj_factors(normalize_adj_factors(flat, source=self.name))
                 if not df.is_empty():
                     frames.append(df)
             if on_chunk_done:

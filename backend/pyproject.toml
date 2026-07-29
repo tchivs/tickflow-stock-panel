@@ -1,7 +1,7 @@
 [project]
-name = "tickflow-stock-panel-backend"
-version = "0.1.83"
-description = "A 股选股 + 监控 + 回测面板 — TickFlow 适配"
+name = "athenaquant-backend"
+version = "1.0.0"
+description = "Self-hosted A-share quantitative research platform"
 readme = "../README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
@@ -70,6 +70,7 @@ forecast = [
     "einops==0.8.1",
     "huggingface-hub==0.33.1",
     "safetensors==0.6.2",
+    "exchange-calendars==4.13.2",
 ]
 
 dev = [
@@ -104,6 +105,7 @@ ignore = ["E501"]   # 长行交给 fmt
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+addopts = "--import-mode=importlib"
 markers = [
     "kronos_model: opt-in smoke requiring human-approved pinned local Kronos assets",
     "linux_process_group: native Linux setsid/killpg/descendant ownership evidence",

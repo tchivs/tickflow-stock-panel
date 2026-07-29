@@ -1,4 +1,5 @@
 """Deployment-owned, local-only Kronos checkpoint catalog."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -63,7 +64,10 @@ class ResolvedCheckpoint:
     trust_remote_code: bool
     local_files_only: bool
 
-
+    @property
+    def source_digest_sha256(self) -> str:
+        """Expose the verified vendored-source manifest identity to persistence."""
+        return self.source_manifest_sha256
 
 
 class ApprovedCheckpointCatalog:
@@ -101,9 +105,7 @@ class ApprovedCheckpointCatalog:
                 "model",
             )
             _verify_asset_shape(
-                _contained_directory(
-                    root, raw.get("local_tokenizer_dir"), "local tokenizer path"
-                ),
+                _contained_directory(root, raw.get("local_tokenizer_dir"), "local tokenizer path"),
                 "tokenizer",
             )
 
@@ -166,6 +168,35 @@ class ApprovedCheckpointCatalog:
             raise ValueError(str(error)) from error
         return entry
 
+    def public_entries(self) -> tuple[dict[str, object], ...]:
+        """Return path-free projections of only successfully verified entries."""
+        fields = (
+            "catalog_id",
+            "source_repository",
+            "source_revision",
+            "model_repo",
+            "model_revision",
+            "model_weight_sha256",
+            "tokenizer_repo",
+            "tokenizer_revision",
+            "tokenizer_weight_sha256",
+            "pairing",
+            "max_context",
+            "allowed_devices",
+            "weight_format",
+            "local_files_only",
+            "trust_remote_code",
+        )
+        return tuple(
+            {
+                **{field: getattr(entry, field) for field in fields},
+                "integrity": "verified",
+                "available": True,
+                "reason": "",
+            }
+            for entry in self._entries.values()
+        )
+
 
 def _resolve_entry(
     raw: Mapping[str, Any],
@@ -190,9 +221,10 @@ def _resolve_entry(
     if pairing != expected_pair:
         raise ForecastCatalogError("model/tokenizer pairing is not approved")
     model_size, tokenizer_size = pairing.split(":", 1)
-    if raw.get("model_repo") != f"NeoQuasar/Kronos-{model_size}" or raw.get(
-        "tokenizer_repo"
-    ) != f"NeoQuasar/Kronos-Tokenizer-{tokenizer_size}":
+    if (
+        raw.get("model_repo") != f"NeoQuasar/Kronos-{model_size}"
+        or raw.get("tokenizer_repo") != f"NeoQuasar/Kronos-Tokenizer-{tokenizer_size}"
+    ):
         raise ForecastCatalogError("model/tokenizer pairing repository is not approved")
 
     if raw.get("weight_format") != "safetensors":
@@ -241,7 +273,9 @@ def _resolve_entry(
     )
     source_value = raw.get("source_dir")
     if source_value is None:
-        source_dir = (Path(__file__).resolve().parents[1] / "vendor" / "kronos").resolve(strict=True)
+        source_dir = (Path(__file__).resolve().parents[1] / "vendor" / "kronos").resolve(
+            strict=True
+        )
     else:
         source_dir = _contained_directory(root, source_value, "local source path")
 
@@ -272,8 +306,6 @@ def _resolve_entry(
         trust_remote_code=False,
         local_files_only=True,
     )
-
-
 
 
 def _existing_directory(path: Path, field: str) -> Path:
@@ -377,13 +409,13 @@ def _verify_source(source_dir: Path, revision: str) -> tuple[str, tuple[tuple[st
     unexpected_files = {
         path.name
         for path in source_dir.iterdir()
-        if path.name not in expected_paths | {"UPSTREAM.json"} and (path.is_file() or path.is_symlink())
+        if path.name not in expected_paths | {"UPSTREAM.json"}
+        and (path.is_file() or path.is_symlink())
     }
     if unexpected_files:
         raise ForecastCatalogError("approved source file set is invalid")
     digests.sort(key=lambda item: item[0])
     return _file_sha256(manifest), tuple(digests)
-
 
 
 def _verify_asset_shape(directory: Path, kind: str) -> None:
@@ -424,7 +456,11 @@ def _file_sha256(path: Path) -> str:
 
 
 def _immutable_revision(value: object, field: str) -> str:
-    if not isinstance(value, str) or not value or value.lower() in {"main", "master", "latest", "head"}:
+    if (
+        not isinstance(value, str)
+        or not value
+        or value.lower() in {"main", "master", "latest", "head"}
+    ):
         raise ForecastCatalogError(f"{field} must be an immutable revision")
     if not _COMMIT.fullmatch(value) and not value.startswith("base-approved-revision-"):
         raise ForecastCatalogError(f"{field} must be an immutable revision")

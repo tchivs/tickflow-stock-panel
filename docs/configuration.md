@@ -1,4 +1,4 @@
-# 配置详解
+# AthenaQuant 配置详解
 
 所有配置从根目录 `.env` 读取(复制 `.env.example` 开始),也可在面板 **设置** 页面可视化修改。本文件解释每个配置项的作用。
 
@@ -12,7 +12,7 @@
 TICKFLOW_API_KEY=              # 留空 = None 模式(历史日K免费);填 Key = 按订阅档位解锁
 ```
 
-本项目基于 [TickFlow](https://tickflow.org) 数据源。
+AthenaQuant 默认使用 [TickFlow](https://tickflow.org) 市场数据源；它是可替换的数据提供方，不是 AthenaQuant 的项目主体。
 
 - **留空(None 模式)**:通过 free-api 使用历史日 K(当日数据盘后 1-2 小时可用),**无需付费**即可体验核心选股/回测功能
 - **填入 API Key**:按你的订阅档位解锁更多能力
@@ -96,10 +96,34 @@ AUTH_PASSWORD=你的密码    # 至少 6 位;仅首次生效,已设过则不覆�
 ## Docker 构建 Extras(可选)
 
 ```ini
-BACKEND_EXTRAS=             # 留空默认;legacy-cpu 兼容老 CPU
+BACKEND_EXTRAS=             # 留空默认；值以空格分隔
 ```
 
-老 VPS 无 AVX2/FMA 支持时设为 `legacy-cpu`,会给 Polars 切到 `rtcompat` 运行时;需回测则 `legacy-cpu backtest`。详见 [deployment.md → 老 CPU 兼容](./deployment.md#老-cpu-兼容avx2fma-缺失)。
+| 值 | 作用 |
+| :--- | :--- |
+| `legacy-cpu` | 为无 AVX2/FMA 的旧主机安装 Polars `rtcompat` 运行时。 |
+| `backtest` | 安装 vectorbt 回测依赖。 |
+| `shadow` | 安装 Shadow Account 研究依赖。 |
+| `forecast` | 安装本地 Forecast 推理依赖，不会下载或启用模型。 |
+
+例如 `BACKEND_EXTRAS=legacy-cpu backtest shadow`。Forecast 模型资产必须由受控 provisioning 流程显式安装并通过固定 SHA-256 校验。详见 [deployment.md](./deployment.md#可选模块)。
+
+Forecast 生产运行时配置：
+
+| 配置 | 默认值 | 说明 |
+| :--- | :--- | :--- |
+| `FORECAST_ENABLED` | `false` | 只有为 `true` 且全部本地资产校验通过时才发布 Forecast 能力。 |
+| `FORECAST_DEVICE` | `cpu` | 当前允许 `cpu` 或 `cuda:0`；批准设备仍受 checkpoint 清单约束。 |
+| `FORECAST_CHECKPOINT_ROOT` | `<DATA_DIR>/forecast-checkpoints` | 服务端拥有的 checkpoint、catalog 和交易日历目录；Docker 推荐 `/app/data/forecast-checkpoints`。 |
+
+生产批准资产通过以下显式命令准备，应用启动时不会联网下载：
+
+```bash
+docker compose run --rm app /app/.venv/bin/python -m app.forecast.provision \
+  --root /app/data/forecast-checkpoints
+```
+
+生成的受治理日历覆盖至 2027-12-31。2027 日期采用全国银行间同业拆借中心的预设节假日，revision 前缀为 `xshg-cfets-preset-2027-`；国务院及上交所正式安排发布后必须重新核对并 provision。
 
 ---
 

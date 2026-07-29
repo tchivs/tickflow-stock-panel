@@ -33,7 +33,7 @@ _CARD_MAX_LEN = 28000
 _WECOM_MD_MAX_BYTES = 4000
 
 # 截断提示行: 正文超长被截断时追加, 引导用户回应用内查看完整内容。
-_WECOM_TRUNCATED_HINT = "\n\n…内容较长已截断，更多详情请回到 TickFlow 应用内查看。"
+_WECOM_TRUNCATED_HINT = "\n\n…内容较长已截断，更多详情请回到 AthenaQuant 应用内查看。"
 
 # 飞书自定义机器人 Webhook 前缀 (用于 URL 合法性校验)
 FEISHU_HOOK_PREFIX = "https://open.feishu.cn/open-apis/bot/v2/hook/"
@@ -351,4 +351,3 @@ def send_wecom_markdown(webhook_url: str, title: str, body_md: str) -> bool:
 
     payload: dict = {"msgtype": "markdown", "markdown": {"content": content}}
     return _post_wecom(webhook_url, payload)
-

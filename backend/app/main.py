@@ -92,7 +92,7 @@ def _load_advanced_host_fixture() -> tuple[dict[str, object], "AdvancedFixtureRe
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info(
-        "TickFlow Stock Panel v%s starting (mode=%s)",
+        "AthenaQuant v%s starting (data_source_mode=%s)",
         __version__, tf_client.current_mode(),
     )
 
@@ -653,9 +653,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="TickFlow Stock Panel",
+    title="AthenaQuant",
     version=__version__,
-    description="A 股选股 + 回测面板 — TickFlow 适配",
+    description="Self-hosted A-share quantitative research platform",
     lifespan=lifespan,
 )
 

@@ -84,6 +84,19 @@ def test_distinct_complete_path_paging(tmp_path: Path) -> None:
     assert seen == list(range(32))
 
 
+def test_path_paging_uses_committed_record_shape(tmp_path: Path) -> None:
+    """Persisted descriptors stay generic; Forecast shape belongs to the record."""
+    from app.forecast.artifacts import ForecastPathReader
+
+    record, descriptor, _target = _write_paths(tmp_path)
+    descriptor.pop("sample_count")
+    descriptor.pop("horizon")
+    descriptor.pop("feature_count")
+    rows, total = ForecastPathReader(tmp_path).read_page(record=record, offset=0, limit=12)
+    assert total == 32
+    assert len(rows) == 12 * 5 * 2
+
+
 @pytest.mark.parametrize("corruption", ["duplicate", "incomplete", "out_of_range", "symlink"])
 def test_corrupt_path_relation_fails_closed(tmp_path: Path, corruption: str) -> None:
     from app.forecast.artifacts import ForecastPathReader
@@ -203,9 +216,7 @@ def test_record_scoped_calibration_refresh_never_scans_unrelated_forecasts() -> 
             return record if record is not None and record["principal"] == principal else None
 
         @staticmethod
-        def outcomes_for_owned_forecast(
-            *, forecast_id: str, principal: str, instrument_id: str
-        ):
+        def outcomes_for_owned_forecast(*, forecast_id: str, principal: str, instrument_id: str):
             del forecast_id, principal, instrument_id
             return []
 
@@ -215,7 +226,6 @@ def test_record_scoped_calibration_refresh_never_scans_unrelated_forecasts() -> 
         ):
             del forecast_id, principal, instrument_id
             return []
-
 
     class Scanner:
         def __init__(self) -> None:
@@ -438,22 +448,31 @@ def test_forecast_owned_pages_filter_principal_and_instrument_before_pagination(
         )
         is None
     )
-    assert repository.owned_job_transitions_after(
-        str(owner_a_job["id"]),
-        principal="principal-b",
-        instrument_id="600000.SH",
-        after_version=-1,
-    ) == []
-    assert repository.outcomes_for_owned_forecast(
-        forecast_id=str(owner_a_record["id"]),
-        principal="principal-b",
-        instrument_id="600000.SH",
-    ) == []
-    assert repository.calibration_facts_for_owned_forecast(
-        forecast_id=str(owner_a_record["id"]),
-        principal="principal-b",
-        instrument_id="600000.SH",
-    ) == []
+    assert (
+        repository.owned_job_transitions_after(
+            str(owner_a_job["id"]),
+            principal="principal-b",
+            instrument_id="600000.SH",
+            after_version=-1,
+        )
+        == []
+    )
+    assert (
+        repository.outcomes_for_owned_forecast(
+            forecast_id=str(owner_a_record["id"]),
+            principal="principal-b",
+            instrument_id="600000.SH",
+        )
+        == []
+    )
+    assert (
+        repository.calibration_facts_for_owned_forecast(
+            forecast_id=str(owner_a_record["id"]),
+            principal="principal-b",
+            instrument_id="600000.SH",
+        )
+        == []
+    )
 
 
 def test_cr03_same_instrument_cross_principal_matrix_denies_every_surface(
@@ -552,18 +571,14 @@ def test_cr03_same_instrument_cross_principal_matrix_denies_every_surface(
 
     @app.middleware("http")
     async def bind_principal(request: Request, call_next):  # type: ignore[no-untyped-def]
-        request.state.reviewer_principal = request.headers.get(
-            "x-test-principal", "principal-a"
-        )
+        request.state.reviewer_principal = request.headers.get("x-test-principal", "principal-a")
         return await call_next(request)
 
     client = TestClient(app, raise_server_exceptions=False)
     owner_a = {"X-Test-Principal": "principal-a"}
     owner_b = {"X-Test-Principal": "principal-b"}
 
-    jobs = client.get(
-        "/api/forecast/instruments/600000.SH/jobs?offset=0&limit=1", headers=owner_b
-    )
+    jobs = client.get("/api/forecast/instruments/600000.SH/jobs?offset=0&limit=1", headers=owner_b)
     records = client.get(
         "/api/forecast/instruments/600000.SH/records?offset=0&limit=1", headers=owner_b
     )
@@ -632,9 +647,7 @@ def test_cr03_same_instrument_cross_principal_matrix_denies_every_surface(
         f"/api/forecast/records/{foreign_record_id}/calibration", headers=owner_a
     )
     assert calibration.status_code == 200
-    assert [item["forecast_id"] for item in calibration.json()["outcomes"]] == [
-        foreign_record_id
-    ]
+    assert [item["forecast_id"] for item in calibration.json()["outcomes"]] == [foreign_record_id]
     assert [item["forecast_id"] for item in calibration.json()["calibration"]] == [
         foreign_record_id
     ]
@@ -648,7 +661,6 @@ def test_cr03_same_instrument_cross_principal_matrix_denies_every_surface(
     assert hub.active_count == 0
     assert hub.publish_calls == 1
     assert runner.calls == 0
-
 
 
 def _terminal_sse_repository(tmp_path: Path):

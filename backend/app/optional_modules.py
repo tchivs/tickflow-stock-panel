@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import logging
 import re
 import sqlite3
 import threading
@@ -16,6 +17,8 @@ from typing import Any, Protocol, runtime_checkable
 from fastapi import APIRouter, Request
 
 from app.operational.migrations import migrate_operational_db
+
+logger = logging.getLogger(__name__)
 
 _SAFE_CODE = re.compile(r"[a-z][a-z0-9_]{0,127}\Z")
 _UNSAFE_STATUS_MARKERS = (
@@ -76,6 +79,28 @@ def _default_probe(name: str) -> OptionalModuleProbe:
         return OptionalModuleProbe.available(code="thesis_available")
     if name == "shadow" and importlib.util.find_spec("sklearn") is not None:
         return OptionalModuleProbe.available(code="shadow_available")
+    if name == "forecast":
+        from app.config import settings
+
+        if not settings.forecast_enabled:
+            return OptionalModuleProbe.unavailable(
+                code="forecast_disabled",
+                reason="forecast optional capability is disabled",
+                install_hint="enable and provision the forecast deployment capability",
+            )
+        if importlib.util.find_spec("torch") is None:
+            return OptionalModuleProbe.unavailable(
+                code="forecast_dependency_missing",
+                reason="forecast optional dependency is not installed",
+                install_hint="build the forecast optional dependency group",
+            )
+        if not OPTIONAL_MODULE_FORECAST_COMPONENTS:
+            return OptionalModuleProbe.unavailable(
+                code="forecast_checkpoint_unavailable",
+                reason="approved local forecast supply is unavailable",
+                install_hint="provision the approved local forecast checkpoint",
+            )
+        return OptionalModuleProbe.available(code="forecast_available")
     return OptionalModuleProbe.unavailable(
         code=f"{name}_dependency_missing",
         reason=f"{name} optional dependency is not installed",
@@ -208,6 +233,7 @@ class _RuntimeBundle:
     request_service: object | None = None
     path_reader: object | None = None
     dispatcher: object | None = None
+    catalog_entries: tuple[Mapping[str, object], ...] = ()
 
 
 class _ConcreteFactory:
@@ -448,6 +474,7 @@ class _ConcreteFactory:
             request_service=request_service,
             path_reader=ForecastPathReader(output_root),
             dispatcher=dispatcher,
+            catalog_entries=tuple(components.get("catalog_entries", ())),
         )
 
     def close(self, service: object) -> None:
@@ -752,6 +779,7 @@ def install_optional_module_host(app: Any, host: OptionalModuleHost) -> None:
                 app.state.forecast_maturity_scanner = bundle.scanner
                 app.state.forecast_path_reader = bundle.path_reader
                 app.state.forecast_progress_hub = ForecastProgressHub()
+                app.state.forecast_catalog_entries = bundle.catalog_entries
         else:
             _clear_module_state(app, name)
 
@@ -834,9 +862,7 @@ def install_optional_module_host(app: Any, host: OptionalModuleHost) -> None:
                     scheduler.remove_job("phase5_forecast_maturity_scan")
                 except Exception:
                     pass
-            host.mark_unavailable(
-                OptionalModuleName.FORECAST, code="forecast_dispatcher_failed"
-            )
+            host.mark_unavailable(OptionalModuleName.FORECAST, code="forecast_dispatcher_failed")
             _clear_module_state(app, OptionalModuleName.FORECAST)
 
     for name in OptionalModuleName:
@@ -857,9 +883,7 @@ def shutdown_optional_module_host(app: Any) -> None:
     host.close()
 
 
-def _cleanup_expired_retry_artifact(
-    bundle: _RuntimeBundle, outcome: Mapping[str, object]
-) -> None:
+def _cleanup_expired_retry_artifact(bundle: _RuntimeBundle, outcome: Mapping[str, object]) -> None:
     """Reference-check and discard only an expired operation-owned input."""
     artifact_id = outcome.get("input_artifact_id")
     if not isinstance(artifact_id, str) or not artifact_id:
@@ -942,6 +966,28 @@ def _clear_module_state(app: Any, name: OptionalModuleName) -> None:
         setattr(app.state, attribute, None)
 
 
+def _configure_production_forecast(data_root: Path) -> None:
+    """Populate production components only after all local supply checks pass."""
+    global OPTIONAL_MODULE_FORECAST_COMPONENTS
+    if OPTIONAL_MODULE_FORECAST_COMPONENTS:
+        return
+    from app.config import settings
+
+    if not settings.forecast_enabled or importlib.util.find_spec("torch") is None:
+        return
+    try:
+        from app.forecast.bootstrap import build_production_forecast_components
+
+        OPTIONAL_MODULE_FORECAST_COMPONENTS = build_production_forecast_components(
+            checkpoint_root=settings.forecast_checkpoint_root,
+            data_root=data_root,
+            device=settings.forecast_device,
+        )
+    except Exception as error:  # startup must fail closed, not fail the host
+        logger.warning("Forecast production supply rejected: %s", error)
+        OPTIONAL_MODULE_FORECAST_COMPONENTS = {}
+
+
 def build_and_install_optional_module_host(
     *,
     app: Any,
@@ -951,6 +997,7 @@ def build_and_install_optional_module_host(
     quote_service: object | None,
     governed_repository: object | None,
 ) -> OptionalModuleHost:
+    _configure_production_forecast(data_root)
     host = build_optional_module_host(
         database_path=database_path,
         data_root=data_root,

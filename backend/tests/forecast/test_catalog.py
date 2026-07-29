@@ -1,4 +1,5 @@
 """RED contracts for the deployment-owned, local-only Kronos checkpoint catalog."""
+
 from __future__ import annotations
 
 import hashlib
@@ -99,12 +100,20 @@ def _approved_catalog(tmp_path: Path):
         profiles[catalog_id] = entry
         approved[catalog_id] = dict(entry)
     manifest = root / "catalog.json"
-    manifest.write_text(json.dumps({"schema_version": "forecast-catalog-v1", "entries": list(profiles.values())}), encoding="utf-8")
-    return ApprovedCheckpointCatalog.from_file(
-        manifest_path=manifest,
-        approved_root=root,
-        approved_profiles=approved,
-    ), root, manifest, approved
+    manifest.write_text(
+        json.dumps({"schema_version": "forecast-catalog-v1", "entries": list(profiles.values())}),
+        encoding="utf-8",
+    )
+    return (
+        ApprovedCheckpointCatalog.from_file(
+            manifest_path=manifest,
+            approved_root=root,
+            approved_profiles=approved,
+        ),
+        root,
+        manifest,
+        approved,
+    )
 
 
 def test_catalog_accepts_only_official_mini_small_and_base_pairings(tmp_path):
@@ -120,6 +129,19 @@ def test_catalog_preserves_model_size_context_and_device_policy(tmp_path):
     assert catalog.require_local("kronos-small", device="cpu").max_context == 512
     with pytest.raises(ValueError, match="device"):
         catalog.require_local("kronos-base", device="cpu")
+
+
+def test_catalog_public_entries_publish_verified_path_free_gate(tmp_path):
+    catalog, root, _manifest, _approved = _approved_catalog(tmp_path)
+    entries = catalog.public_entries()
+    mini = next(entry for entry in entries if entry["catalog_id"] == "kronos-mini")
+    assert mini["integrity"] == "verified"
+    assert mini["available"] is True
+    assert mini["reason"] == ""
+    serialized = json.dumps(entries)
+    assert str(root) not in serialized
+    assert "model_dir" not in serialized
+    assert "tokenizer_dir" not in serialized
 
 
 def test_catalog_explicitly_rejects_unapproved_large_model(tmp_path):
@@ -142,32 +164,45 @@ def test_catalog_rejects_moving_or_non_commit_revisions(tmp_path):
     payload["entries"][0]["model_revision"] = "latest"
     manifest.write_text(json.dumps(payload), encoding="utf-8")
     from app.forecast.catalog import ApprovedCheckpointCatalog, ForecastCatalogError
+
     with pytest.raises(ForecastCatalogError, match="revision"):
-        ApprovedCheckpointCatalog.from_file(manifest_path=manifest, approved_root=root, approved_profiles=approved)
+        ApprovedCheckpointCatalog.from_file(
+            manifest_path=manifest, approved_root=root, approved_profiles=approved
+        )
 
 
 def test_catalog_rejects_missing_partial_and_tampered_files(tmp_path):
     _catalog, root, manifest, approved = _approved_catalog(tmp_path)
     (root / "Kronos-mini" / "model.safetensors").write_bytes(b"tampered")
     from app.forecast.catalog import ApprovedCheckpointCatalog, ForecastCatalogError
+
     with pytest.raises(ForecastCatalogError, match="digest"):
-        ApprovedCheckpointCatalog.from_file(manifest_path=manifest, approved_root=root, approved_profiles=approved)
+        ApprovedCheckpointCatalog.from_file(
+            manifest_path=manifest, approved_root=root, approved_profiles=approved
+        )
     (root / "Kronos-small" / "config.json").unlink()
     with pytest.raises(ForecastCatalogError, match="missing|partial"):
-        ApprovedCheckpointCatalog.from_file(manifest_path=manifest, approved_root=root, approved_profiles=approved)
+        ApprovedCheckpointCatalog.from_file(
+            manifest_path=manifest, approved_root=root, approved_profiles=approved
+        )
 
 
 def test_catalog_rejects_config_digest_tamper_and_source_byte_tamper(tmp_path):
     _catalog, root, manifest, approved = _approved_catalog(tmp_path)
     (root / "Kronos-mini" / "config.json").write_text('{"tampered":true}', encoding="utf-8")
     from app.forecast.catalog import ApprovedCheckpointCatalog, ForecastCatalogError
+
     with pytest.raises(ForecastCatalogError, match="config digest"):
-        ApprovedCheckpointCatalog.from_file(manifest_path=manifest, approved_root=root, approved_profiles=approved)
+        ApprovedCheckpointCatalog.from_file(
+            manifest_path=manifest, approved_root=root, approved_profiles=approved
+        )
 
     (root / "Kronos-mini" / "config.json").write_text("{}", encoding="utf-8")
     (root / "source" / "kronos.py").write_text("tampered", encoding="utf-8")
     with pytest.raises(ForecastCatalogError, match="source file digest"):
-        ApprovedCheckpointCatalog.from_file(manifest_path=manifest, approved_root=root, approved_profiles=approved)
+        ApprovedCheckpointCatalog.from_file(
+            manifest_path=manifest, approved_root=root, approved_profiles=approved
+        )
 
 
 def test_catalog_vendored_byte_manifest_freezes_source_file_digests(tmp_path):
@@ -211,17 +246,17 @@ def test_catalog_config_digest_required_for_model_and_tokenizer(tmp_path):
         )
 
 
-
-
-
 def test_catalog_rejects_model_tokenizer_pair_mismatch(tmp_path):
     _catalog, root, manifest, approved = _approved_catalog(tmp_path)
     payload = json.loads(manifest.read_text(encoding="utf-8"))
     payload["entries"][0]["pairing"] = "mini:base"
     manifest.write_text(json.dumps(payload), encoding="utf-8")
     from app.forecast.catalog import ApprovedCheckpointCatalog, ForecastCatalogError
+
     with pytest.raises(ForecastCatalogError, match="pair"):
-        ApprovedCheckpointCatalog.from_file(manifest_path=manifest, approved_root=root, approved_profiles=approved)
+        ApprovedCheckpointCatalog.from_file(
+            manifest_path=manifest, approved_root=root, approved_profiles=approved
+        )
 
 
 def test_catalog_rejects_paths_outside_server_owned_root(tmp_path):
@@ -230,8 +265,11 @@ def test_catalog_rejects_paths_outside_server_owned_root(tmp_path):
     payload["entries"][0]["local_model_dir"] = "../escaped"
     manifest.write_text(json.dumps(payload), encoding="utf-8")
     from app.forecast.catalog import ApprovedCheckpointCatalog, ForecastCatalogError
+
     with pytest.raises(ForecastCatalogError, match="root|path"):
-        ApprovedCheckpointCatalog.from_file(manifest_path=manifest, approved_root=root, approved_profiles=approved)
+        ApprovedCheckpointCatalog.from_file(
+            manifest_path=manifest, approved_root=root, approved_profiles=approved
+        )
 
 
 def test_catalog_rejects_remote_repo_or_url_as_runtime_path(tmp_path):
@@ -240,8 +278,11 @@ def test_catalog_rejects_remote_repo_or_url_as_runtime_path(tmp_path):
     payload["entries"][0]["local_model_dir"] = "https://huggingface.co/NeoQuasar/Kronos-mini"
     manifest.write_text(json.dumps(payload), encoding="utf-8")
     from app.forecast.catalog import ApprovedCheckpointCatalog, ForecastCatalogError
+
     with pytest.raises(ForecastCatalogError, match="local|path"):
-        ApprovedCheckpointCatalog.from_file(manifest_path=manifest, approved_root=root, approved_profiles=approved)
+        ApprovedCheckpointCatalog.from_file(
+            manifest_path=manifest, approved_root=root, approved_profiles=approved
+        )
 
 
 def test_catalog_rejects_pickle_and_non_safetensors_weights(tmp_path):
@@ -251,8 +292,11 @@ def test_catalog_rejects_pickle_and_non_safetensors_weights(tmp_path):
     payload["entries"][0]["model_weight_file"] = "pytorch_model.bin"
     manifest.write_text(json.dumps(payload), encoding="utf-8")
     from app.forecast.catalog import ApprovedCheckpointCatalog, ForecastCatalogError
+
     with pytest.raises(ForecastCatalogError, match="safetensors"):
-        ApprovedCheckpointCatalog.from_file(manifest_path=manifest, approved_root=root, approved_profiles=approved)
+        ApprovedCheckpointCatalog.from_file(
+            manifest_path=manifest, approved_root=root, approved_profiles=approved
+        )
 
 
 def test_catalog_rejects_remote_code_trust_and_network_fallback(tmp_path):
@@ -262,8 +306,11 @@ def test_catalog_rejects_remote_code_trust_and_network_fallback(tmp_path):
     payload["entries"][0]["local_files_only"] = False
     manifest.write_text(json.dumps(payload), encoding="utf-8")
     from app.forecast.catalog import ApprovedCheckpointCatalog, ForecastCatalogError
+
     with pytest.raises(ForecastCatalogError, match="remote|local"):
-        ApprovedCheckpointCatalog.from_file(manifest_path=manifest, approved_root=root, approved_profiles=approved)
+        ApprovedCheckpointCatalog.from_file(
+            manifest_path=manifest, approved_root=root, approved_profiles=approved
+        )
 
 
 def test_catalog_revalidates_integrity_before_worker_spawn(tmp_path):
@@ -286,6 +333,7 @@ def test_catalog_probe_never_imports_torch_kronos_or_allocates_model(tmp_path):
 def test_catalog_probe_never_calls_network(tmp_path, monkeypatch):
     def denied(*_args, **_kwargs):
         raise AssertionError("routine catalog validation attempted network access")
+
     monkeypatch.setattr("socket.create_connection", denied)
     catalog, _root, _manifest, _approved = _approved_catalog(tmp_path)
     assert catalog.require_local("kronos-mini", device="cpu").local_files_only is True
@@ -293,6 +341,7 @@ def test_catalog_probe_never_calls_network(tmp_path, monkeypatch):
 
 def test_catalog_absence_returns_typed_forecast_unavailable_state(tmp_path):
     from app.forecast.catalog import ApprovedCheckpointCatalog
+
     status = ApprovedCheckpointCatalog.probe(
         manifest_path=tmp_path / "missing.json",
         approved_root=tmp_path / "models",
@@ -308,6 +357,7 @@ def test_catalog_absence_returns_typed_forecast_unavailable_state(tmp_path):
 
 def test_catalog_unavailable_state_is_sanitized_and_path_free(tmp_path):
     from app.forecast.catalog import ApprovedCheckpointCatalog
+
     status = ApprovedCheckpointCatalog.probe(
         manifest_path=tmp_path / "secret" / "catalog.json",
         approved_root=tmp_path / "secret",
@@ -329,6 +379,7 @@ def test_default_host_import_does_not_require_forecast_dependencies():
     assert status.available is False
     before = set(sys.modules)
     from app import main  # noqa: F401
+
     imported = set(sys.modules) - before
     assert "torch" not in imported
     assert "huggingface_hub" not in imported

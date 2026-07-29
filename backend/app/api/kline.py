@@ -16,16 +16,8 @@ router = APIRouter(prefix="/api/kline", tags=["kline"])
 
 
 def _minute_allowed(capset) -> bool:
-    """是否有分钟K权限 (TickFlow Pro+ 或 custom minute 源)。"""
-    from app.tickflow.capabilities import Cap
-    if capset.has(Cap.KLINE_MINUTE_BATCH):
-        return True
-    from app.services import preferences
-    provider = preferences.get_minute_data_provider()
-    if provider == "tickflow":
-        return False
-    from app.data_providers import custom as custom_sources
-    return custom_sources.provider_has_dataset(provider, "minute")
+    """Whether the selected provider can fetch minute bars."""
+    return kline_sync.can_sync_minute(capset)
 
 
 @router.get("/instruments/search")
@@ -166,18 +158,19 @@ def get_daily(
 
     if df.is_empty():
         try:
-            raw = kline_sync.sync_daily_batch([symbol], count=days + 30)
+            raw = kline_sync.sync_daily_batch(
+                [symbol], count=days + 30, asset_type=asset_type,
+            )
         except Exception as e:
-            raise HTTPException(status_code=502, detail=f"TickFlow fetch failed: {e}") from e
+            raise HTTPException(status_code=502, detail=f"数据源拉取失败: {e}") from e
         if raw.is_empty():
             return {"symbol": symbol, "name": stock_name, "stock_info": stock_info, "rows": []}
         # 拉除权因子做前复权 (Starter+ 有权限), 否则空 df → compute_enriched 退回未复权
         factors = pl.DataFrame()
         capset = getattr(request.app.state, "capabilities", None)
         try:
-            from app.tickflow.capabilities import Cap
-            if capset and capset.has(Cap.ADJ_FACTOR):
-                factors = kline_sync.fetch_adj_factor_single(symbol)
+            if capset and kline_sync.can_sync_adj_factor(capset):
+                factors = kline_sync.fetch_adj_factor_single(symbol, asset_type=asset_type)
         except Exception as e:  # noqa: BLE001
             logger.debug("单股除权因子拉取失败 %s: %s", symbol, e)
         enriched = compute_enriched(raw, factors=factors)
@@ -387,7 +380,7 @@ def get_minute_batch(request: Request, body: dict):
 
     - 本地优先: 先从 kline_minute parquet 读, 完整的直接用
     - 缺失补拉: 本地不完整的 symbol 用 sync_minute_batch 批量实时拉 (不落库)
-    - 需 Pro+ 权限 (kline.minute.batch)
+    - 需要当前数据源支持分钟 K
     """
     from datetime import datetime
     import polars as pl
@@ -401,9 +394,9 @@ def get_minute_batch(request: Request, body: dict):
     repo = request.app.state.repo
     capset = request.app.state.capabilities
 
-    # 权限守卫: 分钟K批量是 Pro+ 能力
-    if not capset.has(Cap.KLINE_MINUTE_BATCH):
-        raise HTTPException(status_code=403, detail="需要 Pro+ 权限 (kline.minute.batch)")
+    # TickFlow capability 或自定义 minute 数据集均可放行
+    if not kline_sync.can_sync_minute(capset):
+        raise HTTPException(status_code=403, detail="当前数据源不支持分钟 K")
 
     trade_date = date.fromisoformat(trade_date_str) if trade_date_str else date.today()
 
@@ -488,19 +481,23 @@ def get_minute(
     """读取某只股票某天的分钟 K 线。
 
     - 本地有完整数据(240条) → 直接返回
-    - 本地无数据或不完整 → 从 TickFlow 实时拉取返回（不写入）
+    - 本地无数据或不完整 → 从当前分钟数据源实时拉取返回(不写入)
     """
     repo = request.app.state.repo
     asset_type = repo.resolve_asset_type(symbol)
-    stock_info = _get_stock_info(repo, symbol) if asset_type == "stock" else _get_asset_info(repo, symbol, asset_type)
+    stock_info = (
+        _get_stock_info(repo, symbol)
+        if asset_type == "stock"
+        else _get_asset_info(repo, symbol, asset_type)
+    )
     stock_name = stock_info.get("name")
 
     if trade_date is None:
         trade_date = repo.latest_minute_date(symbol, asset_type=asset_type)
     if trade_date is None:
-        # 本地无任何分钟K，尝试从 TickFlow 拉取当天
+        # 本地无任何分钟K，尝试从当前数据源拉取当天
         trade_date = date.today()
-        df = kline_sync.fetch_minute_single(symbol, trade_date)
+        df = kline_sync.fetch_minute_single(symbol, trade_date, asset_type=asset_type)
         return {
             "symbol": symbol, "name": stock_name, "stock_info": stock_info,
             "date": str(trade_date), "rows": df.to_dicts(), "source": "live",
@@ -527,21 +524,19 @@ def get_minute(
             expected = 240
 
     is_complete = not df.is_empty() and len(df) >= expected * 0.9  # 允许 10% 容差
-
     if is_complete:
         return {
             "symbol": symbol, "name": stock_name, "stock_info": stock_info,
             "date": str(trade_date), "rows": df.to_dicts(), "source": "local",
         }
 
-    # 本地不完整或无数据 → 从 TickFlow 实时拉取
-    live_df = kline_sync.fetch_minute_single(symbol, trade_date)
+    # 本地不完整或无数据 → 从当前分钟数据源实时拉取
+    live_df = kline_sync.fetch_minute_single(symbol, trade_date, asset_type=asset_type)
     return {
         "symbol": symbol, "name": stock_name, "stock_info": stock_info,
         "date": str(trade_date), "rows": live_df.to_dicts(),
         "source": "live" if not live_df.is_empty() else "none",
     }
-
 
 @router.post("/sync")
 def sync_symbol(
@@ -585,14 +580,12 @@ async def sync_minute(request: Request):
     from app.services.pipeline_jobs import job_store, release_run_slot, try_acquire_run_slot
     from app.api.data import invalidate_storage_cache
     from app.services.preferences import get_minute_sync_days
-    from app.tickflow.capabilities import Cap
-    from app.tickflow.pools import get_pool
 
     repo = request.app.state.repo
     capset = request.app.state.capabilities
 
     if not _minute_allowed(capset):
-        raise HTTPException(status_code=403, detail="需要 Pro+ 权限")
+        raise HTTPException(status_code=403, detail="当前数据源不支持分钟 K")
 
     job_id, is_new = job_store.create()
     if not is_new:
@@ -610,16 +603,7 @@ async def sync_minute(request: Request):
         try:
             job_store.start(job_id)
             progress("sync_minute", 5, "解析标的池…")
-            universe = sorted(set(get_pool("watchlist")) | set(get_pool("CN_Equity_A")))
-            # 补充 instruments 全量标的，覆盖北交所、新股等
-            inst_path = repo.store.data_dir / "instruments" / "instruments.parquet"
-            if inst_path.exists():
-                try:
-                    import polars as pl
-                    inst = pl.read_parquet(inst_path, columns=["symbol"])
-                    universe = sorted(set(universe) | set(inst["symbol"].to_list()))
-                except Exception:  # noqa: BLE001
-                    pass
+            universe = _resolve_minute_universe(capset, repo)
             progress("sync_minute", 10, f"标的池 {len(universe)} 只")
 
             days = get_minute_sync_days()
@@ -667,9 +651,8 @@ async def extend_history(request: Request):
         repo = request.app.state.repo
         capset = request.app.state.capabilities
 
-        from app.tickflow.capabilities import Cap
-        if not capset.has(Cap.KLINE_DAILY_BATCH):
-            raise HTTPException(status_code=403, detail="需要 Pro+ 权限 (batch K-line)")
+        if not kline_sync.can_sync_daily(capset):
+            raise HTTPException(status_code=403, detail="当前数据源不支持批量日 K")
 
         from app.services.extend_history import run_extend_history
         from app.services.pipeline_jobs import job_store, release_run_slot, try_acquire_run_slot
@@ -746,9 +729,8 @@ async def repair_daily(request: Request):
         repo = request.app.state.repo
         capset = request.app.state.capabilities
 
-        from app.tickflow.capabilities import Cap
-        if not capset.has(Cap.KLINE_DAILY_BATCH):
-            raise HTTPException(status_code=403, detail="需要 Pro+ 权限 (batch K-line)")
+        if not kline_sync.can_sync_daily(capset):
+            raise HTTPException(status_code=403, detail="当前数据源不支持批量日 K")
 
         from app.services.repair_daily import run_repair_daily
         from app.services.pipeline_jobs import job_store, release_run_slot, try_acquire_run_slot
@@ -910,12 +892,15 @@ async def extend_minute_history(request: Request):
         repo = request.app.state.repo
         capset = request.app.state.capabilities
 
-        from app.tickflow.capabilities import Cap
-        if not _minute_allowed(capset):
-            raise HTTPException(status_code=403, detail="需要 Pro+ 权限 (batch minute K-line)")
+        if not kline_sync.can_sync_minute(capset):
+            raise HTTPException(status_code=403, detail="当前数据源不支持分钟 K")
 
-        # month 单位(按月扩展更长的分钟K历史)仅 Expert+ 开放;Pro 仅可用 day
-        if unit == "month":
+        from app.services import preferences
+        minute_provider = kline_sync.get_custom_data_provider(
+            "minute", preferences.get_minute_data_provider(),
+        )
+        # TickFlow 的月级扩展受套餐约束;自定义数据源不受 TickFlow 套餐限制。
+        if unit == "month" and minute_provider is None:
             from app.tickflow.policy import tier_label
             base_tier = tier_label().split()[0].split("+")[0].strip().lower()
             if base_tier != "expert":
@@ -976,16 +961,17 @@ async def extend_minute_history(request: Request):
                 universe = _resolve_minute_universe(capset, repo)
                 progress("extend_minute", 8, f"标的池: {len(universe)} 只")
 
-                from app.tickflow.capabilities import Cap
-                from app.tickflow.rate_limits import resolve_limit
-
-                limit = resolve_limit(
-                    capset,
-                    Cap.KLINE_MINUTE_BATCH,
-                    default_batch=100,
-                    default_rpm=30,
-                    default_rpm_when_unset=False,
-                )
+                limit = None
+                if minute_provider is None:
+                    from app.tickflow.capabilities import Cap
+                    from app.tickflow.rate_limits import resolve_limit
+                    limit = resolve_limit(
+                        capset,
+                        Cap.KLINE_MINUTE_BATCH,
+                        default_batch=100,
+                        default_rpm=30,
+                        default_rpm_when_unset=False,
+                    )
 
                 def _run():
                     """全部在 executor 线程里完成,避免阻塞事件循环。"""
@@ -1000,7 +986,8 @@ async def extend_minute_history(request: Request):
                         universe,
                         start_time=_dt.combine(new_start, _dt.min.time()),
                         end_time=_dt.combine(latest, _dt.min.time()),
-                        batch_size=limit.batch, rpm=limit.rpm,
+                        batch_size=limit.batch if limit else None,
+                        rpm=limit.rpm if limit else None,
                         on_chunk_done=_chunk,
                     )
 
@@ -1067,7 +1054,7 @@ async def extend_minute_history(request: Request):
 
 
 def _resolve_minute_universe(capset, repo) -> list[str]:
-    """分钟K标的池解析。"""
+    """Resolve the minute universe from TickFlow or local provider instruments."""
     from app.tickflow.capabilities import Cap
     if capset.has(Cap.KLINE_MINUTE_BATCH):
         try:
@@ -1077,4 +1064,7 @@ def _resolve_minute_universe(capset, repo) -> list[str]:
                 return sorted(all_a)
         except Exception:
             pass
-    return []
+    instruments = repo.get_instruments()
+    if instruments.is_empty() or "symbol" not in instruments.columns:
+        return []
+    return sorted(set(instruments["symbol"].to_list()))

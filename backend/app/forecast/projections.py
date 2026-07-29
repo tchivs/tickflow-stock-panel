@@ -1,9 +1,9 @@
 """Deny-by-default public projections for immutable Forecast state."""
 
 from __future__ import annotations
+
 import math
 import re
-
 from collections.abc import Mapping, Sequence
 
 _PUBLIC_STATUS = {
@@ -117,9 +117,11 @@ def _verified_quantiles(value: Mapping[str, object]) -> dict[str, dict[str, floa
         or value.get("quantile_session_count") != horizon
         or isinstance(value.get("quantile_feature_count"), bool)
         or not isinstance(value.get("quantile_feature_count"), int)
-        or value.get("quantile_row_count")
-        != 3 * horizon * int(value["quantile_feature_count"])
-        or any(not isinstance(item, str) or re.fullmatch(r"[0-9a-f]{64}", item) is None for item in digests)
+        or value.get("quantile_row_count") != 3 * horizon * int(value["quantile_feature_count"])
+        or any(
+            not isinstance(item, str) or re.fullmatch(r"[0-9a-f]{64}", item) is None
+            for item in digests
+        )
         or digests[0] != digests[2]
     ):
         return None
@@ -242,6 +244,9 @@ def catalog_entry(value: Mapping[str, object]) -> dict[str, object]:
         "weight_format",
         "local_files_only",
         "trust_remote_code",
+        "integrity",
+        "available",
+        "reason",
     ):
         item = value.get(key)
         if isinstance(item, (str, int, bool, tuple, list)):

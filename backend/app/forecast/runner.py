@@ -1,4 +1,5 @@
 """Spawn-only, resource-bounded orchestration for immutable Forecast inference."""
+
 from __future__ import annotations
 
 import json
@@ -29,7 +30,7 @@ class ForecastRunnerLimits:
 
     wall_clock_seconds: int = 120
     cpu_seconds: int = 120
-    address_space_bytes: int = 2 * 1024 * 1024 * 1024
+    address_space_bytes: int = 8 * 1024 * 1024 * 1024
     thread_count: int = 2
     output_bytes: int = 16 * 1024
     queue_items: int = 1
@@ -104,7 +105,6 @@ class BlockingWorker:
         return {}
 
 
-
 class SuccessWithDescendantWorker:
     """Return a valid success manifest while leaving a long-lived process-group child."""
 
@@ -160,8 +160,6 @@ class _CappedTextSink:
 
     def flush(self) -> None:
         return None
-
-
 
 
 def _send_frame(output: Any, payload: Mapping[str, object], limit: int) -> None:
@@ -442,7 +440,11 @@ class ForecastRunner:
                     process_group_reaped=True,
                 )
 
-            if resource is None or os.name != "posix" or "spawn" not in multiprocessing.get_all_start_methods():
+            if (
+                resource is None
+                or os.name != "posix"
+                or "spawn" not in multiprocessing.get_all_start_methods()
+            ):
                 terminal = self._terminalize_current(
                     running,
                     owner=owner,
@@ -625,7 +627,9 @@ class ForecastRunner:
                             lease_owner=owner,
                             ttl_seconds=lease_ttl,
                         )
-                        if not self.repository.heartbeat_global_lease(owner=owner, ttl_seconds=lease_ttl):
+                        if not self.repository.heartbeat_global_lease(
+                            owner=owner, ttl_seconds=lease_ttl
+                        ):
                             raise ValueError("global lease lost")
                     except ValueError:
                         reaped = self._reap(process, process_group_id)
@@ -705,7 +709,9 @@ class ForecastRunner:
                     status="artifact_failed",
                     reason="artifact_verification_failed",
                 )
-                return self._result(terminal, "artifact_failed", reason="artifact_verification_failed")
+                return self._result(
+                    terminal, "artifact_failed", reason="artifact_verification_failed"
+                )
 
             if self._stop_requested():
                 terminal = self._terminalize_current(
@@ -796,7 +802,9 @@ class ForecastRunner:
     def _manifest_is_capped(self, manifest: object) -> bool:
         if not isinstance(manifest, Mapping):
             return False
-        if not set(manifest).issubset({"output_descriptor", "immutable_record", "lose_lease_before_result"}):
+        if not set(manifest).issubset(
+            {"output_descriptor", "immutable_record", "lose_lease_before_result"}
+        ):
             return False
         if not {"output_descriptor", "immutable_record"}.issubset(manifest):
             return False

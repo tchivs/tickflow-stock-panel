@@ -50,7 +50,7 @@ class NotificationChannel(Protocol):
 
 def _message(event: Mapping[str, Any]) -> tuple[str, str]:
     source = str(event.get("source") or "alert")
-    title = f"TickFlow · {source}"
+    title = f"AthenaQuant · {source}"
     symbol = str(event.get("symbol") or "").strip()
     name = str(event.get("name") or "").strip()
     message = str(event.get("message") or "").strip()
