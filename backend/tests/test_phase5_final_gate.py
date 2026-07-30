@@ -833,6 +833,37 @@ def test_posix_tree_cleanup_reaps_descendant_after_leader_exits(
         os.kill(descendant_pid, 0)
 
 
+def test_documented_command_resolves_planning_paths_from_repo_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "repo"
+    backend = repo / "backend"
+    phase_dir = repo / ".planning" / "milestones" / "v1.0-phases" / "05-optional-enhancements"
+    phase_dir.mkdir(parents=True)
+    backend.mkdir()
+    for name in ("05-VALIDATION.md", "05-43-SUMMARY.md", "05-44-PLAN.md"):
+        (phase_dir / name).touch()
+
+    class PreflightReached(Exception):
+        pass
+
+    def stop_after_preflight(repo_root: Path, summary: Path) -> GitProvenance:
+        assert repo_root == repo.resolve()
+        assert summary == (phase_dir / "05-43-SUMMARY.md").resolve()
+        raise PreflightReached
+
+    monkeypatch.setattr(final_gate, "capture_git_provenance", stop_after_preflight)
+    monkeypatch.chdir(backend)
+
+    with pytest.raises(PreflightReached):
+        final_gate.orchestrate(
+            Path(".."),
+            Path(".planning/milestones/v1.0-phases/05-optional-enhancements/05-VALIDATION.md"),
+            Path(".planning/milestones/v1.0-phases/05-optional-enhancements/05-43-SUMMARY.md"),
+            Path(".planning/milestones/v1.0-phases/05-optional-enhancements/05-44-PLAN.md"),
+        )
+
+
 def test_wsl_path_resolution_decodes_utf16_and_reports_unavailable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

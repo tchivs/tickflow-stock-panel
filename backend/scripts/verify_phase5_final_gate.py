@@ -349,6 +349,12 @@ def _canonical(path: Path) -> Path:
     return path.expanduser().resolve()
 
 
+def _canonical_from_repo(path: Path, repo_root: Path) -> Path:
+    expanded = path.expanduser()
+    return (repo_root / expanded if not expanded.is_absolute() else expanded).resolve()
+
+
+
 def _inside(path: Path, root: Path) -> bool:
     try:
         path.relative_to(root)
@@ -2172,9 +2178,9 @@ def orchestrate(
     gh_runner: Callable[..., subprocess.CompletedProcess[Any]] = subprocess.run,
 ) -> dict[str, Any]:
     repo_root = _canonical(repo_root)
-    validation_path = _canonical(validation_path)
-    phase43_summary = _canonical(phase43_summary)
-    plan_path = _canonical(plan_path)
+    validation_path = _canonical_from_repo(validation_path, repo_root)
+    phase43_summary = _canonical_from_repo(phase43_summary, repo_root)
+    plan_path = _canonical_from_repo(plan_path, repo_root)
     phase05_dir = _find_phase05_dir(repo_root)
     expected_plan = (phase05_dir / "05-44-PLAN.md").resolve()
     if plan_path != expected_plan or not plan_path.is_file():

@@ -50,12 +50,12 @@ uv run python scripts/verify_phase5_final_gate.py orchestrate \
   --validation-path .planning/milestones/v1.0-phases/05-optional-enhancements/05-VALIDATION.md \
   --phase43-summary .planning/milestones/v1.0-phases/05-optional-enhancements/05-43-SUMMARY.md \
   --plan-path .planning/milestones/v1.0-phases/05-optional-enhancements/05-44-PLAN.md
-``+
+```
 This runs all four producers locally (pytest-windows, pytest-linux, playwright-fixture, playwright-real-host).
 On Linux the pytest-linux producer runs natively; on Windows it runs via WSL.
 
 For CI-sourced Linux evidence instead of local execution, append `--github-run-id <run-id>`.
 This is optional — the default is local-first.
 
-Paths resolve dynamically via `_find_phase05_dir()`, so the command works regardless of whether
-Phase 05 artifacts are in the active `.planning/phases/` or archived `.planning/milestones/` layout.
+Relative planning paths resolve against `--repo-root`, not the process working directory. Phase 05
+artifacts are discovered dynamically, so the command works with active or archived phase layouts.
