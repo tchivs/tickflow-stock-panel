@@ -50,7 +50,7 @@ v1.1 hardens the shipped v1.0 MVP without adding new user-facing capabilities or
   2. Operator can run the same command on a clean Linux checkout and produce the same bundle shape without requiring access to historical CI runs.
   3. The final-gate verifier passes against freshly regenerated reports without referencing cached attestations or CI-only artifacts.
 
-**Plans**: 0/N plans complete
+**Plans**: 1/N plans complete (06-01: release reproducibility root-cause fixes)
 **UI hint**: no
 
 ### Phase 7: Validation Hygiene
@@ -99,7 +99,7 @@ v1.1 hardens the shipped v1.0 MVP without adding new user-facing capabilities or
 
 | # | Phase | Requirements | Status | Target |
 |---|-------|--------------|--------|--------|
-| 6 | Release Reproducibility | REL-01 | Pending | — |
+| 6 | Release Reproducibility | REL-01 | In Progress | 06-01 |
 | 7 | Validation Hygiene | VAL-01 | Pending | — |
 | 8 | Optional Supply Path | SUP-01 | Pending | — |
 | 9 | Visual Regression | VIS-01 | Pending | — |

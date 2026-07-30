@@ -38,3 +38,24 @@ The Linux producer always prefixed its argv with `wsl.exe`, making it fail on na
 - `backend/scripts/verify_phase5_final_gate.py` — dynamic path resolver, local-first Linux producer with `linux_native` mode, platform-aware `orchestrate()`, updated CLI help
 - `backend/scripts/sync_kronos.py` — removed approval gate and APPROVAL_SUMMARY constant
 - `backend/tests/test_phase5_final_gate.py` — dynamic paths, fixed fake_killpg, platform-aware assertions, native Linux spec test
+
+## Operator Command
+
+On any clean checkout (Windows or Linux), the operator regenerates the full release evidence bundle with:
+
+```bash
+cd backend
+uv run python scripts/verify_phase5_final_gate.py orchestrate \
+  --repo-root /path/to/AthenaQuant \
+  --validation-path .planning/milestones/v1.0-phases/05-optional-enhancements/05-VALIDATION.md \
+  --phase43-summary .planning/milestones/v1.0-phases/05-optional-enhancements/05-43-SUMMARY.md \
+  --plan-path .planning/milestones/v1.0-phases/05-optional-enhancements/05-44-PLAN.md
+``+
+This runs all four producers locally (pytest-windows, pytest-linux, playwright-fixture, playwright-real-host).
+On Linux the pytest-linux producer runs natively; on Windows it runs via WSL.
+
+For CI-sourced Linux evidence instead of local execution, append `--github-run-id <run-id>`.
+This is optional — the default is local-first.
+
+Paths resolve dynamically via `_find_phase05_dir()`, so the command works regardless of whether
+Phase 05 artifacts are in the active `.planning/phases/` or archived `.planning/milestones/` layout.
