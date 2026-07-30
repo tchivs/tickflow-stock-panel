@@ -702,8 +702,11 @@ def build_optional_module_host(
     try:
         operational_path.parent.mkdir(parents=True, exist_ok=True)
         governed_root.mkdir(parents=True, exist_ok=True)
-        with sqlite3.connect(operational_path) as connection:
+        connection = sqlite3.connect(operational_path)
+        try:
             migrate_operational_db(connection)
+        finally:
+            connection.close()
     except (OSError, sqlite3.DatabaseError) as error:
         raise RuntimeError("optional module operational foundation is unavailable") from error
     services = OptionalModuleServices(

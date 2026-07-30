@@ -15,7 +15,7 @@ import logging
 import os
 import threading
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -135,7 +135,7 @@ class JobStore:
             if not j:
                 return
             j["status"] = "running"
-            j["started_at"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+            j["started_at"] = datetime.now(UTC).isoformat(timespec="seconds") + "Z"
 
     def succeed(self, job_id: str, result: Any) -> None:
         with self._lock:
@@ -143,7 +143,7 @@ class JobStore:
             if not j:
                 return
             j["status"] = "succeeded"
-            j["finished_at"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+            j["finished_at"] = datetime.now(UTC).isoformat(timespec="seconds") + "Z"
             j["progress"] = 100
             j["result"] = result
             j["duration_s"] = _duration_s(j)

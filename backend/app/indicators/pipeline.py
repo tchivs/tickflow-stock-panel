@@ -260,6 +260,7 @@ def _apply_adj_factor(raw: pl.DataFrame, factors: pl.DataFrame) -> pl.DataFrame:
         right_on="trade_date",
         by="symbol",
         strategy="backward",
+        check_sortedness=False,
     )
 
     # 补充 total_factor + 前复权 + 除权标记,一次 with_columns 完成
@@ -1061,7 +1062,7 @@ def run_pipeline(data_dir: Path | None = None,
 
     all_symbols = (
         lf_all.select("symbol").unique().sort("symbol")
-        .collect(streaming=True)["symbol"].to_list()
+        .collect(engine="streaming")["symbol"].to_list()
     )
     if not all_symbols:
         logger.info("无日K数据, 跳过管道")
@@ -1093,7 +1094,7 @@ def run_pipeline(data_dir: Path | None = None,
         # 只读取本批 symbol 的数据
         lf_batch = scan_daily_parquet(daily_glob, cast_options=_cast)
         lf_batch = lf_batch.filter(pl.col("symbol").is_in(batch_syms))
-        raw = lf_batch.sort(["symbol", "date"]).collect(streaming=True)
+        raw = lf_batch.sort(["symbol", "date"]).collect(engine="streaming")
 
         if raw.is_empty():
             continue

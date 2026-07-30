@@ -241,7 +241,7 @@ class BacktestEngine:
                     & (pl.col("date") <= end)
                 )
                 .sort(["symbol", "date"])
-                .collect(streaming=True)
+                .collect(engine="streaming")
             )
         except Exception as e:
             logger.warning("backtest load panel failed: %s", e)

@@ -99,8 +99,19 @@ def get_paid_realtime_client() -> TickFlow | None:
 
 
 def reset_clients() -> None:
-    """Key 变化后调用 — 让下一次 get_client() 拿新实例。"""
+    """Key 变化后调用 — 让下一次 get_client() 拿新实例。也用于 shutdown 清理。"""
     global _sync_client, _async_client, _paid_realtime_client
+    for client in (_sync_client, _paid_realtime_client):
+        if client is not None:
+            try:
+                client.close()
+            except Exception:  # noqa: BLE001
+                pass
+    if _async_client is not None:
+        try:
+            _async_client.close()
+        except Exception:  # noqa: BLE001
+            pass
     _sync_client = None
     _async_client = None
     _paid_realtime_client = None

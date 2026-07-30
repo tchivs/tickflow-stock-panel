@@ -649,6 +649,7 @@ async def lifespan(app: FastAPI):
     wbot = getattr(app.state, "wecom_bot_service", None)
     if wbot:
         wbot.stop()
+    tf_client.reset_clients()
     logger.info("shutdown")
 
 

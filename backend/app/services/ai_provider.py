@@ -163,6 +163,8 @@ async def _run_openai_once(
         if _is_openai_transport_error(exc):
             raise RuntimeError(_format_openai_error(exc)) from exc
         raise
+    finally:
+        await client.close()
     if not resp.choices:
         return ""
     return (resp.choices[0].message.content or "").strip()
@@ -197,6 +199,8 @@ async def _stream_openai(
         if _is_openai_transport_error(exc):
             raise RuntimeError(_format_openai_error(exc)) from exc
         raise
+    finally:
+        await client.close()
 
 
 def _openai_client(api_key: str, timeout: float):

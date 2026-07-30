@@ -156,10 +156,13 @@ class GovernedAnalysisReader:
     def assert_ready(self) -> None:
         if not self._database_path.is_file():
             raise RuntimeError("governed analysis reader is unavailable")
-        with sqlite3.connect(self._database_path) as connection:
+        connection = sqlite3.connect(self._database_path)
+        try:
             table = connection.execute(
                 "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'analysis_reports'"
             ).fetchone()
+        finally:
+            connection.close()
         if table is None:
             raise RuntimeError("governed analysis reader is unavailable")
 
@@ -168,7 +171,8 @@ class GovernedAnalysisReader:
     ) -> Mapping[str, object] | None:
         _reader_request(instrument, field, as_of, lookback_days, ANALYSIS_FIELDS)
         earliest = as_of - timedelta(days=lookback_days)
-        with sqlite3.connect(self._database_path) as connection:
+        connection = sqlite3.connect(self._database_path)
+        try:
             connection.row_factory = sqlite3.Row
             row = connection.execute(
                 """SELECT id, version, report_json, created_at
@@ -179,6 +183,8 @@ class GovernedAnalysisReader:
                    LIMIT 1""",
                 (instrument, earliest.isoformat(), as_of.isoformat()),
             ).fetchone()
+        finally:
+            connection.close()
         if row is None:
             return None
         report = json.loads(row["report_json"])

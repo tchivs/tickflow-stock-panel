@@ -409,7 +409,7 @@ class FactorBacktestService:
         )
 
         # pivot: date × group
-        pivot = group_ret.pivot(index="date", columns="_group", values="group_return").sort("date")
+        pivot = group_ret.pivot(index="date", on="_group", values="group_return").sort("date")
 
         if pivot.is_empty():
             return []
