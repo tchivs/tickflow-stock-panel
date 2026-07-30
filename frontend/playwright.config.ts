@@ -42,6 +42,25 @@ export default defineConfig({
       },
     },
     {
+      name: 'visual-desktop',
+      testMatch: /visual-regression\.spec\.ts/,
+      use: {
+        browserName: 'chromium',
+        viewport: { width: 1440, height: 960 },
+      },
+    },
+    {
+      name: 'visual-mobile-375',
+      testMatch: /visual-regression\.spec\.ts/,
+      use: {
+        browserName: 'chromium',
+        viewport: { width: 375, height: 812 },
+        deviceScaleFactor: 2,
+        hasTouch: true,
+        isMobile: true,
+      },
+    },
+    {
       name: 'phase4-fastapi-host',
       use: {
         baseURL: 'http://127.0.0.1:4173',

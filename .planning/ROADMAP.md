@@ -92,7 +92,7 @@ v1.1 hardens the shipped v1.0 MVP without adding new user-facing capabilities or
   2. Critical 375px responsive workflows have baseline screenshots captured and committed.
   3. A regression run fails when an unintended UI drift is detected against the committed baselines.
 
-**Plans**: 0/N plans complete
+**Plans**: 1/N plans complete (09-01: visual regression baselines)
 **UI hint**: yes
 
 ## Coverage
@@ -102,7 +102,7 @@ v1.1 hardens the shipped v1.0 MVP without adding new user-facing capabilities or
 | 6 | Release Reproducibility | REL-01 | In Progress | 06-01 |
 | 7 | Validation Hygiene | VAL-01 | In Progress | 07-01 |
 | 8 | Optional Supply Path | SUP-01 | In Progress | 08-01 |
-| 9 | Visual Regression | VIS-01 | Pending | — |
+| 9 | Visual Regression | VIS-01 | In Progress | 09-01 |
 
 **Requirement coverage:** 4/4 mapped (100%)
 
