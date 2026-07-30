@@ -462,6 +462,7 @@ def build_producer_specs(
     *,
     linux_repo_root: str,
     linux_report_root: str,
+    linux_native: bool = False,
 ) -> tuple[ProducerSpec, ...]:
     repo_root = _canonical(repo_root)
     report_root = _canonical(report_root)
@@ -499,45 +500,51 @@ def build_producer_specs(
     linux_report = f"{linux_report_root.rstrip('/')}/{REPORT_FILENAMES['pytest-linux']}"
     linux_cache = f"{linux_report_root.rstrip('/')}/pytest-cache-linux"
     linux_tmp = f"{linux_report_root.rstrip('/')}/tmp-linux"
-    linux_command = " ".join(
-        shlex.quote(part)
-        for part in (
-            "env",
-            "ATHENA_ALLOW_NETWORK=0",
-            "PYTHONDONTWRITEBYTECODE=1",
-            f"TMPDIR={linux_tmp}",
-            "uv",
-            "run",
-            "--isolated",
-            "--frozen",
-            "--extra",
-            "dev",
-            "--extra",
-            "shadow",
-            "pytest",
-            "--import-mode=importlib",
-            *_BACKEND_TEST_TARGETS,
-            f"--deselect={_OPTIONAL_SMOKE}",
-            "-o",
-            "xfail_strict=true",
-            "-o",
-            f"cache_dir={linux_cache}",
-            "-m",
-            "not windows_only",
-            f"--junitxml={linux_report}",
-            "-x",
-        )
+    linux_command_parts = (
+        "env",
+        "ATHENA_ALLOW_NETWORK=0",
+        "PYTHONDONTWRITEBYTECODE=1",
+        f"TMPDIR={linux_tmp}",
+        "uv",
+        "run",
+        "--isolated",
+        "--frozen",
+        "--extra",
+        "dev",
+        "--extra",
+        "shadow",
+        "pytest",
+        "--import-mode=importlib",
+        *_BACKEND_TEST_TARGETS,
+        f"--deselect={_OPTIONAL_SMOKE}",
+        "-o",
+        "xfail_strict=true",
+        "-o",
+        f"cache_dir={linux_cache}",
+        "-m",
+        "not windows_only",
+        f"--junitxml={linux_report}",
+        "-x",
     )
-    linux = ProducerSpec(
-        label="pytest-linux",
-        cwd=repo_root,
-        argv=(
+    if linux_native:
+        linux_argv: tuple[str, ...] = tuple(linux_command_parts)
+        linux_cwd = backend
+    else:
+        linux_command = " ".join(
+            shlex.quote(part) for part in linux_command_parts
+        )
+        linux_argv = (
             "wsl.exe",
             "--exec",
             "bash",
             "-lc",
             f"cd {shlex.quote(linux_backend)} && {linux_command}",
-        ),
+        )
+        linux_cwd = repo_root
+    linux = ProducerSpec(
+        label="pytest-linux",
+        cwd=linux_cwd,
+        argv=linux_argv,
         env=common_env,
         report_path=reports["pytest-linux"],
         sidecar_path=reports["pytest-linux"].with_name(
@@ -2196,24 +2203,34 @@ def orchestrate(
     report_root.mkdir(parents=True)
 
     if github_run_id is None:
-        try:
-            linux_repo_root = _resolve_wsl_path(repo_root)
-            linux_report_root = _resolve_wsl_path(report_root)
-        except ReportError as error:
-            raise ReportError(
-                f"{error}; runId={run_id}; reportRoot={report_root}; "
-                f"expectedHead={provenance.expected_head}; "
-                f"expectedTree={provenance.expected_tree}"
-            ) from error
+        if os.name == "nt":
+            try:
+                linux_repo_root = _resolve_wsl_path(repo_root)
+                linux_report_root = _resolve_wsl_path(report_root)
+            except ReportError as error:
+                raise ReportError(
+                    f"{error}; install WSL or pass --github-run-id to use "
+                    f"CI-sourced evidence; runId={run_id}; "
+                    f"reportRoot={report_root}; "
+                    f"expectedHead={provenance.expected_head}; "
+                    f"expectedTree={provenance.expected_tree}"
+                ) from error
+            linux_native = False
+        else:
+            linux_repo_root = str(repo_root)
+            linux_report_root = str(report_root)
+            linux_native = True
     else:
         linux_repo_root = "/external-evidence-not-executed"
         linux_report_root = "/external-evidence-not-executed"
+        linux_native = False
 
     specs = build_producer_specs(
         repo_root,
         report_root,
         linux_repo_root=linux_repo_root,
         linux_report_root=linux_report_root,
+        linux_native=linux_native,
     )
     run_producer(
         specs[0],
@@ -2307,8 +2324,9 @@ def _orchestrate_main(argv: list[str]) -> int:
     parser.add_argument(
         "--github-run-id",
         help=(
-            "successful exact GitHub Actions run whose bound artifact is "
-            "queried and downloaded; omitted to use WSL"
+            "optional: successful exact GitHub Actions run whose bound "
+            "artifact is downloaded as CI-sourced evidence; omit for local "
+            "execution (native Linux or WSL on Windows)"
         ),
     )
     parser.add_argument(

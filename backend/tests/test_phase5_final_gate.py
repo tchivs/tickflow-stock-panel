@@ -535,6 +535,29 @@ def test_producer_specs_redirect_every_output_to_external_root(tmp_path: Path) -
         assert any(arg.startswith("--output=") for arg in spec.argv)
         assert Path(spec.env["PLAYWRIGHT_JSON_OUTPUT_FILE"]).parent == root
 
+def test_producer_specs_linux_native_runs_directly_without_wsl(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    (repo / "backend").mkdir(parents=True)
+    (repo / "frontend").mkdir()
+    root = tmp_path / "external"
+    root.mkdir()
+    specs = build_producer_specs(
+        repo,
+        root,
+        linux_repo_root="/repo",
+        linux_report_root="/reports",
+        linux_native=True,
+    )
+    linux = specs[1]
+    assert "wsl.exe" not in linux.argv
+    assert linux.cwd == repo / "backend"
+    assert linux.argv[0] == "env"
+    assert "--import-mode=importlib" in linux.argv
+    assert "not windows_only" in linux.argv
+    assert "--extra" in linux.argv and "shadow" in linux.argv
+
 
 def test_run_producer_uses_fake_and_writes_bound_sidecar(tmp_path: Path) -> None:
     repo = tmp_path / "repo"

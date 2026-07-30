@@ -10,7 +10,7 @@ commit: pending
 
 ## What Changed
 
-Three root causes that made v1.0 release evidence irreproducible were fixed:
+Four root causes that made v1.0 release evidence irreproducible were fixed:
 
 ### 1. Archival-layout-independent path resolution (BLOCKER 0)
 The v1.0 milestone archival moved `.planning/phases/05-optional-enhancements/` → `.planning/milestones/v1.0-phases/05-optional-enhancements/`, but no code was updated. Added `_find_phase05_dir()` to `verify_phase5_final_gate.py` that dynamically resolves the Phase 05 directory by searching archived milestone layouts first, then falling back to active phases. All hardcoded paths in the gate script, its tests, and `sync_kronos.py` now use dynamic resolution.
@@ -20,6 +20,9 @@ Removed `_require_complete_approval()` and `APPROVAL_SUMMARY` from `sync_kronos.
 
 ### 3. POSIX process-tree test mock fixed
 Fixed `fake_killpg` in `test_phase5_final_gate.py` to (a) handle signal 0 (process-existence probe) without crashing on `signal.Signals(0)`, (b) simulate process group disappearance after SIGKILL by raising `ProcessLookupError`, and (c) use platform-aware termination assertions.
+
+### 4. Linux evidence producer local-first (Task 2)
+The Linux producer always prefixed its argv with `wsl.exe`, making it fail on native Linux. Added platform detection in `orchestrate()`: on native Linux the producer runs directly (cwd=backend, no WSL wrapper); on Windows it uses WSL as before; on Windows-without-WSL it prints a clear actionable error guiding the operator to install WSL or use `--github-run-id`. The `--github-run-id` CI download path is documented as optional in CLI help. Added `test_producer_specs_linux_native_runs_directly_without_wsl` to verify the native path.
 
 ## Before/After Test Counts
 
@@ -32,6 +35,6 @@ Fixed `fake_killpg` in `test_phase5_final_gate.py` to (a) handle signal 0 (proce
 
 ## Files Modified
 
-- `backend/scripts/verify_phase5_final_gate.py` — dynamic path resolver, updated RELEVANT_PATHS and orchestrate()
+- `backend/scripts/verify_phase5_final_gate.py` — dynamic path resolver, local-first Linux producer with `linux_native` mode, platform-aware `orchestrate()`, updated CLI help
 - `backend/scripts/sync_kronos.py` — removed approval gate and APPROVAL_SUMMARY constant
-- `backend/tests/test_phase5_final_gate.py` — dynamic paths in _git_repo, fixed fake_killpg, platform-aware assertions
+- `backend/tests/test_phase5_final_gate.py` — dynamic paths, fixed fake_killpg, platform-aware assertions, native Linux spec test
