@@ -449,6 +449,8 @@ def _pytest_argv(report: str, cache: str, marker: str) -> tuple[str, ...]:
         "--frozen",
         "--extra",
         "dev",
+        "--extra",
+        "shadow",
         "pytest",
         *_WINDOWS_BACKEND_TEST_TARGETS,
         "-o",

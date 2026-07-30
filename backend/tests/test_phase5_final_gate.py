@@ -510,7 +510,8 @@ def test_producer_specs_redirect_every_output_to_external_root(tmp_path: Path) -
     assert all(spec.env["ATHENA_ALLOW_NETWORK"] == "0" for spec in specs)
     windows = specs[0]
     assert "--isolated" in windows.argv and "--frozen" in windows.argv
-    assert windows.argv.count("--extra") == 1
+    assert windows.argv.count("--extra") == 2
+    assert "shadow" in windows.argv
     assert "tests/advanced/test_sandbox.py" in windows.argv
     assert "tests/forecast/test_runner.py" in windows.argv
     assert "tests/test_kronos_provisioner.py" not in windows.argv
