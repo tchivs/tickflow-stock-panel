@@ -64,7 +64,7 @@ v1.1 hardens the shipped v1.0 MVP without adding new user-facing capabilities or
   2. The frontend build and type-check complete with no avoidable deprecation warnings.
   3. The data-stack validation (DuckDB/Parquet contract and schema-drift checks) completes without sortedness or avoidable warnings.
 
-**Plans**: 0/N plans complete
+**Plans**: 1/N plans complete (07-01: eliminate avoidable warnings)
 **UI hint**: no
 
 ### Phase 8: Optional Supply Path
@@ -100,7 +100,7 @@ v1.1 hardens the shipped v1.0 MVP without adding new user-facing capabilities or
 | # | Phase | Requirements | Status | Target |
 |---|-------|--------------|--------|--------|
 | 6 | Release Reproducibility | REL-01 | In Progress | 06-01 |
-| 7 | Validation Hygiene | VAL-01 | Pending | — |
+| 7 | Validation Hygiene | VAL-01 | In Progress | 07-01 |
 | 8 | Optional Supply Path | SUP-01 | Pending | — |
 | 9 | Visual Regression | VIS-01 | Pending | — |
 
