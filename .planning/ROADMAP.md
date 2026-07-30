@@ -78,7 +78,7 @@ v1.1 hardens the shipped v1.0 MVP without adding new user-facing capabilities or
   2. An incomplete or mismatched supply identity is rejected and the optional module reports unavailable without weakening the fail-closed default.
   3. The approval path has an automated test proving both accepted provisioning and identity-rejected failure.
 
-**Plans**: 0/N plans complete
+**Plans**: 1/N plans complete (08-01: verify documented operator supply path)
 **UI hint**: no
 
 ### Phase 9: Visual Regression
@@ -101,7 +101,7 @@ v1.1 hardens the shipped v1.0 MVP without adding new user-facing capabilities or
 |---|-------|--------------|--------|--------|
 | 6 | Release Reproducibility | REL-01 | In Progress | 06-01 |
 | 7 | Validation Hygiene | VAL-01 | In Progress | 07-01 |
-| 8 | Optional Supply Path | SUP-01 | Pending | — |
+| 8 | Optional Supply Path | SUP-01 | In Progress | 08-01 |
 | 9 | Visual Regression | VIS-01 | Pending | — |
 
 **Requirement coverage:** 4/4 mapped (100%)
