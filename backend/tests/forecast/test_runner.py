@@ -863,7 +863,9 @@ def _runner(tmp_path: Path, **overrides):
         repository=repository,
         limits=ForecastRunnerLimits(
             wall_clock_seconds=3,
-            cpu_seconds=2,
+            # Spawn/module bootstrap consumed >2 CPU seconds before _child_entry
+            # installed RLIMIT_CPU in the isolated Linux producer; wall time stays 3s.
+            cpu_seconds=5,
             address_space_bytes=1024 * 1024 * 1024,
             thread_count=2,
             output_bytes=16 * 1024,
@@ -899,7 +901,7 @@ def test_runner_enforces_wall_cpu_address_thread_output_and_manifest_bounds(tmp_
         "start_method": "spawn",
         "new_process_group": True,
         "wall_clock_seconds": 3,
-        "cpu_seconds": 2,
+        "cpu_seconds": 5,
         "address_space_bytes": 1024 * 1024 * 1024,
         "thread_count": 2,
         "output_bytes": 16 * 1024,
