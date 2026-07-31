@@ -35,6 +35,9 @@ BUSINESS_PATHS = {
     "thesis": "/api/theses/instruments/600000.SH/versions",
     "forecast": "/api/forecast/instruments/600000.SH/records",
 }
+# Covers the fixture's 5-second spawn handshake and 10-second worker budget,
+# with bounded room for mandatory process-group reap and the transactional commit.
+_FORECAST_HOST_COMPLETION_TIMEOUT_SECONDS = 20.0
 FORBIDDEN_PUBLIC_FIELDS = {
     "absolute_path",
     "account_secret",
@@ -1002,7 +1005,7 @@ def test_production_forecast_factory_completes_approved_request_and_stays_indepe
         )
         assert created.status_code == 201, created.text
         job = created.json()["job"]
-        deadline = time.monotonic() + 3
+        deadline = time.monotonic() + _FORECAST_HOST_COMPLETION_TIMEOUT_SECONDS
         while job["status"] in {"queued", "running"} and time.monotonic() < deadline:
             time.sleep(0.01)
             job = client.get(f"/api/forecast/jobs/{job['id']}").json()["job"]
