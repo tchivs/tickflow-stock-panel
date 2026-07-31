@@ -80,7 +80,7 @@ Deferred to future releases. Tracked but not in current roadmap.
 
 ## Traceability
 
-Populated during roadmap creation.
+Populated during roadmap creation (2026-07-31). Verified: all 20 v1 requirements mapped to exactly one phase; Status remains Pending.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
@@ -112,4 +112,4 @@ Populated during roadmap creation.
 
 ---
 *Requirements defined: 2026-07-31*
-*Last updated: 2026-07-31 after initial definition*
+*Last updated: 2026-07-31 — v1.2 roadmap created; traceability verified (20/20 mapped, all Pending)*
