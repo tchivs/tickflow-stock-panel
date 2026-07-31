@@ -2385,7 +2385,6 @@ def test_dispatcher_cancellation_reaps_group_before_commit(tmp_path, monkeypatch
 
 
 @pytest.mark.windows_only
-@pytest.mark.skipif(os.name != "nt", reason="Windows fail-closed evidence")
 def test_r43_wr01_windows_fail_closed_and_linux_process_group_nodes_are_explicit(request, tmp_path):
     import os
 
