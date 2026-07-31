@@ -1,5 +1,5 @@
 {
-  "label": "查看当前 v1.1 状态及下一项 GSD 动作：",
-  "command": "/gsd-progress",
+  "label": "v1.1 已归档。启动下一个里程碑：",
+  "command": "/gsd-new-milestone",
   "requiresFreshContext": false
 }

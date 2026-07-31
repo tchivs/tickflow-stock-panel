@@ -8,15 +8,9 @@ AthenaQuant is a shipped, self-hosted quantitative research platform for individ
 
 An investor can turn reliable market data and their own holdings into an auditable, actionable research and monitoring workflow without operating multiple disconnected tools.
 
-## Current Milestone: v1.1 Operational Hardening
+## Current Milestone: Next (TBD)
 
-**Goal:** Make release evidence routinely reproducible across supported hosts, remove avoidable runtime and data-stack warnings, formalize the operator-controlled optional-model supply path, and add durable visual-regression evidence — without weakening v1.0 fail-closed safety boundaries.
-
-**Target features:**
-- Reproducible release evidence from current Windows and Linux environments without historical attestations
-- Runtime, data-stack, and frontend validation free of avoidable deprecation and sortedness warnings
-- Optional local-model supply stays fail-closed with an explicit, documented, testable operator approval path
-- Durable screenshot-based visual regression for critical desktop and 375px responsive workflows
+v1.1 Operational Hardening shipped 2026-07-29. The next milestone has not been defined yet — run `/gsd-new-milestone` to start requirements gathering.
 
 ## Success Metric
 
@@ -26,10 +20,14 @@ The v1.0 release is successful when all 23 requirements are verified end to end,
 
 ### Active
 
-- [ ] Release evidence is reproducible from current Windows and Linux environments without relying on historical attestations.
-- [ ] Runtime, data-stack, and frontend validation complete without avoidable deprecation or sortedness warnings.
-- [ ] Optional local-model supply remains fail-closed while an explicit operator approval path is documented and testable.
-- [ ] Critical responsive workflows have durable screenshot-based visual regression evidence.
+No active requirements. Next milestone requirements will be defined via `/gsd-new-milestone`.
+
+### Validated in v1.1
+
+- [x] Release evidence is reproducible from clean Windows and Linux checkouts without historical attestations (REL-01).
+- [x] Runtime, data-stack, and frontend validation complete without avoidable deprecation or sortedness warnings (VAL-01).
+- [x] Optional local-model supply remains fail-closed with a documented, testable operator provisioning command (SUP-01).
+- [x] Critical desktop and 375px responsive workflows have durable screenshot-based visual regression evidence (VIS-01).
 
 ### Validated in v1.0
 
@@ -65,8 +63,9 @@ v1.0 validated the host architecture and locked its safety boundaries: one FastA
 
 - Architecture source: `docs/ARCHITECTURE.md`
 - Synthesized intake: `.planning/intel/SYNTHESIS.md`
-- Shipped milestone archive: `.planning/milestones/v1.0-ROADMAP.md`
-- Canonical release audit: `.planning/milestones/v1.0-MILESTONE-AUDIT.md`
+- v1.0 milestone archive: `.planning/milestones/v1.0-ROADMAP.md`
+- v1.0 canonical release audit: `.planning/milestones/v1.0-MILESTONE-AUDIT.md`
+- v1.1 milestone archive: `.planning/milestones/v1.1-ROADMAP.md`
 
 ## Evolution
 
@@ -86,4 +85,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-07-29 — started milestone v1.1 Operational Hardening*
+*Last updated: 2026-07-29 — v1.1 Operational Hardening milestone archived*

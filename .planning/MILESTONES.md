@@ -108,3 +108,19 @@
 - One provenance-bound closeout approved only the R43/Wave 15 scope after 613/613 checks passed against one frozen Git tree, including attested native Linux evidence from GitHub Actions.
 
 ---
+
+## v1.1 Operational Hardening (Shipped: 2026-07-29)
+
+**Phases completed:** 4 phases, 4 plans (Phase 6-9)
+**Closeout type:** override_closeout (2 verification overrides documented)
+
+**Key accomplishments:**
+
+- Release evidence paths resolve dynamically from repo root, surviving archive layout changes; Linux evidence producer runs natively without WSL dependency.
+- Historical approval-paperwork gate removed from sync_kronos.py — supply is fail-closed on SHA-256/identity, not reviewer paperwork.
+- All avoidable backend test warnings eliminated across 9 files: Polars `collect(engine="streaming")`, `check_sortedness=False`, `datetime.now(UTC)`, explicit sqlite3/AsyncOpenAI client cleanup. Backend: 961 passed, 0 failed (down from 9 failures). Warnings 143→84 (84 all pytest GC artifacts, 0 application-code).
+- Frontend validation clean: tsc 0 errors, vite build clean.
+- Optional supply path verified complete: documented provision command, SHA-256 fail-closed identity gate, 24 tests pass.
+- Visual regression baselines committed: 4 Playwright tests at desktop (1440×960) and mobile (375×812), 1% drift threshold.
+
+---

@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Operational Hardening
 status: complete
-last_updated: "2026-07-29T22:30:00.000Z"
+last_updated: "2026-07-29T23:00:00.000Z"
 last_activity: 2026-07-29
 progress:
   total_phases: 4
@@ -84,17 +84,23 @@ None.
 
 ## Deferred Items
 
-| Category | Item | Status | Deferred At |
-|----------|------|--------|-------------|
-| Optional enhancement | Shadow Account, thesis tracking, and Kronos forecasting | Phase 5 / v2 | 2026-07-10 |
-| Supply identity | Human approval paperwork | Removed for personal project | 2026-07-24 |
+Items acknowledged and deferred at v1.1 milestone close on 2026-07-29:
+
+| Category | Item | Status |
+|----------|------|--------|
+| debug | clean-shadow-final-gate | awaiting_human_verify (fixed and accepted by guardrail) |
+| verification | Phase 06 06-VERIFICATION.md | human_needed (E2E Playwright/frontend deferred) |
+| Optional enhancement | Shadow Account, thesis tracking, and Kronos forecasting | Phase 5 / v2 |
+| Supply identity | Human approval paperwork | Removed for personal project |
+
+**Known verification overrides: 2** (see table above)
 
 ## Session Continuity
 
 Last session: 2026-07-29T22:30:00.000Z
-Stopped at: All v1.1 phases complete
+Stopped at: v1.1 milestone archived
 Resume file: None
 
 ## Operator Next Steps
 
-- Run /gsd-complete-milestone to archive v1.1 and prepare for next milestone
+- Run `/gsd-new-milestone` to start the next milestone
