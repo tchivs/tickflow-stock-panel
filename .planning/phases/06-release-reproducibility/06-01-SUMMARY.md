@@ -49,9 +49,11 @@ uv run python scripts/verify_phase5_final_gate.py orchestrate \
   --repo-root /path/to/AthenaQuant \
   --validation-path .planning/milestones/v1.0-phases/05-optional-enhancements/05-VALIDATION.md \
   --phase43-summary .planning/milestones/v1.0-phases/05-optional-enhancements/05-43-SUMMARY.md \
-  --plan-path .planning/milestones/v1.0-phases/05-optional-enhancements/05-44-PLAN.md
+  --plan-path .planning/milestones/v1.0-phases/05-optional-enhancements/05-44-PLAN.md \
+  --evidence-only
 ```
-This runs all four producers locally (pytest-windows, pytest-linux, playwright-fixture, playwright-real-host).
+This runs all four producers locally (pytest-windows, pytest-linux, playwright-fixture, playwright-real-host),
+verifies their same-run provenance, and leaves the already-closed v1.0 validation history unchanged.
 On Linux the pytest-linux producer runs natively; on Windows it runs via WSL.
 
 For CI-sourced Linux evidence instead of local execution, append `--github-run-id <run-id>`.

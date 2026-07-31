@@ -2179,6 +2179,7 @@ def orchestrate(
     linux_evidence_dir: Path | None = None,
     github_run_id: str | None = None,
     github_repository: str = GITHUB_REPOSITORY,
+    update_validation: bool = True,
     gh_runner: Callable[..., subprocess.CompletedProcess[Any]] = subprocess.run,
 ) -> dict[str, Any]:
     repo_root = _canonical(repo_root)
@@ -2288,24 +2289,30 @@ def orchestrate(
     verdict = verify_report_envelopes(envelopes)
     verdict_path = report_root / "parser-verdict.json"
     _write_json_fsync(verdict_path, verdict)
-    original = validation_path.read_text(encoding="utf-8")
-    candidate = build_scoped_validation_candidate(
-        original,
-        provenance=provenance,
-        run_id=run_id,
-        started_at=started_at,
-        report_root=report_root,
-        report_paths=report_paths,
-    )
+    validation_updated = False
+    if update_validation:
+        original = validation_path.read_text(encoding="utf-8")
+        candidate = build_scoped_validation_candidate(
+            original,
+            provenance=provenance,
+            run_id=run_id,
+            started_at=started_at,
+            report_root=report_root,
+            report_paths=report_paths,
+        )
 
-    # Final static/postflight assertion.  os.replace below is the last mutation.
-    assert_git_provenance(repo_root, provenance)
-    atomic_replace_validation(validation_path, candidate)
+        # Final static/postflight assertion. os.replace below is the last mutation.
+        assert_git_provenance(repo_root, provenance)
+        atomic_replace_validation(validation_path, candidate)
+        validation_updated = True
+    else:
+        assert_git_provenance(repo_root, provenance)
     return {
         **verdict,
         "phase43Commit": provenance.phase43_commit,
         "reportRoot": str(report_root),
         "verdictPath": str(verdict_path),
+        "validationUpdated": validation_updated,
     }
 
 
@@ -2332,6 +2339,11 @@ def _orchestrate_main(argv: list[str]) -> int:
     parser.add_argument("--phase43-summary", required=True, type=Path)
     parser.add_argument("--plan-path", required=True, type=Path)
     parser.add_argument(
+        "--evidence-only",
+        action="store_true",
+        help="regenerate and verify the evidence bundle without rewriting validation history",
+    )
+    parser.add_argument(
         "--github-run-id",
         help=(
             "optional: successful exact GitHub Actions run whose bound "
@@ -2352,6 +2364,7 @@ def _orchestrate_main(argv: list[str]) -> int:
         args.plan_path,
         github_run_id=args.github_run_id,
         github_repository=args.github_repository,
+        update_validation=not args.evidence_only,
     )
     print(json.dumps(result, sort_keys=True))
     return 0

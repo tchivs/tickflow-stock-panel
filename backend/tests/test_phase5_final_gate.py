@@ -866,6 +866,33 @@ def test_documented_command_resolves_planning_paths_from_repo_root(
         )
 
 
+def test_evidence_only_cli_disables_validation_history_update(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_orchestrate(*_args: object, **kwargs: object) -> dict[str, object]:
+        captured.update(kwargs)
+        return {"passed": 1}
+
+    monkeypatch.setattr(final_gate, "orchestrate", fake_orchestrate)
+
+    result = main(
+        [
+            "orchestrate",
+            "--repo-root", ".",
+            "--validation-path", "validation.md",
+            "--phase43-summary", "summary.md",
+            "--plan-path", "plan.md",
+            "--evidence-only",
+        ]
+    )
+
+    assert result == 0
+    assert captured["update_validation"] is False
+    assert json.loads(capsys.readouterr().out) == {"passed": 1}
+
+
 def test_wsl_path_resolution_decodes_utf16_and_reports_unavailable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
