@@ -1,16 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.1
-milestone_name: Operational Hardening
-status: complete
-last_updated: "2026-07-31T17:02:25.794Z"
+milestone: v1.2
+milestone_name: End-to-End Factor Portfolio Pipeline
+status: planning
+last_updated: "2026-07-31T17:06:25.850Z"
 last_activity: 2026-07-31
 progress:
-  total_phases: 4
-  completed_phases: 4
-  total_plans: 4
-  completed_plans: 4
-  percent: 100
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
@@ -24,10 +24,10 @@ See: .planning/PROJECT.md (updated 2026-07-10)
 
 ## Current Position
 
-Phase: 6-9 (all complete)
+Phase: Not started (defining requirements)
 Plan: —
-Status: v1.1 archived — ready for `/gsd-new-milestone`
-Last activity: 2026-07-31 — Phase 06 native-Linux verification passed; Windows/WSL execution deferred by user
+Status: Defining requirements
+Last activity: 2026-07-31 — Milestone v1.2 started
 
 ## v1.1 Phase Summary
 

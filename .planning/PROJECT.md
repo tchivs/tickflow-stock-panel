@@ -8,9 +8,16 @@ AthenaQuant is a shipped, self-hosted quantitative research platform for individ
 
 An investor can turn reliable market data and their own holdings into an auditable, actionable research and monitoring workflow without operating multiple disconnected tools.
 
-## Current Milestone: Next (TBD)
+## Current Milestone: v1.2 End-to-End Factor Portfolio Pipeline
 
-v1.1 Operational Hardening shipped 2026-07-29. The next milestone has not been defined yet — run `/gsd-new-milestone` to start requirements gathering.
+**Goal:** Extend the research platform from single-factor evaluation into an auditable factor → portfolio → risk pipeline that outputs rebalance suggestions (no automated execution).
+
+**Target features:**
+- **Factor library & multi-factor model**: restricted factor DSL with whitelist parsing, IC/RankIC/ICIR/monthly-robustness evaluation, admission gates (train/val IC, no lookahead, no label leakage, similarity dedup), catalog+summary storage
+- **Portfolio construction & optimization**: expected-return + covariance + constraints layering, stable objectives (min volatility / HRP) as baselines, long-only, per-instrument/industry caps, min cash, turnover cost, immutable optimization run records
+- **Risk analysis & attribution**: risk models (sample/semi/exponential/Ledoit-Wolf + PSD repair), exposure, contribution, drawdown attribution
+- **Deeper strategy research**: rolling walk-forward validation (not expanding, reserved independent OOS segment), parameter optimization & ensembling, shared backtest/live signal chain
+- **Output & boundary**: RebalancePlan (target weights, A-share discrete lots, cash, turnover cost, blocked instruments, expiry), suggestions to auditable paper rebalance — no execution authority
 
 ## Success Metric
 
@@ -20,7 +27,7 @@ The v1.0 release is successful when all 23 requirements are verified end to end,
 
 ### Active
 
-No active requirements. Next milestone requirements will be defined via `/gsd-new-milestone`.
+Building toward v1.2 (End-to-End Factor Portfolio Pipeline). Requirements are defined in `.planning/REQUIREMENTS.md`.
 
 ### Validated in v1.1
 
@@ -85,4 +92,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-07-31 after Phase 06 post-closeout verification*
+*Last updated: 2026-07-31 — v1.2 End-to-End Factor Portfolio Pipeline milestone started*
