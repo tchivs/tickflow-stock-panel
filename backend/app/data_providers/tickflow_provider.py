@@ -41,9 +41,9 @@ class TickFlowProvider:
     def get_daily(
         self,
         symbols: list[str],
-        start_time: datetime | None,
-        end_time: datetime | None,
-        asset_type: AssetType,  # noqa: ARG002
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
+        asset_type: AssetType = "stock",  # noqa: ARG002
     ) -> pl.DataFrame:
         if not symbols:
             return pl.DataFrame()
@@ -75,9 +75,9 @@ class TickFlowProvider:
     def get_adj_factors(
         self,
         symbols: list[str],
-        start_time: datetime | None,
-        end_time: datetime | None,
-        asset_type: AssetType,  # noqa: ARG002
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
+        asset_type: AssetType = "stock",  # noqa: ARG002
     ) -> pl.DataFrame:
         if not symbols:
             return pl.DataFrame()
@@ -95,14 +95,12 @@ class TickFlowProvider:
     def get_minute(
         self,
         symbols: list[str],
-        start_time: datetime | None,
-        end_time: datetime | None,
-        asset_type: AssetType,  # noqa: ARG002
-        freq: str = "1m",  # noqa: ARG002
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
+        asset_type: AssetType = "stock",
     ) -> pl.DataFrame:
         # Existing minute sync remains in app.services.kline_sync for now.
         return pl.DataFrame()
-
     def get_realtime(
         self,
         universes: list[str] | None = None,

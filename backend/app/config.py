@@ -76,6 +76,12 @@ class Settings(BaseSettings):
     # TickFlow
     tickflow_api_key: str = Field(default="", description="留空启用 free 模式")
 
+    # Free-stockdb (hello245m/free-stockdb HTTP query service)
+    free_stockdb_url: str = Field(
+        default="http://127.0.0.1:7899",
+        description="Base URL of a running free-stockdb server (stockdb C++ query service)",
+    )
+
     # AI
     ai_provider: str = "openai_compat"
     ai_base_url: str = "https://api.zhaji.dev/v1"
