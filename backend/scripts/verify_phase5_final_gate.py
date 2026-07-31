@@ -521,6 +521,8 @@ def build_producer_specs(
         "dev",
         "--extra",
         "shadow",
+        "--extra",
+        "forecast",
         "pytest",
         "--import-mode=importlib",
         *_BACKEND_TEST_TARGETS,

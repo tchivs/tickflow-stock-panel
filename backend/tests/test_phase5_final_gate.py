@@ -520,6 +520,7 @@ def test_producer_specs_redirect_every_output_to_external_root(tmp_path: Path) -
     linux = specs[1]
     assert linux.argv[:3] == ("wsl.exe", "--exec", "bash")
     assert "--extra shadow" in " ".join(linux.argv)
+    assert "--extra forecast" in " ".join(linux.argv)
     assert "--import-mode=importlib" in " ".join(linux.argv)
     assert "not windows_only" in " ".join(linux.argv)
     assert "test_pinned_local_kronos_mini_regression" in " ".join(linux.argv)
