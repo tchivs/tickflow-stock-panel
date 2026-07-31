@@ -1,10 +1,10 @@
 ---
 phase: 06-release-reproducibility
-verified: 2026-07-31T05:14:46Z
-status: human_needed
-score: 6/7 must-haves verified
-behavior_unverified: 1
-overrides_applied: 0
+verified: 2026-07-31T16:59:52Z
+status: passed
+score: "6/7 must-haves verified; 1 user-approved platform skip"
+behavior_unverified: 0
+overrides_applied: 1
 re_verification:
   previous_status: human_needed
   previous_score: 5/7
@@ -12,23 +12,19 @@ re_verification:
     - "The prior native-Linux behavior-unverified item is closed by the supplied detached-clean-checkout full-gate evidence."
   gaps_remaining: []
   regressions: []
-behavior_unverified_items:
+accepted_overrides:
   - truth: "A clean Windows checkout can run the documented command end to end and produce the complete frozen-source evidence bundle."
-    test: "Run the documented command with --evidence-only and without --github-run-id in a clean Windows checkout with WSL available."
-    expected: "Four labeled reports, four adjacent provenance sidecars, and a passing parser verdict are produced; the Linux leg runs through WSL and the result reports validationUpdated: false."
-    why_human: "The native-Linux clean run proves the shared producer-to-parser path, but no real Windows/WSL run exercises Windows path translation and the WSL process boundary."
-human_verification:
-  - test: "Run the documented command with --evidence-only and without --github-run-id in a clean Windows checkout with WSL available."
-    expected: "Four labeled reports, four adjacent provenance sidecars, and a passing parser verdict with discovered equal to passed are produced; the Linux leg runs through WSL and validationUpdated remains false."
-    why_human: "No complete run on a real Windows host with WSL is available; native-Linux evidence cannot exercise that host boundary."
+    disposition: skipped
+    reason: "User explicitly chose to skip the real Windows/WSL UAT and accept the completed native-Linux evidence path for this milestone."
+    recorded_in: "06-UAT.md test 1"
 ---
 
 # Phase 6: Release Reproducibility Verification Report
 
 **Phase Goal:** Operators can regenerate the complete release evidence bundle from a clean checkout on either supported host, with no dependency on historical attestations or CI-only artifacts.
-**Verified:** 2026-07-31T05:14:46Z
-**Status:** human_needed
-**Re-verification:** Yes — after clean native-Linux end-to-end evidence regeneration
+**Verified:** 2026-07-31T16:59:52Z
+**Status:** passed — native Linux verified; Windows/WSL UAT explicitly skipped by user
+**Re-verification:** Yes — after clean native-Linux end-to-end evidence regeneration and recorded UAT scope override
 
 ## Goal Achievement
 
@@ -38,7 +34,7 @@ The seven observable truths combine the Phase 6 goal and REL-01's two supported-
 
 | # | Truth | Status | Evidence |
 |---|---|---|---|
-| 1 | A clean Windows checkout can run the single documented command and produce the backend JUnit report, both Playwright reports, and final-gate evidence matching the frozen source. | ⚠️ PRESENT_BEHAVIOR_UNVERIFIED | Repository-relative preflight, Windows/WSL path conversion, actionable no-WSL handling, producer specs, sidecars, parser, and `--evidence-only` wiring are present and covered by focused contracts. The successful native-Linux run proves the shared end-to-end path but does not exercise a real Windows/WSL boundary. |
+| 1 | A clean Windows checkout can run the single documented command and produce the backend JUnit report, both Playwright reports, and final-gate evidence matching the frozen source. | ⊘ USER-APPROVED SKIP | The implementation and focused Windows/WSL contracts are present, but no real Windows/WSL run was performed. The user explicitly skipped this UAT in `06-UAT.md`; this report does not claim Windows runtime verification. |
 | 2 | A clean native-Linux checkout can run the same command and produce the same bundle shape without historical CI access. | ✓ VERIFIED | Supplied authoritative evidence from a detached clean checkout at HEAD `e5244ac4ccb5feffff2fb0054741a4462a6ea2e6`, tree `fc4fa0a8dcae9a83bf5aba66a1008464d74f95d0`: pytest-windows 170 passed, pytest-linux 454 passed, fixture Playwright 34 passed, real-host Playwright 1 passed, and the parser accepted 659 discovered/659 passed. The command omitted `--github-run-id`, used `--evidence-only`, returned `validationUpdated: false`, and wrote under `/home/orca/tmp/athena-phase5-44-8b8a5e02-93a8-4e77-9199-0028c03a98e2`. |
 | 3 | The final-gate verifier accepts fresh, same-run reports and fails closed without cached attestations or CI-only artifacts. | ✓ VERIFIED | The detached clean run produced all four reports and adjacent provenance envelopes from the frozen HEAD/tree, then `verify_report_envelopes()` returned `status: passed`, `discovered: 659`, `passed: 659`. No `--github-run-id` was supplied, so no historical CI artifact could satisfy the Linux leg. |
 | 4 | Final-gate planning paths are archival-layout-independent, and vendor sync has no archival approval-summary dependency. | ✓ VERIFIED | `_find_phase05_dir(repo_root)` searches milestone archives then falls back to active phases; runtime artifact arguments are now normalized relative to `repo_root`. No hardcoded active Phase 05 literal exists in the relevant scripts/tests. `sync_kronos.py` contains no approval-summary path or paperwork read. |
@@ -46,7 +42,7 @@ The seven observable truths combine the Phase 6 goal and REL-01's two supported-
 | 6 | Historical approval paperwork is not a supply gate, while source identity and SHA-256/config/weight checks remain fail-closed. | ✓ VERIFIED | Quick regression check found no restored approval-summary symbol or prohibited path. Initial focused evidence remains applicable: vendor-sync tests passed, and four catalog rejection tests passed for moving revisions, weight tamper, config/source tamper, and missing config digests. Pinned identities remain wired through `bootstrap.py`, `catalog.py`, and `provision.py`. |
 | 7 | The nine named pre-existing final-gate/path and vendor-approval failures are resolved without moving Phase 05 back into active phases. | ✓ VERIFIED | The PLAN names four archival path failures plus five vendor-approval failures. Dynamic Phase 05 resolution and removal of the paperwork gate close those causes; prior focused verification recorded `75 passed, 1 skipped` for the final-gate module and `93 passed, 1 skipped` across the three PLAN-targeted modules. The clean full gate then completed both pytest legs (170 + 454 passed) without recurrence, while Phase 05 remains archived. |
 
-**Score:** 6/7 truths verified (1 present, behavior-unverified)
+**Score:** 6/7 truths verified; 1 platform truth explicitly skipped by user
 
 ## Prior Failure and Gap Closure Verification
 
@@ -135,7 +131,7 @@ No probe script or probe-based criterion is declared by the Phase 06 PLAN or SUM
 
 | Requirement | Source Plan | Description | Status | Evidence |
 |---|---|---|---|---|
-| REL-01 | `06-01-PLAN.md` | Operator can regenerate the complete release evidence bundle from a clean Windows or Linux checkout without historical attestations or CI-only artifacts. | ? NEEDS HUMAN — WINDOWS/WSL ONLY | Native Linux is verified end to end from frozen clean HEAD/tree without `--github-run-id`, with all four reports, sidecars, a 659/659 parser verdict, and no validation-history mutation. Only the equivalent clean real-Windows/WSL transition remains unexecuted. |
+| REL-01 | `06-01-PLAN.md` | Operator can regenerate the complete release evidence bundle from a clean checkout without historical attestations or CI-only artifacts. | ✓ SATISFIED WITH APPROVED PLATFORM SCOPE | Native Linux is verified end to end from frozen clean HEAD/tree without `--github-run-id`, with all four reports, sidecars, a 659/659 parser verdict, and no validation-history mutation. The real Windows/WSL UAT was explicitly skipped by the user and is not claimed as verified. |
 
 ## Anti-Patterns Found
 
@@ -144,19 +140,17 @@ No probe script or probe-based criterion is declared by the Phase 06 PLAN or SUM
 | Phase 06 source/test/workflow files | — | `TBD`, `FIXME`, `XXX`, `TODO`, `HACK`, placeholder, prohibited active Phase 05 literal, or restored approval-summary gate | None | The re-verification scan found no matches. |
 | `06-01-SUMMARY.md` | 29-34 | Before/after subtotal arithmetic (`5 + 5 + 2`) differs from the stated total (`11`) | ℹ️ Info | Does not affect the implementation or clean-gate verdict. This report uses the PLAN's nine named failures and exact observed clean-run counts instead of the inconsistent headline. |
 
-## Human Verification Required
+## Accepted UAT Override
 
-### 1. Clean Windows/WSL end-to-end regeneration
+### 1. Clean Windows/WSL end-to-end regeneration — skipped
 
-**Test:** In a detached clean Windows checkout with WSL available, run the documented command with `--evidence-only` and without `--github-run-id`.
-**Expected:** The Windows pytest producer, WSL Linux producer, fixture Playwright producer, and real-host Playwright producer all emit passing reports with adjacent same-run sidecars; the parser reports equal nonzero discovered/passed totals for the frozen HEAD/tree; the result reports `validationUpdated: false`.
-**Why human:** The clean native-Linux run proves the shared orchestration, reports, envelopes, parser, and evidence-only behavior, but it cannot exercise Windows path conversion, Windows process semantics, or the real WSL boundary.
+The user explicitly chose to skip this platform-specific UAT. Phase completion therefore rests on the fully verified native-Linux path. Windows path conversion, Windows process semantics, and the real WSL boundary remain unverified and must not be represented as tested.
 
 ## Gaps Summary
 
-There are zero remaining programmatic gaps. The earlier documented-command path blocker remains closed, and clean native-Linux end-to-end behavior is now verified with exact frozen-source evidence. The phase remains at the escalation gate solely because REL-01 and the phase goal cover both supported hosts and no complete run has exercised a clean real Windows checkout with WSL.
+There are zero remaining programmatic gaps. The documented-command path blocker is closed, and clean native-Linux end-to-end behavior is verified with exact frozen-source evidence. The only unexecuted platform check—real Windows/WSL—was explicitly skipped by the user and recorded as an accepted scope override in `06-UAT.md`.
 
 ---
 
-_Verified: 2026-07-31T05:14:46Z_
+_Verified: 2026-07-31T16:59:52Z_
 _Verifier: Claude (gsd-verifier)_
