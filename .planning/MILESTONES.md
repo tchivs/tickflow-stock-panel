@@ -112,7 +112,7 @@
 ## v1.1 Operational Hardening (Shipped: 2026-07-29)
 
 **Phases completed:** 4 phases, 4 plans (Phase 6-9)
-**Closeout type:** override_closeout (2 verification overrides documented)
+**Closeout type:** override_closeout (post-closeout native-Linux evidence verified 659/659; 1 Windows/WSL deferral remains)
 
 **Key accomplishments:**
 

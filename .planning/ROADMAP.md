@@ -29,7 +29,7 @@ Four phases hardened the shipped MVP: reproducible release evidence, validation 
 - Phases: 4/4 complete (Phase 6-9)
 - Backend tests: 961 passed, 0 failed (down from 9 failures)
 - Test warnings: 143 → 84 (84 all pytest GC artifacts, 0 application-code)
-- Closeout: override_closeout (2 verification overrides documented)
+- Closeout: native-Linux release evidence reverified 659/659; real Windows/WSL execution deferred by user and not claimed as tested
 
 Archive:
 
@@ -38,4 +38,4 @@ Archive:
 
 ---
 
-*Last updated: 2026-07-29 — v1.1 Operational Hardening milestone archived*
+*Last updated: 2026-07-31 — Phase 06 post-closeout verification finalized*

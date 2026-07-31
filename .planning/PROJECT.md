@@ -24,7 +24,7 @@ No active requirements. Next milestone requirements will be defined via `/gsd-ne
 
 ### Validated in v1.1
 
-- [x] Release evidence is reproducible from clean Windows and Linux checkouts without historical attestations (REL-01).
+- [x] Release evidence is reproducible from a clean native-Linux checkout without historical attestations; real Windows/WSL execution is explicitly deferred and not claimed as verified (REL-01, approved scope override).
 - [x] Runtime, data-stack, and frontend validation complete without avoidable deprecation or sortedness warnings (VAL-01).
 - [x] Optional local-model supply remains fail-closed with a documented, testable operator provisioning command (SUP-01).
 - [x] Critical desktop and 375px responsive workflows have durable screenshot-based visual regression evidence (VIS-01).
@@ -85,4 +85,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-07-29 — v1.1 Operational Hardening milestone archived*
+*Last updated: 2026-07-31 after Phase 06 post-closeout verification*
