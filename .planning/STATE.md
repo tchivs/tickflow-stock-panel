@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Operational Hardening
-status: planning
-last_updated: "2026-07-29T16:25:56.777Z"
+status: complete
+last_updated: "2026-07-29T22:30:00.000Z"
 last_activity: 2026-07-29
 progress:
   total_phases: 4
-  completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
-  percent: 0
+  completed_phases: 4
+  total_plans: 4
+  completed_plans: 4
+  percent: 100
 ---
 
 # Project State
@@ -20,197 +20,63 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-10)
 
 **Core value:** An investor can turn reliable market data and their own holdings into an auditable, actionable research and monitoring workflow without operating multiple disconnected tools.
-**Current focus:** v1.1 Operational Hardening — Phase 6 Release Reproducibility
+**Current focus:** v1.1 Operational Hardening — all 4 phases complete, ready for milestone archive
 
 ## Current Position
 
-Phase: 6 (Release Reproducibility) — not started (roadmap defined)
+Phase: 6-9 (all complete)
 Plan: —
-Status: Roadmap approved — ready for /gsd-plan-phase 6
-Last activity: 2026-07-29 — Milestone v1.1 roadmap created (4 phases)
+Status: All v1.1 phases delivered — ready for /gsd-complete-milestone
+Last activity: 2026-07-29 — Phase 9 visual regression baselines committed
+
+## v1.1 Phase Summary
+
+| Phase | Requirement | Status | Plan |
+|-------|-------------|--------|------|
+| 6 Release Reproducibility | REL-01 | ✅ Complete | 06-01 |
+| 7 Validation Hygiene | VAL-01 | ✅ Complete | 07-01 |
+| 8 Optional Supply Path | SUP-01 | ✅ Complete | 08-01 |
+| 9 Visual Regression | VIS-01 | ✅ Complete | 09-01 |
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 66
-- Average duration: N/A
-- Total execution time: 0 hours
+- Total plans completed: 70 (v1.0: 66, v1.1: 4)
+- v1.1 plans: 4 plans, all complete
 
-**By Phase:**
+**v1.1 By Phase:**
 
-| Phase | Plans | Total | Avg/Plan |
-|-------|-------|-------|----------|
-| 01 | 15 | - | - |
-| 02 | 8 | - | - |
-| 03 | 12 | - | - |
-| 04 | 27 | - | - |
-| 05 | 17 | - | - |
+| Phase | Plans | Status |
+|-------|-------|--------|
+| 06 | 1 (06-01) | Complete |
+| 07 | 1 (07-01) | Complete |
+| 08 | 1 (08-01) | Complete |
+| 09 | 1 (09-01) | Complete |
 
-**Recent Trend:**
+**v1.1 Key Metrics:**
 
-- Last 5 plans: None
-- Trend: N/A
-
-| Phase 02-factor-and-strategy-research P07 | 4m 30s | 3 tasks | 5 files |
-| Phase 02 P08 | 1258 | 3 tasks | 5 files |
-| Phase 03 P01 | 3min | 1 tasks | 1 files |
-| Phase 03 P02 | 4min | 2 tasks | 7 files |
-| Phase 03 P03 | 7min | 2 tasks | 4 files |
-| Phase 03 P04 | 301 | 2 tasks | 6 files |
-| Phase 03 P05 | 7m 8s | 2 tasks | 8 files |
-| Phase 03 P06 | 6m 49s | 2 tasks | 4 files |
-| Phase 03 P07 | 529 | 2 tasks | 6 files |
-| Phase 03 P09 | 6m | 1 tasks | 6 files |
-| Phase 03 P08 | 11m 22s | 3 tasks | 9 files |
-| Phase 03 P10 | 14m | 3 tasks | 7 files |
-| Phase 03 P11 | 527 | 2 tasks | 5 files |
-| Phase 03 P12 | 480 | 3 tasks | 5 files |
-| Phase 04 P12 | 21m | 2 tasks | 6 files |
-| Phase 04 P13 | 7m | 2 tasks | 5 files |
-| Phase 04 P14 | 16m | 2 tasks | 10 files |
-| Phase 04 P15 | 11m | 3 tasks | 7 files |
-| Phase 04 P16 | 8m | 2 tasks | 6 files |
-| Phase 04 P17 | 10m 52s | 2 tasks | 9 files |
-| Phase 04 P18 | 12m | 2 tasks | 5 files |
-| Phase 04-advanced-capabilities P22 | 521 | 2 tasks | 9 files |
-| Phase 04-advanced-capabilities P24 | 773 | 2 tasks | 9 files |
-| Phase 04-advanced-capabilities P23 | 9m 37s | 2 tasks | 6 files |
-| Phase 04 P25 | 314 | 2 tasks | 3 files |
-| Phase 04 P26 | 11m 20s | 2 tasks | 4 files |
-| Phase 04 P27 | 7m 18s | 2 tasks | 4 files |
-**Per-Plan Metrics:**
-
-| Plan | Duration | Tasks | Files |
-|------|----------|-------|-------|
-| Phase 05 P05 | 920 | 2 tasks | 5 files |
-| Phase 05 P07 | 12m 30s | 3 tasks | 13 files |
-| Phase 05 P08 | 15m 9s | 2 tasks | 6 files |
-| Phase 05 P11 | 15m 17s | 2 tasks | 5 files |
-| Phase 05 P14 | 20m | 2 tasks | 7 files |
-| Phase 05-optional-enhancements P15 | 18m30s | 2 tasks | 6 files |
-| Phase 05-optional-enhancements P16 | 25m33s | 3 tasks | 3 files |
-| Phase 05 P17 | 14m25s | 2 tasks | 11 files |
-| Phase 05 P40 | 1m | 1 tasks | 3 files |
-| Phase 05 P36 | 25min | 2 tasks | 6 files |
-| Phase 05 P27 | 45min | 2 tasks | 6 files |
-| Phase 05 P39 | 19min | 2 tasks | 6 files |
-| Phase 05 P42 | 20m | 3 tasks | 6 files |
-| Phase 05 P43 | 30m | 3 tasks | 12 files |
-| Phase 05 P44 | 1h34m47s | 2 tasks | 11 files |
+- Backend tests: 961 passed, 3 skipped, 0 failed (down from 9 failures)
+- Test warnings: 143 → 84 (all remaining are pytest GC artifacts, 0 application-code warnings)
+- Frontend: tsc clean, vite build clean
+- Visual regression: 4 baselines committed (desktop + mobile)
 
 ## Accumulated Context
 
-### Decisions
+### v1.1 Decisions
 
-No implementation decision was explicitly locked by the architecture intake. Required planning guardrails:
-
-- [Phase 1]: Phase 1 must run as one Linux Docker Compose container with no external database or message queue.
-- [Phase 1]: Preserve Parquet/DuckDB/Polars for time-series data and SQLite for operational state.
-- [All phases]: Preserve upstream synchronization paths and independently activatable module boundaries.
-- [Phase ?]: Completed strategy results fingerprint the full governed panel loaded for execution, including warmup and any full-mode buffer.
-- [Phase ?]: The catalog receives only revision and fingerprint copied from the server-issued result under its existing recognized keys.
-- [Phase ?]: Catalog warning vocabulary and no-winner comparison semantics remain unchanged.
-- [Phase ?]: Strategy retention eligibility requires the current successful SSE task and its server-issued handle.
-- [Phase 03]: 批准 langgraph==1.2.9 与 langgraph-checkpoint-sqlite==3.1.0；保留直接 OpenAI SDK 适配器且不添加 langchain-openai。
-- [Phase 03]: Wave 0 analysis contracts remain intentionally RED until plans 03-04 through 03-07 implement app.analysis. — Avoid placeholder production code while preserving executable evidence, graph, lifecycle, and trusted-reviewer invariants.
-- [Phase 03]: Analysis client actions carry only bounded subject identifiers or server-issued review references; they never send reviewer, provenance, grade, or lifecycle authority.
-- [Phase 03]: Every analysis cache key includes the subject so persisted progress invalidates only the affected object's panels.
-- [Phase 03]: Phase 3 browser scenarios remain per-case expected failures until 03-08 removes the markers after delivering the UI.
-- [Phase 03]: Analysis evidence is frozen server-side with provenance hashes and independent material-number cross-checks before model generation.
-- [Phase 03]: Analysis audit records use append-only operational.db tables with SQLite immutable triggers; only run execution status may transition.
-- [Phase 03]: Graph execution opens AsyncSqliteSaver per invocation so async ainvoke retains durable thread checkpoints without a process-global connection.
-- [Phase 03]: Lifecycle remains a read-only fallback snapshot; lifecycle mutation integration is intentionally deferred to Plan 03-09.
-- [Phase 03]: Lifecycle proposals are evidence-gated suggestions; only confirmed events determine official state.
-- [Phase 03]: Reviewer principals are opaque, persisted per session, and resolved only from server-held session tokens.
-- [Phase 03]: Confirmed events and one observation plan are committed atomically; rejection and outcomes remain append-only.
-- [Phase 03]: Analysis route IDs resolve to a persisted subject before authorization; opaque IDs are never authority.
-- [Phase 03]: Shared SSE binds immutable server-derived subject scope at subscription and filters analysis_progress before queueing.
-- [Phase 03]: Lifecycle evaluation runs only after immutable report and completed run persistence.
-- [Phase 03]: Completed-analysis proposal retries use deterministic run/report/snapshot attribution and never append official events.
-- [Phase 03]: Analysis UI maps stock/portfolio display subjects to server-authorized instrument/account requests within the workspace.
-- [Phase 03]: Analysis reports are read only in object-local workspaces; the legacy free-text global dialog host is disabled.
-- [Phase 03]: Production analysis evidence is derived only from governed market, financial, and operational repositories; browser focus and notes never become facts.
-- [Phase 03]: Only genuinely active runs are deduplicated; a new run without execution collaborators records a sanitized terminal failure.
-- [Phase 03]: AsyncSqliteSaver is the production graph verification path; synchronous cross-thread SQLite saver checks remain excluded.
-- [Phase 03]: Analysis API responses use explicit allowlisted projections rather than raw SQLite records or nested snapshots.
-- [Phase 03]: Completed reports receive a server-issued signal only after subject authorization; legacy reports get no lifecycle transition.
-- [Phase 03]: Rejected lifecycle proposals are inferred from append-only rejection records; confirmed events alone determine official state.
-- [Phase 03]: Analysis UI keeps stock/portfolio display subjects separate from instrument/account API request subjects. — This preserves object-local UI semantics while preventing client calls from sending unsupported subject kinds.
-- [Phase 04]: Viewpoint reads select the latest immutable evaluation by `created_at` then stable ID, never response ordering.
-- [Phase 04]: Experiment execution uses a spawned, parent-owned process group and returns only bounded manifest metadata.
-- [Phase 04]: Job-state mutation and its append-only audit fact commit together before scoped SSE publication.
-- [Phase 04]: Production advanced workflows receive only persisted server bindings and remain recovery cursors rather than authority sources.
-- [Phase 04]: Custom strategy source may spawn only after a fresh complete Linux isolation proof; unavailable or stale proof rejects before spawn.
-- [Phase 04]: A root SSE subscriber sends a data-free ready event after scope-bound registration so host acceptance can avoid connection races.
-- [Phase 04]: Linux sandbox proof accepts only parent/child namespace deltas, mount and write-boundary checks, network denial, rlimit observations, and verified cleanup before source spawn.
-- [Phase 04]: Sandbox run disclosure reauthorizes the persisted opaque parent research asset and returns only an allowlisted terminal DTO.
-- [Phase 04]: Viewpoint evaluation reads frozen historical windows through KlineRepository; revision, correction, and evaluation routes reauthorize the persisted instrument before append. — Preserves governed data boundaries and prevents browser-provided scope or market authority.
-- [Phase 04]: Frozen experiment scopes and five evolution gates reload only immutable server-produced evidence; browser requests cannot supply authority or verdicts.
-- [Phase 04]: Viewpoint mutations invalidate only the active subject's viewpoint version and calibration keys. — Preserves object-local cache ownership for immutable research records.
-- [Phase 04]: Experiment and evolution controls submit bounded scope/configuration while gate verdicts and sandbox details remain server-projected. — Prevents browser-provided authority and sandbox disclosure.
-- [Phase ?]: ResearchRepository exclusively resolves immutable research assets to installed strategies; advanced workflows receive an injected resolver.
-- [Phase ?]: Legacy experiment specifications remain readable but fail closed for execution without frozen server-bound strategy provenance.
-- [Phase ?]: Advanced-host readiness is deployment-owned and validates 000300.SH, fixed evaluation windows, coverage, splits, and bullish_alignment warmup before any governed-lake write.
-- [Phase ?]: Host fixture eligibility derives bounded MA and momentum inputs from raw bars and reuses the production bullish_alignment expression rather than copying strategy logic.
-- [Phase ?]: Historical aggregate rate windows use reserved __legacy_rate_window__ identity and cannot be consumed by live policy.
-- [Phase ?]: Rejected task quota checks persist audit state without emitting advanced-progress SSE.
-- [Phase ?]: Viewpoint calibration selects the first terminal immutable fact by created-at and stable ID, excluding the awaiting fact.
-- [Phase ?]: Terminal viewpoint evaluation retries reuse the frozen ledger fact and cannot invoke governed evaluation or alter calibration.
-- [Phase ?]: Public experiment creation resolves an extant persisted asset-to-installed-strategy binding before service invocation and returns safe 404 on mismatch.
-- [Phase ?]: Authenticated real-lifespan tests prove task-specific quota denials produce no advanced SSE event while independent research capacity remains available.
-- [Phase ?]: Queue acquisition requires immutable authorization policy provenance to equal the current persisted policy in the same transaction; mismatches never charge or create work.
-- [Phase ?]: Queued jobs compare durable authorization policy provenance with the current revision before quota inspection, workflow work, or advanced-progress publication.
-- [Phase ?]: Phase 05 optional-host contracts start the single production FastAPI lifespan and limit test overrides to independent deployment probes and failure injection.
-- [Phase ?]: Phase 05 browser RED accepts exactly one scenario-specific missing production locator per UI-SPEC scenario; all fixture, syntax, launch, skip, retry, timeout, external-request, and unexpected-pass failures remain fatal.
-- [Phase ?]: Descriptor-less SHDW-01 and THES-01 edges remain flagged-unverified until final named green host/browser scenarios; no probe descriptor is invented in Wave 0.
-- [Phase ?]: Kronos-base revision 2b554741eca47781b64468546e77fef3e85130e6 is cataloged only with Tokenizer-base and remains explicit-provisioning-only.
-- [Phase ?]: Provisioning admits only config.json and model.safetensors at immutable revisions, verifies full SHA-256 in temporary staging, and atomically publishes the deployment catalog.
-- [Phase ?]: Checkpoint verification and routine runtime paths stay local-only; existing mismatched assets are rejected rather than overwritten.
-- [Phase ?]: Same-content retries and corrections always receive distinct Shadow batch and artifact identities; hashes record lineage without deduplicating facts.
-- [Phase ?]: A Shadow evidence set freezes only when every trade in each attributable completed batch is explicitly included or excluded.
-- [Phase ?]: Shadow estimators are transient; only canonical allowlisted rule data, provenance, metrics, assumptions, limitations, and replay evidence persist.
-- [Phase ?]: Shadow retries reuse exact frozen split identities but append new immutable attempts and terminal evaluations; failed evidence is never rewritten or promoted.
-- [Phase ?]: Shadow retention is one idempotent research event with no strategy, monitor, plan, position, ledger, broker, provider, or market-action collaborator.
-- [Phase ?]: Shadow public history uses hand-written allowlists and omits managed paths, raw data, account aliases, runner internals, exceptions, and client verdicts.
-- [Phase ?]: Forecast maturity uses the existing unique forecast/horizon fact identity and one atomic outcome-plus-calibration transaction without another store.
-- [Phase ?]: Forecast SSE queues are bounded transport only; every subscription and reconnect re-authorizes and reads committed persisted job state.
-- [Phase ?]: Optional route shapes install once while each lifespan independently probes initializes recovers schedules and closes module-local services.
-- [Phase ?]: Phase 05 frontend exports one status-aware shared request wrapper; no parallel transport library was introduced.
-- [Phase ?]: Forecast SSE is hook-local transport only; terminal state is refreshed from persisted job status before object-local invalidation.
-- [Phase ?]: Shadow retainability is derived only from two persisted passing IS/OOS evaluations; browser verdict and activation authority remain absent.
-- [Phase ?]: Shadow normalizes bounded safe Wave 0 fixture fields but keeps production /evaluations authoritative and does not fabricate legacy /runs facts or a SHDW descriptor.
-- [Phase ?]: Thesis and Forecast mount only for stock subjects; Portfolio keeps the original three-tab behavior and no optional requests.
-- [Phase ?]: Optional panels stay mounted behind semantic tabpanels so object-local selection and scroll state survive tab switches without a global store.
-- [Phase ?]: Phase 05 capability probes use QK.phase5Capabilities and never share the unrelated global capabilities cache identity.
-- [Phase ?]: Forecast charts remain progressive enhancement; captioned quantile, path, provenance, history, and calibration tables are the accessible evidence surface.
-- [Phase ?]: Lazy optional imports are checked against the process baseline so full-suite order cannot invalidate the real lifespan no-new-heavy-runtime guarantee.
-- [Phase ?]: Forecast freshness is projected from the existing governed Kline repository; no second calendar, store, or browser-authored as-of authority is introduced.
-- [Phase ?]: Real Kronos acceptance stays opt-in and local-only: absent approved assets report unavailable, while provisioned assets must pass exact provenance, network denial, and resource observation.
-- [Phase ?]: Personal-project exception: 05-26 no longer requires a human supply approval record. Existing rejected 05-28/05-40 summaries remain historical records only.
-- [Phase ?]: Forecast supply remains fail-closed on missing or mismatched immutable revision and SHA-256 values, but those values are no longer gated by reviewer identity or approval paperwork.
-- [Phase ?]: Thesis check/history pages self-identify with instrument/version display identity (WR-03)
-- [Phase ?]: Executable Kronos identity is destination SHA-256 map + config/weight digests, not UPSTREAM revision alone.
-- [Phase ?]: Modules load via unique _athena_kronos_* package names from source_dir; preloaded shadows outside source are rejected.
-- [Phase ?]: IPC is length-capped JSON frames over a one-way Pipe; cleanup terminate/kill reaps process group.
-- [Phase ?]: Recovery reuses normal runner CAS/global-lease path via run_recovered_job
-- [Phase ?]: Handshake PGID is the only post-spawn group identity; leader exit never proves cleanup
-- [Phase ?]: Host recovery outcomes stay path/principal-free; recovery failure marks only Forecast unavailable
-- [Phase 05]: Missing POSIX resource support makes custom-strategy isolation unavailable and blocks limits/spawn; no unbounded fallback is permitted.
-- [Phase 05]: Windows managed artifacts use binary writable file descriptors and skip unsupported directory fsync while POSIX durability remains unchanged.
-- [Phase 05]: Phase 05 availability combinations run as five top-level Playwright tests with stable case IDs and fresh Page fixtures.
-- [Phase 05]: ChecksTable consumes the canonical ThesisCheck[] contract.
-- [Phase ?]: Submitted strategy source is provenance only; controlled execution consumes immutable positive-parser IR.
-- [Phase ?]: Forecast retry reservation is the first mutation and only its persisted owner token may bind or publish.
-- [Phase ?]: Durable fully-bound publication is dispatch acceptance; wake-up is only a best-effort hint.
-- [Phase ?]: Timed-out shutdown retains exact ownership and returns a retryable aggregate until bounded close succeeds.
-- [Phase 05]: 05-44 closeout is bound to local run 7d7ce3ad-c09b-4bb8-8b4b-31d28f7aadef at HEAD 2c313c1c59f1d43699f034624bee1751f114f06d and tree c79e902d29f0de40125d9d43542c4d2973ed8cb9.
-- [Phase 05]: GitHub Actions run 30221237357 is the accepted exact-tree native Linux evidence for the final four-report bundle.
-- [Phase 05]: Only R43/Wave 15 was approved; global validation, historical rows, 05-28, 05-40, and 05-GC-44-1 remain unchanged.
+- [Phase 6]: Release evidence paths resolve dynamically from repo root, surviving archive layout changes.
+- [Phase 6]: Linux evidence producer runs natively (no WSL dependency) on Linux hosts; WSL remains Windows fallback.
+- [Phase 6]: Historical approval-paperwork gate removed from sync_kronos.py — supply is fail-closed on SHA-256/identity, not on reviewer paperwork.
+- [Phase 7]: Polars `collect(engine="streaming")` preserves exact streaming semantics via non-deprecated API.
+- [Phase 7]: `check_sortedness=False` on `join_asof` is safe because data is pre-sorted by `["symbol", "date"]`.
+- [Phase 7]: ResourceWarning from SSL sockets in test_main_host is a pytest `gc.collect()` artifact, not an application leak.
+- [Phase 8]: Optional supply path was already complete from v1.0; Phase 8 verified it meets all criteria (24 tests pass).
+- [Phase 9]: Visual regression uses `maxDiffPixelRatio: 0.01` — 1% pixel drift threshold.
 
 ### Pending Todos
 
-None yet.
+None.
 
 ### Blockers/Concerns
 
@@ -225,10 +91,10 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-07-26T21:41:28.046Z
-Stopped at: Completed 05-44-PLAN.md
+Last session: 2026-07-29T22:30:00.000Z
+Stopped at: All v1.1 phases complete
 Resume file: None
 
 ## Operator Next Steps
 
-- Start the next milestone with /gsd-new-milestone
+- Run /gsd-complete-milestone to archive v1.1 and prepare for next milestone
