@@ -48,6 +48,7 @@ class OptimizationRequest(BaseModel):
     turnover_coef: float = Field(default=0.0014, ge=0.0)
     turnover_reference: Literal["equal_weight", "run_id"] = "equal_weight"
     w_prev_run_id: str | None = None
+    industry_cap: float | None = None  # 行业上限请求; 治理映射不存在时 fail-closed (PFOL-03)
 
     @model_validator(mode="after")
     def _w_prev_run_id_required_for_run_id(self) -> OptimizationRequest:

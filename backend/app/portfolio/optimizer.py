@@ -32,6 +32,7 @@ from app.portfolio.constraints import (
     TURNOVER_COEF_DEFAULT,
     TURNOVER_REFERENCE_EQUAL_WEIGHT,
     TURNOVER_REFERENCE_RUN_ID,
+    assert_industry_cap_unavailable,
 )
 from app.portfolio.hrp import hrp_portfolio, hrp_weights, render_baseline
 from app.portfolio.repository import PortfolioRepository
@@ -557,6 +558,11 @@ def _run_optimization_impl(
     data_dir: Path | None,
 ) -> dict[str, Any]:
     """run_optimization 的主体 (由 fail-closed 包装器调用)。"""
+    # 行业上限 fail-closed 闸门 (PFOL-03, T-11-06, pitfall 8): 治理行业映射
+    # 未实现 (INDUSTRY_CAP_ENABLED=False) 时, 任何行业上限请求都抛 ValueError
+    # "industry mapping unavailable", 由包装器记录为 failed run —— 绝不静默忽略。
+    assert_industry_cap_unavailable(requested=req.industry_cap is not None)
+
     if symbols is None:
         symbols = [f"SYM{i:03d}" for i in range(12)]
     if returns is None:
@@ -668,6 +674,7 @@ def _run_optimization_impl(
                 "turnover_coef": req.turnover_coef,
                 "turnover_reference": turnover_reference,
                 "turnover_reference_detail": turnover_reference_detail,
+                "industry_cap": req.industry_cap,
                 "policy_version": "phase-11-policy-v1",
             },
             solver_name=solver_name,
@@ -751,6 +758,7 @@ def _run_optimization_impl(
                 "turnover_coef": req.turnover_coef,
                 "turnover_reference": turnover_reference,
                 "turnover_reference_detail": turnover_reference_detail,
+                "industry_cap": req.industry_cap,
                 "policy_version": "phase-11-policy-v1",
             },
             solver_name=solver_name,
@@ -817,6 +825,7 @@ def _run_optimization_impl(
             "turnover_coef": req.turnover_coef,
             "turnover_reference": turnover_reference,
             "turnover_reference_detail": turnover_reference_detail,
+            "industry_cap": req.industry_cap,
             "policy_version": "phase-11-policy-v1",
         },
         solver_name=solver_name,
