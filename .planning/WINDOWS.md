@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 0
+open_count: 1
 waived_count: 0
 fixed_count: 4
-total_count: 4
-last_updated: 2026-07-26T21:41:15.935Z
+total_count: 5
+last_updated: 2026-08-01T16:43:05.110Z
 ---
 
 # Broken Windows Ledger
@@ -19,6 +19,7 @@ last_updated: 2026-07-26T21:41:15.935Z
 | 2 | 05 | unrun-verify | backend/tests/forecast/test_runner.py |  | linux_process_group suite unrun because no usable WSL distribution is installed | fixed |  | 2026-07-26T20:01:02.152Z | 2026-07-26T21:41:15.418Z |
 | 3 | 05 | unrun-verify | backend/scripts/verify_phase5_final_gate.py | 1200 | 05-44 unique final orchestration could not produce native Linux JUnit because wsl.exe has no installed distribution; scoped VALIDATION remains pending | fixed |  | 2026-07-26T20:13:12.349Z | 2026-07-26T21:41:15.935Z |
 | 4 | 05 | deviation | backend/scripts/verify_phase5_final_gate.py | 1200 | 05-44 WSL preflight originally crashed while decoding native UTF-16LE help output; fix adb7a09 was committed but not rerun under the one-orchestration rule | fixed |  | 2026-07-26T20:13:12.851Z | 2026-07-26T20:22:53.282Z |
+| 5 | 11 | stub | backend/tests/portfolio/test_repository.py | 1 | RED scaffold: append-only record/get/list methods land in 11-01 | open |  | 2026-08-01T16:43:05.110Z |  |
 
 ````json
 [
@@ -69,6 +70,18 @@ last_updated: 2026-07-26T21:41:15.935Z
     "reason": "",
     "recorded_at": "2026-07-26T20:13:12.851Z",
     "resolved_at": "2026-07-26T20:22:53.282Z"
+  },
+  {
+    "id": 5,
+    "kind": "stub",
+    "phase": "11",
+    "file": "backend/tests/portfolio/test_repository.py",
+    "line": 1,
+    "description": "RED scaffold: append-only record/get/list methods land in 11-01",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-01T16:43:05.110Z",
+    "resolved_at": null
   }
 ]
 ````
