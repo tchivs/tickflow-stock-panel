@@ -10,6 +10,9 @@ PSD 修复 NEVER silent —— provenance 是 risk_model_json 的强制字段, o
 """
 from __future__ import annotations
 
+import json
+from hashlib import sha256
+
 import numpy as np
 
 from app.portfolio.constraints import PSD_EPSILON_DEFAULT
@@ -86,3 +89,25 @@ def repair_psd(
         "eigenvalues_after": eigenvalues_after,
     }
     return repaired, provenance
+
+
+def covariance_sha256(cov: np.ndarray) -> str:
+    """Canonical 8-decimal sha256 identity for a covariance matrix (PFOL-01).
+
+    The digest is computed over the canonical JSON of the matrix as a list of
+    lists rounded to 8 decimals (sort_keys + compact separators + ensure_ascii
+    False) — byte-identical to ``PortfolioArtifactService.write_bundle``'s
+    ``covariance.json`` serialization (11-06). Phase 12 can therefore verify the
+    artifact bytes against the digest recorded in ``risk_model_json``.
+
+    Args:
+        cov: (n, n) 协方差矩阵 (修复后进入工件的矩阵)。
+
+    Returns:
+        64 位小写 hex 摘要。
+    """
+    matrix = np.asarray(cov, dtype=float).round(8).tolist()
+    content = json.dumps(
+        matrix, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+    ).encode("utf-8")
+    return sha256(content).hexdigest()

@@ -36,7 +36,7 @@ from app.portfolio.constraints import (
 )
 from app.portfolio.hrp import hrp_portfolio, hrp_weights, render_baseline
 from app.portfolio.repository import PortfolioRepository
-from app.portfolio.risk import check_psd, repair_psd, sample_covariance
+from app.portfolio.risk import check_psd, covariance_sha256, repair_psd, sample_covariance
 from app.portfolio.snapshot import SnapshotBindingError, load_composite_snapshot
 from app.research.repository import ResearchRepository
 
@@ -393,6 +393,7 @@ def _build_risk_model(
         "window": list(window),
         "dropna": True,
         "psd_repair": provenance,
+        "covariance_sha256": covariance_sha256(cov),
     }
     return {"covariance": cov, "risk_model_json": risk_model_json}
 
@@ -656,6 +657,16 @@ def _run_optimization_impl(
             covariance=cov,
         )
         weights_descriptor = next(d for d in descriptors if d.relative_path.endswith("weights.json"))
+        covariance_descriptor = next(
+            d for d in descriptors if d.relative_path.endswith("covariance.json")
+        )
+        # 协方差工件路径记录进 risk_model_json (PFOL-01, Phase 12 接缝):
+        # covariance_sha256 已由 _build_risk_model 写入, 此处补上工件相对路径,
+        # 使 Phase 12 能按摘要对 covariance.json 做 checksum 校验读取。
+        risk_model_json = {
+            **risk_model_json,
+            "covariance_artifact_relative_path": covariance_descriptor.relative_path,
+        }
 
         return repository.record_optimization_run(
             id=run_id,
@@ -807,6 +818,14 @@ def _run_optimization_impl(
         covariance=cov,
     )
     weights_descriptor = next(d for d in descriptors if d.relative_path.endswith("weights.json"))
+    covariance_descriptor = next(
+        d for d in descriptors if d.relative_path.endswith("covariance.json")
+    )
+    # 协方差工件路径记录进 risk_model_json (PFOL-01, Phase 12 接缝)。
+    risk_model_json = {
+        **risk_model_json,
+        "covariance_artifact_relative_path": covariance_descriptor.relative_path,
+    }
 
     record = repository.record_optimization_run(
         id=run_id,

@@ -89,13 +89,12 @@ class PortfolioArtifactService:
             self._write_json(namespace, run_id, "baseline_weights.json", dict(baseline_weights)),
         ]
         if covariance is not None:
+            # 协方差工件按 8 位小数规范化 (与 risk.covariance_sha256 的摘要口径
+            # 字节一致): 工件字节的 sha256 == risk_model_json 里的 covariance_sha256,
+            # 使 Phase 12 能按摘要做 checksum 校验读取 (PFOL-01/04)。
+            rounded = np.asarray(covariance, dtype=float).round(8)
             descriptors.append(
-                self._write_json(
-                    namespace,
-                    run_id,
-                    "covariance.json",
-                    [row.tolist() for row in covariance],
-                )
+                self._write_json(namespace, run_id, "covariance.json", rounded.tolist())
             )
         return descriptors
 
