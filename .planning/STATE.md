@@ -5,10 +5,10 @@ milestone_name: End-to-End Factor Portfolio Pipeline — in progress
 current_phase: 10
 current_phase_name: defining requirements
 status: executing
-stopped_at: "Completed 10-05: Admission + Evaluation Breadth (wave 3)"
-last_updated: "2026-08-01T10:12:22.827Z"
+stopped_at: "Completed 10-06: Composite + Catalog Breadth (wave 4)"
+last_updated: "2026-08-01T11:00:00.000Z"
 last_activity: 2026-08-01
-last_activity_desc: 10-04 PIT Universe Resolver + Manifest complete (28/28 gate green)
+last_activity_desc: 10-06 Composite + Catalog Breadth complete (16/16 gate green, 102 research suite)
 progress:
   total_phases: 6
   completed_phases: 0
@@ -29,9 +29,9 @@ See: .planning/PROJECT.md (updated 2026-07-31)
 ## Current Position
 
 Phase: 10 Factor Library & Multi-Factor Model (in progress)
-Plan: 10-05 complete (waves 0-3 done: 10-02/10-03 foundations, 10-01 tracer, 10-04 PIT universe, 10-05 admission + evaluation breadth)
-Status: Executing — remaining plan 10-06
-Last activity: 2026-08-01 — 10-05 Admission + Evaluation Breadth complete (per-plan gate 29/29 green)
+Plan: 10-06 complete (waves 0-4 done: 10-02/10-03 foundations, 10-01 tracer, 10-04 PIT universe, 10-05 admission + evaluation breadth, 10-06 composite + catalog breadth)
+Status: Executing — all six Phase 10 plans complete; per-plan gates green
+Last activity: 2026-08-01 — 10-06 Composite + Catalog Breadth complete (per-plan gate 16/16 green; research suite 102 passed)
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -39,7 +39,7 @@ Progress: [░░░░░░░░░░] 0%
 
 | Phase | Requirements | Status |
 |-------|-------------|--------|
-| 10 Factor Library & Multi-Factor Model | FACT-01..06 | In progress (10-01..10-05 complete, 10-06 remaining) |
+| 10 Factor Library & Multi-Factor Model | FACT-01..06 | In progress (10-01..10-06 complete) |
 | 11 Portfolio Construction & Optimization | PFOL-01..04 | Not started |
 | 12 Risk Models & Attribution | RSK-01..03 | Not started |
 | 13 Walk-Forward Validation & Parameter Search | WFWD-01..03 | Not started |
@@ -66,6 +66,7 @@ Progress: [░░░░░░░░░░] 0%
 |------|----------|-------|-------|
 | Phase 10 P10-04 | 45 | 5 tasks | 6 files |
 | Phase 10 P10-05 | 4500 | 7 tasks | 8 files |
+| Phase 10 P10-06 | 4680 | 4 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -105,8 +106,8 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-08-01T10:12:15.315Z
-Stopped at: Completed 10-05: Admission + Evaluation Breadth (wave 3)
+Last session: 2026-08-01T11:00:00.000Z
+Stopped at: Completed 10-06: Composite + Catalog Breadth (wave 4)
 Resume file: None
 
 ## Operator Next Steps
@@ -119,3 +120,6 @@ Resume file: None
 - [Phase ?]: Candidate trails: every admission verdict (admitted AND rejected) carries provenance, evaluation_run_id, ExperimentSnapshot.id, and ordered gate results; evaluation references are optional when no catalog/artifact_service is wired
 - [Phase ?]: IC-correlation dedup: per-date IC Pearson on the val window, series aligned on sorted val dates; degenerate constant series yield 0.0; discover_similar untouched
 - [Phase ?]: evaluation.py delegates fully to FactorSignalChain.compute; legacy _evaluate_panel/_rebalance/_required_columns/_correlation_series deleted; parse_factor/compile_factor no longer imported
+- [Phase ?]: Composite weights derive from catalog-recorded mean IC for the same revision + resolved config (cross-module integrity); a revision with missing recorded mean IC fails the build closed, never equal-weight silently
+- [Phase ?]: Composite outputs are snapshot-immutable: input_snapshot_sha256 binds (sorted revision_ids, weighting, membership_fingerprint, panel fingerprints, mean ICs); output written via EvaluationArtifactService.write_bundle (O_EXCL + fsync + sha256); factor_model_composites rows append-only bound by input_snapshot_sha256
+- [Phase ?]: Admitted-factor catalog entries are summary-only (coverage mean + series, finite counts, ast/shape signature) with revision lineage (factor_id, revision_id, revision_number); full factor-value matrices are an anti-feature; the composite model is a first-class catalog record with its latest snapshot reference
