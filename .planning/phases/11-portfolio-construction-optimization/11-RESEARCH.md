@@ -574,7 +574,7 @@ risk_model_json = {"risk_model": "sample_covariance_v1", "window": [start, end],
 | A7 | `metadata.version(solver)` resolves for all bundled solvers via a fixed mapping; `"unknown"` fallback if not | Code Examples | Audit completeness of solver_version; fallback keeps runs recordable |
 | A8 | cvxpy 1.9.2 cp311 wheels exist (verified) and `uv sync` on the host Python 3.11.2 succeeds | Dependency Changes | If resolution differs, Wave 0 empty-`.venv` gate catches it before implementation |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Turnover coefficient scale.** `TURNOVER_COEF_DEFAULT = 0.0014` is a *cost* proxy (fraction of notional per unit |Δw|), but the risk term `wᵀΣw` is a *variance* in return units. The two have different units; a fixed coefficient is defensible for a research baseline but should be confirmed. *Recommendation:* keep 0.0014 with provenance; document that calibration is a Phase 13 walk-forward item.
 2. **Default cap/min-cash values.** 10%/5% are Claude's-discretion proposals. *Recommendation:* surface as policy constants (`phase-11-policy-v1`) for user confirmation in discuss/plan; the values are recorded in every run so changing them is auditable.
