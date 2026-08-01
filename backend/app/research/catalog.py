@@ -1,7 +1,10 @@
 """Immutable local experiment catalog and transparent evidence comparison.
 
 The catalog stores provenance snapshots only.  It neither executes experiments nor
-reads managed artifacts, so comparison remains a metadata-only operation.
+reads managed artifacts, so comparison remains a metadata-only operation.  The
+metrics map is additive — new evidence keys (``icir``, ``monthly_robustness``,
+``coverage``, ``monthly_ic_series``) record the full monthly evidence set
+alongside IC/RankIC and never alter ``_compatibility_warnings``.
 """
 from __future__ import annotations
 

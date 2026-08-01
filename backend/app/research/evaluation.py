@@ -21,7 +21,7 @@ import polars as pl
 from app.backtest.engine import BacktestEngine
 from app.backtest.factor import FactorBacktestService, FactorConfig
 from app.research.artifacts import ArtifactDescriptor, ArtifactWriteError, EvaluationArtifactService
-from app.research.factor_dsl import FactorDslError, ParsedFactor, parse_factor
+from app.research.factor_dsl import FactorDslError
 from app.research.factor_registry import FactorRegistry, FactorRevision
 from app.research.signal_chain import (
     FactorSignalChain,
@@ -62,6 +62,29 @@ class ResolvedEvaluationConfig:
 
 # A concise public spelling for API and catalog callers.
 FactorEvaluationConfig = ResolvedEvaluationConfig
+
+
+def _per_date_correlation_series(
+    panel: pl.DataFrame,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Per-date Pearson IC and RankIC over the evaluated cross-section."""
+    correlations = (
+        panel.group_by("date")
+        .agg(
+            pl.corr("_factor", "_forward_return").alias("ic"),
+            pl.corr(pl.col("_factor").rank(method="average"), pl.col("_forward_return").rank(method="average")).alias("rank_ic"),
+        )
+        .sort("date")
+    )
+    ic_series: list[dict[str, Any]] = []
+    rank_ic_series: list[dict[str, Any]] = []
+    for row in correlations.iter_rows(named=True):
+        date_text = str(row["date"])
+        if row["ic"] is not None and np.isfinite(float(row["ic"])):
+            ic_series.append({"date": date_text, "ic": float(row["ic"])})
+        if row["rank_ic"] is not None and np.isfinite(float(row["rank_ic"])):
+            rank_ic_series.append({"date": date_text, "rank_ic": float(row["rank_ic"])})
+    return ic_series, rank_ic_series
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,7 +170,7 @@ class FactorEvaluationService:
         """Validate everything, then delegate the one governed panel compute to the chain."""
         try:
             resolved_config = self._validate_config(config)
-            revision, parsed = self._validated_revision(config.factor_revision_id)
+            revision = self._validated_revision(config.factor_revision_id)
         except (TypeError, ValueError, FactorDslError) as error:
             return FactorEvaluationResult(
                 evaluation_run_id=None,
@@ -187,7 +210,7 @@ class FactorEvaluationService:
             return self._failed(evaluation_run_id, revision_provenance, resolved_config, "no valid observations after treatments")
 
         manifest = self._manifest(loaded, evaluated, resolved_config, list(signal.required_source_fields), signal.resolved_universe)
-        ic_series, rank_ic_series = self._correlation_series(evaluated)
+        ic_series, rank_ic_series = _per_date_correlation_series(evaluated)
         if not ic_series and not rank_ic_series:
             return self._failed(
                 evaluation_run_id,
@@ -212,6 +235,7 @@ class FactorEvaluationService:
             "icir": monthly["icir"],
             "monthly_robustness": monthly["monthly_robustness"],
             "coverage": coverage,
+            "monthly_ic_series": [dict(row) for row in monthly["monthly_ic_series"]],
             "group_stats": supplemental["group_stats"],
             "long_short_stats": supplemental["long_short_stats"],
         }
@@ -221,6 +245,7 @@ class FactorEvaluationService:
                 signals=self._signal_records(evaluated),
                 metric_series=self._combined_metric_series(ic_series, rank_ic_series),
                 result=compact_result,
+                monthly_series=[dict(row) for row in monthly["monthly_ic_series"]],
             )
         except ArtifactWriteError as error:
             return self._failed(
@@ -286,74 +311,11 @@ class FactorEvaluationService:
             raise ValueError("execution costs must be non-negative")
         return config.as_dict()
 
-    def _validated_revision(self, revision_id: str) -> tuple[FactorRevision, ParsedFactor]:
+    def _validated_revision(self, revision_id: str) -> FactorRevision:
         revision = self.registry.get_revision(revision_id)
         if revision is None:
             raise ValueError("factor revision does not exist")
-        parsed = parse_factor(revision.canonical_expression)
-        if parsed.dsl_version != revision.dsl_version:
-            raise ValueError("stored factor revision DSL version is not supported")
-        if tuple(sorted(parsed.referenced_fields)) != tuple(sorted(revision.fields)):
-            raise ValueError("stored factor revision dependency fields are invalid")
-        return revision, parsed
-
-    @staticmethod
-    def _required_columns(parsed: ParsedFactor) -> list[str]:
-        return ["symbol", "date", "close", *sorted(field for field in parsed.referenced_fields if field != "close")]
-
-    # The legacy adapter is retained as the one sanctioned second implementation
-    # until 10-05 removes it; production evaluate() delegates to the chain.
-    @staticmethod
-    def _evaluate_panel(panel: pl.DataFrame, parsed: ParsedFactor, config: ResolvedEvaluationConfig) -> pl.DataFrame:
-        values = (
-            panel.sort(["symbol", "date"])
-            .with_columns(parsed.compile().cast(pl.Float64).alias("_factor"))
-            .with_columns(
-                (pl.col("close").shift(-config.forward_return_horizon).over("symbol") / pl.col("close") - 1.0)
-                .cast(pl.Float64)
-                .alias("_forward_return")
-            )
-            .filter((pl.col("date") >= config.start) & (pl.col("date") <= config.end))
-            .filter(
-                pl.col("_factor").is_finite()
-                & pl.col("_forward_return").is_finite()
-                & pl.col("close").is_finite()
-                & (pl.col("close") > 0)
-            )
-        )
-        return FactorEvaluationService._rebalance(values, config.rebalance)
-
-    @staticmethod
-    def _rebalance(panel: pl.DataFrame, cadence: RebalanceCadence) -> pl.DataFrame:
-        if cadence == "daily":
-            return panel
-        if cadence == "weekly":
-            return panel.filter(pl.col("date").dt.weekday() == 1)
-        return (
-            panel.with_columns(pl.col("date").dt.strftime("%Y-%m").alias("_month"))
-            .filter(pl.col("date") == pl.col("date").min().over("_month"))
-            .drop("_month")
-        )
-
-    @staticmethod
-    def _correlation_series(panel: pl.DataFrame) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-        correlations = (
-            panel.group_by("date")
-            .agg(
-                pl.corr("_factor", "_forward_return").alias("ic"),
-                pl.corr(pl.col("_factor").rank(method="average"), pl.col("_forward_return").rank(method="average")).alias("rank_ic"),
-            )
-            .sort("date")
-        )
-        ic_series: list[dict[str, Any]] = []
-        rank_ic_series: list[dict[str, Any]] = []
-        for row in correlations.iter_rows(named=True):
-            date_text = str(row["date"])
-            if row["ic"] is not None and np.isfinite(float(row["ic"])):
-                ic_series.append({"date": date_text, "ic": float(row["ic"])})
-            if row["rank_ic"] is not None and np.isfinite(float(row["rank_ic"])):
-                rank_ic_series.append({"date": date_text, "rank_ic": float(row["rank_ic"])})
-        return ic_series, rank_ic_series
+        return revision
 
     @staticmethod
     def _combined_metric_series(

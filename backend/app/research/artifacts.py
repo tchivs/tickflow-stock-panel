@@ -46,11 +46,15 @@ class EvaluationArtifactService:
         signals: list[Mapping[str, Any]],
         metric_series: list[Mapping[str, Any]],
         result: Mapping[str, Any],
+        monthly_series: list[Mapping[str, Any]] | None = None,
     ) -> list[ArtifactDescriptor]:
         """Create an all-new namespace and immutable JSON evidence files.
 
         Namespace creation and every file use exclusive creation. A collision is a
-        failure, never a reason to reuse or overwrite retained evidence.
+        failure, never a reason to reuse or overwrite retained evidence.  The
+        ``monthly_series`` payload (per-month IC/RankIC/ICIR/robustness rows) is
+        written as ``monthly_series.json`` when supplied — additive, existing
+        descriptors unchanged.
         """
         namespace = self._namespace(evaluation_run_id)
         try:
@@ -60,14 +64,16 @@ class EvaluationArtifactService:
         except OSError as error:
             raise ArtifactWriteError(f"could not create artifact namespace: {error}") from error
 
-        try:
-            return [
-                self._write_json(namespace, evaluation_run_id, "signals.json", signals),
-                self._write_json(namespace, evaluation_run_id, "metric_series.json", metric_series),
-                self._write_json(namespace, evaluation_run_id, "result.json", result),
-            ]
-        except (OSError, TypeError, ValueError, ArtifactWriteError) as error:
-            raise ArtifactWriteError(f"could not write immutable evidence bundle: {error}") from error
+        descriptors = [
+            self._write_json(namespace, evaluation_run_id, "signals.json", signals),
+            self._write_json(namespace, evaluation_run_id, "metric_series.json", metric_series),
+            self._write_json(namespace, evaluation_run_id, "result.json", result),
+        ]
+        if monthly_series is not None:
+            descriptors.append(
+                self._write_json(namespace, evaluation_run_id, "monthly_series.json", monthly_series)
+            )
+        return descriptors
 
     def _namespace(self, evaluation_run_id: str) -> Path:
         if not isinstance(evaluation_run_id, str) or not _RUN_ID.fullmatch(evaluation_run_id):

@@ -109,8 +109,16 @@ def run_admission(
     rebalance: str = "daily",
     warmup_days: int = 0,
     n_groups: int = 2,
+    catalog: Any | None = None,
+    artifact_service: Any | None = None,
 ) -> dict[str, Any]:
-    """Run the five gates and append the verdict row (admission or rejection)."""
+    """Run the five gates and append the verdict row (admission or rejection).
+
+    When ``catalog`` and ``artifact_service`` are provided, the admission
+    orchestration records the evaluation it ran through
+    ``ExperimentCatalog.record_factor_evaluation`` and links the catalogue
+    snapshot in the candidate trail (admission and rejection alike).
+    """
     from app.research.signal_chain import FactorSignalChain, SignalChainConfig
 
     revision = registry.get_revision(revision_id)
@@ -136,6 +144,27 @@ def run_admission(
     evaluated = signal.frame
     if evaluated.is_empty():
         raise ValueError("no valid observations for admission evaluation")
+
+    # The admission orchestration records the evaluation it ran and links the
+    # catalog snapshot before gates run, so every verdict (admission and
+    # rejection) carries the evidence package reference.
+    evaluation_run_id, experiment_snapshot_id = _record_evaluation_reference(
+        catalog=catalog,
+        artifact_service=artifact_service,
+        engine=engine,
+        registry=registry,
+        universe_resolver=universe_resolver,
+        revision=revision,
+        universe=universe,
+        asset_type=asset_type,
+        start=start,
+        end=end,
+        horizon=horizon,
+        rebalance=rebalance,
+        warmup_days=warmup_days,
+        n_groups=n_groups,
+        signal=signal,
+    )
 
     # The shifted-label gate needs the close column, which the chain frame does
     # not carry; join it back from the loaded governed panel.  The shift-based
@@ -165,7 +194,7 @@ def run_admission(
         }
     )
     if not allowed_fields:
-        return _record_verdict(repo, registry, revision, "rejected", "no_lookahead", gate_results, signal, start, end, horizon)
+        return _record_verdict(repo, registry, revision, "rejected", "no_lookahead", gate_results, signal, start, end, horizon, evaluation_run_id=evaluation_run_id, experiment_snapshot_id=experiment_snapshot_id)
 
     # Gate 2: no_label_leakage — shifted-label IC must collapse to ~0.
     shifted = shifted_label_ic(leakage_frame, horizon=horizon)
@@ -180,7 +209,7 @@ def run_admission(
         }
     )
     if not gate_results[-1]["passed"]:
-        return _record_verdict(repo, registry, revision, "rejected", "no_label_leakage", gate_results, signal, start, end, horizon)
+        return _record_verdict(repo, registry, revision, "rejected", "no_label_leakage", gate_results, signal, start, end, horizon, evaluation_run_id=evaluation_run_id, experiment_snapshot_id=experiment_snapshot_id)
 
     # Gate 3: similarity_dedup — Jaccard structural + IC correlation with admitted factors.
     similarity = _jaccard_duplicate(registry, revision, exclude_revision_id=revision.id)
@@ -196,7 +225,7 @@ def run_admission(
         }
     )
     if not gate_results[-1]["passed"]:
-        return _record_verdict(repo, registry, revision, "rejected", "similarity_dedup", gate_results, signal, start, end, horizon)
+        return _record_verdict(repo, registry, revision, "rejected", "similarity_dedup", gate_results, signal, start, end, horizon, evaluation_run_id=evaluation_run_id, experiment_snapshot_id=experiment_snapshot_id)
 
     # Gate 4: train_ic — mean IC over the first 70% of dates by order.
     train_observations = len([day for day in per_date_ics if day in train_dates])
@@ -216,7 +245,7 @@ def run_admission(
         }
     )
     if not train_passed:
-        return _record_verdict(repo, registry, revision, "rejected", "train_ic", gate_results, signal, start, end, horizon)
+        return _record_verdict(repo, registry, revision, "rejected", "train_ic", gate_results, signal, start, end, horizon, evaluation_run_id=evaluation_run_id, experiment_snapshot_id=experiment_snapshot_id)
 
     # Gate 5: val_ic — held-out mean IC over the last 30% of dates.
     val_passed = val_ic is not None and val_ic >= VAL_MIN_MEAN_IC
@@ -231,9 +260,9 @@ def run_admission(
         }
     )
     if not val_passed:
-        return _record_verdict(repo, registry, revision, "rejected", "val_ic", gate_results, signal, start, end, horizon)
+        return _record_verdict(repo, registry, revision, "rejected", "val_ic", gate_results, signal, start, end, horizon, evaluation_run_id=evaluation_run_id, experiment_snapshot_id=experiment_snapshot_id)
 
-    return _record_verdict(repo, registry, revision, "admitted", "all gates passed", gate_results, signal, start, end, horizon)
+    return _record_verdict(repo, registry, revision, "admitted", "all gates passed", gate_results, signal, start, end, horizon, evaluation_run_id=evaluation_run_id, experiment_snapshot_id=experiment_snapshot_id)
 
 
 def _per_date_ic(evaluated: pl.DataFrame) -> dict[str, float]:
@@ -249,6 +278,63 @@ def _per_date_ic(evaluated: pl.DataFrame) -> dict[str, float]:
     }
 
 
+def _record_evaluation_reference(
+    *,
+    catalog: Any,
+    artifact_service: Any,
+    engine: Any,
+    registry: FactorRegistry,
+    universe_resolver: object | None,
+    revision: FactorRevision,
+    universe: str,
+    asset_type: str,
+    start: date,
+    end: date,
+    horizon: int,
+    rebalance: str,
+    warmup_days: int,
+    n_groups: int,
+    signal: Any,
+) -> tuple[str | None, str | None]:
+    """Run and catalogue the evaluation the admission orchestration performed.
+
+    Returns ``(evaluation_run_id, experiment_snapshot_id)`` for a completed
+    evaluation, or ``(None, None)`` when the orchestration has no catalog/artifact
+    service or the evaluation did not complete.
+    """
+    if catalog is None or artifact_service is None:
+        return None, None
+    from app.research.evaluation import FactorEvaluationConfig, FactorEvaluationService
+
+    symbols = tuple(sorted(set(signal.loaded_panel["symbol"].unique().to_list())))
+    if not symbols:
+        return None, None
+    service = FactorEvaluationService(engine, registry, artifact_service, universe_resolver)
+    result = service.evaluate(
+        FactorEvaluationConfig(
+            factor_revision_id=revision.id,
+            universe=universe,
+            symbols=symbols,
+            asset_type=asset_type,
+            start=start,
+            end=end,
+            forward_return_horizon=horizon,
+            rebalance=rebalance,  # type: ignore[arg-type]
+            missing_data_treatment="drop",
+            warmup_treatment="exclude",
+            warmup_days=warmup_days,
+            n_groups=n_groups,
+            weight="equal",
+            fees_pct=0.0,
+            slippage_bps=0.0,
+        )
+    )
+    if not result.completed:
+        return None, None
+    snapshot = catalog.record_factor_evaluation(result)
+    return result.evaluation_run_id, snapshot.id
+
+
 def _record_verdict(
     repo: ResearchRepository,
     registry: FactorRegistry,
@@ -260,6 +346,9 @@ def _record_verdict(
     start: date,
     end: date,
     horizon: int,
+    *,
+    evaluation_run_id: str | None = None,
+    experiment_snapshot_id: str | None = None,
 ) -> dict[str, Any]:
     input_payload = json.dumps(
         {
@@ -277,8 +366,8 @@ def _record_verdict(
 
     trail = {
         "provenance": dict(revision.provenance),
-        "evaluation_run_ids": [],
-        "experiment_snapshot_ids": [],
+        "evaluation_run_ids": [evaluation_run_id] if evaluation_run_id else [],
+        "experiment_snapshot_ids": [experiment_snapshot_id] if experiment_snapshot_id else [],
         "gate_results": gate_results,
     }
     return {
