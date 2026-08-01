@@ -12,11 +12,15 @@ These tests lock the composite contracts and are expected to FAIL until 10-01 cr
 """
 from __future__ import annotations
 
+import uuid
 from datetime import date
+from hashlib import sha256
 
 import polars as pl
 import pytest
 
+from app.research.artifacts import ArtifactWriteError, EvaluationArtifactService
+from app.research.catalog import ExperimentCatalog, FactorEvidencePackage
 from app.research.factor_registry import FactorRegistry
 from app.research.repository import ResearchRepository
 
@@ -24,9 +28,45 @@ from app.research.repository import ResearchRepository
 @pytest.fixture
 def models_module():
     """Deferred import: the module does not exist until 10-01."""
-    from app.research.models import CompositeModel, CompositeWeighting, build_composite  # noqa: F401
+    from app.research.models import CompositeModel, CompositeWeighting, build_composite
 
     return {"CompositeModel": CompositeModel, "CompositeWeighting": CompositeWeighting, "build_composite": build_composite}
+
+
+def _fixture_artifacts(tmp_path) -> EvaluationArtifactService:
+    return EvaluationArtifactService(tmp_path / "app-data")
+
+
+def _record_mean_ic(
+    research_repository: ResearchRepository,
+    research_registry: FactorRegistry,
+    revision_id: str,
+    *,
+    mean: float,
+    universe: str = "fixture-a-share",
+    start: date = date(2024, 1, 2),
+    end: date = date(2024, 1, 3),
+) -> None:
+    """Record catalogued evaluation evidence carrying the given mean IC."""
+    catalog = ExperimentCatalog(research_repository)
+    catalog.record_factor_evidence(
+        FactorEvidencePackage(
+            evaluation_run_id=uuid.uuid4().hex,
+            factor_revision_id=revision_id,
+            resolved_config={
+                "universe": universe,
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+                "forward_return_horizon": 1,
+            },
+            input_manifest={"revision": "governed-v1", "fingerprint": "f" * 64, "rows": 8},
+            prediction_signals={"signals_artifact": "research_artifacts/f/signals.json"},
+            metrics={"ic_summary": {"mean": mean}, "rank_ic_summary": {"mean": 0.1}},
+            artifacts=(),
+            diagnostics={},
+            model_provenance=None,
+        )
+    )
 
 
 def test_equal_weight_weights_are_uniform(
@@ -87,23 +127,118 @@ def test_output_artifact_is_immutable(
     research_repository: ResearchRepository,
     models_module,
 ) -> None:
-    from app.research.artifacts import ArtifactWriteError, EvaluationArtifactService
+    """A second computation cannot overwrite the prior namespace (O_EXCL)."""
+    artifacts = _fixture_artifacts(tmp_path)
+    first = research_registry.create_factor(name="Close", expression="close")
+    second = research_registry.create_factor(name="Rank", expression="rank(close)")
 
-    artifacts = EvaluationArtifactService(tmp_path / "app-data")
-    run_id = "a" * 32
-
+    model = models_module["build_composite"](
+        repo=research_repository,
+        engine=stub_engine,
+        registry=research_registry,
+        revision_ids=(first.id, second.id),
+        weighting="equal",
+        universe="fixture-a-share",
+        start=date(2024, 1, 2),
+        end=date(2024, 1, 3),
+        artifact_service=artifacts,
+    )
+    rows = research_repository.list_model_composites(model.model_id)
+    assert len(rows) == 1
+    row = rows[0]
+    # The descriptor checksum matches the bytes on disk.
+    path = tmp_path / "app-data" / row["artifact_relative_path"]
+    assert sha256(path.read_bytes()).hexdigest() == row["output_sha256"]
+    # A different computation writing to the SAME namespace is blocked by O_EXCL:
+    # the retained evidence is never overwritten (T-10-04).
     with pytest.raises(ArtifactWriteError, match="already exists"):
         artifacts.write_bundle(
-            run_id,
-            signals=[{"signal": 1}],
-            metric_series=[],
-            result={"status": "completed"},
-        )
-        artifacts.write_bundle(
-            run_id,
-            signals=[{"signal": 999}],
+            model.model_id,
+            signals=[{"symbol": "000001.SZ", "date": "2024-01-02", "composite": 999.0}],
             metric_series=[],
             result={"status": "replacement"},
+        )
+
+
+def test_output_artifact_checksum_matches_bytes(
+    tmp_path,
+    research_registry: FactorRegistry,
+    stub_engine,
+    research_repository: ResearchRepository,
+    models_module,
+) -> None:
+    """The persisted composite row's output_sha256 matches the artifact bytes."""
+    artifacts = _fixture_artifacts(tmp_path)
+    first = research_registry.create_factor(name="Close", expression="close")
+    second = research_registry.create_factor(name="Rank", expression="rank(close)")
+    model = models_module["build_composite"](
+        repo=research_repository,
+        engine=stub_engine,
+        registry=research_registry,
+        revision_ids=(first.id, second.id),
+        weighting="equal",
+        universe="fixture-a-share",
+        start=date(2024, 1, 2),
+        end=date(2024, 1, 3),
+        artifact_service=artifacts,
+    )
+    rows = research_repository.list_model_composites(model.model_id)
+    assert len(rows) == 1
+    row = rows[0]
+    path = tmp_path / "app-data" / row["artifact_relative_path"]
+    assert path.read_bytes()  # artifact exists on disk
+    assert row["output_sha256"] == sha256(path.read_bytes()).hexdigest()
+    assert row["input_snapshot_sha256"] == model.input_snapshot_sha256
+
+
+def test_ic_weighted_weights_are_proportional_to_catalogued_mean_ic(
+    research_registry: FactorRegistry,
+    stub_engine,
+    research_repository: ResearchRepository,
+    models_module,
+) -> None:
+    """w_r / w_s == mean_ic_r / mean_ic_s from the catalog-recorded evidence."""
+    first = research_registry.create_factor(name="Close", expression="close")
+    second = research_registry.create_factor(name="Rank", expression="rank(close)")
+    _record_mean_ic(research_repository, research_registry, first.id, mean=0.03)
+    _record_mean_ic(research_repository, research_registry, second.id, mean=0.06)
+
+    model = models_module["build_composite"](
+        repo=research_repository,
+        engine=stub_engine,
+        registry=research_registry,
+        revision_ids=(first.id, second.id),
+        weighting="ic_weighted",
+        universe="fixture-a-share",
+        start=date(2024, 1, 2),
+        end=date(2024, 1, 3),
+    )
+    ratio = model.weights[first.id] / model.weights[second.id]
+    assert ratio == pytest.approx(0.03 / 0.06)
+    assert sum(model.weights.values()) == pytest.approx(1.0)
+
+
+def test_ic_weighted_fails_closed_when_recorded_mean_ic_is_missing(
+    research_registry: FactorRegistry,
+    stub_engine,
+    research_repository: ResearchRepository,
+    models_module,
+) -> None:
+    """A revision without recorded evidence fails closed, never equal-weight."""
+    first = research_registry.create_factor(name="Close", expression="close")
+    second = research_registry.create_factor(name="Rank", expression="rank(close)")
+    _record_mean_ic(research_repository, research_registry, first.id, mean=0.03)
+
+    with pytest.raises(ValueError, match="no recorded evaluation evidence"):
+        models_module["build_composite"](
+            repo=research_repository,
+            engine=stub_engine,
+            registry=research_registry,
+            revision_ids=(first.id, second.id),
+            weighting="ic_weighted",
+            universe="fixture-a-share",
+            start=date(2024, 1, 2),
+            end=date(2024, 1, 3),
         )
 
 

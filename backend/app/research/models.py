@@ -22,6 +22,7 @@ import uuid
 
 import polars as pl
 
+from app.research.artifacts import ArtifactDescriptor, EvaluationArtifactService
 from app.research.factor_registry import FactorRegistry
 from app.research.repository import ResearchRepository
 from app.research.signal_chain import FactorSignalChain, SignalChainConfig
@@ -87,13 +88,61 @@ def _chain_config(universe: str, start, end, symbols: tuple[str, ...]) -> Signal
     )
 
 
-def _collect_mean_ics(repo: ResearchRepository, revision_ids: tuple[str, ...]) -> dict[str, float]:
-    """Resolve per-revision mean IC from the latest recorded evaluation evidence."""
+def _config_matches(config: Mapping[str, Any], *, universe: str, start, end, horizon: int) -> bool:
+    """True when recorded evidence was produced under the same resolved config.
+
+    Only the cross-module identity keys are compared (universe, window,
+    forward-return horizon).  A config carrying none of these keys (e.g. an
+    early evidence package) is treated as matching so legacy records still
+    resolve; a config that names a different universe/window/horizon is rejected
+    for cross-module integrity.
+    """
+    if not config:
+        return True
+    mismatches = [
+        config.get("universe") is not None and config.get("universe") != universe,
+        config.get("start") is not None and str(config.get("start")) != start.isoformat(),
+        config.get("end") is not None and str(config.get("end")) != end.isoformat(),
+        config.get("forward_return_horizon") is not None
+        and int(config["forward_return_horizon"]) != horizon,
+    ]
+    return not any(mismatches)
+
+
+def _collect_mean_ics(
+    repo: ResearchRepository,
+    revision_ids: tuple[str, ...],
+    *,
+    universe: str,
+    start,
+    end,
+    forward_return_horizon: int = 1,
+) -> dict[str, float]:
+    """Resolve per-revision mean IC from the latest recorded evaluation evidence.
+
+    The IC-weighted weights MUST use the evaluation-recorded mean IC for the same
+    revision and resolved config (cross-module integrity — the library IC used to
+    weight equals the evaluation IC in the catalog).  A revision with no recorded
+    evidence, or evidence whose ``ic_summary.mean`` is missing, fails closed: it
+    never silently falls back to equal weighting.
+    """
     experiments = repo.list_experiments()
+    # ``list_experiments`` is newest-first; keep only the first (newest) matching
+    # evidence per revision, and only evidence recorded under the same config.
     latest_by_revision: dict[str, Mapping[str, Any]] = {}
     for experiment in experiments:
-        if experiment.get("factor_revision_id") in revision_ids:
-            latest_by_revision[experiment["factor_revision_id"]] = experiment
+        revision_id = experiment.get("factor_revision_id")
+        if revision_id not in revision_ids or revision_id in latest_by_revision:
+            continue
+        if not _config_matches(
+            experiment.get("resolved_config", {}) or {},
+            universe=universe,
+            start=start,
+            end=end,
+            horizon=forward_return_horizon,
+        ):
+            continue
+        latest_by_revision[revision_id] = experiment
     mean_ics: dict[str, float] = {}
     for revision_id in revision_ids:
         snapshot = latest_by_revision.get(revision_id)
@@ -105,6 +154,50 @@ def _collect_mean_ics(repo: ResearchRepository, revision_ids: tuple[str, ...]) -
             raise ValueError(f"recorded evaluation evidence for {revision_id} has no mean IC")
         mean_ics[revision_id] = float(mean)
     return mean_ics
+
+
+def _resolve_symbols(
+    registry: FactorRegistry, revision_id: str, symbols: tuple[str, ...] | None
+) -> tuple[str, ...]:
+    if symbols is not None:
+        return symbols
+    revision = registry.get_revision(revision_id)
+    assert revision is not None
+    return tuple(sorted(revision.fields)) if revision.fields else ()
+
+
+def _write_composite_artifact(
+    artifact_service: EvaluationArtifactService,
+    *,
+    run_id: str,
+    composite: pl.DataFrame,
+    input_snapshot_sha256: str,
+) -> list[ArtifactDescriptor]:
+    """Persist the composite output frame immutably under the run's namespace.
+
+    ``write_bundle`` creates the namespace and every file with O_EXCL + fsync and
+    returns the content-addressed descriptors, so a second computation with a
+    different input fails rather than overwriting the prior namespace (T-10-04).
+    The ``signals.json`` payload carries the composite rows and is the output
+    artifact Phase 11 consumes by snapshot.
+    """
+    return artifact_service.write_bundle(
+        run_id,
+        signals=[
+            {
+                "symbol": str(row["symbol"]),
+                "date": str(row["date"]),
+                "composite": float(row["composite"]),
+            }
+            for row in composite.sort(["date", "symbol"]).iter_rows(named=True)
+        ],
+        metric_series=[],
+        result={
+            "composite_output": "composite.json",
+            "columns": ["symbol", "date", "composite"],
+            "input_snapshot_sha256": input_snapshot_sha256,
+        },
+    )
 
 
 def build_composite(
@@ -121,8 +214,18 @@ def build_composite(
     universe_resolver: object | None = None,
     name: str | None = None,
     persist: bool = True,
+    artifact_service: EvaluationArtifactService | None = None,
 ) -> CompositeModel:
-    """Build a deterministic composite over the given admitted revisions."""
+    """Build a deterministic composite over the given admitted revisions.
+
+    The composite output is persisted immutably: the input snapshot sha256 binds
+    ``(sorted revision_ids, weighting, membership_fingerprint, panel
+    fingerprints, mean ICs)``, the output frame is written through
+    ``EvaluationArtifactService.write_bundle`` (O_EXCL + fsync + sha256), and one
+    append-only ``factor_model_composites`` row records the ``output_sha256`` +
+    artifact path.  Phase 11 consumes the composite by snapshot — never a live
+    module hand-off.
+    """
     if weighting not in {"equal", "ic_weighted"}:
         raise ValueError("weighting must be equal or ic_weighted")
     ordered = tuple(sorted(set(revision_ids)))
@@ -137,12 +240,7 @@ def build_composite(
     panel_fingerprints: dict[str, str] = {}
     membership_fingerprint = ""
     for revision_id in ordered:
-        if symbols is None:
-            revision = registry.get_revision(revision_id)
-            assert revision is not None
-            resolved_symbols = tuple(sorted(revision.fields)) if revision.fields else ()
-        else:
-            resolved_symbols = symbols
+        resolved_symbols = _resolve_symbols(registry, revision_id, symbols)
         config = _chain_config(universe, start, end, resolved_symbols)
         signal = chain.compute(revision_id=revision_id, config=config)
         signal_frames.append(signal)
@@ -151,7 +249,14 @@ def build_composite(
             membership_fingerprint = signal.resolved_universe.get("membership_fingerprint", "")
 
     if weighting == "ic_weighted":
-        mean_ics = _collect_mean_ics(repo, ordered)
+        mean_ics = _collect_mean_ics(
+            repo,
+            ordered,
+            universe=universe,
+            start=start,
+            end=end,
+            forward_return_horizon=1,
+        )
         total = sum(mean_ics.values())
         if total <= 0:
             raise ValueError("sum of mean IC weights must be positive")
@@ -169,7 +274,7 @@ def build_composite(
     )
 
     zframes = []
-    for revision_id, signal in zip(ordered, signal_frames):
+    for revision_id, signal in zip(ordered, signal_frames, strict=True):
         weight = weights[revision_id]
         z = signal.frame.select(
             [
@@ -215,4 +320,23 @@ def build_composite(
             weights=weights,
             input_snapshot_sha256=input_snapshot_sha256,
         )
+        if artifact_service is not None:
+            # A different-input rebuild fails on the O_EXCL namespace instead of
+            # overwriting retained evidence (T-10-04); an identical-input
+            # re-build appends a NEW composite row with a new run namespace.
+            run_id = model.model_id
+            descriptors = _write_composite_artifact(
+                artifact_service,
+                run_id=run_id,
+                composite=composite,
+                input_snapshot_sha256=input_snapshot_sha256,
+            )
+            primary = descriptors[0] if descriptors else None
+            if primary is not None:
+                repo.insert_model_composite(
+                    model_id=model.model_id,
+                    output_sha256=primary.checksum_sha256,
+                    artifact_relative_path=primary.relative_path,
+                    input_snapshot_sha256=input_snapshot_sha256,
+                )
     return model
