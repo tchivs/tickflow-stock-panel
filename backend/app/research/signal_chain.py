@@ -13,18 +13,18 @@ multiple consumers over the same window share one governed read.
 """
 from __future__ import annotations
 
+import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date, timedelta
 from hashlib import sha256
-import json
-from typing import Any, Literal, Mapping, TypeAlias
+from typing import Any, Literal, TypeAlias
 
 import polars as pl
 
 from app.backtest.engine import BacktestEngine, PanelCache
-from app.research.factor_dsl import FactorDslError, parse_factor
+from app.research.factor_dsl import parse_factor
 from app.research.factor_registry import FactorRegistry
-
 
 RebalanceCadence: TypeAlias = Literal["daily", "weekly", "monthly"]
 MissingDataTreatment: TypeAlias = Literal["drop"]
@@ -276,7 +276,7 @@ class FactorSignalChain:
         try:
             observed_start = str(panel.select(pl.col("date").min()).item())
             observed_end = str(panel.select(pl.col("date").max()).item())
-        except Exception:  # noqa: BLE001 - an empty panel has no observed range
+        except Exception:
             observed_start = ""
             observed_end = ""
         payload = json.dumps(

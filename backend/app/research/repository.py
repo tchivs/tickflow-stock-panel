@@ -5,20 +5,21 @@ sequence.  It owns only research tables; market time series remain in the lake.
 """
 from __future__ import annotations
 
-from contextlib import contextmanager
-from datetime import datetime, timezone
 import json
-from pathlib import Path, PurePosixPath
 import re
 import sqlite3
-from typing import Any, Iterator, Mapping, Sequence
 import uuid
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
+from datetime import UTC, datetime
+from pathlib import Path, PurePosixPath
+from typing import Any
 
 from app.operational.migrations import migrate_operational_db
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _json(value: object, field: str) -> str:
@@ -777,12 +778,3 @@ class ResearchRepository:
                 (model_id,),
             ).fetchall()
         return [dict(row) for row in rows]
-
-    def list_comparison_candidates(self) -> list[dict[str, Any]]:
-        with self._connection() as connection:
-            rows = connection.execute(
-                """SELECT id FROM research_experiments
-                   WHERE status = 'completed' AND validated = 1 AND retained_at IS NOT NULL
-                   ORDER BY retained_at, created_at, id"""
-            ).fetchall()
-            return [self._experiment_row(connection, row["id"]) for row in rows]  # type: ignore[list-item]

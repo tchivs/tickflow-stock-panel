@@ -8,9 +8,10 @@ alongside IC/RankIC and never alter ``_compatibility_warnings``.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Mapping, Sequence, TYPE_CHECKING
 import uuid
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
 
 from app.research.artifacts import ArtifactDescriptor
 from app.research.repository import ResearchRepository
@@ -93,7 +94,7 @@ class ModelProvenance:
     provenance: Mapping[str, Any]
 
     @classmethod
-    def from_mapping(cls, value: Mapping[str, Any]) -> "ModelProvenance":
+    def from_mapping(cls, value: Mapping[str, Any]) -> ModelProvenance:
         if not isinstance(value, Mapping):
             raise ValueError("model provenance must be a mapping")
         model_version = value.get("model_version")
@@ -223,7 +224,7 @@ class ExperimentSnapshot:
     created_at: str
 
     @classmethod
-    def from_record(cls, record: Mapping[str, Any]) -> "ExperimentSnapshot":
+    def from_record(cls, record: Mapping[str, Any]) -> ExperimentSnapshot:
         model = record.get("model_provenance")
         return cls(
             id=str(record["id"]),
@@ -293,7 +294,7 @@ class ExperimentCatalog:
 
     def record_factor_evaluation(
         self,
-        result: "FactorEvaluationResult",
+        result: FactorEvaluationResult,
         *,
         model_provenance: Mapping[str, Any] | None = None,
         prediction_signals: Mapping[str, Any] | None = None,
@@ -468,7 +469,7 @@ class ExperimentCatalog:
 
     def record_strategy_backtest(
         self,
-        result: "StrategyBacktestResult",
+        result: StrategyBacktestResult,
         *,
         strategy_id: str,
         strategy_version: str,
@@ -486,7 +487,7 @@ class ExperimentCatalog:
             raise ValueError("strategy result must be validated before cataloguing")
         if getattr(result, "error", None):
             raise ValueError("only successful strategy backtest results can be catalogued")
-        source = getattr(result, "strategy_info")
+        source = result.strategy_info
         if not isinstance(source, Mapping) or source.get("id") != strategy_id:
             raise ValueError("strategy identity must match the registered server result")
         descriptors = tuple(

@@ -23,18 +23,19 @@ candidate trail.
 """
 from __future__ import annotations
 
+import json
+from collections.abc import Mapping
+from contextlib import suppress
 from datetime import date
 from hashlib import sha256
-import json
-from typing import Any, Mapping
+from typing import Any
 
 import numpy as np
 import polars as pl
 
-from app.research.factor_dsl import ALLOWED_FIELDS, _FUNCTION_PARTITION, shifted_label_ic
+from app.research.factor_dsl import ALLOWED_FIELDS, shifted_label_ic
 from app.research.factor_registry import FactorRegistry, FactorRevision
 from app.research.repository import ResearchRepository
-
 
 ADMISSION_POLICY_VERSION: str = "admission-policy-v1"
 TRAIN_MIN_MEAN_IC: float = 0.02
@@ -310,10 +311,8 @@ def run_admission(
     # admission verdict is the source of truth and must not fail because a
     # supplementary summary row could not be recorded.
     if catalog is not None:
-        try:
+        with suppress(Exception):
             _record_admitted_summary(catalog, revision, signal, start, end, asset_type)
-        except Exception:  # noqa: BLE001 - summary storage is supplementary
-            pass
 
     return _record_verdict(repo, registry, revision, "admitted", "all gates passed", gate_results, signal, start, end, horizon, evaluation_run_id=evaluation_run_id, experiment_snapshot_id=experiment_snapshot_id)
 

@@ -122,9 +122,9 @@ def test_cross_consumer_equality_with_frozen_expected_frame(
         {"symbol": "000003.SZ", "date": date(2024, 1, 2), "_factor": 3.0, "_forward_return": 0.10000000000000009, "_rank": 3.0, "_zscore": 0.3872983346207417},
         {"symbol": "000004.SZ", "date": date(2024, 1, 2), "_factor": 4.0, "_forward_return": 0.8999999999999999, "_rank": 4.0, "_zscore": 1.161895003862225},
     ]
-    observed_rows = frame.frame.sort(["symbol", "date"]).iter_rows(named=True)
-    assert len(list(observed_rows)) == len(expected_rows)
-    for observed, expected in zip(observed_rows, expected_rows):
+    observed_rows = list(frame.frame.sort(["symbol", "date"]).iter_rows(named=True))
+    assert len(observed_rows) == len(expected_rows)
+    for observed, expected in zip(observed_rows, expected_rows, strict=True):
         for key, expected_value in expected.items():
             observed_value = observed[key]
             if isinstance(expected_value, float):

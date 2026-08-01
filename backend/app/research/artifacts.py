@@ -1,15 +1,15 @@
 """Managed immutable artifact storage for research evaluation evidence."""
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
-from hashlib import sha256
 import json
 import os
-from pathlib import Path
 import re
-from typing import Any, Mapping
-
+from collections.abc import Mapping
+from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
+from hashlib import sha256
+from pathlib import Path
+from typing import Any
 
 _RUN_ID = re.compile(r"[0-9a-f]{32}\Z")
 
@@ -122,5 +122,5 @@ class EvaluationArtifactService:
             content_type="application/json",
             byte_size=len(content),
             checksum_sha256=sha256(content).hexdigest(),
-            created_at=datetime.now(timezone.utc).isoformat(),
+            created_at=datetime.now(UTC).isoformat(),
         )

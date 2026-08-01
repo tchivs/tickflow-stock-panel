@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
 
@@ -32,7 +32,7 @@ def _artifact(tmp_path: Path, run_id: str, name: str = "signals.json") -> Artifa
         content_type="application/json",
         byte_size=len(content),
         checksum_sha256=sha256(content).hexdigest(),
-        created_at=datetime.now(timezone.utc).isoformat(),
+        created_at=datetime.now(UTC).isoformat(),
     )
 
 

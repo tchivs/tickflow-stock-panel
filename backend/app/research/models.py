@@ -13,12 +13,13 @@ snapshot, never a live module hand-off.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from hashlib import sha256
 import json
-from typing import Any, Literal, Mapping
 import uuid
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from hashlib import sha256
+from typing import Any, Literal
 
 import polars as pl
 
@@ -26,7 +27,6 @@ from app.research.artifacts import ArtifactDescriptor, EvaluationArtifactService
 from app.research.factor_registry import FactorRegistry
 from app.research.repository import ResearchRepository
 from app.research.signal_chain import FactorSignalChain, SignalChainConfig
-
 
 CompositeWeighting = Literal["equal", "ic_weighted"]
 
@@ -51,7 +51,7 @@ class CompositeModel:
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _input_snapshot_sha256(

@@ -1,9 +1,10 @@
 """Immutable factor-definition registry with deterministic similarity discovery."""
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Mapping
 import uuid
+from collections.abc import Mapping
+from dataclasses import dataclass
+from typing import Any
 
 from app.research.factor_dsl import FactorFeatures, ParsedFactor, parse_factor
 from app.research.repository import ResearchRepository
@@ -28,7 +29,7 @@ class FactorRevision:
     created_at: str
 
     @classmethod
-    def from_record(cls, record: Mapping[str, Any]) -> "FactorRevision":
+    def from_record(cls, record: Mapping[str, Any]) -> FactorRevision:
         return cls(
             id=str(record["id"]),
             factor_id=str(record["factor_id"]),

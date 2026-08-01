@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from datetime import date, timedelta
 import json
+import uuid
+from datetime import date, timedelta
 from hashlib import sha256
 from pathlib import Path
-import uuid
 
 import numpy as np
 import polars as pl
@@ -57,7 +57,7 @@ def _monthly_panel() -> pl.DataFrame:
     }
     rows: list[dict] = []
     for symbol, values in closes.items():
-        for day, value in zip((d1, d2, d3, d4), values):
+        for day, value in zip((d1, d2, d3, d4), values, strict=True):
             rows.append({"symbol": symbol, "date": day, "close": value, "ma20": 1.0})
     return pl.DataFrame(rows)
 
@@ -262,7 +262,7 @@ def test_evidence_metrics_match_numpy_reference(tmp_path: Path) -> None:
     assert result.icir == pytest.approx(float(np.mean(ic_monthly) / np.std(ic_monthly)))
     assert result.monthly_robustness == pytest.approx(float(np.mean(ic_monthly > 0)))
     assert len(result.monthly_ic_series) == len(ic_monthly)
-    for entry, month in zip(result.monthly_ic_series, sorted(monthly)):
+    for entry, month in zip(result.monthly_ic_series, sorted(monthly), strict=True):
         assert entry["month"] == month
         assert entry["ic_monthly"] == pytest.approx(float(np.mean(monthly[month])))
 

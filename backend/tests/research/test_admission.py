@@ -29,15 +29,15 @@ from tests.research.conftest import StubBacktestEngine
 
 def admission_module():
     """Deferred import: the module does not exist until 10-01."""
-    from app.research.admission import (  # noqa: F401
+    from app.research.admission import (
         ADMISSION_POLICY_VERSION,
+        MAX_IC_CORRELATION,
+        MAX_SIMILARITY_SCORE,
+        MIN_COVERAGE,
+        MIN_TRAIN_OBSERVATIONS,
+        SHIFTED_LABEL_MAX_ABS_IC,
         TRAIN_MIN_MEAN_IC,
         VAL_MIN_MEAN_IC,
-        MIN_TRAIN_OBSERVATIONS,
-        MAX_SIMILARITY_SCORE,
-        MAX_IC_CORRELATION,
-        SHIFTED_LABEL_MAX_ABS_IC,
-        MIN_COVERAGE,
         run_admission,
         temporal_split,
     )
@@ -143,7 +143,7 @@ def test_verdict_is_append_only_single_row_per_revision_policy(
         start=date(2024, 1, 2),
         end=date(2024, 1, 3),
     )
-    with pytest.raises(Exception):
+    with pytest.raises(Exception):  # noqa: B017 - append-only verdict guard
         admission_module["run_admission"](
             research_repository,
             engine=stub_engine,

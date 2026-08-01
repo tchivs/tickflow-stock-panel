@@ -5,15 +5,14 @@ object is created.  The compiler deliberately has no escape hatch for source tex
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
-from hashlib import sha256
 import json
 import math
 import re
+from dataclasses import dataclass
+from hashlib import sha256
 from typing import Final, Literal, TypeAlias
 
 import polars as pl
-
 
 DSL_VERSION: Final = "factor-dsl-v2"
 MAX_ROLLING_WINDOW: Final = 252
@@ -114,22 +113,22 @@ class Field:
 @dataclass(frozen=True, slots=True)
 class Unary:
     operator: str
-    operand: "Expression"
+    operand: Expression
     location: SourceLocation
 
 
 @dataclass(frozen=True, slots=True)
 class Binary:
     operator: str
-    left: "Expression"
-    right: "Expression"
+    left: Expression
+    right: Expression
     location: SourceLocation
 
 
 @dataclass(frozen=True, slots=True)
 class Call:
     name: str
-    arguments: tuple["Expression", ...]
+    arguments: tuple[Expression, ...]
     location: SourceLocation
 
 
@@ -379,7 +378,7 @@ def _validate_expression(expression: Expression) -> None:
 
 
 def _is_zero_literal(expression: Expression) -> bool:
-    return isinstance(expression, Number) and expression.value == 0 or (
+    return (isinstance(expression, Number) and expression.value == 0) or (
         isinstance(expression, Unary) and isinstance(expression.operand, Number) and expression.operand.value == 0
     )
 

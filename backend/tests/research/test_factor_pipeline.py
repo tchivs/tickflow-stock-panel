@@ -23,7 +23,6 @@ from app.research.models import build_composite
 from app.research.repository import ResearchRepository
 from tests.research.conftest import StubBacktestEngine
 
-
 # Hadamard-8 rows 1..7 are mutually orthogonal mean-zero cross-sections.  The
 # fixture schedules each trading date's forward return on a rotating Hadamard row,
 # so a factor built from ``row(t)`` is exactly orthogonal to the displaced label

@@ -6,15 +6,15 @@ all validation, review, persistence, and execution transitions elsewhere.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime, timezone
 import json
-from typing import Any, Awaitable, Callable, Mapping, Protocol
 import uuid
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from typing import Any, Protocol
 
 from app.research.factor_dsl import FactorDslError, parse_factor
 from app.services import ai_provider
-
 
 HYPOTHESIS_PROMPT_TEMPLATE_VERSION = "factor-hypothesis-v1"
 GenerateText = Callable[..., Awaitable[str]]
@@ -142,7 +142,7 @@ class ConfiguredFactorHypothesisGateway:
         self._generate_text = generate_text or ai_provider.generate_ai_text
 
     @classmethod
-    def from_current_configuration(cls) -> "ConfiguredFactorHypothesisGateway | None":
+    def from_current_configuration(cls) -> ConfiguredFactorHypothesisGateway | None:
         provider = ai_provider.current_ai_provider()
         if provider != ai_provider.OPENAI_COMPAT_PROVIDER or not ai_provider.ai_configured(provider):
             return None
@@ -205,7 +205,7 @@ class FactorHypothesisService:
             parsed = parse_factor(expression)
         except FactorDslError as error:
             raise ValueError(f"provider draft has invalid factor DSL: {error}") from error
-        generated_at = datetime.now(timezone.utc).isoformat()
+        generated_at = datetime.now(UTC).isoformat()
         draft = HypothesisDraft(
             draft_id=uuid.uuid4().hex,
             hypothesis=text,

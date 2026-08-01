@@ -8,12 +8,13 @@ orchestration.
 """
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
-from datetime import date, timedelta
-from hashlib import sha256
 import json
-from typing import Any, Literal, Mapping
 import uuid
+from collections.abc import Mapping
+from dataclasses import asdict, dataclass, field
+from datetime import date
+from hashlib import sha256
+from typing import Any, Literal
 
 import numpy as np
 import polars as pl
@@ -25,10 +26,10 @@ from app.research.factor_dsl import FactorDslError
 from app.research.factor_registry import FactorRegistry, FactorRevision
 from app.research.signal_chain import (
     FactorSignalChain,
-    RebalanceCadence,
     MissingDataTreatment,
-    WarmupTreatment,
+    RebalanceCadence,
     SignalChainConfig,
+    WarmupTreatment,
 )
 
 
