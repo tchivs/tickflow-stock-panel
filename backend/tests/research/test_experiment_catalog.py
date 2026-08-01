@@ -68,6 +68,12 @@ def test_completed_factor_snapshot_is_immutable_and_retention_is_explicit_once(t
             input_manifest=package.input_manifest,
             ic_summary=package.metrics["ic_summary"],
             rank_ic_summary=package.metrics["rank_ic_summary"],
+            icir=0.42,
+            monthly_robustness=0.6,
+            coverage={"mean": 0.9, "coverage_series": [{"date": "2025-01-02", "coverage": 0.9}]},
+            monthly_ic_series=(
+                {"month": "2025-01", "ic_monthly": 0.05, "rank_ic_monthly": 0.04},
+            ),
             artifacts=package.artifacts,
             diagnostics=("factor evidence validated",),
         )
@@ -75,6 +81,10 @@ def test_completed_factor_snapshot_is_immutable_and_retention_is_explicit_once(t
 
     assert saved.retained_at is None
     assert catalog.list_comparison_candidates() == []
+    assert saved.metrics["icir"] == 0.42
+    assert saved.metrics["monthly_robustness"] == 0.6
+    assert saved.metrics["coverage"]["mean"] == 0.9
+    assert saved.metrics["monthly_ic_series"][0]["month"] == "2025-01"
     artifact_path = tmp_path / saved.artifacts[0].relative_path
     artifact_bytes = artifact_path.read_bytes()
     snapshot = saved.as_dict()
