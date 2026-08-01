@@ -7,6 +7,8 @@ Fixtures 提供 11-01 需要关闭的合同面: 治理面板边界替身 (StubBa
 """
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -93,13 +95,30 @@ def artifact_root(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def fixture_composite(portfolio_repository: PortfolioRepository) -> dict[str, object]:
+def fixture_composite(
+    portfolio_repository: PortfolioRepository, artifact_root: Path
+) -> dict[str, object]:
     """A recorded composite model + snapshot identity for the tracer pipeline.
 
     Mirrors the Phase 10 seam: a factor_model_models definition plus one
     factor_model_composites row; ``input_snapshot_sha256`` is the audit root the
-    run row must equal.
+    run row must equal. Writes the composite artifact under the app-data root so
+    the checksum-verified snapshot binding (11-05/11-06) reads real bytes.
     """
+
+    artifact_dir = Path(artifact_root) / "research_artifacts" / ("0" * 32)
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    signals = [
+        {"symbol": "600000.SH", "date": "2026-08-01", "composite": 0.5},
+        {"symbol": "600001.SH", "date": "2026-08-01", "composite": 0.25},
+    ]
+    payload = json.dumps(
+        signals, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+    ).encode("utf-8")
+    artifact_path = artifact_dir / "signals.json"
+    artifact_path.write_bytes(payload)
+    output_sha256 = hashlib.sha256(payload).hexdigest()
+
     research = ResearchRepository(portfolio_repository.database_path)
     research.insert_model_definition(
         model_id="composite-model-v1",
@@ -111,8 +130,8 @@ def fixture_composite(portfolio_repository: PortfolioRepository) -> dict[str, ob
     )
     research.insert_model_composite(
         model_id="composite-model-v1",
-        output_sha256="f" * 64,
-        artifact_relative_path="research_artifacts/00000000000000000000000000000000/signals.json",
+        output_sha256=output_sha256,
+        artifact_relative_path=f"research_artifacts/{'0' * 32}/signals.json",
         input_snapshot_sha256="f" * 64,
     )
     return {"model_id": "composite-model-v1", "input_snapshot_sha256": "f" * 64}
