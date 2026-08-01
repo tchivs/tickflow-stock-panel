@@ -282,9 +282,10 @@ def run_optimization(
     ensure_psd_provenance(cov, risk_model_json["psd_repair"], epsilon=PSD_EPSILON_DEFAULT)
 
     # 先决条件: model_id 必须存在于 factor_model_models (FK), 且 composite-zscore-v1
-    # 必须绑定一个快照身份。fixture 路径下在 research 仓库侧登记定义 + 快照
-    # (仅当尚未存在), 使 run 行 FK 成立; 生产 catalog 接缝由 11-05 替换。
-    if req.expected_return_method == "composite-zscore-v1":
+    # 必须绑定一个快照身份。调用方若已提供 composite_snapshot_id (来自快照接缝) 则
+    # 直接记录; 否则在 research 仓库侧登记定义 + 快照 (仅当尚未存在), 使 run 行
+    # FK 成立。生产 catalog 接缝由 11-05 替换。
+    if req.expected_return_method == "composite-zscore-v1" and composite_snapshot_id is None:
         research = ResearchRepository(repository.database_path)
         if research.get_model_definition(req.model_id) is None:  # type: ignore[arg-type]
             research.insert_model_definition(
@@ -295,13 +296,13 @@ def run_optimization(
                 weights={},
                 input_snapshot_sha256=input_snapshot_sha256,
             )
-        research.insert_model_composite(
+        composite = research.insert_model_composite(
             model_id=req.model_id,  # type: ignore[arg-type]
             output_sha256=input_snapshot_sha256,
             artifact_relative_path="research_artifacts/00000000000000000000000000000000/signals.json",
             input_snapshot_sha256=input_snapshot_sha256,
         )
-        composite_snapshot_id = None
+        composite_snapshot_id = composite["id"]
 
     w_prev, turnover_reference = _resolve_w_prev(req, symbols, repository)
 
