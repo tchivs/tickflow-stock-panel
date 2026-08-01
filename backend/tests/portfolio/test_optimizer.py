@@ -219,26 +219,30 @@ def test_run_id_reference_loads_prior_weights_aligned_to_symbols(
 def test_run_id_reference_missing_prior_run_fails_closed(
     portfolio_repository, artifact_root, fixture_composite,
 ) -> None:
-    """PFOL-03: a missing prior run raises ValueError (fail closed)."""
-    with pytest.raises(ValueError, match="prior run not found"):
-        run_optimization(
-            {
-                "objective": "min_volatility",
-                "as_of": "2026-08-01",
-                "universe": "cn-a-share",
-                "model_id": "composite-model-v1",
-                "expected_return_method": "composite-zscore-v1",
-                "render_baselines": True,
-                "per_instrument_cap": 0.10,
-                "min_cash": 0.05,
-                "turnover_coef": 0.0014,
-                "turnover_reference": "run_id",
-                "w_prev_run_id": "0" * 32,
-            },
-            repository=portfolio_repository,
-            artifact_service_root=artifact_root,
-            snapshot=fixture_composite,
-        )
+    """PFOL-03/04 (11-05): a missing prior run fails closed and is recorded as a
+    failed run with reason — never a silent abort and never a propagated ValueError
+    (the orchestrator wraps the ENTIRE run)."""
+    run = run_optimization(
+        {
+            "objective": "min_volatility",
+            "as_of": "2026-08-01",
+            "universe": "cn-a-share",
+            "model_id": "composite-model-v1",
+            "expected_return_method": "composite-zscore-v1",
+            "render_baselines": True,
+            "per_instrument_cap": 0.10,
+            "min_cash": 0.05,
+            "turnover_coef": 0.0014,
+            "turnover_reference": "run_id",
+            "w_prev_run_id": "0" * 32,
+        },
+        repository=portfolio_repository,
+        artifact_service_root=artifact_root,
+        snapshot=fixture_composite,
+    )
+    assert run["problem_status"] == "failed"
+    assert run["failure_reason"] is not None
+    assert "prior run not found" in run["failure_reason"]
 
 
 def test_schema_requires_w_prev_run_id_for_run_id_reference() -> None:
@@ -259,24 +263,27 @@ def test_schema_requires_w_prev_run_id_for_run_id_reference() -> None:
 def test_max_sharpe_requires_baselines(
     portfolio_repository, artifact_root, fixture_composite,
 ) -> None:
-    """Pitfall 2: max_sharpe with render_baselines=False is rejected, never silent."""
-    with pytest.raises(ValueError, match="render_baselines"):
-        run_optimization(
-            {
-                "objective": "max_sharpe",
-                "as_of": "2026-08-01",
-                "universe": "cn-a-share",
-                "model_id": "composite-model-v1",
-                "expected_return_method": "composite-zscore-v1",
-                "render_baselines": False,
-                "per_instrument_cap": 0.10,
-                "min_cash": 0.05,
-                "turnover_coef": 0.0014,
-            },
-            repository=portfolio_repository,
-            artifact_service_root=artifact_root,
-            snapshot=fixture_composite,
-        )
+    """Pitfall 2 (11-05): max_sharpe with render_baselines=False is rejected and
+    recorded as a failed run with reason — never silent, never propagated."""
+    run = run_optimization(
+        {
+            "objective": "max_sharpe",
+            "as_of": "2026-08-01",
+            "universe": "cn-a-share",
+            "model_id": "composite-model-v1",
+            "expected_return_method": "composite-zscore-v1",
+            "render_baselines": False,
+            "per_instrument_cap": 0.10,
+            "min_cash": 0.05,
+            "turnover_coef": 0.0014,
+        },
+        repository=portfolio_repository,
+        artifact_service_root=artifact_root,
+        snapshot=fixture_composite,
+    )
+    assert run["problem_status"] == "failed"
+    assert run["failure_reason"] is not None
+    assert "render_baselines" in run["failure_reason"]
 
 
 def test_max_sharpe_solves_under_constraint_stack() -> None:
@@ -334,24 +341,27 @@ def test_max_sharpe_run_records_both_baselines(
 def test_max_sharpe_requires_mu(
     portfolio_repository, artifact_root, fixture_composite,
 ) -> None:
-    """PFOL-02: max_sharpe without an expected-returns vector fails closed."""
-    with pytest.raises(ValueError, match="expected-returns"):
-        run_optimization(
-            {
-                "objective": "max_sharpe",
-                "as_of": "2026-08-01",
-                "universe": "cn-a-share",
-                "model_id": "composite-model-v1",
-                "expected_return_method": "composite-zscore-v1",
-                "render_baselines": True,
-                "per_instrument_cap": 0.10,
-                "min_cash": 0.05,
-                "turnover_coef": 0.0014,
-            },
-            repository=portfolio_repository,
-            artifact_service_root=artifact_root,
-            snapshot=fixture_composite,
-        )
+    """PFOL-02 (11-05): max_sharpe without an expected-returns vector fails closed
+    and is recorded as a failed run with reason."""
+    run = run_optimization(
+        {
+            "objective": "max_sharpe",
+            "as_of": "2026-08-01",
+            "universe": "cn-a-share",
+            "model_id": "composite-model-v1",
+            "expected_return_method": "composite-zscore-v1",
+            "render_baselines": True,
+            "per_instrument_cap": 0.10,
+            "min_cash": 0.05,
+            "turnover_coef": 0.0014,
+        },
+        repository=portfolio_repository,
+        artifact_service_root=artifact_root,
+        snapshot=fixture_composite,
+    )
+    assert run["problem_status"] == "failed"
+    assert run["failure_reason"] is not None
+    assert "expected-returns" in run["failure_reason"]
 
 
 def test_min_vol_is_default_objective() -> None:

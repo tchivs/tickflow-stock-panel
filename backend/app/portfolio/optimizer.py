@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import importlib.metadata
 import json
+import sqlite3
 import uuid
 from pathlib import Path
 from typing import Any
@@ -35,6 +36,7 @@ from app.portfolio.constraints import (
 from app.portfolio.hrp import hrp_portfolio, hrp_weights, render_baseline
 from app.portfolio.repository import PortfolioRepository
 from app.portfolio.risk import check_psd, repair_psd, sample_covariance
+from app.portfolio.snapshot import SnapshotBindingError, load_composite_snapshot
 from app.research.repository import ResearchRepository
 
 # 策略 options dict 原样记录进 solver_options_json (PFOL-04): solver_path 声明
@@ -440,9 +442,12 @@ def run_optimization(
         mu: (n_assets,) 期望收益向量 (max_sharpe 必填, 与 symbols 对齐; 快照绑定
             在 11-05 落位, 此前由调用方提供)。
         snapshot: 预解析快照 dict ({"model_id", "input_snapshot_sha256",
-            "composite_snapshot_id"}) —— 11-01 tracer 的 fixture 身份接缝;
-            None 时用确定性 fixture 身份。
-        catalog / data_dir: 生产 catalog 接缝 (11-05); 本 plan 未接线。
+            "composite_snapshot_id", 可选 "symbols"/"mu"}) —— 11-01 tracer 的
+            fixture 身份接缝; None 且 expected_return_method ==
+            composite-zscore-v1 时由 catalog 接缝解析 (生产路径, 11-05)。
+        catalog / data_dir: 生产 catalog 接缝 (11-05): catalog.get_composite_model
+            → checksum 验证 artifact → as_of 横截面; 提供时 snapshot 参数被忽略
+            (真实接缝优先, 绝不 live module hand-off)。
 
     Returns:
         与 get_optimization_run 同构的 run 记录 (JSON 列已展开)。
@@ -453,17 +458,144 @@ def run_optimization(
     run_id = uuid.uuid4().hex
     created_at = "2026-08-01T00:00:00Z"
 
+    # ---- fail-closed 入口守卫 (11-05/11-06): 编排器包裹 ENTIRE run, 任何
+    # SnapshotBindingError / ValueError / 求解器失败都记录为 failed run 并携带
+    # failure_reason (PFOL-04) —— 绝不静默中断。求解器崩溃 (cp.error.SolverError)
+    # 也并入: _solve_problem 在路径上所有 solver 都抛 SolverError 时抛出。
+    try:
+        return _run_optimization_impl(
+            req,
+            run_id=run_id,
+            created_at=created_at,
+            repository=repository,
+            artifact_service_root=artifact_service_root,
+            returns=returns,
+            symbols=symbols,
+            mu=mu,
+            snapshot=snapshot,
+            catalog=catalog,
+            data_dir=data_dir,
+        )
+    except (SnapshotBindingError, ValueError, RuntimeError, cp.error.SolverError) as error:
+        return _record_failed_run(
+            repository,
+            run_id=run_id,
+            req=req,
+            created_at=created_at,
+            failure_reason=str(error),
+        )
+
+
+def _record_failed_run(
+    repository: PortfolioRepository,
+    *,
+    run_id: str,
+    req: Any,
+    created_at: str,
+    failure_reason: str,
+) -> dict[str, Any]:
+    """Persist a failed run row with the failure reason (PFOL-04).
+
+    模型缺失 (快照绑定 "model not found") 时, run 行的 model_id FK 无法引用一个
+    不存在的模型定义 —— 此时降级为 expected_return_method="none" 且 model_id=None,
+    由 failure_reason 保留完整事实 (该 run 从未消费任何复合快照)。
+    """
+    constraint_stack = {
+        "cap": req.per_instrument_cap,
+        "min_cash": req.min_cash,
+        "turnover_coef": req.turnover_coef,
+        "turnover_reference": TURNOVER_REFERENCE_EQUAL_WEIGHT,
+        "turnover_reference_detail": TURNOVER_REFERENCE_EQUAL_WEIGHT,
+        "industry_cap": getattr(req, "industry_cap", None),
+        "policy_version": "phase-11-policy-v1",
+    }
+    risk_model_json = {"risk_model": "sample_covariance_v1", "psd_repair": None}
+    fields: dict[str, Any] = {
+        "id": run_id,
+        "objective": req.objective,
+        "as_of": req.as_of.isoformat(),
+        "universe": req.universe,
+        "model_id": req.model_id,
+        "composite_snapshot_id": None,
+        "input_snapshot_sha256": "f" * 64,
+        "expected_return_method": req.expected_return_method,
+        "risk_model": "sample_covariance_v1",
+        "risk_model_json": risk_model_json,
+        "constraint_stack_json": constraint_stack,
+        "solver_name": "n/a",
+        "solver_version": "n/a",
+        "solver_options_json": {},
+        "problem_status": "failed",
+        "failure_reason": failure_reason,
+        "output_weights_json": None,
+        "output_sha256": None,
+        "weights_artifact_relative_path": None,
+        "baseline_weights_json": None,
+        "created_at": created_at,
+    }
+    try:
+        return repository.record_optimization_run(**fields)
+    except sqlite3.IntegrityError:
+        # 模型不存在 (FK): 降级记录, failure_reason 保留完整事实。
+        fields["model_id"] = None
+        fields["expected_return_method"] = "none"
+        return repository.record_optimization_run(**fields)
+
+
+def _run_optimization_impl(
+    req: Any,
+    *,
+    run_id: str,
+    created_at: str,
+    repository: PortfolioRepository,
+    artifact_service_root: Path,
+    returns: np.ndarray | None,
+    symbols: list[str] | None,
+    mu: np.ndarray | None,
+    snapshot: dict[str, Any] | None,
+    catalog: Any,
+    data_dir: Path | None,
+) -> dict[str, Any]:
+    """run_optimization 的主体 (由 fail-closed 包装器调用)。"""
     if symbols is None:
         symbols = [f"SYM{i:03d}" for i in range(12)]
     if returns is None:
         returns = _fixture_returns()
 
-    if snapshot is not None:
+    # 快照解析: 生产 catalog 接缝优先 (catalog + data_dir), 否则退回预解析
+    # snapshot dict (tracer fixture 接缝)。两者都缺失且需要 composite 时
+    # 保持 11-01 的 fixture 身份路径 (现有测试兼容), 由 research 仓库登记。
+    if catalog is not None and data_dir is not None and req.expected_return_method == "composite-zscore-v1":
+        loaded = load_composite_snapshot(
+            catalog,
+            model_id=req.model_id,  # type: ignore[arg-type]
+            as_of=req.as_of,
+            data_dir=data_dir,
+        )
+        input_snapshot_sha256 = loaded["input_snapshot_sha256"]
+        composite_snapshot_id = loaded["composite_snapshot_id"]
+        # 快照横截面定义 run 的标的宇宙 (与 expected-return 向量 mu 对齐);
+        # 风险面板 (returns) 必须由调用方按同一宇宙提供, 绝不与快照错位。
+        symbols = list(loaded["symbols"])
+        snapshot = loaded
+    elif snapshot is not None:
         input_snapshot_sha256 = snapshot.get("input_snapshot_sha256", "f" * 64)
         composite_snapshot_id = snapshot.get("composite_snapshot_id")
+        snapshot_symbols = snapshot.get("symbols")
+        if snapshot_symbols is not None:
+            symbols = list(snapshot_symbols)
     else:
         input_snapshot_sha256 = "f" * 64
         composite_snapshot_id = None
+
+    # 快照的 mu 横截面 (max_sharpe 期望收益): catalog 接缝解析时把快照 dict 的
+    # symbols/mu 对齐到 run 的 symbols。快照横截面标的与收益率面板标的不一致
+    # (复合覆盖与风险面板窗口不同) 时 fail closed —— 绝不静默错位。
+    snapshot_mu = snapshot.get("mu") if snapshot is not None else None
+    if snapshot_mu is not None:
+        if len(snapshot_mu) != len(symbols):
+            raise ValueError("snapshot mu length must match symbols")
+        mu = np.asarray(snapshot_mu, dtype=float)
 
     risk_block = _build_risk_model(returns, window=(req.as_of.isoformat(), req.as_of.isoformat()))
     cov = risk_block["covariance"]
