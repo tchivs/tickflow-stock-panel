@@ -159,26 +159,12 @@ def run_admission(
     if evaluated.is_empty():
         raise ValueError("no valid observations for admission evaluation")
 
-    # The admission orchestration records the evaluation it ran and links the
-    # catalog snapshot before gates run, so every verdict (admission and
-    # rejection) carries the evidence package reference.
-    evaluation_run_id, experiment_snapshot_id = _record_evaluation_reference(
-        catalog=catalog,
-        artifact_service=artifact_service,
-        engine=engine,
-        registry=registry,
-        universe_resolver=universe_resolver,
-        revision=revision,
-        universe=universe,
-        asset_type=asset_type,
-        start=start,
-        end=end,
-        horizon=horizon,
-        rebalance=rebalance,
-        warmup_days=warmup_days,
-        n_groups=n_groups,
-        signal=signal,
-    )
+    # IN-07: the full evaluation + catalog evidence is deferred until AFTER gate
+    # 1 (no_lookahead) passes.  A structurally-invalid factor is rejected without
+    # paying for a second evaluation and an evidence snapshot; every verdict that
+    # survives gate 1 still carries the evidence package reference.
+    evaluation_run_id: str | None = None
+    experiment_snapshot_id: str | None = None
 
     # The shifted-label gate needs the close column, which the chain frame does
     # not carry; join it back from the loaded governed panel.  The shift-based
@@ -216,6 +202,27 @@ def run_admission(
     )
     if not allowed_fields:
         return _record_verdict(repo, registry, revision, "rejected", "no_lookahead", gate_results, signal, start, end, horizon, evaluation_run_id=evaluation_run_id, experiment_snapshot_id=experiment_snapshot_id)
+
+    # IN-07: record the evaluation the admission orchestration performed only
+    # once gate 1 (structural) passes, so structurally-invalid factors are
+    # rejected without duplicating catalog growth.
+    evaluation_run_id, experiment_snapshot_id = _record_evaluation_reference(
+        catalog=catalog,
+        artifact_service=artifact_service,
+        engine=engine,
+        registry=registry,
+        universe_resolver=universe_resolver,
+        revision=revision,
+        universe=universe,
+        asset_type=asset_type,
+        start=start,
+        end=end,
+        horizon=horizon,
+        rebalance=rebalance,
+        warmup_days=warmup_days,
+        n_groups=n_groups,
+        signal=signal,
+    )
 
     # Gate 2: coverage — finite-share floor over the resolved universe (WR-02).
     # ``pre_filter_counts`` are computed by the chain over the resolved
