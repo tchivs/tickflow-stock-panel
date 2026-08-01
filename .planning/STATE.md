@@ -4,15 +4,15 @@ milestone: v1.2
 milestone_name: End-to-End Factor Portfolio Pipeline — in progress
 current_phase: 11
 current_phase_name: Portfolio Construction & Optimization
-status: planning
+status: executing
 stopped_at: "Completed 10-06: Composite + Catalog Breadth (wave 4)"
-last_updated: "2026-08-01T12:41:25.011Z"
+last_updated: "2026-08-01T14:20:38.553Z"
 last_activity: 2026-08-01
 last_activity_desc: Phase 10 complete, transitioned to Phase 11
 progress:
   total_phases: 6
   completed_phases: 0
-  total_plans: 1
+  total_plans: 2
   completed_plans: 0
   percent: 0
 ---
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-07-31)
 
 Phase: 11 — Portfolio Construction & Optimization
 Plan: Not started
-Status: Ready to plan
+Status: Ready to execute
 Last activity: 2026-08-01 — Phase 10 complete, transitioned to Phase 11
 
 Progress: [░░░░░░░░░░] 0%
