@@ -430,7 +430,7 @@ def list_data_sources() -> dict:
         {
             "name": "free_stockdb",
             "display_name": "Free-StockDB (HTTP)",
-            "datasets": ["daily", "minute"],
+            "datasets": ["daily", "minute", "boards"],
             "health": provider_chain.health_check("free_stockdb"),
             "base_url": settings.free_stockdb_url,
         },

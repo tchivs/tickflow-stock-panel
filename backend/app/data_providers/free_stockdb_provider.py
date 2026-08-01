@@ -45,12 +45,15 @@ logger = logging.getLogger(__name__)
 #   daily row: {code, date(int yyyymmdd), open, high, low, close, volume, amount,
 #               name, pre_close, pct_chg, pe_ttm, pb, total_mv, float_mv,
 #               turnover, vol_ratio, is_st, amplitude}
-#   adj row:   {cum, div, give, mult, trans}   (no date inside the row; key carries it)
+#   board row: {code, name, category, group, source, symbols[]}
+#   queried with k1=key:<category_name> (the prefix shared by every member
+#   key, e.g. "概念_5G"), NOT the full "板块:概念_5G:300843.TI" key.
 
 TABLE_DAILY = "日k"
 TABLE_ADJ = "复权"
 TABLE_MINUTE = "分钟k"
 TABLE_INSTRUMENTS = "股票代码"
+TABLE_BOARD = "板块"
 
 _DAILY_FIELD_MAP = {
     "code": "symbol",
@@ -94,6 +97,55 @@ class FreeStockDBProvider:
 
     def get_instruments(self, asset_type: AssetType = "stock") -> pl.DataFrame:
         return pl.DataFrame()
+
+    def get_boards(self, names: list[str] | None = None) -> pl.DataFrame:
+        """Fetch board membership from the 板块 table.
+
+        The server stores each board as a single dict under keys
+        ``板块:<category_name>:<index_code>`` (e.g. ``板块:概念_5G:300843.TI``).
+        ``vals`` returns the dict only when k1 is the shared category-name
+        prefix (``概念_5G``) — the full key, ``all:``, and wildcard k1 all
+        return ``[]``. ``names`` may be full category names or substrings;
+        empty means every board.
+
+        Returns one row per board: symbol/code/name/category/group/source/
+        members (List[str] of 6-digit member symbols).
+        """
+        keys = self._keys("板块:*")
+        if not keys:
+            return pl.DataFrame()
+        wanted: set[str] = set()
+        for key in keys:
+            parts = key.split(":", 2)
+            if len(parts) < 2:
+                continue
+            cat_name = parts[1]
+            if names:
+                if any(name in cat_name for name in names):
+                    wanted.add(cat_name)
+            else:
+                wanted.add(cat_name)
+        rows: list[dict[str, Any]] = []
+        for cat_name in sorted(wanted):
+            items = self._vals(TABLE_BOARD, f"key:{cat_name}", "all:")
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                board = {
+                    "symbol": str(item.get("code") or ""),
+                    "code": str(item.get("code") or ""),
+                    "name": str(item.get("name") or ""),
+                    "category": str(item.get("category") or ""),
+                    "group": str(item.get("group") or ""),
+                    "source": str(item.get("source") or ""),
+                    "members": [str(s) for s in (item.get("symbols") or [])],
+                }
+                if not board["code"]:
+                    continue
+                rows.append(board)
+        if not rows:
+            return pl.DataFrame()
+        return pl.DataFrame(rows)
 
     def get_daily(
         self,

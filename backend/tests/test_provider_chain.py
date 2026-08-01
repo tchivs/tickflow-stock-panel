@@ -283,6 +283,55 @@ def test_free_stockdb_adj_factor_keys_recovery(monkeypatch: pytest.MonkeyPatch) 
     assert abs(rows[1]["ex_factor"] - 1.0) < 1e-9
 
 
+def test_free_stockdb_boards_fetch_members(monkeypatch: pytest.MonkeyPatch) -> None:
+    """板块 values are read via the shared category-name k1, not the full key."""
+    keys = [
+        "板块:概念_5G:300843.TI",
+        "板块:概念_人工智能:302035.TI",
+        "板块:申万一级_电子:801080.SL",
+    ]
+
+    class _BoardTransport:
+        def get(self, url: str, params: dict[str, Any] | None = None, timeout: float | None = None):
+            if (params or {}).get("cmd") == "keys":
+                return _FakeResponse(keys)
+            cat = (params or {}).get("k1", "").removeprefix("key:")
+            payload = {
+                "概念_5G": [{"code": "300843.TI", "name": "5G", "category": "概念",
+                             "group": "特色指数列表", "source": "ths",
+                             "symbols": ["000016", "000049", "000063"]}],
+                "概念_人工智能": [{"code": "302035.TI", "name": "人工智能", "category": "概念",
+                                   "group": "特色指数列表", "source": "ths",
+                                   "symbols": ["000016", "000032"]}],
+                "申万一级_电子": [{"code": "801080.SL", "name": "电子", "category": "申万一级",
+                                    "group": "申万行业指数列表", "source": "sw",
+                                    "symbols": ["000020", "000021"]}],
+            }
+            return _FakeResponse(payload.get(cat, []))
+
+        def close(self) -> None:
+            pass
+
+    provider = FreeStockDBProvider(base_url="http://fake")
+    provider._client = _BoardTransport()  # type: ignore[assignment]
+
+    # Substring filter: 5G matches only 概念_5G.
+    df = provider.get_boards(["5G"])
+    assert df.height == 1
+    row = df.to_dicts()[0]
+    assert row["symbol"] == "300843.TI"
+    assert row["name"] == "5G"
+    assert row["category"] == "概念"
+    assert row["members"] == ["000016", "000049", "000063"]
+
+    # Empty filter returns every board; member codes stay strings.
+    all_ = provider.get_boards()
+    assert all_.height == 3
+    assert all_["members"].dtype == pl.List(pl.String)
+    boards_by_name = {r["name"]: r["members"] for r in all_.to_dicts()}
+    assert boards_by_name["电子"] == ["000020", "000021"]
+
+
 def test_bucket_minutes_session_alignment() -> None:
     from datetime import datetime
 
