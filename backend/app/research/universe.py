@@ -158,6 +158,9 @@ def seed_membership(
     normalized = _normalize_instruments(instruments, enriched)
     inserted = 0
     for record in normalized:
+        # IN-05: only treat a UNIQUE collision as "already exists".  A genuine
+        # validation/serialization error (bad symbol, bad asset type, malformed
+        # provenance) must surface instead of being silently swallowed.
         try:
             repo.insert_universe_membership(
                 universe_name=universe_name,
@@ -168,10 +171,12 @@ def seed_membership(
                 source=source,
                 provenance_json={"method": _MEMBERSHIP_METHOD, "rule": "instruments-sync-seed"},
             )
-        except ValueError:
-            # UNIQUE(universe_name, symbol, effective_date, state) collision — the
-            # event already exists, which is the desired idempotent state.
-            continue
+        except ValueError as error:
+            if "conflicts with a persisted event" in str(error):
+                # UNIQUE(universe_name, symbol, effective_date, state) collision
+                # — the event already exists, the desired idempotent state.
+                continue
+            raise
         inserted += 1
     return inserted
 
