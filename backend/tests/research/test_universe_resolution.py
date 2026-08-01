@@ -25,7 +25,7 @@ from app.research.repository import ResearchRepository
 @pytest.fixture
 def universe_module():
     """Deferred import: the module does not exist until 10-04."""
-    from app.research.universe import resolve_universe, resolve_universe_daily  # noqa: F401
+    from app.research.universe import resolve_universe, resolve_universe_daily
 
     return {"resolve_universe": resolve_universe, "resolve_universe_daily": resolve_universe_daily}
 
