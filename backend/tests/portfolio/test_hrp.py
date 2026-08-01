@@ -19,13 +19,25 @@ HRP_FIXTURE_COV = np.array(
 
 
 def test_cluster_ordering_groups_correlated_pair() -> None:
-    """PFOL-02: quasi-diagonal leaves order the correlated pair adjacently."""
+    """PFOL-02: quasi-diagonal leaves order the correlated pair adjacently.
+
+    Assets 0 and 1 (600000/600001) are highly correlated; the single-linkage
+    quasi-diagonalization must place them as adjacent leaves.
+    """
+    from scipy.cluster.hierarchy import leaves_list, linkage
+    from scipy.spatial.distance import squareform
+
     weights = hrp_weights(HRP_FIXTURE_COV)
     assert weights.shape == (3,)
-    # We cannot read the leaf order directly from weights; this scaffold asserts
-    # determinism and unit sum, and 11-01 adds the leaf-order assertion via
-    # scipy.cluster.hierarchy.leaves_list on the same covariance.
     assert np.all(weights >= 0.0)
+
+    d = np.sqrt(np.diag(HRP_FIXTURE_COV))
+    corr = np.clip(HRP_FIXTURE_COV / np.outer(d, d), -1.0, 1.0)
+    dist = squareform(np.sqrt((1.0 - corr) / 2.0), checks=False)
+    link = linkage(dist, method="single", optimal_ordering=True)
+    order = leaves_list(link).astype(int)
+    position = {leaf: i for i, leaf in enumerate(order)}
+    assert abs(position[0] - position[1]) == 1
 
 
 def test_hrp_weights_sum_to_one() -> None:

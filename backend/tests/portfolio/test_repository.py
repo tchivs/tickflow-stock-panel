@@ -60,9 +60,17 @@ def test_record_and_get_round_trip_json_columns(portfolio_repository: PortfolioR
 def test_update_and_delete_are_blocked(portfolio_repository: PortfolioRepository) -> None:
     """PFOL-04: immutability triggers reject UPDATE and DELETE."""
     portfolio_repository.record_optimization_run(**_valid_run())
-    # 11-01 adds the raw-sql trigger assertions (UPDATE/DELETE raise
-    # sqlite3.IntegrityError) once the record methods land.
-    raise sqlite3.IntegrityError("portfolio optimization runs are append-only")
+    with portfolio_repository._connection() as connection:
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                "UPDATE portfolio_optimization_runs SET solver_name = 'OSQP' WHERE id = ?",
+                ("a" * 32,),
+            )
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                "DELETE FROM portfolio_optimization_runs WHERE id = ?",
+                ("a" * 32,),
+            )
 
 
 def test_failed_run_requires_failure_reason(portfolio_repository: PortfolioRepository) -> None:

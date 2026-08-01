@@ -80,3 +80,19 @@ def test_deterministic_solves() -> None:
     second = solve_min_vol(**kwargs)
     assert first["weights"] == second["weights"]
     assert first["options"] == second["options"]
+
+
+def test_non_optimal_status_recorded_as_is() -> None:
+    """PFOL-04: a non-optimal solve status is carried verbatim, never promoted.
+
+    cap 0.30 x 2 assets < 0.95 budget -> infeasible under the budget equality;
+    the dict records the real solver status, not a fabricated 'optimal'.
+    """
+    cov = np.diag([0.04, 0.09])
+    result = solve_min_vol(
+        cov, list(FIXTURE_SYMBOLS), per_instrument_cap=0.30,
+        min_cash=0.05, turnover_coef=0.0, w_prev=np.array([0.5, 0.5]),
+    )
+    assert result["status"] == "infeasible"
+    assert result["weights"] == {}
+    assert result["options"]["solver"] == "CLARABEL"
