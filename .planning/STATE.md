@@ -5,16 +5,16 @@ milestone_name: End-to-End Factor Portfolio Pipeline — in progress
 current_phase: 11
 current_phase_name: Portfolio Construction & Optimization
 status: executing
-stopped_at: Completed 11-01-PLAN.md
-last_updated: "2026-08-01T17:41:09.670Z"
+stopped_at: Completed 11-03-PLAN.md
+last_updated: "2026-08-01T17:52:30.540Z"
 last_activity: 2026-08-01
-last_activity_desc: 11-01 tracer complete — end-to-end optimization pipeline green
+last_activity_desc: 11-03 HRP baseline breadth complete — hrp_portfolio first-class objective, 11-03 tests green
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 2
-  completed_plans: 1
-  percent: 50
+  completed_plans: 2
+  percent: 100
 ---
 
 # Project State
@@ -29,18 +29,18 @@ See: .planning/PROJECT.md (updated 2026-07-31)
 ## Current Position
 
 Phase: 11 — Portfolio Construction & Optimization
-Plan: 11-01 complete (Wave 1 — end-to-end optimization pipeline tracer)
-Status: Ready for 11-03/11-04 (Wave 2 — HRP breadth ∥ min-vol/max-Sharpe breadth)
-Last activity: 2026-08-01 — 11-01 tracer complete
+Plan: 11-03 complete (Wave 2 — HRP baseline breadth: hrp_portfolio first-class objective)
+Status: Ready for 11-04 (Wave 2 — min-vol/max-Sharpe breadth; running in parallel by Exec1104)
+Last activity: 2026-08-01 — 11-03 HRP breadth complete
 
-Progress: [█████░░░░░] 50%
+Progress: [██████████] 100%
 
 ## v1.2 Phase Summary
 
 | Phase | Requirements | Status |
 |-------|-------------|--------|
 | 10 Factor Library & Multi-Factor Model | FACT-01..06 | In progress (10-01..10-06 complete) |
-| 11 Portfolio Construction & Optimization | PFOL-01..04 | In progress (11-01..11-02 complete) |
+| 11 Portfolio Construction & Optimization | PFOL-01..04 | In progress (11-01, 11-02, 11-03 complete) |
 | 12 Risk Models & Attribution | RSK-01..03 | Not started |
 | 13 Walk-Forward Validation & Parameter Search | WFWD-01..03 | Not started |
 | 14 Output & Boundary (RebalancePlan + Paper Rebalance) | RBAL-01..02 | Not started |
@@ -69,6 +69,7 @@ Progress: [█████░░░░░] 50%
 | Phase 10 P10-06 | 4680 | 4 tasks | 4 files |
 | Phase 11 P11-02 | 12 | 4 tasks | 13 files |
 | Phase 11 P11-01 | 45 | 12 tasks | 13 files |
+| Phase 11 P11-03 | 21 | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -108,8 +109,8 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-08-01T17:41:09.670Z
-Stopped at: Completed 11-01-PLAN.md
+Last session: 2026-08-01T17:52:30.540Z
+Stopped at: Completed 11-03-PLAN.md
 Resume file: None
 
 ## Operator Next Steps
@@ -131,3 +132,5 @@ Resume file: None
 - [Phase 11]: Clarabel 1.9.2 solver options are tol_gap_abs/tol_gap_rel (not OSQP eps_abs/eps_rel, per Wave 0 finding); options dict recorded verbatim in solver_options_json.
 - [Phase 11]: HRP baseline rendered scaled by (1 - min_cash) so it compares apples-to-apples with the QP under the cash floor.
 - [Phase 11]: run_optimization accepts a pre-resolved snapshot dict (model_id/input_snapshot_sha256/composite_snapshot_id) in 11-01; the production catalog seam (load_composite_snapshot) lands in 11-05.
+- [Phase ?]: HRP objective outputs baseline == weights (no QP to compare against) — objective=hrp run row: solver_name/solver_version=n/a, solver_options_json={}, problem_status=optimal, still append-only immutable
+- [Phase ?]: hrp_portfolio runs the same fail-closed PSD gate as the QP path — non-PSD covariance raises ValueError (pitfall 9), never silent
