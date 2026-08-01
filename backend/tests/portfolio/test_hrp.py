@@ -6,6 +6,7 @@ module is created by 11-01, so this file is RED until then.
 from __future__ import annotations
 
 import numpy as np
+
 from app.portfolio.hrp import hrp_weights, render_baseline
 
 # Two highly correlated assets (600000/600001) + one orthogonal (600002).

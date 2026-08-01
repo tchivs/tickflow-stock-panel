@@ -14,7 +14,7 @@ from __future__ import annotations
 PER_INSTRUMENT_CAP_DEFAULT = 0.10
 # 最低现金: cp.sum(w) <= 1 - MIN_CASH_DEFAULT 是现金地板 (下限), 绝非严格等式。
 MIN_CASH_DEFAULT = 0.05
-# 换手惩罚系数: 往返成本代理 ≈ 佣金双边 2×2bp + 滑点双边 2×5bps = 0.0014,
+# 换手惩罚系数: 往返成本代理 ≈ 佣金双边 2x2bp + 滑点双边 2x5bps = 0.0014,
 # 源自 MatcherConfig 费用模型 (backtest/engine.py buy_cost_pct/sell_cost_pct)。
 TURNOVER_COEF_DEFAULT = 0.0014
 # PSD 修复 epsilon: eigen_clip 钳位到的最小特征值。

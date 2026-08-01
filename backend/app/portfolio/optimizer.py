@@ -20,7 +20,6 @@ import numpy as np
 
 from app.portfolio.artifacts import PortfolioArtifactService
 from app.portfolio.constraints import (
-    MAX_SHARPE_RISK_AVERSION,
     MIN_CASH_DEFAULT,
     PER_INSTRUMENT_CAP_DEFAULT,
     PSD_EPSILON_DEFAULT,
@@ -84,9 +83,10 @@ def ensure_psd_provenance(
         ValueError: provenance 缺失/不完整且协方差需要修复时。
     """
     min_eig, _ = check_psd(cov)
-    if min_eig < -epsilon:
-        if not provenance or "eigenvalues_before" not in provenance or "eigenvalues_after" not in provenance:
-            raise ValueError("PSD repair provenance missing")
+    if min_eig < -epsilon and (
+        not provenance or "eigenvalues_before" not in provenance or "eigenvalues_after" not in provenance
+    ):
+        raise ValueError("PSD repair provenance missing")
     return cov
 
 
@@ -144,7 +144,7 @@ def solve_min_vol(
         if abs(residual) > 1e-12:
             largest = int(np.argmax(np.abs(rounded)))
             rounded[largest] = rounded[largest] + residual
-        weights = dict(zip(symbols, rounded.tolist()))
+        weights = dict(zip(symbols, rounded.tolist(), strict=True))
     else:
         weights = {}
     return {
@@ -216,7 +216,7 @@ def _fixture_snapshot_id() -> str:
 def _fixture_returns() -> np.ndarray:
     """Deterministic 12-symbol fixture returns matrix for the tracer pipeline.
 
-    12 标的 × 20 观测: 全秩、协方差数值 PSD (无需修复), 使 12×0.10=1.20 ≥ 0.95
+    12 标的 x 20 观测: 全秩、协方差数值 PSD (无需修复), 使 12x0.10=1.20 ≥ 0.95
     预算, cap/min-cash 约束下可行。
     """
     rng = np.random.default_rng(20260801)
@@ -363,7 +363,7 @@ def run_optimization(
     # 成功路径: 渲染 HRP 基线 (按 1 - min_cash 缩放, 与 QP 口径一致)。
     baseline_full = hrp_weights(cov)
     baseline_scaled = render_baseline(baseline_full, min_cash=req.min_cash)
-    baseline_weights = dict(zip(symbols, np.asarray(baseline_scaled, dtype=float).round(8)))
+    baseline_weights = dict(zip(symbols, np.asarray(baseline_scaled, dtype=float).round(8), strict=True))
 
     artifact_service = PortfolioArtifactService(artifact_service_root)
     descriptors = artifact_service.write_bundle(

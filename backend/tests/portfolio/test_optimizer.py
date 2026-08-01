@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+
 from app.portfolio.optimizer import ensure_psd_provenance, solve_min_vol
 
 FIXTURE_SYMBOLS = ("600000.SH", "600001.SH")
