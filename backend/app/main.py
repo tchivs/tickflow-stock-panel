@@ -172,6 +172,7 @@ async def lifespan(app: FastAPI):
     from app.research.factor_registry import FactorRegistry
     from app.research.hypotheses import ConfiguredFactorHypothesisGateway, FactorHypothesisService
     from app.research.repository import ResearchRepository
+    from app.research.universe import UniverseResolver
 
     research_repository = ResearchRepository(operational.database_path)
     artifact_service = EvaluationArtifactService(store.data_dir)
@@ -180,13 +181,40 @@ async def lifespan(app: FastAPI):
     app.state.research_artifact_service = artifact_service
     app.state.experiment_catalog = ExperimentCatalog(research_repository)
     app.state.backtest_engine = BacktestEngine(repo)
+    # WR-03: the PIT universe resolver (survivorship-bias guard) is bound to the
+    # research repository and injected into the evaluation service so production
+    # evaluation/admission runs carry membership fingerprints instead of always
+    # falling back to ``config-symbols``.
+    universe_resolver = UniverseResolver(research_repository)
+    app.state.universe_resolver = universe_resolver
     app.state.factor_evaluation_service = FactorEvaluationService(
-        app.state.backtest_engine, app.state.factor_registry, artifact_service
+        app.state.backtest_engine, app.state.factor_registry, artifact_service, universe_resolver
     )
     app.state.factor_hypothesis_service = FactorHypothesisService(
         ConfiguredFactorHypothesisGateway.from_current_configuration()
     )
     app.state.research_strategy_handles = {}
+
+    # WR-03: seed the PIT membership table at startup from the instruments
+    # dimension (idempotent, append-only) so production manifests carry real
+    # membership fingerprints.  ``seed_membership`` ignores rows without a
+    # listing date or first bar, so this is a best-effort sync — never fatal on
+    # a host whose instruments lake is empty.
+    try:
+        from app.research.universe import seed_membership
+
+        instruments_frame = repo.get_instruments()
+        enriched_frame, _ = repo.get_enriched_latest()
+        seeded = seed_membership(
+            research_repository,
+            instruments_frame,
+            enriched_frame,
+            universe_name="cn-a-share",
+        )
+        if seeded:
+            logger.info("seeded %d PIT universe membership rows (cn-a-share)", seeded)
+    except Exception:  # noqa: BLE001 - best-effort startup sync, never fatal
+        logger.warning("PIT universe membership seeding skipped", exc_info=True)
 
     from app.advanced.authorization import AdvancedAuthorizationService, OperatorPolicy
     from app.advanced.evolution import EvolutionService
