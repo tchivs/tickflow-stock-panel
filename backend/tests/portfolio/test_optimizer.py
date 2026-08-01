@@ -1,14 +1,24 @@
-"""RED scaffold for portfolio/optimizer.py — min-vol QP + PSD gate.
+"""Phase 11 portfolio/optimizer tests — solver_path, w_prev anchor, max-Sharpe gate.
 
 Wave 0 (11-02) scaffold: contracts come from RESEARCH.md `## cvxpy QP
-Formulation`; the module is created by 11-01, so this file is RED until then.
+Formulation`; 11-01 made the min-vol path green; 11-04 (this file) locks the
+PFOL-02/03 breadth: solver_path fallback + per-solver version capture, the
+w_prev equal-weight anchor / prior-run reference, and the max-Sharpe explicit
+non-default contract (render_baselines=True mandatory, min-vol + HRP baselines
+always recorded alongside).
 """
 from __future__ import annotations
 
 import numpy as np
 import pytest
 
-from app.portfolio.optimizer import ensure_psd_provenance, solve_min_vol
+from app.portfolio.optimizer import (
+    ensure_psd_provenance,
+    run_optimization,
+    solve_max_sharpe,
+    solve_min_vol,
+)
+from app.portfolio.schemas import OptimizationRequest
 
 FIXTURE_SYMBOLS = ("600000.SH", "600001.SH")
 
@@ -97,3 +107,254 @@ def test_non_optimal_status_recorded_as_is() -> None:
     assert result["status"] == "infeasible"
     assert result["weights"] == {}
     assert result["options"]["solver"] == "CLARABEL"
+
+
+# ---------------------------------------------------------------------------
+# 11-04: solver_path fallback + per-solver version capture
+# ---------------------------------------------------------------------------
+
+
+def test_recorded_options_contain_solver_path_and_solver() -> None:
+    """PFOL-04: the verbatim options dict records solver_path + solver keys."""
+    cov = np.diag([0.04, 0.09])
+    result = solve_min_vol(
+        cov, list(FIXTURE_SYMBOLS), per_instrument_cap=1.0, min_cash=0.05,
+        turnover_coef=0.0, w_prev=np.array([0.5, 0.5]),
+    )
+    options = result["options"]
+    assert "solver_path" in options
+    assert options["solver_path"] == ["CLARABEL", "OSQP"]
+    assert "solver" in options
+    assert options["solver"] == "CLARABEL"
+
+
+def test_solver_name_and_version_capture_actual_solver() -> None:
+    """PFOL-04: solver_name is the solver that ran; solver_version is non-empty."""
+    cov = np.diag([0.04, 0.09])
+    result = solve_min_vol(
+        cov, list(FIXTURE_SYMBOLS), per_instrument_cap=1.0, min_cash=0.05,
+        turnover_coef=0.0, w_prev=np.array([0.5, 0.5]),
+    )
+    assert result["solver_name"] in ("CLARABEL", "OSQP")
+    assert isinstance(result["solver_version"], str)
+    assert result["solver_version"] != ""
+
+
+# ---------------------------------------------------------------------------
+# 11-04: w_prev resolution — equal-weight anchor + prior-run reference
+# ---------------------------------------------------------------------------
+
+
+def test_equal_weight_anchor_recorded_in_constraint_stack(
+    portfolio_repository, artifact_root, fixture_composite,
+) -> None:
+    """PFOL-03: a first run with equal_weight records the anchor verbatim."""
+    run = run_optimization(
+        {
+            "objective": "min_volatility",
+            "as_of": "2026-08-01",
+            "universe": "cn-a-share",
+            "model_id": "composite-model-v1",
+            "expected_return_method": "composite-zscore-v1",
+            "render_baselines": True,
+            "per_instrument_cap": 0.10,
+            "min_cash": 0.05,
+            "turnover_coef": 0.0014,
+            "turnover_reference": "equal_weight",
+        },
+        repository=portfolio_repository,
+        artifact_service_root=artifact_root,
+        snapshot=fixture_composite,
+    )
+    stack = run["constraint_stack"]
+    assert stack["turnover_reference"] == "equal_weight"
+    assert stack["turnover_reference_detail"] == "equal_weight"
+
+
+def test_run_id_reference_loads_prior_weights_aligned_to_symbols(
+    portfolio_repository, artifact_root, fixture_composite,
+) -> None:
+    """PFOL-03: a run_id reference loads the prior run's checksum-bound weights,
+    aligns them to the current symbols, and records the detail."""
+    first = run_optimization(
+        {
+            "objective": "min_volatility",
+            "as_of": "2026-08-01",
+            "universe": "cn-a-share",
+            "model_id": "composite-model-v1",
+            "expected_return_method": "composite-zscore-v1",
+            "render_baselines": True,
+            "per_instrument_cap": 0.10,
+            "min_cash": 0.05,
+            "turnover_coef": 0.0014,
+            "turnover_reference": "equal_weight",
+        },
+        repository=portfolio_repository,
+        artifact_service_root=artifact_root,
+        snapshot=fixture_composite,
+    )
+    second = run_optimization(
+        {
+            "objective": "min_volatility",
+            "as_of": "2026-08-01",
+            "universe": "cn-a-share",
+            "model_id": "composite-model-v1",
+            "expected_return_method": "composite-zscore-v1",
+            "render_baselines": True,
+            "per_instrument_cap": 0.10,
+            "min_cash": 0.05,
+            "turnover_coef": 0.0014,
+            "turnover_reference": "run_id",
+            "w_prev_run_id": first["id"],
+        },
+        repository=portfolio_repository,
+        artifact_service_root=artifact_root,
+        snapshot=fixture_composite,
+    )
+    stack = second["constraint_stack"]
+    assert stack["turnover_reference"] == "run_id"
+    assert stack["turnover_reference_detail"] == f"run_id:{first['id']}"
+
+
+def test_run_id_reference_missing_prior_run_fails_closed(
+    portfolio_repository, artifact_root, fixture_composite,
+) -> None:
+    """PFOL-03: a missing prior run raises ValueError (fail closed)."""
+    with pytest.raises(ValueError, match="prior run not found"):
+        run_optimization(
+            {
+                "objective": "min_volatility",
+                "as_of": "2026-08-01",
+                "universe": "cn-a-share",
+                "model_id": "composite-model-v1",
+                "expected_return_method": "composite-zscore-v1",
+                "render_baselines": True,
+                "per_instrument_cap": 0.10,
+                "min_cash": 0.05,
+                "turnover_coef": 0.0014,
+                "turnover_reference": "run_id",
+                "w_prev_run_id": "0" * 32,
+            },
+            repository=portfolio_repository,
+            artifact_service_root=artifact_root,
+            snapshot=fixture_composite,
+        )
+
+
+def test_schema_requires_w_prev_run_id_for_run_id_reference() -> None:
+    """V5: w_prev_run_id is required iff turnover_reference == 'run_id'."""
+    with pytest.raises(ValueError, match="w_prev_run_id is required"):
+        OptimizationRequest(as_of="2026-08-01", turnover_reference="run_id")
+    # equal_weight is the default and needs no run id.
+    request = OptimizationRequest(as_of="2026-08-01")
+    assert request.turnover_reference == "equal_weight"
+    assert request.w_prev_run_id is None
+
+
+# ---------------------------------------------------------------------------
+# 11-04: max-Sharpe — explicit non-default with baselines rendered
+# ---------------------------------------------------------------------------
+
+
+def test_max_sharpe_requires_baselines(
+    portfolio_repository, artifact_root, fixture_composite,
+) -> None:
+    """Pitfall 2: max_sharpe with render_baselines=False is rejected, never silent."""
+    with pytest.raises(ValueError, match="render_baselines"):
+        run_optimization(
+            {
+                "objective": "max_sharpe",
+                "as_of": "2026-08-01",
+                "universe": "cn-a-share",
+                "model_id": "composite-model-v1",
+                "expected_return_method": "composite-zscore-v1",
+                "render_baselines": False,
+                "per_instrument_cap": 0.10,
+                "min_cash": 0.05,
+                "turnover_coef": 0.0014,
+            },
+            repository=portfolio_repository,
+            artifact_service_root=artifact_root,
+            snapshot=fixture_composite,
+        )
+
+
+def test_max_sharpe_solves_under_constraint_stack() -> None:
+    """PFOL-02: the max-Sharpe objective solves under the same constraint stack."""
+    cov = np.diag([0.04, 0.09])
+    result = solve_max_sharpe(
+        np.array([0.01, 0.02]),
+        cov,
+        list(FIXTURE_SYMBOLS),
+        per_instrument_cap=1.0,
+        min_cash=0.05,
+        turnover_coef=0.0,
+        w_prev=np.array([0.5, 0.5]),
+    )
+    assert result["status"] == "optimal"
+    assert result["solver_name"] in ("CLARABEL", "OSQP")
+    assert result["solver_version"] != ""
+    weights = np.array([result["weights"][s] for s in FIXTURE_SYMBOLS])
+    assert weights.min() >= -1e-8
+    assert abs(weights.sum() - 0.95) < 1e-6
+
+
+def test_max_sharpe_run_records_both_baselines(
+    portfolio_repository, artifact_root, fixture_composite,
+) -> None:
+    """Pitfall 2: a max_sharpe run records objective + BOTH min-vol and HRP baselines."""
+    run = run_optimization(
+        {
+            "objective": "max_sharpe",
+            "as_of": "2026-08-01",
+            "universe": "cn-a-share",
+            "model_id": "composite-model-v1",
+            "expected_return_method": "composite-zscore-v1",
+            "render_baselines": True,
+            "per_instrument_cap": 0.10,
+            "min_cash": 0.05,
+            "turnover_coef": 0.0014,
+        },
+        repository=portfolio_repository,
+        artifact_service_root=artifact_root,
+        snapshot=fixture_composite,
+        mu=np.linspace(0.0005, 0.0025, 12),
+    )
+    assert run["problem_status"] == "optimal"
+    assert run["objective"] == "max_sharpe"
+    baseline = run["baseline_weights"]
+    assert isinstance(baseline, dict)
+    assert "min_volatility" in baseline
+    assert "hrp" in baseline
+    # Both baselines are rendered to the (1 - min_cash) budget.
+    assert abs(sum(baseline["min_volatility"].values()) - 0.95) < 1e-6
+    assert abs(sum(baseline["hrp"].values()) - 0.95) < 1e-6
+
+
+def test_max_sharpe_requires_mu(
+    portfolio_repository, artifact_root, fixture_composite,
+) -> None:
+    """PFOL-02: max_sharpe without an expected-returns vector fails closed."""
+    with pytest.raises(ValueError, match="expected-returns"):
+        run_optimization(
+            {
+                "objective": "max_sharpe",
+                "as_of": "2026-08-01",
+                "universe": "cn-a-share",
+                "model_id": "composite-model-v1",
+                "expected_return_method": "composite-zscore-v1",
+                "render_baselines": True,
+                "per_instrument_cap": 0.10,
+                "min_cash": 0.05,
+                "turnover_coef": 0.0014,
+            },
+            repository=portfolio_repository,
+            artifact_service_root=artifact_root,
+            snapshot=fixture_composite,
+        )
+
+
+def test_min_vol_is_default_objective() -> None:
+    """PFOL-02: min_volatility remains the default objective (kept green from 11-01)."""
+    request = OptimizationRequest(as_of="2026-08-01")
+    assert request.objective == "min_volatility"
