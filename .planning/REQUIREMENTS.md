@@ -9,7 +9,7 @@ Requirements for the v1.2 milestone. Each maps to a roadmap phase.
 
 ### Factor Library & Multi-Factor Model
 
-- [ ] **FACT-01**: Researcher can run factor admission gates — train/val IC threshold, no-lookahead check, no-label-leakage check, and similarity dedup — and every admission verdict is recorded as an immutable append-only record with the candidate trail (including rejections).
+- [x] **FACT-01**: Researcher can run factor admission gates — train/val IC threshold, no-lookahead check, no-label-leakage check, and similarity dedup — and every admission verdict is recorded as an immutable append-only record with the candidate trail (including rejections).
 - [x] **FACT-02**: Factor evaluation reports ICIR, monthly robustness, and coverage alongside IC/RankIC, with the full monthly evidence set exposed (not a scalar mean).
 - [ ] **FACT-03**: Researcher can compose admitted factors into a deterministic multi-factor expected-return model (equal-weight or IC-weighted cross-sectional z-score, no ML), consumed by portfolio optimization.
 - [ ] **FACT-04**: Factor DSL extension enforces a partition-context contract — every operator declares per-date / per-symbol / pointwise semantics, label fields are denied in the allowlist, and a deterministic shifted-label leakage test gates DSL changes.
@@ -84,7 +84,7 @@ Populated during roadmap creation (2026-07-31). Verified: all 20 v1 requirements
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| FACT-01 | Phase 10 | Pending |
+| FACT-01 | Phase 10 | Complete |
 | FACT-02 | Phase 10 | Complete |
 | FACT-03 | Phase 10 | Pending |
 | FACT-04 | Phase 10 | Pending |
@@ -113,4 +113,4 @@ Populated during roadmap creation (2026-07-31). Verified: all 20 v1 requirements
 
 ---
 *Requirements defined: 2026-07-31*
-*Last updated: 2026-07-31 — v1.2 roadmap created; traceability verified (20/20 mapped, all Pending)*
+*Last updated: 2026-08-01 — 10-05 complete: FACT-01 admitted (candidate trails + IC-corr dedup + MIN_TRAIN); FACT-02 monthly evidence already Complete*

@@ -44,6 +44,7 @@ Six phases extend the shipped research platform from single-factor evaluation in
 
 - Requirements: 20/20 mapped (14 P1, 6 P2)
 - Phases: 6 planned (Phase 10-15), 0 complete
+- Plans: 5/6 Phase 10 plans executed (10-01..10-05 complete; 10-06 remaining)
 - Boundary: RebalancePlan and paper rebalance carry zero execution authority (hard acceptance criterion)
 
 ## Phases
@@ -75,9 +76,9 @@ Six phases extend the shipped research platform from single-factor evaluation in
   4. Researcher cannot compile a DSL change whose operators lack explicit partition semantics (per-date / per-symbol / pointwise) or that references a denied label field — the compiler rejects it and the shifted-label leakage gate blocks the change.
   5. Researcher can open the admitted factor catalog and see summary storage (coverage, finite counts, signature) with revision lineage; evaluation, multi-factor models, expected returns, and live as-of rebalance suggestions all consume the same signal chain.
 
-**Plans**: 0/1 plans executed
+**Plans**: 5/6 plans executed (10-01..10-05 complete; 10-06 remaining)
 
-- [ ] 10-PLAN.md
+- [x] 10-PLAN.md
 
 *Planning research: point-in-time universe snapshot design (largest open data gap; persist validity ranges / delisted markers / membership-as-of without a second datastore); runtime install verification — scipy 1.17.1 promotion to base deps and sklearn 1.8.0 lazy import must be verified in an empty `.venv`, not assumed.*
 
