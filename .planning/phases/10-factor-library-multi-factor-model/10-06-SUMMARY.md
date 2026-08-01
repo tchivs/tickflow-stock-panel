@@ -127,3 +127,44 @@ None — no new network endpoints, auth paths, file-access patterns, or schema c
 - Per-plan gate `test_models.py + test_experiment_catalog.py`: **16 passed**
 - Full research suite: **102 passed** (no regressions in `test_factor_pipeline.py`, `test_admission.py`, or the rest of the research suite)
 - Manual proof: identical builds → identical `input_snapshot_sha256` + frames; `output_sha256` matches artifact bytes; append-only composite rows bound by snapshot
+
+## Fix Summary (post-review, 2026-08-01)
+
+Code review (10-REVIEW.md, 19 findings) found 2 BLOCKERs, 8 WARNINGs, 9 INFOs in the executed phase code. All were resolved; each fix is an atomic commit.
+
+### BLOCKERs
+
+- **CR-01** `build_composite` equal-weight double-applied the 1/n weight (multiply by 1/n THEN `mean_horizontal` → `mean(z)/n`). Now uses the sum of the weighted z columns (`sum(z_r/n) == mean(z_r)`), matching the IC-weighted branch. Added `test_equal_weight_composite_matches_numeric_reference` asserting composite VALUES against the mean of the raw per-revision z-scores (n=2). Commit `bd78e46`.
+- **CR-02** `_ic_correlation_duplicate` truncated both arrays to `min(len)` positionally, pairing a sparse admitted series at mismatched dates (a date-aligned anti-correlated series returned +1.0). Now intersects dates (`common = sorted(set(...) & set(...))`), requires ≥ 2 common dates, and returns the SIGNED worst correlation so anti-correlated twins (−1.0) are flagged as clearly as positive ones. Added `test_ic_correlation_dedup_aligns_sparse_admitted_dates` (positional pairing → +1.0, date-aligned → −1.0). Commit `a4aa43d`.
+
+### WARNINGs
+
+- **WR-01** `_collect_mean_ics` now filters `status == "completed"` AND requires `ic_summary.mean` before selecting the newest evidence (commit `2bd3e56`).
+- **WR-02** `MIN_COVERAGE` is now enforced: a coverage gate after `no_lookahead` computes the mean finite share from `resolved_universe["pre_filter_counts"]` and rejects below 0.50; pipeline is now six gates (commit `7961e99`).
+- **WR-03** `UniverseResolver(research_repository)` is constructed and injected into `FactorEvaluationService` in `main.py`, plus a best-effort idempotent `seed_membership` startup sync from the instruments dimension (commit `a5d3714`).
+- **WR-04** `_resolve_symbols` no longer falls back to DSL field names — it fails closed with a clear error unless explicit symbols or a universe resolver (resolved via its membership) is provided (commit `771dc00`).
+- **WR-05** composite artifact `composite_output` now points at `signals.json` where the composite rows actually live (commit `771dc00`).
+- **WR-06** `ruff check --fix` + manual fixes: F401 unused imports, F811 duplicate `list_comparison_candidates` deleted (repository.py), RUF100 unused noqa, UP035/UP037/UP017/B009/I001, and explicit `zip(strict=True)` at the B905 sites. `ruff check` now passes clean on the phase files (commit `42687ed`).
+- **WR-07** `run_admission` calls `record_admitted_factor_summary` once a factor clears every gate (coverage/finite counts from the same pre_filter_counts), best-effort (commit `3324234`).
+- **WR-08** `build_composite` persistence is routed through `catalog.record_composite_model` (constructing an `ExperimentCatalog` from the repo when none is injected) so the snapshot record Phase 11 consumes is always created (commit `01fbaab`).
+
+### INFOs
+
+- **IN-01** pre_filter_counts exclude forward-return-null rows (last horizon days), so coverage measures the usable cross-section (commit `c1a4935`).
+- **IN-02** the 70/30 split applies to the full window's rebalance dates, then intersects finite-IC dates (commit `b71b779`).
+- **IN-03** manifest `resolved_symbols` records the sorted union of loaded-panel symbols, not the requested config symbols (commit `4190080`).
+- **IN-04** same-date listed+delisted events tie-break by `MAX(created_at)` (commit `6772a0d`).
+- **IN-05** `seed_membership` only swallows the UNIQUE-conflict ValueError; real errors surface (commit `2996900`).
+- **IN-06** documented the `inf` fail-closed verdict in `shifted_label_ic` (commit `57a13af`).
+- **IN-07** evaluation evidence recording is deferred until after gate 1 passes, so structurally-invalid factors are rejected without a duplicate evaluation (commit `1c6a500`).
+- **IN-08** the empty-panel path preserves the resolved membership fingerprint (commit `26fe989`).
+- **IN-09** `get_composite_model` docstring documents the fresh-model-id-per-build semantics (commit `57a13af`).
+
+### Verification
+
+```bash
+cd backend && .venv/bin/python -m pytest tests/research -q --tb=short   # 105 passed
+.venv/bin/python -m pytest -q --tb=short --ignore=tests/research        # 925 passed, 3 skipped
+```
+
+Full backend suite after fixes: **1030 passed, 3 skipped** (was 1027 passed, 3 skipped before review fixes). `ruff check app/research tests/research` → clean.
