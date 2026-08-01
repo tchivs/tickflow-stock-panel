@@ -5,16 +5,16 @@ milestone_name: End-to-End Factor Portfolio Pipeline — in progress
 current_phase: 11
 current_phase_name: Portfolio Construction & Optimization
 status: executing
-stopped_at: Completed 11-04-PLAN.md
-last_updated: "2026-08-01T22:45:00.000Z"
+stopped_at: Completed 11-05-PLAN.md
+last_updated: "2026-08-01T18:59:40.797Z"
 last_activity: 2026-08-01
-last_activity_desc: 11-04 min-vol/max-Sharpe breadth complete — solver_path fallback, w_prev anchor, max-Sharpe opt-in + baselines, 11-04 tests green
+last_activity_desc: 11-05 snapshot binding + run-record breadth complete — load_composite_snapshot catalog seam, fail-closed failed-run wrapper, list breadth, 11-05 tests green
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 2
-  completed_plans: 2
-  percent: 100
+  completed_plans: 1
+  percent: 50
 ---
 
 # Project State
@@ -29,18 +29,18 @@ See: .planning/PROJECT.md (updated 2026-07-31)
 ## Current Position
 
 Phase: 11 — Portfolio Construction & Optimization
-Plan: 11-04 complete (Wave 2 — min-vol breadth + max-Sharpe non-default: solver_path fallback, w_prev anchor, opt-in contract)
-Status: Ready for 11-05 (Wave 3 — snapshot binding + run-record breadth)
-Last activity: 2026-08-01 — 11-04 min-vol/max-Sharpe breadth complete
+Plan: 11-05 complete (Wave 3 — snapshot binding + run-record breadth: load_composite_snapshot catalog seam, fail-closed failed-run wrapper, list_optimization_runs limit)
+Status: Ready for 11-06 (Wave 4 — constraint hardening + artifact breadth; running in parallel by Exec1106)
+Last activity: 2026-08-01 — 11-05 snapshot binding + run-record breadth complete
 
-Progress: [██████████] 100%
+Progress: [█████░░░░░] 50%
 
 ## v1.2 Phase Summary
 
 | Phase | Requirements | Status |
 |-------|-------------|--------|
 | 10 Factor Library & Multi-Factor Model | FACT-01..06 | In progress (10-01..10-06 complete) |
-| 11 Portfolio Construction & Optimization | PFOL-01..04 | In progress (11-01, 11-02, 11-03, 11-04 complete) |
+| 11 Portfolio Construction & Optimization | PFOL-01..04 | In progress (11-01, 11-02, 11-03, 11-04, 11-05 complete) |
 | 12 Risk Models & Attribution | RSK-01..03 | Not started |
 | 13 Walk-Forward Validation & Parameter Search | WFWD-01..03 | Not started |
 | 14 Output & Boundary (RebalancePlan + Paper Rebalance) | RBAL-01..02 | Not started |
@@ -71,6 +71,7 @@ Progress: [██████████] 100%
 | Phase 11 P11-01 | 45 | 12 tasks | 13 files |
 | Phase 11 P11-03 | 21 | 2 tasks | 3 files |
 | Phase 11 P11-04 | 44 | 4 tasks | 4 files |
+| Phase 11 P11-05 | 55 | 5 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -110,14 +111,14 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-08-01T18:15:45.518Z
-Stopped at: Completed 11-04-PLAN.md
+Last session: 2026-08-01T18:58:01.000Z
+Stopped at: Completed 11-05-PLAN.md
 Resume file: None
 
 ## Operator Next Steps
 
 - Run `/gsd-plan-phase 10` to plan Phase 10 (Factor Library & Multi-Factor Model)
-- Run the phase gate (full backend suite) after all Wave 2/3/4 plans (11-05, 11-06)
+- Run the phase gate (full backend suite) after all Wave 2/3/4 plans (11-05, 11-06) — 11-06 currently executing in parallel by Exec1106
 
 ## Decisions
 
@@ -138,11 +139,13 @@ Resume file: None
 - [Phase 11]: recorded options dict stays policy-verbatim (solver_path + eps_abs/eps_rel in solver_options_json); _solve_kwargs maps tolerance keys to the active solver's namespace (CLARABEL tol_gap_abs/tol_gap_rel, OSQP eps_abs/eps_rel).
 - [Phase 11]: w_prev run_id reference reads the prior run's weights ARTIFACT via read_artifact with output_sha256 checksum verification (never trusts the DB JSON alone); missing symbols align to 0.0, extra dropped; constraint_stack_json records turnover_reference + turnover_reference_detail.
 - [Phase 11]: max_sharpe explicit non-default — render_baselines=False raises ValueError (never silent); every max_sharpe run records baseline_weights_json={'min_volatility','hrp'} both rendered to (1 - min_cash); mu is an explicit run_optimization parameter (snapshot binding lands in 11-05).
+- [Phase 11]: Expected returns are consumed BY SNAPSHOT — catalog.get_composite_model → checksum-verified artifact load (sha256(bytes) == output_sha256, frozen_panel fail-closed pattern) → as_of cross-section → mu; run row's input_snapshot_sha256 == composite's input_snapshot_sha256 (audit root, cross-module integrity). Never a live module hand-off (pitfall 5).
+- [Phase 11]: run_optimization fail-closed wrapper records SnapshotBindingError / ValueError / RuntimeError / cp.error.SolverError as failed runs with failure_reason (PFOL-04) — never a silent abort; model-not-found FK-degrades the row (model_id→None, expected_return_method→'none') so the append-only INSERT satisfies the factor_model_models FK.
+- [Phase 11]: The lookahead guard keys on artifact DATA COVERAGE (earliest [symbol,date,composite] date), not created_at — a backtest composite's created_at is later than its data dates (RESEARCH.md 'as_of precedes ... the panel window' clause).
+- [Phase 11]: list_optimization_runs gains a limit cap (default 200, positive-int fail-closed) for the Phase 15 API; objective/as_of filters + ORDER BY created_at, id preserved.
 - [Phase ?]: HRP objective outputs baseline == weights (no QP to compare against) — objective=hrp run row: solver_name/solver_version=n/a, solver_options_json={}, problem_status=optimal, still append-only immutable
 - [Phase ?]: hrp_portfolio runs the same fail-closed PSD gate as the QP path — non-PSD covariance raises ValueError (pitfall 9), never silent
 - [Phase ?]: solver_path=['CLARABEL','OSQP'] fallback resolved manually (_solve_problem): cvxpy 1.9.2 native solver_path raises SolverError when all solvers return non-optimal, so OSQP is retried only on SolverError (solver crash) and any status the first solver returns is recorded verbatim (pitfall 4)
 - [Phase ?]: Recorded options dict stays policy-verbatim (solver_path + eps_abs/eps_rel in solver_options_json); _solve_kwargs maps tolerance keys to the active solver's namespace (CLARABEL tol_gap_abs/tol_gap_rel, OSQP eps_abs/eps_rel)
 - [Phase ?]: w_prev run_id reference reads the prior run's weights ARTIFACT via read_artifact with output_sha256 checksum verification (never trusts the DB JSON alone); missing symbols align to 0.0, extra dropped; constraint_stack_json records turnover_reference + turnover_reference_detail
 - [Phase ?]: max_sharpe explicit non-default — render_baselines=False raises ValueError (never silent); every max_sharpe run records baseline_weights_json={'min_volatility','hrp'} both rendered to (1 - min_cash); mu is an explicit run_optimization parameter (snapshot binding lands in 11-05)
-
-
