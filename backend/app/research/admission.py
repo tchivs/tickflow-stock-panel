@@ -75,15 +75,22 @@ def _ic_correlation_duplicate(
     *,
     val_dates: set[str],
 ) -> float:
+    """Worst |Pearson| between the candidate's and any admitted factor's per-date IC.
+
+    The per-date IC series are computed on the val window; both series are
+    truncated to their common finite overlap.  Returns 0.0 when no two-point
+    overlap exists (a constant IC series is a degenerate cross-section).
+    """
+    ordered_val = sorted(val_dates)
     candidate_values = np.array(
-        [per_date_ics[day] for day in sorted(val_dates) if day in per_date_ics], dtype=float
+        [per_date_ics[day] for day in ordered_val if day in per_date_ics], dtype=float
     )
     if len(candidate_values) < 2 or float(np.std(candidate_values)) == 0:
         return 0.0
     worst = 0.0
     for _admitted_id, series in admitted_ic_series.items():
         admitted_values = np.array(
-            [series[day] for day in sorted(val_dates) if day in series], dtype=float
+            [series[day] for day in ordered_val if day in series], dtype=float
         )
         if len(admitted_values) < 2:
             continue
