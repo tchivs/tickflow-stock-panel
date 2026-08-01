@@ -25,7 +25,7 @@ from app.portfolio.constraints import (
     PSD_EPSILON_DEFAULT,
     TURNOVER_COEF_DEFAULT,
 )
-from app.portfolio.hrp import hrp_weights, render_baseline
+from app.portfolio.hrp import hrp_portfolio, hrp_weights, render_baseline
 from app.portfolio.repository import PortfolioRepository
 from app.portfolio.risk import check_psd, repair_psd, sample_covariance
 from app.research.repository import ResearchRepository
@@ -303,6 +303,58 @@ def run_optimization(
             input_snapshot_sha256=input_snapshot_sha256,
         )
         composite_snapshot_id = composite["id"]
+
+    # objective="hrp" 一等目标: 无求解器参与 (solver_name/solver_version="n/a",
+    # solver_options_json={}), 但 run 记录仍不可变、可审计 (PFOL-02/04)。
+    # PSD gate 已在上面跑过 (ensure_psd_provenance), hrp_portfolio 内部再挡一道
+    # 负对角线 (pitfall 9)。HRP 输出本身就是渲染后的基线。
+    if req.objective == "hrp":
+        hrp_result = hrp_portfolio(cov, min_cash=req.min_cash, symbols=symbols)
+        weights = hrp_result["weights"]
+        baseline_weights = weights
+        status = hrp_result["status"]
+        solver_name = hrp_result["solver_name"]
+        solver_version = "n/a"
+        options: dict[str, Any] = {}
+
+        artifact_service = PortfolioArtifactService(artifact_service_root)
+        descriptors = artifact_service.write_bundle(
+            run_id=run_id,
+            weights=weights,
+            baseline_weights=baseline_weights,
+            covariance=cov,
+        )
+        weights_descriptor = next(d for d in descriptors if d.relative_path.endswith("weights.json"))
+
+        return repository.record_optimization_run(
+            id=run_id,
+            objective="hrp",
+            as_of=req.as_of.isoformat(),
+            universe=req.universe,
+            model_id=req.model_id,
+            composite_snapshot_id=composite_snapshot_id,
+            input_snapshot_sha256=input_snapshot_sha256,
+            expected_return_method=req.expected_return_method,
+            risk_model="sample_covariance_v1",
+            risk_model_json=risk_model_json,
+            constraint_stack_json={
+                "cap": req.per_instrument_cap,
+                "min_cash": req.min_cash,
+                "turnover_coef": req.turnover_coef,
+                "turnover_reference": req.turnover_reference,
+                "policy_version": "phase-11-policy-v1",
+            },
+            solver_name=solver_name,
+            solver_version=solver_version,
+            solver_options_json=options,
+            problem_status=status,
+            failure_reason=None,
+            output_weights_json=weights,
+            output_sha256=weights_descriptor.checksum_sha256,
+            weights_artifact_relative_path=weights_descriptor.relative_path,
+            baseline_weights_json=baseline_weights,
+            created_at=created_at,
+        )
 
     w_prev, turnover_reference = _resolve_w_prev(req, symbols, repository)
 

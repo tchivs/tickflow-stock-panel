@@ -9,9 +9,14 @@ scipy 仅用于聚类, 绝不充当通用优化器。
 """
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 from scipy.cluster.hierarchy import leaves_list, linkage
 from scipy.spatial.distance import squareform
+
+from app.portfolio.constraints import PSD_EPSILON_DEFAULT
+from app.portfolio.risk import check_psd
 
 
 def _cov_to_corr(cov: np.ndarray) -> np.ndarray:
@@ -78,3 +83,36 @@ def render_baseline(weights: np.ndarray, *, min_cash: float) -> np.ndarray:
     使 HRP 基线与含现金地板的 QP 解口径一致 (apples-to-apples, PFOL-02)。
     """
     return weights * (1.0 - min_cash)
+
+
+def hrp_portfolio(cov: np.ndarray, *, min_cash: float, symbols: list[str]) -> dict[str, Any]:
+    """First-class HRP objective: deterministic weights as an auditable run (PFOL-02).
+
+    与 min-vol/max-Sharpe 同级的一等目标: 不调用任何求解器, 直接输出确定性的
+    HRP 权重 (按 ``(1 - min_cash)`` 缩放)。PSD gate 先行 (pitfall 9):
+    ``_cluster_weights`` 要对对角线取倒数, 负对角线会让逆方差失去意义 ——
+    与 optimizer 的 fail-closed 门一致, 非 PSD 协方差在此直接拒绝, NEVER silent。
+
+    Args:
+        cov: 已通过 PSD gate 的协方差矩阵 (调用方负责先修/溯源)。
+        min_cash: 现金地板 —— 权重缩放为全投资 HRP × (1 - min_cash)。
+        symbols: 标的列表, 长度必须与 cov 维度一致。
+
+    Returns:
+        {"weights": dict[symbol, float], "status": "optimal", "solver_name": "n/a"}
+        —— 无求解器参与, 记录仍保持审计契约 (PFOL-02/04)。
+
+    Raises:
+        ValueError: 协方差非 PSD (无溯源) 或 symbols 长度与协方差维度不匹配。
+    """
+    min_eig, _ = check_psd(cov)
+    if min_eig < -PSD_EPSILON_DEFAULT:
+        raise ValueError("PSD repair provenance missing")
+    if len(symbols) != cov.shape[0]:
+        raise ValueError("symbols length must match covariance dimension")
+    weights = render_baseline(hrp_weights(cov), min_cash=min_cash).round(8)
+    return {
+        "weights": dict(zip(symbols, weights.tolist(), strict=True)),
+        "status": "optimal",
+        "solver_name": "n/a",
+    }
