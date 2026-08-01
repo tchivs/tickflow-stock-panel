@@ -115,7 +115,10 @@ class FactorSignalChain:
 
         panel = self._load_panel(list(sorted(symbols)), load_start, config.end, required, config.asset_type)
         if panel.is_empty():
-            return self._empty_frame(revision, config, required, panel)
+            # IN-08: pass the real membership through so the empty-panel path
+            # still records the resolved universe fingerprint instead of
+            # reverting to config-symbols.
+            return self._empty_frame(revision, config, required, panel, membership=membership)
         missing = sorted(set(required) - set(panel.columns))
         if missing:
             raise SignalChainError(f"governed panel does not provide required fields: {', '.join(missing)}")
@@ -325,6 +328,8 @@ class FactorSignalChain:
         config: SignalChainConfig,
         required: list[str],
         panel: pl.DataFrame,
+        *,
+        membership: pl.DataFrame | None = None,
     ) -> FactorSignalFrame:
         frame = panel.select([pl.col("symbol"), pl.col("date")]).with_columns(
             [
@@ -338,7 +343,9 @@ class FactorSignalChain:
             revision_id=revision.id,
             dsl_version=revision.dsl_version,
             panel_fingerprint=self._panel_fingerprint(panel),
-            resolved_universe=self._resolved_universe(config, None, {}),
+            # IN-08: preserve the resolved membership (and an empty pre-filter
+            # count map — no rows survived) instead of discarding it.
+            resolved_universe=self._resolved_universe(config, membership, {}),
             frame=frame,
             loaded_panel=panel,
             required_source_fields=tuple(required),
