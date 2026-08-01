@@ -1575,6 +1575,47 @@ MIGRATIONS: tuple[str, ...] = (
     CREATE TRIGGER factor_model_composites_no_delete BEFORE DELETE ON factor_model_composites
     BEGIN SELECT RAISE(ABORT, 'factor model composites are append-only'); END;
     """,
+    """
+    -- Phase 11 append-only optimization run records (PFOL-04).
+    -- Every optimization run is one immutable fact: INSERT-only. Failed runs are
+    -- retained with their failure reason; solver/options/status are recorded
+    -- verbatim against the pinned cvxpy 1.9.2 engine. Weights/covariance live in
+    -- checksum-verified immutable artifacts (output_sha256 + relative path).
+    CREATE TABLE portfolio_optimization_runs (
+        id TEXT PRIMARY KEY,
+        objective TEXT NOT NULL CHECK (objective IN ('min_volatility', 'hrp', 'max_sharpe')),
+        as_of TEXT NOT NULL,
+        universe TEXT NOT NULL,
+        model_id TEXT REFERENCES factor_model_models(model_id) ON DELETE RESTRICT,
+        composite_snapshot_id TEXT,
+        input_snapshot_sha256 TEXT NOT NULL CHECK (length(input_snapshot_sha256) = 64),
+        expected_return_method TEXT NOT NULL CHECK (expected_return_method IN ('composite-zscore-v1', 'none')),
+        risk_model TEXT NOT NULL CHECK (risk_model IN ('sample_covariance_v1')),
+        risk_model_json TEXT NOT NULL,
+        constraint_stack_json TEXT NOT NULL,
+        solver_name TEXT NOT NULL,
+        solver_version TEXT NOT NULL,
+        solver_options_json TEXT NOT NULL,
+        problem_status TEXT NOT NULL CHECK (
+            problem_status IN ('optimal', 'optimal_inaccurate', 'infeasible',
+                               'unbounded', 'solver_error', 'failed')
+        ),
+        failure_reason TEXT,
+        output_weights_json TEXT,
+        output_sha256 TEXT CHECK (output_sha256 IS NULL OR length(output_sha256) = 64),
+        weights_artifact_relative_path TEXT,
+        baseline_weights_json TEXT,
+        created_at TEXT NOT NULL,
+        CHECK (
+            (problem_status IN ('failed', 'solver_error')) = (failure_reason IS NOT NULL)
+        )
+    );
+    CREATE INDEX idx_portfolio_optimization_runs_as_of ON portfolio_optimization_runs(as_of, objective);
+    CREATE TRIGGER portfolio_optimization_runs_no_update BEFORE UPDATE ON portfolio_optimization_runs
+    BEGIN SELECT RAISE(ABORT, 'portfolio optimization runs are append-only'); END;
+    CREATE TRIGGER portfolio_optimization_runs_no_delete BEFORE DELETE ON portfolio_optimization_runs
+    BEGIN SELECT RAISE(ABORT, 'portfolio optimization runs are append-only'); END;
+    """,
 )
 
 

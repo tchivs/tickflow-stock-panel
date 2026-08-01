@@ -449,3 +449,145 @@ def test_phase10_append_only_tables_migrate_with_constraints_and_idempotence(
             f"VALUES ('c2', 'missing-model', '{'g' * 64}', 'research_artifacts/run/composite.parquet', "
             f"'{'d' * 64}', '2026-01-01T00:00:00Z')"  # FK RESTRICT
         )
+
+
+def _insert_phase11_model(connection: sqlite3.Connection) -> None:
+    """Insert the minimal factor model row the runs-table FK requires."""
+    connection.execute(
+        "INSERT INTO factor_model_models (model_id, name, weighting, revision_ids_json, "
+        "weights_json, input_snapshot_sha256, created_at) "
+        f"VALUES ('pf-m1', 'portfolio-composite', 'equal', '[]', '{{}}', '{'h' * 64}', "
+        "'2026-01-01T00:00:00Z')"
+    )
+
+
+def _run_row(
+    run_id: str = "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+    *,
+    objective: str = "min_volatility",
+    expected_return_method: str = "composite-zscore-v1",
+    risk_model: str = "sample_covariance_v1",
+    problem_status: str = "optimal",
+    failure_reason: str | None = None,
+    input_sha256: str | None = None,
+    output_sha256: str | None = None,
+    model_id: str | None = "pf-m1",
+) -> str:
+    """Build a valid portfolio_optimization_runs INSERT statement."""
+    return (
+        "INSERT INTO portfolio_optimization_runs (id, objective, as_of, universe, model_id, "
+        "composite_snapshot_id, input_snapshot_sha256, expected_return_method, risk_model, "
+        "risk_model_json, constraint_stack_json, solver_name, solver_version, solver_options_json, "
+        "problem_status, failure_reason, output_weights_json, output_sha256, "
+        "weights_artifact_relative_path, baseline_weights_json, created_at) "
+        "VALUES ("
+        f"'{run_id}', '{objective}', '2026-08-01', 'cn-a-share', "
+        + (f"'{model_id}', " if model_id else "NULL, ")
+        + f"'csnap-1', '{input_sha256 if input_sha256 is not None else '1' * 64}', "
+        f"'{expected_return_method}', '{risk_model}', '{{\"psd_repair\":{{\"method\":\"none\"}}}}', "
+        f"'{{\"cap\":0.1}}', 'CLARABEL', '0.11.1', '{{}}', '{problem_status}', "
+        + (f"'{failure_reason}', " if failure_reason is not None else "NULL, ")
+        + (f"'{{\"000001.SZ\":0.5}}', " if output_sha256 is not None else "NULL, ")
+        + (f"'{output_sha256}', " if output_sha256 is not None else "NULL, ")
+        + "'research_artifacts/run-id/weights.json', '{\"000001.SZ\":0.5}', "
+        + "'2026-08-01T00:00:00Z')"
+    )
+
+
+def test_phase11_optimization_runs_migrate_with_constraints_and_idempotence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """portfolio_optimization_runs: CHECK enums + sha256 + failed⇔reason + triggers."""
+    planned = migrations.MIGRATIONS
+    runs_index = next(
+        index
+        for index, script in enumerate(planned)
+        if "portfolio_optimization_runs" in script
+    )
+    connection = sqlite3.connect(":memory:")
+    connection.execute("PRAGMA foreign_keys = ON")
+
+    # Forward-only: table absent before the Phase 11 script, present after.
+    monkeypatch.setattr(migrations, "MIGRATIONS", planned[:runs_index])
+    migrations.migrate_operational_db(connection)
+    assert connection.execute("PRAGMA user_version").fetchone() == (runs_index,)
+    assert (
+        connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+            "AND name = 'portfolio_optimization_runs'"
+        ).fetchone()
+        is None
+    )
+
+    monkeypatch.setattr(migrations, "MIGRATIONS", planned)
+    migrations.migrate_operational_db(connection)
+    assert connection.execute("PRAGMA user_version").fetchone() == (len(planned),)
+    migrations.migrate_operational_db(connection)  # idempotent no-op
+    assert connection.execute("PRAGMA user_version").fetchone() == (len(planned),)
+
+    _insert_phase11_model(connection)
+
+    # --- Valid minimal optimal run row. ---
+    connection.execute(_run_row())
+
+    # --- CHECK objective enum. ---
+    with pytest.raises(sqlite3.IntegrityError):
+        connection.execute(_run_row(run_id="r2" * 16, objective="max_alpha"))
+    # --- CHECK expected_return_method enum. ---
+    with pytest.raises(sqlite3.IntegrityError):
+        connection.execute(_run_row(run_id="r3" * 16, expected_return_method="live"))
+    # --- CHECK risk_model enum. ---
+    with pytest.raises(sqlite3.IntegrityError):
+        connection.execute(_run_row(run_id="r4" * 16, risk_model="shrinkage_v1"))
+    # --- CHECK problem_status enum. ---
+    with pytest.raises(sqlite3.IntegrityError):
+        connection.execute(_run_row(run_id="r5" * 16, problem_status="converged"))
+    # --- CHECK input_snapshot_sha256 length. ---
+    with pytest.raises(sqlite3.IntegrityError):
+        connection.execute(_run_row(run_id="r6" * 16, input_sha256="short"))
+    # --- CHECK output_sha256 length when present. ---
+    with pytest.raises(sqlite3.IntegrityError):
+        connection.execute(
+            _run_row(run_id="r7" * 16, output_sha256="not-a-sha256")
+        )
+    # --- failed requires failure_reason; failure_reason requires failed/solver_error. ---
+    with pytest.raises(sqlite3.IntegrityError):
+        connection.execute(_run_row(run_id="r8" * 16, problem_status="failed"))
+    with pytest.raises(sqlite3.IntegrityError):
+        connection.execute(
+            _run_row(run_id="r9" * 16, failure_reason="solver blew up")
+        )
+    # --- failed + failure_reason is the valid invariant row. ---
+    connection.execute(
+        _run_row(
+            run_id="ra" * 16,
+            problem_status="failed",
+            failure_reason="non-PSD covariance without provenance",
+        )
+    )
+    # --- solver_error also requires failure_reason. ---
+    with pytest.raises(sqlite3.IntegrityError):
+        connection.execute(_run_row(run_id="rb" * 16, problem_status="solver_error"))
+    connection.execute(
+        _run_row(
+            run_id="rc" * 16,
+            problem_status="solver_error",
+            failure_reason="CLARABEL crashed",
+        )
+    )
+
+    # --- model_id NULL allowed for expected_return_method='none' (risk-only run). ---
+    connection.execute(_run_row(run_id="rd" * 16, model_id=None, expected_return_method="none"))
+
+    # --- Immutability triggers: UPDATE and DELETE raise. ---
+    with pytest.raises(sqlite3.IntegrityError):
+        connection.execute(
+            "UPDATE portfolio_optimization_runs SET solver_name = 'OSQP' "
+            "WHERE id = 'a1b2c3d4e5f60718293a4b5c6d7e8f90'"
+        )
+    with pytest.raises(sqlite3.IntegrityError):
+        connection.execute("DELETE FROM portfolio_optimization_runs WHERE id = 'a1b2c3d4e5f60718293a4b5c6d7e8f90'")
+
+    # --- FK RESTRICT: model_id must reference factor_model_models. ---
+    with pytest.raises(sqlite3.IntegrityError):
+        connection.execute(_run_row(run_id="re" * 16, model_id="missing-model"))
