@@ -20,6 +20,7 @@ dependencies = [
     "pandas>=2.2",                # 仅在 BacktestService 边界使用,见 §7.4 / ADR-19
     "fastexcel>=0.10",            # Polars 读取 xlsx/xls
     "scipy>=1.17.1,<1.18",        # Phase 11 HRP (scipy.cluster.hierarchy); <1.18 上限: 1.18 要求 Python>=3.12
+    "cvxpy==1.9.2",               # Phase 11 QP solver (精确锁定: 求解结果对版本敏感, 审计记录引用 cp.__version__); 内置 OSQP/Clarabel/SCS/HiGHS
     # TickFlow 官方 SDK
     "tickflow[all]>=0.1.23",
     # Scheduling
