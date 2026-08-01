@@ -307,6 +307,25 @@ def _build_condition_mask(df: pl.DataFrame, conditions: list[dict], logic: str) 
     return df.filter(mask)
 
 
+def _sector_symbols(boards: list[dict]) -> set[str]:
+    """从板块 dict 列表提取成员股票代码 (6 位数字, 去交易所后缀)。
+
+    board dict 来自 FreeStockDBProvider.get_boards 的归一化行, 含
+    ``members`` (List[str]); 兼容含 ``symbols`` 键的旧形状。返回去重后的
+    代码集合; 无效输入返回空集。
+    """
+    symbols: set[str] = set()
+    for board in boards:
+        if not isinstance(board, dict):
+            continue
+        members = board.get("members") or board.get("symbols") or []
+        for member in members:
+            code = str(member).strip().split(".")[0]
+            if len(code) == 6 and code.isdigit():
+                symbols.add(code)
+    return symbols
+
+
 class MonitorRuleEngine:
     """通用监控规则引擎 — 接收实时行情 DataFrame,评估所有规则,返回 AlertEvent。
 
@@ -341,6 +360,9 @@ class MonitorRuleEngine:
         self._history_loader: Callable[[_dt.date, int], "pl.DataFrame"] | None = None
         # ETF 版历史窗口加载器 (asset_type=etf 的规则用)。为 None 时 ETF filter_history 策略跳过。
         self._history_loader_etf: Callable[[_dt.date, int], "pl.DataFrame"] | None = None
+        # 板块 loader: (sector) -> 板块 dict 列表。scope=sector 规则用它做
+        # 板块 JOIN。为 None 时 sector 规则 fail-closed 返回空。
+        self._board_loader: Callable[[str], list[dict]] | None = None
         # 本轮 evaluate() 产出的策略选股结果: strategy_id → {rows, total, as_of}
         # 供策略页实时回显复用 (/api/screener/cached 端点直接读取, 避免重跑)。
         # 注意: 始终是「完整」的 dict —— evaluate 重算时先写到 _building_strategy_results,
@@ -382,6 +404,16 @@ class MonitorRuleEngine:
         if rule.get("asset_type") == "etf":
             return self._history_loader_etf
         return self._history_loader
+
+    def set_board_loader(self, loader) -> None:
+        """注入板块 loader: (sector: str) -> 该板块的 dict 列表。
+
+        loader 返回的每个 dict 需含 ``members`` (List[str], 6 位股票代码,
+        与 df.symbol 去除交易所后缀后的代码对齐)。为 None 时 scope=sector
+        规则 fail-closed 返回空。由 app 装配处注入 FreeStockDBProvider.
+        get_boards 的结果转换闭包。
+        """
+        self._board_loader = loader
 
     def set_name_map(self, name_map: dict[str, str]) -> None:
         """注入 symbol → 股票名 映射, 用于在告警事件里回填 name 字段。
@@ -667,8 +699,7 @@ class MonitorRuleEngine:
 
         return events
 
-    @staticmethod
-    def _apply_scope(df: pl.DataFrame, rule: dict) -> pl.DataFrame:
+    def _apply_scope(self, df: pl.DataFrame, rule: dict) -> pl.DataFrame:
         """按 scope 过滤 DataFrame。"""
         scope = rule.get("scope", "symbols")
         if scope == "all":
@@ -679,13 +710,27 @@ class MonitorRuleEngine:
                 return df.head(0)
             return df.filter(pl.col("symbol").is_in(syms))
         if scope == "sector":
-            # sector 过滤需 df 含板块列 (后续接入 ext_data JOIN)。在 JOIN 落地前
-            # fail-closed 返回空 —— 绝不退化为「全市场」误触发 (旧行为 return df 会让
-            # 一条板块规则对全市场每只命中都告警)。新建 sector 规则已在 validate 拦截,
-            # 此处兜底任何历史遗留的 sector 规则。
-            logger.warning("scope=sector 规则 %s 暂不支持(板块 JOIN 未实现), 本轮跳过",
-                           rule.get("id"))
-            return df.head(0)
+            # 板块 JOIN: 从 board loader 取「板块名/代码 → 成员股票」映射, 把 df
+            # 按成员过滤。rule.sector 支持板块显示名 (如 "5G") 或板块指数代码
+            # (如 "300843.TI"), 大小写不敏感。未注入 loader 或板块未匹配时
+            # fail-closed 返回空 —— 绝不退化为「全市场」误触发。
+            sector = rule.get("sector")
+            if not sector or self._board_loader is None:
+                return df.head(0)
+            boards = self._board_loader(sector)
+            if not boards:
+                return df.head(0)
+            symbols = _sector_symbols(boards)
+            if not symbols:
+                return df.head(0)
+            # 板块成员是 6 位裸代码; df.symbol 可能是 "000001" 或带交易所后缀
+            # 的 "000001.SZ"。剥掉后缀再比对, 保留原 symbol 列原样返回。
+            # (polars 1.40 的 is_in(list) 有歧义弃用, 改用 starts_with 前缀匹配)
+            return df.filter(
+                pl.any_horizontal(
+                    pl.col("symbol").str.starts_with(code) for code in symbols
+                )
+            )
         return df
 
     def _match_strategy(
