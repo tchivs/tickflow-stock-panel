@@ -215,7 +215,80 @@ def solve_min_vol(
     # 记录 dict 保持策略原文 (含 solver_path); _solve_problem 手动回退, 使
     # non-optimal 状态 (如 infeasible) 原样记录 (pitfall 4)。
     solver_name = _solve_problem(problem, options)
+    return _finalize_result(problem, w, symbols, min_cash, options, solver_name)
 
+
+def solve_max_sharpe(
+    mu: np.ndarray,
+    cov: np.ndarray,
+    symbols: list[str],
+    *,
+    per_instrument_cap: float = PER_INSTRUMENT_CAP_DEFAULT,
+    min_cash: float = MIN_CASH_DEFAULT,
+    turnover_coef: float = TURNOVER_COEF_DEFAULT,
+    w_prev: np.ndarray,
+    risk_aversion: float = MAX_SHARPE_RISK_AVERSION,
+    solver_options: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Solve the long-only max-Sharpe QP under the same constraint stack (PFOL-02).
+
+    w = cp.Variable(n, nonneg=True); 同一约束栈 (预算等式 sum(w)==1-min_cash,
+    单标的 cap); objective = mu @ w - (risk_aversion/2) * quad_form(w, cov)
+    + turnover_coef * norm1(w - w_prev)。max_sharpe 显式非默认: 仅当
+    render_baselines=True 时才可达 (pitfall 2), 且每次运行都记录 min-vol + HRP
+    双基线。风险厌恶系数 = MAX_SHARPE_RISK_AVERSION (1.0, 策略常量)。
+
+    Args:
+        mu: 期望收益向量 (composite cross-section, 与 symbols 对齐)。
+        cov: PSD 协方差 (必须已通过 ensure_psd_provenance gate)。
+        symbols: 标的列表 (与 cov/mu 行对齐)。
+        per_instrument_cap: 单标的权重上限。
+        min_cash: 最低现金 (地板)。
+        turnover_coef: 换手惩罚系数。
+        w_prev: 上一期权重向量 (与 symbols 对齐)。
+        risk_aversion: 风险厌恶系数 (策略常量 MAX_SHARPE_RISK_AVERSION = 1.0)。
+        solver_options: 覆盖默认的 solve() 选项 (白名单外键会被 solve 拒绝)。
+
+    Returns:
+        dict: status / solver_name / solve_time / num_iters / options /
+        cvxpy_version / solver_version / weights (dict[symbol, float])。
+    """
+    n = len(symbols)
+    w = cp.Variable(n, nonneg=True)
+    constraints = [cp.sum(w) == 1.0 - min_cash, w <= per_instrument_cap]
+    objective = cp.Maximize(
+        mu @ w - (risk_aversion / 2.0) * cp.quad_form(w, cov) - turnover_coef * cp.norm1(w - w_prev)
+    )
+    problem = cp.Problem(objective, constraints)
+    options = dict(DEFAULT_SOLVER_OPTIONS)
+    if solver_options:
+        options.update(solver_options)
+    solver_name = _solve_problem(problem, options)
+    return _finalize_result(problem, w, symbols, min_cash, options, solver_name)
+
+
+def _finalize_result(
+    problem: cp.Problem,
+    w: cp.Variable,
+    symbols: list[str],
+    min_cash: float,
+    options: dict[str, Any],
+    solver_name: str,
+) -> dict[str, Any]:
+    """从求解后的 problem 提取全量审计结果 (min-vol / max-sharpe 共用).
+
+    Args:
+        problem: 已求解的 cp.Problem。
+        w: 权重变量。
+        symbols: 标的列表。
+        min_cash: 最低现金 (预算舍入修正)。
+        options: 记录的 options dict (原样进 solver_options_json)。
+        solver_name: 实际运行的 solver 名。
+
+    Returns:
+        dict: status / solver_name / solve_time / num_iters / options /
+        cvxpy_version / solver_version / weights (dict[symbol, float])。
+    """
     if w.value is not None:
         rounded = np.asarray(w.value, dtype=float).round(8)
         # 预算等式 sum(w) == 1 - min_cash 的舍入漂移: round(8) 后逐分量误差累计可能
@@ -343,6 +416,7 @@ def run_optimization(
     artifact_service_root: Path,
     returns: np.ndarray | None = None,
     symbols: list[str] | None = None,
+    mu: np.ndarray | None = None,
     snapshot: dict[str, Any] | None = None,
     catalog: Any = None,
     data_dir: Path | None = None,
@@ -363,6 +437,8 @@ def run_optimization(
         artifact_service_root: 工件根目录 (服务在其下创建 research_artifacts/)。
         returns: (n_obs, n_assets) 收益率矩阵; None 时用 _fixture_returns()。
         symbols: 标的列表; None 时用确定性 12 标的默认集。
+        mu: (n_assets,) 期望收益向量 (max_sharpe 必填, 与 symbols 对齐; 快照绑定
+            在 11-05 落位, 此前由调用方提供)。
         snapshot: 预解析快照 dict ({"model_id", "input_snapshot_sha256",
             "composite_snapshot_id"}) —— 11-01 tracer 的 fixture 身份接缝;
             None 时用确定性 fixture 身份。
@@ -478,15 +554,39 @@ def run_optimization(
         req, symbols, repository, artifact_service_root
     )
 
+    # max_sharpe 显式非默认: 仅当 render_baselines=True 才可到达 (pitfall 2 ——
+    # PyPortfolioOpt μ-不确定警告)。否则 ValueError, 绝不静默跳过。
+    if req.objective == "max_sharpe" and not req.render_baselines:
+        raise ValueError("max_sharpe requires render_baselines=True (baselines are mandatory)")
+
+    # mu: composite cross-section 期望收益 (快照绑定在 11-05 落位; 此前由调用方
+    # 提供, 与 symbols 对齐)。
+    if req.objective == "max_sharpe":
+        if mu is None:
+            raise ValueError("max_sharpe requires an expected-returns vector (mu)")
+        if len(mu) != len(symbols):
+            raise ValueError("expected returns length must match symbols")
+
     try:
-        result = solve_min_vol(
-            cov,
-            symbols,
-            per_instrument_cap=req.per_instrument_cap,
-            min_cash=req.min_cash,
-            turnover_coef=req.turnover_coef,
-            w_prev=w_prev,
-        )
+        if req.objective == "max_sharpe":
+            result = solve_max_sharpe(
+                np.asarray(mu, dtype=float),
+                cov,
+                symbols,
+                per_instrument_cap=req.per_instrument_cap,
+                min_cash=req.min_cash,
+                turnover_coef=req.turnover_coef,
+                w_prev=w_prev,
+            )
+        else:
+            result = solve_min_vol(
+                cov,
+                symbols,
+                per_instrument_cap=req.per_instrument_cap,
+                min_cash=req.min_cash,
+                turnover_coef=req.turnover_coef,
+                w_prev=w_prev,
+            )
         status = result["status"]
         weights = result["weights"]
         solver_name = result["solver_name"]
@@ -534,10 +634,30 @@ def run_optimization(
         )
         return record
 
-    # 成功路径: 渲染 HRP 基线 (按 1 - min_cash 缩放, 与 QP 口径一致)。
+    # 成功路径 (optimal / optimal_inaccurate): 渲染基线。max_sharpe 运行时 ALWAYS
+    # 记录 min-vol + HRP 双基线 (pitfall 2); min_volatility 运行时记录 HRP 基线
+    # (与 11-01/11-03 契约一致)。min-vol 基线在同一协方差/约束栈下求解 (换手惩罚
+    # 同 w_prev), 使审计面完全一致。
     baseline_full = hrp_weights(cov)
     baseline_scaled = render_baseline(baseline_full, min_cash=req.min_cash)
-    baseline_weights = dict(zip(symbols, np.asarray(baseline_scaled, dtype=float).round(8), strict=True))
+    hrp_weights_rendered = dict(
+        zip(symbols, np.asarray(baseline_scaled, dtype=float).round(8), strict=True)
+    )
+    if req.objective == "max_sharpe":
+        min_vol_result = solve_min_vol(
+            cov,
+            symbols,
+            per_instrument_cap=req.per_instrument_cap,
+            min_cash=req.min_cash,
+            turnover_coef=req.turnover_coef,
+            w_prev=w_prev,
+        )
+        baseline_weights = {
+            "min_volatility": min_vol_result["weights"],
+            "hrp": hrp_weights_rendered,
+        }
+    else:
+        baseline_weights = hrp_weights_rendered
 
     artifact_service = PortfolioArtifactService(artifact_service_root)
     descriptors = artifact_service.write_bundle(

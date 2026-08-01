@@ -50,7 +50,7 @@ class OptimizationRequest(BaseModel):
     w_prev_run_id: str | None = None
 
     @model_validator(mode="after")
-    def _w_prev_run_id_required_for_run_id(self) -> "OptimizationRequest":
+    def _w_prev_run_id_required_for_run_id(self) -> OptimizationRequest:
         """turnover_reference="run_id" 时必须提供 w_prev_run_id (fail closed)."""
         if self.turnover_reference == "run_id" and not self.w_prev_run_id:
             raise ValueError("w_prev_run_id is required when turnover_reference is run_id")
