@@ -264,3 +264,71 @@ def test_repeated_compute_is_deterministic(
         ).frame
 
     assert compute().equals(compute())
+
+
+def test_equal_weight_composite_matches_numeric_reference(
+    research_registry: FactorRegistry,
+    stub_engine,
+    research_repository: ResearchRepository,
+    models_module,
+) -> None:
+    """CR-01: equal-weight composite == mean of the per-revision z-scores.
+
+    The documented formula is ``composite = mean_r z_r``.  A regression once
+    pre-multiplied each z-score by 1/n and then mean-averaged the already-
+    weighted columns, yielding ``mean(z)/n`` (bias factor 0.5 for n=2).  Assert
+    the composite VALUES against an independent numeric reference computed from
+    the raw chain z-scores, not just the weights.
+    """
+    from app.research.signal_chain import FactorSignalChain, SignalChainConfig
+
+    first = research_registry.create_factor(name="Close", expression="close")
+    second = research_registry.create_factor(name="Rank", expression="rank(close)")
+    revision_ids = (first.id, second.id)
+
+    model = models_module["build_composite"](
+        repo=research_repository,
+        engine=stub_engine,
+        registry=research_registry,
+        revision_ids=revision_ids,
+        weighting="equal",
+        universe="fixture-a-share",
+        start=date(2024, 1, 2),
+        end=date(2024, 1, 3),
+    )
+
+    chain = FactorSignalChain(stub_engine, research_registry, None)
+    zframes = []
+    for revision_id in revision_ids:
+        signal = chain.compute(
+            revision_id=revision_id,
+            config=SignalChainConfig(
+                universe="fixture-a-share",
+                symbols=(),
+                asset_type="stock",
+                start=date(2024, 1, 2),
+                end=date(2024, 1, 3),
+                warmup_days=0,
+                forward_return_horizon=1,
+            ),
+        )
+        zframes.append(
+            signal.frame.select(
+                [pl.col("symbol"), pl.col("date"), pl.col("_zscore").alias(f"z_{revision_id}")]
+            )
+        )
+    reference = zframes[0].join(zframes[1], on=["symbol", "date"], how="inner")
+    reference = reference.with_columns(
+        ((pl.col(f"z_{revision_ids[0]}") + pl.col(f"z_{revision_ids[1]}")) / 2).alias(
+            "expected_composite"
+        )
+    ).select(["symbol", "date", "expected_composite"])
+
+    observed = model.frame.sort(["date", "symbol"])
+    reference = reference.sort(["date", "symbol"])
+    assert observed.height == reference.height
+    for row in reference.iter_rows(named=True):
+        observed_value = observed.filter(
+            (pl.col("symbol") == row["symbol"]) & (pl.col("date") == row["date"])
+        ).select(pl.col("composite")).item()
+        assert observed_value == pytest.approx(row["expected_composite"], abs=1e-9)

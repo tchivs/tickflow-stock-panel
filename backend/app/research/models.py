@@ -289,8 +289,12 @@ def build_composite(
         combined = combined.join(z, on=["symbol", "date"], how="full")
 
     if weighting == "equal":
-        composite_expr = pl.mean_horizontal(
-            [pl.col(f"_z_{revision_id}") for revision_id in ordered]
+        # Each ``_z_{revision_id}`` already carries its 1/n weight, so the sum of
+        # the weighted z columns equals the mean of the unweighted z-scores
+        # (CR-01: do NOT mean_horizontal the already-weighted columns, which
+        # would apply the 1/n factor a second time).
+        composite_expr = sum(
+            pl.col(f"_z_{revision_id}") for revision_id in ordered
         ).alias("composite")
     else:
         composite_expr = sum(
