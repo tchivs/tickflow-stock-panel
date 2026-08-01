@@ -69,6 +69,18 @@ def _symbols_fingerprint(symbols: frozenset[str]) -> str:
     return sha256(",".join(sorted(symbols)).encode("utf-8")).hexdigest()
 
 
+def _membership_fingerprint(membership: pl.DataFrame) -> str:
+    """sha256 over the canonical per-date membership frame ``[symbol, date]``.
+
+    The frame is sorted by (symbol, date) before hashing so identical per-date
+    resolutions hash identically across runs — the reproducibility contract that
+    feeds ``catalog._compatibility_warnings``.
+    """
+    ordered = membership.select(["symbol", "date"]).sort(["symbol", "date"])
+    payload = "|".join(f"{row['symbol']}:{row['date']}" for row in ordered.iter_rows(named=True))
+    return sha256(payload.encode("utf-8")).hexdigest()
+
+
 def _median(values: list[int]) -> float:
     ordered = sorted(values)
     middle = len(ordered) // 2
@@ -206,12 +218,25 @@ class FactorSignalChain:
         return ["symbol", "date", "close", *sorted(field for field in parsed.referenced_fields if field != "close")]
 
     def _resolve_membership(self, config: SignalChainConfig) -> pl.DataFrame | None:
+        """Per-date membership over the window (or start-warmup when set).
+
+        The chain derives the symbol set from this frame, passes the union to the
+        single governed ``load_panel``, then filters rows per date with an inner
+        join — the per-date filter is applied AFTER the governed read, leaving
+        ``load_panel`` byte-identical (RESEARCH PIT contract §4).
+        """
         if self._universe_resolver is None:
             return None
         resolve = getattr(self._universe_resolver, "resolve_universe_daily", None)
         if resolve is None:
             return None
-        membership = resolve(universe_name=config.universe, start=config.start, end=config.end, asset_type=config.asset_type)
+        membership_start = config.start - timedelta(days=config.warmup_days) if config.warmup_days else config.start
+        membership = resolve(
+            universe_name=config.universe,
+            start=membership_start,
+            end=config.end,
+            asset_type=config.asset_type,
+        )
         if membership is None or getattr(membership, "is_empty", lambda: True)():
             return None
         return membership.select(["symbol", "date"]).unique()
@@ -278,15 +303,19 @@ class FactorSignalChain:
             lengths = [int(row["count"]) for row in counts.iter_rows(named=True)]
             per_date_symbol_counts = {"min": min(lengths), "median": _median(lengths), "max": max(lengths)} if lengths else {}
             method = "factor_universe_membership/v1"
+            excluded_delisted = sorted(set(config.symbols) - symbol_set)
         else:
             symbol_set = frozenset(config.symbols)
             per_date_symbol_counts = {"min": len(config.symbols), "median": float(len(config.symbols)), "max": len(config.symbols)}
             method = "config-symbols"
+            excluded_delisted = []
         return {
             "method": method,
-            "membership_fingerprint": _symbols_fingerprint(symbol_set),
+            "membership_fingerprint": (
+                _membership_fingerprint(membership) if membership is not None else _symbols_fingerprint(symbol_set)
+            ),
             "per_date_symbol_counts": per_date_symbol_counts,
-            "excluded_delisted": [],
+            "excluded_delisted": excluded_delisted,
             "pre_filter_counts": dict(pre_filter_counts),
         }
 

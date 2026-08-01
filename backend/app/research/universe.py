@@ -270,3 +270,29 @@ def _normalize_first_bar(value: Any) -> date | None:
         return _as_date(value, field="first bar")
     except ValueError:
         return None
+
+
+class UniverseResolver:
+    """Binds the PIT resolver functions to a repository for the signal chain.
+
+    The chain keeps ``universe_resolver`` as an injection seam; this adapter
+    exposes the module functions with the call signature the chain expects
+    (keyword ``universe_name``/``start``/``end``/``asset_type``), so production
+    wiring is ``UniverseResolver(repository)`` and tests keep passing a fixture
+    resolver with the same surface.
+    """
+
+    def __init__(self, repo: ResearchRepository) -> None:
+        self._repo = repo
+
+    def resolve_universe(
+        self, *, universe_name: str, as_of: date, asset_type: str = "stock"
+    ) -> tuple[frozenset[str], str]:
+        return resolve_universe(self._repo, universe_name=universe_name, as_of=as_of, asset_type=asset_type)
+
+    def resolve_universe_daily(
+        self, *, universe_name: str, start: date, end: date, asset_type: str = "stock"
+    ) -> pl.DataFrame:
+        return resolve_universe_daily(
+            self._repo, universe_name=universe_name, start=start, end=end, asset_type=asset_type
+        )
