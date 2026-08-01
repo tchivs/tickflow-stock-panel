@@ -18,9 +18,9 @@ Requirements for the v1.2 milestone. Each maps to a roadmap phase.
 
 ### Portfolio Construction & Optimization
 
-- [ ] **PFOL-01**: Researcher can build sample covariance from a governed panel with PSD check, and any PSD repair is an explicit recorded step (method, epsilon, eigenvalues before/after) in the immutable run record.
-- [ ] **PFOL-02**: Researcher can solve a long-only minimum-volatility portfolio and an HRP baseline; max-Sharpe is available only as an explicit non-default option with baselines rendered alongside.
-- [ ] **PFOL-03**: Optimizer supports a constraint stack: long-only bounds, per-instrument cap, minimum cash, and convex turnover cost; industry cap is deferred until a governed industry mapping exists (fail-closed otherwise).
+- [x] **PFOL-01**: Researcher can build sample covariance from a governed panel with PSD check, and any PSD repair is an explicit recorded step (method, epsilon, eigenvalues before/after) in the immutable run record.
+- [x] **PFOL-02**: Researcher can solve a long-only minimum-volatility portfolio and an HRP baseline; max-Sharpe is available only as an explicit non-default option with baselines rendered alongside.
+- [x] **PFOL-03**: Optimizer supports a constraint stack: long-only bounds, per-instrument cap, minimum cash, and convex turnover cost; industry cap is deferred until a governed industry mapping exists (fail-closed otherwise).
 - [x] **PFOL-04**: Every optimization run is an immutable record with input-snapshot SHA-256, expected-return method, risk model, solver name/version/options, problem status, and output weights; failed runs are retained with their failure reason.
 
 ### Risk Analysis & Attribution
@@ -90,9 +90,9 @@ Populated during roadmap creation (2026-07-31). Verified: all 20 v1 requirements
 | FACT-04 | Phase 10 | Complete |
 | FACT-05 | Phase 10 | Complete |
 | FACT-06 | Phase 10 | Complete |
-| PFOL-01 | Phase 11 | Pending |
-| PFOL-02 | Phase 11 | Pending |
-| PFOL-03 | Phase 11 | Pending |
+| PFOL-01 | Phase 11 | Complete |
+| PFOL-02 | Phase 11 | Complete |
+| PFOL-03 | Phase 11 | Complete |
 | PFOL-04 | Phase 11 | Complete |
 | RSK-01 | Phase 12 | Pending |
 | RSK-02 | Phase 12 | Pending |

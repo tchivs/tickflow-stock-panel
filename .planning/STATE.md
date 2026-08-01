@@ -5,16 +5,16 @@ milestone_name: End-to-End Factor Portfolio Pipeline — in progress
 current_phase: 11
 current_phase_name: Portfolio Construction & Optimization
 status: executing
-stopped_at: Completed 11-02-PLAN.md
-last_updated: "2026-08-01T16:42:31.150Z"
+stopped_at: Completed 11-01-PLAN.md
+last_updated: "2026-08-01T17:41:09.670Z"
 last_activity: 2026-08-01
-last_activity_desc: Phase 10 complete, transitioned to Phase 11
+last_activity_desc: 11-01 tracer complete — end-to-end optimization pipeline green
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 2
-  completed_plans: 0
-  percent: 0
+  completed_plans: 1
+  percent: 50
 ---
 
 # Project State
@@ -29,18 +29,18 @@ See: .planning/PROJECT.md (updated 2026-07-31)
 ## Current Position
 
 Phase: 11 — Portfolio Construction & Optimization
-Plan: 11-02 complete (Wave 0 — cvxpy dep, runs migration, test scaffolds)
-Status: Ready for 11-01 (tracer)
-Last activity: 2026-08-01 — 11-02 Wave 0 complete
+Plan: 11-01 complete (Wave 1 — end-to-end optimization pipeline tracer)
+Status: Ready for 11-03/11-04 (Wave 2 — HRP breadth ∥ min-vol/max-Sharpe breadth)
+Last activity: 2026-08-01 — 11-01 tracer complete
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [█████░░░░░] 50%
 
 ## v1.2 Phase Summary
 
 | Phase | Requirements | Status |
 |-------|-------------|--------|
 | 10 Factor Library & Multi-Factor Model | FACT-01..06 | In progress (10-01..10-06 complete) |
-| 11 Portfolio Construction & Optimization | PFOL-01..04 | Not started |
+| 11 Portfolio Construction & Optimization | PFOL-01..04 | In progress (11-01..11-02 complete) |
 | 12 Risk Models & Attribution | RSK-01..03 | Not started |
 | 13 Walk-Forward Validation & Parameter Search | WFWD-01..03 | Not started |
 | 14 Output & Boundary (RebalancePlan + Paper Rebalance) | RBAL-01..02 | Not started |
@@ -68,6 +68,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 10 P10-05 | 4500 | 7 tasks | 8 files |
 | Phase 10 P10-06 | 4680 | 4 tasks | 4 files |
 | Phase 11 P11-02 | 12 | 4 tasks | 13 files |
+| Phase 11 P11-01 | 45 | 12 tasks | 13 files |
 
 ## Accumulated Context
 
@@ -107,8 +108,8 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-08-01T16:42:31.139Z
-Stopped at: Completed 11-02-PLAN.md
+Last session: 2026-08-01T17:41:09.670Z
+Stopped at: Completed 11-01-PLAN.md
 Resume file: None
 
 ## Operator Next Steps
@@ -126,3 +127,7 @@ Resume file: None
 - [Phase ?]: Admitted-factor catalog entries are summary-only (coverage mean + series, finite counts, ast/shape signature) with revision lineage (factor_id, revision_id, revision_number); full factor-value matrices are an anti-feature; the composite model is a first-class catalog record with its latest snapshot reference
 - [Phase ?]: cvxpy==1.9.2 pinned to base deps (one-way door, pre-approved) — solver results version-sensitive, audit cites cp.__version__
 - [Phase ?]: portfolio_optimization_runs migrated per RESEARCH schema (one-way door, pre-approved) — CHECK enums + sha256 + failed-reason invariant + immutability triggers
+- [Phase 11]: Min-vol QP uses budget equality cp.sum(w) == 1 - min_cash (fully-deployed floor) — the analytical scaffold test requires full deployment; the cash floor (1 - sum(w) >= min_cash) holds exactly, and pitfall 7 double-counting is avoided.
+- [Phase 11]: Clarabel 1.9.2 solver options are tol_gap_abs/tol_gap_rel (not OSQP eps_abs/eps_rel, per Wave 0 finding); options dict recorded verbatim in solver_options_json.
+- [Phase 11]: HRP baseline rendered scaled by (1 - min_cash) so it compares apples-to-apples with the QP under the cash floor.
+- [Phase 11]: run_optimization accepts a pre-resolved snapshot dict (model_id/input_snapshot_sha256/composite_snapshot_id) in 11-01; the production catalog seam (load_composite_snapshot) lands in 11-05.

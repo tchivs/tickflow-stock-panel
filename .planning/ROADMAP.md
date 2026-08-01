@@ -94,10 +94,12 @@ Six phases extend the shipped research platform from single-factor evaluation in
   3. Researcher can apply the constraint stack — long-only bounds, per-instrument cap, minimum cash, convex turnover cost — and an industry cap fails closed until a governed industry mapping exists.
   4. Researcher can retrieve any optimization run as an immutable record carrying input-snapshot SHA-256, expected-return method, risk model, solver name/version/options, problem status, and output weights; failed runs retain their failure reason.
 
-**Plans**: 1/6 plans executed
+**Plans**: 2/2 plans executed (11-01, 11-02 complete)
+
+- [ ] 11-PLAN.md
 
 - [x] 11-02 Wave 0 — cvxpy dep + runs migration + test scaffolds (2026-08-01)
-- [ ] 11-01 Tracer — end-to-end optimization pipeline
+- [x] 11-01 Tracer — end-to-end optimization pipeline
 - [ ] 11-03 HRP baseline
 - [ ] 11-04 Min-vol breadth + max-Sharpe non-default
 - [ ] 11-05 Snapshot binding + run-record breadth
@@ -170,7 +172,7 @@ Phases execute in numeric order: 10 → 11 → 12 → 13 → 14 → 15 (Phase 13
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 10. Factor Library & Multi-Factor Model | 6/1 | Complete    | 2026-08-01 |
-| 11. Portfolio Construction & Optimization | 1/6 | In progress |  |
+| 11. Portfolio Construction & Optimization | 0/1 | Planned    |  |
 | 12. Risk Models & Attribution | 0/3 | Not started | - |
 | 13. Walk-Forward Validation & Parameter Search | 0/4 | Not started | - |
 | 14. Output & Boundary (RebalancePlan + Paper Rebalance) | 0/3 | Not started | - |
