@@ -1504,6 +1504,77 @@ MIGRATIONS: tuple[str, ...] = (
     BEFORE DELETE ON forecast_retry_operations
     BEGIN SELECT RAISE(ABORT, 'forecast retry operations are durable'); END;
     """,
+    """
+    -- Phase 10 append-only research contracts (PIT universe + admission + composite).
+    -- All four tables are immutable facts: rows are INSERT-only. A universe delist is
+    -- a NEW row, never an UPDATE; an admission verdict or model/composite output row
+    -- is never rewritten once persisted.
+    CREATE TABLE factor_universe_membership (
+        id TEXT PRIMARY KEY,
+        universe_name TEXT NOT NULL,
+        symbol TEXT NOT NULL,
+        asset_type TEXT NOT NULL CHECK (asset_type IN ('stock', 'etf')),
+        effective_date TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('listed', 'delisted')),
+        source TEXT NOT NULL,
+        provenance_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE (universe_name, symbol, effective_date, state)
+    );
+    CREATE INDEX idx_universe_membership_resolve
+        ON factor_universe_membership(universe_name, symbol, effective_date);
+    CREATE TRIGGER factor_universe_membership_no_update BEFORE UPDATE ON factor_universe_membership
+    BEGIN SELECT RAISE(ABORT, 'factor universe membership is append-only'); END;
+    CREATE TRIGGER factor_universe_membership_no_delete BEFORE DELETE ON factor_universe_membership
+    BEGIN SELECT RAISE(ABORT, 'factor universe membership is append-only'); END;
+
+    CREATE TABLE factor_admission_verdicts (
+        id TEXT PRIMARY KEY,
+        revision_id TEXT NOT NULL REFERENCES research_factor_revisions(id) ON DELETE RESTRICT,
+        policy_version TEXT NOT NULL,
+        verdict TEXT NOT NULL CHECK (verdict IN ('admitted', 'rejected')),
+        reason TEXT NOT NULL,
+        gates_json TEXT NOT NULL,
+        candidate_trail_json TEXT NOT NULL,
+        resolved_universe_json TEXT NOT NULL,
+        input_snapshot_sha256 TEXT NOT NULL CHECK (length(input_snapshot_sha256) = 64),
+        created_at TEXT NOT NULL,
+        UNIQUE (revision_id, policy_version)
+    );
+    CREATE INDEX idx_admission_verdicts_revision ON factor_admission_verdicts(revision_id);
+    CREATE TRIGGER factor_admission_verdicts_no_update BEFORE UPDATE ON factor_admission_verdicts
+    BEGIN SELECT RAISE(ABORT, 'factor admission verdicts are append-only'); END;
+    CREATE TRIGGER factor_admission_verdicts_no_delete BEFORE DELETE ON factor_admission_verdicts
+    BEGIN SELECT RAISE(ABORT, 'factor admission verdicts are append-only'); END;
+
+    CREATE TABLE factor_model_models (
+        model_id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        weighting TEXT NOT NULL CHECK (weighting IN ('equal', 'ic_weighted')),
+        revision_ids_json TEXT NOT NULL,
+        weights_json TEXT NOT NULL,
+        input_snapshot_sha256 TEXT NOT NULL CHECK (length(input_snapshot_sha256) = 64),
+        created_at TEXT NOT NULL
+    );
+    CREATE TRIGGER factor_model_models_no_update BEFORE UPDATE ON factor_model_models
+    BEGIN SELECT RAISE(ABORT, 'factor model definitions are append-only'); END;
+    CREATE TRIGGER factor_model_models_no_delete BEFORE DELETE ON factor_model_models
+    BEGIN SELECT RAISE(ABORT, 'factor model definitions are append-only'); END;
+
+    CREATE TABLE factor_model_composites (
+        id TEXT PRIMARY KEY,
+        model_id TEXT NOT NULL REFERENCES factor_model_models(model_id) ON DELETE RESTRICT,
+        output_sha256 TEXT NOT NULL CHECK (length(output_sha256) = 64),
+        artifact_relative_path TEXT NOT NULL,
+        input_snapshot_sha256 TEXT NOT NULL CHECK (length(input_snapshot_sha256) = 64),
+        created_at TEXT NOT NULL
+    );
+    CREATE INDEX idx_factor_model_composites_model ON factor_model_composites(model_id);
+    CREATE TRIGGER factor_model_composites_no_update BEFORE UPDATE ON factor_model_composites
+    BEGIN SELECT RAISE(ABORT, 'factor model composites are append-only'); END;
+    CREATE TRIGGER factor_model_composites_no_delete BEFORE DELETE ON factor_model_composites
+    BEGIN SELECT RAISE(ABORT, 'factor model composites are append-only'); END;
+    """,
 )
 
 

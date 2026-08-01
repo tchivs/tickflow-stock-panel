@@ -264,9 +264,14 @@ def test_r43_cr03_legacy_unbound_queued_migration_quarantines_before_restart(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     planned = migrations.MIGRATIONS
+    retry_index = next(
+        index
+        for index, script in enumerate(planned)
+        if "forecast_retry_operations" in script
+    )
     connection = sqlite3.connect(":memory:")
     connection.execute("PRAGMA foreign_keys = ON")
-    monkeypatch.setattr(migrations, "MIGRATIONS", planned[:-1])
+    monkeypatch.setattr(migrations, "MIGRATIONS", planned[:retry_index])
     migrations.migrate_operational_db(connection)
     connection.execute(
         """INSERT INTO forecast_jobs
@@ -314,3 +319,133 @@ def test_r43_cr03_legacy_unbound_queued_migration_quarantines_before_restart(
         (1, "interrupted", "legacy_unbound_quarantined"),
     ]
     assert connection.execute("PRAGMA user_version").fetchone() == (len(planned),)
+
+
+def _insert_phase10_revision(connection: sqlite3.Connection) -> None:
+    """Insert the minimal factor definition + revision the verdict FK requires."""
+    connection.execute(
+        "INSERT INTO research_factor_definitions (id, created_at) VALUES ('f1', '2026-01-01T00:00:00Z')"
+    )
+    connection.execute(
+        """INSERT INTO research_factor_revisions (
+               id, factor_id, revision_number, name, description, hypothesis,
+               canonical_expression, dsl_version, ast_signature, shape_signature,
+               fields_json, operators_json, functions_json, provenance_json, created_at
+           ) VALUES ('r1', 'f1', 1, 'close-factor', '', '', 'close', 'factor-dsl-v1',
+                     'sig', 'shape', '["close"]', '[]', '[]', '{}', '2026-01-01T00:00:00Z')"""
+    )
+
+
+def test_phase10_append_only_tables_migrate_with_constraints_and_idempotence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    planned = migrations.MIGRATIONS
+    connection = sqlite3.connect(":memory:")
+    connection.execute("PRAGMA foreign_keys = ON")
+    migrations.migrate_operational_db(connection)
+
+    tables = {
+        "factor_universe_membership",
+        "factor_admission_verdicts",
+        "factor_model_models",
+        "factor_model_composites",
+    }
+    present = {
+        row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+    }
+    assert tables.issubset(present)
+    assert connection.execute("PRAGMA user_version").fetchone() == (len(planned),)
+
+    # Forward-only idempotence: re-running the full migration is a no-op.
+    migrations.migrate_operational_db(connection)
+    assert connection.execute("PRAGMA user_version").fetchone() == (len(planned),)
+
+    # --- factor_universe_membership: UNIQUE + CHECK + append-only triggers. ---
+    membership = (
+        "INSERT INTO factor_universe_membership (id, universe_name, symbol, asset_type, "
+        "effective_date, state, source, provenance_json, created_at) "
+        "VALUES ('m1', 'cn-a-share', '600000.SH', 'stock', '2025-07-29', 'listed', "
+        "'instruments-sync', '{}', '2026-01-01T00:00:00Z')"
+    )
+    connection.execute(membership)
+    with pytest.raises(sqlite3.IntegrityError):
+        connection.execute(membership.replace("'m1'", "'m2'"))  # UNIQUE violation
+    with pytest.raises(sqlite3.IntegrityError):
+        connection.execute(
+            "INSERT INTO factor_universe_membership (id, universe_name, symbol, asset_type, "
+            "effective_date, state, source, provenance_json, created_at) "
+            "VALUES ('m3', 'cn-a-share', '600001.SH', 'future', '2025-07-29', 'listed', "
+            "'instruments-sync', '{}', '2026-01-01T00:00:00Z')"  # CHECK asset_type
+        )
+    with pytest.raises(sqlite3.IntegrityError):
+        connection.execute(
+            "INSERT INTO factor_universe_membership (id, universe_name, symbol, asset_type, "
+            "effective_date, state, source, provenance_json, created_at) "
+            "VALUES ('m4', 'cn-a-share', '600001.SH', 'stock', '2025-07-29', 'suspended', "
+            "'instruments-sync', '{}', '2026-01-01T00:00:00Z')"  # CHECK state
+        )
+    with pytest.raises(sqlite3.IntegrityError):
+        connection.execute("UPDATE factor_universe_membership SET state = 'delisted' WHERE id = 'm1'")
+    with pytest.raises(sqlite3.IntegrityError):
+        connection.execute("DELETE FROM factor_universe_membership WHERE id = 'm1'")
+
+    # --- factor_admission_verdicts: FK + UNIQUE + CHECK + sha256 length. ---
+    _insert_phase10_revision(connection)
+    verdict = (
+        "INSERT INTO factor_admission_verdicts (id, revision_id, policy_version, verdict, reason, "
+        "gates_json, candidate_trail_json, resolved_universe_json, input_snapshot_sha256, created_at) "
+        f"VALUES ('v1', 'r1', 'admission-policy-v1', 'admitted', 'ok', '[]', '{{}}', '{{}}', "
+        f"'{'a' * 64}', '2026-01-01T00:00:00Z')"
+    )
+    connection.execute(verdict)
+    with pytest.raises(sqlite3.IntegrityError):
+        connection.execute(verdict.replace("'v1'", "'v2'"))  # UNIQUE(revision_id, policy_version)
+    with pytest.raises(sqlite3.IntegrityError):
+        connection.execute(
+            "INSERT INTO factor_admission_verdicts (id, revision_id, policy_version, verdict, reason, "
+            "gates_json, candidate_trail_json, resolved_universe_json, input_snapshot_sha256, created_at) "
+            f"VALUES ('v3', 'r1', 'admission-policy-v1', 'maybe', 'x', '[]', '{{}}', '{{}}', "
+            f"'{'b' * 64}', '2026-01-01T00:00:00Z')"  # CHECK verdict
+        )
+    with pytest.raises(sqlite3.IntegrityError):
+        connection.execute(
+            "INSERT INTO factor_admission_verdicts (id, revision_id, policy_version, verdict, reason, "
+            "gates_json, candidate_trail_json, resolved_universe_json, input_snapshot_sha256, created_at) "
+            "VALUES ('v4', 'missing-revision', 'admission-policy-v1', 'admitted', 'x', '[]', '{{}}', "
+            f"'{{}}', '{'c' * 64}', '2026-01-01T00:00:00Z')"  # FK RESTRICT
+        )
+    with pytest.raises(sqlite3.IntegrityError):
+        connection.execute(
+            "INSERT INTO factor_admission_verdicts (id, revision_id, policy_version, verdict, reason, "
+            "gates_json, candidate_trail_json, resolved_universe_json, input_snapshot_sha256, created_at) "
+            "VALUES ('v5', 'r1', 'admission-policy-v1', 'admitted', 'x', '[]', '{{}}', "
+            "'{}', 'short', '2026-01-01T00:00:00Z')"  # CHECK sha256 length
+        )
+
+    # --- factor_model_models: CHECK weighting. ---
+    connection.execute(
+        "INSERT INTO factor_model_models (model_id, name, weighting, revision_ids_json, "
+        "weights_json, input_snapshot_sha256, created_at) "
+        f"VALUES ('m1', 'composite', 'equal', '[]', '{{}}', '{'d' * 64}', '2026-01-01T00:00:00Z')"
+    )
+    with pytest.raises(sqlite3.IntegrityError):
+        connection.execute(
+            "INSERT INTO factor_model_models (model_id, name, weighting, revision_ids_json, "
+            "weights_json, input_snapshot_sha256, created_at) "
+            f"VALUES ('m2', 'composite', 'quantile', '[]', '{{}}', '{'e' * 64}', '2026-01-01T00:00:00Z')"
+        )
+
+    # --- factor_model_composites: FK + sha256 length. ---
+    connection.execute(
+        "INSERT INTO factor_model_composites (id, model_id, output_sha256, artifact_relative_path, "
+        "input_snapshot_sha256, created_at) "
+        f"VALUES ('c1', 'm1', '{'f' * 64}', 'research_artifacts/run/composite.parquet', "
+        f"'{'d' * 64}', '2026-01-01T00:00:00Z')"
+    )
+    with pytest.raises(sqlite3.IntegrityError):
+        connection.execute(
+            "INSERT INTO factor_model_composites (id, model_id, output_sha256, artifact_relative_path, "
+            "input_snapshot_sha256, created_at) "
+            f"VALUES ('c2', 'missing-model', '{'g' * 64}', 'research_artifacts/run/composite.parquet', "
+            f"'{'d' * 64}', '2026-01-01T00:00:00Z')"  # FK RESTRICT
+        )
