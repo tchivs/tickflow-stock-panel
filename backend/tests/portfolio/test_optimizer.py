@@ -429,3 +429,106 @@ def test_optimal_inaccurate_status_recorded_verbatim(
     assert recorded["solver_options"] == {"solver": "OSQP", "max_iter": 1}
     # The run row retains the honest status verbatim — never promoted to optimal.
     assert recorded["problem_status"] != "optimal"
+
+
+# ---------------------------------------------------------------------------
+# 11-06: industry-cap fail-closed gate + covariance artifact breadth
+# ---------------------------------------------------------------------------
+
+
+def test_industry_cap_requested_fails_closed_with_failed_run(
+    portfolio_repository, artifact_root, fixture_composite,
+) -> None:
+    """PFOL-03 (pitfall 8): requesting an industry cap records a failed run with
+    reason "industry mapping unavailable" — never silently ignored."""
+    run = run_optimization(
+        {
+            "objective": "min_volatility",
+            "as_of": "2026-08-01",
+            "universe": "cn-a-share",
+            "model_id": "composite-model-v1",
+            "expected_return_method": "composite-zscore-v1",
+            "render_baselines": True,
+            "per_instrument_cap": 0.10,
+            "min_cash": 0.05,
+            "turnover_coef": 0.0014,
+            "industry_cap": 0.05,
+        },
+        repository=portfolio_repository,
+        artifact_service_root=artifact_root,
+        snapshot=fixture_composite,
+    )
+    assert run["problem_status"] == "failed"
+    assert run["failure_reason"] == "industry mapping unavailable"
+    # The failed run still records the requested cap in the constraint stack.
+    assert run["constraint_stack"]["industry_cap"] == 0.05
+
+
+def test_no_industry_cap_records_null_in_constraint_stack(
+    portfolio_repository, artifact_root, fixture_composite,
+) -> None:
+    """PFOL-03: a run without an industry cap records industry_cap: null."""
+    run = run_optimization(
+        {
+            "objective": "min_volatility",
+            "as_of": "2026-08-01",
+            "universe": "cn-a-share",
+            "model_id": "composite-model-v1",
+            "expected_return_method": "composite-zscore-v1",
+            "render_baselines": True,
+            "per_instrument_cap": 0.10,
+            "min_cash": 0.05,
+            "turnover_coef": 0.0014,
+        },
+        repository=portfolio_repository,
+        artifact_service_root=artifact_root,
+        snapshot=fixture_composite,
+    )
+    assert run["problem_status"] == "optimal"
+    assert run["constraint_stack"]["industry_cap"] is None
+    assert run["constraint_stack"]["policy_version"] == "phase-11-policy-v1"
+
+
+def test_successful_run_records_covariance_sha256_and_artifact(
+    portfolio_repository, artifact_root, fixture_composite,
+) -> None:
+    """PFOL-01/04: a successful run's risk_model_json carries covariance_sha256
+    (64 hex) + the covariance artifact path, and the artifact checksum-verifies
+    against the digest (Phase 12 seam)."""
+    from app.portfolio.artifacts import PortfolioArtifactService
+
+    run = run_optimization(
+        {
+            "objective": "min_volatility",
+            "as_of": "2026-08-01",
+            "universe": "cn-a-share",
+            "model_id": "composite-model-v1",
+            "expected_return_method": "composite-zscore-v1",
+            "render_baselines": True,
+            "per_instrument_cap": 0.10,
+            "min_cash": 0.05,
+            "turnover_coef": 0.0014,
+        },
+        repository=portfolio_repository,
+        artifact_service_root=artifact_root,
+        snapshot=fixture_composite,
+    )
+    risk_model = run["risk_model"]
+    digest = risk_model["covariance_sha256"]
+    assert len(digest) == 64
+    assert all(char in "0123456789abcdef" for char in digest)
+    relative_path = risk_model["covariance_artifact_relative_path"]
+    assert relative_path.startswith(f"research_artifacts/{run['id']}/covariance.json")
+
+    # The covariance artifact checksum-verifies against the recorded digest.
+    service = PortfolioArtifactService(artifact_root)
+    payload = service.read_artifact(relative_path, checksum_sha256=digest)
+    assert payload  # checksum-verified read succeeded
+
+
+def test_industry_cap_field_on_schema_is_nullable() -> None:
+    """V5: industry_cap defaults to None; a requested cap is carried verbatim."""
+    request = OptimizationRequest(as_of="2026-08-01")
+    assert request.industry_cap is None
+    capped = OptimizationRequest(as_of="2026-08-01", industry_cap=0.05)
+    assert capped.industry_cap == 0.05
