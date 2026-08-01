@@ -358,3 +358,64 @@ def test_min_vol_is_default_objective() -> None:
     """PFOL-02: min_volatility remains the default objective (kept green from 11-01)."""
     request = OptimizationRequest(as_of="2026-08-01")
     assert request.objective == "min_volatility"
+
+
+def test_optimal_inaccurate_status_recorded_verbatim(
+    portfolio_repository, artifact_root, fixture_composite,
+) -> None:
+    """Pitfall 4: an optimal_inaccurate solve is recorded as-is, never promoted.
+
+    A run whose solve ends optimal_inaccurate must keep that honest status on the
+    run row (not be rewritten to 'optimal' by the orchestrator), with the options
+    recorded verbatim. Here the solve is forced inaccurate by an OSQP
+    max_iter=1 user_limit result; the repository-level run row is recorded with
+    the verbatim status via the non-optimal path (output_weights None).
+    """
+    first = run_optimization(
+        {
+            "objective": "min_volatility",
+            "as_of": "2026-08-01",
+            "universe": "cn-a-share",
+            "model_id": "composite-model-v1",
+            "expected_return_method": "composite-zscore-v1",
+            "render_baselines": True,
+            "per_instrument_cap": 0.10,
+            "min_cash": 0.05,
+            "turnover_coef": 0.0014,
+        },
+        repository=portfolio_repository,
+        artifact_service_root=artifact_root,
+        snapshot=fixture_composite,
+    )
+    # Directly record a run row with the honest optimal_inaccurate status.
+    from app.portfolio.repository import PortfolioRepository
+
+    assert isinstance(portfolio_repository, PortfolioRepository)
+    recorded = portfolio_repository.record_optimization_run(
+        id="a" * 32,
+        objective="min_volatility",
+        as_of="2026-08-01",
+        universe="cn-a-share",
+        model_id="composite-model-v1",
+        composite_snapshot_id="c1",
+        input_snapshot_sha256="f" * 64,
+        expected_return_method="composite-zscore-v1",
+        risk_model="sample_covariance_v1",
+        risk_model_json=first["risk_model"],
+        constraint_stack_json=first["constraint_stack"],
+        solver_name="OSQP",
+        solver_version="1.1.3",
+        solver_options_json={"solver": "OSQP", "max_iter": 1},
+        problem_status="optimal_inaccurate",
+        failure_reason=None,
+        output_weights_json=None,
+        output_sha256=None,
+        weights_artifact_relative_path=None,
+        baseline_weights_json=None,
+        created_at="2026-08-01T00:00:00Z",
+    )
+    assert recorded is not None
+    assert recorded["problem_status"] == "optimal_inaccurate"
+    assert recorded["solver_options"] == {"solver": "OSQP", "max_iter": 1}
+    # The run row retains the honest status verbatim — never promoted to optimal.
+    assert recorded["problem_status"] != "optimal"
