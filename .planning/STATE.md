@@ -4,8 +4,8 @@ milestone: v1.2
 milestone_name: End-to-End Factor Portfolio Pipeline — in progress
 current_phase_name: defining requirements
 status: executing
-stopped_at: v1.2 roadmap created — Phases 10-15 defined, 20/20 requirements mapped, STATE.md refreshed
-last_updated: "2026-08-01T06:41:54.635Z"
+stopped_at: "Completed 10-04: PIT Universe Resolver + Manifest (wave 2)"
+last_updated: "2026-08-01T09:13:34.683Z"
 last_activity: 2026-07-31
 last_activity_desc: Milestone v1.2 started; ROADMAP.md written (Phases 10-15)
 progress:
@@ -27,10 +27,10 @@ See: .planning/PROJECT.md (updated 2026-07-31)
 
 ## Current Position
 
-Phase: Not started (defining requirements)
-Plan: —
-Status: Ready to execute
-Last activity: 2026-07-31 — Milestone v1.2 started; ROADMAP.md written (Phases 10-15)
+Phase: 10 Factor Library & Multi-Factor Model (in progress)
+Plan: 10-04 complete (waves 0-2 done: 10-02/10-03 foundations, 10-01 tracer, 10-04 PIT universe)
+Status: Executing — remaining plans 10-05, 10-06
+Last activity: 2026-08-01 — 10-04 PIT Universe Resolver + Manifest complete (28/28 gate green)
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -38,7 +38,7 @@ Progress: [░░░░░░░░░░] 0%
 
 | Phase | Requirements | Status |
 |-------|-------------|--------|
-| 10 Factor Library & Multi-Factor Model | FACT-01..06 | Not started |
+| 10 Factor Library & Multi-Factor Model | FACT-01..06 | In progress (10-01..10-04 complete) |
 | 11 Portfolio Construction & Optimization | PFOL-01..04 | Not started |
 | 12 Risk Models & Attribution | RSK-01..03 | Not started |
 | 13 Walk-Forward Validation & Parameter Search | WFWD-01..03 | Not started |
@@ -58,6 +58,12 @@ Progress: [░░░░░░░░░░] 0%
 - Test warnings: 143 → 84 (all remaining are pytest GC artifacts, 0 application-code warnings)
 - Frontend: tsc clean, vite build clean
 - Visual regression: 4 baselines committed (desktop + mobile)
+
+**Per-Plan Metrics:**
+
+| Plan | Duration | Tasks | Files |
+|------|----------|-------|-------|
+| Phase 10 P10-04 | 45 | 5 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -97,10 +103,14 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-07-31
-Stopped at: v1.2 roadmap created — Phases 10-15 defined, 20/20 requirements mapped, STATE.md refreshed
+Last session: 2026-08-01T09:13:34.676Z
+Stopped at: Completed 10-04: PIT Universe Resolver + Manifest (wave 2)
 Resume file: None
 
 ## Operator Next Steps
 
 - Run `/gsd-plan-phase 10` to plan Phase 10 (Factor Library & Multi-Factor Model)
+
+## Decisions
+
+- [Phase ?]: PIT universe: membership_fingerprint hashes the sorted per-date [symbol,date] frame

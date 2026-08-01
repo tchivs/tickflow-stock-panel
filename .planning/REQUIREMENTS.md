@@ -10,11 +10,11 @@ Requirements for the v1.2 milestone. Each maps to a roadmap phase.
 ### Factor Library & Multi-Factor Model
 
 - [ ] **FACT-01**: Researcher can run factor admission gates — train/val IC threshold, no-lookahead check, no-label-leakage check, and similarity dedup — and every admission verdict is recorded as an immutable append-only record with the candidate trail (including rejections).
-- [ ] **FACT-02**: Factor evaluation reports ICIR, monthly robustness, and coverage alongside IC/RankIC, with the full monthly evidence set exposed (not a scalar mean).
+- [x] **FACT-02**: Factor evaluation reports ICIR, monthly robustness, and coverage alongside IC/RankIC, with the full monthly evidence set exposed (not a scalar mean).
 - [ ] **FACT-03**: Researcher can compose admitted factors into a deterministic multi-factor expected-return model (equal-weight or IC-weighted cross-sectional z-score, no ML), consumed by portfolio optimization.
 - [ ] **FACT-04**: Factor DSL extension enforces a partition-context contract — every operator declares per-date / per-symbol / pointwise semantics, label fields are denied in the allowlist, and a deterministic shifted-label leakage test gates DSL changes.
 - [ ] **FACT-05**: Admitted factors are stored in an immutable catalog with summary storage (coverage, finite counts, signature) and revision lineage.
-- [ ] **FACT-06**: A single shared factor signal chain computes cross-sectional factor values from compiled DSL over governed panels, used identically by evaluation, multi-factor models, walk-forward, expected returns, and live as-of rebalance suggestions (no train/serve skew).
+- [x] **FACT-06**: A single shared factor signal chain computes cross-sectional factor values from compiled DSL over governed panels, used identically by evaluation, multi-factor models, walk-forward, expected returns, and live as-of rebalance suggestions (no train/serve skew).
 
 ### Portfolio Construction & Optimization
 
@@ -85,11 +85,11 @@ Populated during roadmap creation (2026-07-31). Verified: all 20 v1 requirements
 | Requirement | Phase | Status |
 |-------------|-------|--------|
 | FACT-01 | Phase 10 | Pending |
-| FACT-02 | Phase 10 | Pending |
+| FACT-02 | Phase 10 | Complete |
 | FACT-03 | Phase 10 | Pending |
 | FACT-04 | Phase 10 | Pending |
 | FACT-05 | Phase 10 | Pending |
-| FACT-06 | Phase 10 | Pending |
+| FACT-06 | Phase 10 | Complete |
 | PFOL-01 | Phase 11 | Pending |
 | PFOL-02 | Phase 11 | Pending |
 | PFOL-03 | Phase 11 | Pending |
@@ -106,6 +106,7 @@ Populated during roadmap creation (2026-07-31). Verified: all 20 v1 requirements
 | UI-02 | Phase 15 | Pending |
 
 **Coverage:**
+
 - v1 requirements: 20 total (14 P1, 6 P2)
 - Mapped to phases: 20
 - Unmapped: 0 ✓
