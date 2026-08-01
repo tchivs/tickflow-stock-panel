@@ -51,7 +51,7 @@ def test_record_and_get_round_trip_json_columns(portfolio_repository: PortfolioR
     fetched = portfolio_repository.get_optimization_run("a" * 32)
     assert fetched is not None
     assert fetched["objective"] == "min_volatility"
-    assert fetched["risk_model"] == {"psd_repair": {"method": "none"}}
+    assert fetched["risk_model_detail"] == {"psd_repair": {"method": "none"}}
     assert fetched["constraint_stack"] == {"cap": 0.1, "min_cash": 0.05}
     assert fetched["solver_options"] == {}
     assert fetched["output_weights"] == {"600000.SH": 0.5}

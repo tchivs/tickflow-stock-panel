@@ -4,6 +4,10 @@
 quasi-diagonalization + 递归二分逆方差分配, 输出确定性的全投资 HRP 权重;
 render_baseline 按 (1 - min_cash) 缩放, 使与 QP 解的比较口径一致。
 
+注意 (IN-02): 叶序确定性依赖 scipy linkage(optimal_ordering=True) 的 tie-break,
+该顺序只保证在同一 scipy 版本内可复现; 跨版本可能改变聚类顺序。scipy 已固定
+<1.18 (RESEARCH.md), 且 run 记录冻结权重, 因此已记录的 run 不受影响。
+
 不知道: 求解逻辑 (optimizer.py)、约束栈 (constraints.py)、行业映射;
 scipy 仅用于聚类, 绝不充当通用优化器。
 """

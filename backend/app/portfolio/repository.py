@@ -52,7 +52,7 @@ def _record(row: sqlite3.Row | dict[str, Any] | None) -> dict[str, Any] | None:
         return None
     value = dict(row)
     for column, target in (
-        ("risk_model_json", "risk_model"),
+        ("risk_model_json", "risk_model_detail"),
         ("constraint_stack_json", "constraint_stack"),
         ("solver_options_json", "solver_options"),
         ("output_weights_json", "output_weights"),

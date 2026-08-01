@@ -37,6 +37,7 @@ def test_full_pipeline_min_vol_run_is_immutable_and_checksum_bound(
         repository=portfolio_repository,
         artifact_service_root=artifact_root,
         snapshot=fixture_composite,
+        fixture_mode=True,
     )
     assert run["problem_status"] == "optimal"
     assert run["solver_name"] in ("CLARABEL", "OSQP")
@@ -45,7 +46,7 @@ def test_full_pipeline_min_vol_run_is_immutable_and_checksum_bound(
     assert run["input_snapshot_sha256"] == fixture_composite["input_snapshot_sha256"]
     assert len(run["input_snapshot_sha256"]) == 64
     # PSD 溯源永不静默: 要么无需修复 (none), 要么记录了 eigen_clip。
-    assert run["risk_model"]["psd_repair"]["method"] in ("none", "eigen_clip")
+    assert run["risk_model_detail"]["psd_repair"]["method"] in ("none", "eigen_clip")
 
     weights = run["output_weights"]
     assert sum(weights.values()) <= 1 - 0.05 + 1e-8

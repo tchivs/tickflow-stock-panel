@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from hashlib import sha256
@@ -88,14 +89,20 @@ class PortfolioArtifactService:
             self._write_json(namespace, run_id, "weights.json", dict(weights)),
             self._write_json(namespace, run_id, "baseline_weights.json", dict(baseline_weights)),
         ]
-        if covariance is not None:
-            # 协方差工件按 8 位小数规范化 (与 risk.covariance_sha256 的摘要口径
-            # 字节一致): 工件字节的 sha256 == risk_model_json 里的 covariance_sha256,
-            # 使 Phase 12 能按摘要做 checksum 校验读取 (PFOL-01/04)。
-            rounded = np.asarray(covariance, dtype=float).round(8)
-            descriptors.append(
-                self._write_json(namespace, run_id, "covariance.json", rounded.tolist())
-            )
+        try:
+            if covariance is not None:
+                # 协方差工件按 8 位小数规范化 (与 risk.covariance_sha256 的摘要口径
+                # 字节一致): 工件字节的 sha256 == risk_model_json 里的 covariance_sha256,
+                # 使 Phase 12 能按摘要做 checksum 校验读取 (PFOL-01/04)。
+                rounded = np.asarray(covariance, dtype=float).round(8)
+                descriptors.append(
+                    self._write_json(namespace, run_id, "covariance.json", rounded.tolist())
+                )
+        except Exception:
+            # IN-05: 中段写入失败时清理命名空间, 绝不留下孤儿的部分 bundle
+            # (先写好的文件与 run 记录不一致, 只会污染审计面)。
+            shutil.rmtree(namespace, ignore_errors=True)
+            raise
         return descriptors
 
     def read_artifact(self, relative_path: str, *, checksum_sha256: str) -> bytes:

@@ -17,6 +17,7 @@ import importlib.metadata
 import json
 import sqlite3
 import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -52,6 +53,17 @@ DEFAULT_SOLVER_OPTIONS: dict[str, Any] = {
     "eps_rel": 1e-8,
     "max_iter": 20000,
 }
+
+# WR-02: 失败 run 在无法解析真实快照身份时使用的文档化哨兵 (绝非有效摘要)。
+# portfolio_optimization_runs.input_snapshot_sha256 为 NOT NULL + 64-hex CHECK,
+# 无法存 NULL; 此哨兵与 fixture 身份 ("f"*64) 区分, 且当模型定义存在时优先解析
+# 其真实 input_snapshot_sha256 (见 _record_failed_run)。
+_UNKNOWN_INPUT_SNAPSHOT_SHA256 = "0" * 64
+
+
+def _now() -> str:
+    """UTC ISO timestamp for run-record created_at (WR-06: 真实运行时刻)."""
+    return datetime.now(UTC).isoformat()
 
 
 # solver 包名 → 发行版名固定映射 (scs/highspy 的 distribution 名与 solver 名不同)。
@@ -173,6 +185,22 @@ def ensure_psd_provenance(
     return cov
 
 
+def _validate_solver_options(solver_options: dict[str, Any] | None) -> None:
+    """WR-01: 白名单校验 —— solve() 唯一可接受的选项面 (V5 / T-11-04).
+
+    调用方传入的 solver_options 键必须都在 SOLVER_OPTIONS_ALLOWLIST 内, 否则抛
+    ValueError (fail closed)。不在白名单内的键会被 solve 直接转发/记录, 这正是
+    V5 声称要拒绝的任意注入面。
+    """
+    from app.portfolio.schemas import SOLVER_OPTIONS_ALLOWLIST
+
+    if not solver_options:
+        return
+    unknown = sorted(set(solver_options) - SOLVER_OPTIONS_ALLOWLIST)
+    if unknown:
+        raise ValueError(f"solver option(s) not allowed: {', '.join(unknown)}")
+
+
 def solve_min_vol(
     cov: np.ndarray,
     symbols: list[str],
@@ -209,11 +237,21 @@ def solve_min_vol(
     # 精确满足, 1 - sum(w) == min_cash >= 0)。纯 floor (<=) 对无线性项的 min-vol 会
     # 退化为全现金 (w -> 0, 零风险), 与解析解/测试锁定的完全投入契约不符 (pitfall 7:
     # 绝不用 sum(w)==1 叠加独立现金约束造成双重计数)。
+    #
+    # 偏离说明 (WR-05): 锁定决策与 11-RESEARCH.md 写的是 floor (cp.sum(w) <= 1 - min_cash),
+    # 本实现刻意使用严格预算等式 —— 这是 11-01 记录的、经测试锁定的 deviation
+    # (11-01-SUMMARY.md "Budget equality for the min-vol QP"): 对无线性项的 min-vol,
+    # 纯 floor 让组合退化为全现金 (w→0, 零风险), 无法满足解析解 (w_i ∝ 1/σ² 缩放到
+    # 1 - min_cash) 与 pitfall-7 的完全投入断言。等式仍精确满足现金地板不变量
+    # (1 - sum(w) == min_cash >= 0); 换手惩罚与 per-instrument cap 提供凸正则,
+    # 使 floor 语义下不会发生的退化在此也不会发生。Phase 14 现金残差处理应按
+    # min_cash 精确地板消费。
     constraints = [cp.sum(w) == 1.0 - min_cash, w <= per_instrument_cap]
     objective = cp.Minimize(cp.quad_form(w, cov) + turnover_coef * cp.norm1(w - w_prev))
     problem = cp.Problem(objective, constraints)
     options = dict(DEFAULT_SOLVER_OPTIONS)
     if solver_options:
+        _validate_solver_options(solver_options)
         options.update(solver_options)
     # 记录 dict 保持策略原文 (含 solver_path); _solve_problem 手动回退, 使
     # non-optimal 状态 (如 infeasible) 原样记录 (pitfall 4)。
@@ -258,6 +296,8 @@ def solve_max_sharpe(
     """
     n = len(symbols)
     w = cp.Variable(n, nonneg=True)
+    # 同一约束栈 (预算等式 sum(w)==1-min_cash —— WR-05 记录为经测试锁定的 deviation,
+    # 见 solve_min_vol 注释; 单标的 cap)。
     constraints = [cp.sum(w) == 1.0 - min_cash, w <= per_instrument_cap]
     objective = cp.Maximize(
         mu @ w - (risk_aversion / 2.0) * cp.quad_form(w, cov) - turnover_coef * cp.norm1(w - w_prev)
@@ -265,6 +305,7 @@ def solve_max_sharpe(
     problem = cp.Problem(objective, constraints)
     options = dict(DEFAULT_SOLVER_OPTIONS)
     if solver_options:
+        _validate_solver_options(solver_options)
         options.update(solver_options)
     solver_name = _solve_problem(problem, options)
     return _finalize_result(problem, w, symbols, min_cash, options, solver_name)
@@ -292,7 +333,10 @@ def _finalize_result(
         dict: status / solver_name / solve_time / num_iters / options /
         cvxpy_version / solver_version / weights (dict[symbol, float])。
     """
-    if w.value is not None:
+    # CR-03 (pitfall 4): 只有 status == "optimal" 才提取权重。optimal_inaccurate /
+    # infeasible / unbounded 等非最优状态的 w.value (即便非 None) 是不精确/部分值,
+    # 绝不作为精确权重持久化 —— 返回空 dict, 由编排器按非最优处理。
+    if problem.status == "optimal" and w.value is not None:
         rounded = np.asarray(w.value, dtype=float).round(8)
         # 预算等式 sum(w) == 1 - min_cash 的舍入漂移: round(8) 后逐分量误差累计可能
         # 让 sum 略超预算 (如 0.95000002)。把残差修正到最大分量上, 使记录权重
@@ -424,6 +468,7 @@ def run_optimization(
     snapshot: dict[str, Any] | None = None,
     catalog: Any = None,
     data_dir: Path | None = None,
+    fixture_mode: bool = False,
 ) -> dict[str, Any]:
     """Run the end-to-end optimization spine and persist an immutable run record.
 
@@ -458,12 +503,13 @@ def run_optimization(
 
     req = request if isinstance(request, OptimizationRequest) else OptimizationRequest(**request)
     run_id = uuid.uuid4().hex
-    created_at = "2026-08-01T00:00:00Z"
+    created_at = _now()
 
     # ---- fail-closed 入口守卫 (11-05/11-06): 编排器包裹 ENTIRE run, 任何
     # SnapshotBindingError / ValueError / 求解器失败都记录为 failed run 并携带
-    # failure_reason (PFOL-04) —— 绝不静默中断。求解器崩溃 (cp.error.SolverError)
-    # 也并入: _solve_problem 在路径上所有 solver 都抛 SolverError 时抛出。
+    # failure_reason (PFOL-04) —— 绝不静默中断。cvxpy 1.9.2 的 DCPError/SolverError
+    # 都是裸 Exception 子类 (无 cp.error.Error 基类), 显式并入 (CR-02): 非 PSD
+    # 协方差、w_prev 形状错配或求解器崩溃都必须落成 failed run, 绝不传播出去。
     try:
         return _run_optimization_impl(
             req,
@@ -477,8 +523,9 @@ def run_optimization(
             snapshot=snapshot,
             catalog=catalog,
             data_dir=data_dir,
+            fixture_mode=fixture_mode,
         )
-    except (SnapshotBindingError, ValueError, RuntimeError, cp.error.SolverError) as error:
+    except (SnapshotBindingError, ValueError, RuntimeError, cp.error.SolverError, cp.error.DCPError) as error:
         return _record_failed_run(
             repository,
             run_id=run_id,
@@ -488,6 +535,29 @@ def run_optimization(
         )
 
 
+def _resolve_failed_run_snapshot_sha(
+    repository: PortfolioRepository,
+    req: Any,
+    provided: str | None,
+) -> str:
+    """Resolve the honest input_snapshot_sha256 for a failed run (WR-02).
+
+    优先使用调用方已解析的真实摘要; 否则查模型定义 (composite-zscore-v1 时) 的
+    input_snapshot_sha256; 两者都不可得时用文档化哨兵 _UNKNOWN_INPUT_SNAPSHOT_SHA256
+    —— 绝不伪造一个看似有效的随机摘要。
+    """
+    if provided:
+        return provided
+    if req.expected_return_method == "composite-zscore-v1" and req.model_id:
+        try:
+            definition = ResearchRepository(repository.database_path).get_model_definition(req.model_id)
+        except Exception:
+            definition = None
+        if definition is not None:
+            return str(definition["input_snapshot_sha256"])
+    return _UNKNOWN_INPUT_SNAPSHOT_SHA256
+
+
 def _record_failed_run(
     repository: PortfolioRepository,
     *,
@@ -495,12 +565,18 @@ def _record_failed_run(
     req: Any,
     created_at: str,
     failure_reason: str,
+    input_snapshot_sha256: str | None = None,
 ) -> dict[str, Any]:
     """Persist a failed run row with the failure reason (PFOL-04).
 
     模型缺失 (快照绑定 "model not found") 时, run 行的 model_id FK 无法引用一个
     不存在的模型定义 —— 此时降级为 expected_return_method="none" 且 model_id=None,
     由 failure_reason 保留完整事实 (该 run 从未消费任何复合快照)。
+
+    WR-02: input_snapshot_sha256 绝不伪造。调用方可传入真实摘要 (来自 catalog
+    接缝的已解析快照); 否则记录 None (schema 允许), 由 failure_reason 携带完整事实。
+    expected_return_method 原样保留 —— 降级仅发生在 model_id FK 失败时, 不静默
+    改写调用方意图。
     """
     constraint_stack = {
         "cap": req.per_instrument_cap,
@@ -519,7 +595,9 @@ def _record_failed_run(
         "universe": req.universe,
         "model_id": req.model_id,
         "composite_snapshot_id": None,
-        "input_snapshot_sha256": "f" * 64,
+        "input_snapshot_sha256": _resolve_failed_run_snapshot_sha(
+            repository, req, input_snapshot_sha256
+        ),
         "expected_return_method": req.expected_return_method,
         "risk_model": "sample_covariance_v1",
         "risk_model_json": risk_model_json,
@@ -557,6 +635,7 @@ def _run_optimization_impl(
     snapshot: dict[str, Any] | None,
     catalog: Any,
     data_dir: Path | None,
+    fixture_mode: bool = False,
 ) -> dict[str, Any]:
     """run_optimization 的主体 (由 fail-closed 包装器调用)。"""
     # 行业上限 fail-closed 闸门 (PFOL-03, T-11-06, pitfall 8): 治理行业映射
@@ -564,14 +643,10 @@ def _run_optimization_impl(
     # "industry mapping unavailable", 由包装器记录为 failed run —— 绝不静默忽略。
     assert_industry_cap_unavailable(requested=req.industry_cap is not None)
 
-    if symbols is None:
-        symbols = [f"SYM{i:03d}" for i in range(12)]
-    if returns is None:
-        returns = _fixture_returns()
-
     # 快照解析: 生产 catalog 接缝优先 (catalog + data_dir), 否则退回预解析
     # snapshot dict (tracer fixture 接缝)。两者都缺失且需要 composite 时
-    # 保持 11-01 的 fixture 身份路径 (现有测试兼容), 由 research 仓库登记。
+    # 由已登记的复合快照提供身份 (CR-01/WR-02, 绝不伪造); 没有可用身份则
+    # fail closed。
     if catalog is not None and data_dir is not None and req.expected_return_method == "composite-zscore-v1":
         loaded = load_composite_snapshot(
             catalog,
@@ -595,6 +670,21 @@ def _run_optimization_impl(
         input_snapshot_sha256 = "f" * 64
         composite_snapshot_id = None
 
+    # 风险面板与标的宇宙 (WR-04): 生产编排器绝不静默回退到 fixture 数据。
+    # returns/symbols 必须由调用方提供 (或经 catalog 接缝从快照宇宙解析); 仅当
+    # 显式传入 fixture_mode=True (tracer/测试接缝) 时才允许确定性 fixture 数据。
+    # 放在快照解析之后: catalog 接缝已从快照宇宙解析出 symbols, 此处只兜底。
+    if fixture_mode:
+        if symbols is None:
+            symbols = [f"SYM{i:03d}" for i in range(12)]
+        if returns is None:
+            returns = _fixture_returns()
+    elif returns is None or symbols is None:
+        raise ValueError(
+            "returns and symbols are required unless fixture_mode=True "
+            "(no silent fixture fallback in the production orchestrator)"
+        )
+
     # 快照的 mu 横截面 (max_sharpe 期望收益): catalog 接缝解析时把快照 dict 的
     # symbols/mu 对齐到 run 的 symbols。快照横截面标的与收益率面板标的不一致
     # (复合覆盖与风险面板窗口不同) 时 fail closed —— 绝不静默错位。
@@ -610,27 +700,25 @@ def _run_optimization_impl(
     ensure_psd_provenance(cov, risk_model_json["psd_repair"], epsilon=PSD_EPSILON_DEFAULT)
 
     # 先决条件: model_id 必须存在于 factor_model_models (FK), 且 composite-zscore-v1
-    # 必须绑定一个快照身份。调用方若已提供 composite_snapshot_id (来自快照接缝) 则
-    # 直接记录; 否则在 research 仓库侧登记定义 + 快照 (仅当尚未存在), 使 run 行
-    # FK 成立。生产 catalog 接缝由 11-05 替换。
+    # 必须绑定一个真实快照身份 (CR-01/WR-02)。调用方若已提供 composite_snapshot_id
+    # (来自快照/catalog 接缝, 携带真实 input_snapshot_sha256) 则直接记录; 否则解析
+    # 该模型已登记的复合快照 (tracer fixture 接缝: conftest 已写入真实 artifact 字节
+    # 并登记 output_sha256=sha256(bytes))。两者都没有时 fail closed —— 绝不写一个
+    # 指向不存在工件的幽灵 factor_model_composites 行, 由包装器记录为 failed run
+    # (PFOL-04 / pitfall 5: 绝不 live module hand-off, 绝不伪造审计根)。
     if req.expected_return_method == "composite-zscore-v1" and composite_snapshot_id is None:
         research = ResearchRepository(repository.database_path)
-        if research.get_model_definition(req.model_id) is None:  # type: ignore[arg-type]
-            research.insert_model_definition(
-                model_id=req.model_id,  # type: ignore[arg-type]
-                name=f"composite {req.model_id}",
-                weighting="equal",
-                revision_ids=[],
-                weights={},
-                input_snapshot_sha256=input_snapshot_sha256,
+        registered = research.list_model_composites(req.model_id)  # type: ignore[arg-type]
+        if registered:
+            composite = registered[-1]  # 最新已登记复合快照 (真实字节 + 真实 sha)
+            composite_snapshot_id = composite["id"]
+            input_snapshot_sha256 = composite["input_snapshot_sha256"]
+        else:
+            raise ValueError(
+                "composite-zscore-v1 requires a checksum-verified snapshot seam "
+                "(composite_snapshot_id / catalog+data_dir / registered composite); "
+                "refusing to fabricate a composite row"
             )
-        composite = research.insert_model_composite(
-            model_id=req.model_id,  # type: ignore[arg-type]
-            output_sha256=input_snapshot_sha256,
-            artifact_relative_path="research_artifacts/00000000000000000000000000000000/signals.json",
-            input_snapshot_sha256=input_snapshot_sha256,
-        )
-        composite_snapshot_id = composite["id"]
 
     # objective="hrp" 一等目标: 无求解器参与 (solver_name/solver_version="n/a",
     # solver_options_json={}), 但 run 记录仍不可变、可审计 (PFOL-02/04)。
@@ -743,15 +831,25 @@ def _run_optimization_impl(
         solver_version = result["solver_version"]
         options = result["options"]
         failure_reason = None
-    except (ValueError, RuntimeError) as error:
+    except (ValueError, RuntimeError, cp.error.SolverError, cp.error.DCPError) as error:
+        # CR-02: cvxpy 的 DCPError/SolverError 都是裸 Exception 子类 —— 显式并入,
+        # 使非 PSD 协方差 / w_prev 形状错配 / 求解器崩溃落成 failed run (绝不传播)。
+        # WR-07: 求解从未发生 (pre-solve 失败), solver 审计字段不伪造 ——
+        # solver_name="n/a", options={}, 与 HRP 客观路径一致。
         status = "failed"
         weights = {}
         solver_name = "n/a"
         solver_version = "n/a"
-        options = dict(DEFAULT_SOLVER_OPTIONS)
+        options: dict[str, Any] = {}
         failure_reason = str(error)
 
-    if status not in {"optimal", "optimal_inaccurate"}:
+    # CR-03: optimal_inaccurate 视为非最优 —— 绝不把不精确权重当精确结果持久化
+    # (pitfall 4)。记录 solver_error run (带 failure_reason), 不写权重工件,
+    # output_weights_json=None (IN-06)。
+    if status != "optimal":
+        if status == "optimal_inaccurate":
+            failure_reason = failure_reason or "optimal_inaccurate: solver did not converge to requested tolerance"
+            status = "solver_error"
         record = repository.record_optimization_run(
             id=run_id,
             objective=req.objective,
@@ -777,7 +875,7 @@ def _run_optimization_impl(
             solver_options_json=options,
             problem_status=status,
             failure_reason=failure_reason,
-            output_weights_json=weights if weights else None,
+            output_weights_json=None,
             output_sha256=None,
             weights_artifact_relative_path=None,
             baseline_weights_json=None,
@@ -785,7 +883,7 @@ def _run_optimization_impl(
         )
         return record
 
-    # 成功路径 (optimal / optimal_inaccurate): 渲染基线。max_sharpe 运行时 ALWAYS
+    # 成功路径 (仅 status == "optimal"): 渲染基线。max_sharpe 运行时 ALWAYS
     # 记录 min-vol + HRP 双基线 (pitfall 2); min_volatility 运行时记录 HRP 基线
     # (与 11-01/11-03 契约一致)。min-vol 基线在同一协方差/约束栈下求解 (换手惩罚
     # 同 w_prev), 使审计面完全一致。
