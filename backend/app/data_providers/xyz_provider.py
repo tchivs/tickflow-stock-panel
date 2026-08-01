@@ -54,7 +54,7 @@ class XYZProvider:
         financial=False,
     )
 
-    def __init__(self, mcp_url: str = _DEFAULT_MCP_URL, timeout: float = 30.0) -> None:
+    def __init__(self, mcp_url: str = _DEFAULT_MCP_URL, timeout: float = 8.0) -> None:
         self.mcp_url = mcp_url
         self._timeout = timeout
         self._client = httpx.Client(timeout=timeout)
