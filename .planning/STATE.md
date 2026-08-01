@@ -5,10 +5,10 @@ milestone_name: End-to-End Factor Portfolio Pipeline — in progress
 current_phase: 11
 current_phase_name: Portfolio Construction & Optimization
 status: executing
-stopped_at: Completed 11-03-PLAN.md
-last_updated: "2026-08-01T17:52:30.540Z"
+stopped_at: Completed 11-04-PLAN.md
+last_updated: "2026-08-01T22:45:00.000Z"
 last_activity: 2026-08-01
-last_activity_desc: 11-03 HRP baseline breadth complete — hrp_portfolio first-class objective, 11-03 tests green
+last_activity_desc: 11-04 min-vol/max-Sharpe breadth complete — solver_path fallback, w_prev anchor, max-Sharpe opt-in + baselines, 11-04 tests green
 progress:
   total_phases: 6
   completed_phases: 0
@@ -29,9 +29,9 @@ See: .planning/PROJECT.md (updated 2026-07-31)
 ## Current Position
 
 Phase: 11 — Portfolio Construction & Optimization
-Plan: 11-03 complete (Wave 2 — HRP baseline breadth: hrp_portfolio first-class objective)
-Status: Ready for 11-04 (Wave 2 — min-vol/max-Sharpe breadth; running in parallel by Exec1104)
-Last activity: 2026-08-01 — 11-03 HRP breadth complete
+Plan: 11-04 complete (Wave 2 — min-vol breadth + max-Sharpe non-default: solver_path fallback, w_prev anchor, opt-in contract)
+Status: Ready for 11-05 (Wave 3 — snapshot binding + run-record breadth)
+Last activity: 2026-08-01 — 11-04 min-vol/max-Sharpe breadth complete
 
 Progress: [██████████] 100%
 
@@ -40,7 +40,7 @@ Progress: [██████████] 100%
 | Phase | Requirements | Status |
 |-------|-------------|--------|
 | 10 Factor Library & Multi-Factor Model | FACT-01..06 | In progress (10-01..10-06 complete) |
-| 11 Portfolio Construction & Optimization | PFOL-01..04 | In progress (11-01, 11-02, 11-03 complete) |
+| 11 Portfolio Construction & Optimization | PFOL-01..04 | In progress (11-01, 11-02, 11-03, 11-04 complete) |
 | 12 Risk Models & Attribution | RSK-01..03 | Not started |
 | 13 Walk-Forward Validation & Parameter Search | WFWD-01..03 | Not started |
 | 14 Output & Boundary (RebalancePlan + Paper Rebalance) | RBAL-01..02 | Not started |
@@ -70,6 +70,7 @@ Progress: [██████████] 100%
 | Phase 11 P11-02 | 12 | 4 tasks | 13 files |
 | Phase 11 P11-01 | 45 | 12 tasks | 13 files |
 | Phase 11 P11-03 | 21 | 2 tasks | 3 files |
+| Phase 11 P11-04 | 44 | 4 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -109,13 +110,14 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-08-01T17:52:30.540Z
-Stopped at: Completed 11-03-PLAN.md
+Last session: 2026-08-01T18:15:45.518Z
+Stopped at: Completed 11-04-PLAN.md
 Resume file: None
 
 ## Operator Next Steps
 
 - Run `/gsd-plan-phase 10` to plan Phase 10 (Factor Library & Multi-Factor Model)
+- Run the phase gate (full backend suite) after all Wave 2/3/4 plans (11-05, 11-06)
 
 ## Decisions
 
@@ -132,5 +134,15 @@ Resume file: None
 - [Phase 11]: Clarabel 1.9.2 solver options are tol_gap_abs/tol_gap_rel (not OSQP eps_abs/eps_rel, per Wave 0 finding); options dict recorded verbatim in solver_options_json.
 - [Phase 11]: HRP baseline rendered scaled by (1 - min_cash) so it compares apples-to-apples with the QP under the cash floor.
 - [Phase 11]: run_optimization accepts a pre-resolved snapshot dict (model_id/input_snapshot_sha256/composite_snapshot_id) in 11-01; the production catalog seam (load_composite_snapshot) lands in 11-05.
+- [Phase 11]: solver_path=['CLARABEL','OSQP'] fallback is resolved manually (_solve_problem): cvxpy 1.9.2 native solver_path raises SolverError when all solvers return non-optimal, so the manual path retries OSQP only on SolverError (solver crash) and records any status the first solver returns verbatim (pitfall 4 — infeasible recorded as-is, never promoted).
+- [Phase 11]: recorded options dict stays policy-verbatim (solver_path + eps_abs/eps_rel in solver_options_json); _solve_kwargs maps tolerance keys to the active solver's namespace (CLARABEL tol_gap_abs/tol_gap_rel, OSQP eps_abs/eps_rel).
+- [Phase 11]: w_prev run_id reference reads the prior run's weights ARTIFACT via read_artifact with output_sha256 checksum verification (never trusts the DB JSON alone); missing symbols align to 0.0, extra dropped; constraint_stack_json records turnover_reference + turnover_reference_detail.
+- [Phase 11]: max_sharpe explicit non-default — render_baselines=False raises ValueError (never silent); every max_sharpe run records baseline_weights_json={'min_volatility','hrp'} both rendered to (1 - min_cash); mu is an explicit run_optimization parameter (snapshot binding lands in 11-05).
 - [Phase ?]: HRP objective outputs baseline == weights (no QP to compare against) — objective=hrp run row: solver_name/solver_version=n/a, solver_options_json={}, problem_status=optimal, still append-only immutable
 - [Phase ?]: hrp_portfolio runs the same fail-closed PSD gate as the QP path — non-PSD covariance raises ValueError (pitfall 9), never silent
+- [Phase ?]: solver_path=['CLARABEL','OSQP'] fallback resolved manually (_solve_problem): cvxpy 1.9.2 native solver_path raises SolverError when all solvers return non-optimal, so OSQP is retried only on SolverError (solver crash) and any status the first solver returns is recorded verbatim (pitfall 4)
+- [Phase ?]: Recorded options dict stays policy-verbatim (solver_path + eps_abs/eps_rel in solver_options_json); _solve_kwargs maps tolerance keys to the active solver's namespace (CLARABEL tol_gap_abs/tol_gap_rel, OSQP eps_abs/eps_rel)
+- [Phase ?]: w_prev run_id reference reads the prior run's weights ARTIFACT via read_artifact with output_sha256 checksum verification (never trusts the DB JSON alone); missing symbols align to 0.0, extra dropped; constraint_stack_json records turnover_reference + turnover_reference_detail
+- [Phase ?]: max_sharpe explicit non-default — render_baselines=False raises ValueError (never silent); every max_sharpe run records baseline_weights_json={'min_volatility','hrp'} both rendered to (1 - min_cash); mu is an explicit run_optimization parameter (snapshot binding lands in 11-05)
+
+

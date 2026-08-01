@@ -94,14 +94,14 @@ Six phases extend the shipped research platform from single-factor evaluation in
   3. Researcher can apply the constraint stack — long-only bounds, per-instrument cap, minimum cash, convex turnover cost — and an industry cap fails closed until a governed industry mapping exists.
   4. Researcher can retrieve any optimization run as an immutable record carrying input-snapshot SHA-256, expected-return method, risk model, solver name/version/options, problem status, and output weights; failed runs retain their failure reason.
 
-**Plans**: 3/6 plans executed (11-02, 11-01, 11-03 complete; per-plan gates green)
+**Plans**: 4/6 plans executed (11-02, 11-01, 11-03, 11-04 complete; per-plan gates green)
 
 - [ ] 11-PLAN.md
 
 - [x] 11-02 Wave 0 — cvxpy dep + runs migration + test scaffolds (2026-08-01)
 - [x] 11-01 Tracer — end-to-end optimization pipeline
 - [x] 11-03 HRP baseline
-- [ ] 11-04 Min-vol breadth + max-Sharpe non-default
+- [x] 11-04 Min-vol breadth + max-Sharpe non-default
 - [ ] 11-05 Snapshot binding + run-record breadth
 - [ ] 11-06 Constraint hardening + artifact breadth
 
