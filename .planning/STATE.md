@@ -4,15 +4,15 @@ milestone: v1.2
 milestone_name: End-to-End Factor Portfolio Pipeline — in progress
 current_phase: 12
 current_phase_name: Risk Models & Attribution
-status: planning
+status: executing
 stopped_at: Completed 11-05-PLAN.md
-last_updated: "2026-08-01T21:21:17.017Z"
+last_updated: "2026-08-01T23:01:51.953Z"
 last_activity: 2026-08-02
 last_activity_desc: Phase 11 complete, transitioned to Phase 12
 progress:
   total_phases: 6
   completed_phases: 0
-  total_plans: 2
+  total_plans: 3
   completed_plans: 0
   percent: 0
 ---
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-07-31)
 
 Phase: 12 — Risk Models & Attribution
 Plan: Not started
-Status: Ready to plan
+Status: Ready to execute
 Last activity: 2026-08-02 — Phase 11 complete, transitioned to Phase 12
 
 Progress: [██████████] 100%
