@@ -111,3 +111,120 @@ def test_covariance_sha256_digest_roundtrips_through_covariance_artifact(
     )
     matrix = np.asarray(json.loads(payload.decode("utf-8")), dtype=float)
     assert covariance_sha256(matrix) == digest
+
+
+# ---------------------------------------------------------------------------
+# 12-02: RSK-02 new-model RED cases (semi / EWMA / Ledoit-Wolf) — green in 12-03
+# ---------------------------------------------------------------------------
+
+
+def test_semi_covariance_matches_manual_below_mean_reference(
+    fixture_returns: np.ndarray,
+) -> None:
+    """RSK-02: semi_covariance equals the manual below-mean reference.
+
+    Benchmark "mean" = row-wise mean (cross-sectional mean per observation);
+    drops are the below-benchmark co-movements, normalized by the subset
+    observation count (12-CONTEXT / 12-03 contract).
+    """
+    from app.portfolio.risk import semi_covariance
+
+    cov = semi_covariance(fixture_returns, benchmark="mean")
+    benchmark = fixture_returns.mean(axis=1, keepdims=True)
+    drops = np.minimum(fixture_returns - benchmark, 0.0)
+    expected = drops.T @ drops / drops.shape[0]
+    assert np.allclose(cov, expected, rtol=1e-10)
+
+
+def test_semi_covariance_zero_benchmark_uses_below_zero_subset(
+    fixture_returns: np.ndarray,
+) -> None:
+    """RSK-02: benchmark="zero" restricts to below-zero co-movement."""
+    from app.portfolio.risk import semi_covariance
+
+    cov = semi_covariance(fixture_returns, benchmark="zero")
+    drops = np.minimum(fixture_returns, 0.0)
+    expected = drops.T @ drops / drops.shape[0]
+    assert np.allclose(cov, expected, rtol=1e-10)
+
+
+def test_ewma_covariance_lambda_one_recovers_sample_covariance(
+    fixture_returns: np.ndarray,
+) -> None:
+    """RSK-02: EWMA lam=1.0 recovers the sample covariance on demeaned data."""
+    from app.portfolio.risk import ewma_covariance
+
+    demeaned = fixture_returns - fixture_returns.mean(axis=0)
+    cov = ewma_covariance(demeaned, lam=1.0)
+    expected = np.cov(demeaned, rowvar=False)
+    assert np.allclose(cov, expected, rtol=1e-8)
+
+
+def test_ewma_covariance_matches_hand_computed_recursion() -> None:
+    """RSK-02: EWMA lam=0.94 matches a hand-computed 2-step recursion.
+
+    Start Sigma_1 = outer(r_1, r_1); recurse Sigma_t = lam*Sigma_{t-1} +
+    (1 - lam)*outer(r_t, r_t) (12-CONTEXT RiskMetrics formula).
+    """
+    from app.portfolio.risk import ewma_covariance
+
+    returns = np.array([[0.010, 0.012], [0.011, 0.013]])
+    cov = ewma_covariance(returns, lam=0.94)
+    r0, r1 = returns[0], returns[1]
+    expected = 0.94 * np.outer(r0, r0) + (1 - 0.94) * np.outer(r1, r1)
+    assert np.allclose(cov, expected, rtol=1e-10)
+
+
+def test_ledoit_wolf_covariance_returns_psd_with_shrinkage(
+    fixture_returns: np.ndarray,
+) -> None:
+    """RSK-02: Ledoit-Wolf returns a PSD matrix with shrinkage in (0, 1]."""
+    from app.portfolio.risk import ledoit_wolf_covariance
+
+    cov = ledoit_wolf_covariance(fixture_returns)
+    assert np.linalg.eigvalsh(cov).min() >= -1e-9
+    assert np.allclose(cov, cov.T, rtol=1e-12)
+
+
+def test_make_risk_model_family_dispatches_all_four_models(
+    fixture_returns: np.ndarray,
+) -> None:
+    """RSK-02: make_risk_model_family returns covariance + provenance for 4 models."""
+    from app.portfolio.risk import make_risk_model_family
+
+    for name in (
+        "sample_covariance_v1",
+        "semi_covariance_v1",
+        "ewma_covariance_v1",
+        "ledoit_wolf_v1",
+    ):
+        block = make_risk_model_family(fixture_returns, risk_model_name=name)
+        assert "covariance" in block
+        assert block["risk_model_json"]["risk_model"] == name
+        assert block["risk_model_json"]["psd_repair"]["method"] in ("none", "eigen_clip")
+
+
+def test_make_risk_model_family_rejects_unknown_name() -> None:
+    """RSK-02: an unknown risk-model name raises ValueError."""
+    from app.portfolio.risk import make_risk_model_family
+
+    with pytest.raises(ValueError):
+        make_risk_model_family(np.eye(2), risk_model_name="black_litterman_v1")
+
+
+def test_risk_module_import_does_not_load_sklearn() -> None:
+    """RSK-02: importing app.portfolio.risk must NOT load sklearn (lazy boundary)."""
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    backend_root = Path(__file__).resolve().parents[2]
+    code = "import sys; import app.portfolio.risk; print('sklearn' in sys.modules)"
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=str(backend_root),
+    )
+    assert result.stdout.strip() == "False"

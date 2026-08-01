@@ -135,3 +135,63 @@ def fixture_composite(
         input_snapshot_sha256="f" * 64,
     )
     return {"model_id": "composite-model-v1", "input_snapshot_sha256": "f" * 64}
+
+
+@pytest.fixture
+def fixture_returns_long() -> np.ndarray:
+    """Deterministic 24-obs x 4-symbol returns with a CONSTRUCTED drawdown segment.
+
+    A seeded 24 x 4 matrix whose obs 8-11 form a portfolio dip (approx -5% then
+    -4% before recovery) so 12-06's period detection has a known target. The
+    equal-weight portfolio return at obs 8 ~ -0.05 and obs 9 ~ -0.04 drive the
+    underwater curve below the 2% depth threshold; obs 12-13 recover (the
+    underwater curve returns to 0 exactly at obs 13).
+    """
+    rng = np.random.default_rng(20260802)
+    rows = rng.normal(0.0005, 0.001, size=(24, 4))
+    # Constructed drawdown segment: obs 8-9 deep negative dip, obs 10-11 partial
+    # recovery, obs 12-13 recovery above the prior peak.
+    rows[8] = [-0.050, -0.049, -0.051, -0.050]
+    rows[9] = [-0.040, -0.039, -0.041, -0.040]
+    rows[10] = [0.005, 0.006, 0.004, 0.005]
+    rows[11] = [-0.010, -0.009, -0.011, -0.010]
+    rows[12] = [0.090, 0.091, 0.089, 0.090]
+    rows[13] = [0.040, 0.041, 0.039, 0.040]
+    return rows
+
+
+@pytest.fixture
+def fixture_attribution_run(
+    portfolio_repository: PortfolioRepository,
+    artifact_root: Path,
+    fixture_composite: dict[str, object],
+) -> dict[str, object]:
+    """A recorded min-vol run on the fixture composite for the attribution spine.
+
+    Mirrors the Phase 11 tracer pipeline: records one optimal run via
+    ``run_optimization`` (fixture_mode=True) bound to the fixture composite
+    identity, and returns the run record (weights + checksum-bound covariance
+    artifact). 12-01/12-04/12-06 consume this as the attribution input.
+    """
+    from app.portfolio.optimizer import run_optimization
+
+    request = {
+        "objective": "min_volatility",
+        "as_of": "2026-08-01",
+        "universe": "cn-a-share",
+        "model_id": "composite-model-v1",
+        "expected_return_method": "composite-zscore-v1",
+        "render_baselines": True,
+        "per_instrument_cap": 0.10,
+        "min_cash": 0.05,
+        "turnover_coef": 0.0014,
+    }
+    run = run_optimization(
+        request,
+        repository=portfolio_repository,
+        artifact_service_root=artifact_root,
+        snapshot=fixture_composite,
+        fixture_mode=True,
+    )
+    assert run["problem_status"] == "optimal"
+    return run
