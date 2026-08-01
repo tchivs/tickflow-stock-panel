@@ -5,8 +5,8 @@ milestone_name: End-to-End Factor Portfolio Pipeline — in progress
 current_phase: 11
 current_phase_name: Portfolio Construction & Optimization
 status: executing
-stopped_at: "Completed 10-06: Composite + Catalog Breadth (wave 4)"
-last_updated: "2026-08-01T14:20:38.553Z"
+stopped_at: Completed 11-02-PLAN.md
+last_updated: "2026-08-01T16:42:31.150Z"
 last_activity: 2026-08-01
 last_activity_desc: Phase 10 complete, transitioned to Phase 11
 progress:
@@ -29,9 +29,9 @@ See: .planning/PROJECT.md (updated 2026-07-31)
 ## Current Position
 
 Phase: 11 — Portfolio Construction & Optimization
-Plan: Not started
-Status: Ready to execute
-Last activity: 2026-08-01 — Phase 10 complete, transitioned to Phase 11
+Plan: 11-02 complete (Wave 0 — cvxpy dep, runs migration, test scaffolds)
+Status: Ready for 11-01 (tracer)
+Last activity: 2026-08-01 — 11-02 Wave 0 complete
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -67,6 +67,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 10 P10-04 | 45 | 5 tasks | 6 files |
 | Phase 10 P10-05 | 4500 | 7 tasks | 8 files |
 | Phase 10 P10-06 | 4680 | 4 tasks | 4 files |
+| Phase 11 P11-02 | 12 | 4 tasks | 13 files |
 
 ## Accumulated Context
 
@@ -106,8 +107,8 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-08-01T11:00:00.000Z
-Stopped at: Completed 10-06: Composite + Catalog Breadth (wave 4)
+Last session: 2026-08-01T16:42:31.139Z
+Stopped at: Completed 11-02-PLAN.md
 Resume file: None
 
 ## Operator Next Steps
@@ -123,3 +124,5 @@ Resume file: None
 - [Phase ?]: Composite weights derive from catalog-recorded mean IC for the same revision + resolved config (cross-module integrity); a revision with missing recorded mean IC fails the build closed, never equal-weight silently
 - [Phase ?]: Composite outputs are snapshot-immutable: input_snapshot_sha256 binds (sorted revision_ids, weighting, membership_fingerprint, panel fingerprints, mean ICs); output written via EvaluationArtifactService.write_bundle (O_EXCL + fsync + sha256); factor_model_composites rows append-only bound by input_snapshot_sha256
 - [Phase ?]: Admitted-factor catalog entries are summary-only (coverage mean + series, finite counts, ast/shape signature) with revision lineage (factor_id, revision_id, revision_number); full factor-value matrices are an anti-feature; the composite model is a first-class catalog record with its latest snapshot reference
+- [Phase ?]: cvxpy==1.9.2 pinned to base deps (one-way door, pre-approved) — solver results version-sensitive, audit cites cp.__version__
+- [Phase ?]: portfolio_optimization_runs migrated per RESEARCH schema (one-way door, pre-approved) — CHECK enums + sha256 + failed-reason invariant + immutability triggers

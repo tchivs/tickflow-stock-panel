@@ -12,7 +12,7 @@ Requirements for the v1.2 milestone. Each maps to a roadmap phase.
 - [x] **FACT-01**: Researcher can run factor admission gates — train/val IC threshold, no-lookahead check, no-label-leakage check, and similarity dedup — and every admission verdict is recorded as an immutable append-only record with the candidate trail (including rejections).
 - [x] **FACT-02**: Factor evaluation reports ICIR, monthly robustness, and coverage alongside IC/RankIC, with the full monthly evidence set exposed (not a scalar mean).
 - [x] **FACT-03**: Researcher can compose admitted factors into a deterministic multi-factor expected-return model (equal-weight or IC-weighted cross-sectional z-score, no ML), consumed by portfolio optimization.
-- [ ] **FACT-04**: Factor DSL extension enforces a partition-context contract — every operator declares per-date / per-symbol / pointwise semantics, label fields are denied in the allowlist, and a deterministic shifted-label leakage test gates DSL changes.
+- [x] **FACT-04**: Factor DSL extension enforces a partition-context contract — every operator declares per-date / per-symbol / pointwise semantics, label fields are denied in the allowlist, and a deterministic shifted-label leakage test gates DSL changes.
 - [x] **FACT-05**: Admitted factors are stored in an immutable catalog with summary storage (coverage, finite counts, signature) and revision lineage.
 - [x] **FACT-06**: A single shared factor signal chain computes cross-sectional factor values from compiled DSL over governed panels, used identically by evaluation, multi-factor models, walk-forward, expected returns, and live as-of rebalance suggestions (no train/serve skew).
 
@@ -21,7 +21,7 @@ Requirements for the v1.2 milestone. Each maps to a roadmap phase.
 - [ ] **PFOL-01**: Researcher can build sample covariance from a governed panel with PSD check, and any PSD repair is an explicit recorded step (method, epsilon, eigenvalues before/after) in the immutable run record.
 - [ ] **PFOL-02**: Researcher can solve a long-only minimum-volatility portfolio and an HRP baseline; max-Sharpe is available only as an explicit non-default option with baselines rendered alongside.
 - [ ] **PFOL-03**: Optimizer supports a constraint stack: long-only bounds, per-instrument cap, minimum cash, and convex turnover cost; industry cap is deferred until a governed industry mapping exists (fail-closed otherwise).
-- [ ] **PFOL-04**: Every optimization run is an immutable record with input-snapshot SHA-256, expected-return method, risk model, solver name/version/options, problem status, and output weights; failed runs are retained with their failure reason.
+- [x] **PFOL-04**: Every optimization run is an immutable record with input-snapshot SHA-256, expected-return method, risk model, solver name/version/options, problem status, and output weights; failed runs are retained with their failure reason.
 
 ### Risk Analysis & Attribution
 
@@ -87,13 +87,13 @@ Populated during roadmap creation (2026-07-31). Verified: all 20 v1 requirements
 | FACT-01 | Phase 10 | Complete |
 | FACT-02 | Phase 10 | Complete |
 | FACT-03 | Phase 10 | Complete |
-| FACT-04 | Phase 10 | Pending |
+| FACT-04 | Phase 10 | Complete |
 | FACT-05 | Phase 10 | Complete |
 | FACT-06 | Phase 10 | Complete |
 | PFOL-01 | Phase 11 | Pending |
 | PFOL-02 | Phase 11 | Pending |
 | PFOL-03 | Phase 11 | Pending |
-| PFOL-04 | Phase 11 | Pending |
+| PFOL-04 | Phase 11 | Complete |
 | RSK-01 | Phase 12 | Pending |
 | RSK-02 | Phase 12 | Pending |
 | RSK-03 | Phase 12 | Pending |
