@@ -199,7 +199,18 @@ def _build_risk_model(
             "eigenvalues_before": eigvals.tolist(),
             "eigenvalues_after": None,
         }
-    return {"covariance": cov, "provenance": provenance, "window": list(window), "dropna": True}
+    risk_model_json = {
+        "risk_model": "sample_covariance_v1",
+        "window": list(window),
+        "dropna": True,
+        "psd_repair": provenance,
+    }
+    return {"covariance": cov, "risk_model_json": risk_model_json}
+
+
+def _fixture_snapshot_id() -> str:
+    """Deterministic 64-hex snapshot identity for the tracer fixture path."""
+    return "f" * 64
 
 
 def _fixture_returns() -> np.ndarray:
@@ -267,7 +278,8 @@ def run_optimization(
 
     risk_block = _build_risk_model(returns, window=(req.as_of.isoformat(), req.as_of.isoformat()))
     cov = risk_block["covariance"]
-    ensure_psd_provenance(cov, risk_block["provenance"], epsilon=PSD_EPSILON_DEFAULT)
+    risk_model_json = risk_block["risk_model_json"]
+    ensure_psd_provenance(cov, risk_model_json["psd_repair"], epsilon=PSD_EPSILON_DEFAULT)
 
     # 先决条件: model_id 必须存在于 factor_model_models (FK), 且 composite-zscore-v1
     # 必须绑定一个快照身份。测试流水线传入的 model_id 是 fixture 模型, 因此先在
@@ -327,7 +339,7 @@ def run_optimization(
             input_snapshot_sha256=input_snapshot_sha256,
             expected_return_method=req.expected_return_method,
             risk_model="sample_covariance_v1",
-            risk_model_json=risk_block["provenance"],
+            risk_model_json=risk_model_json,
             constraint_stack_json={
                 "cap": req.per_instrument_cap,
                 "min_cash": req.min_cash,
@@ -372,7 +384,7 @@ def run_optimization(
         input_snapshot_sha256=input_snapshot_sha256,
         expected_return_method=req.expected_return_method,
         risk_model="sample_covariance_v1",
-        risk_model_json=risk_block["provenance"],
+        risk_model_json=risk_model_json,
         constraint_stack_json={
             "cap": req.per_instrument_cap,
             "min_cash": req.min_cash,
