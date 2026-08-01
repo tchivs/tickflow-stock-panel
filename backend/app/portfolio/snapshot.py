@@ -99,13 +99,16 @@ def load_composite_snapshot(
         raise SnapshotBindingError("composite artifact checksum mismatch")
 
     rows: list[dict[str, Any]] = []
+    malformed = 0
     for item in payload:
         if not isinstance(item, dict):
+            malformed += 1
             continue
         symbol = item.get("symbol")
         row_date = item.get("date")
         composite_value = item.get("composite")
         if symbol is None or row_date is None or composite_value is None:
+            malformed += 1
             continue
         rows.append(
             {
@@ -114,15 +117,26 @@ def load_composite_snapshot(
                 "composite": float(composite_value),
             }
         )
+    # IN-04: 部分畸形行绝不静默丢弃 —— 解析行数必须等于 payload 长度, 否则
+    # 快照消费的是比 artifact 声称更小的宇宙 (fail closed)。
+    if len(rows) != len(payload):
+        raise SnapshotBindingError(
+            f"composite artifact malformed rows: {malformed} of {len(payload)} rows skipped"
+        )
     if not rows:
         raise SnapshotBindingError("composite artifact is empty")
 
-    # Lookahead 守卫: as_of 不能早于 artifact 的数据覆盖 (面板窗口起点)。
+    # Lookahead 守卫 (WR-03): as_of 必须落在 artifact 的数据覆盖窗口内。
     # 按数据覆盖而非 created_at 判定 —— 回测复合的 created_at 晚于数据日期
     # (RESEARCH.md "as_of precedes ... or the panel window" 的后者是生效条款)。
+    # 早于 earliest_date (面板窗口起点) 或晚于 max(date) (覆盖终点) 都视为
+    # lookahead / 越界, 分别给明确错误。
     earliest_date = min(row["date"] for row in rows)
     if as_of.isoformat() < earliest_date:
         raise SnapshotBindingError("as_of precedes composite snapshot coverage")
+    latest_date = max(row["date"] for row in rows)
+    if as_of.isoformat() > latest_date:
+        raise SnapshotBindingError("as_of exceeds composite snapshot coverage")
 
     # PIT 过滤: 成员关系帧 inner join (post-seam, signal_chain 同款)。
     if universe_resolver is not None:

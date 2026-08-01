@@ -211,6 +211,62 @@ def test_lookahead_as_of_fails_closed(
         )
 
 
+def test_lookahead_as_of_after_last_date_fails_closed(
+    portfolio_repository: PortfolioRepository,
+    snapshot_catalog: ExperimentCatalog,
+    artifact_root: Path,
+) -> None:
+    """(5b) WR-03: as_of AFTER the last data date is rejected as out-of-coverage
+    (the end of the panel window is guarded, not just the start)."""
+    model_id = "snapshot-model-lookahead-end"
+    input_sha = "f" * 64
+    as_of = date(2026, 8, 10)  # after the artifact's last recorded date
+    past_rows = [
+        {"symbol": "600000.SH", "date": "2026-08-01", "composite": 0.5},
+        {"symbol": "600001.SH", "date": "2026-08-01", "composite": -0.3},
+    ]
+    relative, output_sha = _write_signals_artifact(artifact_root, model_id, past_rows)
+    _register_composite(
+        portfolio_repository,
+        model_id=model_id,
+        artifact_relative_path=relative,
+        output_sha256=output_sha,
+        input_snapshot_sha256=input_sha,
+    )
+    with pytest.raises(SnapshotBindingError, match="exceeds composite snapshot coverage"):
+        load_composite_snapshot(
+            snapshot_catalog, model_id=model_id, as_of=as_of, data_dir=artifact_root
+        )
+
+
+def test_malformed_artifact_rows_fail_closed(
+    portfolio_repository: PortfolioRepository,
+    snapshot_catalog: ExperimentCatalog,
+    artifact_root: Path,
+) -> None:
+    """(7) IN-04: a partially malformed artifact (missing fields) is rejected
+    rather than silently consumed with fewer symbols than it claims."""
+    model_id = "snapshot-model-malformed"
+    input_sha = "f" * 64
+    as_of = date(2026, 8, 1)
+    rows = [
+        {"symbol": "600000.SH", "date": "2026-08-01", "composite": 0.5},
+        {"symbol": "600001.SH"},  # malformed: missing date + composite
+    ]
+    relative, output_sha = _write_signals_artifact(artifact_root, model_id, rows)
+    _register_composite(
+        portfolio_repository,
+        model_id=model_id,
+        artifact_relative_path=relative,
+        output_sha256=output_sha,
+        input_snapshot_sha256=input_sha,
+    )
+    with pytest.raises(SnapshotBindingError, match="malformed"):
+        load_composite_snapshot(
+            snapshot_catalog, model_id=model_id, as_of=as_of, data_dir=artifact_root
+        )
+
+
 def test_run_optimization_records_failed_run_on_snapshot_binding_failure(
     portfolio_repository: PortfolioRepository,
     snapshot_catalog: ExperimentCatalog,
