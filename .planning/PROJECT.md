@@ -56,6 +56,13 @@ Building toward v1.2 (End-to-End Factor Portfolio Pipeline). Requirements are de
 - [x] FACT-05: Admitted factors stored in an immutable catalog with summary storage (coverage, finite counts, signature) and revision lineage — Phase 10.
 - [x] FACT-06: A single shared factor signal chain used identically by evaluation, multi-factor models, walk-forward, expected returns, and live as-of suggestions (no train/serve skew) — Phase 10.
 
+### Validated in v1.2 Phase 11
+
+- [x] PFOL-01: Researcher can build sample covariance from a governed panel with explicit recorded PSD repair (method, epsilon, eigenvalues before/after) in the immutable run record — never silent — Phase 11.
+- [x] PFOL-02: Researcher can solve a long-only minimum-volatility portfolio and an HRP baseline side by side; max-Sharpe is an explicit non-default option that always renders baselines alongside — Phase 11.
+- [x] PFOL-03: Optimizer supports the constraint stack — long-only bounds, per-instrument cap, minimum cash, convex turnover cost — and industry cap fails closed until a governed industry mapping exists — Phase 11.
+- [x] PFOL-04: Every optimization run is an immutable record carrying input-snapshot SHA-256, expected-return method, risk model, solver name/version/options, problem status, and output weights; failed runs retain their failure reason — Phase 11.
+
 ### Out of Scope
 
 - Automated live broker order execution.
@@ -85,6 +92,16 @@ v1.0 validated the host architecture and locked its safety boundaries: one FastA
 - **Evaluation evidence** — ICIR = mean(monthly IC)/std(monthly IC), monthly robustness = positive-month share, coverage on resolved universe pre-filter; full monthly series in checksummed artifact; summary-only storage (no factor matrices).
 - **scipy promoted to base deps** (`>=1.17.1,<1.18`, 1.18 needs Python ≥3.12 vs floor 3.11); sklearn stays shadow-extra lazy-imported; empty-.venv Wave 0 gate verified.
 
+## Phase 11 Decisions (2026-08-01)
+
+- **cvxpy 1.9.2 is the primary QP solver** — exact-pinned base dep (PyPI-verified; bundled OSQP/Clarabel/SCS/HiGHS); default solver CLARABEL with per-solver option namespaces (Clarabel `tol_gap_abs/tol_gap_rel`, OSQP `eps_abs/eps_rel`); `solver_stats` + importlib version captured in every run. scipy used only for HRP clustering, never as the general optimizer.
+- **QP formulation** — `w = cp.Variable(nonneg=True)`; constraints `sum(w) == 1 - min_cash` (documented tested deviation from the floor: avoids degenerate all-cash min-vol) and `w <= cap`; objective `quad_form(w, Σ) + turnover_coef·‖w − w_prev‖₁`; PSD gate is a hard prerequisite for `cp.quad_form` (non-PSD → recorded failed run).
+- **PSD repair never silent** — eigen-clip provenance (method/epsilon/eigenvalues before/after) mandatory in `risk_model_json`; optimizer fails closed without it.
+- **Immutable run records** — `portfolio_optimization_runs` append-only table + no_update/no_delete triggers + CHECK enums (objective/expected_return_method/risk_model/problem_status) + `failed⇔failure_reason` invariant + sha256 length CHECK; weights as O_EXCL+fsync+sha256 artifacts.
+- **max-Sharpe is explicit non-default** — rejected without `render_baselines=True`; when allowed, min-vol + HRP baselines are always recorded alongside; `optimal_inaccurate` is treated as non-optimal (recorded solver_error run, no weights persisted).
+- **Snapshot binding fail-closed** — `portfolio/snapshot.py` loads the composite via `catalog.get_composite_model` → checksum-verified artifact → as_of cross-section; `run.input_snapshot_sha256 == factor_model_composites.input_snapshot_sha256`; never calls `build_composite`; as_of beyond panel coverage rejected as lookahead.
+- **Constraint hardening** — solver-options whitelist enforced (unknown keys rejected); industry cap requested → recorded failed run 'industry mapping unavailable'; `created_at` = real UTC run time.
+
 ## Source Context
 
 - Architecture source: `docs/ARCHITECTURE.md`
@@ -111,4 +128,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-08-01 after Phase 10*
+*Last updated: 2026-08-01 after Phase 11*

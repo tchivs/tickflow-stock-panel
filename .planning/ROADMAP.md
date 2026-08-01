@@ -172,7 +172,7 @@ Phases execute in numeric order: 10 → 11 → 12 → 13 → 14 → 15 (Phase 13
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 10. Factor Library & Multi-Factor Model | 6/6 | Complete    | 2026-08-01 |
-| 11. Portfolio Construction & Optimization | 6/6 | Complete    | 2026-08-01 |
+| 11. Portfolio Construction & Optimization | 7/1 | Complete    | 2026-08-01 |
 | 12. Risk Models & Attribution | 0/3 | Not started | - |
 | 13. Walk-Forward Validation & Parameter Search | 0/4 | Not started | - |
 | 14. Output & Boundary (RebalancePlan + Paper Rebalance) | 0/3 | Not started | - |

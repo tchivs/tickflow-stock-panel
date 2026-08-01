@@ -2,19 +2,19 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: End-to-End Factor Portfolio Pipeline — in progress
-current_phase: 11
-current_phase_name: Portfolio Construction & Optimization
-status: executing
-stopped_at: Completed 11-06-PLAN.md
-last_updated: "2026-08-01T20:25:00.000Z"
-last_activity: 2026-08-01
-last_activity_desc: 11-06 constraint hardening + artifact breadth complete — industry-cap fail-closed gate through run_optimization, covariance artifact + sha256 in risk_model_json, 11-06 tests green
+current_phase: 12
+current_phase_name: Risk Models & Attribution
+status: planning
+stopped_at: Completed 11-05-PLAN.md
+last_updated: "2026-08-01T21:21:17.017Z"
+last_activity: 2026-08-02
+last_activity_desc: Phase 11 complete, transitioned to Phase 12
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 2
-  completed_plans: 2
-  percent: 100
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
@@ -28,10 +28,10 @@ See: .planning/PROJECT.md (updated 2026-07-31)
 
 ## Current Position
 
-Phase: 11 — Portfolio Construction & Optimization
-Plan: 11-06 complete (Wave 4 — constraint hardening + artifact breadth: industry-cap fail-closed gate through run_optimization, covariance artifact + sha256 in risk_model_json)
-Status: All 6 Phase 11 plans complete — phase gate (full backend suite) pending before /gsd-verify-work
-Last activity: 2026-08-01 — 11-06 constraint hardening + artifact breadth complete
+Phase: 12 — Risk Models & Attribution
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-08-02 — Phase 11 complete, transitioned to Phase 12
 
 Progress: [██████████] 100%
 
