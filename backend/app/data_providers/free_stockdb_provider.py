@@ -121,12 +121,65 @@ class FreeStockDBProvider:
                 continue
             cat_name = parts[1]
             if names:
+                # 匹配 category-name 前缀 (子串); 纯代码输入 (如 "300843" 或
+                # "300843.TI") 不匹配任何前缀, 由调用方按完整 key 精确反查。
                 if any(name in cat_name for name in names):
                     wanted.add(cat_name)
             else:
                 wanted.add(cat_name)
         rows: list[dict[str, Any]] = []
         for cat_name in sorted(wanted):
+            items = self._vals(TABLE_BOARD, f"key:{cat_name}", "all:")
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                board = {
+                    "symbol": str(item.get("code") or ""),
+                    "code": str(item.get("code") or ""),
+                    "name": str(item.get("name") or ""),
+                    "category": str(item.get("category") or ""),
+                    "group": str(item.get("group") or ""),
+                    "source": str(item.get("source") or ""),
+                    "members": [str(s) for s in (item.get("symbols") or [])],
+                }
+                if not board["code"]:
+                    continue
+                rows.append(board)
+        if not rows:
+            return pl.DataFrame()
+        return pl.DataFrame(rows)
+
+
+    def get_board_by_codes(self, codes: list[str]) -> pl.DataFrame:
+        """Fetch boards by their index codes (e.g. ``300843.TI`` or ``300843``).
+
+        The server's keys wildcard is prefix-only, so a pure-code lookup can't
+        be expressed as ``板块:<code>*``. Enumerate all 板块 keys once (one
+        round trip), match the trailing ``:<code>`` component in memory, then
+        fetch the matching boards by their category-name prefix. Returns one
+        row per matched board (same schema as :meth:`get_boards`); empty frame
+        when no code matches.
+        """
+        if not codes:
+            return pl.DataFrame()
+        wanted_codes = {str(c).strip().split(".")[0] for c in codes if str(c).strip()}
+        if not wanted_codes:
+            return pl.DataFrame()
+        keys = self._keys("板块:*")
+        if not keys:
+            return pl.DataFrame()
+        cat_names: set[str] = set()
+        for key in keys:
+            parts = key.split(":", 2)
+            if len(parts) < 3:
+                continue
+            index_code = parts[2].strip().split(".")[0]
+            if index_code in wanted_codes:
+                cat_names.add(parts[1])
+        if not cat_names:
+            return pl.DataFrame()
+        rows: list[dict[str, Any]] = []
+        for cat_name in sorted(cat_names):
             items = self._vals(TABLE_BOARD, f"key:{cat_name}", "all:")
             for item in items:
                 if not isinstance(item, dict):

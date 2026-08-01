@@ -332,6 +332,47 @@ def test_free_stockdb_boards_fetch_members(monkeypatch: pytest.MonkeyPatch) -> N
     assert boards_by_name["电子"] == ["000020", "000021"]
 
 
+def test_free_stockdb_boards_by_code(monkeypatch: pytest.MonkeyPatch) -> None:
+    """按板块指数代码反查: keys 尾部匹配 + category-name 取数。"""
+    keys = [
+        "板块:概念_5G:300843.TI",
+        "板块:概念_人工智能:302035.TI",
+        "板块:申万一级_电子:801080.SL",
+    ]
+
+    class _CodeTransport:
+        def get(self, url: str, params: dict[str, Any] | None = None, timeout: float | None = None):
+            if (params or {}).get("cmd") == "keys":
+                return _FakeResponse(keys)
+            cat = (params or {}).get("k1", "").removeprefix("key:")
+            payload = {
+                "概念_5G": [{"code": "300843.TI", "name": "5G", "category": "概念",
+                             "group": "特色指数列表", "source": "ths",
+                             "symbols": ["000016", "000049", "000063"]}],
+                "概念_人工智能": [{"code": "302035.TI", "name": "人工智能", "category": "概念",
+                                   "group": "特色指数列表", "source": "ths",
+                                   "symbols": ["000016", "000032"]}],
+            }
+            return _FakeResponse(payload.get(cat, []))
+
+        def close(self) -> None:
+            pass
+
+    provider = FreeStockDBProvider(base_url="http://fake")
+    provider._client = _CodeTransport()  # type: ignore[assignment]
+
+    # 完整代码与裸代码均命中。
+    df = provider.get_board_by_codes(["300843.TI"])
+    assert df.height == 1
+    assert df.to_dicts()[0]["name"] == "5G"
+    df2 = provider.get_board_by_codes(["300843"])
+    assert df2.height == 1
+    assert df2.to_dicts()[0]["name"] == "5G"
+
+    # 未知代码 → 空。
+    assert provider.get_board_by_codes(["999999"]).is_empty()
+
+
 def test_bucket_minutes_session_alignment() -> None:
     from datetime import datetime
 

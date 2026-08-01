@@ -611,6 +611,17 @@ async def lifespan(app: FastAPI):
             if not sector or not isinstance(_fsdb, FreeStockDBProvider):
                 return []
             names = [sector] if isinstance(sector, str) else list(sector)
+            # 代码形式 (如 "300843.TI" 或 "300843"): get_boards 的 category-name
+            # 子串收窄命中不了纯代码, 走 get_board_by_codes 按代码精确反查。
+            if any(n.strip().split(".")[0].isdigit() for n in names if n.strip()):
+                try:
+                    frame = _fsdb.get_board_by_codes(names)
+                except Exception as e:
+                    logger.warning("board loader codes %s failed: %s", names, e)
+                    frame = None
+                if frame is not None and not frame.is_empty():
+                    return frame.to_dicts()
+                return []
             try:
                 frame = _fsdb.get_boards(names)
                 if frame is None or frame.is_empty():
@@ -632,7 +643,6 @@ async def lifespan(app: FastAPI):
                 r for r in rows
                 if any(w in str(r.get("name") or "").lower() for w in wanted)
             ]
-
         monitor_engine.set_board_loader(_board_loader)
     except Exception as e:
         logger.warning("board loader unavailable, scope=sector rules will fail-closed: %s", e)
