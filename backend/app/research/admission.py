@@ -138,9 +138,10 @@ def run_admission(
         raise ValueError("no valid observations for admission evaluation")
 
     # The shifted-label gate needs the close column, which the chain frame does
-    # not carry; join it back from the loaded governed panel.
+    # not carry; join it back from the loaded governed panel.  The shift-based
+    # label is row-order sensitive per symbol, so sort deterministically.
     close_frame = signal.loaded_panel.select(["symbol", "date", "close"]).unique(subset=["symbol", "date"])
-    leakage_frame = evaluated.join(close_frame, on=["symbol", "date"], how="inner")
+    leakage_frame = evaluated.join(close_frame, on=["symbol", "date"], how="inner").sort(["symbol", "date"])
 
     per_date_ics = _per_date_ic(evaluated)
     train_dates, val_dates = temporal_split(per_date_ics)
@@ -198,7 +199,12 @@ def run_admission(
         return _record_verdict(repo, registry, revision, "rejected", "similarity_dedup", gate_results, signal, start, end, horizon)
 
     # Gate 4: train_ic — mean IC over the first 70% of dates by order.
-    train_passed = train_ic is not None and train_ic >= TRAIN_MIN_MEAN_IC
+    train_observations = len([day for day in per_date_ics if day in train_dates])
+    train_passed = (
+        train_observations >= MIN_TRAIN_OBSERVATIONS
+        and train_ic is not None
+        and train_ic >= TRAIN_MIN_MEAN_IC
+    )
     gate_results.append(
         {
             "gate": "train_ic",
@@ -206,7 +212,7 @@ def run_admission(
             "metric": "mean_ic_train",
             "observed": train_ic,
             "threshold": TRAIN_MIN_MEAN_IC,
-            "detail": f"temporal 70/30 split; {len(train_dates)} train dates",
+            "detail": f"temporal 70/30 split; {train_observations} train observations (min {MIN_TRAIN_OBSERVATIONS})",
         }
     )
     if not train_passed:
