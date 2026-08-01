@@ -360,3 +360,104 @@ def test_factor_backtest_service_labels_pearson_and_spearman_separately() -> Non
     assert result.ic_series[0]["ic"] == pytest.approx(float(np.corrcoef([1, 2, 3, 4], [0, 0.5, 0.1, 0.9])[0, 1]), abs=1e-4)
     assert result.rank_ic_series[0]["rank_ic"] == pytest.approx(0.8)
     assert result.ic_mean != result.rank_ic_mean
+
+
+def test_monthly_series_artifact_is_checksummed_and_persisted(tmp_path: Path) -> None:
+    """The evidence bundle contains monthly_series.json with a matching descriptor."""
+    registry = _registry(tmp_path)
+    revision = registry.create_factor(name="Close", expression="close")
+    engine = StubBacktestEngine(_monthly_panel())
+    service = FactorEvaluationService(engine, registry, EvaluationArtifactService(tmp_path / "app-data"))
+
+    result = service.evaluate(_config(revision.id, end=date(2024, 2, 2)))
+
+    assert result.status == "completed"
+    monthly_descriptor = next(
+        (artifact for artifact in result.artifacts if artifact.relative_path.endswith("monthly_series.json")),
+        None,
+    )
+    assert monthly_descriptor is not None
+    path = tmp_path / "app-data" / monthly_descriptor.relative_path
+    content = path.read_bytes()
+    assert monthly_descriptor.byte_size == len(content)
+    assert monthly_descriptor.checksum_sha256 == sha256(content).hexdigest()
+
+    payload = json.loads(content)
+    assert [row["month"] for row in payload] == ["2024-01", "2024-02"]
+    assert all("ic_monthly" in row for row in payload)
+
+
+def test_result_json_carries_monthly_evidence_scalars_and_series(tmp_path: Path) -> None:
+    """The compact_result written to result.json carries the monthly evidence set."""
+    registry = _registry(tmp_path)
+    revision = registry.create_factor(name="Close", expression="close")
+    engine = StubBacktestEngine(_monthly_panel())
+    service = FactorEvaluationService(engine, registry, EvaluationArtifactService(tmp_path / "app-data"))
+
+    result = service.evaluate(_config(revision.id, end=date(2024, 2, 2)))
+
+    assert result.status == "completed"
+    result_descriptor = next(
+        (artifact for artifact in result.artifacts if artifact.relative_path.endswith("result.json")),
+        None,
+    )
+    assert result_descriptor is not None
+    payload = json.loads((tmp_path / "app-data" / result_descriptor.relative_path).read_text())
+    assert payload["icir"] == result.icir
+    assert payload["monthly_robustness"] == result.monthly_robustness
+    assert payload["coverage"]["mean"] == result.coverage["mean"]
+    assert [row["month"] for row in payload["monthly_ic_series"]] == [
+        row["month"] for row in result.monthly_ic_series
+    ]
+
+
+def test_coverage_reflects_resolved_universe_exclusion_pre_filter(tmp_path: Path) -> None:
+    """A symbol excluded by the resolved universe is not part of the coverage cross-section."""
+    from app.research.universe import UniverseResolver
+
+    repository = ResearchRepository(tmp_path / "operational.db")
+    repository.migrate()
+    # 000004.SZ is listed only from 2024-02-01; 000001-000003 are always members.
+    for symbol in ("000001.SZ", "000002.SZ", "000003.SZ"):
+        repository.insert_universe_membership(
+            universe_name="fixture-a-share",
+            symbol=symbol,
+            asset_type="stock",
+            effective_date="2024-01-01",
+            state="listed",
+            source="instruments-sync",
+            provenance_json={},
+        )
+    repository.insert_universe_membership(
+        universe_name="fixture-a-share",
+        symbol="000004.SZ",
+        asset_type="stock",
+        effective_date="2024-02-01",
+        state="listed",
+        source="instruments-sync",
+        provenance_json={},
+    )
+    registry = FactorRegistry(repository)
+    revision = registry.create_factor(name="CloseMa20", expression="close / ma20")
+    panel = _monthly_panel().with_columns(
+        pl.when((pl.col("symbol") == "000003.SZ") & (pl.col("date") == date(2024, 1, 2)))
+        .then(0.0)
+        .otherwise(pl.col("ma20"))
+        .alias("ma20")
+    )
+    engine = StubBacktestEngine(panel)
+    service = FactorEvaluationService(
+        engine,
+        registry,
+        EvaluationArtifactService(tmp_path / "app-data"),
+        universe_resolver=UniverseResolver(repository),
+    )
+
+    result = service.evaluate(_config(revision.id, end=date(2024, 2, 2)))
+
+    assert result.status == "completed"
+    series_by_date = {entry["date"]: entry["coverage"] for entry in result.coverage["coverage_series"]}
+    # On 2024-01-02 only three symbols are resolved members (000004.SZ is not yet
+    # listed).  A non-finite row for a member symbol makes coverage 2/3: the
+    # non-member symbol is excluded from the pre-filter resolved cross-section.
+    assert series_by_date["2024-01-02"] == pytest.approx(2.0 / 3.0)
