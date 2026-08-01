@@ -1,14 +1,17 @@
 ---
 gsd_state_version: 1.0
 milestone: v1.2
-milestone_name: End-to-End Factor Portfolio Pipeline
-status: planning
-last_updated: "2026-07-31T17:30:00.000Z"
+milestone_name: End-to-End Factor Portfolio Pipeline — in progress
+current_phase_name: defining requirements
+status: executing
+stopped_at: v1.2 roadmap created — Phases 10-15 defined, 20/20 requirements mapped, STATE.md refreshed
+last_updated: "2026-08-01T06:41:54.635Z"
 last_activity: 2026-07-31
+last_activity_desc: Milestone v1.2 started; ROADMAP.md written (Phases 10-15)
 progress:
   total_phases: 6
   completed_phases: 0
-  total_plans: 0
+  total_plans: 1
   completed_plans: 0
   percent: 0
 ---
@@ -26,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-07-31)
 
 Phase: Not started (defining requirements)
 Plan: —
-Status: Defining requirements
+Status: Ready to execute
 Last activity: 2026-07-31 — Milestone v1.2 started; ROADMAP.md written (Phases 10-15)
 
 Progress: [░░░░░░░░░░] 0%
