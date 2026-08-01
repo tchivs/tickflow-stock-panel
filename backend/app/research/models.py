@@ -163,13 +163,37 @@ def _collect_mean_ics(
 
 
 def _resolve_symbols(
-    registry: FactorRegistry, revision_id: str, symbols: tuple[str, ...] | None
+    revision_id: str,
+    symbols: tuple[str, ...] | None,
+    *,
+    universe: str,
+    universe_resolver: object | None = None,
+    as_of=None,
 ) -> tuple[str, ...]:
+    """Resolve the symbol universe for a revision, never from DSL field names.
+
+    ``revision.fields`` are governed *column* names (e.g. ``close``, ``ma20``),
+    not tickers; falling back to them sends ``load_panel`` after nonexistent
+    symbols (WR-04).  Symbols must be supplied explicitly, or resolved from the
+    universe resolver's membership when one is provided; otherwise fail closed.
+    """
     if symbols is not None:
         return symbols
-    revision = registry.get_revision(revision_id)
-    assert revision is not None
-    return tuple(sorted(revision.fields)) if revision.fields else ()
+    if universe_resolver is not None:
+        resolve = getattr(universe_resolver, "resolve_universe", None)
+        if resolve is not None:
+            try:
+                members, _fingerprint = resolve(universe_name=universe, as_of=as_of, asset_type="stock")
+            except TypeError:
+                # Fixture resolvers may use a narrower signature; fall through to
+                # the explicit-symbols requirement.
+                members = frozenset()
+            if members:
+                return tuple(sorted(members))
+    raise ValueError(
+        f"symbols are required for composite computation of revision {revision_id}; "
+        "pass an explicit symbol list or provide a universe_resolver"
+    )
 
 
 def _write_composite_artifact(
@@ -199,7 +223,7 @@ def _write_composite_artifact(
         ],
         metric_series=[],
         result={
-            "composite_output": "composite.json",
+            "composite_output": "signals.json",
             "columns": ["symbol", "date", "composite"],
             "input_snapshot_sha256": input_snapshot_sha256,
         },
@@ -246,7 +270,13 @@ def build_composite(
     panel_fingerprints: dict[str, str] = {}
     membership_fingerprint = ""
     for revision_id in ordered:
-        resolved_symbols = _resolve_symbols(registry, revision_id, symbols)
+        resolved_symbols = _resolve_symbols(
+            revision_id,
+            symbols,
+            universe=universe,
+            universe_resolver=universe_resolver,
+            as_of=end,
+        )
         config = _chain_config(universe, start, end, resolved_symbols)
         signal = chain.compute(revision_id=revision_id, config=config)
         signal_frames.append(signal)

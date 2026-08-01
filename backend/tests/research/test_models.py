@@ -23,6 +23,7 @@ from app.research.artifacts import ArtifactWriteError, EvaluationArtifactService
 from app.research.catalog import ExperimentCatalog, FactorEvidencePackage
 from app.research.factor_registry import FactorRegistry
 from app.research.repository import ResearchRepository
+from tests.research.conftest import FIXTURE_SYMBOLS
 
 
 @pytest.fixture
@@ -86,6 +87,7 @@ def test_equal_weight_weights_are_uniform(
         revision_ids=revision_ids,
         weighting="equal",
         universe="fixture-a-share",
+        symbols=FIXTURE_SYMBOLS,
         start=date(2024, 1, 2),
         end=date(2024, 1, 3),
     )
@@ -112,6 +114,7 @@ def test_identical_builds_produce_identical_input_snapshot_sha256(
             revision_ids=revision_ids,
             weighting="equal",
             universe="fixture-a-share",
+            symbols=FIXTURE_SYMBOLS,
             start=date(2024, 1, 2),
             end=date(2024, 1, 3),
         )
@@ -139,6 +142,7 @@ def test_output_artifact_is_immutable(
         revision_ids=(first.id, second.id),
         weighting="equal",
         universe="fixture-a-share",
+        symbols=FIXTURE_SYMBOLS,
         start=date(2024, 1, 2),
         end=date(2024, 1, 3),
         artifact_service=artifacts,
@@ -178,6 +182,7 @@ def test_output_artifact_checksum_matches_bytes(
         revision_ids=(first.id, second.id),
         weighting="equal",
         universe="fixture-a-share",
+        symbols=FIXTURE_SYMBOLS,
         start=date(2024, 1, 2),
         end=date(2024, 1, 3),
         artifact_service=artifacts,
@@ -210,6 +215,7 @@ def test_ic_weighted_weights_are_proportional_to_catalogued_mean_ic(
         revision_ids=(first.id, second.id),
         weighting="ic_weighted",
         universe="fixture-a-share",
+        symbols=FIXTURE_SYMBOLS,
         start=date(2024, 1, 2),
         end=date(2024, 1, 3),
     )
@@ -237,6 +243,7 @@ def test_ic_weighted_fails_closed_when_recorded_mean_ic_is_missing(
             revision_ids=(first.id, second.id),
             weighting="ic_weighted",
             universe="fixture-a-share",
+            symbols=FIXTURE_SYMBOLS,
             start=date(2024, 1, 2),
             end=date(2024, 1, 3),
         )
@@ -259,6 +266,7 @@ def test_repeated_compute_is_deterministic(
             revision_ids=(first.id, second.id),
             weighting="equal",
             universe="fixture-a-share",
+            symbols=FIXTURE_SYMBOLS,
             start=date(2024, 1, 2),
             end=date(2024, 1, 3),
         ).frame
@@ -293,6 +301,7 @@ def test_equal_weight_composite_matches_numeric_reference(
         revision_ids=revision_ids,
         weighting="equal",
         universe="fixture-a-share",
+        symbols=FIXTURE_SYMBOLS,
         start=date(2024, 1, 2),
         end=date(2024, 1, 3),
     )
@@ -332,3 +341,56 @@ def test_equal_weight_composite_matches_numeric_reference(
             (pl.col("symbol") == row["symbol"]) & (pl.col("date") == row["date"])
         ).select(pl.col("composite")).item()
         assert observed_value == pytest.approx(row["expected_composite"], abs=1e-9)
+
+
+def test_build_composite_requires_symbols_or_resolver(
+    research_registry: FactorRegistry,
+    stub_engine,
+    research_repository: ResearchRepository,
+    models_module,
+) -> None:
+    """WR-04: omitted symbols fail closed instead of falling back to DSL fields.
+
+    ``revision.fields`` are governed column names, not tickers; a composite
+    built with the old fallback requested ``load_panel`` for "close"/"rank"
+    and produced garbage (masked by the stub engine).  Omitting symbols with no
+    resolver must raise, and a resolver-provided universe is accepted.
+    """
+    first = research_registry.create_factor(name="Close", expression="close")
+    second = research_registry.create_factor(name="Rank", expression="rank(close)")
+    revision_ids = (first.id, second.id)
+
+    with pytest.raises(ValueError, match="symbols are required"):
+        models_module["build_composite"](
+            repo=research_repository,
+            engine=stub_engine,
+            registry=research_registry,
+            revision_ids=revision_ids,
+            weighting="equal",
+            universe="fixture-a-share",
+            start=date(2024, 1, 2),
+            end=date(2024, 1, 3),
+        )
+
+    # With a universe resolver providing membership, symbols resolve from it.
+    from tests.research.conftest import StubUniverseResolver
+
+    membership = pl.DataFrame(
+        {
+            "symbol": ["000001.SZ", "000002.SZ", "000003.SZ", "000004.SZ"] * 2,
+            "date": [date(2024, 1, 2)] * 4 + [date(2024, 1, 3)] * 4,
+        }
+    )
+    resolver = StubUniverseResolver(membership)
+    model = models_module["build_composite"](
+        repo=research_repository,
+        engine=stub_engine,
+        registry=research_registry,
+        revision_ids=revision_ids,
+        weighting="equal",
+        universe="fixture-a-share",
+        universe_resolver=resolver,
+        start=date(2024, 1, 2),
+        end=date(2024, 1, 3),
+    )
+    assert model.frame.height > 0
