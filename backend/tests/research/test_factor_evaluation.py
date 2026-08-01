@@ -290,6 +290,59 @@ def test_coverage_is_computed_pre_filter_on_resolved_universe(tmp_path: Path) ->
     assert series_by_date["2024-01-02"] == pytest.approx(1.0)
 
 
+def test_evaluation_manifest_records_universe_resolution_fingerprint(tmp_path: Path) -> None:
+    """Every completed evaluation manifest carries a universe_resolution block."""
+    from app.research.universe import UniverseResolver
+
+    repository = ResearchRepository(tmp_path / "operational.db")
+    repository.migrate()
+    for symbol in ("000001.SZ", "000002.SZ", "000003.SZ", "000004.SZ"):
+        repository.insert_universe_membership(
+            universe_name="fixture-a-share",
+            symbol=symbol,
+            asset_type="stock",
+            effective_date="2024-01-01",
+            state="listed",
+            source="instruments-sync",
+            provenance_json={},
+        )
+    registry = FactorRegistry(repository)
+    revision = registry.create_factor(name="Close", expression="close")
+    engine = StubBacktestEngine(_panel())
+    service = FactorEvaluationService(
+        engine,
+        registry,
+        EvaluationArtifactService(tmp_path / "app-data"),
+        universe_resolver=UniverseResolver(repository),
+    )
+
+    result = service.evaluate(_config(revision.id))
+
+    assert result.status == "completed"
+    assert result.input_manifest is not None
+    block = result.input_manifest["universe_resolution"]
+    assert block["method"] == "factor_universe_membership/v1"
+    assert len(block["membership_fingerprint"]) == 64
+    assert block["per_date_symbol_counts"]["min"] >= 1
+    assert block["excluded_delisted"] == []
+
+
+def test_evaluation_manifest_config_symbols_fallback_when_no_resolver(tmp_path: Path) -> None:
+    """Without a resolver the manifest records the config-symbols fallback."""
+    registry = _registry(tmp_path)
+    revision = registry.create_factor(name="Close", expression="close")
+    engine = StubBacktestEngine(_panel())
+    service = FactorEvaluationService(engine, registry, EvaluationArtifactService(tmp_path / "app-data"))
+
+    result = service.evaluate(_config(revision.id))
+
+    assert result.status == "completed"
+    block = result.input_manifest["universe_resolution"]  # type: ignore[index]
+    assert block["method"] == "config-symbols"
+    assert len(block["membership_fingerprint"]) == 64
+    assert block["per_date_symbol_counts"] == {"min": 4, "median": 4.0, "max": 4}
+
+
 def test_factor_backtest_service_labels_pearson_and_spearman_separately() -> None:
     engine = StubBacktestEngine(_panel())
     result = FactorBacktestService(engine).run(

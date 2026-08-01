@@ -28,14 +28,14 @@ from app.research.repository import ResearchRepository
 @pytest.fixture
 def signal_chain_class():
     """Deferred import: the module does not exist until 10-01."""
-    from app.research.signal_chain import FactorSignalChain  # noqa: F401
+    from app.research.signal_chain import FactorSignalChain
 
     return FactorSignalChain
 
 
 @pytest.fixture
 def signal_chain_config_class():
-    from app.research.signal_chain import SignalChainConfig  # noqa: F401
+    from app.research.signal_chain import SignalChainConfig
 
     return SignalChainConfig
 
@@ -46,7 +46,7 @@ def test_revision_panel_binding_rejects_dsl_version_mismatch_before_governed_loa
     signal_chain_class,
     signal_chain_config_class,
 ) -> None:
-    revision = research_registry.create_factor(name="Close", expression="close")
+    research_registry.create_factor(name="Close", expression="close")
     chain = signal_chain_class(stub_engine, research_registry, universe_resolver=None)
     config = signal_chain_config_class(
         universe="fixture-a-share",
@@ -158,3 +158,115 @@ def test_signal_frame_is_frozen_dataclass(
     signal_chain_class,
 ) -> None:
     assert hasattr(signal_chain_class, "compute")
+
+
+def test_chain_resolves_real_universe_membership_per_date(
+    research_registry: FactorRegistry,
+    research_repository: ResearchRepository,
+    stub_engine,
+    signal_chain_class,
+    signal_chain_config_class,
+) -> None:
+    """Real resolver: per-date membership excludes post-start listings and a delist."""
+    from app.research.universe import UniverseResolver
+
+    # 000001-000003 listed from the start; 000004.SZ lists mid-window; 000005.SZ
+    # is requested but never a member (delisted before the window).
+    for symbol in ("000001.SZ", "000002.SZ", "000003.SZ"):
+        research_repository.insert_universe_membership(
+            universe_name="fixture-a-share",
+            symbol=symbol,
+            asset_type="stock",
+            effective_date="2024-01-01",
+            state="listed",
+            source="instruments-sync",
+            provenance_json={},
+        )
+    research_repository.insert_universe_membership(
+        universe_name="fixture-a-share",
+        symbol="000004.SZ",
+        asset_type="stock",
+        effective_date="2024-01-03",
+        state="listed",
+        source="instruments-sync",
+        provenance_json={},
+    )
+    revision = research_registry.create_factor(name="Close", expression="close")
+    chain = signal_chain_class(
+        stub_engine,
+        research_registry,
+        universe_resolver=UniverseResolver(research_repository),
+    )
+    config = signal_chain_config_class(
+        universe="fixture-a-share",
+        symbols=("000001.SZ", "000002.SZ", "000003.SZ", "000004.SZ", "000005.SZ"),
+        asset_type="stock",
+        start=date(2024, 1, 2),
+        end=date(2024, 1, 3),
+        warmup_days=3,
+        forward_return_horizon=1,
+    )
+
+    frame = chain.compute(revision_id=revision.id, config=config)
+    assert frame.resolved_universe["method"] == "factor_universe_membership/v1"
+    assert frame.resolved_universe["membership_fingerprint"]
+    assert frame.resolved_universe["excluded_delisted"] == ["000005.SZ"]
+    assert frame.resolved_universe["per_date_symbol_counts"]["min"] >= 3
+
+    # The membership filter is applied to the loaded panel AFTER the single
+    # governed read: post-listing symbols appear only from their listing date.
+    loaded_day_one = frame.loaded_panel.filter(pl.col("date") == date(2024, 1, 2))
+    loaded_day_two = frame.loaded_panel.filter(pl.col("date") == date(2024, 1, 3))
+    assert "000004.SZ" not in loaded_day_one["symbol"].to_list()
+    assert "000004.SZ" in loaded_day_two["symbol"].to_list()
+    assert "000005.SZ" not in loaded_day_two["symbol"].to_list()
+
+
+def test_chain_membership_fingerprint_changes_when_membership_changes(
+    research_registry: FactorRegistry,
+    research_repository: ResearchRepository,
+    stub_engine,
+    signal_chain_class,
+    signal_chain_config_class,
+) -> None:
+    """Adding a membership row changes the chain's per-date membership fingerprint."""
+    from app.research.universe import UniverseResolver
+
+    for symbol in ("000001.SZ", "000002.SZ", "000003.SZ"):
+        research_repository.insert_universe_membership(
+            universe_name="fixture-a-share",
+            symbol=symbol,
+            asset_type="stock",
+            effective_date="2024-01-01",
+            state="listed",
+            source="instruments-sync",
+            provenance_json={},
+        )
+    revision = research_registry.create_factor(name="Close", expression="close")
+    chain = signal_chain_class(
+        stub_engine,
+        research_registry,
+        universe_resolver=UniverseResolver(research_repository),
+    )
+    config = signal_chain_config_class(
+        universe="fixture-a-share",
+        symbols=("000001.SZ", "000002.SZ", "000003.SZ", "000004.SZ"),
+        asset_type="stock",
+        start=date(2024, 1, 2),
+        end=date(2024, 1, 3),
+        warmup_days=3,
+        forward_return_horizon=1,
+    )
+
+    before = chain.compute(revision_id=revision.id, config=config).resolved_universe["membership_fingerprint"]
+    research_repository.insert_universe_membership(
+        universe_name="fixture-a-share",
+        symbol="000004.SZ",
+        asset_type="stock",
+        effective_date="2024-01-02",
+        state="listed",
+        source="instruments-sync",
+        provenance_json={},
+    )
+    after = chain.compute(revision_id=revision.id, config=config).resolved_universe["membership_fingerprint"]
+    assert before != after
