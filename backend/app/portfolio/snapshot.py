@@ -11,8 +11,8 @@ as_of 早于 artifact 数据覆盖 (lookahead) —— 都以 SnapshotBindingErro
 由 run_optimization 编排器记录为 failed run (PFOL-04), 绝不静默中断。
 
 不知道: 求解逻辑 (optimizer.py)、风险模型 (risk.py)、工件存储 (artifacts.py)、
-build_composite 的调用路径 (本模块绝不调用 build_composite —— pitfall 5, 无
-live module hand-off)。
+复合模型的构建调用路径 (本模块绝不 live module hand-off —— pitfall 5: 只消费
+快照 artifact, 绝不直接调用模型构建)。
 """
 from __future__ import annotations
 
