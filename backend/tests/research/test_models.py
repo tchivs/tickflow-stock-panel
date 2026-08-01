@@ -12,6 +12,7 @@ These tests lock the composite contracts and are expected to FAIL until 10-01 cr
 """
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import date
 from hashlib import sha256
@@ -394,3 +395,70 @@ def test_build_composite_requires_symbols_or_resolver(
         end=date(2024, 1, 3),
     )
     assert model.frame.height > 0
+
+
+def test_composite_snapshot_consumption_matches_artifact_bytes(
+    tmp_path,
+    research_registry: FactorRegistry,
+    stub_engine,
+    research_repository: ResearchRepository,
+    models_module,
+) -> None:
+    """Cross-module (11-05): the optimizer consumes the composite BY SNAPSHOT.
+
+    RESEARCH.md `## Input Snapshot Binding` integrity check 2: library composite
+    used as expected returns == artifact bytes verified by output_sha256, and the
+    run's audit root ``input_snapshot_sha256`` == the factor_model_composites
+    row's ``input_snapshot_sha256``. build_composite records the frozen artifact;
+    load_composite_snapshot (portfolio) reads exactly those bytes.
+    """
+    from app.portfolio.snapshot import load_composite_snapshot
+
+    artifacts = _fixture_artifacts(tmp_path)
+    first = research_registry.create_factor(name="Close", expression="close")
+    second = research_registry.create_factor(name="Rank", expression="rank(close)")
+    model = models_module["build_composite"](
+        repo=research_repository,
+        engine=stub_engine,
+        registry=research_registry,
+        revision_ids=(first.id, second.id),
+        weighting="equal",
+        universe="fixture-a-share",
+        symbols=FIXTURE_SYMBOLS,
+        start=date(2024, 1, 2),
+        end=date(2024, 1, 3),
+        artifact_service=artifacts,
+    )
+
+    rows = research_repository.list_model_composites(model.model_id)
+    assert len(rows) == 1
+    row = rows[0]
+
+    # 快照绑定: catalog 接缝 + 真实 artifact 字节 (checksum 验证) → as_of 横截面。
+    # 复合帧只含 2024-01-02 的横截面 (面板末日因 forward_return 丢弃)。
+    catalog = ExperimentCatalog(research_repository)
+    snapshot = load_composite_snapshot(
+        catalog,
+        model_id=model.model_id,
+        as_of=date(2024, 1, 2),
+        data_dir=tmp_path / "app-data",
+    )
+
+    # 审计根: run 的 input_snapshot_sha256 == 复合行 input_snapshot_sha256。
+    assert snapshot["input_snapshot_sha256"] == row["input_snapshot_sha256"]
+    assert snapshot["input_snapshot_sha256"] == model.input_snapshot_sha256
+
+    # 横截面 == artifact 字节里 [symbol, date, composite] 在 as_of 的取值。
+    artifact_payload = json.loads(
+        (tmp_path / "app-data" / row["artifact_relative_path"]).read_bytes()
+    )
+    expected = {
+        item["symbol"]: float(item["composite"])
+        for item in artifact_payload
+        if item["date"] == "2024-01-02"
+    }
+    assert set(snapshot["symbols"]) == set(expected)
+    assert {s: float(mu) for s, mu in zip(snapshot["symbols"], snapshot["mu"], strict=True)} == expected
+    # 工件字节的 sha256 与记录的 output_sha256 一致 (checksum 验证)。
+    artifact_bytes = (tmp_path / "app-data" / row["artifact_relative_path"]).read_bytes()
+    assert sha256(artifact_bytes).hexdigest() == row["output_sha256"]
