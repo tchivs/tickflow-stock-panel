@@ -253,3 +253,53 @@ def test_parse_iso() -> None:
     assert _parse_iso("2024-01-02T09:31:00").isoformat() == "2024-01-02T09:31:00"
     assert _parse_iso("2024-01-02").isoformat() == "2024-01-02T00:00:00"
     assert _parse_iso("") is None
+
+
+def test_free_stockdb_adj_factor_keys_recovery(monkeypatch: pytest.MonkeyPatch) -> None:
+    """keys recovers event dates; cumulative cum converts to per-event ratio."""
+    keys = ["复权:000001:20240102", "复权:000001:20240110"]
+    vals = {"复权": [{"cum": 1.2}]}  # same value returned for both dates
+
+    class _AdjTransport:
+        def __init__(self) -> None:
+            self._tables = vals
+
+        def get(self, url: str, params: dict[str, Any] | None = None, timeout: float | None = None):  # noqa: ARG002
+            if (params or {}).get("cmd") == "keys":
+                return _FakeResponse(keys)
+            return _FakeResponse(self._tables.get((params or {}).get("t", ""), []))
+
+        def close(self) -> None:
+            pass
+
+    provider = FreeStockDBProvider(base_url="http://fake")
+    provider._client = _AdjTransport()  # type: ignore[assignment]
+    df = provider.get_adj_factors(["000001"])
+    assert df.height == 2
+    rows = df.sort("trade_date").to_dicts()
+    # cum 1.2 / prev 1.0 -> 1.2 for the first event, then 1.2/1.2 -> 1.0
+    assert rows[0]["trade_date"].isoformat() == "2024-01-02"
+    assert abs(rows[0]["ex_factor"] - 1.2) < 1e-9
+    assert abs(rows[1]["ex_factor"] - 1.0) < 1e-9
+
+
+def test_bucket_minutes_session_alignment() -> None:
+    from datetime import datetime
+
+    from app.data_providers.free_stockdb_provider import _bucket_minutes
+
+    rows = []
+    # Morning 09:30-09:34 + lunch boundary 11:30 + afternoon 13:00-13:04
+    for ts in ["2026-07-28 09:30:00", "2026-07-28 09:31:00", "2026-07-28 09:32:00",
+               "2026-07-28 09:33:00", "2026-07-28 09:34:00",
+               "2026-07-28 11:30:00", "2026-07-28 13:00:00", "2026-07-28 13:04:00"]:
+        rows.append({
+            "symbol": "000001",
+            "datetime": datetime.fromisoformat(ts),
+            "open": 10.0, "high": 11.0, "low": 9.0, "close": 10.5,
+            "volume": 100.0, "amount": 1000.0, "freq": "1m",
+        })
+    buckets = _bucket_minutes(pl.DataFrame(rows), 5, "5m").sort("datetime")
+    times = [r["datetime"].strftime("%H:%M") for r in buckets.to_dicts()]
+    # 09:30 bucket holds 09:30-09:34; 11:30 and 13:00-13:04 form separate buckets.
+    assert times == ["09:30", "11:30", "13:00"]

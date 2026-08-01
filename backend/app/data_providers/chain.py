@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 _BUILTIN_CHAIN: dict[str, list[str]] = {
     "daily": ["free_stockdb", "xyz", "tickflow"],
     "minute": ["free_stockdb", "xyz", "tickflow"],
-    "adj_factor": ["tickflow"],
+    "adj_factor": ["free_stockdb", "tickflow"],
     "realtime": ["tickflow"],
     "financial": ["tickflow"],
     "instruments": ["tickflow"],

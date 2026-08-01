@@ -11,25 +11,33 @@ Wire protocol (verified against the running server at 152.53.204.161:7899):
     GET /?cmd=vals&t=<table>&k1=key:<code>&k2=all:
     GET /?cmd=vals&t=<table>&k1=key:<code>&k2=key:<date>
     GET /?cmd=vals&t=<table>&k1=key:<code>&k2=fwd:<start>,<end>
+    GET /?cmd=keys&t=<table>:<code>:<prefix>*
 
     t=日k      daily K        -> list[dict] full OHLCV + snapshot fields
     t=复权      adjustment     -> list[dict] {cum, div, give, mult, trans}
     t=分钟k     minute K       -> list[dict]
 
-Returns ``[]`` for unknown tables/keys on this server build; callers must
-treat empty results as "no data for that window" (chain fallback input).
+Adjustment-factor events are stored under keys ``复权:<code>:YYYYMMDD``. The
+``vals`` command returns factor rows without the event date, so the provider
+recovers dates via ``keys 复权:<code>:*`` and converts the cumulative ``cum``
+ratio into the per-event pre/post ratio the internal pipeline expects.
+
+Weekly/monthly bars are aggregated client-side from daily bars (the KV store
+keeps raw daily/minute only); 1/5/15/30/60-minute bars are served directly by
+the minute table. Returns ``[]`` for unknown tables/keys; callers treat empty
+results as "no data for that window" (chain fallback input).
 """
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, time, timedelta
 from typing import Any
 
 import httpx
 import polars as pl
 
 from app.data_providers.base import AssetType, ProviderCapabilities
-from app.data_providers.normalizer import normalize_daily, normalize_instruments
+from app.data_providers.normalizer import normalize_adj_factors, normalize_daily, normalize_instruments
 
 logger = logging.getLogger(__name__)
 
@@ -56,26 +64,19 @@ _DAILY_FIELD_MAP = {
 }
 _DAILY_EXTRA = ("name", "pre_close", "pct_chg", "pe_ttm", "pb", "total_mv", "turnover")
 
+# minute frequency -> min-datetime granularity key (server stores raw 1m bars;
+# 5/15/30/60 are bucketed client-side).
+_MINUTE_UNIT_MINUTES = {"1m": 1, "5m": 5, "15m": 15, "30m": 30, "60m": 60}
+
 
 class FreeStockDBProvider:
-    """HTTP client for a free-stockdb server (stockdb C++ query service).
-
-    Capability notes (this server build):
-      - daily: full history via ``vals 日k``.
-      - minute: only dates already synced into the server's ``./data``.
-      - adj_factor: unavailable over HTTP — the deployed build returns factor
-        rows without their event date (date lives in the LevelDB key, which the
-        HTTP layer drops), and ``cum`` is cumulative while the internal
-        ``ex_factor`` is a per-event pre/post ratio. The chain layer falls back
-        to TickFlow for adjustment factors.
-      - realtime/financial/instruments: not exposed over HTTP on this build.
-    """
+    """HTTP client for a free-stockdb server (stockdb C++ query service)."""
 
     name = "free_stockdb"
     capabilities = ProviderCapabilities(
         instruments=False,
         daily=True,
-        adj_factor=False,
+        adj_factor=True,
         minute=True,
         realtime=False,
         financial=False,
@@ -115,6 +116,20 @@ class FreeStockDBProvider:
             return pl.DataFrame()
         return normalize_daily(pl.concat(frames, how="diagonal_relaxed"), source=self.name)
 
+    def get_weekly(self, symbols: list[str], start_time: datetime | None = None, end_time: datetime | None = None) -> pl.DataFrame:
+        """Aggregate daily bars into ISO-week bars client-side."""
+        daily = self.get_daily(symbols, start_time, end_time)
+        if daily.is_empty():
+            return daily
+        return _aggregate_period(daily, period="week")
+
+    def get_monthly(self, symbols: list[str], start_time: datetime | None = None, end_time: datetime | None = None) -> pl.DataFrame:
+        """Aggregate daily bars into calendar-month bars client-side."""
+        daily = self.get_daily(symbols, start_time, end_time)
+        if daily.is_empty():
+            return daily
+        return _aggregate_period(daily, period="month")
+
     def get_adj_factors(
         self,
         symbols: list[str],
@@ -122,8 +137,50 @@ class FreeStockDBProvider:
         end_time: datetime | None = None,
         asset_type: AssetType = "stock",
     ) -> pl.DataFrame:
-        # Not usable over HTTP on this server build; chain falls back to TickFlow.
-        return pl.DataFrame()
+        if not symbols:
+            return pl.DataFrame()
+        rows: list[dict[str, Any]] = []
+        for symbol in symbols:
+            code = str(symbol).split(".")[0]
+            # 1. Event dates live in the LevelDB key; recover them via keys.
+            keys = self._keys(f"复权:{code}:*")
+            if not keys:
+                continue
+            events: list[tuple[date, float]] = []
+            for key in keys:
+                event_date = _parse_date(key.rsplit(":", 1)[-1])
+                if event_date is None:
+                    continue
+                if start_time is not None and event_date < start_time.date():
+                    continue
+                if end_time is not None and event_date > end_time.date():
+                    continue
+                # 2. Per-date factor value.
+                item = self._vals(TABLE_ADJ, f"key:{code}", f"key:{event_date.strftime('%Y%m%d')}")
+                if not item or not isinstance(item[0], dict):
+                    continue
+                cum = float(item[0].get("cum") or 0.0)
+                if cum <= 0:
+                    continue
+                events.append((event_date, cum))
+            if not events:
+                continue
+            events.sort(key=lambda e: e[0])
+            # 3. Convert cumulative factor to per-event pre/post ratio.
+            prev = 1.0
+            for event_date, cum in events:
+                if cum <= 0 or prev <= 0:
+                    prev = cum
+                    continue
+                rows.append({
+                    "symbol": symbol,
+                    "trade_date": event_date,
+                    "ex_factor": cum / prev,
+                })
+                prev = cum
+        if not rows:
+            return pl.DataFrame()
+        return normalize_adj_factors(rows, source=self.name)
 
     def get_minute(
         self,
@@ -134,6 +191,7 @@ class FreeStockDBProvider:
     ) -> pl.DataFrame:
         if not symbols:
             return pl.DataFrame()
+        bucket_min = _MINUTE_UNIT_MINUTES.get(freq, 1)
         frames: list[pl.DataFrame] = []
         for symbol in symbols:
             rows = self._vals_minute(TABLE_MINUTE, symbol, start_time, end_time)
@@ -161,7 +219,11 @@ class FreeStockDBProvider:
                 }))
         if not frames:
             return pl.DataFrame()
-        return pl.concat(frames, how="diagonal_relaxed")
+        raw = pl.concat(frames, how="diagonal_relaxed")
+        if bucket_min == 1:
+            return raw
+        # Bucket 1m bars into the requested interval (5/15/30/60).
+        return _bucket_minutes(raw, bucket_min, freq)
 
     def get_realtime(
         self,
@@ -171,6 +233,23 @@ class FreeStockDBProvider:
         return pl.DataFrame()
 
     # -- protocol helpers --------------------------------------------------------
+
+    def _keys(self, expr: str, timeout: float | None = None) -> list[str]:
+        """cmd=keys with a wildcard returns the matched LevelDB keys (list[str])."""
+        try:
+            resp = self._client.get(
+                self.base_url + "/",
+                params={"cmd": "keys", "t": expr},
+                timeout=timeout or self._timeout,
+            )
+            resp.raise_for_status()
+            payload = resp.json()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("free-stockdb %s keys query failed: %s", expr, e)
+            return []
+        if isinstance(payload, list):
+            return [str(k) for k in payload]
+        return []
 
     def _vals(self, table: str, k1: str, k2: str, timeout: float | None = None) -> list[Any]:
         try:
@@ -246,12 +325,100 @@ def _parse_date(value: Any) -> date | None:
 def _minute_ts(value: datetime | None, *, end: str) -> str:
     if value is None:
         return "99999999999999" if end == "end" else "00000000000000"
-    # Protocol expects a 14-digit timestamp (YYYYMMDDHHMMSS). When the caller
-    # supplies a date-only datetime, expand it to cover the whole session.
     ts = value.strftime("%Y%m%d%H%M%S")
     if ts.endswith("000000"):
         ts = ts[:8] + ("235959" if end == "end" else "093000")
     return ts[:14]
+
+
+def _date_key(value: datetime | None) -> str:
+    return value.strftime("%Y%m%d") if value else "00000000"
+
+
+def _aggregate_period(daily: pl.DataFrame, *, period: str) -> pl.DataFrame:
+    """Aggregate normalized daily bars into week (ISO) or month bars."""
+    if daily.is_empty():
+        return daily
+    period_expr = (
+        pl.col("date").dt.strftime("%G-%V")
+        if period == "week"
+        else pl.col("date").dt.strftime("%Y-%m")
+    )
+    df = daily.with_columns(
+        period_expr.alias("_period"),
+        pl.col("date").cast(pl.Datetime).alias("_dt"),
+    )
+    grouped = (
+        df.group_by(["symbol", "_period"])
+        .agg([
+            pl.col("_dt").max().dt.date().alias("date"),
+            pl.col("open").first(),
+            pl.col("high").max(),
+            pl.col("low").min(),
+            pl.col("close").last(),
+            pl.col("volume").sum(),
+            pl.col("amount").sum(),
+        ])
+        .sort(["symbol", "date"])
+        .drop("_period")
+    )
+    keep = [c for c in daily.columns if c in grouped.columns]
+    return grouped.select(keep)
+
+
+def _bucket_minutes(raw: pl.DataFrame, bucket_min: int, freq: str) -> pl.DataFrame:
+    """Bucket raw 1-minute bars into the requested interval (5/15/30/60).
+
+    A-share sessions are not contiguous in wall clock (11:30-13:00 lunch).
+    Morning bars anchor at 09:30; afternoon bars anchor at 13:00 and their
+    bucket ids are offset by the morning bucket count so 11:30 and 13:00 never
+    share a bucket.
+    """
+    if raw.is_empty():
+        return raw
+    dt = pl.col("datetime")
+    hour = dt.dt.hour().cast(pl.Int64)
+    minute = dt.dt.minute().cast(pl.Int64)
+    morning = (hour < 12) & ((hour > 9) | ((hour == 9) & (minute >= 30)))
+    afternoon = hour >= 13
+    morning_elapsed = hour * 60 + minute - (9 * 60 + 30)  # 0..120
+    afternoon_elapsed = hour * 60 + minute - (13 * 60)  # 0..120
+    # Bucket ids: morning 0..M-1, afternoon M..2M-1. Morning elapsed 120 is the
+    # final morning minute (11:30) and must stay in morning bucket M-1 (not
+    # spill into afternoon's M), so cap the morning bucket index at M-1.
+    morning_bucket = pl.min_horizontal(morning_elapsed // bucket_min, 120 // bucket_min - 1)
+    bucket = (
+        pl.when(morning)
+        .then(morning_bucket)
+        .otherwise(
+            pl.when(afternoon)
+            .then(afternoon_elapsed // bucket_min + 120 // bucket_min)
+            .otherwise(None)
+        )
+    )
+    df = raw.with_columns(
+        bucket.alias("_bucket"),
+        dt.dt.date().alias("_date"),
+    )
+    grouped = (
+        df.filter(pl.col("_bucket").is_not_null())
+        .group_by(["symbol", "_date", "_bucket"])
+        .agg([
+            pl.col("datetime").min().alias("datetime"),
+            pl.col("open").first(),
+            pl.col("high").max(),
+            pl.col("low").min(),
+            pl.col("close").last(),
+            pl.col("volume").sum(),
+            pl.col("amount").sum(),
+        ])
+        .sort(["symbol", "datetime"])
+        .drop(["_date", "_bucket"])
+        .with_columns(pl.lit(freq).alias("freq"))
+    )
+    return grouped
+
+
 
 
 def _parse_minute_ts(value: int) -> datetime | None:
@@ -262,8 +429,3 @@ def _parse_minute_ts(value: int) -> datetime | None:
         return datetime.strptime(s[:14], "%Y%m%d%H%M%S")
     except ValueError:
         return None
-
-
-def _date_key(value: datetime | None) -> str:
-    return value.strftime("%Y%m%d") if value else "00000000"
-
