@@ -425,6 +425,15 @@ class FactorEvaluationService:
         schema = {name: str(dtype) for name, dtype in loaded.schema.items()}
         observed_start = loaded.select(pl.col("date").min()).item()
         observed_end = loaded.select(pl.col("date").max()).item()
+        # IN-03: resolved_symbols records the symbols actually loaded into the
+        # governed panel (membership-resolved union), not the requested config
+        # symbols.  When a universe resolver narrows the cross-section, the
+        # manifest must reflect what the chain truly evaluated.
+        resolved_symbols = (
+            sorted(loaded.select(pl.col("symbol")).unique().get_column("symbol").to_list())
+            if "symbol" in loaded.columns
+            else []
+        )
         source_reference = {
             "loader": "BacktestEngine.load_panel",
             "source_kind": "governed_enriched_parquet",
@@ -440,7 +449,7 @@ class FactorEvaluationService:
         return {
             "asset_type": resolved_config["asset_type"],
             "universe": resolved_config["universe"],
-            "resolved_symbols": list(resolved_config["symbols"]),
+            "resolved_symbols": resolved_symbols,
             "requested_start": resolved_config["start"],
             "requested_end": resolved_config["end"],
             "required_source_fields": required_columns,
