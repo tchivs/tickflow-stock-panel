@@ -77,26 +77,31 @@ def _ic_correlation_duplicate(
 ) -> float:
     """Worst |Pearson| between the candidate's and any admitted factor's per-date IC.
 
-    The per-date IC series are computed on the val window; both series are
-    truncated to their common finite overlap.  Returns 0.0 when no two-point
-    overlap exists (a constant IC series is a degenerate cross-section).
+    The per-date IC series are computed on the val window; each pair is aligned by
+    intersecting the dates both series actually observe (a sparse admitted series
+    may have dropped dates whose per-date IC was null).  Returns the signed
+    correlation of the admitted factor with the largest |correlation|, so a
+    strongly anti-correlated twin (correlation ~ -1.0) is as clearly flagged as a
+    positively correlated twin.  Returns 0.0 when no two-point overlap exists (a
+    constant IC series is a degenerate cross-section).
     """
     ordered_val = sorted(val_dates)
-    candidate_values = np.array(
-        [per_date_ics[day] for day in ordered_val if day in per_date_ics], dtype=float
-    )
-    if len(candidate_values) < 2 or float(np.std(candidate_values)) == 0:
+    candidate_dates = set(per_date_ics) & set(ordered_val)
+    if len(candidate_dates) < 2:
+        return 0.0
+    candidate_values = np.array([per_date_ics[day] for day in ordered_val if day in candidate_dates], dtype=float)
+    if float(np.std(candidate_values)) == 0:
         return 0.0
     worst = 0.0
     for _admitted_id, series in admitted_ic_series.items():
-        admitted_values = np.array(
-            [series[day] for day in ordered_val if day in series], dtype=float
-        )
-        if len(admitted_values) < 2:
+        common_dates = sorted(candidate_dates & set(series) & set(ordered_val))
+        if len(common_dates) < 2:
             continue
-        limit = min(len(candidate_values), len(admitted_values))
-        correlation = float(np.corrcoef(candidate_values[:limit], admitted_values[:limit])[0, 1])
-        worst = max(worst, abs(correlation) if np.isfinite(correlation) else 0.0)
+        candidate_values = np.array([per_date_ics[d] for d in common_dates], dtype=float)
+        admitted_values = np.array([series[d] for d in common_dates], dtype=float)
+        correlation = float(np.corrcoef(candidate_values, admitted_values)[0, 1])
+        if np.isfinite(correlation) and abs(correlation) > abs(worst):
+            worst = correlation
     return worst
 
 

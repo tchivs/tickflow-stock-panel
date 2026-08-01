@@ -296,3 +296,35 @@ def test_min_train_observations_rejects_short_window(tmp_path) -> None:
     assert trail["evaluation_run_ids"]
     assert trail["experiment_snapshot_ids"]
     assert len(trail["gate_results"]) == 4
+
+
+def test_ic_correlation_dedup_aligns_sparse_admitted_dates(tmp_path) -> None:
+    """CR-02: a sparse admitted IC series is date-aligned before correlation.
+
+    The old implementation truncated both arrays to ``min(len)`` positionally,
+    pairing a candidate with a SPARSE admitted series at mismatched dates.  In
+    the fixture below the candidate observes all five val dates while the
+    admitted series drops ``d0``; the positional pairing happens to pair
+    anti-aligned values as if they were in phase and returns **+1.0**.  The
+    date-intersected gate returns **-1.0** — the true anti-correlation of the
+    common dates.
+    """
+    from app.research.admission import _ic_correlation_duplicate
+
+    candidate = {"d0": 0.1, "d1": 0.2, "d2": 0.1, "d3": 0.2, "d4": 0.1}
+    admitted = {"d1": 0.1, "d2": 0.2, "d3": 0.1, "d4": 0.2}  # sparse: d0 dropped
+    val_dates = {"d0", "d1", "d2", "d3", "d4"}
+
+    observed = _ic_correlation_duplicate(candidate, {"admitted": admitted}, val_dates=val_dates)
+
+    # Date-aligned reference: common dates are d1..d4 and the series are
+    # perfectly anti-correlated there.
+    common = sorted(set(candidate) & set(admitted) & set(val_dates))
+    candidate_values = np.array([candidate[day] for day in common], dtype=float)
+    admitted_values = np.array([admitted[day] for day in common], dtype=float)
+    reference = float(np.corrcoef(candidate_values, admitted_values)[0, 1])
+    assert reference == pytest.approx(-1.0)
+    assert observed == pytest.approx(-1.0, abs=1e-9)
+    # The gate's signed worst is anti-correlated, NOT the spurious +1.0 the
+    # positional truncation produced.
+    assert observed < 0.0
