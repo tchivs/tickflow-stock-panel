@@ -10,13 +10,18 @@ from hashlib import sha256
 import json
 import math
 import re
-from typing import Final, TypeAlias
+from typing import Final, Literal, TypeAlias
 
 import polars as pl
 
 
-DSL_VERSION: Final = "factor-dsl-v1"
+DSL_VERSION: Final = "factor-dsl-v2"
 MAX_ROLLING_WINDOW: Final = 252
+
+# Leakage gate threshold (FACT-04): |IC| between a clean factor and the displaced
+# label must collapse to at most this.  Also used by admission's no_label_leakage
+# stage; kept in the DSL so every DSL change re-verifies against it.
+SHIFTED_LABEL_MAX_ABS_IC: Final = 0.02
 
 # Governed/enriched numeric columns only.  Non-numeric identity and date columns
 # are intentionally absent, so they cannot enter a factor expression.
@@ -31,6 +36,14 @@ ALLOWED_FIELDS: Final[frozenset[str]] = frozenset({
     "annual_vol_20d", "rsi_6", "rsi_14", "rsi_24",
 })
 
+# Label/identity columns that carry forward-looking or per-row identity information.
+# They are intentionally excluded from ALLOWED_FIELDS and denied explicitly so the
+# diagnostic names the field instead of reporting a generic unknown field.
+DENIED_FIELDS: Final[frozenset[str]] = frozenset({
+    "date", "symbol", "label", "forward_return",
+    "_forward_return", "_factor", "_rank", "_zscore",
+})
+
 _FUNCTION_ARITY: Final[dict[str, int]] = {
     "abs": 1,
     "sign": 1,
@@ -39,6 +52,21 @@ _FUNCTION_ARITY: Final[dict[str, int]] = {
     "rank": 1,
     "zscore": 1,
     "rolling_mean": 2,
+}
+
+PartitionContext: TypeAlias = Literal["pointwise", "per_date", "per_symbol"]
+
+# Declared partition semantics for every stateful operator (FACT-04).  A function
+# added to _FUNCTION_ARITY without a matching entry here is a compile error and
+# fails the table-consistency test set(_FUNCTION_ARITY) == set(_FUNCTION_PARTITION).
+_FUNCTION_PARTITION: Final[dict[str, PartitionContext]] = {
+    "abs": "pointwise",
+    "sign": "pointwise",
+    "log1p": "pointwise",
+    "clip": "pointwise",
+    "rank": "per_date",          # matches .over("date") in _compile_node
+    "zscore": "per_date",        # matches .over("date")
+    "rolling_mean": "per_symbol",  # matches .over("symbol")
 }
 
 
@@ -117,6 +145,7 @@ class FactorFeatures:
     fields: frozenset[str]
     operators: frozenset[str]
     functions: frozenset[str]
+    partition_context: frozenset[str]
 
     @property
     def operator_function_set(self) -> frozenset[str]:
@@ -241,8 +270,7 @@ class _Parser:
             self._advance()
             if self.current.kind == "(":
                 return self._call(token)
-            if token.value not in ALLOWED_FIELDS:
-                raise FactorDslError(f"unknown governed numeric field {token.value!r}", token.location)
+            _validate_field_name(token.value, token.location)
             return Field(token.value, token.location)
         if token.kind == "(":
             self._advance()
@@ -282,6 +310,12 @@ def _literal_number(expression: Expression, message: str, location: SourceLocati
 
 
 def _validate_call(call: Call) -> None:
+    if call.name not in _FUNCTION_PARTITION:
+        raise FactorDslError(
+            f"function {call.name!r} has no declared partition context "
+            "(add an entry to _FUNCTION_PARTITION)",
+            call.location,
+        )
     if call.name == "clip":
         low = _literal_number(call.arguments[1], "clip lower bound must be a numeric literal", call.arguments[1].location)
         high = _literal_number(call.arguments[2], "clip upper bound must be a numeric literal", call.arguments[2].location)
@@ -295,14 +329,25 @@ def _validate_call(call: Call) -> None:
             )
 
 
+def _denied_field_error(name: str, location: SourceLocation) -> FactorDslError:
+    return FactorDslError(f"denied label/identity field {name!r} cannot enter a factor expression", location)
+
+
+def _validate_field_name(name: str, location: SourceLocation) -> None:
+    """Reject denied label/identity fields before the generic unknown-field path."""
+    if name in DENIED_FIELDS:
+        raise _denied_field_error(name, location)
+    if name not in ALLOWED_FIELDS:
+        raise FactorDslError(f"unknown governed numeric field {name!r}", location)
+
+
 def _validate_expression(expression: Expression) -> None:
     if isinstance(expression, Number):
         if not math.isfinite(expression.value):
             raise FactorDslError("numeric literal must be finite", expression.location)
         return
     if isinstance(expression, Field):
-        if expression.name not in ALLOWED_FIELDS:
-            raise FactorDslError(f"unknown governed numeric field {expression.name!r}", expression.location)
+        _validate_field_name(expression.name, expression.location)
         return
     if isinstance(expression, Unary):
         if expression.operator != "-":
@@ -320,6 +365,12 @@ def _validate_expression(expression: Expression) -> None:
     if isinstance(expression, Call):
         if expression.name not in _FUNCTION_ARITY or len(expression.arguments) != _FUNCTION_ARITY[expression.name]:
             raise FactorDslError(f"invalid call to {expression.name!r}", expression.location)
+        if expression.name not in _FUNCTION_PARTITION:
+            raise FactorDslError(
+                f"function {expression.name!r} has no declared partition context "
+                "(add an entry to _FUNCTION_PARTITION)",
+                expression.location,
+            )
         for argument in expression.arguments:
             _validate_expression(argument)
         _validate_call(expression)
@@ -419,7 +470,32 @@ def extract_features(expression: Expression) -> FactorFeatures:
         fields=frozenset(fields),
         operators=frozenset(operators),
         functions=frozenset(functions),
+        partition_context=_partition_context(expression),
     )
+
+
+def _partition_context(expression: Expression) -> frozenset[str]:
+    """Effective partition context: the union of every leaf operator's context.
+
+    Fields and binary/unary operators are pointwise; a function call contributes
+    its declared _FUNCTION_PARTITION context (the union collapses to pointwise
+    when no stateful operator is present).
+    """
+    contexts: set[str] = set()
+
+    def visit(node: Expression) -> None:
+        if isinstance(node, Call):
+            contexts.add(_FUNCTION_PARTITION[node.name])
+            for argument in node.arguments:
+                visit(argument)
+        elif isinstance(node, Unary):
+            visit(node.operand)
+        elif isinstance(node, Binary):
+            visit(node.left)
+            visit(node.right)
+
+    visit(expression)
+    return frozenset(contexts) if contexts else frozenset({"pointwise"})
 
 
 def parse_factor(source: str) -> ParsedFactor:
@@ -456,8 +532,7 @@ def _compile_node(expression: Expression) -> pl.Expr:
     if isinstance(expression, Field):
         # Validation is repeated at this boundary: manually constructed ASTs do not
         # gain access to arbitrary columns.
-        if expression.name not in ALLOWED_FIELDS:
-            raise FactorDslError(f"unknown governed numeric field {expression.name!r}", expression.location)
+        _validate_field_name(expression.name, expression.location)
         return pl.col(expression.name)
     if isinstance(expression, Unary):
         return -_compile_node(expression.operand)
@@ -475,6 +550,12 @@ def _compile_node(expression: Expression) -> pl.Expr:
         raise FactorDslError(f"unsupported binary operator {expression.operator!r}", expression.location)
     if isinstance(expression, Call):
         arguments = tuple(_compile_node(argument) for argument in expression.arguments)
+        if expression.name not in _FUNCTION_PARTITION:
+            raise FactorDslError(
+                f"function {expression.name!r} has no declared partition context "
+                "(add an entry to _FUNCTION_PARTITION)",
+                expression.location,
+            )
         if expression.name == "abs":
             return arguments[0].abs()
         if expression.name == "sign":
@@ -495,3 +576,27 @@ def _compile_node(expression: Expression) -> pl.Expr:
             return arguments[0].rolling_mean(window_size=window, min_samples=1).over("symbol")
         raise FactorDslError(f"unknown factor function {expression.name!r}", expression.location)
     raise TypeError("expression is not a factor DSL AST node")
+
+
+def shifted_label_ic(evaluated: pl.DataFrame, *, horizon: int) -> float:
+    """Deterministic shifted-label leakage gate: IC with the label displaced one extra horizon.
+
+    The label is displaced so it is misaligned with the factor: the forward return
+    over ``[t + H, t + 2H]`` is correlated with the factor observed at ``t``.  A
+    clean factor has no information about the misaligned window and its IC collapses
+    to ~0; a lookahead factor that embeds future information shows nonzero IC.
+    Returns ``abs(mean(per-date IC))`` and ``inf`` when no finite per-date
+    correlation survives (an empty cross-section cannot be measured).
+    """
+    displaced = evaluated.with_columns(
+        (
+            pl.col("close").shift(-2 * horizon).over("symbol")
+            / pl.col("close").shift(-horizon).over("symbol")
+            - 1.0
+        ).alias("_shifted_label")
+    )
+    ic = displaced.group_by("date").agg(
+        pl.corr(pl.col("_factor"), pl.col("_shifted_label")).alias("ic")
+    )["ic"].drop_nulls()
+    ic = ic.filter(ic.is_finite())
+    return float(abs(ic.mean())) if len(ic) else float("inf")

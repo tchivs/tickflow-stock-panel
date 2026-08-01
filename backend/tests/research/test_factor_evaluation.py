@@ -83,7 +83,7 @@ def test_evaluation_reports_distinct_ic_rankic_and_reproducible_evidence(tmp_pat
         "id": revision.id,
         "factor_id": revision.factor_id,
         "revision_number": 1,
-        "dsl_version": "factor-dsl-v1",
+        "dsl_version": "factor-dsl-v2",
         "canonical_expression": "close",
         "ast_signature": revision.ast_signature,
     }

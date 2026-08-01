@@ -7,7 +7,7 @@ from typing import Any, Literal, Mapping
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.research.factor_dsl import ALLOWED_FIELDS, FactorDslError, parse_factor
+from app.research.factor_dsl import ALLOWED_FIELDS, DSL_VERSION, FactorDslError, parse_factor
 from app.research.hypotheses import HypothesisUnavailableError
 
 
@@ -125,7 +125,7 @@ def _validate_evaluation_guard(request: Request, payload: FactorEvaluationReques
 @router.get("/dsl/options")
 def dsl_options() -> dict[str, Any]:
     return {
-        "dsl_version": "factor-dsl-v1",
+        "dsl_version": DSL_VERSION,
         "fields": sorted(ALLOWED_FIELDS),
         "functions": {
             "abs": ["value"],
