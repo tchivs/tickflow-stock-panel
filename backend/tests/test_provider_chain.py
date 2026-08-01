@@ -373,6 +373,46 @@ def test_free_stockdb_boards_by_code(monkeypatch: pytest.MonkeyPatch) -> None:
     assert provider.get_board_by_codes(["999999"]).is_empty()
 
 
+def test_free_stockdb_board_cache_reuses_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    """板块 keys 只枚举一次; TTL 内复用; clear 后重新枚举。"""
+    keys = ["板块:概念_5G:300843.TI", "板块:概念_人工智能:302035.TI"]
+    call_log: list[str] = []
+
+    class _CacheTransport:
+        def get(self, url: str, params: dict[str, Any] | None = None, timeout: float | None = None):
+            cmd = (params or {}).get("cmd")
+            if cmd == "keys":
+                call_log.append("keys")
+                return _FakeResponse(keys)
+            cat = (params or {}).get("k1", "").removeprefix("key:")
+            call_log.append(f"vals:{cat}")
+            payload = {
+                "概念_5G": [{"code": "300843.TI", "name": "5G", "category": "概念",
+                             "group": "特色指数列表", "source": "ths",
+                             "symbols": ["000016"]}],
+                "概念_人工智能": [{"code": "302035.TI", "name": "人工智能", "category": "概念",
+                                    "group": "特色指数列表", "source": "ths",
+                                    "symbols": ["000032"]}],
+            }
+            return _FakeResponse(payload.get(cat, []))
+
+        def close(self) -> None:
+            pass
+
+    provider = FreeStockDBProvider(base_url="http://fake", board_ttl_seconds=3600)
+    provider._client = _CacheTransport()  # type: ignore[assignment]
+
+    provider.get_board_by_codes(["300843.TI"])
+    provider.get_board_by_codes(["300843.TI"])  # 命中 keys + vals 缓存
+    provider.get_board_by_codes(["302035.TI"])  # keys 缓存, 仅新 vals
+    assert call_log == ["keys", "vals:概念_5G", "vals:概念_人工智能"]
+
+    provider.clear_board_cache()
+    call_log.clear()
+    provider.get_board_by_codes(["300843.TI"])
+    assert call_log == ["keys", "vals:概念_5G"]
+
+
 def test_bucket_minutes_session_alignment() -> None:
     from datetime import datetime
 

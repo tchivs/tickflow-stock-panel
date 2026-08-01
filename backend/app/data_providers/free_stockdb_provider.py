@@ -30,7 +30,9 @@ results as "no data for that window" (chain fallback input).
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, time, timedelta
+import threading
+import time
+from datetime import date, datetime
 from typing import Any
 
 import httpx
@@ -85,11 +87,21 @@ class FreeStockDBProvider:
         financial=False,
     )
 
-    def __init__(self, base_url: str = "http://127.0.0.1:7899", timeout: float = 20.0) -> None:
+    def __init__(
+        self,
+        base_url: str = "http://127.0.0.1:7899",
+        timeout: float = 20.0,
+        board_ttl_seconds: float = 3600.0,
+    ) -> None:
         self.base_url = base_url.rstrip("/")
         self._timeout = timeout
         self._client = httpx.Client(timeout=timeout)
-
+        # 板块数据日更; keys 枚举 + 已查 category-name → board dict 缓存避免
+        # 监控轮询每轮全扫 1337 块。TTL 默认 1h, 可通过 board_ttl_seconds 调。
+        self._board_ttl = board_ttl_seconds
+        self._board_keys_cache: tuple[float, list[str]] | None = None
+        self._board_vals_cache: dict[str, tuple[float, list[Any]]] = {}
+        self._board_lock = threading.Lock()
     def close(self) -> None:
         self._client.close()
 
@@ -111,7 +123,7 @@ class FreeStockDBProvider:
         Returns one row per board: symbol/code/name/category/group/source/
         members (List[str] of 6-digit member symbols).
         """
-        keys = self._keys("板块:*")
+        keys = self._board_keys()
         if not keys:
             return pl.DataFrame()
         wanted: set[str] = set()
@@ -129,7 +141,7 @@ class FreeStockDBProvider:
                 wanted.add(cat_name)
         rows: list[dict[str, Any]] = []
         for cat_name in sorted(wanted):
-            items = self._vals(TABLE_BOARD, f"key:{cat_name}", "all:")
+            items = self._board_vals(cat_name)
             for item in items:
                 if not isinstance(item, dict):
                     continue
@@ -165,7 +177,7 @@ class FreeStockDBProvider:
         wanted_codes = {str(c).strip().split(".")[0] for c in codes if str(c).strip()}
         if not wanted_codes:
             return pl.DataFrame()
-        keys = self._keys("板块:*")
+        keys = self._board_keys()
         if not keys:
             return pl.DataFrame()
         cat_names: set[str] = set()
@@ -180,7 +192,7 @@ class FreeStockDBProvider:
             return pl.DataFrame()
         rows: list[dict[str, Any]] = []
         for cat_name in sorted(cat_names):
-            items = self._vals(TABLE_BOARD, f"key:{cat_name}", "all:")
+            items = self._board_vals(cat_name)
             for item in items:
                 if not isinstance(item, dict):
                     continue
@@ -337,6 +349,40 @@ class FreeStockDBProvider:
     ) -> pl.DataFrame:
         return pl.DataFrame()
 
+
+    def _board_keys(self) -> list[str]:
+        """Enumerable 板块 keys with TTL cache (thread-safe)."""
+        now = time.monotonic()
+        cached = self._board_keys_cache
+        if cached is not None and now - cached[0] < self._board_ttl:
+            return cached[1]
+        with self._board_lock:
+            cached = self._board_keys_cache
+            if cached is not None and now - cached[0] < self._board_ttl:
+                return cached[1]
+            keys = self._keys("板块:*")
+            self._board_keys_cache = (time.monotonic(), keys)
+            return keys
+
+    def _board_vals(self, cat_name: str) -> list[Any]:
+        """Fetch one board's dict via its category-name k1, with TTL cache."""
+        now = time.monotonic()
+        cached = self._board_vals_cache.get(cat_name)
+        if cached is not None and now - cached[0] < self._board_ttl:
+            return cached[1]
+        with self._board_lock:
+            cached = self._board_vals_cache.get(cat_name)
+            if cached is not None and now - cached[0] < self._board_ttl:
+                return cached[1]
+            items = self._vals(TABLE_BOARD, f"key:{cat_name}", "all:")
+            self._board_vals_cache[cat_name] = (time.monotonic(), items)
+            return items
+
+    def clear_board_cache(self) -> None:
+        """Drop cached 板块 keys/values (e.g. after a server data sync)."""
+        with self._board_lock:
+            self._board_keys_cache = None
+            self._board_vals_cache.clear()
     # -- protocol helpers --------------------------------------------------------
 
     def _keys(self, expr: str, timeout: float | None = None) -> list[str]:
