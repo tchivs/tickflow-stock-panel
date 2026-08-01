@@ -12,6 +12,7 @@ from pathlib import Path, PurePosixPath
 import re
 import sqlite3
 from typing import Any, Iterator, Mapping, Sequence
+import uuid
 
 from app.operational.migrations import migrate_operational_db
 
@@ -480,6 +481,278 @@ class ResearchRepository:
             retained = self._experiment_row(connection, experiment_id)
         assert retained is not None
         return retained
+
+    def list_comparison_candidates(self) -> list[dict[str, Any]]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                """SELECT id FROM research_experiments
+                   WHERE status = 'completed' AND validated = 1 AND retained_at IS NOT NULL
+                   ORDER BY retained_at, created_at, id"""
+            ).fetchall()
+            return [self._experiment_row(connection, row["id"]) for row in rows]  # type: ignore[list-item]
+
+    # ------------------------------------------------------------------
+    # Phase 10 append-only tables (PIT universe + admission + composite).
+    # Every insert below follows the repository's append-only convention:
+    # canonical JSON serialization, transactional writes, and no UPDATE/DELETE
+    # paths (the migration enforces immutability triggers at the SQL level).
+    # ------------------------------------------------------------------
+
+    def insert_universe_membership(
+        self,
+        *,
+        universe_name: str,
+        symbol: str,
+        asset_type: str,
+        effective_date: str,
+        state: str,
+        source: str,
+        provenance_json: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Append one PIT membership event. A delist is a new row, never an UPDATE."""
+        if state not in {"listed", "delisted"}:
+            raise ValueError("membership state must be listed or delisted")
+        if asset_type not in {"stock", "etf"}:
+            raise ValueError("asset_type must be stock or etf")
+        membership_id = uuid.uuid4().hex
+        now = _now()
+        with self._connection() as connection, connection:
+            try:
+                connection.execute(
+                    """INSERT INTO factor_universe_membership (
+                           id, universe_name, symbol, asset_type, effective_date,
+                           state, source, provenance_json, created_at
+                       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        membership_id,
+                        universe_name,
+                        symbol,
+                        asset_type,
+                        effective_date,
+                        state,
+                        source,
+                        _json(dict(provenance_json), "membership provenance"),
+                        now,
+                    ),
+                )
+            except sqlite3.IntegrityError as error:
+                raise ValueError("universe membership row conflicts with a persisted event") from error
+            row = connection.execute(
+                "SELECT * FROM factor_universe_membership WHERE id = ?", (membership_id,)
+            ).fetchone()
+        if row is None:
+            raise RuntimeError("universe membership row was not persisted")
+        record = dict(row)
+        record["provenance"] = json.loads(record.pop("provenance_json"))
+        return record
+
+    def resolve_universe_memberships(
+        self, *, universe_name: str, as_of: str, asset_type: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Latest membership event per symbol with ``effective_date <= as_of``.
+
+        A symbol is a member when its latest event is ``listed``; a delist event
+        closes membership as-of without deleting the earlier row (append-only).
+        """
+        query = (
+            """SELECT membership.* FROM factor_universe_membership AS membership
+               JOIN (
+                   SELECT symbol, MAX(effective_date) AS effective_date
+                   FROM factor_universe_membership
+                   WHERE universe_name = ? AND effective_date <= ?
+                   GROUP BY symbol
+               ) AS latest
+                 ON latest.symbol = membership.symbol
+                AND latest.effective_date = membership.effective_date
+               WHERE membership.universe_name = ? AND membership.effective_date <= ?"""
+        )
+        parameters: list[object] = [universe_name, as_of, universe_name, as_of]
+        if asset_type is not None:
+            query += " AND membership.asset_type = ?"
+            parameters.append(asset_type)
+        with self._connection() as connection:
+            rows = connection.execute(query, parameters).fetchall()
+        records: list[dict[str, Any]] = []
+        for row in rows:
+            record = dict(row)
+            record["provenance"] = json.loads(record.pop("provenance_json"))
+            records.append(record)
+        return records
+
+    def insert_admission_verdict(
+        self,
+        *,
+        revision_id: str,
+        policy_version: str,
+        verdict: str,
+        reason: str,
+        gates_json: Sequence[Mapping[str, Any]],
+        candidate_trail_json: Mapping[str, Any],
+        resolved_universe_json: Mapping[str, Any],
+        input_snapshot_sha256: str,
+    ) -> dict[str, Any]:
+        """Append one immutable admission verdict (admission or rejection)."""
+        if verdict not in {"admitted", "rejected"}:
+            raise ValueError("verdict must be admitted or rejected")
+        if not re.fullmatch(r"[0-9a-f]{64}", input_snapshot_sha256):
+            raise ValueError("input_snapshot_sha256 must be a lowercase SHA-256 hex digest")
+        verdict_id = uuid.uuid4().hex
+        now = _now()
+        with self._connection() as connection, connection:
+            try:
+                connection.execute(
+                    """INSERT INTO factor_admission_verdicts (
+                           id, revision_id, policy_version, verdict, reason, gates_json,
+                           candidate_trail_json, resolved_universe_json,
+                           input_snapshot_sha256, created_at
+                       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        verdict_id,
+                        revision_id,
+                        policy_version,
+                        verdict,
+                        reason,
+                        _json(list(gates_json), "admission gates"),
+                        _json(dict(candidate_trail_json), "admission candidate trail"),
+                        _json(dict(resolved_universe_json), "resolved universe"),
+                        input_snapshot_sha256,
+                        now,
+                    ),
+                )
+            except sqlite3.IntegrityError as error:
+                raise ValueError(
+                    "an admission verdict already exists for this revision and policy"
+                ) from error
+            row = connection.execute(
+                "SELECT * FROM factor_admission_verdicts WHERE id = ?", (verdict_id,)
+            ).fetchone()
+        if row is None:
+            raise RuntimeError("admission verdict was not persisted")
+        record = dict(row)
+        record["gates"] = json.loads(record.pop("gates_json"))
+        record["candidate_trail"] = json.loads(record.pop("candidate_trail_json"))
+        record["resolved_universe"] = json.loads(record.pop("resolved_universe_json"))
+        return record
+
+    def get_admission_verdict(self, revision_id: str, policy_version: str) -> dict[str, Any] | None:
+        """Return the persisted verdict for a (revision, policy) pair, if any."""
+        with self._connection() as connection:
+            row = connection.execute(
+                """SELECT * FROM factor_admission_verdicts
+                   WHERE revision_id = ? AND policy_version = ?""",
+                (revision_id, policy_version),
+            ).fetchone()
+        if row is None:
+            return None
+        record = dict(row)
+        record["gates"] = json.loads(record.pop("gates_json"))
+        record["candidate_trail"] = json.loads(record.pop("candidate_trail_json"))
+        record["resolved_universe"] = json.loads(record.pop("resolved_universe_json"))
+        return record
+
+    def insert_model_definition(
+        self,
+        *,
+        model_id: str,
+        name: str,
+        weighting: str,
+        revision_ids: Sequence[str],
+        weights: Mapping[str, float],
+        input_snapshot_sha256: str,
+    ) -> dict[str, Any]:
+        """Append one immutable composite-model definition."""
+        if weighting not in {"equal", "ic_weighted"}:
+            raise ValueError("weighting must be equal or ic_weighted")
+        if not re.fullmatch(r"[0-9a-f]{64}", input_snapshot_sha256):
+            raise ValueError("input_snapshot_sha256 must be a lowercase SHA-256 hex digest")
+        now = _now()
+        with self._connection() as connection, connection:
+            connection.execute(
+                """INSERT INTO factor_model_models (
+                       model_id, name, weighting, revision_ids_json, weights_json,
+                       input_snapshot_sha256, created_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        model_id,
+                        name,
+                        weighting,
+                        _json(sorted(revision_ids), "model revision ids"),
+                        _json(dict(weights), "model weights"),
+                        input_snapshot_sha256,
+                        now,
+                    ),
+            )
+            row = connection.execute(
+                "SELECT * FROM factor_model_models WHERE model_id = ?", (model_id,)
+            ).fetchone()
+        if row is None:
+            raise RuntimeError("model definition was not persisted")
+        record = dict(row)
+        record["revision_ids"] = json.loads(record.pop("revision_ids_json"))
+        record["weights"] = json.loads(record.pop("weights_json"))
+        return record
+
+    def get_model_definition(self, model_id: str) -> dict[str, Any] | None:
+        """Return the persisted composite-model definition, if any."""
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM factor_model_models WHERE model_id = ?", (model_id,)
+            ).fetchone()
+        if row is None:
+            return None
+        record = dict(row)
+        record["revision_ids"] = json.loads(record.pop("revision_ids_json"))
+        record["weights"] = json.loads(record.pop("weights_json"))
+        return record
+
+    def insert_model_composite(
+        self,
+        *,
+        model_id: str,
+        output_sha256: str,
+        artifact_relative_path: str,
+        input_snapshot_sha256: str,
+    ) -> dict[str, Any]:
+        """Append one immutable composite output row (one per computation)."""
+        for field, value in (("output_sha256", output_sha256), ("input_snapshot_sha256", input_snapshot_sha256)):
+            if not re.fullmatch(r"[0-9a-f]{64}", value):
+                raise ValueError(f"{field} must be a lowercase SHA-256 hex digest")
+        composite_id = uuid.uuid4().hex
+        now = _now()
+        with self._connection() as connection, connection:
+            try:
+                connection.execute(
+                    """INSERT INTO factor_model_composites (
+                           id, model_id, output_sha256, artifact_relative_path,
+                           input_snapshot_sha256, created_at
+                       ) VALUES (?, ?, ?, ?, ?, ?)""",
+                    (
+                        composite_id,
+                        model_id,
+                        output_sha256,
+                        artifact_relative_path,
+                        input_snapshot_sha256,
+                        now,
+                    ),
+                )
+            except sqlite3.IntegrityError as error:
+                raise ValueError("model composite references a missing model definition") from error
+            row = connection.execute(
+                "SELECT * FROM factor_model_composites WHERE id = ?", (composite_id,)
+            ).fetchone()
+        if row is None:
+            raise RuntimeError("model composite row was not persisted")
+        return dict(row)
+
+    def list_model_composites(self, model_id: str) -> list[dict[str, Any]]:
+        """All immutable composite outputs for a model, oldest first."""
+        with self._connection() as connection:
+            rows = connection.execute(
+                """SELECT * FROM factor_model_composites
+                   WHERE model_id = ? ORDER BY created_at, id""",
+                (model_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def list_comparison_candidates(self) -> list[dict[str, Any]]:
         with self._connection() as connection:
