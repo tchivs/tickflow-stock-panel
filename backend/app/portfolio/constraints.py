@@ -21,6 +21,10 @@ TURNOVER_COEF_DEFAULT = 0.0014
 PSD_EPSILON_DEFAULT = 1e-10
 # max-Sharpe 风险厌恶系数 (仅 objective == "max_sharpe" 时使用)。
 MAX_SHARPE_RISK_AVERSION = 1.0
+# 换手基准 (turnover_reference) 合法取值: 首次运行用等权 1/n 锚, 后续运行引用
+# 先前 run 的校验和绑定权重 (PFOL-03, Phase 14 再平衡继承)。
+TURNOVER_REFERENCE_EQUAL_WEIGHT = "equal_weight"
+TURNOVER_REFERENCE_RUN_ID = "run_id"
 # 行业上限: fail-closed —— 行业 JOIN 未实现前恒为 False; 任何请求都会显式报错。
 INDUSTRY_CAP_ENABLED = False
 

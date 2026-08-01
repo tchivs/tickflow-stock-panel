@@ -24,10 +24,13 @@ import numpy as np
 
 from app.portfolio.artifacts import PortfolioArtifactService
 from app.portfolio.constraints import (
+    MAX_SHARPE_RISK_AVERSION,
     MIN_CASH_DEFAULT,
     PER_INSTRUMENT_CAP_DEFAULT,
     PSD_EPSILON_DEFAULT,
     TURNOVER_COEF_DEFAULT,
+    TURNOVER_REFERENCE_EQUAL_WEIGHT,
+    TURNOVER_REFERENCE_RUN_ID,
 )
 from app.portfolio.hrp import hrp_portfolio, hrp_weights, render_baseline
 from app.portfolio.repository import PortfolioRepository
@@ -242,20 +245,51 @@ def _resolve_w_prev(
     request: Any,
     symbols: list[str],
     repository: PortfolioRepository,
-) -> tuple[np.ndarray, str]:
-    """Resolve the turnover reference anchor (equal-weight default; PFOL-03)."""
+    artifact_service_root: Path,
+) -> tuple[np.ndarray, str, str]:
+    """Resolve the turnover reference anchor (PFOL-03).
+
+    Returns ``(w_prev, turnover_reference, turnover_reference_detail)``:
+
+    - ``turnover_reference == "equal_weight"`` (默认): 首次运行用等权 1/n 锚,
+      detail 为 ``"equal_weight"``。
+    - ``turnover_reference == "run_id"``: 引用先前 run 的校验和绑定权重工件,
+      按当前 symbols 对齐 (缺失 symbol → 0.0, 多余 → 丢弃), detail 为
+      ``"run_id:<w_prev_run_id>"``。先前 run 不存在/无权重工件时 fail closed
+      (ValueError, 由编排器记录为 failed run)。
+
+    Args:
+        request: OptimizationRequest (或等价 dict)。
+        symbols: 当前 run 的标的列表。
+        repository: PortfolioRepository (先前 run 的 append-only 访问面)。
+        artifact_service_root: 工件根目录 (校验先前 run 的权重工件 checksum)。
+
+    Returns:
+        (w_prev, turnover_reference, turnover_reference_detail)。
+
+    Raises:
+        ValueError: run_id 引用缺失/无权重工件时 (fail closed)。
+    """
     n = len(symbols)
-    if getattr(request, "turnover_reference", "equal_weight") == "equal_weight":
-        return np.full(n, 1.0 / n), "equal_weight"
+    reference = getattr(request, "turnover_reference", TURNOVER_REFERENCE_EQUAL_WEIGHT)
+    if reference == TURNOVER_REFERENCE_EQUAL_WEIGHT:
+        return np.full(n, 1.0 / n), TURNOVER_REFERENCE_EQUAL_WEIGHT, TURNOVER_REFERENCE_EQUAL_WEIGHT
     run_id = getattr(request, "w_prev_run_id", None)
     if not run_id:
         raise ValueError("w_prev_run_id is required when turnover_reference is run_id")
     prior = repository.get_optimization_run(run_id)
     if prior is None:
         raise ValueError(f"prior run not found: {run_id}")
-    prior_weights = prior.get("output_weights") or {}
+    relative_path = prior.get("weights_artifact_relative_path")
+    output_sha256 = prior.get("output_sha256")
+    if not relative_path or not output_sha256:
+        raise ValueError(f"prior run has no weights artifact: {run_id}")
+    # 校验和绑定读取: 工件内容必须与 run 行的 output_sha256 一致 (checksum gate)。
+    artifact_service = PortfolioArtifactService(artifact_service_root)
+    payload = artifact_service.read_artifact(relative_path, checksum_sha256=output_sha256)
+    prior_weights = json.loads(payload.decode("utf-8"))
     aligned = np.array([float(prior_weights.get(symbol, 0.0)) for symbol in symbols])
-    return aligned, f"run_id:{run_id}"
+    return aligned, TURNOVER_REFERENCE_RUN_ID, f"run_id:{run_id}"
 
 
 def _build_risk_model(
@@ -396,6 +430,10 @@ def run_optimization(
         solver_version = "n/a"
         options: dict[str, Any] = {}
 
+        # HRP 无换手基准 (无求解器, 无 w_prev 参与): 引用语义记录为 equal_weight。
+        turnover_reference = TURNOVER_REFERENCE_EQUAL_WEIGHT
+        turnover_reference_detail = TURNOVER_REFERENCE_EQUAL_WEIGHT
+
         artifact_service = PortfolioArtifactService(artifact_service_root)
         descriptors = artifact_service.write_bundle(
             run_id=run_id,
@@ -420,7 +458,8 @@ def run_optimization(
                 "cap": req.per_instrument_cap,
                 "min_cash": req.min_cash,
                 "turnover_coef": req.turnover_coef,
-                "turnover_reference": req.turnover_reference,
+                "turnover_reference": turnover_reference,
+                "turnover_reference_detail": turnover_reference_detail,
                 "policy_version": "phase-11-policy-v1",
             },
             solver_name=solver_name,
@@ -435,7 +474,9 @@ def run_optimization(
             created_at=created_at,
         )
 
-    w_prev, turnover_reference = _resolve_w_prev(req, symbols, repository)
+    w_prev, turnover_reference, turnover_reference_detail = _resolve_w_prev(
+        req, symbols, repository, artifact_service_root
+    )
 
     try:
         result = solve_min_vol(
@@ -477,6 +518,7 @@ def run_optimization(
                 "min_cash": req.min_cash,
                 "turnover_coef": req.turnover_coef,
                 "turnover_reference": turnover_reference,
+                "turnover_reference_detail": turnover_reference_detail,
                 "policy_version": "phase-11-policy-v1",
             },
             solver_name=solver_name,
@@ -522,6 +564,7 @@ def run_optimization(
             "min_cash": req.min_cash,
             "turnover_coef": req.turnover_coef,
             "turnover_reference": turnover_reference,
+            "turnover_reference_detail": turnover_reference_detail,
             "policy_version": "phase-11-policy-v1",
         },
         solver_name=solver_name,

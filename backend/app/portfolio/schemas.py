@@ -12,7 +12,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Final, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 Objective = Literal["min_volatility", "hrp", "max_sharpe"]
 
@@ -48,3 +48,10 @@ class OptimizationRequest(BaseModel):
     turnover_coef: float = Field(default=0.0014, ge=0.0)
     turnover_reference: Literal["equal_weight", "run_id"] = "equal_weight"
     w_prev_run_id: str | None = None
+
+    @model_validator(mode="after")
+    def _w_prev_run_id_required_for_run_id(self) -> "OptimizationRequest":
+        """turnover_reference="run_id" 时必须提供 w_prev_run_id (fail closed)."""
+        if self.turnover_reference == "run_id" and not self.w_prev_run_id:
+            raise ValueError("w_prev_run_id is required when turnover_reference is run_id")
+        return self
