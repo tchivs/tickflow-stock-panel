@@ -205,7 +205,7 @@ def test_admission_verdict_carries_catalogued_evaluation_reference(tmp_path) -> 
     assert snapshot is not None
     assert snapshot.originating_run_id == trail["evaluation_run_ids"][0]
     assert [gate["gate"] for gate in trail["gate_results"]] == [
-        "no_lookahead", "no_label_leakage", "similarity_dedup", "train_ic", "val_ic",
+        "no_lookahead", "coverage", "no_label_leakage", "similarity_dedup", "train_ic", "val_ic",
     ]
 
 
@@ -295,7 +295,9 @@ def test_min_train_observations_rejects_short_window(tmp_path) -> None:
     trail = verdict["candidate_trail_json"]
     assert trail["evaluation_run_ids"]
     assert trail["experiment_snapshot_ids"]
-    assert len(trail["gate_results"]) == 4
+    # Gates before train_ic now include coverage: no_lookahead, coverage,
+    # no_label_leakage, similarity_dedup, train_ic.
+    assert len(trail["gate_results"]) == 5
 
 
 def test_ic_correlation_dedup_aligns_sparse_admitted_dates(tmp_path) -> None:

@@ -13,9 +13,10 @@ Policy provenance (fixed thresholds, never tuned at runtime):
 - ``MAX_IC_CORRELATION = 0.90`` — per-date IC-series Pearson with an admitted factor.
 - ``SHIFTED_LABEL_MAX_ABS_IC = 0.02`` — shifted-label leakage gate (shared with the
   DSL contract, FACT-04).
-- ``MIN_COVERAGE = 0.50`` — finite-share floor over the resolved universe.
+- ``MIN_COVERAGE = 0.50`` — finite-share floor over the resolved universe
+  (enforced by the coverage gate, see below).
 
-The pipeline runs five ordered, deterministic gates: no_lookahead,
+The pipeline runs six ordered, deterministic gates: no_lookahead, coverage,
 no_label_leakage, similarity_dedup, train_ic, val_ic.  Every verdict — admission
 AND rejection — is persisted as one immutable append-only row with the full
 candidate trail.
@@ -208,7 +209,36 @@ def run_admission(
     if not allowed_fields:
         return _record_verdict(repo, registry, revision, "rejected", "no_lookahead", gate_results, signal, start, end, horizon, evaluation_run_id=evaluation_run_id, experiment_snapshot_id=experiment_snapshot_id)
 
-    # Gate 2: no_label_leakage — shifted-label IC must collapse to ~0.
+    # Gate 2: coverage — finite-share floor over the resolved universe (WR-02).
+    # ``pre_filter_counts`` are computed by the chain over the resolved
+    # cross-section before the finite/forward-return filter, so the coverage
+    # gate measures the share of the universe that actually produced a finite
+    # factor value.  A factor covering 1% of the universe must not be admitted
+    # even if its IC clears the thresholds.
+    pre_filter_counts = signal.resolved_universe.get("pre_filter_counts", {})
+    coverage_series = [
+        {"date": day, "coverage": float(counts["finite"]) / float(counts["total"])}
+        for day, counts in pre_filter_counts.items()
+        if counts.get("total") and counts["total"] > 0
+    ]
+    mean_coverage = (
+        float(np.mean([item["coverage"] for item in coverage_series])) if coverage_series else 0.0
+    )
+    coverage_passed = bool(coverage_series) and mean_coverage >= MIN_COVERAGE
+    gate_results.append(
+        {
+            "gate": "coverage",
+            "passed": bool(coverage_passed),
+            "metric": "mean_finite_share",
+            "observed": mean_coverage,
+            "threshold": MIN_COVERAGE,
+            "detail": f"finite-share over {len(coverage_series)} resolved dates (min {MIN_COVERAGE})",
+        }
+    )
+    if not coverage_passed:
+        return _record_verdict(repo, registry, revision, "rejected", "coverage", gate_results, signal, start, end, horizon, evaluation_run_id=evaluation_run_id, experiment_snapshot_id=experiment_snapshot_id)
+
+    # Gate 3: no_label_leakage — shifted-label IC must collapse to ~0.
     shifted = shifted_label_ic(leakage_frame, horizon=horizon)
     gate_results.append(
         {
