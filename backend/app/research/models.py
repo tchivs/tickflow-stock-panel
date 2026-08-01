@@ -245,6 +245,7 @@ def build_composite(
     name: str | None = None,
     persist: bool = True,
     artifact_service: EvaluationArtifactService | None = None,
+    catalog: object | None = None,
 ) -> CompositeModel:
     """Build a deterministic composite over the given admitted revisions.
 
@@ -352,18 +353,18 @@ def build_composite(
         frame=composite,
     )
     if persist:
-        repo.insert_model_definition(
-            model_id=model.model_id,
-            name=model.name,
-            weighting=weighting,
-            revision_ids=ordered,
-            weights=weights,
-            input_snapshot_sha256=input_snapshot_sha256,
-        )
+        from app.research.catalog import ExperimentCatalog
+
+        # WR-08: route composite persistence through the catalog's first-class
+        # record (model definition + composite snapshot) so the snapshot record
+        # Phase 11 consumes is always created.  ``record_composite_model`` is
+        # append-only and immutable; an identical-input rebuild creates a NEW
+        # model row (fresh model_id) rather than reusing the prior model.
+        catalog = catalog if catalog is not None else ExperimentCatalog(repo)
         if artifact_service is not None:
             # A different-input rebuild fails on the O_EXCL namespace instead of
             # overwriting retained evidence (T-10-04); an identical-input
-            # re-build appends a NEW composite row with a new run namespace.
+            # re-build appends a NEW composite row under a new run namespace.
             run_id = model.model_id
             descriptors = _write_composite_artifact(
                 artifact_service,
@@ -373,10 +374,25 @@ def build_composite(
             )
             primary = descriptors[0] if descriptors else None
             if primary is not None:
-                repo.insert_model_composite(
+                catalog.record_composite_model(
                     model_id=model.model_id,
+                    name=model.name,
+                    weighting=weighting,
+                    revision_ids=ordered,
+                    weights=weights,
+                    input_snapshot_sha256=input_snapshot_sha256,
                     output_sha256=primary.checksum_sha256,
                     artifact_relative_path=primary.relative_path,
-                    input_snapshot_sha256=input_snapshot_sha256,
                 )
+        else:
+            # No artifact service: still persist the model definition so the
+            # model exists; the composite snapshot row requires an artifact.
+            repo.insert_model_definition(
+                model_id=model.model_id,
+                name=model.name,
+                weighting=weighting,
+                revision_ids=ordered,
+                weights=weights,
+                input_snapshot_sha256=input_snapshot_sha256,
+            )
     return model
