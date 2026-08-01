@@ -140,8 +140,13 @@ class FactorSignalChain:
             )
 
         # Pre-filter finite counts over the evaluation window: coverage measures the
-        # resolved cross-section, never the post-filter frame (pitfall 5).
+        # resolved cross-section, never the post-filter frame (pitfall 5).  The
+        # last ``horizon`` days have a null forward return and are dropped from the
+        # evaluated frame; excluding them from the finite share makes coverage
+        # measure the usable cross-section (IN-01).
         windowed = frame.filter((pl.col("date") >= config.start) & (pl.col("date") <= config.end))
+        if horizon is not None:
+            windowed = windowed.filter(pl.col("_forward_return").is_finite())
         finite_counts = (
             windowed.with_columns(pl.col("_factor").is_finite().alias("_finite"))
             .group_by("date")

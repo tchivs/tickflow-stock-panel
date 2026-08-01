@@ -141,9 +141,11 @@ def test_cross_consumer_equality_with_frozen_expected_frame(
     assert frame.resolved_universe["membership_fingerprint"] == (
         "afb5ae1781db3795f606121847d3428941b62ff27bd537bc464886f26cc0200c"
     )
+    # The second date's forward return is null (no third date), so the
+    # pre-filter finite share excludes it — coverage measures the usable
+    # cross-section (IN-01).
     assert frame.resolved_universe["pre_filter_counts"] == {
         "2024-01-02": {"total": 4, "finite": 4},
-        "2024-01-03": {"total": 4, "finite": 4},
     }
     assert frame.required_source_fields == ("symbol", "date", "close")
 
