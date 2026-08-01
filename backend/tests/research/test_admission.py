@@ -33,6 +33,7 @@ def admission_module():
         SHIFTED_LABEL_MAX_ABS_IC,
         MIN_COVERAGE,
         run_admission,
+        temporal_split,
     )
 
     return {
@@ -45,6 +46,7 @@ def admission_module():
         "SHIFTED_LABEL_MAX_ABS_IC": SHIFTED_LABEL_MAX_ABS_IC,
         "MIN_COVERAGE": MIN_COVERAGE,
         "run_admission": run_admission,
+        "temporal_split": temporal_split,
     }
 
 
@@ -105,32 +107,18 @@ def test_rejection_records_full_verdict_row_with_candidate_trail(
     assert "gate_results" in verdict["candidate_trail_json"]
 
 
-def test_temporal_split_is_deterministic(
-    research_registry: FactorRegistry,
-    stub_engine,
-    research_repository: ResearchRepository,
-    admission_module,
-) -> None:
-    revision = research_registry.create_factor(name="Close", expression="close")
-    first = admission_module["run_admission"](
-        research_repository,
-        engine=stub_engine,
-        registry=research_registry,
-        revision_id=revision.id,
-        universe="fixture-a-share",
-        start=date(2024, 1, 2),
-        end=date(2024, 1, 3),
-    )
-    second = admission_module["run_admission"](
-        research_repository,
-        engine=stub_engine,
-        registry=research_registry,
-        revision_id=revision.id,
-        universe="fixture-a-share",
-        start=date(2024, 1, 2),
-        end=date(2024, 1, 3),
-    )
-    assert first["verdict"] == second["verdict"]
+def test_temporal_split_is_deterministic(admission_module) -> None:
+    """Identical inputs yield identical train/val boundaries by date order."""
+    dates = ["2024-01-02", "2024-01-03", "2024-01-04", "2024-01-05", "2024-01-08", "2024-01-09"]
+    per_date_ics = {day: 0.05 for day in dates}
+    first_train, first_val = admission_module["temporal_split"](per_date_ics)
+    second_train, second_val = admission_module["temporal_split"](per_date_ics)
+    assert first_train == second_train
+    assert first_val == second_val
+    assert len(first_train) == 4  # 70% of 6 dates by date order
+    assert len(first_val) == 2
+    assert first_train == {"2024-01-02", "2024-01-03", "2024-01-04", "2024-01-05"}
+    assert first_val == {"2024-01-08", "2024-01-09"}
 
 
 def test_verdict_is_append_only_single_row_per_revision_policy(

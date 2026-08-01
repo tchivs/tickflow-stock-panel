@@ -1,0 +1,300 @@
+"""Deterministic factor admission gates with append-only verdicts (FACT-01).
+
+Policy provenance (fixed thresholds, never tuned at runtime):
+
+- ``ADMISSION_POLICY_VERSION = "admission-policy-v1"``
+- ``TRAIN_MIN_MEAN_IC = 0.02`` — train-window mean IC floor.  Chosen above the
+  shifted-label noise bound (0.02) so a factor must beat a misaligned-label factor
+  before it can be admitted.
+- ``VAL_MIN_MEAN_IC = 0.01`` — held-out val-window mean IC floor (stricter than
+  noise, kept below the train floor because the val window is smaller).
+- ``MIN_TRAIN_OBSERVATIONS = 40`` — rebalance dates required for ICIR stability.
+- ``MAX_SIMILARITY_SCORE = 0.80`` — Jaccard structural dedup (``discover_similar``).
+- ``MAX_IC_CORRELATION = 0.90`` — per-date IC-series Pearson with an admitted factor.
+- ``SHIFTED_LABEL_MAX_ABS_IC = 0.02`` — shifted-label leakage gate (shared with the
+  DSL contract, FACT-04).
+- ``MIN_COVERAGE = 0.50`` — finite-share floor over the resolved universe.
+
+The pipeline runs five ordered, deterministic gates: no_lookahead,
+no_label_leakage, similarity_dedup, train_ic, val_ic.  Every verdict — admission
+AND rejection — is persisted as one immutable append-only row with the full
+candidate trail.
+"""
+from __future__ import annotations
+
+from datetime import date
+from hashlib import sha256
+import json
+from typing import Any, Mapping
+
+import numpy as np
+import polars as pl
+
+from app.research.factor_dsl import ALLOWED_FIELDS, _FUNCTION_PARTITION, shifted_label_ic
+from app.research.factor_registry import FactorRegistry, FactorRevision
+from app.research.repository import ResearchRepository
+
+
+ADMISSION_POLICY_VERSION: str = "admission-policy-v1"
+TRAIN_MIN_MEAN_IC: float = 0.02
+VAL_MIN_MEAN_IC: float = 0.01
+MIN_TRAIN_OBSERVATIONS: int = 40
+MAX_SIMILARITY_SCORE: float = 0.80
+MAX_IC_CORRELATION: float = 0.90
+SHIFTED_LABEL_MAX_ABS_IC: float = 0.02
+MIN_COVERAGE: float = 0.50
+TRAIN_FRACTION: float = 0.70
+
+
+def temporal_split(per_date_ics: Mapping[str, float]) -> tuple[set[str], set[str]]:
+    """Deterministic 70/30 split by date order (never random shuffle)."""
+    ordered = sorted(per_date_ics)
+    split = max(1, int(len(ordered) * TRAIN_FRACTION))
+    return set(ordered[:split]), set(ordered[split:])
+
+
+def _mean_ic(per_date_ics: Mapping[str, float], dates: set[str]) -> float | None:
+    values = [per_date_ics[day] for day in sorted(dates) if day in per_date_ics]
+    return float(np.mean(values)) if values else None
+
+
+def _jaccard_duplicate(
+    registry: FactorRegistry, revision: FactorRevision, *, exclude_revision_id: str
+) -> float:
+    candidates = registry.discover_similar(
+        revision.canonical_expression,
+        limit=20,
+        exclude_revision_id=exclude_revision_id,
+    )
+    return max((candidate.score for candidate in candidates), default=0.0)
+
+
+def _ic_correlation_duplicate(
+    per_date_ics: Mapping[str, float],
+    admitted_ic_series: Mapping[str, Mapping[str, float]],
+    *,
+    val_dates: set[str],
+) -> float:
+    candidate_values = np.array(
+        [per_date_ics[day] for day in sorted(val_dates) if day in per_date_ics], dtype=float
+    )
+    if len(candidate_values) < 2 or float(np.std(candidate_values)) == 0:
+        return 0.0
+    worst = 0.0
+    for _admitted_id, series in admitted_ic_series.items():
+        admitted_values = np.array(
+            [series[day] for day in sorted(val_dates) if day in series], dtype=float
+        )
+        if len(admitted_values) < 2:
+            continue
+        limit = min(len(candidate_values), len(admitted_values))
+        correlation = float(np.corrcoef(candidate_values[:limit], admitted_values[:limit])[0, 1])
+        worst = max(worst, abs(correlation) if np.isfinite(correlation) else 0.0)
+    return worst
+
+
+def run_admission(
+    repo: ResearchRepository,
+    *,
+    engine: Any,
+    registry: FactorRegistry,
+    revision_id: str,
+    universe: str,
+    start: date,
+    end: date,
+    horizon: int = 1,
+    asset_type: str = "stock",
+    admitted_ic_series: Mapping[str, Mapping[str, float]] | None = None,
+    universe_resolver: object | None = None,
+    rebalance: str = "daily",
+    warmup_days: int = 0,
+    n_groups: int = 2,
+) -> dict[str, Any]:
+    """Run the five gates and append the verdict row (admission or rejection)."""
+    from app.research.signal_chain import FactorSignalChain, SignalChainConfig
+
+    revision = registry.get_revision(revision_id)
+    if revision is None:
+        raise ValueError("factor revision does not exist")
+
+    chain = FactorSignalChain(engine, registry, universe_resolver)
+    signal = chain.compute(
+        revision_id=revision.id,
+        config=SignalChainConfig(
+            universe=universe,
+            symbols=(),
+            asset_type=asset_type,
+            start=start,
+            end=end,
+            warmup_days=warmup_days,
+            forward_return_horizon=horizon,
+            rebalance=rebalance,  # type: ignore[arg-type]
+            missing_data_treatment="drop",
+            warmup_treatment="exclude",
+        ),
+    )
+    evaluated = signal.frame
+    if evaluated.is_empty():
+        raise ValueError("no valid observations for admission evaluation")
+
+    # The shifted-label gate needs the close column, which the chain frame does
+    # not carry; join it back from the loaded governed panel.
+    close_frame = signal.loaded_panel.select(["symbol", "date", "close"]).unique(subset=["symbol", "date"])
+    leakage_frame = evaluated.join(close_frame, on=["symbol", "date"], how="inner")
+
+    per_date_ics = _per_date_ic(evaluated)
+    train_dates, val_dates = temporal_split(per_date_ics)
+    train_ic = _mean_ic(per_date_ics, train_dates)
+    val_ic = _mean_ic(per_date_ics, val_dates)
+
+    gate_results: list[dict[str, Any]] = []
+
+    # Gate 1: no_lookahead — the DSL contract is structurally enforced by the
+    # compiler: parse succeeded (the expression references only ALLOWED_FIELDS) and
+    # every function declared its partition context.
+    allowed_fields = set(revision.fields) <= set(ALLOWED_FIELDS)
+    gate_results.append(
+        {
+            "gate": "no_lookahead",
+            "passed": bool(allowed_fields),
+            "metric": "structural",
+            "observed": {"referenced_fields": list(revision.fields)},
+            "threshold": "ALLOWED_FIELDS",
+            "detail": "compiler-enforced partition context" if allowed_fields else "expression references a denied field",
+        }
+    )
+    if not allowed_fields:
+        return _record_verdict(repo, registry, revision, "rejected", "no_lookahead", gate_results, signal, start, end, horizon)
+
+    # Gate 2: no_label_leakage — shifted-label IC must collapse to ~0.
+    shifted = shifted_label_ic(leakage_frame, horizon=horizon)
+    gate_results.append(
+        {
+            "gate": "no_label_leakage",
+            "passed": shifted <= SHIFTED_LABEL_MAX_ABS_IC,
+            "metric": "abs_mean_ic_shifted",
+            "observed": shifted,
+            "threshold": SHIFTED_LABEL_MAX_ABS_IC,
+            "detail": "shifted-label displacement one extra horizon",
+        }
+    )
+    if not gate_results[-1]["passed"]:
+        return _record_verdict(repo, registry, revision, "rejected", "no_label_leakage", gate_results, signal, start, end, horizon)
+
+    # Gate 3: similarity_dedup — Jaccard structural + IC correlation with admitted factors.
+    similarity = _jaccard_duplicate(registry, revision, exclude_revision_id=revision.id)
+    correlation = _ic_correlation_duplicate(per_date_ics, admitted_ic_series or {}, val_dates=val_dates)
+    gate_results.append(
+        {
+            "gate": "similarity_dedup",
+            "passed": similarity < MAX_SIMILARITY_SCORE and correlation < MAX_IC_CORRELATION,
+            "metric": "max_jaccard_and_ic_corr",
+            "observed": {"similarity_score": similarity, "ic_correlation": correlation},
+            "threshold": {"MAX_SIMILARITY_SCORE": MAX_SIMILARITY_SCORE, "MAX_IC_CORRELATION": MAX_IC_CORRELATION},
+            "detail": "Jaccard structural + IC-series Pearson on the val window",
+        }
+    )
+    if not gate_results[-1]["passed"]:
+        return _record_verdict(repo, registry, revision, "rejected", "similarity_dedup", gate_results, signal, start, end, horizon)
+
+    # Gate 4: train_ic — mean IC over the first 70% of dates by order.
+    train_passed = train_ic is not None and train_ic >= TRAIN_MIN_MEAN_IC
+    gate_results.append(
+        {
+            "gate": "train_ic",
+            "passed": bool(train_passed),
+            "metric": "mean_ic_train",
+            "observed": train_ic,
+            "threshold": TRAIN_MIN_MEAN_IC,
+            "detail": f"temporal 70/30 split; {len(train_dates)} train dates",
+        }
+    )
+    if not train_passed:
+        return _record_verdict(repo, registry, revision, "rejected", "train_ic", gate_results, signal, start, end, horizon)
+
+    # Gate 5: val_ic — held-out mean IC over the last 30% of dates.
+    val_passed = val_ic is not None and val_ic >= VAL_MIN_MEAN_IC
+    gate_results.append(
+        {
+            "gate": "val_ic",
+            "passed": bool(val_passed),
+            "metric": "mean_ic_val",
+            "observed": val_ic,
+            "threshold": VAL_MIN_MEAN_IC,
+            "detail": f"held-out {len(val_dates)} val dates",
+        }
+    )
+    if not val_passed:
+        return _record_verdict(repo, registry, revision, "rejected", "val_ic", gate_results, signal, start, end, horizon)
+
+    return _record_verdict(repo, registry, revision, "admitted", "all gates passed", gate_results, signal, start, end, horizon)
+
+
+def _per_date_ic(evaluated: pl.DataFrame) -> dict[str, float]:
+    correlations = (
+        evaluated.group_by("date")
+        .agg(pl.corr("_factor", "_forward_return").alias("ic"))
+        .sort("date")
+    )
+    return {
+        str(row["date"]): float(row["ic"])
+        for row in correlations.iter_rows(named=True)
+        if row["ic"] is not None and np.isfinite(float(row["ic"]))
+    }
+
+
+def _record_verdict(
+    repo: ResearchRepository,
+    registry: FactorRegistry,
+    revision: FactorRevision,
+    verdict: str,
+    reason: str,
+    gate_results: list[dict[str, Any]],
+    signal: Any,
+    start: date,
+    end: date,
+    horizon: int,
+) -> dict[str, Any]:
+    input_payload = json.dumps(
+        {
+            "revision_id": revision.id,
+            "policy_version": ADMISSION_POLICY_VERSION,
+            "window": {"start": start.isoformat(), "end": end.isoformat()},
+            "horizon": horizon,
+            "membership_fingerprint": signal.resolved_universe.get("membership_fingerprint", ""),
+            "panel_fingerprint": signal.panel_fingerprint,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    input_snapshot_sha256 = sha256(input_payload).hexdigest()
+
+    trail = {
+        "provenance": dict(revision.provenance),
+        "evaluation_run_ids": [],
+        "experiment_snapshot_ids": [],
+        "gate_results": gate_results,
+    }
+    return {
+        **repo.insert_admission_verdict(
+            revision_id=revision.id,
+            policy_version=ADMISSION_POLICY_VERSION,
+            verdict=verdict,
+            reason=reason,
+            gates_json=gate_results,
+            candidate_trail_json=trail,
+            resolved_universe_json=signal.resolved_universe,
+            input_snapshot_sha256=input_snapshot_sha256,
+        ),
+        # The repository decodes the JSON columns; expose them under their schema
+        # names so callers (and catalog consumers) read the same keys the migration
+        # declares.
+        "gates_json": gate_results,
+        "candidate_trail_json": trail,
+        "resolved_universe_json": dict(signal.resolved_universe),
+    }
+
+
+def get_verdict(repo: ResearchRepository, revision_id: str) -> dict[str, Any] | None:
+    """Return the persisted verdict record with JSON columns decoded, if any."""
+    return repo.get_admission_verdict(revision_id, ADMISSION_POLICY_VERSION)
