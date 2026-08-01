@@ -250,9 +250,9 @@ def run_optimization(
         artifact_service_root: 工件根目录 (服务在其下创建 research_artifacts/)。
         returns: (n_obs, n_assets) 收益率矩阵; None 时用 _fixture_returns()。
         symbols: 标的列表; None 时用确定性 12 标的默认集。
-        snapshot: 预解析快照 dict ({"input_snapshot_sha256", "symbols", "mu"});
-            None 时用 fixture 身份 (与返回的 input_snapshot_sha256 一致的
-            确定性 64-hex)。
+        snapshot: 预解析快照 dict ({"model_id", "input_snapshot_sha256",
+            "composite_snapshot_id"}) —— 11-01 tracer 的 fixture 身份接缝;
+            None 时用确定性 fixture 身份。
         catalog / data_dir: 生产 catalog 接缝 (11-05); 本 plan 未接线。
 
     Returns:
@@ -282,8 +282,8 @@ def run_optimization(
     ensure_psd_provenance(cov, risk_model_json["psd_repair"], epsilon=PSD_EPSILON_DEFAULT)
 
     # 先决条件: model_id 必须存在于 factor_model_models (FK), 且 composite-zscore-v1
-    # 必须绑定一个快照身份。测试流水线传入的 model_id 是 fixture 模型, 因此先在
-    # research 仓库侧登记定义 + 快照 (仅当尚未存在), 使 run 行 FK 成立。
+    # 必须绑定一个快照身份。fixture 路径下在 research 仓库侧登记定义 + 快照
+    # (仅当尚未存在), 使 run 行 FK 成立; 生产 catalog 接缝由 11-05 替换。
     if req.expected_return_method == "composite-zscore-v1":
         research = ResearchRepository(repository.database_path)
         if research.get_model_definition(req.model_id) is None:  # type: ignore[arg-type]

@@ -15,6 +15,7 @@ import polars as pl
 import pytest
 
 from app.portfolio.repository import PortfolioRepository
+from app.research.repository import ResearchRepository
 
 FIXTURE_SYMBOLS = ("600000.SH", "600001.SH", "600002.SH", "600003.SH")
 
@@ -89,3 +90,29 @@ def portfolio_repository(tmp_path: Path) -> PortfolioRepository:
 def artifact_root(tmp_path: Path) -> Path:
     """App-data root for PortfolioArtifactService (11-01's write_bundle)."""
     return tmp_path / "app-data"
+
+
+@pytest.fixture
+def fixture_composite(portfolio_repository: PortfolioRepository) -> dict[str, object]:
+    """A recorded composite model + snapshot identity for the tracer pipeline.
+
+    Mirrors the Phase 10 seam: a factor_model_models definition plus one
+    factor_model_composites row; ``input_snapshot_sha256`` is the audit root the
+    run row must equal.
+    """
+    research = ResearchRepository(portfolio_repository.database_path)
+    research.insert_model_definition(
+        model_id="composite-model-v1",
+        name="fixture composite model",
+        weighting="equal",
+        revision_ids=[],
+        weights={},
+        input_snapshot_sha256="f" * 64,
+    )
+    research.insert_model_composite(
+        model_id="composite-model-v1",
+        output_sha256="f" * 64,
+        artifact_relative_path="research_artifacts/00000000000000000000000000000000/signals.json",
+        input_snapshot_sha256="f" * 64,
+    )
+    return {"model_id": "composite-model-v1", "input_snapshot_sha256": "f" * 64}
