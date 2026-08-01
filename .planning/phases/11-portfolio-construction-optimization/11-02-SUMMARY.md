@@ -103,7 +103,7 @@ status: complete
 
 - **Duration:** 12 min
 - **Started:** 2026-08-01T16:32:57Z
-- **Completed:** 2026-08-01T16:41:08Z
+- **Completed:** 2026-08-01T16:44:14Z
 - **Tasks:** 4
 - **Files modified:** 13
 
@@ -124,7 +124,7 @@ Each task was committed atomically:
 3. **Task: PortfolioRepository seam** - `2d4af9e` (feat)
 4. **Task: 6 RED test scaffolds + conftest fixtures** - `c2f4b51` (test)
 
-**Plan metadata:** pending final docs commit
+**Plan metadata:** `274a886` (docs: complete wave 0 plan) + `deb0caa` (chore: broken-windows ledger)
 
 ## Files Created/Modified
 
