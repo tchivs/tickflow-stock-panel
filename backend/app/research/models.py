@@ -129,10 +129,16 @@ def _collect_mean_ics(
     experiments = repo.list_experiments()
     # ``list_experiments`` is newest-first; keep only the first (newest) matching
     # evidence per revision, and only evidence recorded under the same config.
+    # Diagnostic/summary snapshots (``status != "completed"`` or no ``ic_summary``)
+    # never shadow a valid completed evaluation (WR-01).
     latest_by_revision: dict[str, Mapping[str, Any]] = {}
     for experiment in experiments:
         revision_id = experiment.get("factor_revision_id")
         if revision_id not in revision_ids or revision_id in latest_by_revision:
+            continue
+        if experiment.get("status") != "completed":
+            continue
+        if experiment.get("metrics", {}).get("ic_summary", {}).get("mean") is None:
             continue
         if not _config_matches(
             experiment.get("resolved_config", {}) or {},
