@@ -55,7 +55,7 @@ Six phases extend the shipped research platform from single-factor evaluation in
 - Decimal phases (11.1, 11.2): urgent insertions after planning, marked with INSERTED
 
 - [x] **Phase 10: Factor Library & Multi-Factor Model** - Admission gates, full monthly evidence, multi-factor expected returns, catalog, and the shared signal chain (completed 2026-08-01)
-- [ ] **Phase 11: Portfolio Construction & Optimization** - Sample covariance with PSD repair, min-vol/HRP baselines, constraint stack, immutable run records
+- [x] **Phase 11: Portfolio Construction & Optimization** - Sample covariance with PSD repair, min-vol/HRP baselines, constraint stack, immutable run records (completed 2026-08-01)
 - [ ] **Phase 12: Risk Models & Attribution** - Risk-model suite with PSD provenance, exposure/contribution and drawdown attribution
 - [ ] **Phase 13: Walk-Forward Validation & Parameter Search** - Rolling folds, reserved final OOS, OOS-scored parameter search, ensembling
 - [ ] **Phase 14: Output & Boundary (RebalancePlan + Paper Rebalance)** - A-share lot-sized plans, auditable paper rebalance, zero execution authority
@@ -94,16 +94,16 @@ Six phases extend the shipped research platform from single-factor evaluation in
   3. Researcher can apply the constraint stack — long-only bounds, per-instrument cap, minimum cash, convex turnover cost — and an industry cap fails closed until a governed industry mapping exists.
   4. Researcher can retrieve any optimization run as an immutable record carrying input-snapshot SHA-256, expected-return method, risk model, solver name/version/options, problem status, and output weights; failed runs retain their failure reason.
 
-**Plans**: 5/6 plans executed (11-02, 11-01, 11-03, 11-04, 11-05 complete; per-plan gates green)
+**Plans**: 6/6 plans executed (11-02, 11-01, 11-03, 11-04, 11-05, 11-06 complete; per-plan gates green)
 
-- [ ] 11-PLAN.md
+- [x] 11-PLAN.md
 
 - [x] 11-02 Wave 0 — cvxpy dep + runs migration + test scaffolds (2026-08-01)
 - [x] 11-01 Tracer — end-to-end optimization pipeline
 - [x] 11-03 HRP baseline
 - [x] 11-04 Min-vol breadth + max-Sharpe non-default
 - [x] 11-05 Snapshot binding + run-record breadth
-- [ ] 11-06 Constraint hardening + artifact breadth
+- [x] 11-06 Constraint hardening + artifact breadth
 
 *Planning research: optimizer engine — cvxpy 1.9.2 vs scipy SLSQP (research flag). Stack research recommends cvxpy as primary QP solver; architecture research cautions scipy-only unless a true QP is required and flags the package-legitimacy approval gate. The constraint stack (caps / min-cash / turnover) is the deciding factor. Resolve before planning.*
 
@@ -172,7 +172,7 @@ Phases execute in numeric order: 10 → 11 → 12 → 13 → 14 → 15 (Phase 13
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 10. Factor Library & Multi-Factor Model | 6/6 | Complete    | 2026-08-01 |
-| 11. Portfolio Construction & Optimization | 5/6 | Executing    |  |
+| 11. Portfolio Construction & Optimization | 6/6 | Complete    | 2026-08-01 |
 | 12. Risk Models & Attribution | 0/3 | Not started | - |
 | 13. Walk-Forward Validation & Parameter Search | 0/4 | Not started | - |
 | 14. Output & Boundary (RebalancePlan + Paper Rebalance) | 0/3 | Not started | - |

@@ -5,16 +5,16 @@ milestone_name: End-to-End Factor Portfolio Pipeline — in progress
 current_phase: 11
 current_phase_name: Portfolio Construction & Optimization
 status: executing
-stopped_at: Completed 11-05-PLAN.md
-last_updated: "2026-08-01T18:59:40.797Z"
+stopped_at: Completed 11-06-PLAN.md
+last_updated: "2026-08-01T20:25:00.000Z"
 last_activity: 2026-08-01
-last_activity_desc: 11-05 snapshot binding + run-record breadth complete — load_composite_snapshot catalog seam, fail-closed failed-run wrapper, list breadth, 11-05 tests green
+last_activity_desc: 11-06 constraint hardening + artifact breadth complete — industry-cap fail-closed gate through run_optimization, covariance artifact + sha256 in risk_model_json, 11-06 tests green
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 2
-  completed_plans: 1
-  percent: 50
+  completed_plans: 2
+  percent: 100
 ---
 
 # Project State
@@ -29,18 +29,18 @@ See: .planning/PROJECT.md (updated 2026-07-31)
 ## Current Position
 
 Phase: 11 — Portfolio Construction & Optimization
-Plan: 11-05 complete (Wave 3 — snapshot binding + run-record breadth: load_composite_snapshot catalog seam, fail-closed failed-run wrapper, list_optimization_runs limit)
-Status: Ready for 11-06 (Wave 4 — constraint hardening + artifact breadth; running in parallel by Exec1106)
-Last activity: 2026-08-01 — 11-05 snapshot binding + run-record breadth complete
+Plan: 11-06 complete (Wave 4 — constraint hardening + artifact breadth: industry-cap fail-closed gate through run_optimization, covariance artifact + sha256 in risk_model_json)
+Status: All 6 Phase 11 plans complete — phase gate (full backend suite) pending before /gsd-verify-work
+Last activity: 2026-08-01 — 11-06 constraint hardening + artifact breadth complete
 
-Progress: [█████░░░░░] 50%
+Progress: [██████████] 100%
 
 ## v1.2 Phase Summary
 
 | Phase | Requirements | Status |
 |-------|-------------|--------|
 | 10 Factor Library & Multi-Factor Model | FACT-01..06 | In progress (10-01..10-06 complete) |
-| 11 Portfolio Construction & Optimization | PFOL-01..04 | In progress (11-01, 11-02, 11-03, 11-04, 11-05 complete) |
+| 11 Portfolio Construction & Optimization | PFOL-01..04 | In progress (11-01, 11-02, 11-03, 11-04, 11-05, 11-06 complete) |
 | 12 Risk Models & Attribution | RSK-01..03 | Not started |
 | 13 Walk-Forward Validation & Parameter Search | WFWD-01..03 | Not started |
 | 14 Output & Boundary (RebalancePlan + Paper Rebalance) | RBAL-01..02 | Not started |
@@ -72,6 +72,7 @@ Progress: [█████░░░░░] 50%
 | Phase 11 P11-03 | 21 | 2 tasks | 3 files |
 | Phase 11 P11-04 | 44 | 4 tasks | 4 files |
 | Phase 11 P11-05 | 55 | 5 tasks | 6 files |
+| Phase 11 P11-06 | 75 | 3 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -118,7 +119,7 @@ Resume file: None
 ## Operator Next Steps
 
 - Run `/gsd-plan-phase 10` to plan Phase 10 (Factor Library & Multi-Factor Model)
-- Run the phase gate (full backend suite) after all Wave 2/3/4 plans (11-05, 11-06) — 11-06 currently executing in parallel by Exec1106
+- Run the phase gate (full backend suite) after all Wave 2/3/4 plans (11-05, 11-06) — all Phase 11 plans complete; run `cd backend && .venv/bin/python -m pytest -x` before /gsd-verify-work
 
 ## Decisions
 
@@ -143,6 +144,8 @@ Resume file: None
 - [Phase 11]: run_optimization fail-closed wrapper records SnapshotBindingError / ValueError / RuntimeError / cp.error.SolverError as failed runs with failure_reason (PFOL-04) — never a silent abort; model-not-found FK-degrades the row (model_id→None, expected_return_method→'none') so the append-only INSERT satisfies the factor_model_models FK.
 - [Phase 11]: The lookahead guard keys on artifact DATA COVERAGE (earliest [symbol,date,composite] date), not created_at — a backtest composite's created_at is later than its data dates (RESEARCH.md 'as_of precedes ... the panel window' clause).
 - [Phase 11]: list_optimization_runs gains a limit cap (default 200, positive-int fail-closed) for the Phase 15 API; objective/as_of filters + ORDER BY created_at, id preserved.
+- [Phase 11]: Industry-cap fail-closed gate wired through run_optimization — assert_industry_cap_unavailable(requested=req.industry_cap is not None) at the top of _run_optimization_impl; a requested cap raises ValueError("industry mapping unavailable") caught by the 11-05 wrapper and recorded as a failed run (pitfall 8, T-11-06). constraint_stack_json records industry_cap: null when unrequested (HRP / non-optimal / success paths).
+- [Phase 11]: Covariance artifact + sha256 in risk_model_json — covariance_sha256(cov) hashes the canonical 8-decimal JSON (byte-identical to write_bundle's covariance.json rounding); artifact bytes hash to the recorded digest, so Phase 12 loads covariance.json by checksum (covariance_artifact_relative_path = research_artifacts/<run_id>/covariance.json).
 - [Phase ?]: HRP objective outputs baseline == weights (no QP to compare against) — objective=hrp run row: solver_name/solver_version=n/a, solver_options_json={}, problem_status=optimal, still append-only immutable
 - [Phase ?]: hrp_portfolio runs the same fail-closed PSD gate as the QP path — non-PSD covariance raises ValueError (pitfall 9), never silent
 - [Phase ?]: solver_path=['CLARABEL','OSQP'] fallback resolved manually (_solve_problem): cvxpy 1.9.2 native solver_path raises SolverError when all solvers return non-optimal, so OSQP is retried only on SolverError (solver crash) and any status the first solver returns is recorded verbatim (pitfall 4)
