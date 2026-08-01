@@ -7,8 +7,9 @@ These tests lock the chain contracts and are expected to FAIL until 10-01 create
    ``fields`` set raises before any governed load;
 2. per-date membership filter — symbols with a post-start listing date are excluded
    on dates before their listing but present after;
-3. cross-consumer equality — ``chain.compute`` for a config equals the legacy
-   ``FactorEvaluationService._evaluate_panel`` result for the same panel/config;
+3. cross-consumer equality — ``chain.compute`` for the fixture config equals a
+   FROZEN expected ``FactorSignalFrame`` (columns, values, ``panel_fingerprint``,
+   ``resolved_universe`` block) — the legacy ``_evaluate_panel`` adapter is gone;
 4. PanelCache dedup — two ``chain.compute`` calls with an identical config result in
    exactly one ``load_panel`` call on the stub engine;
 5. ``forward_return_horizon=None`` — the live as-of path computes values without a
@@ -85,12 +86,19 @@ def test_per_date_membership_filter_excludes_post_start_listings(
     assert frame.frame.columns == ["symbol", "date", "_factor", "_forward_return", "_rank", "_zscore"]
 
 
-def test_cross_consumer_equality_with_legacy_evaluate_panel(
+def test_cross_consumer_equality_with_frozen_expected_frame(
     research_registry: FactorRegistry,
     stub_engine,
     signal_chain_class,
     signal_chain_config_class,
 ) -> None:
+    """``chain.compute`` equals a frozen expected FactorSignalFrame for the fixture config.
+
+    The legacy ``FactorEvaluationService._evaluate_panel`` adapter is deleted;
+    this test locks the chain's exact output (columns, values, panel_fingerprint,
+    resolved_universe block) so a second factor-value implementation cannot drift
+    back in.
+    """
     revision = research_registry.create_factor(name="Close", expression="close")
     chain = signal_chain_class(stub_engine, research_registry, universe_resolver=None)
     config = signal_chain_config_class(
@@ -104,8 +112,40 @@ def test_cross_consumer_equality_with_legacy_evaluate_panel(
     )
 
     frame = chain.compute(revision_id=revision.id, config=config)
+
+    # --- Frozen expected values (fixture panel: 2 dates x 4 symbols, close 1..4;
+    # the second date's forward return is null without a third date, so the
+    # finite filter keeps only the first date's cross-section) ---
+    expected_rows = [
+        {"symbol": "000001.SZ", "date": date(2024, 1, 2), "_factor": 1.0, "_forward_return": 0.0, "_rank": 1.0, "_zscore": -1.161895003862225},
+        {"symbol": "000002.SZ", "date": date(2024, 1, 2), "_factor": 2.0, "_forward_return": 0.5, "_rank": 2.0, "_zscore": -0.3872983346207417},
+        {"symbol": "000003.SZ", "date": date(2024, 1, 2), "_factor": 3.0, "_forward_return": 0.10000000000000009, "_rank": 3.0, "_zscore": 0.3872983346207417},
+        {"symbol": "000004.SZ", "date": date(2024, 1, 2), "_factor": 4.0, "_forward_return": 0.8999999999999999, "_rank": 4.0, "_zscore": 1.161895003862225},
+    ]
+    observed_rows = frame.frame.sort(["symbol", "date"]).iter_rows(named=True)
+    assert len(list(observed_rows)) == len(expected_rows)
+    for observed, expected in zip(observed_rows, expected_rows):
+        for key, expected_value in expected.items():
+            observed_value = observed[key]
+            if isinstance(expected_value, float):
+                assert observed_value == pytest.approx(expected_value)
+            else:
+                assert observed_value == expected_value
+
+    assert frame.frame.columns == ["symbol", "date", "_factor", "_forward_return", "_rank", "_zscore"]
     assert frame.revision_id == revision.id
     assert frame.dsl_version == revision.dsl_version
+    # Frozen fingerprints for the fixture governed panel and config-symbols universe.
+    assert frame.panel_fingerprint == "fd3c3a725475e7625614382c3291132c444bc4de7d362fa7c4d71e92d0b9a504"
+    assert frame.resolved_universe["method"] == "config-symbols"
+    assert frame.resolved_universe["membership_fingerprint"] == (
+        "afb5ae1781db3795f606121847d3428941b62ff27bd537bc464886f26cc0200c"
+    )
+    assert frame.resolved_universe["pre_filter_counts"] == {
+        "2024-01-02": {"total": 4, "finite": 4},
+        "2024-01-03": {"total": 4, "finite": 4},
+    }
+    assert frame.required_source_fields == ("symbol", "date", "close")
 
 
 def test_panel_cache_dedup_results_in_single_governed_load(

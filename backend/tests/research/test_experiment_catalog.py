@@ -253,3 +253,49 @@ def test_strategy_comparison_warns_only_for_changed_governed_identity(tmp_path: 
 
     identical = retain("c" * 32, "governed-v1", "1" * 64)
     assert catalog.compare([baseline.id, identical.id]).as_dict()["warnings"] == []
+
+
+def test_new_evidence_keys_round_trip_through_catalog_boundary(tmp_path: Path) -> None:
+    """icir/monthly_robustness/coverage/monthly_ic_series survive the snapshot boundary."""
+    catalog, registry = _catalog(tmp_path)
+    factor = registry.create_factor(name="Momentum", expression="close / ma20")
+    package = _factor_package(tmp_path, factor.id)
+    monthly_ic_series = (
+        {"month": "2025-01", "ic_monthly": 0.05, "rank_ic_monthly": 0.04},
+        {"month": "2025-02", "ic_monthly": 0.07, "rank_ic_monthly": 0.06},
+    )
+    saved = catalog.record_factor_evaluation(
+        FactorEvaluationResult(
+            evaluation_run_id=package.evaluation_run_id,
+            status="completed",
+            factor_revision={"id": factor.id},
+            resolved_config=package.resolved_config,
+            input_manifest=package.input_manifest,
+            ic_summary={"mean": 0.12, "std": 0.04, "information_ratio": 3.0, "positive_rate": 1.0, "observations": 40},
+            rank_ic_summary={"mean": 0.18, "std": 0.05, "information_ratio": 3.6, "positive_rate": 1.0, "observations": 40},
+            icir=0.42,
+            monthly_robustness=0.6,
+            coverage={"mean": 0.9, "coverage_series": [{"date": "2025-01-02", "coverage": 0.9}]},
+            monthly_ic_series=monthly_ic_series,
+            artifacts=package.artifacts,
+            diagnostics=("factor evidence validated",),
+        )
+    )
+
+    assert saved.metrics["icir"] == 0.42
+    assert saved.metrics["monthly_robustness"] == 0.6
+    assert saved.metrics["coverage"] == {"mean": 0.9, "coverage_series": [{"date": "2025-01-02", "coverage": 0.9}]}
+    assert saved.metrics["monthly_ic_series"] == [
+        {"month": "2025-01", "ic_monthly": 0.05, "rank_ic_monthly": 0.04},
+        {"month": "2025-02", "ic_monthly": 0.07, "rank_ic_monthly": 0.06},
+    ]
+    rendered = saved.as_dict()
+    assert rendered["metrics"]["icir"] == 0.42
+    assert rendered["metrics"]["monthly_robustness"] == 0.6
+    assert rendered["metrics"]["coverage"]["mean"] == 0.9
+    assert [row["month"] for row in rendered["metrics"]["monthly_ic_series"]] == ["2025-01", "2025-02"]
+
+    # The immutable snapshot reloaded from the repository round-trips the keys.
+    reloaded = catalog.get(saved.id)
+    assert reloaded is not None
+    assert reloaded.as_dict() == rendered
