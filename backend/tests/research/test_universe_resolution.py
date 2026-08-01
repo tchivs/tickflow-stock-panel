@@ -128,3 +128,113 @@ def test_daily_resolution_returns_symbol_date_frame(
     )
     assert daily.columns == ["symbol", "date"]
     assert daily["symbol"].unique().to_list() == ["600000.SH"]
+
+
+def test_daily_resolution_closes_membership_after_delist(
+    research_repository: ResearchRepository,
+    universe_module,
+) -> None:
+    """A delist event closes the per-date frame on and after its effective date."""
+    _seed_membership(
+        research_repository,
+        rows=[
+            {"universe_name": "cn-a-share", "symbol": "600000.SH", "effective_date": "2025-01-01", "state": "listed"},
+            {"universe_name": "cn-a-share", "symbol": "600000.SH", "effective_date": "2025-02-10", "state": "delisted"},
+        ],
+    )
+    daily = universe_module["resolve_universe_daily"](
+        research_repository,
+        universe_name="cn-a-share",
+        start=date(2025, 2, 1),
+        end=date(2025, 2, 28),
+    )
+    dates = daily.filter(pl.col("symbol") == "600000.SH")["date"].to_list()
+    assert date(2025, 2, 9) in dates
+    assert date(2025, 2, 10) not in dates
+
+
+def test_seed_membership_uses_listing_date_with_first_bar_fallback(
+    research_repository: ResearchRepository,
+    universe_module,
+) -> None:
+    """Seed: listing_date String cast normalization + first-bar fallback (OQ5)."""
+    from app.research.universe import seed_membership
+
+    instruments = pl.DataFrame(
+        {
+            "symbol": ["600000.SH", "600001.SH", "600002.SH"],
+            "listing_date": ["2025-01-15", None, "not-a-date"],
+        }
+    )
+    enriched = pl.DataFrame(
+        {
+            "symbol": ["600001.SH", "600001.SH", "600002.SH"],
+            "date": [date(2025, 1, 20), date(2025, 1, 25), date(2025, 1, 5)],
+        }
+    )
+    inserted = seed_membership(
+        research_repository, instruments, enriched, universe_name="cn-a-share"
+    )
+    assert inserted == 3
+
+    events = research_repository.list_universe_memberships(universe_name="cn-a-share")
+    by_symbol = {event["symbol"]: event for event in events}
+    assert by_symbol["600000.SH"]["effective_date"] == "2025-01-15"  # listing_date wins
+    assert by_symbol["600001.SH"]["effective_date"] == "2025-01-20"  # first-bar fallback
+    assert by_symbol["600002.SH"]["effective_date"] == "2025-01-05"  # invalid listing -> first bar
+    assert all(event["state"] == "listed" for event in events)
+    assert all(event["source"] == "instruments-sync" for event in events)
+
+
+def test_resolve_universe_deterministic_fingerprint(
+    research_repository: ResearchRepository,
+    universe_module,
+) -> None:
+    """Two calls with identical membership state return identical fingerprints."""
+    _seed_membership(
+        research_repository,
+        rows=[
+            {"universe_name": "cn-a-share", "symbol": "600000.SH", "effective_date": "2025-01-01", "state": "listed"},
+            {"universe_name": "cn-a-share", "symbol": "600001.SH", "effective_date": "2025-02-01", "state": "listed"},
+        ],
+    )
+    first = universe_module["resolve_universe"](
+        research_repository, universe_name="cn-a-share", as_of=date(2025, 3, 1)
+    )
+    second = universe_module["resolve_universe"](
+        research_repository, universe_name="cn-a-share", as_of=date(2025, 3, 1)
+    )
+    assert first[0] == second[0]
+    assert first[1] == second[1]
+
+
+def test_close_membership_appends_delisted_row_and_never_auto_delists(
+    research_repository: ResearchRepository,
+    universe_module,
+) -> None:
+    """close_membership appends a delisted row; symbols_lagging never auto-delists."""
+    from app.research.universe import close_membership
+
+    _seed_membership(
+        research_repository,
+        rows=[
+            {"universe_name": "cn-a-share", "symbol": "600000.SH", "effective_date": "2025-01-01", "state": "listed"},
+        ],
+    )
+    close_membership(
+        research_repository,
+        universe_name="cn-a-share",
+        symbol="600000.SH",
+        effective_date=date(2025, 6, 1),
+    )
+    before = universe_module["resolve_universe"](
+        research_repository, universe_name="cn-a-share", as_of=date(2025, 5, 1)
+    )[0]
+    after = universe_module["resolve_universe"](
+        research_repository, universe_name="cn-a-share", as_of=date(2025, 7, 1)
+    )[0]
+    assert "600000.SH" in before
+    assert "600000.SH" not in after
+    # A delist is a new row, never an UPDATE: both events remain in the history.
+    events = research_repository.list_universe_memberships(universe_name="cn-a-share")
+    assert [event["state"] for event in events] == ["listed", "delisted"]
