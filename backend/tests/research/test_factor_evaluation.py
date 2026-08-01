@@ -46,6 +46,22 @@ def _panel() -> pl.DataFrame:
     return pl.DataFrame(rows)
 
 
+def _monthly_panel() -> pl.DataFrame:
+    """A two-calendar-month fixture with deterministic per-date IC values."""
+    d1, d2, d3, d4 = date(2024, 1, 2), date(2024, 1, 3), date(2024, 2, 1), date(2024, 2, 2)
+    closes = {
+        "000001.SZ": (1.0, 1.5, 2.0, 3.0),
+        "000002.SZ": (2.0, 2.6, 4.0, 3.0),
+        "000003.SZ": (3.0, 3.6, 6.0, 3.0),
+        "000004.SZ": (4.0, 4.4, 8.0, 3.0),
+    }
+    rows: list[dict] = []
+    for symbol, values in closes.items():
+        for day, value in zip((d1, d2, d3, d4), values):
+            rows.append({"symbol": symbol, "date": day, "close": value, "ma20": 1.0})
+    return pl.DataFrame(rows)
+
+
 def _config(revision_id: str, **overrides: object) -> FactorEvaluationConfig:
     values: dict[str, object] = {
         "factor_revision_id": revision_id,
@@ -224,6 +240,54 @@ def test_artifact_namespace_collision_never_replaces_prior_bytes(tmp_path: Path)
 
     assert signal_path.read_bytes() == before
     assert original[0].checksum_sha256 == sha256(before).hexdigest()
+
+
+def test_evidence_metrics_match_numpy_reference(tmp_path: Path) -> None:
+    registry = _registry(tmp_path)
+    revision = registry.create_factor(name="Close", expression="close")
+    engine = StubBacktestEngine(_monthly_panel())
+    service = FactorEvaluationService(engine, registry, EvaluationArtifactService(tmp_path / "app-data"))
+
+    result = service.evaluate(_config(revision.id, end=date(2024, 2, 2)))
+
+    assert result.status == "completed"
+    assert result.icir is not None
+    assert result.monthly_robustness is not None
+    assert result.coverage["mean"] is not None
+
+    monthly: dict[str, list[float]] = {}
+    for row in result.ic_series:
+        monthly.setdefault(str(row["date"])[:7], []).append(float(row["ic"]))
+    ic_monthly = np.array([float(np.mean(monthly[month])) for month in sorted(monthly)])
+    assert result.icir == pytest.approx(float(np.mean(ic_monthly) / np.std(ic_monthly)))
+    assert result.monthly_robustness == pytest.approx(float(np.mean(ic_monthly > 0)))
+    assert len(result.monthly_ic_series) == len(ic_monthly)
+    for entry, month in zip(result.monthly_ic_series, sorted(monthly)):
+        assert entry["month"] == month
+        assert entry["ic_monthly"] == pytest.approx(float(np.mean(monthly[month])))
+
+
+def test_coverage_is_computed_pre_filter_on_resolved_universe(tmp_path: Path) -> None:
+    """Non-finite factor rows make coverage < 1.0, proving it is not post-filter."""
+    registry = _registry(tmp_path)
+    revision = registry.create_factor(name="CloseMa20", expression="close / ma20")
+    panel = _monthly_panel().with_columns(
+        pl.when((pl.col("symbol") == "000003.SZ") & (pl.col("date") == date(2024, 2, 1)))
+        .then(0.0)
+        .otherwise(pl.col("ma20"))
+        .alias("ma20")
+    )
+    engine = StubBacktestEngine(panel)
+    service = FactorEvaluationService(engine, registry, EvaluationArtifactService(tmp_path / "app-data"))
+
+    result = service.evaluate(_config(revision.id, end=date(2024, 2, 2)))
+
+    assert result.status == "completed"
+    assert result.coverage["mean"] is not None
+    assert result.coverage["mean"] < 1.0
+    series_by_date = {entry["date"]: entry["coverage"] for entry in result.coverage["coverage_series"]}
+    assert series_by_date["2024-02-01"] == pytest.approx(3.0 / 4.0)
+    assert series_by_date["2024-01-02"] == pytest.approx(1.0)
 
 
 def test_factor_backtest_service_labels_pearson_and_spearman_separately() -> None:

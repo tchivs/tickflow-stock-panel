@@ -1,8 +1,10 @@
 """Governed evaluation of immutable factor revisions.
 
-This module deliberately owns orchestration and evidence only.  Market panels are
-loaded exclusively through :class:`BacktestEngine`; factor source is parsed by the
-restricted DSL and evaluated by Polars expressions.
+This module deliberately owns orchestration and evidence only.  Factor values are
+computed exclusively through :class:`FactorSignalChain` (FACT-06) — the chain is the
+single compile-to-compute path; this service adds config validation, the full
+monthly evidence set (IC, RankIC, ICIR, monthly robustness, coverage) and artifact
+orchestration.
 """
 from __future__ import annotations
 
@@ -21,11 +23,13 @@ from app.backtest.factor import FactorBacktestService, FactorConfig
 from app.research.artifacts import ArtifactDescriptor, ArtifactWriteError, EvaluationArtifactService
 from app.research.factor_dsl import FactorDslError, ParsedFactor, parse_factor
 from app.research.factor_registry import FactorRegistry, FactorRevision
-
-
-RebalanceCadence = Literal["daily", "weekly", "monthly"]
-MissingDataTreatment = Literal["drop"]
-WarmupTreatment = Literal["exclude"]
+from app.research.signal_chain import (
+    FactorSignalChain,
+    RebalanceCadence,
+    MissingDataTreatment,
+    WarmupTreatment,
+    SignalChainConfig,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,6 +89,10 @@ class FactorEvaluationResult:
     rank_ic_series: tuple[Mapping[str, Any], ...] = ()
     ic_summary: Mapping[str, Any] | None = None
     rank_ic_summary: Mapping[str, Any] | None = None
+    icir: float | None = None
+    monthly_robustness: float | None = None
+    coverage: Mapping[str, Any] = field(default_factory=dict)
+    monthly_ic_series: tuple[Mapping[str, Any], ...] = ()
     group_stats: tuple[Mapping[str, Any], ...] = ()
     group_nav: tuple[Mapping[str, Any], ...] = ()
     long_short_stats: Mapping[str, Any] = field(default_factory=dict)
@@ -107,6 +115,10 @@ class FactorEvaluationResult:
             "rank_ic_series": [dict(item) for item in self.rank_ic_series],
             "ic_summary": None if self.ic_summary is None else dict(self.ic_summary),
             "rank_ic_summary": None if self.rank_ic_summary is None else dict(self.rank_ic_summary),
+            "icir": self.icir,
+            "monthly_robustness": self.monthly_robustness,
+            "coverage": dict(self.coverage),
+            "monthly_ic_series": [dict(item) for item in self.monthly_ic_series],
             "group_stats": [dict(item) for item in self.group_stats],
             "group_nav": [dict(item) for item in self.group_nav],
             "long_short_stats": dict(self.long_short_stats),
@@ -117,20 +129,22 @@ class FactorEvaluationResult:
 
 
 class FactorEvaluationService:
-    """Evaluates one stored factor revision without bypassing governed panel access."""
+    """Evaluates one stored factor revision through the shared signal chain."""
 
     def __init__(
         self,
         engine: BacktestEngine,
         registry: FactorRegistry,
         artifact_service: EvaluationArtifactService,
+        universe_resolver: object | None = None,
     ) -> None:
         self.engine = engine
         self.registry = registry
         self.artifact_service = artifact_service
+        self._chain = FactorSignalChain(engine, registry, universe_resolver)
 
     def evaluate(self, config: ResolvedEvaluationConfig) -> FactorEvaluationResult:
-        """Validate everything before the one and only market-panel load."""
+        """Validate everything, then delegate the one governed panel compute to the chain."""
         try:
             resolved_config = self._validate_config(config)
             revision, parsed = self._validated_revision(config.factor_revision_id)
@@ -147,35 +161,32 @@ class FactorEvaluationService:
         # opaque identity even when the lake has no usable data.
         evaluation_run_id = uuid.uuid4().hex
         revision_provenance = self._revision_provenance(revision)
-        panel_columns = self._required_columns(parsed)
-        load_start = config.start - timedelta(days=config.warmup_days)
-        panel = self.engine.load_panel(
-            list(sorted(config.symbols)),
-            load_start,
-            config.end,
-            columns=panel_columns,
+
+        chain_config = SignalChainConfig(
+            universe=config.universe,
+            symbols=tuple(config.symbols),
             asset_type=config.asset_type,
+            start=config.start,
+            end=config.end,
+            warmup_days=config.warmup_days,
+            forward_return_horizon=config.forward_return_horizon,
+            rebalance=config.rebalance,
+            missing_data_treatment=config.missing_data_treatment,
+            warmup_treatment=config.warmup_treatment,
         )
-        if panel.is_empty():
-            return self._failed(evaluation_run_id, revision_provenance, resolved_config, "governed panel is empty")
-
-        missing = sorted(set(panel_columns) - set(panel.columns))
-        if missing:
-            return self._failed(
-                evaluation_run_id,
-                revision_provenance,
-                resolved_config,
-                f"governed panel does not provide required fields: {', '.join(missing)}",
-            )
-
         try:
-            evaluated = self._evaluate_panel(panel, parsed, config)
-        except (pl.exceptions.PolarsError, ValueError) as error:
+            signal = self._chain.compute(revision_id=config.factor_revision_id, config=chain_config)
+        except (pl.exceptions.PolarsError, ValueError, FactorDslError) as error:
             return self._failed(evaluation_run_id, revision_provenance, resolved_config, f"factor computation failed: {error}")
+
+        loaded = signal.loaded_panel
+        evaluated = signal.frame
+        if loaded.is_empty():
+            return self._failed(evaluation_run_id, revision_provenance, resolved_config, "governed panel is empty")
         if evaluated.is_empty():
             return self._failed(evaluation_run_id, revision_provenance, resolved_config, "no valid observations after treatments")
 
-        manifest = self._manifest(panel, evaluated, resolved_config, panel_columns)
+        manifest = self._manifest(loaded, evaluated, resolved_config, list(signal.required_source_fields), signal.resolved_universe)
         ic_series, rank_ic_series = self._correlation_series(evaluated)
         if not ic_series and not rank_ic_series:
             return self._failed(
@@ -186,6 +197,8 @@ class FactorEvaluationService:
                 manifest,
             )
 
+        monthly = self._monthly_evidence(ic_series, rank_ic_series)
+        coverage = self._coverage(signal.resolved_universe)
         supplemental = self._supplemental_evidence(evaluated, config)
         ic_summary = self._summary(ic_series, "ic")
         rank_ic_summary = self._summary(rank_ic_series, "rank_ic")
@@ -196,6 +209,9 @@ class FactorEvaluationService:
             "input_manifest": manifest,
             "ic_summary": ic_summary,
             "rank_ic_summary": rank_ic_summary,
+            "icir": monthly["icir"],
+            "monthly_robustness": monthly["monthly_robustness"],
+            "coverage": coverage,
             "group_stats": supplemental["group_stats"],
             "long_short_stats": supplemental["long_short_stats"],
         }
@@ -225,6 +241,10 @@ class FactorEvaluationService:
             rank_ic_series=tuple(rank_ic_series),
             ic_summary=ic_summary,
             rank_ic_summary=rank_ic_summary,
+            icir=monthly["icir"],
+            monthly_robustness=monthly["monthly_robustness"],
+            coverage=coverage,
+            monthly_ic_series=tuple(monthly["monthly_ic_series"]),
             group_stats=tuple(supplemental["group_stats"]),
             group_nav=tuple(supplemental["group_nav"]),
             long_short_stats=supplemental["long_short_stats"],
@@ -281,6 +301,8 @@ class FactorEvaluationService:
     def _required_columns(parsed: ParsedFactor) -> list[str]:
         return ["symbol", "date", "close", *sorted(field for field in parsed.referenced_fields if field != "close")]
 
+    # The legacy adapter is retained as the one sanctioned second implementation
+    # until 10-05 removes it; production evaluate() delegates to the chain.
     @staticmethod
     def _evaluate_panel(panel: pl.DataFrame, parsed: ParsedFactor, config: ResolvedEvaluationConfig) -> pl.DataFrame:
         values = (
@@ -360,6 +382,48 @@ class FactorEvaluationService:
         ).as_dict()
 
     @staticmethod
+    def _monthly_evidence(
+        ic_series: list[Mapping[str, Any]], rank_ic_series: list[Mapping[str, Any]]
+    ) -> dict[str, Any]:
+        """Monthly means of the per-date IC/RankIC series plus ICIR and robustness."""
+        ic_by_month: dict[str, list[float]] = {}
+        rank_by_month: dict[str, list[float]] = {}
+        for row in ic_series:
+            ic_by_month.setdefault(str(row["date"])[:7], []).append(float(row["ic"]))
+        for row in rank_ic_series:
+            rank_by_month.setdefault(str(row["date"])[:7], []).append(float(row["rank_ic"]))
+        monthly: list[dict[str, Any]] = []
+        for month in sorted(set(ic_by_month) | set(rank_by_month)):
+            entry: dict[str, Any] = {"month": month}
+            if month in ic_by_month:
+                entry["ic_monthly"] = float(np.mean(ic_by_month[month]))
+            if month in rank_by_month:
+                entry["rank_ic_monthly"] = float(np.mean(rank_by_month[month]))
+            monthly.append(entry)
+        ic_monthly = [entry["ic_monthly"] for entry in monthly if "ic_monthly" in entry]
+        if len(ic_monthly) < 2 or float(np.std(ic_monthly)) <= 1e-12:
+            icir: float | None = None
+        else:
+            icir = float(np.mean(ic_monthly)) / float(np.std(ic_monthly))
+        monthly_robustness: float | None = (
+            float(np.mean(np.array(ic_monthly) > 0)) if ic_monthly else None
+        )
+        return {"monthly_ic_series": tuple(monthly), "icir": icir, "monthly_robustness": monthly_robustness}
+
+    @staticmethod
+    def _coverage(resolved_universe: Mapping[str, Any]) -> dict[str, Any]:
+        """Mean per-date finite _factor share over the resolved universe (pre-filter)."""
+        pre_filter = resolved_universe.get("pre_filter_counts", {})
+        series: list[dict[str, Any]] = []
+        for date_text in sorted(pre_filter):
+            total = int(pre_filter[date_text]["total"])
+            finite = int(pre_filter[date_text]["finite"])
+            if total > 0:
+                series.append({"date": date_text, "coverage": float(finite / total)})
+        mean = float(np.mean([entry["coverage"] for entry in series])) if series else None
+        return {"mean": mean, "coverage_series": series}
+
+    @staticmethod
     def _supplemental_evidence(panel: pl.DataFrame, config: ResolvedEvaluationConfig) -> dict[str, Any]:
         backtest_config = FactorConfig(
             factor_name="_factor",
@@ -393,6 +457,7 @@ class FactorEvaluationService:
         evaluated: pl.DataFrame,
         resolved_config: Mapping[str, Any],
         required_columns: list[str],
+        resolved_universe: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         schema = {name: str(dtype) for name, dtype in loaded.schema.items()}
         observed_start = loaded.select(pl.col("date").min()).item()
@@ -422,6 +487,12 @@ class FactorEvaluationService:
             "schema_fingerprint": sha256(json.dumps(schema, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest(),
             "source_fingerprint": sha256(encoded).hexdigest(),
             "source_reference": "BacktestEngine.load_panel/governed_enriched_parquet",
+            "universe_resolution": {
+                "method": str(resolved_universe.get("method", "config-symbols")) if resolved_universe else "config-symbols",
+                "membership_fingerprint": str(resolved_universe.get("membership_fingerprint", "")) if resolved_universe else "",
+                "per_date_symbol_counts": dict(resolved_universe.get("per_date_symbol_counts", {})) if resolved_universe else {},
+                "excluded_delisted": list(resolved_universe.get("excluded_delisted", [])) if resolved_universe else [],
+            },
         }
 
     @staticmethod
