@@ -1,9 +1,12 @@
-"""Phase 11 最小波动率 QP + PSD fail-closed gate + run_optimization 编排器.
+"""Phase 11 最小波动率/最大夏普 QP + PSD fail-closed gate + run_optimization 编排器.
 
-职责: 在 cvxpy 1.9.2 (Clarabel 默认) 上求解 long-only 最小波动率 QP, 施加完整
-约束栈 (单标的 cap / 最低现金 / 凸换手惩罚); 记录 solver name/version/options/
-status 全量审计; PSD 修复溯源缺失时 fail-closed; run_optimization 编排器把
-快照 → 协方差+PSD → 求解 → 不可变 run 记录 (含 HRP 基线) 串成一条端到端路径。
+职责: 在 cvxpy 1.9.2 (Clarabel 默认 + OSQP solver_path 回退) 上求解 long-only
+最小波动率/最大夏普 QP, 施加完整约束栈 (单标的 cap / 最低现金 / 凸换手惩罚);
+记录 solver name/version/options/status 全量审计 (solver_path 按实际运行的
+solver 记录 name/version); PSD 修复溯源缺失时 fail-closed; run_optimization
+编排器把快照 → 协方差+PSD → 求解 → 不可变 run 记录 (含 HRP 基线) 串成一条
+端到端路径。max_sharpe 显式非默认: 仅当 render_baselines=True 才可到达, 且
+每次 max_sharpe 运行都记录 min-vol + HRP 双基线 (pitfall 2)。
 
 不知道: 样本协方差如何构建 (risk.py)、策略常量 (constraints.py)、工件存储
 (artifacts.py)、运行记录 (repository.py)。
@@ -11,6 +14,7 @@ status 全量审计; PSD 修复溯源缺失时 fail-closed; run_optimization 编
 from __future__ import annotations
 
 import importlib.metadata
+import json
 import uuid
 from pathlib import Path
 from typing import Any
@@ -30,14 +34,19 @@ from app.portfolio.repository import PortfolioRepository
 from app.portfolio.risk import check_psd, repair_psd, sample_covariance
 from app.research.repository import ResearchRepository
 
-# Clarabel 1.9.2 拒绝 OSQP 风格 eps_abs/eps_rel —— 使用 tol_gap_abs/tol_gap_rel
-# (Wave 0 发现)。options dict 原样记录进 solver_options_json。
+# 策略 options dict 原样记录进 solver_options_json (PFOL-04): solver_path 声明
+# CLARABEL 默认 + OSQP 回退面, eps_abs/eps_rel 是策略容差口径。cvxpy 1.9.2 不允许
+# 'solver' 与 'solver_path' 同时传给 solve(), 且 CLARABEL 拒绝 OSQP 风格
+# eps_abs/eps_rel (TypeError) —— 实际 solve 调用经 _solve_kwargs 适配, 记录 dict
+# 保持原样。
 DEFAULT_SOLVER_OPTIONS: dict[str, Any] = {
     "solver": "CLARABEL",
-    "tol_gap_abs": 1e-8,
-    "tol_gap_rel": 1e-8,
+    "solver_path": ["CLARABEL", "OSQP"],
+    "eps_abs": 1e-8,
+    "eps_rel": 1e-8,
     "max_iter": 20000,
 }
+
 
 # solver 包名 → 发行版名固定映射 (scs/highspy 的 distribution 名与 solver 名不同)。
 _SOLVER_DISTRIBUTION = {
@@ -48,7 +57,75 @@ _SOLVER_DISTRIBUTION = {
 }
 
 
+def _solve_kwargs(options: dict[str, Any], solver: str) -> dict[str, Any]:
+    """从记录的 options dict 构造单个 solver 的 solve() kwargs。
+
+    cvxpy 1.9.2 禁止 'solver' 与 'solver_path' 同时出现; 且 CLARABEL 拒绝
+    OSQP 风格 eps_abs/eps_rel (TypeError, Wave 0 发现), OSQP 拒绝 CLARABEL 风格
+    tol_gap_abs/tol_gap_rel。记录的 options dict 是策略原文; 这里去掉
+    solver_path、固定当前 solver, 并把容差键映射到该 solver 的命名空间。
+
+    Args:
+        options: 记录的 options dict (含 solver / solver_path / 容差键)。
+        solver: 当前尝试的 solver 名 (如 "CLARABEL")。
+
+    Returns:
+        可传给 problem.solve(**kwargs) 的 dict。
+    """
+    kwargs = dict(options)
+    kwargs.pop("solver_path", None)
+    kwargs["solver"] = solver
+    if solver == "CLARABEL":
+        if "eps_abs" in kwargs:
+            kwargs["tol_gap_abs"] = kwargs.pop("eps_abs")
+        if "eps_rel" in kwargs:
+            kwargs["tol_gap_rel"] = kwargs.pop("eps_rel")
+        kwargs.pop("polish", None)
+    else:
+        kwargs.pop("tol_gap_abs", None)
+        kwargs.pop("tol_gap_rel", None)
+    return kwargs
+
+
+def _solve_problem(problem: cp.Problem, options: dict[str, Any]) -> str:
+    """按 solver_path 依次求解, 返回实际运行的 solver 名。
+
+    solver_path=["CLARABEL", "OSQP"]: 先 CLARABEL; 仅当 CLARABEL 抛出
+    SolverError (求解器崩溃) 时才回退 OSQP。任一 solver 返回状态 (optimal /
+    optimal_inaccurate / infeasible / unbounded / user_limit) 即记录该诚实状态 ——
+    绝不在 non-optimal status 上继续 (pitfall 4: 状态原样记录, 不提升; infeasible
+    是真实答案)。cvxpy 原生 solver_path 会在所有 solver 都返回 non-optimal 时抛
+    SolverError, 破坏诚实状态契约, 因此这里手动回退。
+
+    Args:
+        problem: 已构造的 cp.Problem。
+        options: 记录的 options dict (含 solver_path / 容差键)。
+
+    Returns:
+        实际求解成功的 solver 名。
+
+    Raises:
+        cp.error.SolverError: 路径上所有 solver 都崩溃时。
+    """
+    path = options.get("solver_path") or [options.get("solver", "CLARABEL")]
+    last_error: Exception | None = None
+    for solver in path:
+        try:
+            problem.solve(**_solve_kwargs(options, solver))
+            return problem.solver_stats.solver_name
+        except cp.error.SolverError as error:
+            last_error = error
+    if last_error is not None:
+        raise last_error
+    raise cp.error.SolverError(f"All solvers failed: {path}")
+
+
 def _solver_version(solver_name: str) -> str:
+    """把 solver 包名解析到发行版版本 (solver_path 下实际运行的 solver).
+
+    solver 包名 → 发行版名固定映射, 经 importlib.metadata.version 取版本; 包未
+    安装/名字未知时回退 "unknown" (PFOL-04 pitfall 6: solver 版本进审计记录)。
+    """
     distribution = _SOLVER_DISTRIBUTION.get(solver_name)
     if distribution is None:
         return "unknown"
@@ -132,7 +209,9 @@ def solve_min_vol(
     options = dict(DEFAULT_SOLVER_OPTIONS)
     if solver_options:
         options.update(solver_options)
-    problem.solve(**options)
+    # 记录 dict 保持策略原文 (含 solver_path); _solve_problem 手动回退, 使
+    # non-optimal 状态 (如 infeasible) 原样记录 (pitfall 4)。
+    solver_name = _solve_problem(problem, options)
 
     if w.value is not None:
         rounded = np.asarray(w.value, dtype=float).round(8)
@@ -149,12 +228,12 @@ def solve_min_vol(
         weights = {}
     return {
         "status": problem.status,
-        "solver_name": problem.solver_stats.solver_name,
+        "solver_name": solver_name,
         "solve_time": problem.solver_stats.solve_time,
         "num_iters": problem.solver_stats.num_iters,
         "options": options,
         "cvxpy_version": cp.__version__,
-        "solver_version": _solver_version(problem.solver_stats.solver_name),
+        "solver_version": _solver_version(solver_name),
         "weights": weights,
     }
 
