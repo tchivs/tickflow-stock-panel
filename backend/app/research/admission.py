@@ -289,7 +289,7 @@ def run_admission(
     if not train_passed:
         return _record_verdict(repo, registry, revision, "rejected", "train_ic", gate_results, signal, start, end, horizon, evaluation_run_id=evaluation_run_id, experiment_snapshot_id=experiment_snapshot_id)
 
-    # Gate 5: val_ic — held-out mean IC over the last 30% of dates.
+    # Gate 6: val_ic — held-out mean IC over the last 30% of dates.
     val_passed = val_ic is not None and val_ic >= VAL_MIN_MEAN_IC
     gate_results.append(
         {
@@ -303,6 +303,17 @@ def run_admission(
     )
     if not val_passed:
         return _record_verdict(repo, registry, revision, "rejected", "val_ic", gate_results, signal, start, end, horizon, evaluation_run_id=evaluation_run_id, experiment_snapshot_id=experiment_snapshot_id)
+
+    # WR-07: persist the FACT-05 admitted-factor catalog summary once the factor
+    # clears every gate.  Coverage/finite counts come from the chain's resolved
+    # cross-section (pre-filter), matching the coverage gate.  Best-effort: the
+    # admission verdict is the source of truth and must not fail because a
+    # supplementary summary row could not be recorded.
+    if catalog is not None:
+        try:
+            _record_admitted_summary(catalog, revision, signal, start, end, asset_type)
+        except Exception:  # noqa: BLE001 - summary storage is supplementary
+            pass
 
     return _record_verdict(repo, registry, revision, "admitted", "all gates passed", gate_results, signal, start, end, horizon, evaluation_run_id=evaluation_run_id, experiment_snapshot_id=experiment_snapshot_id)
 
@@ -318,6 +329,48 @@ def _per_date_ic(evaluated: pl.DataFrame) -> dict[str, float]:
         for row in correlations.iter_rows(named=True)
         if row["ic"] is not None and np.isfinite(float(row["ic"]))
     }
+
+
+def _record_admitted_summary(
+    catalog: Any,
+    revision: FactorRevision,
+    signal: Any,
+    start: date,
+    end: date,
+    asset_type: str,
+) -> None:
+    """Persist the FACT-05 admitted-factor catalog summary (WR-07).
+
+    Coverage and finite counts come from the chain's resolved cross-section
+    (``pre_filter_counts``), the same pre-filter numbers the coverage gate uses,
+    so the summary and the verdict measure the same universe.
+    """
+    pre_filter_counts = signal.resolved_universe.get("pre_filter_counts", {})
+    total = sum(int(counts.get("total", 0)) for counts in pre_filter_counts.values())
+    finite = sum(int(counts.get("finite", 0)) for counts in pre_filter_counts.values())
+    coverage_series = [
+        {"date": day, "coverage": float(counts["finite"]) / float(counts["total"])}
+        for day, counts in sorted(pre_filter_counts.items())
+        if counts.get("total")
+    ]
+    mean_coverage = (
+        float(np.mean([item["coverage"] for item in coverage_series])) if coverage_series else 0.0
+    )
+    catalog.record_admitted_factor_summary(
+        revision_id=revision.id,
+        coverage={"mean": mean_coverage, "coverage_series": coverage_series},
+        finite_counts={
+            "total": total,
+            "finite": finite,
+            "share": float(finite) / float(total) if total else 0.0,
+        },
+        resolved_config={
+            "universe": signal.resolved_universe.get("method", ""),
+            "asset_type": asset_type,
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+        },
+    )
 
 
 def _record_evaluation_reference(
