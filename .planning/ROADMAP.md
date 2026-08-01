@@ -54,7 +54,7 @@ Six phases extend the shipped research platform from single-factor evaluation in
 - Integer phases (10, 11, ...): v1.2 continues v1.1's numbering (v1.1 ended at Phase 9)
 - Decimal phases (11.1, 11.2): urgent insertions after planning, marked with INSERTED
 
-- [ ] **Phase 10: Factor Library & Multi-Factor Model** - Admission gates, full monthly evidence, multi-factor expected returns, catalog, and the shared signal chain
+- [x] **Phase 10: Factor Library & Multi-Factor Model** - Admission gates, full monthly evidence, multi-factor expected returns, catalog, and the shared signal chain (completed 2026-08-01)
 - [ ] **Phase 11: Portfolio Construction & Optimization** - Sample covariance with PSD repair, min-vol/HRP baselines, constraint stack, immutable run records
 - [ ] **Phase 12: Risk Models & Attribution** - Risk-model suite with PSD provenance, exposure/contribution and drawdown attribution
 - [ ] **Phase 13: Walk-Forward Validation & Parameter Search** - Rolling folds, reserved final OOS, OOS-scored parameter search, ensembling
@@ -161,7 +161,7 @@ Phases execute in numeric order: 10 → 11 → 12 → 13 → 14 → 15 (Phase 13
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 10. Factor Library & Multi-Factor Model | 0/1 | Planned    |  |
+| 10. Factor Library & Multi-Factor Model | 6/1 | Complete    | 2026-08-01 |
 | 11. Portfolio Construction & Optimization | 0/4 | Not started | - |
 | 12. Risk Models & Attribution | 0/3 | Not started | - |
 | 13. Walk-Forward Validation & Parameter Search | 0/4 | Not started | - |

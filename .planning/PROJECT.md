@@ -47,6 +47,15 @@ Building toward v1.2 (End-to-End Factor Portfolio Pipeline). Requirements are de
 - [x] Investment-thesis tracking and evidence review preserves immutable lineage and human authority.
 - [x] Kronos forecasting is local-only, provenance-bound, principal-scoped, and fail-closed when supply identity is incomplete.
 
+### Validated in v1.2 Phase 10
+
+- [x] FACT-01: Researcher can run factor admission gates (train/val IC threshold, no-lookahead, no-label-leakage, similarity dedup) with immutable append-only verdicts including rejections and candidate trail — Phase 10.
+- [x] FACT-02: Factor evaluation reports ICIR, monthly robustness, and coverage alongside IC/RankIC with the full monthly evidence set exposed — Phase 10.
+- [x] FACT-03: Researcher can compose admitted factors into a deterministic multi-factor expected-return model (equal-weight or IC-weighted cross-sectional z-score, no ML) — Phase 10.
+- [x] FACT-04: DSL partition-context contract — every operator declares per-date/per-symbol/pointwise semantics, label fields denied, deterministic shifted-label leakage gate — Phase 10.
+- [x] FACT-05: Admitted factors stored in an immutable catalog with summary storage (coverage, finite counts, signature) and revision lineage — Phase 10.
+- [x] FACT-06: A single shared factor signal chain used identically by evaluation, multi-factor models, walk-forward, expected returns, and live as-of suggestions (no train/serve skew) — Phase 10.
+
 ### Out of Scope
 
 - Automated live broker order execution.
@@ -65,6 +74,16 @@ Building toward v1.2 (End-to-End Factor Portfolio Pipeline). Requirements are de
 ## Decision Status
 
 v1.0 validated the host architecture and locked its safety boundaries: one FastAPI host, Parquet/DuckDB/Polars governed data, SQLite operational state, server-owned authorization and identity, append-only audit facts, bounded AI proposals, research-only promotion, and independently activatable optional modules. Future milestones may harden or simplify these seams but must not weaken their fail-closed behavior.
+
+## Phase 10 Decisions (2026-08-01)
+
+- **Shared signal chain is the only factor-value implementation** — `research/signal_chain.py` binds revision → one governed panel → cross-sectional values/rank/zscore; evaluation, composite models, walk-forward, expected returns, and live as-of suggestions all delegate to it (FACT-06 anti train/serve skew).
+- **Hard-threshold admission gates** — fixed policy constants (train/val IC 0.02/0.01, similarity 0.80, IC-corr 0.90, shifted-label 0.02, coverage 0.50); temporal 70/30 date split; rejections recorded identically to admissions in append-only verdicts with candidate trail.
+- **PIT universe membership table** — append-only `factor_universe_membership` in operational.db (no second datastore); per-date resolution filters AFTER the single `BacktestEngine.load_panel` seam; `membership_fingerprint` recorded in every manifest; `UniverseResolver` wired into `FactorEvaluationService` in main.py.
+- **DSL partition-context contract** — `_FUNCTION_PARTITION` beside `_FUNCTION_ARITY`; `DENIED_FIELDS` explicit; `DSL_VERSION` bumped to factor-dsl-v2; shifted-label leakage test (IC must collapse ≤0.02) gates every DSL change.
+- **Deterministic composite** — equal or IC-weighted (∝ catalog-recorded mean IC, NOT ICIR) cross-sectional z-score; no ML; snapshot-immutable output with `input_snapshot_sha256`; consumed by Phase 11 by snapshot.
+- **Evaluation evidence** — ICIR = mean(monthly IC)/std(monthly IC), monthly robustness = positive-month share, coverage on resolved universe pre-filter; full monthly series in checksummed artifact; summary-only storage (no factor matrices).
+- **scipy promoted to base deps** (`>=1.17.1,<1.18`, 1.18 needs Python ≥3.12 vs floor 3.11); sklearn stays shadow-extra lazy-imported; empty-.venv Wave 0 gate verified.
 
 ## Source Context
 
@@ -92,4 +111,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-07-31 — v1.2 End-to-End Factor Portfolio Pipeline milestone started*
+*Last updated: 2026-08-01 after Phase 10*
