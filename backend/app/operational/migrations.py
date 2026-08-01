@@ -1616,6 +1616,85 @@ MIGRATIONS: tuple[str, ...] = (
     CREATE TRIGGER portfolio_optimization_runs_no_delete BEFORE DELETE ON portfolio_optimization_runs
     BEGIN SELECT RAISE(ABORT, 'portfolio optimization runs are append-only'); END;
     """,
+    """
+    -- Phase 12 append-only attribution evidence (RSK-01/03) + risk-model enum widening.
+    -- Two one-way doors in one atomic script (approved decision option-a):
+    --   (1) rebuild portfolio_optimization_runs so risk_model accepts the 4-model enum
+    --       (SQLite cannot ALTER a CHECK -- the Phase 7 rebuild pattern).
+    --   (2) create portfolio_risk_attribution_evidence: every attribution/drawdown
+    --       analysis is one immutable fact bound to a checksum-verified artifact.
+    -- The runs rebuild runs FIRST so the evidence table's run_id FK binds to the
+    -- FINAL runs table (renaming runs after the FK exists would re-point the FK to
+    -- the _legacy table and then break when legacy is dropped).
+    PRAGMA foreign_keys = OFF;
+    DROP TRIGGER IF EXISTS portfolio_optimization_runs_no_update;
+    DROP TRIGGER IF EXISTS portfolio_optimization_runs_no_delete;
+    ALTER TABLE portfolio_optimization_runs RENAME TO portfolio_optimization_runs_legacy;
+    CREATE TABLE portfolio_optimization_runs (
+        id TEXT PRIMARY KEY,
+        objective TEXT NOT NULL CHECK (objective IN ('min_volatility', 'hrp', 'max_sharpe')),
+        as_of TEXT NOT NULL,
+        universe TEXT NOT NULL,
+        model_id TEXT REFERENCES factor_model_models(model_id) ON DELETE RESTRICT,
+        composite_snapshot_id TEXT,
+        input_snapshot_sha256 TEXT NOT NULL CHECK (length(input_snapshot_sha256) = 64),
+        expected_return_method TEXT NOT NULL CHECK (expected_return_method IN ('composite-zscore-v1', 'none')),
+        risk_model TEXT NOT NULL CHECK (risk_model IN ('sample_covariance_v1', 'semi_covariance_v1', 'ewma_covariance_v1', 'ledoit_wolf_v1')),
+        risk_model_json TEXT NOT NULL,
+        constraint_stack_json TEXT NOT NULL,
+        solver_name TEXT NOT NULL,
+        solver_version TEXT NOT NULL,
+        solver_options_json TEXT NOT NULL,
+        problem_status TEXT NOT NULL CHECK (
+            problem_status IN ('optimal', 'optimal_inaccurate', 'infeasible',
+                               'unbounded', 'solver_error', 'failed')
+        ),
+        failure_reason TEXT,
+        output_weights_json TEXT,
+        output_sha256 TEXT CHECK (output_sha256 IS NULL OR length(output_sha256) = 64),
+        weights_artifact_relative_path TEXT,
+        baseline_weights_json TEXT,
+        created_at TEXT NOT NULL,
+        CHECK (
+            (problem_status IN ('failed', 'solver_error')) = (failure_reason IS NOT NULL)
+        )
+    );
+    INSERT INTO portfolio_optimization_runs
+        (id, objective, as_of, universe, model_id, composite_snapshot_id, input_snapshot_sha256,
+         expected_return_method, risk_model, risk_model_json, constraint_stack_json, solver_name,
+         solver_version, solver_options_json, problem_status, failure_reason, output_weights_json,
+         output_sha256, weights_artifact_relative_path, baseline_weights_json, created_at)
+    SELECT
+        id, objective, as_of, universe, model_id, composite_snapshot_id, input_snapshot_sha256,
+        expected_return_method, risk_model, risk_model_json, constraint_stack_json, solver_name,
+        solver_version, solver_options_json, problem_status, failure_reason, output_weights_json,
+        output_sha256, weights_artifact_relative_path, baseline_weights_json, created_at
+    FROM portfolio_optimization_runs_legacy;
+    DROP TABLE portfolio_optimization_runs_legacy;
+    CREATE INDEX idx_portfolio_optimization_runs_as_of ON portfolio_optimization_runs(as_of, objective);
+    CREATE TRIGGER portfolio_optimization_runs_no_update BEFORE UPDATE ON portfolio_optimization_runs
+    BEGIN SELECT RAISE(ABORT, 'portfolio optimization runs are append-only'); END;
+    CREATE TRIGGER portfolio_optimization_runs_no_delete BEFORE DELETE ON portfolio_optimization_runs
+    BEGIN SELECT RAISE(ABORT, 'portfolio optimization runs are append-only'); END;
+
+    CREATE TABLE portfolio_risk_attribution_evidence (
+        id TEXT PRIMARY KEY,
+        attribution_type TEXT NOT NULL CHECK (attribution_type IN ('exposure_contribution', 'drawdown')),
+        run_id TEXT NOT NULL REFERENCES portfolio_optimization_runs(id) ON DELETE RESTRICT,
+        risk_model TEXT NOT NULL CHECK (risk_model IN ('sample_covariance_v1', 'semi_covariance_v1', 'ewma_covariance_v1', 'ledoit_wolf_v1')),
+        as_of TEXT NOT NULL,
+        output_sha256 TEXT NOT NULL CHECK (length(output_sha256) = 64),
+        artifact_relative_path TEXT NOT NULL,
+        reconciliation_json TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    );
+    CREATE INDEX idx_attribution_evidence_run ON portfolio_risk_attribution_evidence(run_id, attribution_type);
+    CREATE TRIGGER portfolio_risk_attribution_evidence_no_update BEFORE UPDATE ON portfolio_risk_attribution_evidence
+    BEGIN SELECT RAISE(ABORT, 'portfolio risk attribution evidence is append-only'); END;
+    CREATE TRIGGER portfolio_risk_attribution_evidence_no_delete BEFORE DELETE ON portfolio_risk_attribution_evidence
+    BEGIN SELECT RAISE(ABORT, 'portfolio risk attribution evidence is append-only'); END;
+    PRAGMA foreign_keys = ON;
+    """,
 )
 
 

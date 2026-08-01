@@ -591,3 +591,159 @@ def test_phase11_optimization_runs_migrate_with_constraints_and_idempotence(
     # --- FK RESTRICT: model_id must reference factor_model_models. ---
     with pytest.raises(sqlite3.IntegrityError):
         connection.execute(_run_row(run_id="re" * 16, model_id="missing-model"))
+
+
+def test_phase12_risk_model_enum_widened(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """option-a: the runs-table risk_model CHECK accepts the 4-model enum."""
+    planned = migrations.MIGRATIONS
+    connection = sqlite3.connect(":memory:")
+    connection.execute("PRAGMA foreign_keys = ON")
+    monkeypatch.setattr(migrations, "MIGRATIONS", planned)
+    migrations.migrate_operational_db(connection)
+    _insert_phase11_model(connection)
+
+    for index, model in enumerate(
+        ("sample_covariance_v1", "semi_covariance_v1", "ewma_covariance_v1", "ledoit_wolf_v1")
+    ):
+        connection.execute(_run_row(run_id=f"r{index}" * 16, risk_model=model))
+    with pytest.raises(sqlite3.IntegrityError):
+        connection.execute(_run_row(run_id="rf" * 16, risk_model="shrinkage_v1"))
+
+
+def test_phase12_attribution_evidence_migrate_with_constraints_and_idempotence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """portfolio_risk_attribution_evidence: enums + sha256 + reconciliation + triggers."""
+    planned = migrations.MIGRATIONS
+    evidence_index = next(
+        index
+        for index, script in enumerate(planned)
+        if "portfolio_risk_attribution_evidence" in script
+    )
+    connection = sqlite3.connect(":memory:")
+    connection.execute("PRAGMA foreign_keys = ON")
+
+    # Forward-only: table absent before the Phase 12 script, present after.
+    monkeypatch.setattr(migrations, "MIGRATIONS", planned[:evidence_index])
+    migrations.migrate_operational_db(connection)
+    assert connection.execute("PRAGMA user_version").fetchone() == (evidence_index,)
+    assert (
+        connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+            "AND name = 'portfolio_risk_attribution_evidence'"
+        ).fetchone()
+        is None
+    )
+
+    monkeypatch.setattr(migrations, "MIGRATIONS", planned)
+    migrations.migrate_operational_db(connection)
+    assert connection.execute("PRAGMA user_version").fetchone() == (len(planned),)
+    migrations.migrate_operational_db(connection)  # idempotent no-op
+    assert connection.execute("PRAGMA user_version").fetchone() == (len(planned),)
+
+    _insert_phase11_model(connection)
+    connection.execute(_run_row())
+    evidence = (
+        "INSERT INTO portfolio_risk_attribution_evidence (id, attribution_type, run_id, risk_model, "
+        "as_of, output_sha256, artifact_relative_path, reconciliation_json, created_at) "
+        f"VALUES ('e1', 'exposure_contribution', 'a1b2c3d4e5f60718293a4b5c6d7e8f90', "
+        f"'sample_covariance_v1', '2026-08-01', '{'a' * 64}', "
+        "'research_artifacts/run-id/attribution.json', '{\"portfolio_variance\":1.0}', "
+        "'2026-08-01T00:00:00Z')"
+    )
+    connection.execute(evidence)
+
+    # --- CHECK attribution_type enum. ---
+    with pytest.raises(sqlite3.IntegrityError):
+        connection.execute(
+            evidence.replace("'e1'", "'e2'").replace("'exposure_contribution'", "'backtest'")
+        )
+    # --- CHECK risk_model enum. ---
+    with pytest.raises(sqlite3.IntegrityError):
+        connection.execute(
+            evidence.replace("'e1'", "'e3'").replace("'sample_covariance_v1'", "'shrinkage_v1'")
+        )
+    # --- CHECK output_sha256 length. ---
+    with pytest.raises(sqlite3.IntegrityError):
+        connection.execute(
+            evidence.replace("'e1'", "'e4'").replace("'" + "a" * 64 + "'", "'short'")
+        )
+    # --- CHECK reconciliation_json NOT NULL (exposure rows always reconcile). ---
+    with pytest.raises(sqlite3.IntegrityError):
+        connection.execute(
+            evidence.replace("'e1'", "'e5'").replace("'{\"portfolio_variance\":1.0}'", "NULL")
+        )
+    # --- Immutability triggers: UPDATE and DELETE raise. ---
+    with pytest.raises(sqlite3.IntegrityError):
+        connection.execute(
+            "UPDATE portfolio_risk_attribution_evidence SET as_of = '2026-08-02' WHERE id = 'e1'"
+        )
+    with pytest.raises(sqlite3.IntegrityError):
+        connection.execute("DELETE FROM portfolio_risk_attribution_evidence WHERE id = 'e1'")
+    # --- FK RESTRICT: run_id must reference portfolio_optimization_runs. ---
+    with pytest.raises(sqlite3.IntegrityError):
+        connection.execute(
+            evidence.replace("'e1'", "'e6'").replace(
+                "'a1b2c3d4e5f60718293a4b5c6d7e8f90'", "'missing-run-id'"
+            )
+        )
+    # --- Drawdown evidence rows are valid with a reconciliation payload. ---
+    connection.execute(
+        "INSERT INTO portfolio_risk_attribution_evidence (id, attribution_type, run_id, risk_model, "
+        "as_of, output_sha256, artifact_relative_path, reconciliation_json, created_at) "
+        f"VALUES ('e7', 'drawdown', 'a1b2c3d4e5f60718293a4b5c6d7e8f90', "
+        f"'semi_covariance_v1', '2026-08-01', '{'b' * 64}', "
+        "'research_artifacts/run-id/drawdown.json', '{\"period_count\":0}', "
+        "'2026-08-01T00:00:00Z')"
+    )
+
+
+def test_phase12_rebuild_preserves_phase11_run_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """option-a rebuild: existing portfolio_optimization_runs rows survive.
+
+    Records a run under the pre-Phase-12 schema (single-value risk_model CHECK),
+    then applies the FULL migration and proves the row survives column-for-column
+    and the new evidence table's FK binds to the rebuilt runs table.
+    """
+    planned = migrations.MIGRATIONS
+    evidence_index = next(
+        index
+        for index, script in enumerate(planned)
+        if "portfolio_risk_attribution_evidence" in script
+    )
+    connection = sqlite3.connect(":memory:")
+    connection.execute("PRAGMA foreign_keys = ON")
+
+    monkeypatch.setattr(migrations, "MIGRATIONS", planned[:evidence_index])
+    migrations.migrate_operational_db(connection)
+    assert connection.execute("PRAGMA user_version").fetchone() == (evidence_index,)
+
+    _insert_phase11_model(connection)
+    connection.execute(_run_row())
+    before = connection.execute(
+        "SELECT * FROM portfolio_optimization_runs WHERE id = 'a1b2c3d4e5f60718293a4b5c6d7e8f90'"
+    ).fetchone()
+    assert before is not None
+    assert before[8] == "sample_covariance_v1"  # risk_model column
+
+    monkeypatch.setattr(migrations, "MIGRATIONS", planned)
+    migrations.migrate_operational_db(connection)
+    assert connection.execute("PRAGMA user_version").fetchone() == (len(planned),)
+    after = connection.execute(
+        "SELECT * FROM portfolio_optimization_runs WHERE id = 'a1b2c3d4e5f60718293a4b5c6d7e8f90'"
+    ).fetchone()
+    assert after is not None
+    assert tuple(after) == tuple(before)
+
+    connection.execute(
+        "INSERT INTO portfolio_risk_attribution_evidence (id, attribution_type, run_id, risk_model, "
+        "as_of, output_sha256, artifact_relative_path, reconciliation_json, created_at) "
+        f"VALUES ('survivor-ev', 'exposure_contribution', "
+        f"'a1b2c3d4e5f60718293a4b5c6d7e8f90', 'sample_covariance_v1', '2026-08-01', "
+        f"'{'c' * 64}', 'research_artifacts/run-id/attribution.json', "
+        "'{\"portfolio_variance\":1.0}', '2026-08-01T00:00:00Z')"
+    )
