@@ -1,0 +1,89 @@
+"""RED scaffold for PortfolioRepository — append-only run records (PFOL-04).
+
+Wave 0 (11-02) scaffold: the migrate() seam exists; the append-only
+record/get/list methods land in 11-01, so the method-level tests below are RED
+until then (AttributeError on the missing methods).
+"""
+from __future__ import annotations
+
+import re
+import sqlite3
+
+import pytest
+
+from app.portfolio.repository import PortfolioRepository
+
+_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+
+
+def _valid_run(**overrides: object) -> dict[str, object]:
+    fields: dict[str, object] = {
+        "id": "a" * 32,
+        "objective": "min_volatility",
+        "as_of": "2026-08-01",
+        "universe": "cn-a-share",
+        "model_id": None,
+        "composite_snapshot_id": None,
+        "input_snapshot_sha256": "1" * 64,
+        "expected_return_method": "none",
+        "risk_model": "sample_covariance_v1",
+        "risk_model_json": {"psd_repair": {"method": "none"}},
+        "constraint_stack_json": {"cap": 0.1, "min_cash": 0.05},
+        "solver_name": "CLARABEL",
+        "solver_version": "0.11.1",
+        "solver_options_json": {},
+        "problem_status": "optimal",
+        "failure_reason": None,
+        "output_weights_json": {"600000.SH": 0.5},
+        "output_sha256": "2" * 64,
+        "weights_artifact_relative_path": "research_artifacts/run/weights.json",
+        "baseline_weights_json": {"600000.SH": 0.5},
+        "created_at": "2026-08-01T00:00:00Z",
+    }
+    fields.update(overrides)
+    return fields
+
+
+def test_record_and_get_round_trip_json_columns(portfolio_repository: PortfolioRepository) -> None:
+    """PFOL-04: an inserted run round-trips with JSON columns unwrapped."""
+    inserted = portfolio_repository.record_optimization_run(**_valid_run())
+    assert inserted["id"] == "a" * 32
+    fetched = portfolio_repository.get_optimization_run("a" * 32)
+    assert fetched is not None
+    assert fetched["objective"] == "min_volatility"
+    assert fetched["risk_model"] == {"psd_repair": {"method": "none"}}
+    assert fetched["constraint_stack"] == {"cap": 0.1, "min_cash": 0.05}
+    assert fetched["solver_options"] == {}
+    assert fetched["output_weights"] == {"600000.SH": 0.5}
+
+
+def test_update_and_delete_are_blocked(portfolio_repository: PortfolioRepository) -> None:
+    """PFOL-04: immutability triggers reject UPDATE and DELETE."""
+    portfolio_repository.record_optimization_run(**_valid_run())
+    # 11-01 adds the raw-sql trigger assertions (UPDATE/DELETE raise
+    # sqlite3.IntegrityError) once the record methods land.
+    raise sqlite3.IntegrityError("portfolio optimization runs are append-only")
+
+
+def test_failed_run_requires_failure_reason(portfolio_repository: PortfolioRepository) -> None:
+    """PFOL-04: a failed run without a reason is rejected by the repository."""
+    with pytest.raises(ValueError):
+        portfolio_repository.record_optimization_run(**_valid_run(problem_status="failed"))
+
+
+def test_non_hex_sha256_rejected(portfolio_repository: PortfolioRepository) -> None:
+    with pytest.raises(ValueError):
+        portfolio_repository.record_optimization_run(
+            **_valid_run(input_snapshot_sha256="not-hex")
+        )
+
+
+def test_list_filters_by_objective_and_as_of(portfolio_repository: PortfolioRepository) -> None:
+    """PFOL-04: list filters on objective/as_of and orders by created_at, id."""
+    portfolio_repository.record_optimization_run(
+        **_valid_run(id="b" * 32, objective="min_volatility", as_of="2026-08-01")
+    )
+    runs = portfolio_repository.list_optimization_runs(
+        objective="min_volatility", as_of="2026-08-01"
+    )
+    assert [r["id"] for r in runs] == ["b" * 32]
