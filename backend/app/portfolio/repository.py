@@ -152,9 +152,27 @@ class PortfolioRepository:
         return _record(row)
 
     def list_optimization_runs(
-        self, *, objective: str | None = None, as_of: str | None = None
+        self,
+        *,
+        objective: str | None = None,
+        as_of: str | None = None,
+        limit: int = 200,
     ) -> list[dict[str, Any]]:
-        """List runs ordered by created_at, id; optional objective/as_of filters."""
+        """List runs ordered by created_at, id; optional objective/as_of filters.
+
+        Phase 15 API 面: limit 上限 (默认 200) 防止无界读取; objective / as_of
+        为可选等式过滤。JSON 列经 _record 展开, 与 get_optimization_run 同构。
+
+        Args:
+            objective: 只返回该 objective 的 run (如 "min_volatility")。
+            as_of: 只返回该 as_of 日期的 run (ISO 字符串)。
+            limit: 返回行数上限 (默认 200; 必须为正整数)。
+
+        Returns:
+            按 created_at, id 升序排列的 run 记录列表 (JSON 列已展开)。
+        """
+        if not isinstance(limit, int) or limit < 1:
+            raise ValueError("limit must be a positive integer")
         clauses: list[str] = []
         parameters: list[Any] = []
         if objective is not None:
@@ -166,11 +184,16 @@ class PortfolioRepository:
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         with self._connection() as connection:
             rows = connection.execute(
-                f"SELECT * FROM portfolio_optimization_runs{where} ORDER BY created_at, id",
-                parameters,
+                f"SELECT * FROM portfolio_optimization_runs{where} "
+                "ORDER BY created_at, id LIMIT ?",
+                [*parameters, limit],
             ).fetchall()
         records = [dict(row) for row in rows]
-        return [unwrapped for unwrapped in (_record(record) for record in records) if unwrapped is not None]
+        return [
+            unwrapped
+            for unwrapped in (_record(record) for record in records)
+            if unwrapped is not None
+        ]
 
     @staticmethod
     def _validate_run_fields(fields: dict[str, Any]) -> None:

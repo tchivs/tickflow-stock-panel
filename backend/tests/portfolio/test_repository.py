@@ -95,3 +95,24 @@ def test_list_filters_by_objective_and_as_of(portfolio_repository: PortfolioRepo
         objective="min_volatility", as_of="2026-08-01"
     )
     assert [r["id"] for r in runs] == ["b" * 32]
+
+
+def test_list_caps_at_limit(portfolio_repository: PortfolioRepository) -> None:
+    """PFOL-04 (11-05): list respects the limit cap for the Phase 15 API."""
+    for index in range(5):
+        # created_at 秒级区分, 使 created_at, id 排序唯一 (00:00:00Z 会并列回退到 id)。
+        portfolio_repository.record_optimization_run(
+            **_valid_run(
+                id=f"{index:032d}",
+                created_at=f"2026-08-0{index + 1}T00:00:00Z",
+            )
+        )
+    runs = portfolio_repository.list_optimization_runs(limit=2)
+    assert len(runs) == 2
+    # 升序 created_at, id: 前两行是 created_at 最早的 (id 为 0-padded 序号)。
+    assert [r["id"] for r in runs] == [f"{0:032d}", f"{1:032d}"]
+    # limit 为 0 / 负数 fail closed。
+    with pytest.raises(ValueError, match="limit"):
+        portfolio_repository.list_optimization_runs(limit=0)
+    with pytest.raises(ValueError, match="limit"):
+        portfolio_repository.list_optimization_runs(limit=-1)
