@@ -66,6 +66,7 @@ def _wide_panel() -> pl.DataFrame:
     n_day = len(days)
     t_idx = np.arange(n_day)
     mixing = 0.5 + 0.8 * np.sin(t_idx / 5.0)  # per-date factor-vs-return alignment
+    mixing_two = 0.5 + 0.8 * np.cos(t_idx / 7.0)  # decorrelated from mixing
 
     returns = np.array([_hadamard_row(t) for t in range(n_day)])
     close = np.zeros((n_day, 8))
@@ -74,6 +75,9 @@ def _wide_panel() -> pl.DataFrame:
         close[t] = close[t - 1] * (1 + 0.02 * returns[t - 1])
     volume = np.array(
         [_hadamard_row(t) + mixing[t] * _hadamard_row(t + 3) for t in range(n_day)]
+    )
+    momentum_5d = np.array(
+        [_hadamard_row(t) + mixing_two[t] * _hadamard_row(t + 2) for t in range(n_day)]
     )
 
     rows: list[dict] = []
@@ -85,6 +89,7 @@ def _wide_panel() -> pl.DataFrame:
                     "date": day,
                     "close": float(close[t, i]),
                     "volume": float(volume[t, i]),
+                    "momentum_5d": float(momentum_5d[t, i]),
                 }
             )
     return pl.DataFrame(rows)
@@ -160,44 +165,62 @@ def _evaluation_config(ctx, revision_id: str) -> FactorEvaluationConfig:
 
 def test_admit_evaluate_compose_catalog_spine(pipeline_context) -> None:
     ctx = pipeline_context
-    revision = ctx["registry"].create_factor(name="Volume", expression="volume")
+    revision_a = ctx["registry"].create_factor(name="Volume", expression="volume")
+    revision_b = ctx["registry"].create_factor(name="Momentum", expression="momentum_5d")
 
-    verdict = run_admission(
+    verdict_a = run_admission(
         ctx["repo"],
         engine=ctx["engine"],
         registry=ctx["registry"],
-        revision_id=revision.id,
+        revision_id=revision_a.id,
         universe="fixture-a-share",
         start=ctx["start"],
         end=ctx["end"],
         universe_resolver=ctx["resolver"],
         horizon=1,
     )
-    assert verdict["verdict"] == "admitted"
-    assert verdict["policy_version"] == ADMISSION_POLICY_VERSION
-    assert verdict["input_snapshot_sha256"] and len(verdict["input_snapshot_sha256"]) == 64
-    assert verdict["gates_json"]
-    assert verdict["candidate_trail_json"]["gate_results"]
-    assert verdict["resolved_universe_json"]["membership_fingerprint"]
+    assert verdict_a["verdict"] == "admitted"
+    assert verdict_a["policy_version"] == ADMISSION_POLICY_VERSION
+    assert verdict_a["input_snapshot_sha256"] and len(verdict_a["input_snapshot_sha256"]) == 64
+    assert verdict_a["gates_json"]
+    assert verdict_a["candidate_trail_json"]["gate_results"]
+    assert verdict_a["resolved_universe_json"]["membership_fingerprint"]
 
-    result = ctx["evaluator"].evaluate(_evaluation_config(ctx, revision.id))
-    assert result.status == "completed"
-    assert result.icir is not None
-    assert result.monthly_robustness is not None
-    assert result.coverage["mean"] is not None
-    assert result.monthly_ic_series
+    result_a = ctx["evaluator"].evaluate(_evaluation_config(ctx, revision_a.id))
+    assert result_a.status == "completed"
+    assert result_a.icir is not None
+    assert result_a.monthly_robustness is not None
+    assert result_a.coverage["mean"] is not None
+    assert result_a.monthly_ic_series
 
-    snapshot = ctx["catalog"].record_factor_evaluation(result)
-    assert snapshot.metrics["icir"] == result.icir
-    assert snapshot.metrics["monthly_robustness"] == result.monthly_robustness
-    assert snapshot.metrics["coverage"]["mean"] == result.coverage["mean"]
+    snapshot = ctx["catalog"].record_factor_evaluation(result_a)
+    assert snapshot.metrics["icir"] == result_a.icir
+    assert snapshot.metrics["monthly_robustness"] == result_a.monthly_robustness
+    assert snapshot.metrics["coverage"]["mean"] == result_a.coverage["mean"]
     assert snapshot.metrics["monthly_ic_series"]
+
+    # A second admitted factor with decorrelated IC series; catalogued evidence
+    # provides the mean-IC weights for the IC-weighted composite.
+    verdict_b = run_admission(
+        ctx["repo"],
+        engine=ctx["engine"],
+        registry=ctx["registry"],
+        revision_id=revision_b.id,
+        universe="fixture-a-share",
+        start=ctx["start"],
+        end=ctx["end"],
+        universe_resolver=ctx["resolver"],
+        horizon=1,
+    )
+    assert verdict_b["verdict"] == "admitted"
+    result_b = ctx["evaluator"].evaluate(_evaluation_config(ctx, revision_b.id))
+    ctx["catalog"].record_factor_evaluation(result_b)
 
     equal = build_composite(
         ctx["repo"],
         engine=ctx["engine"],
         registry=ctx["registry"],
-        revision_ids=(revision.id,),
+        revision_ids=(revision_a.id, revision_b.id),
         weighting="equal",
         universe="fixture-a-share",
         start=ctx["start"],
@@ -205,14 +228,15 @@ def test_admit_evaluate_compose_catalog_spine(pipeline_context) -> None:
         symbols=ctx["symbols"],
         universe_resolver=ctx["resolver"],
     )
-    assert equal.weights == {revision.id: 1.0}
+    assert set(equal.weights) == {revision_a.id, revision_b.id}
+    assert list(equal.weights.values()) == pytest.approx([0.5, 0.5])
     assert len(equal.input_snapshot_sha256) == 64
 
     weighted = build_composite(
         ctx["repo"],
         engine=ctx["engine"],
         registry=ctx["registry"],
-        revision_ids=(revision.id,),
+        revision_ids=(revision_a.id, revision_b.id),
         weighting="ic_weighted",
         universe="fixture-a-share",
         start=ctx["start"],
@@ -221,9 +245,13 @@ def test_admit_evaluate_compose_catalog_spine(pipeline_context) -> None:
         universe_resolver=ctx["resolver"],
     )
     assert weighted.weighting == "ic_weighted"
-    assert list(weighted.weights.values()) == pytest.approx([1.0])
+    assert sum(weighted.weights.values()) == pytest.approx(1.0)
+    assert all(value > 0 for value in weighted.weights.values())
+    # weights are proportional to catalogued mean IC, not the equal-weight prior
+    assert weighted.weights != equal.weights
 
     assert ctx["repo"].get_model_definition(equal.model_id) is not None
+    assert ctx["repo"].get_model_definition(weighted.model_id) is not None
 
 
 def test_rejection_path_records_identical_verdict(pipeline_context) -> None:
