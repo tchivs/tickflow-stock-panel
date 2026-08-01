@@ -554,17 +554,23 @@ class ResearchRepository:
 
         A symbol is a member when its latest event is ``listed``; a delist event
         closes membership as-of without deleting the earlier row (append-only).
+        When a symbol has listed AND delisted events on the same
+        ``effective_date`` (the schema permits different states on one date),
+        the row with the latest ``created_at`` wins the tie-break so the as-of
+        resolution is deterministic (IN-04).
         """
         query = (
             """SELECT membership.* FROM factor_universe_membership AS membership
                JOIN (
-                   SELECT symbol, MAX(effective_date) AS effective_date
+                   SELECT symbol, MAX(effective_date) AS effective_date,
+                          MAX(created_at) AS latest_created_at
                    FROM factor_universe_membership
                    WHERE universe_name = ? AND effective_date <= ?
                    GROUP BY symbol
                ) AS latest
                  ON latest.symbol = membership.symbol
                 AND latest.effective_date = membership.effective_date
+                AND latest.latest_created_at = membership.created_at
                WHERE membership.universe_name = ? AND membership.effective_date <= ?"""
         )
         parameters: list[object] = [universe_name, as_of, universe_name, as_of]
