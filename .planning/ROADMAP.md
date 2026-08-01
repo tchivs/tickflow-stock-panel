@@ -120,7 +120,6 @@ Six phases extend the shipped research platform from single-factor evaluation in
 
 **Plans**: 3 plans
 *Planning notes: standard patterns (PyPortfolioOpt `risk_models` contracts) — skip research-phase.*
-
 ### Phase 13: Walk-Forward Validation & Parameter Search
 
 **Goal**: Researchers can validate strategies and tune parameters on rolling walk-forward folds with a reserved, once-evaluated final OOS segment, and ensemble validated strategies by rank-averaged signals.
@@ -173,7 +172,7 @@ Phases execute in numeric order: 10 → 11 → 12 → 13 → 14 → 15 (Phase 13
 |-------|----------------|--------|-----------|
 | 10. Factor Library & Multi-Factor Model | 6/6 | Complete    | 2026-08-01 |
 | 11. Portfolio Construction & Optimization | 7/1 | Complete    | 2026-08-01 |
-| 12. Risk Models & Attribution | 0/3 | Not started | - |
+| 12. Risk Models & Attribution | 1/3 | In progress | - |
 | 13. Walk-Forward Validation & Parameter Search | 0/4 | Not started | - |
 | 14. Output & Boundary (RebalancePlan + Paper Rebalance) | 0/3 | Not started | - |
 | 15. API/SSE + Frontend Panels | 0/4 | Not started | - |
