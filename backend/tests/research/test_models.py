@@ -90,17 +90,17 @@ def test_output_artifact_is_immutable(
     from app.research.artifacts import ArtifactWriteError, EvaluationArtifactService
 
     artifacts = EvaluationArtifactService(tmp_path / "app-data")
-    revision = research_registry.create_factor(name="Close", expression="close")
+    run_id = "a" * 32
 
     with pytest.raises(ArtifactWriteError, match="already exists"):
         artifacts.write_bundle(
-            "same-run-id",
+            run_id,
             signals=[{"signal": 1}],
             metric_series=[],
             result={"status": "completed"},
         )
         artifacts.write_bundle(
-            "same-run-id",
+            run_id,
             signals=[{"signal": 999}],
             metric_series=[],
             result={"status": "replacement"},
