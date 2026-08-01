@@ -299,3 +299,98 @@ def test_new_evidence_keys_round_trip_through_catalog_boundary(tmp_path: Path) -
     reloaded = catalog.get(saved.id)
     assert reloaded is not None
     assert reloaded.as_dict() == rendered
+
+
+def test_admitted_factor_summary_stores_coverage_finite_counts_and_lineage(tmp_path: Path) -> None:
+    """FACT-05: an admitted factor's catalog entry carries summaries + lineage."""
+    catalog, registry = _catalog(tmp_path)
+    factor = registry.create_factor(name="Momentum", expression="close / ma20")
+    revision = registry.revise_factor(factor.factor_id, expression="close / ma60")
+
+    saved = catalog.record_admitted_factor_summary(
+        revision_id=revision.id,
+        coverage={"mean": 0.92, "coverage_series": [{"date": "2025-01-02", "coverage": 0.92}]},
+        finite_counts={"total": 5537, "finite": 5094, "share": 0.92},
+        resolved_config={"universe": "cn-a-share"},
+    )
+
+    assert saved.metrics["summary_kind"] == "admitted-factor"
+    assert saved.metrics["coverage"]["mean"] == 0.92
+    assert saved.metrics["coverage"]["coverage_series"][0]["coverage"] == 0.92
+    assert saved.metrics["finite_counts"] == {"total": 5537, "finite": 5094, "share": 0.92}
+    signature = saved.metrics["factor_signature"]
+    assert signature["ast_signature"] == revision.ast_signature
+    assert signature["shape_signature"] == revision.shape_signature
+    # Lineage resolves to the registry revision.
+    lineage = saved.metrics["factor_lineage"]
+    assert lineage["factor_id"] == factor.factor_id
+    assert lineage["revision_id"] == revision.id
+    assert lineage["revision_number"] == revision.revision_number
+    assert registry.get_revision(revision.id).id == lineage["revision_id"]
+    # Summary storage only: never a full factor-value matrix in the metrics map.
+    for key in ("values", "frame", "factor_values", "panel"):
+        assert key not in saved.metrics
+
+    summaries = catalog.list_admitted_factor_summaries()
+    assert [entry.id for entry in summaries] == [saved.id]
+
+
+def test_composite_model_record_is_first_class_catalog_record(tmp_path: Path) -> None:
+    """FACT-03: a composite model is retrievable with its latest snapshot reference."""
+    catalog, registry = _catalog(tmp_path)
+    first = registry.create_factor(name="Close", expression="close")
+    second = registry.create_factor(name="Rank", expression="rank(close)")
+    model_id = "m" * 32
+    snapshot_sha = "a" * 64
+
+    record = catalog.record_composite_model(
+        model_id=model_id,
+        name="composite-equal",
+        weighting="equal",
+        revision_ids=(first.id, second.id),
+        weights={first.id: 0.5, second.id: 0.5},
+        input_snapshot_sha256=snapshot_sha,
+        output_sha256="b" * 64,
+        artifact_relative_path=f"research_artifacts/{model_id}/signals.json",
+    )
+
+    assert record.model_id == model_id
+    assert record.weighting == "equal"
+    assert set(record.revision_ids) == {first.id, second.id}
+    assert record.input_snapshot_sha256 == snapshot_sha
+    assert record.latest_composite is not None
+    assert record.latest_composite["input_snapshot_sha256"] == snapshot_sha
+    assert record.latest_composite["output_sha256"] == "b" * 64
+    assert record.latest_composite["artifact_relative_path"] == f"research_artifacts/{model_id}/signals.json"
+
+    # A second snapshot becomes the latest reference.
+    catalog.repository.insert_model_composite(
+        model_id=model_id,
+        output_sha256="c" * 64,
+        artifact_relative_path=f"research_artifacts/{model_id}/signals-v2.json",
+        input_snapshot_sha256=snapshot_sha,
+    )
+    refreshed = catalog.get_composite_model(model_id)
+    assert refreshed is not None
+    assert refreshed.latest_composite["output_sha256"] == "c" * 64
+    rendered = record.as_dict()
+    assert rendered["latest_composite"]["input_snapshot_sha256"] == snapshot_sha
+    assert rendered["revision_ids"] == sorted([first.id, second.id])
+
+
+def test_admitted_summary_never_persists_full_factor_value_matrix(tmp_path: Path) -> None:
+    """The metrics map carries summaries only; no full matrix ever enters storage."""
+    catalog, registry = _catalog(tmp_path)
+    factor = registry.create_factor(name="Momentum", expression="close / ma20")
+    saved = catalog.record_admitted_factor_summary(
+        revision_id=factor.id,
+        coverage={"mean": 0.9},
+        finite_counts={"total": 100, "finite": 90, "share": 0.9},
+    )
+    rendered = saved.as_dict()
+    assert rendered["metrics"]["summary_kind"] == "admitted-factor"
+    for key in ("values", "frame", "factor_values", "panel"):
+        assert key not in rendered["metrics"]
+    # The snapshot exposes summaries only: coverage/finite-counts/signature.
+    assert {"coverage", "finite_counts", "factor_signature", "factor_lineage"} <= set(rendered["metrics"])
+    assert rendered["subject"] == {"kind": "factor", "revision_id": factor.id}

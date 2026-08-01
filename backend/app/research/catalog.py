@@ -131,6 +131,77 @@ class FactorEvidencePackage:
 
 
 @dataclass(frozen=True, slots=True)
+class AdmittedFactorSummary:
+    """Immutable admitted-factor catalog entry: summary storage ONLY (FACT-05).
+
+    Carries coverage (mean + series), finite counts, and the revision's factor
+    signature, plus the lineage linking the definition to every revision.  Full
+    factor-value matrices are never stored here — the metrics map holds summaries
+    only (CONTEXT anti-feature).
+    """
+
+    revision_id: str
+    factor_id: str
+    revision_number: int
+    factor_name: str
+    canonical_expression: str
+    ast_signature: str
+    shape_signature: str
+    coverage: Mapping[str, Any]
+    finite_counts: Mapping[str, Any]
+    admitted_at: str
+    input_snapshot_sha256: str
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "revision_id": self.revision_id,
+            "factor_id": self.factor_id,
+            "revision_number": self.revision_number,
+            "factor_name": self.factor_name,
+            "canonical_expression": self.canonical_expression,
+            "ast_signature": self.ast_signature,
+            "shape_signature": self.shape_signature,
+            "coverage": _normalise(self.coverage),
+            "finite_counts": _normalise(self.finite_counts),
+            "admitted_at": self.admitted_at,
+            "input_snapshot_sha256": self.input_snapshot_sha256,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class CompositeModelRecord:
+    """First-class catalog record for a composite model (FACT-03).
+
+    The model definition plus its LATEST composite snapshot reference
+    (``input_snapshot_sha256`` + artifact path).  Phase 11 consumes the composite
+    by this snapshot, never a live module hand-off.
+    """
+
+    model_id: str
+    name: str
+    weighting: str
+    revision_ids: tuple[str, ...]
+    weights: Mapping[str, float]
+    input_snapshot_sha256: str
+    created_at: str
+    latest_composite: Mapping[str, Any] | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "model_id": self.model_id,
+            "name": self.name,
+            "weighting": self.weighting,
+            "revision_ids": list(self.revision_ids),
+            "weights": _normalise(self.weights),
+            "input_snapshot_sha256": self.input_snapshot_sha256,
+            "created_at": self.created_at,
+            "latest_composite": (
+                None if self.latest_composite is None else _normalise(self.latest_composite)
+            ),
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class ExperimentSnapshot:
     """Self-contained immutable snapshot returned from the catalog, never a live definition."""
 
@@ -279,6 +350,120 @@ class ExperimentCatalog:
             artifacts=package.artifacts,
             diagnostics=package.diagnostics,
             model_provenance=package.model_provenance,
+        )
+
+    def record_admitted_factor_summary(
+        self,
+        *,
+        revision_id: str,
+        coverage: Mapping[str, Any],
+        finite_counts: Mapping[str, Any],
+        resolved_config: Mapping[str, Any] | None = None,
+        input_manifest: Mapping[str, Any] | None = None,
+    ) -> ExperimentSnapshot:
+        """Persist a summary-only admitted-factor catalog entry (FACT-05).
+
+        The entry carries coverage (mean + series), finite counts, and the
+        revision's factor signature, plus the revision lineage (``factor_id``,
+        ``revision_id``, ``revision_number``) resolving back to the registry.
+        Full factor-value matrices are never stored — the metrics map holds
+        summaries only (CONTEXT anti-feature).
+        """
+        revision_id = _required_text(revision_id, "revision_id")
+        revision = self.repository.get_revision(revision_id)
+        if revision is None:
+            raise ValueError("factor revision does not exist")
+        metrics = {
+            "summary_kind": "admitted-factor",
+            "coverage": _normalise(coverage),
+            "finite_counts": _normalise(finite_counts),
+            "factor_signature": {
+                "ast_signature": revision["ast_signature"],
+                "shape_signature": revision["shape_signature"],
+            },
+            "factor_lineage": {
+                "factor_id": revision["factor_id"],
+                "revision_id": revision["id"],
+                "revision_number": revision["revision_number"],
+            },
+        }
+        return self._record(
+            originating_run_id=f"admitted-factor-summary:{revision_id}",
+            status=COMPARABLE_STATUS,
+            validated=True,
+            factor_revision_id=revision_id,
+            strategy_id=None,
+            strategy_version=None,
+            resolved_config=_mapping(resolved_config, "resolved_config"),
+            input_manifest=_mapping(input_manifest, "input_manifest"),
+            prediction_signals={},
+            metrics=metrics,
+            artifacts=(),
+            diagnostics={"summary_kind": "admitted-factor"},
+            model_provenance=None,
+        )
+
+    def list_admitted_factor_summaries(self) -> list[ExperimentSnapshot]:
+        """All admitted-factor summary catalog entries, newest first."""
+        return [
+            ExperimentSnapshot.from_record(record)
+            for record in self.repository.list_experiments()
+            if record.get("metrics", {}).get("summary_kind") == "admitted-factor"
+        ]
+
+    def record_composite_model(
+        self,
+        *,
+        model_id: str,
+        name: str,
+        weighting: str,
+        revision_ids: Sequence[str],
+        weights: Mapping[str, float],
+        input_snapshot_sha256: str,
+        output_sha256: str,
+        artifact_relative_path: str,
+    ) -> CompositeModelRecord:
+        """Persist a composite model definition and its first composite snapshot.
+
+        Both rows are append-only and immutable; Phase 11 consumes the composite
+        by the recorded snapshot (``input_snapshot_sha256`` + artifact path).
+        """
+        self.repository.insert_model_definition(
+            model_id=_required_text(model_id, "model_id"),
+            name=_required_text(name, "name"),
+            weighting=weighting,
+            revision_ids=revision_ids,
+            weights=weights,
+            input_snapshot_sha256=_required_text(input_snapshot_sha256, "input_snapshot_sha256"),
+        )
+        self.repository.insert_model_composite(
+            model_id=model_id,
+            output_sha256=_required_text(output_sha256, "output_sha256"),
+            artifact_relative_path=_required_text(artifact_relative_path, "artifact_relative_path"),
+            input_snapshot_sha256=input_snapshot_sha256,
+        )
+        record = self.get_composite_model(model_id)
+        if record is None:
+            raise RuntimeError("composite model record was not persisted")
+        return record
+
+    def get_composite_model(self, model_id: str) -> CompositeModelRecord | None:
+        """First-class catalog record: model definition + latest composite snapshot."""
+        model_id = _required_text(model_id, "model_id")
+        definition = self.repository.get_model_definition(model_id)
+        if definition is None:
+            return None
+        composites = self.repository.list_model_composites(model_id)
+        latest = composites[-1] if composites else None
+        return CompositeModelRecord(
+            model_id=definition["model_id"],
+            name=definition["name"],
+            weighting=definition["weighting"],
+            revision_ids=tuple(definition["revision_ids"]),
+            weights=dict(definition["weights"]),
+            input_snapshot_sha256=definition["input_snapshot_sha256"],
+            created_at=definition["created_at"],
+            latest_composite=latest,
         )
 
     def record_strategy_backtest(
