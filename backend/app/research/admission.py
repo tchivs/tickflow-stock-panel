@@ -187,7 +187,14 @@ def run_admission(
     leakage_frame = evaluated.join(close_frame, on=["symbol", "date"], how="inner").sort(["symbol", "date"])
 
     per_date_ics = _per_date_ic(evaluated)
-    train_dates, val_dates = temporal_split(per_date_ics)
+    # IN-02: the 70/30 split applies to the FULL window's rebalance dates, then
+    # intersects with finite-IC dates — a null-IC day must not shift the train/
+    # val boundary.  For a panel with finite IC on every rebalance date this is
+    # identical to the old behavior.
+    all_rebalance_dates = sorted({str(day) for day in evaluated["date"].unique().to_list()})
+    full_train, full_val = temporal_split({day: 0.0 for day in all_rebalance_dates})
+    train_dates = {day for day in full_train if day in per_date_ics}
+    val_dates = {day for day in full_val if day in per_date_ics}
     train_ic = _mean_ic(per_date_ics, train_dates)
     val_ic = _mean_ic(per_date_ics, val_dates)
 
