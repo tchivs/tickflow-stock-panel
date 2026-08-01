@@ -579,6 +579,30 @@ class ResearchRepository:
             records.append(record)
         return records
 
+    def list_universe_memberships(
+        self, *, universe_name: str, asset_type: str | None = None
+    ) -> list[dict[str, Any]]:
+        """All membership events for a universe (the append-only history).
+
+        Ordered by symbol then effective date so interval construction in the
+        resolver is deterministic.  Delist events are rows in this history, never
+        updates to an earlier row.
+        """
+        query = "SELECT * FROM factor_universe_membership WHERE universe_name = ?"
+        parameters: list[object] = [universe_name]
+        if asset_type is not None:
+            query += " AND asset_type = ?"
+            parameters.append(asset_type)
+        query += " ORDER BY symbol, effective_date"
+        with self._connection() as connection:
+            rows = connection.execute(query, parameters).fetchall()
+        records: list[dict[str, Any]] = []
+        for row in rows:
+            record = dict(row)
+            record["provenance"] = json.loads(record.pop("provenance_json"))
+            records.append(record)
+        return records
+
     def insert_admission_verdict(
         self,
         *,
