@@ -585,7 +585,12 @@ def shifted_label_ic(evaluated: pl.DataFrame, *, horizon: int) -> float:
     clean factor has no information about the misaligned window and its IC collapses
     to ~0; a lookahead factor that embeds future information shows nonzero IC.
     Returns ``abs(mean(per-date IC))`` and ``inf`` when no finite per-date
-    correlation survives (an empty cross-section cannot be measured).
+    correlation survives (an empty cross-section cannot be measured).  ``inf``
+    is the documented fail-closed verdict: admission gate 2 treats it as a
+    leakage failure (``inf <= SHIFTED_LABEL_MAX_ABS_IC`` is False), so a
+    degenerate panel is REJECTED rather than silently admitted.  Consumers that
+    distinguish "no data" from "strong leakage" must compare against ``inf``
+    explicitly before interpreting the magnitude (IN-06).
     """
     displaced = evaluated.with_columns(
         (

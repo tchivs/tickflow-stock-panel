@@ -449,7 +449,15 @@ class ExperimentCatalog:
         return record
 
     def get_composite_model(self, model_id: str) -> CompositeModelRecord | None:
-        """First-class catalog record: model definition + latest composite snapshot."""
+        """First-class catalog record: model definition + latest composite snapshot.
+
+        "Latest" here means the last ``factor_model_composites`` row by
+        ``created_at``/``id`` for the model.  Each ``build_composite`` call mints
+        a FRESH ``model_id`` (an identical-input rebuild is a NEW model, not a
+        new composite row under the same model — IN-09), so in practice every
+        model has exactly one composite row; this reader still resolves the
+        latest row if a model ever accumulates several.
+        """
         model_id = _required_text(model_id, "model_id")
         definition = self.repository.get_model_definition(model_id)
         if definition is None:
