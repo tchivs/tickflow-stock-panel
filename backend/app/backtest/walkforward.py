@@ -198,8 +198,117 @@ def run_walk_forward(
     """
     repo.create_wf_plan(plan)
     params_sha256 = _params_sha256(params)
+    manifests = _run_folds(
+        plan=plan,
+        folds=(*plan.folds, plan.oos_fold),
+        strategy_id=strategy_id,
+        params=params,
+        params_sha256=params_sha256,
+        service=service,
+        chain=chain,
+        resolver=resolver,
+        repo=repo,
+        fold_scorer=fold_scorer,
+    )
+    return {
+        "plan_id": plan.plan_id,
+        "strategy_id": strategy_id,
+        "params": params,
+        "params_sha256": params_sha256,
+        "fold_manifests": manifests,
+    }
+
+
+def evaluate_best_params(
+    plan: WalkForwardPlan,
+    *,
+    strategy_id: str,
+    best_params: dict[str, Any],
+    service: Any,
+    chain: FactorSignalChain,
+    resolver: Any,
+    repo: ResearchRepository,
+    objective: str = "sharpe",
+    search_run_id: str | None = None,
+    fold_evidence: dict[str, Any] | None = None,
+    validation_threshold: float | None = None,
+    fold_scorer: Any = None,
+) -> dict[str, Any]:
+    """best_params 在保留 OOS 上恰好一次评估 + 记录验证裁决 (WFWD-02)。
+
+    OOS 折是唯一无偏估计: ``UNIQUE (plan_id, fold_index, is_oos=1, strategy_id,
+    params_sha256)`` 使第二次评估抛 ``ValueError("OOS segment already evaluated")``。
+    ``wf_validated_strategies`` 的 ``oos_evidence_fold_id`` UNIQUE 把裁决绑到那
+    次 OOS 证据上 — 搜索再多次也不会污染最终估计。
+
+    ``validation_threshold`` 提供机械门: 给定后 passed_gate 由 OOS 表现对照阈值
+    得出 (min 方向为 <=, 其余为 >=); 缺省 None 时视为研究者显式接受 (passed_gate=1)。
+    """
+    from app.backtest.optimizer import default_direction
+
+    repo.create_wf_plan(plan)  # 幂等钉住 OOS 预约 (先于任何搜索重用)
+    params_sha256 = _params_sha256(best_params)
+    manifests = _run_folds(
+        plan=plan,
+        folds=(plan.oos_fold,),
+        strategy_id=strategy_id,
+        params=best_params,
+        params_sha256=params_sha256,
+        service=service,
+        chain=chain,
+        resolver=resolver,
+        repo=repo,
+        fold_scorer=fold_scorer,
+    )
+    oos_manifest = manifests[0]
+    test_stats = dict((oos_manifest.get("stats") or {}).get("test_stats") or {})
+    raw = test_stats.get(objective)
+    if raw is None:
+        raise ValueError(f"OOS fold has no objective '{objective}' in its test stats")
+    validation_score = float(raw)
+    if validation_threshold is None:
+        passed_gate = True
+    elif default_direction(objective) == "min":
+        passed_gate = bool(validation_score <= validation_threshold)
+    else:
+        passed_gate = bool(validation_score >= validation_threshold)
+    verdict = repo.record_validated_strategy(
+        strategy_id=strategy_id,
+        plan_id=plan.plan_id,
+        search_run_id=search_run_id,
+        params_sha256=params_sha256,
+        oos_evidence_fold_id=oos_manifest["id"],
+        validation_score=validation_score,
+        fold_evidence=fold_evidence or {},
+        passed_gate=passed_gate,
+    )
+    return {
+        "plan_id": plan.plan_id,
+        "strategy_id": strategy_id,
+        "params_sha256": params_sha256,
+        "oos_manifest": oos_manifest,
+        "validation_score": validation_score,
+        "passed_gate": passed_gate,
+        "verdict": verdict,
+    }
+
+
+def _run_folds(
+    *,
+    plan: WalkForwardPlan,
+    folds: Sequence[WalkForwardFold],
+    strategy_id: str,
+    params: dict[str, Any],
+    params_sha256: str,
+    service: Any,
+    chain: FactorSignalChain,
+    resolver: Any,
+    repo: ResearchRepository,
+    fold_scorer: Any,
+) -> list[dict[str, Any]]:
+    """对给定折序列逐个运行 (搜索折 + 保留 OOS 共用同一条 PIT/链/回测路径)。"""
     manifests: list[dict[str, Any]] = []
-    for fold in (*plan.folds, plan.oos_fold):
+    for fold in folds:
         manifests.append(
             _run_fold(
                 plan=plan,
@@ -214,13 +323,7 @@ def run_walk_forward(
                 fold_scorer=fold_scorer,
             )
         )
-    return {
-        "plan_id": plan.plan_id,
-        "strategy_id": strategy_id,
-        "params": params,
-        "params_sha256": params_sha256,
-        "fold_manifests": manifests,
-    }
+    return manifests
 
 
 # ================================================================
