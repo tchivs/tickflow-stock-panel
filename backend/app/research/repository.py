@@ -894,13 +894,38 @@ class ResearchRepository:
         )  # type: ignore[return-value]
 
     def get_wf_plan(self, plan_id: str) -> dict[str, Any] | None:
-        """Return the pinned walk-forward plan with JSON unwrapped."""
+        """Return the pinned walk-forward plan with JSON unwrapped.
+
+        Read surface for the Phase 15 panel and Phase 14 handoff:
+        ``trading_dates_json`` / ``fold_geometry_json`` decode into
+        ``trading_dates`` / ``fold_geometry``.
+        """
         with self._connection() as connection:
             row = connection.execute("SELECT * FROM wf_plans WHERE id = ?", (plan_id,)).fetchone()
         return _unpack_json(
             row,
             {"trading_dates_json": "trading_dates", "fold_geometry_json": "fold_geometry"},
         )
+
+    def list_wf_plans(self, *, limit: int = 200) -> list[dict[str, Any]]:
+        """All pinned walk-forward plans, newest first, capped at limit.
+
+        Read breadth (13-05): the Phase 15 panel lists every pinned plan (each
+        carries its OOS reservation in ``oos_pinned_at``); ``limit`` must be a
+        positive integer (limit=0 raises ValueError)."""
+        if not isinstance(limit, int) or limit < 1:
+            raise ValueError("limit must be a positive integer")
+        with self._connection() as connection:
+            rows = connection.execute(
+                "SELECT * FROM wf_plans ORDER BY created_at DESC, id LIMIT ?", (limit,)
+            ).fetchall()
+        return [
+            _unpack_json(
+                row,
+                {"trading_dates_json": "trading_dates", "fold_geometry_json": "fold_geometry"},
+            )
+            for row in rows
+        ]  # type: ignore[list-item]
 
     def record_wf_fold(self, **fields: Any) -> dict[str, Any]:
         """Append one fold manifest (search fold OR the reserved OOS).
@@ -953,7 +978,11 @@ class ResearchRepository:
     def list_wf_folds(
         self, *, plan_id: str | None = None, is_oos: bool | None = None, limit: int = 200
     ) -> list[dict[str, Any]]:
-        """All fold manifests, ordered by plan_id then fold_index, capped at limit."""
+        """All fold manifests, ordered by plan_id then fold_index, capped at limit.
+
+        Read breadth (13-05): filters by ``plan_id`` / ``is_oos``, unwraps
+        ``chain_config_json`` / ``stats_json``, and fails closed on a non-
+        positive ``limit`` (limit=0 raises ValueError)."""
         if not isinstance(limit, int) or limit < 1:
             raise ValueError("limit must be a positive integer")
         clauses: list[str] = []
@@ -1023,6 +1052,48 @@ class ResearchRepository:
             },
         )  # type: ignore[return-value]
 
+    def list_wf_search_runs(
+        self,
+        *,
+        plan_id: str | None = None,
+        strategy_id: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """All OOS-scored search runs, newest first, capped at limit.
+
+        Read breadth (13-05): the Phase 15 panel lists every search run per
+        plan/strategy with the multiple-comparison bookkeeping
+        (search_space / score_distribution / best_params unwrapped);
+        ``limit`` must be a positive integer (limit=0 raises ValueError)."""
+        if not isinstance(limit, int) or limit < 1:
+            raise ValueError("limit must be a positive integer")
+        clauses: list[str] = []
+        parameters: list[Any] = []
+        if plan_id is not None:
+            clauses.append("plan_id = ?")
+            parameters.append(plan_id)
+        if strategy_id is not None:
+            clauses.append("strategy_id = ?")
+            parameters.append(strategy_id)
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
+        with self._connection() as connection:
+            rows = connection.execute(
+                f"""SELECT * FROM wf_search_runs{where}
+                   ORDER BY created_at DESC, id LIMIT ?""",
+                (*parameters, limit),
+            ).fetchall()
+        return [
+            _unpack_json(
+                row,
+                {
+                    "search_space_json": "search_space",
+                    "score_distribution_json": "score_distribution",
+                    "best_params_json": "best_params",
+                },
+            )
+            for row in rows
+        ]  # type: ignore[list-item]
+
     def record_validated_strategy(self, **fields: Any) -> dict[str, Any]:
         """Append one validation verdict tied to the once-evaluated OOS.
 
@@ -1077,7 +1148,13 @@ class ResearchRepository:
         passed_gate: bool | None = None,
         limit: int = 200,
     ) -> list[dict[str, Any]]:
-        """Validation verdicts, filtered and capped at limit."""
+        """Validation verdicts, filtered and capped at limit.
+
+        Read breadth (13-05): the ``passed_gate`` filter is what the ensemble
+        gate (13-04) and the Phase 15 panel both filter on; every row carries
+        ``resolved_asset_ids`` (unwrapped from the 13-02 DDL column
+        ``resolved_asset_ids_json``) so Phase 14 binds the composite snapshot
+        without re-resolving."""
         if not isinstance(limit, int) or limit < 1:
             raise ValueError("limit must be a positive integer")
         clauses: list[str] = []
