@@ -57,7 +57,7 @@ Six phases extend the shipped research platform from single-factor evaluation in
 - [x] **Phase 10: Factor Library & Multi-Factor Model** - Admission gates, full monthly evidence, multi-factor expected returns, catalog, and the shared signal chain (completed 2026-08-01)
 - [x] **Phase 11: Portfolio Construction & Optimization** - Sample covariance with PSD repair, min-vol/HRP baselines, constraint stack, immutable run records (completed 2026-08-01)
 - [x] **Phase 12: Risk Models & Attribution** - Risk-model suite with PSD provenance, exposure/contribution and drawdown attribution (completed 2026-08-02)
-- [ ] **Phase 13: Walk-Forward Validation & Parameter Search** - Rolling folds, reserved final OOS, OOS-scored parameter search, ensembling
+- [x] **Phase 13: Walk-Forward Validation & Parameter Search** - Rolling folds, reserved final OOS, OOS-scored parameter search, ensembling (completed 2026-08-02)
 - [ ] **Phase 14: Output & Boundary (RebalancePlan + Paper Rebalance)** - A-share lot-sized plans, auditable paper rebalance, zero execution authority
 - [ ] **Phase 15: API/SSE + Frontend Panels** - ModelLibrary/WalkForward and Optimization/RiskAttribution/RebalancePlan panels
 
@@ -189,7 +189,7 @@ Phases execute in numeric order: 10 → 11 → 12 → 13 → 14 → 15 (Phase 13
 | 10. Factor Library & Multi-Factor Model | 6/6 | Complete    | 2026-08-01 |
 | 11. Portfolio Construction & Optimization | 7/1 | Complete    | 2026-08-01 |
 | 12. Risk Models & Attribution | 6/1 | Complete    | 2026-08-02 |
-| 13. Walk-Forward Validation & Parameter Search | 2/5 | In progress | - |
+| 13. Walk-Forward Validation & Parameter Search | 6/1 | Complete    | 2026-08-02 |
 | 14. Output & Boundary (RebalancePlan + Paper Rebalance) | 0/3 | Not started | - |
 | 15. API/SSE + Frontend Panels | 0/4 | Not started | - |
 

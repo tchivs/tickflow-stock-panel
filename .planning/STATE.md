@@ -2,19 +2,19 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: End-to-End Factor Portfolio Pipeline — in progress
-current_phase: 13
-current_phase_name: Walk-Forward Validation & Parameter Search
-status: executing
-stopped_at: Completed 13-05 Wave 4 geometry robustness + reporting breadth (all 5 plans done)
-last_updated: "2026-08-02T11:45:00.000Z"
+current_phase: 14
+current_phase_name: Output & Boundary (RebalancePlan + Paper Rebalance)
+status: planning
+stopped_at: Completed 13-01 Wave 1 tracer (next 13-03)
+last_updated: "2026-08-02T13:36:07.537Z"
 last_activity: 2026-08-02
-last_activity_desc: Wave 4 (13-05) landed — fail-closed geometry, measured-at-execution calendar, reporting read breadth; Phase 13 plans 13-01..13-05 all complete
+last_activity_desc: Phase 13 complete, transitioned to Phase 14
 progress:
   total_phases: 6
   completed_phases: 0
-  total_plans: 5
-  completed_plans: 5
-  percent: 100
+  total_plans: 4
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
@@ -28,10 +28,10 @@ See: .planning/PROJECT.md (updated 2026-07-31)
 
 ## Current Position
 
-Phase: 13 — Walk-Forward Validation & Parameter Search
-Plan: 13-01..13-05 all complete (Wave 0 foundations + tracer + OOS search/gate + ensemble + geometry/reporting breadth)
-Status: In progress (phase gate — full backend suite green before /gsd-verify-work)
-Last activity: 2026-08-02 — Wave 4 (13-05) landed; WFWD-01/02/03 robustness contract locked
+Phase: 14 — Output & Boundary (RebalancePlan + Paper Rebalance)
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-08-02 — Phase 13 complete, transitioned to Phase 14
 
 Progress: [██████████] 100% (13-01..13-05)
 

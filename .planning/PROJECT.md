@@ -56,6 +56,12 @@ Building toward v1.2 (End-to-End Factor Portfolio Pipeline). Requirements are de
 - [x] FACT-05: Admitted factors stored in an immutable catalog with summary storage (coverage, finite counts, signature) and revision lineage — Phase 10.
 - [x] FACT-06: A single shared factor signal chain used identically by evaluation, multi-factor models, walk-forward, expected returns, and live as-of suggestions (no train/serve skew) — Phase 10.
 
+### Validated in v1.2 Phase 13
+
+- [x] WFWD-01: Researcher can run rolling (non-expanding) walk-forward validation with an explicit gap between train and test folds, disjoint recorded folds, and a reserved independent final OOS segment evaluated exactly once and never touched by selection or parameter search — Phase 13.
+- [x] WFWD-02: Parameter optimization is scored on walk-forward OOS folds (not in-sample), with trial count, search space, and score distribution recorded to guard against multiple-comparison bias — Phase 13.
+- [x] WFWD-03: Researcher can ensemble validated strategies via rank-average of their signals — Phase 13.
+
 ### Validated in v1.2 Phase 12
 
 - [x] RSK-01: Researcher can view risk exposure and marginal contribution attribution for an optimized portfolio, reconciling exactly to portfolio variance (hard cross-module assertion) — Phase 12.
@@ -117,6 +123,15 @@ v1.0 validated the host architecture and locked its safety boundaries: one FastA
 - **Drawdown attribution** — underwater curve → periods (module constants depth 2% / min 2 obs) → per-instrument × per-time-segment contributions with the segment-identity hard assertion; `run_drawdown` produces a full report + append-only evidence.
 - **Append-only attribution evidence** — `portfolio_risk_attribution_evidence` table + no_update/no_delete triggers; FK → optimization runs; `risk_model` equality filter ready for Phase 15 API.
 
+## Phase 13 Decisions (2026-08-01)
+
+- **Fold geometry calibrated to measured A-share calendar** — 241 trading days measured (2025-08-01→2026-07-30, Feb-2026 CNY = 14 trading days); train=120 / gap=20 (WF_GAP) / test=20, k=3 folds step 20, reserved OOS=40 days; minimum = `oos+train+gap+2*test+1` (fail-closed below 2 folds); label buffer snapped to `horizon` TRADING days (never calendar days).
+- **OOS is the only unbiased estimate** — reserved final OOS evaluated exactly once (UNIQUE exactly-once guard, `evaluate_oos=False` default so exploration never touches it); best-params OOS run is the single validation estimate; verdict binds `oos_evidence_fold_id` UNIQUE + `resolved_asset_ids` + non-empty `fold_evidence`.
+- **Per-fold PIT universe + shared chain** — every fold resolves `resolve_universe_daily` and runs the ONE shared `FactorSignalChain` via a per-fold `SignalChainConfig(end=test_end+horizon)`; `membership_fingerprint` recorded in every fold manifest; search trials scored on the SAME per-fold PIT membership (never full-lake universe).
+- **OOS-scored parameter search** — WalkForwardOptimizer reuses the grid pattern (GRID_MAX_COMBINATIONS cap); trials score walk-forward test folds only, never in-sample; `wf_search_runs` records n_trials/search_space/score_distribution with `oos_excluded=1` enforced; raw metric-space `best_score` (min-direction never negated in records).
+- **Rank-average ensemble** — Polars per-(symbol,date) weighted `_rank` mean re-ranked per date; validated-only gate (passed_gate=1, fail-closed); output `[symbol,date,ensemble_rank,ensemble_zscore]` + checksum-verified artifact binding `input_snapshot_sha256`; `wf_ensembles` append-only.
+- **Five append-only wf_* tables** — wf_plans/wf_folds/wf_search_runs/wf_validated_strategies/wf_ensembles with no_update/no_delete triggers + 64-hex CHECKs + UNIQUE OOS guard; `create_wf_plan` raises on geometry divergence (stale reservation impossible).
+
 ## Source Context
 
 - Architecture source: `docs/ARCHITECTURE.md`
@@ -143,4 +158,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-08-01 after Phase 12*
+*Last updated: 2026-08-01 after Phase 13*
