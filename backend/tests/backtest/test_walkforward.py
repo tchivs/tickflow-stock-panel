@@ -250,8 +250,10 @@ def test_run_walk_forward_pins_plan_and_records_fingerprints(
         chain=stub_chain,
         resolver=stub_resolver,
         repo=research_repository,
+        evaluate_oos=True,  # WR-01: OOS 评估显式开启 (默认关闭)
     )
     assert result["plan_id"] == wf_fixture_plan.plan_id
+    assert result["evaluate_oos"] is True
     assert len(result["fold_manifests"]) == len(wf_fixture_plan.folds) + 1  # 3 + OOS
     oos_manifest = [m for m in result["fold_manifests"] if m["is_oos"] == 1]
     assert len(oos_manifest) == 1
@@ -272,6 +274,7 @@ def test_run_walk_forward_pins_plan_and_records_fingerprints(
             chain=stub_chain,
             resolver=stub_resolver,
             repo=research_repository,
+            evaluate_oos=True,
         )
 
 
@@ -356,8 +359,8 @@ def test_evaluate_best_params_oos_exactly_once_and_validation_gate(
     """OOS 只评估一次; 裁决绑定到 OOS 证据折 (oos_evidence_fold_id UNIQUE)。"""
     from app.backtest.walkforward import evaluate_best_params, run_walk_forward
 
-    # 预热: 先走一遍 walk-forward (不同 params), 钉住 plan 并记录 3 个搜索折 + 该
-    # params 键的 OOS 折 — 模拟真实流程: 搜索先用一组探索参数跑折, 再评估 best_params。
+    # 预热: 先走一遍 walk-forward (不同 params), 钉住 plan 并记录 3 个搜索折 —
+    # WR-01: 默认 evaluate_oos=False, 搜索/探索绝不写 OOS 槽位 (WFWD-01 exactly-once)。
     run_walk_forward(
         wf_fixture_plan,
         strategy_id="fixture_strategy",
@@ -368,7 +371,7 @@ def test_evaluate_best_params_oos_exactly_once_and_validation_gate(
         repo=research_repository,
     )
     preheat_oos = research_repository.list_wf_folds(plan_id=wf_fixture_plan.plan_id, is_oos=True)
-    assert len(preheat_oos) == 1  # 预热 params 键的 OOS 已记录
+    assert len(preheat_oos) == 0  # 搜索折跑完不写 OOS (WR-01)
     _record_search_run(research_repository, wf_fixture_plan.plan_id, search_id="wf-search-run-1")
 
     # 评估 best_params: 该 params 键的 OOS 首次评估 → 新建 OOS 证据折 + 裁决。
@@ -469,7 +472,9 @@ def test_evaluate_best_params_threshold_gate_min_and_max_direction(
     # 报告面 (13-05): 验证裁决携带 resolved_asset_ids (来自 13-02 DDL 列
     # resolved_asset_ids_json, 解包为 list) — Phase 14 无需重解析即可绑定组合快照。
     assert isinstance(failed[0]["resolved_asset_ids"], list)
-    assert failed[0]["resolved_asset_ids"] == []  # 本路径未提供 → 默认空快照
+    assert failed[0]["resolved_asset_ids"] == sorted(
+        {"000001.SZ", "000002.SZ", "000003.SZ", "000004.SZ"}
+    )  # WR-07: OOS 折的 PIT 成员符号被解析并持久化
     passed = research_repository.list_validated_strategies(
         strategy_id="fixture_strategy", plan_id=wf_fixture_plan.plan_id, passed_gate=True
     )
@@ -699,6 +704,7 @@ def test_reporting_surface_get_plan_list_folds_and_validated(
         chain=stub_chain,
         resolver=stub_resolver,
         repo=research_repository,
+        evaluate_oos=True,  # WR-01: 报告面覆盖 OOS 清单需要显式开启 OOS 评估
     )
     # get_wf_plan: trading_dates + fold_geometry 解包。
     plan_row = research_repository.get_wf_plan(wf_fixture_plan.plan_id)

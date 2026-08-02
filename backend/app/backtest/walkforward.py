@@ -196,8 +196,9 @@ def run_walk_forward(
     resolver: Any,
     repo: ResearchRepository,
     fold_scorer: Any = None,
+    evaluate_oos: bool = False,
 ) -> dict[str, Any]:
-    """端到端走一遍所有折 (搜索折 + 保留 OOS)。
+    """端到端走一遍搜索折 (WR-01: 默认不碰保留 OOS)。
 
     1. 先把 plan 钉入 wf_plans (oos_pinned_at 先于任何搜索重用; 同 plan_id 重跑走
        查询路径返回已存在行 — append-only 幂等)。
@@ -205,16 +206,20 @@ def run_walk_forward(
        经共享 FactorSignalChain.compute 计算 → 从 frame.resolved_universe 记录
        membership_fingerprint → 跑 train/test 窗口回测 → append 一条 wf_folds
        清单 (含 effective_days)。
-    3. OOS 折只评估一次: 第二次同 (plan, strategy, params) 评估抛 ValueError。
+    3. 保留 OOS 是唯一无偏估计 — 只有 ``evaluate_oos=True`` 时才评估 (WFWD-01/
+       WR-01: 搜索/探索调用默认不写 OOS 槽位; 唯一 OOS 写发生在 best_params
+       验证 ``evaluate_best_params``)。OOS 折只评估一次: 第二次同
+       (plan, strategy, params) 评估抛 ValueError。
 
     ``fold_scorer(fold, *, frame, membership) -> dict`` 可注入折评分 (如 Phase 14
     的 per-fold 组合优化变体); 默认 = 固定参数策略回测变体。
     """
     repo.create_wf_plan(plan)
     params_sha256 = _params_sha256(params)
+    folds = (*plan.folds, plan.oos_fold) if evaluate_oos else plan.folds
     manifests = _run_folds(
         plan=plan,
-        folds=(*plan.folds, plan.oos_fold),
+        folds=folds,
         strategy_id=strategy_id,
         params=params,
         params_sha256=params_sha256,
@@ -230,6 +235,7 @@ def run_walk_forward(
         "params": params,
         "params_sha256": params_sha256,
         "fold_manifests": manifests,
+        "evaluate_oos": evaluate_oos,
     }
 
 
@@ -257,41 +263,84 @@ def evaluate_best_params(
 
     ``validation_threshold`` 提供机械门: 给定后 passed_gate 由 OOS 表现对照阈值
     得出 (min 方向为 <=, 其余为 >=); 缺省 None 时视为研究者显式接受 (passed_gate=1)。
+
+    WR-02: OOS 折行只在目标指标确认存在后才持久化 — 一次 OOS 回测失败 (策略在
+    OOS 窗口无信号) 不会永久烧掉恰好一次槽位。
     """
     from app.backtest.optimizer import default_direction
 
     repo.create_wf_plan(plan)  # 幂等钉住 OOS 预约 (先于任何搜索重用)
     params_sha256 = _params_sha256(best_params)
-    manifests = _run_folds(
-        plan=plan,
-        folds=(plan.oos_fold,),
-        strategy_id=strategy_id,
-        params=best_params,
-        params_sha256=params_sha256,
-        service=service,
-        chain=chain,
-        resolver=resolver,
-        repo=repo,
-        fold_scorer=fold_scorer,
+    memberships = _resolve_fold_membership(plan, plan.oos_fold, resolver)
+    frame = chain.compute(
+        revision_id=strategy_id, config=plan.oos_fold.chain_config
     )
-    oos_manifest = manifests[0]
-    test_stats = dict((oos_manifest.get("stats") or {}).get("test_stats") or {})
+    resolved = getattr(frame, "resolved_universe", None) or {}
+    fingerprint = str(resolved.get("membership_fingerprint") or ("0" * 64))
+    effective_days = _effective_test_days(
+        plan.trading_dates,
+        plan.oos_fold.test_start,
+        plan.oos_fold.test_end,
+        plan.oos_fold.chain_config.end,
+        plan.horizon,
+    )
+    if effective_days < 10:
+        raise ValueError(
+            f"OOS fold has {effective_days} effective days (< 10)"
+        )
+
+    stats: dict[str, Any] = {"effective_days": effective_days}
+    if fold_scorer is not None:
+        extra = fold_scorer(
+            fold=plan.oos_fold, frame=frame, membership=memberships
+        )
+        if extra:
+            stats.update(extra)
+    else:
+        _default_fold_score(
+            plan,
+            plan.oos_fold,
+            strategy_id,
+            best_params,
+            _fold_symbols(memberships),
+            service,
+            stats,
+        )
+    # WR-02: 目标指标必须在写 OOS 折行 (消耗恰好一次槽位) 之前确认存在。
+    test_stats = dict(stats.get("test_stats") or {})
     raw = test_stats.get(objective)
     if raw is None:
         raise ValueError(f"OOS fold has no objective '{objective}' in its test stats")
     validation_score = float(raw)
+    oos_manifest = repo.record_wf_fold(
+        plan_id=plan.plan_id,
+        fold_index=plan.oos_fold.fold_index,
+        is_oos=True,
+        strategy_id=strategy_id,
+        params_sha256=params_sha256,
+        train_start=plan.oos_fold.train_start,
+        train_end=plan.oos_fold.train_end,
+        test_start=plan.oos_fold.test_start,
+        test_end=plan.oos_fold.test_end,
+        membership_fingerprint=fingerprint,
+        chain_config=_chain_config_dict(plan.oos_fold.chain_config),
+        stats=stats,
+    )
     if validation_threshold is None:
         passed_gate = True
     elif default_direction(objective) == "min":
         passed_gate = bool(validation_score <= validation_threshold)
     else:
         passed_gate = bool(validation_score >= validation_threshold)
+    # WR-07: 验证裁决携带 OOS 折的 PIT 成员符号 (Phase 14 组合快照绑定无需重解析)。
+    resolved_asset_ids = _fold_symbols(memberships)
     verdict = repo.record_validated_strategy(
         strategy_id=strategy_id,
         plan_id=plan.plan_id,
         search_run_id=search_run_id,
         params_sha256=params_sha256,
         oos_evidence_fold_id=oos_manifest["id"],
+        resolved_asset_ids=resolved_asset_ids,
         validation_score=validation_score,
         fold_evidence=fold_evidence or {},
         passed_gate=passed_gate,
@@ -304,6 +353,7 @@ def evaluate_best_params(
         "validation_score": validation_score,
         "passed_gate": passed_gate,
         "verdict": verdict,
+        "resolved_asset_ids": resolved_asset_ids,
     }
 
 
@@ -486,12 +536,7 @@ def _run_fold(
         existing = _find_existing_fold(repo, plan.plan_id, fold, strategy_id, params_sha256)
         if existing is not None:
             return existing
-    membership = resolver.resolve_universe_daily(
-        universe_name=plan.universe,
-        start=_calendar_days_before(fold.train_start, fold.chain_config.warmup_days),
-        end=fold.chain_config.end,
-        asset_type=plan.asset_type,
-    )
+    membership = _resolve_fold_membership(plan, fold, resolver)
     frame = chain.compute(revision_id=strategy_id, config=fold.chain_config)
     resolved = getattr(frame, "resolved_universe", None) or {}
     fingerprint = str(resolved.get("membership_fingerprint") or ("0" * 64))
@@ -551,6 +596,18 @@ def _find_existing_fold(
         ):
             return row
     return None
+
+
+def _resolve_fold_membership(
+    plan: WalkForwardPlan, fold: WalkForwardFold, resolver: Any
+) -> Any:
+    """解析折窗口的 per-date PIT 成员帧 (与 ``_run_fold`` 同窗解析)。"""
+    return resolver.resolve_universe_daily(
+        universe_name=plan.universe,
+        start=_calendar_days_before(fold.train_start, fold.chain_config.warmup_days),
+        end=fold.chain_config.end,
+        asset_type=plan.asset_type,
+    )
 
 
 def _default_fold_score(
