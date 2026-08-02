@@ -140,13 +140,13 @@ Six phases extend the shipped research platform from single-factor evaluation in
   2. Researcher can run parameter optimization scored on walk-forward OOS folds (never in-sample), with trial count, search space, and score distribution recorded to guard against multiple-comparison bias.
   3. Researcher can ensemble validated strategies via rank-average of their signals.
 
-**Plans**: 2/5 plans executed
+**Plans**: 5/5 plans executed
 
 - [x] 13-01-SUMMARY.md (tracer — WFWD-01 spine proven)
 - [x] 13-02-SUMMARY.md (Wave 0 foundations)
-- [ ] 13-03 (OOS-scored parameter search + validation gate)
-- [ ] 13-04 (rank-average ensemble)
-- [ ] 13-05 (geometry robustness + reporting breadth)
+- [x] 13-03-SUMMARY.md (OOS-scored parameter search + validation gate)
+- [x] 13-04-SUMMARY.md (rank-average ensemble)
+- [x] 13-05-SUMMARY.md (geometry robustness + reporting breadth)
 
 *Planning research: fold geometry (train/test size, gap) calibrated to available A-share history; AlphaMaster's `WF_GAP=20` is a documented starting point.*
 

@@ -31,9 +31,9 @@ Requirements for the v1.2 milestone. Each maps to a roadmap phase.
 
 ### Walk-Forward Validation & Parameter Search
 
-- [ ] **WFWD-01**: Researcher can run rolling (non-expanding) walk-forward validation with an explicit gap between train and test folds, disjoint recorded folds, and a reserved independent final OOS segment evaluated exactly once and never touched by selection or parameter search.
-- [ ] **WFWD-02**: Parameter optimization is scored on walk-forward OOS folds (not in-sample), with trial count, search space, and score distribution recorded to guard against multiple-comparison bias (P2).
-- [ ] **WFWD-03**: Researcher can ensemble validated strategies via rank-average of their signals (P2).
+- [x] **WFWD-01**: Researcher can run rolling (non-expanding) walk-forward validation with an explicit gap between train and test folds, disjoint recorded folds, and a reserved independent final OOS segment evaluated exactly once and never touched by selection or parameter search.
+- [x] **WFWD-02**: Parameter optimization is scored on walk-forward OOS folds (not in-sample), with trial count, search space, and score distribution recorded to guard against multiple-comparison bias (P2).
+- [x] **WFWD-03**: Researcher can ensemble validated strategies via rank-average of their signals (P2).
 
 ### Output & Boundary
 
@@ -97,9 +97,9 @@ Populated during roadmap creation (2026-07-31). Verified: all 20 v1 requirements
 | RSK-01 | Phase 12 | Complete |
 | RSK-02 | Phase 12 | Complete |
 | RSK-03 | Phase 12 | Complete |
-| WFWD-01 | Phase 13 | Pending |
-| WFWD-02 | Phase 13 | Pending |
-| WFWD-03 | Phase 13 | Pending |
+| WFWD-01 | Phase 13 | Complete |
+| WFWD-02 | Phase 13 | Complete |
+| WFWD-03 | Phase 13 | Complete |
 | RBAL-01 | Phase 14 | Pending |
 | RBAL-02 | Phase 14 | Pending |
 | UI-01 | Phase 15 | Pending |
