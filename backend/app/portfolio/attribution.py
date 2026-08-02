@@ -1,9 +1,16 @@
-"""Phase 12 风险归因 — 暴露度 + 边际贡献 + 硬对账 (RSK-01)。
+"""Phase 12 风险归因 — 暴露度 + 边际贡献 + 完整报告 + 硬对账 (RSK-01)。
 
 职责: 在协方差矩阵上做纯 numpy 的归因分解 —— 组合方差 wᵀΣw、风险暴露
 w·(Σw) (保留符号: 负值 = 分散化贡献, 绝不 abs)、边际贡献
 MC_i = w_i·(Σw)_i (与暴露同一乘积向量, 语义为方差分解)、以及 hard 对账
 断言 sum(MC) == wᵀΣw (rtol 1e-12 —— 跨模块完整性守卫, 绝不近似)。
+attribution_report 组装完整报告: 带符号暴露 + MC + 摘要 (top contributors /
+/ diversifiers / instrument count / policy version)。
+
+暴露与边际贡献共享公式 w_i·(Σw)_i (per 12-CONTEXT): 差异是语义 ——
+暴露 = 带符号的风险足迹, MC = 方差分解。两者都保留符号: 负值 = 分散化
+贡献, 绝不被 abs() 抹去 (sum identity 依赖带符号分量)。
+
 对账失败抛 AssertionError; 非有限输入抛 ValueError (fail closed)。
 
 不知道: 求解逻辑 (optimizer.py)、风险模型构建 (risk.py)、工件存储
@@ -60,6 +67,61 @@ def marginal_contributions(weights: np.ndarray, cov: np.ndarray) -> np.ndarray:
     """边际贡献 MC_i = w_i·(Σw)_i —— 同一乘积向量, 语义为方差分解 (RSK-01)。"""
     w, c = _validate(weights, cov)
     return w * (c @ w)
+
+
+def attribution_report(
+    weights: np.ndarray,
+    symbols: Sequence[str],
+    cov: np.ndarray,
+) -> dict[str, Any]:
+    """完整归因报告: 组合方差 + 带符号暴露 + MC + 摘要 (RSK-01)。
+
+    复用 portfolio_variance / portfolio_exposure / marginal_contributions /
+    reconcile_attribution; 保留所有带符号分量 (负 MC = diversifier, 绝不
+    abs)。top_contributors 按 |MC| 降序取前 5 —— 排序用绝对值, 但向量本身
+    不被 abs() 包装 (sum identity 依赖原始符号)。
+
+    Args:
+        weights: (n,) 权重向量。
+        symbols: 标的列表 (长度与 weights 一致)。
+        cov: (n, n) 协方差矩阵。
+
+    Returns:
+        {"portfolio_variance", "exposure" (symbol → float, 带符号),
+         "marginal_contributions" (symbol → float), "sum_contributions",
+         "reconciliation_error", "summary": {"instrument_count",
+         "top_contributors" (|MC| 降序前 5), "diversifiers" (MC < 0),
+         "policy_version": "phase-12-attribution-v1"}}。
+        对账失败抛 AssertionError (hard)。
+    """
+    w, c = _validate(weights, cov)
+    keys = list(symbols)
+    if len(keys) != len(w):
+        raise ValueError("symbols length must match weights")
+
+    variance = portfolio_variance(w, c)
+    exposure = portfolio_exposure(w, c)  # 带符号 (负值 = 分散化贡献)
+    mc = marginal_contributions(w, c)
+    reconciliation = reconcile_attribution(w, c, mc, variance, symbols=keys)
+
+    exposure_map = {key: float(value) for key, value in zip(keys, exposure, strict=True)}
+    mc_map = reconciliation["marginal_contributions"]
+    top_contributors = sorted(keys, key=lambda key: abs(mc_map[key]), reverse=True)[:5]
+    diversifiers = [key for key in keys if mc_map[key] < 0]
+
+    return {
+        "portfolio_variance": reconciliation["portfolio_variance"],
+        "exposure": exposure_map,
+        "marginal_contributions": mc_map,
+        "sum_contributions": reconciliation["sum_contributions"],
+        "reconciliation_error": reconciliation["reconciliation_error"],
+        "summary": {
+            "instrument_count": len(keys),
+            "top_contributors": top_contributors,
+            "diversifiers": diversifiers,
+            "policy_version": "phase-12-attribution-v1",
+        },
+    }
 
 
 def reconcile_attribution(
