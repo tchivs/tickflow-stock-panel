@@ -71,12 +71,12 @@ def semi_covariance(returns: np.ndarray, *, benchmark: str = "mean") -> np.ndarr
 def ewma_covariance(returns: np.ndarray, *, lam: float = 0.94, adjust: bool = True) -> np.ndarray:
     """Exponentially weighted moving-average covariance (RiskMetrics λ=0.94).
 
-    Recursion ``Σ_t = lam * Σ_{t−1} + (1 − lam) * outer(r_t, r_t)`` starting from
+    Recursion ``Σ_t = lam * Σ_{t-1} + (1 - lam) * outer(r_t, r_t)`` starting from
     ``Σ_1 = outer(r_1, r_1)`` (the standard EWMA; pandas ``adjust=True``
-    semantics — the first observation carries the full weight ``lam^{t−1}``, so
+    semantics — the first observation carries the full weight ``lam^{t-1}``, so
     the weights sum to 1 and no extra normalization is needed). ``adjust=False``
     gives the unadjusted recursion whose first observation also receives the
-    ``(1 − lam)`` weight (weight sum ``1 − lam^t``). λ=0.94 is the RiskMetrics
+    ``(1 - lam)`` weight (weight sum ``1 - lam^t``). λ=0.94 is the RiskMetrics
     default. ``lam=1.0`` degenerates to the sample covariance on the common
     window (documented test contract — recovers ``np.cov`` on demeaned data).
 
@@ -84,7 +84,7 @@ def ewma_covariance(returns: np.ndarray, *, lam: float = 0.94, adjust: bool = Tr
         returns: (n_obs, n_assets) 收益率矩阵。
         lam: 衰减因子 (RiskMetrics 标准 0.94)。
         adjust: True (默认) 时首观测权重为 1.0 (权重和自动为 1); False 时首观测
-            也乘 (1 − lam) (未归一化递归, 权重和 1 − lam^t)。
+            也乘 (1 - lam) (未归一化递归, 权重和 1 - lam^t)。
 
     Returns:
         (n_assets, n_assets) EWMA 协方差矩阵。
