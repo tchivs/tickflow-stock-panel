@@ -5,16 +5,16 @@ milestone_name: End-to-End Factor Portfolio Pipeline — in progress
 current_phase: 12
 current_phase_name: Risk Models & Attribution
 status: executing
-stopped_at: Completed 12-03-PLAN.md (Wave 2 risk-model suite breadth)
-last_updated: "2026-08-02T01:30:00.000Z"
+stopped_at: Phase 12 complete (12-05 cross-model attribution + 12-06 drawdown breadth)
+last_updated: "2026-08-02T03:00:00.000Z"
 last_activity: 2026-08-02
-last_activity_desc: Phase 12 Wave 2 risk-model suite breadth complete (12-03)
+last_activity_desc: Phase 12 Waves 3-4 complete (12-05 cross-model attribution + 12-06 drawdown breadth)
 progress:
   total_phases: 6
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 6
-  completed_plans: 4
-  percent: 67
+  completed_plans: 6
+  percent: 100
 ---
 
 # Project State
@@ -29,11 +29,11 @@ See: .planning/PROJECT.md (updated 2026-07-31)
 ## Current Position
 
 Phase: 12 — Risk Models & Attribution
-Plan: 12-03 (Wave 2 — risk-model suite breadth: semi/EWMA/Ledoit-Wolf + dispatcher) complete
-Status: Ready to execute (next: 12-05 Wave 3 — cross-model attribution + reconciliation, then 12-06)
-Last activity: 2026-08-02 — Phase 12 Wave 2 risk-model suite breadth complete (12-03)
+Plan: 12-06 (Wave 4 — drawdown attribution breadth: instrument × segment) complete
+Status: Phase 12 complete — ready for Phase 13 (walk-forward validation)
+Last activity: 2026-08-02 — Phase 12 Waves 3-4 complete (12-05 cross-model attribution + reconciliation breadth; 12-06 drawdown attribution breadth)
 
-Progress: [██████░░░░] 67%
+Progress: [██████████] 100%
 
 ## v1.2 Phase Summary
 
@@ -41,7 +41,7 @@ Progress: [██████░░░░] 67%
 |-------|-------------|--------|
 | 10 Factor Library & Multi-Factor Model | FACT-01..06 | In progress (10-01..10-06 complete) |
 | 11 Portfolio Construction & Optimization | PFOL-01..04 | In progress (11-01, 11-02, 11-03, 11-04, 11-05, 11-06 complete) |
-| 12 Risk Models & Attribution | RSK-01..03 | In progress (12-02 Wave 0 + 12-01 Wave 1 + 12-03 + 12-04 Wave 2 complete) |
+| 12 Risk Models & Attribution | RSK-01..03 | Complete (12-02 Wave 0 + 12-01 Wave 1 + 12-03 + 12-04 Wave 2 + 12-05 Wave 3 + 12-06 Wave 4) |
 | 13 Walk-Forward Validation & Parameter Search | WFWD-01..03 | Not started |
 | 14 Output & Boundary (RebalancePlan + Paper Rebalance) | RBAL-01..02 | Not started |
 | 15 API/SSE + Frontend Panels | UI-01..02 | Not started |
@@ -77,6 +77,8 @@ Progress: [██████░░░░] 67%
 | Phase 12 P12-01 | 35 | 6 tasks | 6 files |
 | Phase 12 P12-04 | 40 | 3 tasks | 3 files |
 | Phase 12 P12-03 | 45 | 4 tasks | 7 files |
+| Phase 12 P12-05 | 35 | 3 tasks | 5 files |
+| Phase 12 P12-06 | 40 | 3 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -116,14 +118,14 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-08-02T01:30:00.000Z
-Stopped at: Completed 12-03-PLAN.md (Wave 2 risk-model suite breadth)
+Last session: 2026-08-02T03:00:00.000Z
+Stopped at: Phase 12 complete (12-05 cross-model attribution + 12-06 drawdown breadth)
 Resume file: None
 
 ## Operator Next Steps
 
-- Run `/gsd-execute-phase 12-05` + `/gsd-execute-phase 12-06` (Wave 3/4 — cross-model attribution ∥ drawdown breadth)
-- Run the phase gate (full backend suite) only after ALL Phase 12 plans (12-01..12-06) land
+- Run the Phase 12 phase gate (full backend suite) — all Phase 12 plans (12-01..12-06) landed
+- Run `/gsd-execute-phase 13` (walk-forward validation) once the phase gate passes
 
 ## Decisions
 
@@ -134,6 +136,10 @@ Resume file: None
 - [Phase 12]: OptimizationRequest.risk_model defaults to sample_covariance_v1 (4-model Literal); the selected name is recorded verbatim on the run row + risk_model_json — RSK-02 selection is explicit, never accidental; the repository _RISK_MODELS runs gate now accepts all four models (matching the 12-02 option-a widened CHECK).
 - [Phase 12]: Rebuild-before-evidence ordering in migration #28 — the runs rebuild runs first so the evidence run_id FK binds to the final runs table.
 - [Phase 12]: Evidence schema reconciliation_json TEXT NOT NULL for every row — exposure rows carry {portfolio_variance, sum_contributions, max_abs_error}; drawdown rows carry {period_count, max_depth, longest_period, segment_max_abs_error} (per 12-01/12-04/12-06 evidence shapes).
+- [Phase 12]: run_attribution has exactly TWO allowed covariance sources (12-05): the identity path (risk_model_name=None) reads ONLY the run's recorded covariance artifact via load_covariance_artifact (checksum-bound, never recomputes); the model-selection path recomputes the selected RSK-02 model's covariance from returns via make_risk_model_family (same PSD gate) and records evidence with the ACTUAL model used.
+- [Phase 12]: reconcile_all_models (12-05) is a pure integrity report — model x variance x sum(MC) x max abs error across all 4 risk models; the identity row (the run's recorded model) is checksum-bound to the run's recorded covariance_sha256; any model failing reconciliation hard-aborts (AssertionError), never a partial-success matrix.
+- [Phase 12]: list_attribution_evidence (12-05) gains the risk_model equality filter (validated against the 4-model enum, fail-closed on unknown) for the Phase 15 API — combinable with run_id/attribution_type, ORDER BY created_at, id, positive-int limit fail-closed.
+- [Phase 12]: drawdown attribution (12-06) decomposes per-instrument x per-segment — c_i = sum_{t in [start,end]} w_i * r_{i,t}, segment_return computed INDEPENDENTLY as (w @ segment.T).sum() so sum(c_i) == segment_return (rtol 1e-10) is a genuine identity check; contributions arithmetic (non-compounded) by design.
 - [Phase ?]: PIT universe: membership_fingerprint hashes the sorted per-date [symbol,date] frame
 - [Phase ?]: Candidate trails: every admission verdict (admitted AND rejected) carries provenance, evaluation_run_id, ExperimentSnapshot.id, and ordered gate results; evaluation references are optional when no catalog/artifact_service is wired
 - [Phase ?]: IC-correlation dedup: per-date IC Pearson on the val window, series aligned on sorted val dates; degenerate constant series yield 0.0; discover_similar untouched
