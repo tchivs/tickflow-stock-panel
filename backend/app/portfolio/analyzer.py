@@ -166,7 +166,7 @@ def run_drawdown(
     portfolio_returns = weights @ panel.T
     underwater = underwater_curve(portfolio_returns)
     periods = drawdown_periods(underwater)
-    max_depth = float(-underwater.min()) if underwater.size else 0.0
+    max_depth = max(0.0, float(-underwater.min())) if underwater.size else 0.0
 
     analysis_id = uuid.uuid4().hex
     descriptor = PortfolioArtifactService(artifact_service_root).write_analysis_artifact(
