@@ -266,6 +266,9 @@ def build_rebalance_plan(
     equity: float,
     matcher_config: MatcherConfig,
     blocked: set[str] | frozenset[str] | list[str] | tuple[str, ...] | None = None,
+    odd_lot_positions: dict[str, int] | None = None,
+    min_cash: float = 0.0,
+    rmse_definition: str = "simple",
     expires_at: str | None = None,
     repository: PortfolioRepository,
     artifact_service_root: Path,
@@ -277,6 +280,8 @@ def build_rebalance_plan(
     O_EXCL + fsync + sha256 计划工件 → 绑定 rebalance_plans 行
     (optimization_run_id + input_snapshot_sha256 + output_sha256 +
     artifact_relative_path)。expires_at 默认 now + 7 个日历日。
+    odd_lot_positions / min_cash / rmse_definition 透传给离散化适配器 ——
+    计划渲染路径完整支持奇股卖出与最低现金 (CR-14-01)。
 
     Args:
         run_id: portfolio_optimization_runs.id。
@@ -284,6 +289,9 @@ def build_rebalance_plan(
         equity: 组合净值。
         matcher_config: backtest/engine.py MatcherConfig (费用模型复用)。
         blocked: 禁买标的集合。
+        odd_lot_positions: {symbol: 当前持仓股数} — 奇股卖出/余数携带。
+        min_cash: 最低现金 (默认 0); 突破时超出部分留在残差。
+        rmse_definition: "simple" | "weighted"。
         expires_at: 可选; 默认 now + 7 个日历日。
         repository: PortfolioRepository。
         artifact_service_root: PortfolioArtifactService 工件根。
@@ -308,9 +316,9 @@ def build_rebalance_plan(
         equity=equity,
         matcher_config=matcher_config,
         blocked=blocked,
-        odd_lot_positions=None,
-        min_cash=0.0,
-        rmse_definition="simple",
+        odd_lot_positions=odd_lot_positions,
+        min_cash=min_cash,
+        rmse_definition=rmse_definition,
     )
 
     plan_id = uuid.uuid4().hex

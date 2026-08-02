@@ -696,6 +696,44 @@ def test_build_rebalance_plan_fails_closed_on_empty_output_weights(
         )
 
 
+def test_build_rebalance_plan_forwards_adapter_inputs(
+    portfolio_repository: PortfolioRepository,
+    artifact_root: Path,
+    fixture_rebalance_run: dict[str, object],
+    fixture_plan_inputs: dict[str, object],
+) -> None:
+    """build_rebalance_plan forwards odd_lot_positions / min_cash / rmse_definition (CR-14-01)."""
+    run = fixture_rebalance_run
+    symbols = sorted(run["output_weights"])
+    prices = _run_prices(run)
+    equity = float(fixture_plan_inputs["equity"])
+    matcher_config = fixture_plan_inputs["matcher_config"]
+    odd_lot_symbol = symbols[0]
+    odd_lots = {odd_lot_symbol: 150}  # one board lot + 50-share odd remainder
+    min_cash = 50_000.0
+
+    plan = build_rebalance_plan(
+        run_id=str(run["id"]),
+        prices=prices,
+        equity=equity,
+        matcher_config=matcher_config,
+        blocked=set(fixture_plan_inputs["blocked"]),
+        odd_lot_positions=odd_lots,
+        min_cash=min_cash,
+        rmse_definition="weighted",
+        repository=portfolio_repository,
+        artifact_service_root=artifact_root,
+    )
+    # weighted RMSE selected + recorded in the row
+    assert plan.rmse_definition == "weighted"
+    row = portfolio_repository.get_rebalance_plan(plan.plan_id)
+    assert row is not None and row["rmse_definition"] == "weighted"
+    # odd-lot carry: the held symbol keeps its 50-share remainder on top of a board lot
+    assert plan.lot_sizes[odd_lot_symbol] % 100 == 50
+    # min_cash respected: residue >= min_cash (restore path fired when needed)
+    assert plan.cash_residue >= min_cash - 1e-9
+
+
 def test_load_rebalance_plan_checksum_verified_read(
     portfolio_repository: PortfolioRepository,
     artifact_root: Path,
