@@ -278,7 +278,7 @@ def test_membership_fingerprint_changes_when_membership_changes(
     result_a = run_walk_forward(
         wf_fixture_plan,
         strategy_id="fixture_strategy",
-        params={},
+        params={"p": 1},
         service=stub_backtest_service,
         chain=make_stub_chain(resolver_a),
         resolver=resolver_a,
@@ -288,7 +288,7 @@ def test_membership_fingerprint_changes_when_membership_changes(
     result_b = run_walk_forward(
         wf_fixture_plan,
         strategy_id="fixture_strategy",
-        params={},
+        params={"p": 2},  # distinct params_sha256 so fold records do not collide
         service=stub_backtest_service,
         chain=make_stub_chain(resolver_b),
         resolver=resolver_b,
