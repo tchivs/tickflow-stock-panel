@@ -419,6 +419,29 @@ def test_run_attribution_model_selection_reconciles_exactly_per_model(
     assert payload["reconciliation"]["max_abs_error"] <= 1e-12 * variance + 1e-15
 
 
+def test_run_attribution_model_selection_non_finite_returns_fail_closed(
+    portfolio_repository: PortfolioRepository,
+    artifact_root: Path,
+    fixture_multi_model_run: tuple[dict[str, object], np.ndarray],
+) -> None:
+    """WR-01: the model-selection path rejects non-finite returns with ValueError
+    and writes NO evidence row (same fail-closed contract as run_drawdown)."""
+    run, returns = fixture_multi_model_run
+    run_id = str(run["id"])
+    dirty = returns.copy()
+    dirty[0, 0] = np.nan
+    count_before = len(portfolio_repository.list_attribution_evidence(run_id=run_id))
+    with pytest.raises(ValueError, match="returns must be finite"):
+        run_attribution(
+            run_id,
+            repository=portfolio_repository,
+            artifact_service_root=artifact_root,
+            returns=dirty,
+            risk_model_name="sample_covariance_v1",
+        )
+    assert len(portfolio_repository.list_attribution_evidence(run_id=run_id)) == count_before
+
+
 def test_reconcile_all_models_cross_model_matrix(
     portfolio_repository: PortfolioRepository,
     artifact_root: Path,

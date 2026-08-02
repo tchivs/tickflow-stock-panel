@@ -106,6 +106,10 @@ def run_attribution(
                 "returns columns must align with the run's output_weights "
                 f"(expected {weights.shape[0]}, got {panel.shape[1]})"
             )
+        # 与 run_drawdown 相同的 fail-closed 契约: 非有限收益率绝不静默进入
+        # 风险模型构建 (dropna 会收缩窗口, 产出看似有效的协方差与证据行)。
+        if not np.all(np.isfinite(panel)):
+            raise ValueError("returns must be finite")
         block = make_risk_model_family(panel, risk_model_name=risk_model_name)
         cov = block["covariance"]
         evidence_risk_model = risk_model_name
