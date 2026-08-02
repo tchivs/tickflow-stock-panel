@@ -13,7 +13,7 @@
       仓储/迁移内部实现。集成权重默认等权 1/n (discretion, 冻结进输入快照)。
 
 rank-average 语义 (13-RESEARCH.md `## Rank-Average Ensembling`):
-  mean_rank(symbol, date) = Σ_s w_s × _rank_s(symbol, date)
+  mean_rank(symbol, date) = Σ_s w_s x _rank_s(symbol, date)
   ensemble_rank  = mean_rank 按日期二次 rank (method="max") — 即"逐日对秩均值
                    再排序"的秩。method="max" 使平局保留平局高度 (均值 2.0 →
                    ensemble_rank 2.0, 满足脚手架契约); 若用 method="average"
