@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import itertools
 import logging
+import statistics
 import threading
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import date
@@ -293,3 +295,206 @@ class StrategyOptimizer:
             "results": ranked,
             "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1),
         }
+
+
+# ================================================================
+# WFWD-02: OOS-scored walk-forward 参数搜索 (复用上面全部网格机制)
+# ================================================================
+
+
+class WalkForwardOptimizer:
+    """基于 walk-forward 折的 OOS-scored 参数搜索。
+
+    与 :class:`StrategyOptimizer` 相同的 DI (``service`` + ``strategy_engine``),
+    复用 ``expand_param_grid`` / ``count_combinations`` / ``GRID_MAX_COMBINATIONS`` /
+    ``objective_value`` / ``default_direction`` — 不重写网格机制。
+
+    WFWD-02 多重比较守卫:
+      - 每个 trial 只对搜索折的 **test 段** 打分 (绝不 in-sample, 绝不碰保留 OOS)。
+      - ``plan.folds`` 按构造永不包含 ``plan.oos_fold``; optimize 收到含 ``is_oos``
+        的折即 fail-closed (ValueError)。
+      - 完成后把 n_trials / search_space / score_distribution 连同
+        ``oos_excluded=1`` 记入 wf_search_runs (插入时强制)。
+    """
+
+    def __init__(self, service: Any, strategy_engine: Any) -> None:
+        self.service = service
+        self.strategy_engine = strategy_engine
+
+    def optimize(
+        self,
+        *,
+        plan: Any,
+        strategy_id: str,
+        param_grid: dict,
+        objective: str = "sharpe",
+        max_workers: int = 4,
+        progress_cb=None,
+        cancel_event: threading.Event | None = None,
+        repo=None,
+    ) -> dict:
+        """OOS-scored 网格搜索: 只打 test 段; OOS 结构性排除; 记录多重比较簿记。
+
+        传入 ``repo`` (ResearchRepository) 时把 n_trials/search_space/
+        score_distribution 连同 ``oos_excluded=1`` 持久化到 wf_search_runs;
+        否则仍返回生成的 ``search_run_id``。
+
+        返回 dict 含 ``n_trials`` / ``search_space`` / ``score_distribution`` /
+        ``best_params`` / ``best_score`` / ``results`` / ``search_run_id``。
+        """
+        from app.backtest.strategy import StrategyBacktestConfig
+
+        t0 = time.perf_counter()
+        if objective not in VALID_OBJECTIVES:
+            raise ValueError(f"不支持的优化目标 '{objective}', 可选: {sorted(VALID_OBJECTIVES)}")
+        direction = default_direction(objective)
+        search_folds = [f for f in plan.folds if not f.is_oos]
+        if not search_folds:
+            raise ValueError("walk-forward plan has no search folds")
+        if any(getattr(f, "is_oos", False) for f in plan.folds):
+            raise ValueError("search folds must not include the reserved OOS")
+
+        s = self.strategy_engine.get(strategy_id)  # 可能抛 ValueError
+        params_meta = s.meta.get("params", [])
+        combos = expand_param_grid(params_meta, param_grid)  # GRID_MAX_COMBINATIONS 上限
+        n_total = len(combos)
+
+        results: list[dict] = []
+        done = 0
+        lock = threading.Lock()
+
+        def _run_one(idx: int, combo: dict) -> dict | None:
+            if cancel_event is not None and cancel_event.is_set():
+                return None
+            per_fold: list[dict] = []
+            try:
+                # 只打搜索折的 test 段 — 绝不打 train 窗, 绝不碰 OOS。
+                for fold in search_folds:
+                    bt_cfg = StrategyBacktestConfig(
+                        strategy_id=strategy_id,
+                        symbols=None,
+                        start=fold.test_start,
+                        end=fold.test_end,
+                        params=dict(combo),
+                        asset_type=plan.asset_type,
+                    )
+                    res = self.service.run(bt_cfg, cancel_event=cancel_event)
+                    if res.error:
+                        per_fold.append(
+                            {"fold_index": fold.fold_index, "score": None, "error": res.error}
+                        )
+                    else:
+                        per_fold.append(
+                            {
+                                "fold_index": fold.fold_index,
+                                "score": objective_value(res.stats, objective, direction),
+                                "objective_raw": res.stats.get(objective),
+                            }
+                        )
+            except Exception as e:  # 隔离单组失败, 记录后继续, 不拖垮整批
+                logger.warning("walk-forward 参数组 %s 回测异常: %r", combo, e)
+                return {
+                    "params": combo,
+                    "error": repr(e),
+                    "per_fold": per_fold,
+                    "_sort": float("-inf"),
+                }
+            scores = [pf["score"] for pf in per_fold if pf.get("score") is not None]
+            pooled = statistics.fmean(scores) if scores else None
+            return {
+                "params": combo,
+                "per_fold": per_fold,
+                "pooled_score": pooled,
+                "objective_raw": pooled,
+                "_sort": float(pooled) if pooled is not None else float("-inf"),
+            }
+
+        max_workers = max(1, min(int(max_workers), n_total))
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = {pool.submit(_run_one, i, c): i for i, c in enumerate(combos)}
+            for fut in as_completed(futures):
+                r = fut.result()  # _run_one 内部已兜底, 不会 re-raise 业务异常
+                with lock:
+                    done += 1
+                    if r is not None:
+                        results.append(r)
+                    if progress_cb is not None:
+                        best = next((x for x in results if x["_sort"] != float("-inf")), None)
+                        progress_cb({
+                            "type": "optimizer_progress",
+                            "done": done,
+                            "total": n_total,
+                            "best_score": round(best["_sort"], 4) if best is not None else None,
+                        })
+
+        ranked = sorted(results, key=lambda x: x["_sort"], reverse=True)
+        for i, r in enumerate(ranked):
+            r["rank"] = i + 1
+            r.pop("_sort", None)
+
+        best = ranked[0] if ranked and ranked[0].get("pooled_score") is not None else None
+        best_score = best["pooled_score"] if best else None
+        per_trial = [
+            {"params": r["params"], "score": r.get("pooled_score"), "error": r.get("error")}
+            for r in ranked
+        ]
+        per_fold_summary: dict[str, list[float]] = {}
+        for r in ranked:
+            for pf in r.get("per_fold", []):
+                score = pf.get("score")
+                if score is not None:
+                    per_fold_summary.setdefault(f"fold_{pf['fold_index']}", []).append(score)
+        per_fold_dist = {
+            key: _dist(values, round_to=4)
+            for key, values in per_fold_summary.items()
+        }
+        score_values = [pt["score"] for pt in per_trial if pt["score"] is not None]
+        score_distribution = {
+            "per_trial": per_trial,
+            "per_fold": per_fold_dist,
+            **_dist(score_values, round_to=4),
+        }
+        search_space = {"param_grid": param_grid, "params_meta": params_meta}
+        search_run_id = uuid.uuid4().hex
+
+        if repo is not None:
+            repo.record_wf_search(
+                id=search_run_id,
+                plan_id=plan.plan_id,
+                strategy_id=strategy_id,
+                objective=objective,
+                direction=direction,
+                search_space=search_space,
+                n_trials=n_total,
+                n_completed=len(results),
+                score_distribution=score_distribution,
+                best_params=dict(best["params"]) if best is not None else {},
+                best_score=round(float(best_score), 6) if best_score is not None else None,
+            )
+
+        return {
+            "objective": objective,
+            "direction": direction,
+            "n_trials": n_total,
+            "n_completed": len(results),
+            "search_space": search_space,
+            "score_distribution": score_distribution,
+            "best_params": best["params"] if best is not None else None,
+            "best_score": round(float(best_score), 4) if best_score is not None else None,
+            "results": ranked,
+            "search_run_id": search_run_id,
+            "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1),
+        }
+
+
+def _dist(values: list[float], *, round_to: int = 6) -> dict:
+    """score 分布的 min/median/max/mean/std (空序列时全为 None)。"""
+    if not values:
+        return {"min": None, "median": None, "max": None, "mean": None, "std": None}
+    return {
+        "min": round(min(values), round_to),
+        "median": round(statistics.median(values), round_to),
+        "max": round(max(values), round_to),
+        "mean": round(statistics.fmean(values), round_to),
+        "std": round(statistics.pstdev(values), round_to),
+    }
