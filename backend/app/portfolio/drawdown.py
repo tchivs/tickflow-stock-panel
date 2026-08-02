@@ -31,17 +31,27 @@ DRAWDOWN_MIN_OBS = 2
 def underwater_curve(portfolio_returns: np.ndarray) -> np.ndarray:
     """水下曲线 = equity / running_max(equity) - 1 (RSK-03)。
 
+    收益率 <= -1.0 会把 equity 推到 0/负, 使水下曲线 NaN/无意义 —— fail closed
+    (与 run_drawdown 的合同一致, 绝不静默产出坏曲线)。
+
     Args:
-        portfolio_returns: (n_obs,) 组合收益率序列。
+        portfolio_returns: (n_obs,) 组合收益率序列 (每个值必须有限且 > -1.0)。
 
     Returns:
         (n_obs,) 水下曲线 (<= 0, 首个观测恒为 0)。
+
+    Raises:
+        ValueError: 序列非一维 / 含非有限值 / 存在 <= -1.0 的收益率。
     """
     returns = np.asarray(portfolio_returns, dtype=float)
     if returns.ndim != 1:
         raise ValueError("portfolio_returns must be a 1-D series")
     if not np.all(np.isfinite(returns)):
         raise ValueError("portfolio_returns must be finite")
+    # WR-02: -1.0 (或更低) 使 equity 归零/为负, cumprod 后的曲线 NaN/无意义;
+    # drawdown_periods 会把 NaN 比较当 False 静默跳过 —— 必须显式拒绝。
+    if np.any(returns <= -1.0):
+        raise ValueError("portfolio_returns must be greater than -1.0")
     if returns.size == 0:
         return np.empty(0, dtype=float)
     equity = np.cumprod(1.0 + returns)
