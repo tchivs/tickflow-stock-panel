@@ -161,7 +161,14 @@ Six phases extend the shipped research platform from single-factor evaluation in
   2. Researcher can approve or reject a rebalance suggestion in the paper-rebalance state machine, and every transition is an append-only audit fact with idempotency.
   3. No execution route exists anywhere: no API endpoint, UI affordance, or service path can push a RebalancePlan to a live broker.
 
-**Plans**: 3 plans
+**Plans**: 5/5 plans executed (14-02, 14-01, 14-03, 14-04, 14-05 complete; per-plan gates green)
+
+- [x] 14-01-SUMMARY.md (tracer — end-to-end RebalancePlan → paper-rebalance slice)
+- [x] 14-02-SUMMARY.md (Wave 0 — rebalance_plans + paper_rebalance_transitions migration + repo + scaffolds)
+- [x] 14-03-SUMMARY.md (lot-sizing adapter breadth — odd-lot sell / cash residue / turnover / RMSE)
+- [x] 14-04-SUMMARY.md (paper state-machine breadth — reject / expired / no-execution gate)
+- [x] 14-05-SUMMARY.md (robustness + reporting breadth)
+
 *Planning notes: standard patterns — the A-share matching layer already proven in `backtest/engine.py` (T+1, limits, suspension, lots, fees); reuse it, do not build a naive second matcher.*
 
 ### Phase 15: API/SSE + Frontend Panels
@@ -190,7 +197,7 @@ Phases execute in numeric order: 10 → 11 → 12 → 13 → 14 → 15 (Phase 13
 | 11. Portfolio Construction & Optimization | 7/1 | Complete    | 2026-08-01 |
 | 12. Risk Models & Attribution | 6/1 | Complete    | 2026-08-02 |
 | 13. Walk-Forward Validation & Parameter Search | 6/1 | Complete    | 2026-08-02 |
-| 14. Output & Boundary (RebalancePlan + Paper Rebalance) | 0/3 | Not started | - |
+| 14. Output & Boundary (RebalancePlan + Paper Rebalance) | 0/5 | Not started | - |
 | 15. API/SSE + Frontend Panels | 0/4 | Not started | - |
 
 ---
