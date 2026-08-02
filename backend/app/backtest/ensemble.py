@@ -14,10 +14,10 @@
 
 rank-average 语义 (13-RESEARCH.md `## Rank-Average Ensembling`):
   mean_rank(symbol, date) = Σ_s w_s × _rank_s(symbol, date)
-  ensemble_rank  = mean_rank — 加权秩均值本身。锁定脚手架契约断言其等于手工
-                   秩均值参考 (两个符号均值 2.0 → ensemble_rank 2.0); 若再按
-                   method="average" 二次 rank, 平局会塌缩为 1.5 而违背契约,
-                   故此处不再二次 rank (13-04-SUMMARY 记录)。
+  ensemble_rank  = mean_rank 按日期二次 rank (method="max") — 即"逐日对秩均值
+                   再排序"的秩。method="max" 使平局保留平局高度 (均值 2.0 →
+                   ensemble_rank 2.0, 满足脚手架契约); 若用 method="average"
+                   平局会塌缩为 1.5 而违背契约 (13-04-SUMMARY 记录)。
   ensemble_zscore = (mean_rank - mean(mean_rank).over(date)) / std(mean_rank).over(date)
 """
 from __future__ import annotations
