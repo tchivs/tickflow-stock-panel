@@ -64,7 +64,12 @@ def drawdown_periods(
     depth_threshold: float = DRAWDOWN_DEPTH_THRESHOLD,
     min_obs: int = DRAWDOWN_MIN_OBS,
 ) -> list[dict[str, Any]]:
-    """识别水下曲线中深度 >= depth_threshold 且持续 >= min_obs 的区间。
+    """识别水下曲线中深度 > depth_threshold (严格大于) 且持续 >= min_obs 的区间。
+
+    注 (IN-06): 实现使用严格 `<` (`active = curve < -depth_threshold` ⟺ 深度
+    严格大于阈值), 不是 `<=` —— 恰好压在阈值上的水下点 (如恰为 -2.0%) 不会被
+    标记。浮点精确命中极少; docstring 与计划措辞 (深度 ≥ 2%) 的分歧以严格
+    行为为准。
 
     Args:
         underwater: (n_obs,) 水下曲线 (underwater_curve 的输出)。

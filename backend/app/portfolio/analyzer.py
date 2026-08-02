@@ -36,6 +36,10 @@ from app.portfolio.drawdown import (
 from app.portfolio.repository import PortfolioRepository
 from app.portfolio.risk import load_covariance_artifact, make_risk_model_family
 
+# IN-03: 四种 RSK-02 模型名的唯一权威来源是 schemas.RiskModel (Literal) 与
+# repository._RISK_MODELS / _RISK_MODELS_PHASE12 (frozenset)。此处是第三个
+# 定义点 — 三者必须同步 (新增第五个模型时 reconcile_all_models 才不会静默遗漏)。
+# 备选: 从 schemas.RiskModel values 派生 (见 12-05/12-06 计划的 Phase 13 接缝)。
 _RISK_MODEL_NAMES = (
     "sample_covariance_v1",
     "semi_covariance_v1",

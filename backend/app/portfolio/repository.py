@@ -31,6 +31,9 @@ _RISK_MODELS = frozenset(
     {"sample_covariance_v1", "semi_covariance_v1", "ewma_covariance_v1", "ledoit_wolf_v1"}
 )
 # 12-02 option-a: runs 表 CHECK 已加宽到 4 模型枚举; 证据表使用同一枚举。
+# IN-04: 别名是刻意为之 (option-a 决策) — 两表共享同一 4 模型枚举, 不预期分叉。
+# 若 Phase 13 需要只加宽 runs 表, 必须拆成两个显式 frozenset, 否则别名会静默
+# 加宽证据校验 (与 analyzer._RISK_MODEL_NAMES 的同步义务一致)。
 _RISK_MODELS_PHASE12 = _RISK_MODELS
 _ATTRIBUTION_TYPES = frozenset({"exposure_contribution", "drawdown"})
 

@@ -1623,6 +1623,12 @@ MIGRATIONS: tuple[str, ...] = (
     --       (SQLite cannot ALTER a CHECK -- the Phase 7 rebuild pattern).
     --   (2) create portfolio_risk_attribution_evidence: every attribution/drawdown
     --       analysis is one immutable fact bound to a checksum-verified artifact.
+    -- IN-05 (documented deviation): the 12-02 plan's schema specified the conditional
+    --   CHECK ((attribution_type = 'exposure_contribution') = (reconciliation_json
+    --   IS NOT NULL)); that combination was self-contradictory (NOT NULL already
+    --   forces the RHS to TRUE, rejecting drawdown rows). The implementation drops
+    --   the conditional CHECK in favor of strict NOT NULL -- consistent with the
+    --   repository and all analyzers always writing a reconciliation payload.
     -- The runs rebuild runs FIRST so the evidence table's run_id FK binds to the
     -- FINAL runs table (renaming runs after the FK exists would re-point the FK to
     -- the _legacy table and then break when legacy is dropped).
