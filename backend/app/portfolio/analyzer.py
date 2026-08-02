@@ -3,6 +3,9 @@
 职责: 加载 Phase 11 不可变 run 记录 → 按 risk_model_detail.covariance_sha256
 对协方差工件做 checksum 校验读取 (绝不重算 live covariance) → 暴露度/边际贡献
 归因 + 硬对账 → O_EXCL 分析工件 (write_analysis_artifact) → append-only 证据行。
+run_drawdown 走同一编排: 组合收益率 = weights @ returns.T → 水下曲线 →
+回撤区间 → 逐标的 × 逐段归因 (drawdown_attribution, 段恒等式 Σc_i == 段收益
+rtol 1e-10 硬断言) → 完整报告工件 + 证据行。
 分析器是只读层: 绝不修改 run 记录, 任何失败都抛异常 (证据只在成功后写入)。
 
 不知道: 求解逻辑 (optimizer.py)、优化 run 的创建 (run_optimization)、
@@ -24,7 +27,13 @@ from app.portfolio.attribution import (
     attribution_report,
     reconcile_attribution,
 )
-from app.portfolio.drawdown import drawdown_periods, underwater_curve
+from app.portfolio.drawdown import (
+    DRAWDOWN_DEPTH_THRESHOLD,
+    DRAWDOWN_MIN_OBS,
+    drawdown_attribution,
+    drawdown_periods,
+    underwater_curve,
+)
 from app.portfolio.repository import PortfolioRepository
 
 
@@ -137,11 +146,16 @@ def run_drawdown(
     repository: PortfolioRepository,
     artifact_service_root: Path,
 ) -> dict[str, Any]:
-    """Underwater-curve + drawdown-period analysis for one run, append-only evidence.
+    """水下曲线 + 回撤区间 + 逐标的 × 逐段归因, append-only 证据 (RSK-03)。
 
-    身份路径 (12-01): 权重来自 run 行, 组合收益率 = weights @ returns.T,
-    underwater_curve + drawdown_periods, 写 drawdown.json, 证据行带
-    reconciliation {"period_count", "max_depth"}。
+    完整报告 (12-06): 权重来自 run 行, 组合收益率 = weights @ returns.T,
+    underwater_curve + drawdown_periods + drawdown_attribution (段恒等式
+    Σc_i == 段收益 rtol 1e-10 硬断言 —— 写任何证据之前必须成立), 写
+    drawdown.json (水下曲线 + 逐段归因表), 证据行 reconciliation 带
+    period_count / max_depth / longest_period / segment_max_abs_error /
+深度与最短持续阈值常量 (模块常量, 非魔法数字)。空 periods →
+{"periods": [], "max_depth": 0.0, "longest_period": 0,
+"segment_reconciliation_max_abs_error": 0.0} (恒等式 vacuous)。
 
     Args:
         run_id: portfolio_optimization_runs.id。
@@ -151,6 +165,10 @@ def run_drawdown(
 
     Returns:
         record_attribution_evidence 返回的记录 (reconciliation 已展开)。
+
+    Raises:
+        ValueError: run 不存在 / 无 output_weights / 收益率面板非有限或列数不齐。
+        AssertionError: 段恒等式对账失败 (hard, 绝不近似 —— 不写任何证据)。
     """
     run = repository.get_optimization_run(run_id)
     if run is None:
@@ -161,6 +179,8 @@ def run_drawdown(
     panel = np.asarray(returns, dtype=float)
     if panel.ndim != 2:
         raise ValueError("returns must be a 2-D panel")
+    if not np.all(np.isfinite(panel)):
+        raise ValueError("returns must be finite")
     weights = np.asarray(list(weights_map.values()), dtype=float)
     if panel.shape[1] != weights.shape[0]:
         raise ValueError(
@@ -170,7 +190,11 @@ def run_drawdown(
     portfolio_returns = weights @ panel.T
     underwater = underwater_curve(portfolio_returns)
     periods = drawdown_periods(underwater)
-    max_depth = max(0.0, float(-underwater.min())) if underwater.size else 0.0
+    # 完整归因报告: 逐标的 × 逐段分解 + 摘要。段恒等式在写证据前硬断言。
+    attribution = drawdown_attribution(
+        weights, panel, periods, symbols=list(weights_map.keys())
+    )
+    max_depth = attribution["max_depth"]
 
     analysis_id = uuid.uuid4().hex
     descriptor = PortfolioArtifactService(artifact_service_root).write_analysis_artifact(
@@ -179,9 +203,16 @@ def run_drawdown(
         filename=f"drawdown-{analysis_id}.json",
         payload={
             "run_id": run_id,
+            "symbols": list(weights_map.keys()),
             "underwater": underwater.round(8).tolist(),
-            "periods": periods,
+            "periods": attribution["periods"],
             "max_depth": max_depth,
+            "longest_period": attribution["longest_period"],
+            "segment_reconciliation_max_abs_error": attribution[
+                "segment_reconciliation_max_abs_error"
+            ],
+            "depth_threshold": DRAWDOWN_DEPTH_THRESHOLD,
+            "min_obs": DRAWDOWN_MIN_OBS,
         },
     )
     return repository.record_attribution_evidence(
@@ -192,6 +223,13 @@ def run_drawdown(
         as_of=run["as_of"],
         output_sha256=descriptor.checksum_sha256,
         artifact_relative_path=descriptor.relative_path,
-        reconciliation_json={"period_count": len(periods), "max_depth": max_depth},
+        reconciliation_json={
+            "period_count": len(periods),
+            "max_depth": max_depth,
+            "longest_period": attribution["longest_period"],
+            "segment_max_abs_error": attribution["segment_reconciliation_max_abs_error"],
+            "depth_threshold": DRAWDOWN_DEPTH_THRESHOLD,
+            "min_obs": DRAWDOWN_MIN_OBS,
+        },
         created_at=_now(),
     )
