@@ -81,8 +81,11 @@ def trading_calendar(
 ) -> list[date]:
     """``[start, end]`` 区间内去重排序的实测交易日。
 
-    通过 governed seam ``BacktestEngine.load_panel(columns=["date"])`` 的只读探针
-    (复用 PanelCache) — 绝不合成 weekday 日历 (Feb 2026 CNY 缺口)。
+    实测于执行期 (measured at execution) 契约: 调用方在每次运行时重测日历 —
+    enriched lake 每月新增约 20 个交易日, 陈旧日历会产生错误的折叠数并把 OOS
+    按设计向前滚动; 绝不硬编码历史末端日期。通过 governed seam
+    ``BacktestEngine.load_panel(columns=["date"])`` 的只读探针 (复用
+    PanelCache) — 绝不合成 weekday 日历 (Feb 2026 CNY 缺口)。
     """
     panel = engine.load_panel(symbols, start, end, columns=["date"], asset_type=asset_type)
     if panel.is_empty():
@@ -123,6 +126,17 @@ def build_plan(
     selection_len = total - oos_size
     if selection_len < 1:
         raise ValueError("insufficient history for walk-forward validation")
+
+    # Fail-closed below 2 folds (walk-forward degenerates at H≈180): a 2-fold
+    # rectangle needs selection_len >= train_size + gap_size + 2 * test_size.
+    minimum = oos_size + train_size + gap_size + 2 * test_size
+    if total < minimum:
+        raise ValueError(
+            "insufficient history for walk-forward validation: "
+            f"{total} measured trading days < minimum {minimum} "
+            f"(need >= 2 folds with train={train_size}/gap={gap_size}/"
+            f"test={test_size}/oos={oos_size})"
+        )
 
     step = test_size
     fold_count = 0
