@@ -292,6 +292,7 @@ class PortfolioRepository:
         *,
         run_id: str | None = None,
         attribution_type: str | None = None,
+        risk_model: str | None = None,
         limit: int = 200,
     ) -> list[dict[str, Any]]:
         """List evidence rows ordered by created_at, id with optional filters.
@@ -299,12 +300,15 @@ class PortfolioRepository:
         Args:
             run_id: 只返回该 run 的证据行。
             attribution_type: 只返回该类型 (exposure_contribution / drawdown)。
+            risk_model: 只返回该风险模型 (四种 RSK-02 模型名之一)。
             limit: 行数上限 (默认 200; 必须为正整数, 否则 fail closed)。
         """
         if not isinstance(limit, int) or limit < 1:
             raise ValueError("limit must be a positive integer")
         if attribution_type is not None and attribution_type not in _ATTRIBUTION_TYPES:
             raise ValueError(f"unknown attribution_type: {attribution_type}")
+        if risk_model is not None and risk_model not in _RISK_MODELS_PHASE12:
+            raise ValueError(f"unknown risk_model: {risk_model}")
         clauses: list[str] = []
         parameters: list[Any] = []
         if run_id is not None:
@@ -313,6 +317,9 @@ class PortfolioRepository:
         if attribution_type is not None:
             clauses.append("attribution_type = ?")
             parameters.append(attribution_type)
+        if risk_model is not None:
+            clauses.append("risk_model = ?")
+            parameters.append(risk_model)
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         with self._connection() as connection:
             rows = connection.execute(
