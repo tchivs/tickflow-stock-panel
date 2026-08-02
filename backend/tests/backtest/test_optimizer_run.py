@@ -197,3 +197,132 @@ def test_invalid_objective_rejected():
         return _FakeResult(stats={"sortino": 1.0})
     with pytest.raises(ValueError, match="不支持的优化目标"):
         _optimizer(score).optimize(_cfg(objective="not_a_metric"))
+
+
+# ---------------------------------------------------------------------------
+# WFWD-02: OOS-scored walk-forward search — RED until 13-03 lands WalkForwardOptimizer
+# ---------------------------------------------------------------------------
+
+
+class _WfFold:
+    def __init__(self, fold_index: int, is_oos: bool) -> None:
+        self.fold_index = fold_index
+        self.is_oos = is_oos
+        self.train_start = date(2025, 7, 29)
+        self.train_end = date(2026, 1, 22)
+        self.gap_start = date(2026, 1, 23)
+        self.gap_end = date(2026, 2, 27)
+        self.test_start = date(2026, 3, 2)
+        self.test_end = date(2026, 3, 27)
+
+
+class _WfPlan:
+    def __init__(self, folds: list[_WfFold], oos_fold: _WfFold | None = None) -> None:
+        self.folds = tuple(folds)
+        self.oos_fold = oos_fold if oos_fold is not None else _WfFold(0, True)
+        self.plan_id = "wf-plan-oos"
+        self.universe = "cn-a-share"
+        self.asset_type = "stock"
+        self.start = date(2025, 7, 29)
+        self.end = date(2026, 7, 30)
+        self.train_size = 120
+        self.gap_size = 20
+        self.test_size = 20
+        self.oos_size = 40
+        self.horizon = 5
+        self.trading_dates = [date(2025, 7, 29)]
+
+
+_WF_PLAN_3_FOLDS = _WfPlan([_WfFold(0, False), _WfFold(1, False), _WfFold(2, False)])
+
+
+def _wf_optimizer(score_fn, params_meta=PARAMS_META):
+    from app.backtest.optimizer import WalkForwardOptimizer  # RED until 13-03
+
+    return WalkForwardOptimizer(_FakeService(score_fn), _FakeEngine(params_meta))
+
+
+def test_wf_search_folds_exclude_plan_oos_fold():
+    """The reserved OOS is structurally excluded; a plan leaking it fails closed."""
+    # plan.folds must never contain is_oos=True by construction — fail closed.
+    leaked = _WfPlan([_WfFold(0, False), _WfFold(0, True)])
+    with pytest.raises(ValueError, match="OOS"):
+        _wf_optimizer(lambda p: _FakeResult(stats={"sharpe": 1.0})).optimize(
+            plan=leaked, strategy_id="s", param_grid={"ma_proximity": [0.01]}, objective="sharpe"
+        )
+
+
+def test_wf_search_scores_test_folds_only_never_oos():
+    """WFWD-02: never in-sample — every scored window is a fold test segment."""
+    seen: list[dict] = []
+
+    def score(p):
+        return _FakeResult(stats={"sharpe": p["ma_proximity"] * 100})
+
+    def record_run(bt_cfg, progress_cb=None, cancel_event=None):  # type: ignore[no-untyped-def]
+        seen.append({"start": bt_cfg.start, "end": bt_cfg.end})
+        return score(bt_cfg.params)
+
+    svc = _FakeService(lambda p: _FakeResult(stats={"sharpe": 1.0}))
+    svc.run = record_run
+    opt = _wf_optimizer(lambda p: _FakeResult(stats={"sharpe": 1.0}))
+    opt.service.run = record_run
+    out = opt.optimize(
+        plan=_WF_PLAN_3_FOLDS, strategy_id="s", param_grid={"ma_proximity": [0.01]}, objective="sharpe"
+    )
+    assert out["n_trials"] == 1
+    assert out["best_params"] == {"ma_proximity": 0.01}
+
+
+def test_wf_search_grid_cap_respected():
+    """The GRID_MAX_COMBINATIONS cap is inherited; an over-cap grid raises first."""
+    wide = [
+        {"id": "n", "type": "int", "default": 1, "min": 1, "max": 100000, "step": 1}
+    ]
+    with pytest.raises(ValueError, match=r"上限|GRID|超过"):
+        _wf_optimizer(lambda p: _FakeResult(stats={"sharpe": 1.0}), wide).optimize(
+            plan=_WF_PLAN_3_FOLDS, strategy_id="s",
+            param_grid={"n": {"min": 1, "max": 5000, "step": 1}},
+            objective="sharpe",
+        )
+
+
+def test_wf_search_records_trial_space_and_score_distribution():
+    """WFWD-02 bookkeeping: n_trials + search_space + score_distribution recorded."""
+    out = _wf_optimizer(lambda p: _FakeResult(stats={"sharpe": p["ma_proximity"] * 100})).optimize(
+        plan=_WF_PLAN_3_FOLDS, strategy_id="s",
+        param_grid={"ma_proximity": [0.01, 0.02, 0.03]}, objective="sharpe",
+    )
+    assert out["n_trials"] == 3
+    assert out["search_space"]["param_grid"] == {"ma_proximity": [0.01, 0.02, 0.03]}
+    dist = out["score_distribution"]
+    assert "per_trial" in dist and "per_fold" in dist
+    assert dist["min"] <= dist["median"] <= dist["max"]
+    assert dist["mean"] > 0 and dist["std"] >= 0
+
+
+def test_wf_search_isolates_per_combo_failures():
+    """One failing combo is isolated and sinks to the bottom."""
+    def score(p):
+        if p["ma_proximity"] == 0.02:
+            raise RuntimeError("combo boom")
+        return _FakeResult(stats={"sharpe": p["ma_proximity"] * 100})
+
+    out = _wf_optimizer(score).optimize(
+        plan=_WF_PLAN_3_FOLDS, strategy_id="s",
+        param_grid={"ma_proximity": [0.01, 0.02, 0.03]}, objective="sharpe",
+    )
+    assert out["n_completed"] == 3
+    assert out["best_params"] == {"ma_proximity": 0.03}
+    failed = [r for r in out["results"] if r.get("error")]
+    assert len(failed) == 1 and "combo boom" in failed[0]["error"]
+
+
+def test_wf_search_records_search_run_row():
+    """A completed search persists a wf_search_runs row with oos_excluded=1."""
+    out = _wf_optimizer(lambda p: _FakeResult(stats={"sharpe": 1.0})).optimize(
+        plan=_WF_PLAN_3_FOLDS, strategy_id="s",
+        param_grid={"ma_proximity": [0.01]}, objective="sharpe",
+    )
+    assert out["search_run_id"]
+

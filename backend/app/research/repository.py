@@ -827,7 +827,9 @@ class ResearchRepository:
         ``oos_pinned_at`` reservation recorded BEFORE any search reuse.
         """
         plan_id = plan.plan_id
-        trading_dates = _json(list(plan.trading_dates), "trading dates")
+        trading_dates = _json(
+            [_as_iso(day) for day in plan.trading_dates], "trading dates"
+        )
         fold_geometry = _json(
             {
                 "folds": [
