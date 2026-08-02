@@ -70,7 +70,7 @@ status: complete
 
 ## Task Commits
 
-1. **Breadth test suite (green)** - `a1cf7e2` (test) — replaces the RED scaffold breadth cases with the 20 green cases.
+1. **Breadth test suite (green)** - `965d0dd` (test) — replaces the RED scaffold breadth cases with the 20 green cases.
 
 ## Files Created/Modified
 
@@ -92,7 +92,7 @@ status: complete
 - **Fix:** Corrected the expected values to the hand-computed engine.py formula references.
 - **Files modified:** backend/tests/portfolio/test_rebalance.py
 - **Verification:** all 20 tests pass.
-- **Committed in:** `a1cf7e2`
+- **Committed in:** `965d0dd`
 
 **2. [Rule 1 - Bug] Price coverage for run symbols**
 - **Found during:** breadth test authoring
@@ -100,7 +100,7 @@ status: complete
 - **Fix:** Added prices covering the run's SYM symbols.
 - **Files modified:** backend/tests/portfolio/test_rebalance.py
 - **Verification:** all 20 tests pass.
-- **Committed in:** `a1cf7e2`
+- **Committed in:** `965d0dd`
 
 ---
 
