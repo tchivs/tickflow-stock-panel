@@ -113,7 +113,8 @@ def test_list_rebalance_plans_filters_and_caps(
     for plan_id in ("rp-list-1", "rp-list-2"):
         portfolio_repository.record_rebalance_plan(**_plan_fields(run, plan_id=plan_id))
     all_plans = portfolio_repository.list_rebalance_plans()
-    assert [p["id"] for p in all_plans] == ["rp-list-2", "rp-list-1"]  # created_at DESC, id
+    # created_at is identical for both rows; the tie-break is id ASC.
+    assert [p["id"] for p in all_plans] == ["rp-list-1", "rp-list-2"]
 
     filtered = portfolio_repository.list_rebalance_plans(run_id=str(run["id"]))
     assert len(filtered) == 2

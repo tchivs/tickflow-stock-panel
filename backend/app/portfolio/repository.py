@@ -36,6 +36,8 @@ _RISK_MODELS = frozenset(
 # 加宽证据校验 (与 analyzer._RISK_MODEL_NAMES 的同步义务一致)。
 _RISK_MODELS_PHASE12 = _RISK_MODELS
 _ATTRIBUTION_TYPES = frozenset({"exposure_contribution", "drawdown"})
+_RMSE_DEFINITIONS = frozenset({"simple", "weighted"})
+_PAPER_TRANSITIONS = frozenset({"suggested", "approved", "rejected", "filled"})
 
 
 # 每个 run 的 immutable 事实用确定性 JSON 序列化 (排序键 + 紧凑分隔符), 与
@@ -82,6 +84,38 @@ def _record_evidence(row: sqlite3.Row | dict[str, Any] | None) -> dict[str, Any]
     value = dict(row)
     if value.get("reconciliation_json") is not None:
         value["reconciliation"] = json.loads(value.pop("reconciliation_json"))
+    return value
+
+
+def _record_rebalance(row: sqlite3.Row | dict[str, Any] | None) -> dict[str, Any] | None:
+    """Un-wrap a rebalance_plans row: the four *_json columns → documented names.
+
+    Accepts either a sqlite3.Row (from a SELECT) or a plain dict (e.g. a row
+    already materialized by list_rebalance_plans). Mirrors ``_record``.
+    """
+    if row is None:
+        return None
+    value = dict(row)
+    for column, target in (
+        ("target_weights_json", "target_weights"),
+        ("discrete_weights_json", "discrete_weights"),
+        ("lot_sizes_json", "lot_sizes"),
+        ("blocked_instruments_json", "blocked_instruments"),
+    ):
+        if column in value and value[column] is not None:
+            value[target] = json.loads(value.pop(column))
+    return value
+
+
+def _record_paper_transition(
+    row: sqlite3.Row | dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Un-wrap a paper_rebalance_transitions row: delta_json → paper_position_delta."""
+    if row is None:
+        return None
+    value = dict(row)
+    if value.get("paper_position_delta_json") is not None:
+        value["paper_position_delta"] = json.loads(value.pop("paper_position_delta_json"))
     return value
 
 
@@ -337,6 +371,266 @@ class PortfolioRepository:
             if unwrapped is not None
         ]
 
+    # ================================================================
+    # Rebalance plans + paper-rebalance transition ledger (14-02, RBAL-01/02)
+    # ================================================================
+    # rebalance_plans 与 paper_rebalance_transitions 都是 append-only 审计
+    # 台账: 写入面只有 INSERT, 读取面是 get/list + 派生状态。幂等键是 DB 的
+    # UNIQUE (plan_id, transition); IntegrityError → ValueError 映射是本仓库
+    # 首次引入 (镜像 research/repository.py create_experiment), 保证调用方拿到
+    # 一致的业务异常而非裸 sqlite3 错误。
+
+    def record_rebalance_plan(self, **fields: Any) -> dict[str, Any]:
+        """Append one immutable RebalancePlan row (RBAL-01).
+
+        Validates the sha256 bindings (input/output, 64-hex), the rmse_definition
+        enum, and required fields before INSERT; the four JSON columns are
+        canonicalized via ``_json``. A duplicate plan id or a missing
+        optimization run raises ValueError (sqlite3.IntegrityError mapped).
+        Returns the stored record with JSON columns un-wrapped.
+        """
+        required = {
+            "id",
+            "optimization_run_id",
+            "input_snapshot_sha256",
+            "as_of",
+            "target_weights_json",
+            "discrete_weights_json",
+            "lot_sizes_json",
+            "cash_residue",
+            "turnover_cost",
+            "blocked_instruments_json",
+            "discretization_rmse",
+            "rmse_definition",
+            "expires_at",
+            "output_sha256",
+            "artifact_relative_path",
+            "created_at",
+        }
+        missing = sorted(required - set(fields))
+        if missing:
+            raise ValueError(f"missing required rebalance plan fields: {', '.join(missing)}")
+
+        for column in ("input_snapshot_sha256", "output_sha256"):
+            if not _SHA256.fullmatch(str(fields[column])):
+                raise ValueError(f"{column} must be a lowercase SHA-256 hex digest")
+        rmse_definition = fields["rmse_definition"]
+        if rmse_definition not in _RMSE_DEFINITIONS:
+            raise ValueError(f"unknown rmse_definition: {rmse_definition}")
+        if not fields.get("expires_at"):
+            raise ValueError("expires_at is required")
+
+        columns = [
+            "id",
+            "optimization_run_id",
+            "input_snapshot_sha256",
+            "as_of",
+            "target_weights_json",
+            "discrete_weights_json",
+            "lot_sizes_json",
+            "cash_residue",
+            "turnover_cost",
+            "blocked_instruments_json",
+            "discretization_rmse",
+            "rmse_definition",
+            "expires_at",
+            "output_sha256",
+            "artifact_relative_path",
+            "created_at",
+        ]
+        serialized = dict(fields)
+        for column in (
+            "target_weights_json",
+            "discrete_weights_json",
+            "lot_sizes_json",
+            "blocked_instruments_json",
+        ):
+            serialized[column] = _json(serialized[column], column)
+        values = [serialized.get(column) for column in columns]
+        with self._connection() as connection, connection:
+            try:
+                connection.execute(
+                    f"INSERT INTO rebalance_plans ({', '.join(columns)}) "
+                    f"VALUES ({', '.join('?' * len(columns))})",
+                    values,
+                )
+            except sqlite3.IntegrityError as error:
+                if "UNIQUE" in str(error) or "PRIMARY KEY" in str(error):
+                    raise ValueError(f"duplicate rebalance plan: {fields['id']}") from error
+                raise ValueError(
+                    f"optimization run does not exist: {fields['optimization_run_id']}"
+                ) from error
+            row = connection.execute(
+                "SELECT * FROM rebalance_plans WHERE id = ?", (fields["id"],)
+            ).fetchone()
+        return _record_rebalance(row)  # type: ignore[return-value]
+
+    def get_rebalance_plan(self, plan_id: str) -> dict[str, Any] | None:
+        """Return one rebalance plan by id with the four JSON columns un-wrapped."""
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM rebalance_plans WHERE id = ?", (plan_id,)
+            ).fetchone()
+        return _record_rebalance(row)
+
+    def list_rebalance_plans(
+        self,
+        *,
+        run_id: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """List rebalance plans ordered by created_at DESC, id; optional run filter.
+
+        Phase 15 API 面: limit 上限 (默认 200) 防止无界读取; run_id 为可选
+        等式过滤 (绑定该 Phase 11 run 的全部计划)。JSON 列经 _record_rebalance
+        展开, 与 get_rebalance_plan 同构。
+        """
+        if not isinstance(limit, int) or limit < 1:
+            raise ValueError("limit must be a positive integer")
+        clauses: list[str] = []
+        parameters: list[Any] = []
+        if run_id is not None:
+            clauses.append("optimization_run_id = ?")
+            parameters.append(run_id)
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        with self._connection() as connection:
+            rows = connection.execute(
+                f"SELECT * FROM rebalance_plans{where} "
+                "ORDER BY created_at DESC, id LIMIT ?",
+                [*parameters, limit],
+            ).fetchall()
+        records = [dict(row) for row in rows]
+        return [
+            unwrapped
+            for unwrapped in (_record_rebalance(record) for record in records)
+            if unwrapped is not None
+        ]
+
+    def record_paper_transition(
+        self,
+        *,
+        plan_id: str,
+        transition: str,
+        idempotency_key: str,
+        previous_state: str | None = None,
+        paper_position_delta_json: object | None = None,
+    ) -> dict[str, Any]:
+        """Append one paper-rebalance audit fact (RBAL-02), idempotent by key.
+
+        UNIQUE (plan_id, transition) enforces exactly-once semantics: a repeated
+        transition with the SAME idempotency_key returns the existing row; a
+        repeated transition with a DIFFERENT key raises ValueError (the caller
+        is re-issuing the same state transition under a new intent). The
+        transition enum is validated before INSERT.
+        """
+        if transition not in _PAPER_TRANSITIONS:
+            raise ValueError(f"unknown paper transition: {transition}")
+        if not isinstance(idempotency_key, str) or not idempotency_key:
+            raise ValueError("idempotency_key is required")
+
+        existing = self._find_paper_transition(plan_id, transition)
+        if existing is not None:
+            if existing["idempotency_key"] != idempotency_key:
+                raise ValueError(
+                    f"paper transition {transition!r} for plan {plan_id!r} already exists "
+                    "with a different idempotency key"
+                )
+            return existing
+
+        delta = (
+            _json(paper_position_delta_json, "paper_position_delta_json")
+            if paper_position_delta_json is not None
+            else None
+        )
+        with self._connection() as connection, connection:
+            try:
+                connection.execute(
+                    "INSERT INTO paper_rebalance_transitions "
+                    "(plan_id, transition, idempotency_key, previous_state, "
+                    " paper_position_delta_json, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (plan_id, transition, idempotency_key, previous_state, delta, _now()),
+                )
+            except sqlite3.IntegrityError as error:
+                if "FOREIGN KEY" in str(error):
+                    raise ValueError(
+                        f"rebalance plan does not exist: {plan_id}"
+                    ) from error
+                raise ValueError(
+                    f"paper transition {transition!r} for plan {plan_id!r} already exists "
+                    "with a different idempotency key"
+                ) from error
+            row = connection.execute(
+                "SELECT * FROM paper_rebalance_transitions "
+                "WHERE plan_id = ? AND transition = ?",
+                (plan_id, transition),
+            ).fetchone()
+        return _record_paper_transition(row)  # type: ignore[return-value]
+
+    def get_paper_state(self, plan_id: str) -> str | None:
+        """Derive the current paper state from the max-ordinal transition row.
+
+        ``paper_rebalance_transitions.id`` is an INTEGER PRIMARY KEY whose
+        ordering is insertion order, so the max id is the latest transition.
+        Returns None when the plan has no transitions yet.
+        """
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT transition FROM paper_rebalance_transitions "
+                "WHERE plan_id = ? ORDER BY id DESC LIMIT 1",
+                (plan_id,),
+            ).fetchone()
+        return str(row[0]) if row is not None else None
+
+    def list_paper_transitions(
+        self,
+        *,
+        plan_id: str | None = None,
+        transition: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """List paper transitions ordered by id; optional plan/transition filters.
+
+        JSON 列 (paper_position_delta_json) 经 _record_paper_transition 展开为
+        paper_position_delta, 与 get_paper_state 的派生口径一致。limit 必须为
+        正整数, 否则 fail closed。
+        """
+        if not isinstance(limit, int) or limit < 1:
+            raise ValueError("limit must be a positive integer")
+        if transition is not None and transition not in _PAPER_TRANSITIONS:
+            raise ValueError(f"unknown paper transition: {transition}")
+        clauses: list[str] = []
+        parameters: list[Any] = []
+        if plan_id is not None:
+            clauses.append("plan_id = ?")
+            parameters.append(plan_id)
+        if transition is not None:
+            clauses.append("transition = ?")
+            parameters.append(transition)
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        with self._connection() as connection:
+            rows = connection.execute(
+                f"SELECT * FROM paper_rebalance_transitions{where} ORDER BY id LIMIT ?",
+                [*parameters, limit],
+            ).fetchall()
+        records = [dict(row) for row in rows]
+        return [
+            unwrapped
+            for unwrapped in (_record_paper_transition(record) for record in records)
+            if unwrapped is not None
+        ]
+
+    def _find_paper_transition(
+        self, plan_id: str, transition: str
+    ) -> dict[str, Any] | None:
+        """Read one transition row by its UNIQUE (plan_id, transition) key."""
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM paper_rebalance_transitions "
+                "WHERE plan_id = ? AND transition = ?",
+                (plan_id, transition),
+            ).fetchone()
+        return _record_paper_transition(row)
     @staticmethod
     def _validate_run_fields(fields: dict[str, Any]) -> None:
         """Enforce PFOL-04 invariants before any INSERT (fail fast, clear message)."""
