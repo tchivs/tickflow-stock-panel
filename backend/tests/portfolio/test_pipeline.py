@@ -11,6 +11,7 @@ contribution → HARD sum(MC) == variance reconciliation → O_EXCL analysis art
 the drawdown identity path (underwater curve + empty periods + evidence row) is
 wired end-to-end; tampered covariance bytes fail closed with no evidence written.
 """
+
 from __future__ import annotations
 
 import json
@@ -21,7 +22,6 @@ import pytest
 
 from app.portfolio.analyzer import run_attribution, run_drawdown
 from app.portfolio.artifacts import ArtifactReadError, ArtifactWriteError, PortfolioArtifactService
-from app.portfolio.attribution import marginal_contributions, portfolio_variance
 from app.portfolio.optimizer import run_optimization
 from app.portfolio.repository import PortfolioRepository
 
@@ -130,12 +130,14 @@ def test_attribution_spine_end_to_end_on_fixture_run(
     assert np.isclose(
         evidence["reconciliation"]["portfolio_variance"], expected_variance, rtol=1e-12
     )
-    mc = np.asarray(list(evidence["reconciliation"]["marginal_contributions"].values())) if "marginal_contributions" in evidence["reconciliation"] else None
     # evidence reconciliation carries the variance decomposition summary.
-    assert abs(
-        evidence["reconciliation"]["sum_contributions"]
-        - evidence["reconciliation"]["portfolio_variance"]
-    ) <= 1e-12 * expected_variance
+    assert (
+        abs(
+            evidence["reconciliation"]["sum_contributions"]
+            - evidence["reconciliation"]["portfolio_variance"]
+        )
+        <= 1e-12 * expected_variance
+    )
     # artifact read-back checksum-verifies and reconciles to the same variance.
     payload = json.loads(
         service.read_artifact(

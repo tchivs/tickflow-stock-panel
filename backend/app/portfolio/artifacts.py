@@ -8,6 +8,7 @@ sha256 校验和, 读取时校验和必须匹配 (镜像 research/artifacts.py:_
 不知道: 求解逻辑 (optimizer.py)、风险模型 (risk.py)、运行记录
 (repository.py 持有 run 行与 output_sha256)。
 """
+
 from __future__ import annotations
 
 import json
@@ -81,7 +82,9 @@ class PortfolioArtifactService:
         try:
             namespace.mkdir(parents=True, exist_ok=False)
         except FileExistsError as error:
-            raise ArtifactWriteError(f"artifact namespace already exists for run {run_id}") from error
+            raise ArtifactWriteError(
+                f"artifact namespace already exists for run {run_id}"
+            ) from error
         except OSError as error:
             raise ArtifactWriteError(f"could not create artifact namespace: {error}") from error
 

@@ -7,6 +7,7 @@ append-only 写入/查询方法由 11-01 补齐。
 不知道: 求解逻辑 (optimizer.py)、风险模型 (risk.py)、工件存储 (artifacts.py)、
 市场时间序列 (留在 lake)。
 """
+
 from __future__ import annotations
 
 import json
@@ -203,8 +204,7 @@ class PortfolioRepository:
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         with self._connection() as connection:
             rows = connection.execute(
-                f"SELECT * FROM portfolio_optimization_runs{where} "
-                "ORDER BY created_at, id LIMIT ?",
+                f"SELECT * FROM portfolio_optimization_runs{where} ORDER BY created_at, id LIMIT ?",
                 [*parameters, limit],
             ).fetchall()
         records = [dict(row) for row in rows]
@@ -372,10 +372,16 @@ class PortfolioRepository:
         # failed / solver_error ⇔ failure_reason 不变量 (DB CHECK 镜像, 失败信息更友好)。
         failure_reason = fields.get("failure_reason")
         if status in {"failed", "solver_error"} and not failure_reason:
-            raise ValueError("failure_reason is required when problem_status is failed or solver_error")
+            raise ValueError(
+                "failure_reason is required when problem_status is failed or solver_error"
+            )
         if status not in {"failed", "solver_error"} and failure_reason is not None:
-            raise ValueError("failure_reason must be NULL unless problem_status is failed or solver_error")
+            raise ValueError(
+                "failure_reason must be NULL unless problem_status is failed or solver_error"
+            )
 
         # model_id 不变量: composite-zscore-v1 必须携带 model_id (仓库层强制)。
         if method == "composite-zscore-v1" and not fields.get("model_id"):
-            raise ValueError("model_id is required when expected_return_method is composite-zscore-v1")
+            raise ValueError(
+                "model_id is required when expected_return_method is composite-zscore-v1"
+            )

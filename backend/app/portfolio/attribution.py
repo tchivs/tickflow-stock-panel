@@ -9,9 +9,11 @@ MC_i = w_i·(Σw)_i (与暴露同一乘积向量, 语义为方差分解)、以�
 不知道: 求解逻辑 (optimizer.py)、风险模型构建 (risk.py)、工件存储
 (artifacts.py)、仓库 (repository.py)、市场时间序列 (留在 lake)。
 """
+
 from __future__ import annotations
 
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 import numpy as np
 
@@ -108,9 +110,7 @@ def reconcile_attribution(
     error = float(abs(sum_contributions - var))
     return {
         "portfolio_variance": var,
-        "marginal_contributions": {
-            key: float(value) for key, value in zip(keys, mc, strict=True)
-        },
+        "marginal_contributions": {key: float(value) for key, value in zip(keys, mc, strict=True)},
         "sum_contributions": sum_contributions,
         "reconciliation_error": error,
         "max_abs_error": error,
