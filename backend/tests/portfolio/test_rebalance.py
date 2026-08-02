@@ -613,6 +613,150 @@ def test_build_rebalance_plan_fails_closed_on_missing_run(
         )
 
 
+def _record_run_like(
+    portfolio_repository: PortfolioRepository, run: dict[str, object], *, run_id: str
+) -> dict[str, object]:
+    """Record a copy of a fixture run under a new id with DB-column field names."""
+    return portfolio_repository.record_optimization_run(
+        id=run_id,
+        objective=str(run["objective"]),
+        as_of=str(run["as_of"]),
+        universe=str(run["universe"]),
+        model_id=run.get("model_id"),
+        composite_snapshot_id=run.get("composite_snapshot_id"),
+        input_snapshot_sha256=str(run["input_snapshot_sha256"]),
+        expected_return_method=str(run["expected_return_method"]),
+        risk_model=str(run["risk_model"]),
+        risk_model_json=run.get("risk_model_detail"),
+        constraint_stack_json=run.get("constraint_stack"),
+        solver_name=str(run.get("solver_name")),
+        solver_version=str(run.get("solver_version")),
+        solver_options_json=run.get("solver_options"),
+        problem_status=str(run["problem_status"]),
+        failure_reason=run.get("failure_reason"),
+        output_weights_json=run.get("output_weights"),
+        output_sha256=run.get("output_sha256"),
+        weights_artifact_relative_path=run.get("weights_artifact_relative_path"),
+        baseline_weights_json=run.get("baseline_weights"),
+        created_at=str(run["created_at"]),
+    )
+
+
+def test_build_rebalance_plan_fails_closed_on_non_optimal_run(
+    portfolio_repository: PortfolioRepository,
+    fixture_rebalance_run: dict[str, object],
+    fixture_plan_inputs: dict[str, object],
+) -> None:
+    """A run whose problem_status != optimal fails closed (mirrors analyzer L92-95)."""
+    run = fixture_rebalance_run
+    failed = dict(run)
+    failed["id"] = "run-failed"
+    failed["problem_status"] = "solver_error"
+    failed["failure_reason"] = "infeasible"
+    failed["output_weights"] = {}
+    _record_run_like(portfolio_repository, failed, run_id="run-failed")
+
+    prices = _run_prices(run)
+    equity = float(fixture_plan_inputs["equity"])
+    matcher_config = fixture_plan_inputs["matcher_config"]
+    with pytest.raises(ValueError, match="problem_status must be optimal"):
+        build_rebalance_plan(
+            run_id="run-failed",
+            prices=prices,
+            equity=equity,
+            matcher_config=matcher_config,
+            repository=portfolio_repository,
+            artifact_service_root=Path("."),
+        )
+
+
+def test_build_rebalance_plan_fails_closed_on_empty_output_weights(
+    portfolio_repository: PortfolioRepository,
+    fixture_rebalance_run: dict[str, object],
+    fixture_plan_inputs: dict[str, object],
+) -> None:
+    """An optimal run with EMPTY output_weights fails closed (no silent empty plan)."""
+    run = fixture_rebalance_run
+    empty = dict(run)
+    empty["id"] = "run-empty"
+    empty["output_weights"] = {}
+    _record_run_like(portfolio_repository, empty, run_id="run-empty")
+
+    prices = _run_prices(run)
+    equity = float(fixture_plan_inputs["equity"])
+    matcher_config = fixture_plan_inputs["matcher_config"]
+    with pytest.raises(ValueError, match="no output weights"):
+        build_rebalance_plan(
+            run_id="run-empty",
+            prices=prices,
+            equity=equity,
+            matcher_config=matcher_config,
+            repository=portfolio_repository,
+            artifact_service_root=Path("."),
+        )
+
+
+def test_load_rebalance_plan_checksum_verified_read(
+    portfolio_repository: PortfolioRepository,
+    artifact_root: Path,
+    fixture_rebalance_run: dict[str, object],
+    fixture_plan_inputs: dict[str, object],
+) -> None:
+    """A tampered artifact file fails the checksum gate (ArtifactReadError)."""
+    from app.portfolio.artifacts import ArtifactReadError
+
+    prices = _run_prices(fixture_rebalance_run)
+    equity = float(fixture_plan_inputs["equity"])
+    matcher_config = fixture_plan_inputs["matcher_config"]
+    plan = build_rebalance_plan(
+        run_id=str(fixture_rebalance_run["id"]),
+        prices=prices,
+        equity=equity,
+        matcher_config=matcher_config,
+        blocked=set(fixture_plan_inputs["blocked"]),
+        repository=portfolio_repository,
+        artifact_service_root=artifact_root,
+    )
+    # valid read returns verified bytes
+    loaded = load_rebalance_plan(
+        plan.plan_id, repository=portfolio_repository, artifact_service_root=artifact_root
+    )
+    assert loaded["plan"]["id"] == plan.plan_id
+    # tamper the artifact file on disk -> checksum mismatch raises
+    artifact_path = Path(artifact_root) / plan.artifact_relative_path
+    artifact_path.write_text('{"tampered": true}', encoding="utf-8")
+    with pytest.raises(ArtifactReadError, match="checksum mismatch"):
+        load_rebalance_plan(
+            plan.plan_id, repository=portfolio_repository, artifact_service_root=artifact_root
+        )
+
+
+def test_get_rebalance_plan_unwraps_all_json_columns_and_blocked_verbatim(
+    portfolio_repository: PortfolioRepository,
+    fixture_rebalance_run: dict[str, object],
+) -> None:
+    """get_rebalance_plan returns the FULL unwrapped record; blocked round-trips verbatim."""
+    run = fixture_rebalance_run
+    fields = _plan_fields(run, plan_id="rp-unwrap")
+    fields["blocked_instruments_json"] = ["600002.SH", "600009.SH"]
+    fields["target_weights_json"] = {"600000.SH": 0.5, "600001.SH": 0.3, "600003.SH": 0.2}
+    fields["lot_sizes_json"] = {"600000.SH": 5000, "600001.SH": 3000, "600003.SH": 2000}
+    portfolio_repository.record_rebalance_plan(**fields)
+
+    row = portfolio_repository.get_rebalance_plan("rp-unwrap")
+    assert row is not None
+    assert row["target_weights"] == fields["target_weights_json"]
+    assert row["discrete_weights"] == fields["discrete_weights_json"]
+    assert row["lot_sizes"] == fields["lot_sizes_json"]
+    assert row["blocked_instruments"] == fields["blocked_instruments_json"]
+    assert row["cash_residue"] == fields["cash_residue"]
+    assert row["discretization_rmse"] == fields["discretization_rmse"]
+    assert row["rmse_definition"] == "simple"
+    assert row["output_sha256"] == fields["output_sha256"]
+    assert row["artifact_relative_path"] == fields["artifact_relative_path"]
+    assert row["input_snapshot_sha256"] == fields["input_snapshot_sha256"]
+
+
 # ================================================================
 # 14-01 tracer: end-to-end RebalancePlan → paper-rebalance spine
 # ================================================================

@@ -135,6 +135,46 @@ def test_list_paper_transitions_filters_and_caps(
         portfolio_repository.list_paper_transitions(transition="executed")
 
 
+def test_get_paper_state_rejected_terminal_and_filled(
+    portfolio_repository: PortfolioRepository,
+    fixture_rebalance_run: dict[str, object],
+) -> None:
+    """get_paper_state derives the current state after each transition; rejected is terminal."""
+    _record_plan(portfolio_repository, fixture_rebalance_run)
+    assert portfolio_repository.get_paper_state("paper-plan-1") is None
+    portfolio_repository.record_paper_transition(
+        plan_id="paper-plan-1", transition="suggested", idempotency_key="key-1"
+    )
+    assert portfolio_repository.get_paper_state("paper-plan-1") == "suggested"
+    portfolio_repository.record_paper_transition(
+        plan_id="paper-plan-1",
+        transition="approved",
+        idempotency_key="key-2",
+        previous_state="suggested",
+    )
+    assert portfolio_repository.get_paper_state("paper-plan-1") == "approved"
+    portfolio_repository.record_paper_transition(
+        plan_id="paper-plan-1",
+        transition="filled",
+        idempotency_key="key-3",
+        previous_state="approved",
+        paper_position_delta_json={"600000.SH": 5000},
+    )
+    assert portfolio_repository.get_paper_state("paper-plan-1") == "filled"
+    # a second plan going through reject stays terminal at rejected
+    _record_plan(portfolio_repository, fixture_rebalance_run, plan_id="paper-plan-2")
+    portfolio_repository.record_paper_transition(
+        plan_id="paper-plan-2", transition="suggested", idempotency_key="k1"
+    )
+    portfolio_repository.record_paper_transition(
+        plan_id="paper-plan-2",
+        transition="rejected",
+        idempotency_key="k2",
+        previous_state="suggested",
+    )
+    assert portfolio_repository.get_paper_state("paper-plan-2") == "rejected"
+
+
 # ================================================================
 # State-machine module contracts (14-01) — RED until the module lands
 # ================================================================
