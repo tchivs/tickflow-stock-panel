@@ -85,9 +85,9 @@ def test_underwater_curve_rejects_returns_at_or_below_minus_one() -> None:
     """WR-02: a return of -1.0 (or lower) drives equity to zero/negative — the
     resulting NaN/infinite underwater curve is rejected with ValueError instead
     of being silently skipped by drawdown_periods."""
-    with pytest.raises(ValueError, match="greater than -1.0"):
+    with pytest.raises(ValueError, match=r"greater than -1\.0"):
         underwater_curve(np.array([0.0, -1.0]))
-    with pytest.raises(ValueError, match="greater than -1.0"):
+    with pytest.raises(ValueError, match=r"greater than -1\.0"):
         underwater_curve(np.array([0.5, -1.5]))
     # The boundary: a -0.999... return stays finite and is accepted.
     curve = underwater_curve(np.array([0.0, -0.9999, 0.5]))
