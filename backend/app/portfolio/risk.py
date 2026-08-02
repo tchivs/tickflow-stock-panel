@@ -22,7 +22,7 @@ from typing import Any
 
 import numpy as np
 
-from app.portfolio.artifacts import PortfolioArtifactService
+from app.portfolio.artifacts import ArtifactReadError, PortfolioArtifactService
 from app.portfolio.constraints import PSD_EPSILON_DEFAULT
 
 
@@ -49,7 +49,11 @@ def semi_covariance(returns: np.ndarray, *, benchmark: str = "mean") -> np.ndarr
     the benchmark (min with 0 after subtraction) and forming the Gram matrix of
     the truncated panel, normalized by the observation count — the PyPortfolioOpt
     ``risk_models.semicovariance`` contract as design spec (never a runtime
-    dependency). A degenerate subset (fewer observations than assets) still
+    dependency). Normalization divides by ``drops.shape[0]`` — the count of ALL
+    common-window observations, NOT the subset of below-benchmark rows
+    (PyPortfolioOpt contract; IN-07 — 12-03 plan's "subset observation count"
+    wording is a plan-side discrepancy, the implementation/test contract is
+    authoritative). A degenerate subset (fewer observations than assets) still
     returns a finite covariance; the PSD gate downstream records any
     near-degeneracy repair with provenance.
 
@@ -82,6 +86,17 @@ def ewma_covariance(returns: np.ndarray, *, lam: float = 0.94, adjust: bool = Tr
     ``(1 - lam)`` weight (weight sum ``1 - lam^t``). λ=0.94 is the RiskMetrics
     default. ``lam=1.0`` degenerates to the sample covariance on the common
     window (documented test contract — recovers ``np.cov`` on demeaned data).
+
+    Note for Phase 13 consumers (IN-01):
+      * Discontinuity — ``lam == 1.0`` is a special-cased jump, NOT the recursion
+        limit. As ``lam → 1⁻`` the recursion limit is ``outer(r_1, r_1)`` (the
+        first observation alone), while the special case returns ``np.cov`` on
+        the common window. The two disagree, so walk-forward code must not treat
+        ``lam`` as continuously interpolating toward the sample covariance.
+      * Non-demeaned — the recursion uses RAW returns (``outer(r_t, r_t)``), so
+        the result is a second-moment matrix ``E[r rᵀ]`` (includes the mean²
+        term), NOT a covariance about the mean. It matches the sample
+        covariance only on demeaned data (see the test contract).
 
     Args:
         returns: (n_obs, n_assets) 收益率矩阵。
@@ -310,15 +325,20 @@ def load_covariance_artifact(run: dict[str, Any], artifact_service_root: Path) -
         (n, n) 协方差矩阵 (工件字节经 8 位小数规范化序列化)。
 
     Raises:
-        ArtifactReadError: 工件缺失 / 路径逃逸 / checksum 不匹配。
+        ArtifactReadError: 工件缺失 / 路径逃逸 / checksum 不匹配 / 协方差元数据
+            缺失 (risk_model_detail 缺 covariance_artifact_relative_path 或
+            covariance_sha256 —— 例如手工插入行或 Phase 11 早期 run)。
         ValueError: 工件解码后不是方阵。
     """
     risk_model = run["risk_model_detail"]
+    # IN-02: 用 .get() 而非直接下标 —— 缺元数据的 run 抛 ArtifactReadError
+    # (文档化错误类型), 而不是 KeyError。
+    artifact_path = risk_model.get("covariance_artifact_relative_path")
+    checksum = risk_model.get("covariance_sha256")
+    if not artifact_path or not checksum:
+        raise ArtifactReadError("covariance artifact metadata missing")
     service = PortfolioArtifactService(artifact_service_root)
-    content = service.read_artifact(
-        risk_model["covariance_artifact_relative_path"],
-        checksum_sha256=risk_model["covariance_sha256"],
-    )
+    content = service.read_artifact(artifact_path, checksum_sha256=checksum)
     matrix = np.asarray(json.loads(content.decode("utf-8")), dtype=float)
     if matrix.ndim != 2 or matrix.shape[0] != matrix.shape[1]:
         raise ValueError("covariance artifact must decode to a square matrix")

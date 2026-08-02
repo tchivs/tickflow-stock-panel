@@ -348,6 +348,25 @@ def test_tampered_covariance_fails_closed_with_no_evidence_row(
     assert len(portfolio_repository.list_attribution_evidence(run_id=run_id)) == count_before
 
 
+def test_run_attribution_missing_covariance_metadata_fails_closed(
+    artifact_root: Path,
+    fixture_attribution_run: dict[str, object],
+) -> None:
+    """IN-02: a run whose risk_model_detail lacks the covariance metadata raises
+    ArtifactReadError (documented error type), NOT KeyError."""
+    from app.portfolio.risk import load_covariance_artifact
+
+    run = dict(fixture_attribution_run)
+    # Drop the covariance metadata keys the seam expects (hand-inserted / legacy row).
+    detail = dict(run["risk_model_detail"])
+    detail.pop("covariance_artifact_relative_path", None)
+    detail.pop("covariance_sha256", None)
+    run["risk_model_detail"] = detail
+
+    with pytest.raises(ArtifactReadError, match="covariance artifact metadata missing"):
+        load_covariance_artifact(run, artifact_service_root=artifact_root)
+
+
 # ---------------------------------------------------------------------------
 # 12-05 breadth — cross-model attribution + reconciliation matrix
 # ---------------------------------------------------------------------------
