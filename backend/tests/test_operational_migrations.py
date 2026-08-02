@@ -908,3 +908,136 @@ def test_phase12_rebuild_preserves_phase11_run_rows(
         f"'{'c' * 64}', 'research_artifacts/run-id/attribution.json', "
         "'{\"portfolio_variance\":1.0}', '2026-08-01T00:00:00Z')"
     )
+
+
+def _rebalance_plan_row(
+    plan_id: str = "rebalance-plan-1",
+    *,
+    run_id: str = "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+    input_sha256: str | None = None,
+    rmse_definition: str = "simple",
+    output_sha256: str | None = None,
+) -> str:
+    """Build a valid rebalance_plans INSERT statement (run FK row must exist)."""
+    return (
+        "INSERT INTO rebalance_plans (id, optimization_run_id, input_snapshot_sha256, as_of, "
+        "target_weights_json, discrete_weights_json, lot_sizes_json, cash_residue, turnover_cost, "
+        "blocked_instruments_json, discretization_rmse, rmse_definition, expires_at, output_sha256, "
+        "artifact_relative_path, created_at) "
+        "VALUES ("
+        f"'{plan_id}', '{run_id}', "
+        f"'{input_sha256 if input_sha256 is not None else '1' * 64}', "
+        "'2026-08-01', '{\"600000.SH\":0.5}', '{\"600000.SH\":0.5}', "
+        "'{\"600000.SH\":100}', 1000.0, 12.5, '[]', 0.01, "
+        f"'{rmse_definition}', '2026-08-08T00:00:00Z', "
+        f"'{output_sha256 if output_sha256 is not None else 'a' * 64}', "
+        "'research_artifacts/rebalance-plan-1/rebalance.json', '2026-08-01T00:00:00Z')"
+    )
+
+
+def _paper_transition_row(
+    transition_id: int = 1,
+    *,
+    plan_id: str = "rebalance-plan-1",
+    transition: str = "suggested",
+    idempotency_key: str = "key-1",
+) -> str:
+    """Build a valid paper_rebalance_transitions INSERT statement."""
+    return (
+        "INSERT INTO paper_rebalance_transitions (id, plan_id, transition, idempotency_key, "
+        "previous_state, paper_position_delta_json, created_at) "
+        "VALUES ("
+        f"{transition_id}, '{plan_id}', '{transition}', '{idempotency_key}', "
+        "NULL, NULL, '2026-08-01T00:00:00Z')"
+    )
+
+
+def test_phase14_rebalance_tables_migrate_with_constraints_and_idempotence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """rebalance_plans + paper_rebalance_transitions: CHECKs + sha256 + FK + triggers."""
+    planned = migrations.MIGRATIONS
+    r14_index = next(
+        index
+        for index, script in enumerate(planned)
+        if "CREATE TABLE rebalance_plans" in script
+    )
+    connection = sqlite3.connect(":memory:")
+    connection.execute("PRAGMA foreign_keys = ON")
+
+    # Forward-only: tables absent before the Phase 14 script, present after.
+    monkeypatch.setattr(migrations, "MIGRATIONS", planned[:r14_index])
+    migrations.migrate_operational_db(connection)
+    assert connection.execute("PRAGMA user_version").fetchone() == (r14_index,)
+    assert (
+        connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'rebalance_plans'"
+        ).fetchone()
+        is None
+    )
+
+    monkeypatch.setattr(migrations, "MIGRATIONS", planned)
+    migrations.migrate_operational_db(connection)
+    assert connection.execute("PRAGMA user_version").fetchone() == (len(planned),)
+    for table in ("rebalance_plans", "paper_rebalance_transitions"):
+        assert (
+            connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
+            ).fetchone()
+            is not None
+        )
+    migrations.migrate_operational_db(connection)  # idempotent no-op
+    assert connection.execute("PRAGMA user_version").fetchone() == (len(planned),)
+
+    # --- rebalance_plans: valid row + CHECK enums + sha256 lengths + FK + PK. ---
+    _insert_phase11_model(connection)
+    connection.execute(_run_row())
+    connection.execute(_rebalance_plan_row())
+    with pytest.raises(sqlite3.IntegrityError):  # rmse_definition CHECK enum
+        connection.execute(_rebalance_plan_row(plan_id="rp-bad-rmse").replace("'simple'", "'squared'"))
+    with pytest.raises(sqlite3.IntegrityError):  # input_snapshot_sha256 length CHECK
+        connection.execute(
+            _rebalance_plan_row(plan_id="rp-bad-in-sha").replace("'" + "1" * 64 + "'", "'short'")
+        )
+    with pytest.raises(sqlite3.IntegrityError):  # output_sha256 length CHECK
+        connection.execute(
+            _rebalance_plan_row(plan_id="rp-bad-out-sha").replace("'" + "a" * 64 + "'", "'short'")
+        )
+    with pytest.raises(sqlite3.IntegrityError):  # FK RESTRICT: optimization_run_id must exist
+        connection.execute(_rebalance_plan_row(plan_id="rp-missing-run", run_id="missing-run-id"))
+    with pytest.raises(sqlite3.IntegrityError):  # duplicate plan id -> PK conflict
+        connection.execute(_rebalance_plan_row(plan_id="rebalance-plan-1"))
+
+    # --- paper_rebalance_transitions: FK + transition enum + UNIQUE idempotency. ---
+    connection.execute(_paper_transition_row())
+    with pytest.raises(sqlite3.IntegrityError):  # FK RESTRICT: plan_id must exist
+        connection.execute(
+            _paper_transition_row(transition_id=2, plan_id="missing-plan", transition="suggested")
+        )
+    with pytest.raises(sqlite3.IntegrityError):  # transition enum CHECK
+        connection.execute(
+            _paper_transition_row(
+                transition_id=3, plan_id="rebalance-plan-1", transition="pending"
+            )
+        )
+    with pytest.raises(sqlite3.IntegrityError):  # UNIQUE (plan_id, transition) idempotency
+        connection.execute(
+            _paper_transition_row(
+                transition_id=4, plan_id="rebalance-plan-1", transition="suggested"
+            )
+        )
+    connection.execute(  # a distinct transition is allowed under the same plan
+        _paper_transition_row(
+            transition_id=5, plan_id="rebalance-plan-1", transition="approved", idempotency_key="key-2"
+        )
+    )
+
+    # --- Immutability triggers: UPDATE/DELETE raise on both tables. ---
+    for table, where in (
+        ("rebalance_plans", "id = 'rebalance-plan-1'"),
+        ("paper_rebalance_transitions", "id = 1"),
+    ):
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(f"UPDATE {table} SET created_at = 'x' WHERE {where}")
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(f"DELETE FROM {table} WHERE {where}")
