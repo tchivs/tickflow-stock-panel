@@ -200,7 +200,7 @@ Phases execute in numeric order: 10 → 11 → 12 → 13 → 14 → 15 (Phase 13
 | 12. Risk Models & Attribution | 6/1 | Complete    | 2026-08-02 |
 | 13. Walk-Forward Validation & Parameter Search | 6/1 | Complete    | 2026-08-02 |
 | 14. Output & Boundary (RebalancePlan + Paper Rebalance) | 5/1 | Complete    | 2026-08-02 |
-| 15. API/SSE + Frontend Panels | 0/4 | Not started | - |
+| 15. API/SSE + Frontend Panels | 0/5 | Not started | - |
 
 ---
 *Last updated: 2026-07-31 — v1.2 roadmap created (Phases 10-15, 20/20 requirements mapped)*
