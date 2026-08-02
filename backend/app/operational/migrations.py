@@ -1701,6 +1701,115 @@ MIGRATIONS: tuple[str, ...] = (
     BEGIN SELECT RAISE(ABORT, 'portfolio risk attribution evidence is append-only'); END;
     PRAGMA foreign_keys = ON;
     """,
+    """
+    -- Phase 13 append-only walk-forward records (WFWD-01/02/03, approved one-way door option-a).
+    -- The whole phase's audit contract rests on these five tables: fold manifests,
+    -- OOS-scored search bookkeeping, validation verdicts, and ensemble outputs are
+    -- immutable facts. The reserved OOS is structurally excluded from search
+    -- (wf_search_runs.oos_excluded=1 CHECK) and evaluated exactly once
+    -- (wf_folds UNIQUE incl. is_oos=1; wf_validated_strategies.oos_evidence_fold_id
+    -- UNIQUE ties the verdict to the once-evaluated OOS). All rows are INSERT-only.
+    CREATE TABLE wf_plans (
+        id TEXT PRIMARY KEY,
+        universe TEXT NOT NULL,
+        asset_type TEXT NOT NULL CHECK (asset_type IN ('stock','etf')),
+        start TEXT NOT NULL,
+        end TEXT NOT NULL,
+        train_size INTEGER NOT NULL CHECK (train_size > 0),
+        gap_size INTEGER NOT NULL CHECK (gap_size >= 0),
+        test_size INTEGER NOT NULL CHECK (test_size > 0),
+        oos_size INTEGER NOT NULL CHECK (oos_size > 0),
+        horizon INTEGER NOT NULL CHECK (horizon > 0),
+        trading_dates_json TEXT NOT NULL,
+        fold_geometry_json TEXT NOT NULL,
+        oos_pinned_at TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    );
+    CREATE TRIGGER wf_plans_no_update BEFORE UPDATE ON wf_plans
+    BEGIN SELECT RAISE(ABORT, 'walk-forward plans are append-only'); END;
+    CREATE TRIGGER wf_plans_no_delete BEFORE DELETE ON wf_plans
+    BEGIN SELECT RAISE(ABORT, 'walk-forward plans are append-only'); END;
+
+    CREATE TABLE wf_folds (
+        id TEXT PRIMARY KEY,
+        plan_id TEXT NOT NULL REFERENCES wf_plans(id) ON DELETE RESTRICT,
+        fold_index INTEGER NOT NULL CHECK (fold_index >= 0),
+        is_oos INTEGER NOT NULL CHECK (is_oos IN (0,1)),
+        strategy_id TEXT NOT NULL,
+        params_sha256 TEXT NOT NULL CHECK (length(params_sha256) = 64),
+        train_start TEXT NOT NULL,
+        train_end TEXT NOT NULL,
+        test_start TEXT NOT NULL,
+        test_end TEXT NOT NULL,
+        membership_fingerprint TEXT NOT NULL CHECK (length(membership_fingerprint) = 64),
+        chain_config_json TEXT NOT NULL,
+        stats_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE (plan_id, fold_index, is_oos, strategy_id, params_sha256)
+    );
+    CREATE INDEX idx_wf_folds_plan ON wf_folds(plan_id, fold_index);
+    CREATE TRIGGER wf_folds_no_update BEFORE UPDATE ON wf_folds
+    BEGIN SELECT RAISE(ABORT, 'walk-forward folds are append-only'); END;
+    CREATE TRIGGER wf_folds_no_delete BEFORE DELETE ON wf_folds
+    BEGIN SELECT RAISE(ABORT, 'walk-forward folds are append-only'); END;
+
+    CREATE TABLE wf_search_runs (
+        id TEXT PRIMARY KEY,
+        plan_id TEXT NOT NULL REFERENCES wf_plans(id) ON DELETE RESTRICT,
+        strategy_id TEXT NOT NULL,
+        objective TEXT NOT NULL,
+        direction TEXT NOT NULL,
+        search_space_json TEXT NOT NULL,
+        n_trials INTEGER NOT NULL,
+        n_completed INTEGER NOT NULL,
+        score_distribution_json TEXT NOT NULL,
+        best_params_json TEXT NOT NULL,
+        best_score REAL,
+        oos_excluded INTEGER NOT NULL CHECK (oos_excluded IN (0,1)),
+        created_at TEXT NOT NULL
+    );
+    CREATE TRIGGER wf_search_runs_no_update BEFORE UPDATE ON wf_search_runs
+    BEGIN SELECT RAISE(ABORT, 'walk-forward search runs are append-only'); END;
+    CREATE TRIGGER wf_search_runs_no_delete BEFORE DELETE ON wf_search_runs
+    BEGIN SELECT RAISE(ABORT, 'walk-forward search runs are append-only'); END;
+
+    CREATE TABLE wf_validated_strategies (
+        id TEXT PRIMARY KEY,
+        strategy_id TEXT NOT NULL,
+        plan_id TEXT NOT NULL REFERENCES wf_plans(id) ON DELETE RESTRICT,
+        search_run_id TEXT REFERENCES wf_search_runs(id) ON DELETE RESTRICT,
+        params_sha256 TEXT NOT NULL CHECK (length(params_sha256) = 64),
+        oos_evidence_fold_id TEXT NOT NULL UNIQUE REFERENCES wf_folds(id) ON DELETE RESTRICT,
+        resolved_asset_ids_json TEXT NOT NULL,
+        validation_score REAL NOT NULL,
+        fold_evidence_json TEXT NOT NULL,
+        passed_gate INTEGER NOT NULL CHECK (passed_gate IN (0,1)),
+        created_at TEXT NOT NULL,
+        UNIQUE (strategy_id, params_sha256, plan_id)
+    );
+    CREATE INDEX idx_wf_validated_strategies ON wf_validated_strategies(strategy_id);
+    CREATE TRIGGER wf_validated_strategies_no_update BEFORE UPDATE ON wf_validated_strategies
+    BEGIN SELECT RAISE(ABORT, 'walk-forward validation verdicts are append-only'); END;
+    CREATE TRIGGER wf_validated_strategies_no_delete BEFORE DELETE ON wf_validated_strategies
+    BEGIN SELECT RAISE(ABORT, 'walk-forward validation verdicts are append-only'); END;
+
+    CREATE TABLE wf_ensembles (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        strategy_ids_json TEXT NOT NULL,
+        weights_json TEXT NOT NULL,
+        validation_record_ids_json TEXT NOT NULL,
+        input_snapshot_sha256 TEXT NOT NULL CHECK (length(input_snapshot_sha256) = 64),
+        output_sha256 TEXT NOT NULL CHECK (length(output_sha256) = 64),
+        artifact_relative_path TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    );
+    CREATE INDEX idx_wf_ensembles_created ON wf_ensembles(created_at);
+    CREATE TRIGGER wf_ensembles_no_update BEFORE UPDATE ON wf_ensembles
+    BEGIN SELECT RAISE(ABORT, 'walk-forward ensembles are append-only'); END;
+    CREATE TRIGGER wf_ensembles_no_delete BEFORE DELETE ON wf_ensembles
+    BEGIN SELECT RAISE(ABORT, 'walk-forward ensembles are append-only'); END;
+    """,
 )
 
 

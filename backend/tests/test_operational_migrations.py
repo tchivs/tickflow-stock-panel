@@ -700,6 +700,167 @@ def test_phase12_attribution_evidence_migrate_with_constraints_and_idempotence(
     )
 
 
+def _wf_plan_row(plan_id: str = "wf-plan-1") -> str:
+    """Build a valid wf_plans INSERT statement."""
+    return (
+        "INSERT INTO wf_plans (id, universe, asset_type, start, end, train_size, gap_size, "
+        "test_size, oos_size, horizon, trading_dates_json, fold_geometry_json, "
+        "oos_pinned_at, created_at) "
+        f"VALUES ('{plan_id}', 'cn-a-share', 'stock', '2025-07-29', '2026-07-30', "
+        f"120, 20, 20, 40, 5, '[]', '{{}}', '2026-08-01T00:00:00Z', "
+        "'2026-08-01T00:00:00Z')"
+    )
+
+
+def _wf_fold_row(
+    fold_id: str = "wf-fold-1",
+    *,
+    plan_id: str = "wf-plan-1",
+    fold_index: int = 0,
+    is_oos: int = 0,
+    strategy_id: str = "fixture_strategy",
+    params_sha256: str | None = None,
+) -> str:
+    """Build a valid wf_folds INSERT statement (plan FK row must exist)."""
+    return (
+        "INSERT INTO wf_folds (id, plan_id, fold_index, is_oos, strategy_id, params_sha256, "
+        "train_start, train_end, test_start, test_end, membership_fingerprint, "
+        "chain_config_json, stats_json, created_at) "
+        f"VALUES ('{fold_id}', '{plan_id}', {fold_index}, {is_oos}, '{strategy_id}', "
+        f"'{params_sha256 if params_sha256 is not None else 'a' * 64}', "
+        f"'2025-07-29', '2026-01-22', '2026-03-02', '2026-03-27', '{'b' * 64}', "
+        "'{\"end\":\"2026-04-01\"}', '{\"effective_days\":15}', '2026-08-01T00:00:00Z')"
+    )
+
+
+def test_phase13_wf_tables_migrate_with_constraints_and_idempotence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Five wf_* tables: CHECKs + sha256 + FK graph + immutability triggers."""
+    planned = migrations.MIGRATIONS
+    wf_index = next(
+        index for index, script in enumerate(planned) if "CREATE TABLE wf_plans" in script
+    )
+    connection = sqlite3.connect(":memory:")
+    connection.execute("PRAGMA foreign_keys = ON")
+
+    # Forward-only: wf_* tables absent before the Phase 13 script, present after.
+    monkeypatch.setattr(migrations, "MIGRATIONS", planned[:wf_index])
+    migrations.migrate_operational_db(connection)
+    assert connection.execute("PRAGMA user_version").fetchone() == (wf_index,)
+    assert (
+        connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'wf_plans'"
+        ).fetchone()
+        is None
+    )
+
+    monkeypatch.setattr(migrations, "MIGRATIONS", planned)
+    migrations.migrate_operational_db(connection)
+    assert connection.execute("PRAGMA user_version").fetchone() == (len(planned),)
+    for table in ("wf_plans", "wf_folds", "wf_search_runs", "wf_validated_strategies", "wf_ensembles"):
+        assert (
+            connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
+            ).fetchone()
+            is not None
+        )
+    migrations.migrate_operational_db(connection)  # idempotent no-op
+    assert connection.execute("PRAGMA user_version").fetchone() == (len(planned),)
+
+    # --- wf_plans: valid row + CHECK enums. ---
+    connection.execute(_wf_plan_row())
+    with pytest.raises(sqlite3.IntegrityError):
+        connection.execute(_wf_plan_row().replace("'stock'", "'index'"))
+    with pytest.raises(sqlite3.IntegrityError):
+        connection.execute(
+            _wf_plan_row(plan_id="wf-plan-bad").replace("120, 20, 20, 40, 5", "0, 20, 20, 40, 5")
+        )
+    with pytest.raises(sqlite3.IntegrityError):
+        connection.execute(
+            _wf_plan_row(plan_id="wf-plan-bad2").replace("120, 20, 20, 40, 5", "120, 20, 20, 40, 0")
+        )
+
+    # --- wf_folds: FK RESTRICT + exactly-once UNIQUE (incl. OOS). ---
+    with pytest.raises(sqlite3.IntegrityError):
+        connection.execute(_wf_fold_row(fold_id="wf-fold-missing", plan_id="missing-plan"))
+    connection.execute(_wf_fold_row())
+    with pytest.raises(sqlite3.IntegrityError):  # duplicate key -> exactly-once
+        connection.execute(_wf_fold_row(fold_id="wf-fold-dup"))
+    with pytest.raises(sqlite3.IntegrityError):  # bad params_sha256 length
+        connection.execute(_wf_fold_row(fold_id="wf-fold-short", params_sha256="short"))
+    with pytest.raises(sqlite3.IntegrityError):  # is_oos must be 0/1
+        connection.execute(_wf_fold_row(fold_id="wf-fold-bad-oos", is_oos=2))
+    # OOS fold row records is_oos=1 under the same UNIQUE key.
+    connection.execute(
+        _wf_fold_row(fold_id="wf-fold-oos", fold_index=0, is_oos=1, params_sha256="c" * 64)
+    )
+
+    # --- wf_search_runs: oos_excluded CHECK (must be 0/1). ---
+    search = (
+        "INSERT INTO wf_search_runs (id, plan_id, strategy_id, objective, direction, "
+        "search_space_json, n_trials, n_completed, score_distribution_json, "
+        "best_params_json, best_score, oos_excluded, created_at) "
+        f"VALUES ('wf-search-1', 'wf-plan-1', 'fixture_strategy', 'sharpe', 'max', "
+        f"'{{}}', 3, 3, '{{}}', '{{}}', 0.5, 1, '2026-08-01T00:00:00Z')"
+    )
+    connection.execute(search)
+    with pytest.raises(sqlite3.IntegrityError):  # oos_excluded CHECK enum (0/1 only)
+        connection.execute(search.replace("'wf-search-1'", "'wf-search-2'").replace("0.5, 1, '", "0.5, 2, '"))
+
+    # --- wf_validated_strategies: FK graph + oos_evidence_fold_id UNIQUE. ---
+    validated = (
+        "INSERT INTO wf_validated_strategies (id, strategy_id, plan_id, search_run_id, "
+        "params_sha256, oos_evidence_fold_id, resolved_asset_ids_json, validation_score, "
+        "fold_evidence_json, passed_gate, created_at) "
+        f"VALUES ('wf-valid-1', 'fixture_strategy', 'wf-plan-1', 'wf-search-1', "
+        f"'{'d' * 64}', 'wf-fold-oos', '[]', 0.5, '{{}}', 1, '2026-08-01T00:00:00Z')"
+    )
+    connection.execute(validated)
+    with pytest.raises(sqlite3.IntegrityError):  # oos_evidence_fold_id UNIQUE
+        connection.execute(
+            validated.replace("'wf-valid-1'", "'wf-valid-2'").replace("'wf-fold-oos'", "'wf-fold-1'")
+        )
+    with pytest.raises(sqlite3.IntegrityError):  # FK: search_run_id must exist
+        connection.execute(
+            validated.replace("'wf-valid-1'", "'wf-valid-3'").replace(
+                "'wf-search-1'", "'missing-search'"
+            )
+        )
+    with pytest.raises(sqlite3.IntegrityError):  # passed_gate CHECK
+        connection.execute(
+            validated.replace("'wf-valid-1'", "'wf-valid-4'").replace("'wf-fold-oos'", "'wf-fold-1'").replace(
+                ", 1, '", ", 2, '"
+            )
+        )
+
+    # --- wf_ensembles: sha256 CHECKs, standalone. ---
+    ensemble = (
+        "INSERT INTO wf_ensembles (id, name, strategy_ids_json, weights_json, "
+        "validation_record_ids_json, input_snapshot_sha256, output_sha256, "
+        "artifact_relative_path, created_at) "
+        f"VALUES ('wf-ens-1', 'wf-ensemble-v1', '[]', '{{}}', '[]', '{'e' * 64}', "
+        f"'{'f' * 64}', 'research_artifacts/wf-ens-1/ensemble.parquet', "
+        "'2026-08-01T00:00:00Z')"
+    )
+    connection.execute(ensemble)
+    with pytest.raises(sqlite3.IntegrityError):
+        connection.execute(ensemble.replace("'wf-ens-1'", "'wf-ens-2'").replace("'" + "e" * 64 + "'", "'short'"))
+
+    # --- Immutability triggers: UPDATE/DELETE raise on every wf_* table. ---
+    for table, where in (
+        ("wf_plans", "id = 'wf-plan-1'"),
+        ("wf_folds", "id = 'wf-fold-1'"),
+        ("wf_search_runs", "id = 'wf-search-1'"),
+        ("wf_validated_strategies", "id = 'wf-valid-1'"),
+        ("wf_ensembles", "id = 'wf-ens-1'"),
+    ):
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(f"UPDATE {table} SET created_at = 'x' WHERE {where}")
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(f"DELETE FROM {table} WHERE {where}")
+
+
 def test_phase12_rebuild_preserves_phase11_run_rows(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
