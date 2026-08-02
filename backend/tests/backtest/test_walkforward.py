@@ -257,14 +257,22 @@ def test_run_walk_forward_pins_plan_and_records_fingerprints(
     assert len(result["fold_manifests"]) == len(wf_fixture_plan.folds) + 1  # 3 + OOS
     oos_manifest = [m for m in result["fold_manifests"] if m["is_oos"] == 1]
     assert len(oos_manifest) == 1
-    # Every fold's chain config end == test_end + horizon (label buffer), so
-    # labels stay finite through the whole test segment (FACT-06 anti skew).
+    # Every fold's chain config end is the label buffer snapped to `horizon`
+    # TRADING days past test_end on the measured calendar (WR-09) — calendar-day
+    # buffers shrink across weekends/holidays and silently shorten scorable test
+    # days. Fully-covered search folds therefore get effective_days == test_size.
     for manifest in result["fold_manifests"]:
         test_end = date.fromisoformat(manifest["test_end"])
-        expected_end = (test_end + timedelta(days=wf_fixture_plan.horizon)).isoformat()
+        after = [d for d in wf_fixture_plan.trading_dates if d > test_end]
+        if len(after) >= wf_fixture_plan.horizon:
+            expected_end = after[wf_fixture_plan.horizon - 1].isoformat()
+        else:
+            expected_end = (test_end + timedelta(days=wf_fixture_plan.horizon)).isoformat()
         assert manifest["chain_config"]["end"] == expected_end
         assert len(manifest["membership_fingerprint"]) == 64
         assert manifest["stats"]["effective_days"] >= 10
+        if manifest["is_oos"] == 0:
+            assert manifest["stats"]["effective_days"] == wf_fixture_plan.test_size  # fully covered
     with pytest.raises(ValueError, match="OOS segment already evaluated"):
         run_walk_forward(
             wf_fixture_plan,
@@ -553,7 +561,50 @@ def test_fail_closed_below_two_folds_reports_measured_count(
         )
     message = str(excinfo.value)
     assert "180 measured trading days" in message
-    assert "minimum 220" in message
+    assert "minimum 221" in message  # WR-08: 真实最小值 = oos+train+gap+2*test+1 = 221
+
+
+def test_build_plan_boundary_220_fails_221_builds(
+    measured_calendar: list[date],
+) -> None:
+    """WR-08: 边界 220 日拒绝, 221 日恰好构建 2 折 + OOS。"""
+    from app.backtest.walkforward import build_plan
+
+    # 220 日 < 真实最小值 221 → fail-closed, 报出最小需求而非误导性几何错误。
+    at_220 = measured_calendar[:220]
+    with pytest.raises(ValueError, match="insufficient history") as excinfo:
+        build_plan(
+            plan_id="wf-220",
+            universe="cn-a-share",
+            asset_type="stock",
+            dates=at_220,
+            train_size=120,
+            gap_size=20,
+            test_size=20,
+            oos_size=40,
+            horizon=5,
+        )
+    assert "minimum 221" in str(excinfo.value)
+
+    # 221 日 → 恰好 2 折, 各 test 段精确 20 日, OOS 精确 40 日, 几何断言通过。
+    at_221 = measured_calendar[:221]
+    plan = build_plan(
+        plan_id="wf-221",
+        universe="cn-a-share",
+        asset_type="stock",
+        dates=at_221,
+        train_size=120,
+        gap_size=20,
+        test_size=20,
+        oos_size=40,
+        horizon=5,
+    )
+    assert len(plan.folds) == 2
+    for fold in plan.folds:
+        segment = [d for d in at_221 if fold.test_start <= d <= fold.test_end]
+        assert len(segment) == 20
+    oos_dates = [d for d in at_221 if d >= plan.oos_fold.test_start]
+    assert len(oos_dates) == 40
 
 
 def test_overlapping_fold_geometry_fails_closed(
@@ -659,10 +710,15 @@ def test_run_walk_forward_effective_days_below_10_raises(
     stub_chain,
     stub_backtest_service,
 ) -> None:
-    """effective_days < 10 时 run_walk_forward fail-closed (不是静默截断)。"""
+    """effective_days < 10 时 run_walk_forward fail-closed (不是静默截断)。
+
+    WR-09 后搜索折标签缓冲吸附到实测交易日, fully-covered 时 effective == test_size;
+    只有日历末端不足 buffer 的折 (此处保留 OOS 折, 其后无更多实测交易日) 才会
+    触发 < 10 守卫。
+    """
     from app.backtest.walkforward import build_plan, run_walk_forward
 
-    # horizon=40 ⇒ 每个 test 段末 40 日的前向收益为空 ⇒ effective ≈ 8 < 10。
+    # horizon=40 ⇒ OOS 折在日历末端无足够未来交易日, effective ≈ 0 < 10。
     plan = build_plan(
         plan_id="wf-horizon40",
         universe="cn-a-share",
@@ -683,6 +739,7 @@ def test_run_walk_forward_effective_days_below_10_raises(
             chain=stub_chain,
             resolver=stub_resolver,
             repo=research_repository,
+            evaluate_oos=True,  # 让保留 OOS 折 (日历末端) 参与, 触发 < 10 守卫
         )
 
 

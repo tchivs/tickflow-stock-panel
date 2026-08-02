@@ -129,7 +129,10 @@ def build_plan(
 
     # Fail-closed below 2 folds (walk-forward degenerates at H≈180): a 2-fold
     # rectangle needs selection_len >= train_size + gap_size + 2 * test_size.
-    minimum = oos_size + train_size + gap_size + 2 * test_size
+    # WR-08: 真实最小值为 oos + train + gap + 2*test + 1 — 第 2 折 test 段结束后还须
+    # 留出至少 1 个交易日作为 OOS 缓冲 (gap_start > train_end), 否则 OOS 折的
+    # gap 缓冲为空, _assert_geometry 报误导性错误。
+    minimum = oos_size + train_size + gap_size + 2 * test_size + 1
     if total < minimum:
         raise ValueError(
             "insufficient history for walk-forward validation: "
@@ -334,6 +337,11 @@ def evaluate_best_params(
         passed_gate = bool(validation_score >= validation_threshold)
     # WR-07: 验证裁决携带 OOS 折的 PIT 成员符号 (Phase 14 组合快照绑定无需重解析)。
     resolved_asset_ids = _fold_symbols(memberships)
+    # WR-06: 裁决必须携带折级证据, 绝不写空 {}。调用方可传入更丰富的 per-fold
+    # 搜索证据 (如优化器的 score_distribution); 缺省时自动注入本次 OOS 折自身的
+    # stats (effective_days / train_stats / test_stats), 保留审计轨迹。
+    if fold_evidence is None:
+        fold_evidence = {"oos": stats}
     verdict = repo.record_validated_strategy(
         strategy_id=strategy_id,
         plan_id=plan.plan_id,
@@ -342,7 +350,7 @@ def evaluate_best_params(
         oos_evidence_fold_id=oos_manifest["id"],
         resolved_asset_ids=resolved_asset_ids,
         validation_score=validation_score,
-        fold_evidence=fold_evidence or {},
+        fold_evidence=fold_evidence,
         passed_gate=passed_gate,
     )
     return {
@@ -425,7 +433,9 @@ def _build_fold(
         test_start=test[0],
         test_end=test[-1],
         membership_fingerprint="0" * 64,
-        chain_config=_fold_chain_config(universe, asset_type, train[0], test[-1], horizon),
+        chain_config=_fold_chain_config(
+            universe, asset_type, train[0], test[-1], horizon, trading_dates
+        ),
     )
 
 
@@ -458,7 +468,9 @@ def _build_oos_fold(
         test_start=oos[0],
         test_end=oos[-1],
         membership_fingerprint="0" * 64,
-        chain_config=_fold_chain_config(universe, asset_type, trading_dates[0], oos[-1], horizon),
+        chain_config=_fold_chain_config(
+            universe, asset_type, trading_dates[0], oos[-1], horizon, trading_dates
+        ),
     )
 
 
@@ -468,18 +480,30 @@ def _fold_chain_config(
     train_start: date,
     test_end: date,
     horizon: int,
+    trading_dates: Sequence[date] | None = None,
 ) -> SignalChainConfig:
     """每折独立 SignalChainConfig — 共享同一条 FactorSignalChain (FACT-06)。
 
-    标签缓冲: end = test_end + horizon (日历日), 使前向收益在整段 test 内有限 —
-    本模块唯一一次日历日偏移, 只用于标签缓冲, 绝不用于折叠边界。
+    标签缓冲: end = test_end 之后第 ``horizon`` 个实测交易日 (WR-09) — 链的前向
+    收益 drop 是逐行 ``shift(-horizon)`` (即 horizon 个交易日), 日历日缓冲会因周末/
+    节假日少于 horizon 个交易日而静默缩短可评分测试日 (实测 18/20)。吸附到实测日历
+    后, 搜索折 fully-covered 时保证 effective_days == test_size。仅当实测日历在
+    test_end 之后不足 horizon 个交易日 (如 OOS 折在日历末端) 时退化为日历日缓冲。
     """
+    if trading_dates is not None:
+        after = [day for day in trading_dates if day > test_end]
+        if len(after) >= horizon:
+            buffer_end = after[horizon - 1]
+        else:
+            buffer_end = test_end + datetime.timedelta(days=horizon)
+    else:
+        buffer_end = test_end + datetime.timedelta(days=horizon)
     return SignalChainConfig(
         universe=universe,
         symbols=(),
         asset_type=asset_type,
         start=train_start,
-        end=test_end + datetime.timedelta(days=horizon),
+        end=buffer_end,
         warmup_days=_WARMUP_DAYS,
         forward_return_horizon=horizon,
         rebalance="daily",
@@ -582,7 +606,12 @@ def _find_existing_fold(
     strategy_id: str,
     params_sha256: str,
 ) -> dict[str, Any] | None:
-    """搜索折查询路径: 已记录的 (plan, fold_index, is_oos, strategy, params) 直接返回。
+    """搜索折查询路径 (IN-01): 已记录的 (plan, fold_index, is_oos, strategy, params) 直接返回。
+
+    这是 **cache-only** 读取: 它只按 (plan, fold_index, strategy_id, params_sha256)
+    命中已持久化的清单, 不重新验证链配置/成员指纹。同 params 在成员漂移后重跑会
+    返回旧清单 — 对 append-only 是预期行为 (每条记录是不可变事实), 但不要把它
+    误读为新鲜度。成员漂移由新的 params_sha256 (或新 plan_id) 捕获。
 
     保持 append-only 幂等 — 重跑同一 walk-forward 时搜索折走查询路径, 仅 OOS 折
     走写路径 (严格一次)。
@@ -619,7 +648,13 @@ def _default_fold_score(
     service: Any,
     stats: dict[str, Any],
 ) -> None:
-    """默认折评分 = 固定参数策略回测 (train 窗口 + test 窗口, 复用 StrategyBacktestService)。"""
+    """默认折评分 = 固定参数策略回测 (train 窗口 + test 窗口, 复用 StrategyBacktestService)。
+
+    IN-04: 折/OOS 评分用窗口内 PIT 成员并集 (``_fold_symbols(membership)``) 作为
+    symbol 集 — 与链的 per-date 成员语义不同, 但退市符号在 test 窗口无数据行,
+    生存偏差基本被数据可得性中和。Phase 14 如需严格 per-date PIT, 应把 per-date
+    成员 join 应用到回测面板 (与链一致)。
+    """
     train_result = service.run(
         StrategyBacktestConfig(
             strategy_id=strategy_id,
