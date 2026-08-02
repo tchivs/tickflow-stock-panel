@@ -464,3 +464,263 @@ def test_evaluate_best_params_threshold_gate_min_and_max_direction(
     )
     assert [v["strategy_id"] for v in failed] == ["fixture_strategy"]
     assert all(v["params_sha256"] == out_fail["params_sha256"] for v in failed)
+    # 报告面 (13-05): 验证裁决携带 resolved_asset_ids (来自 13-02 DDL 列
+    # resolved_asset_ids_json) — Phase 14 无需重解析即可绑定组合快照。
+    # 报告面 (13-05): 验证裁决携带 resolved_asset_ids (来自 13-02 DDL 列
+    # resolved_asset_ids_json, 解包为 list) — Phase 14 无需重解析即可绑定组合快照。
+    assert isinstance(failed[0]["resolved_asset_ids"], list)
+    assert failed[0]["resolved_asset_ids"] == []  # 本路径未提供 → 默认空快照
+    passed = research_repository.list_validated_strategies(
+        strategy_id="fixture_strategy", plan_id=wf_fixture_plan.plan_id, passed_gate=True
+    )
+    assert [v["id"] for v in passed] == [out_pass["verdict"]["id"]]
+
+
+# ---------------------------------------------------------------------------
+# 13-05: 几何稳健性 + 报告面广度
+# ---------------------------------------------------------------------------
+
+
+def _weekday_range(start: date, end: date) -> list[date]:
+    """Conftest 同构的 weekday 日期范围 (测日历重测增长)。"""
+    days: list[date] = []
+    cursor = start
+    while cursor <= end:
+        if cursor.weekday() < 5:
+            days.append(cursor)
+        cursor += timedelta(days=1)
+    return days
+
+
+def test_calendar_remeasured_grows_fold_count_and_rolls_oos_forward(
+    measured_calendar: list[date],
+) -> None:
+    """日历重测 (measured at execution): 增长的历史滚动折叠数并把 OOS 前滚。"""
+    from app.backtest.walkforward import build_plan
+
+    grown = measured_calendar + _weekday_range(date(2026, 8, 3), date(2026, 8, 28))
+    small = build_plan(
+        plan_id="wf-grown",
+        universe="cn-a-share",
+        asset_type="stock",
+        dates=measured_calendar,
+        train_size=120,
+        gap_size=20,
+        test_size=20,
+        oos_size=40,
+        horizon=5,
+    )
+    large = build_plan(
+        plan_id="wf-grown",
+        universe="cn-a-share",
+        asset_type="stock",
+        dates=grown,
+        train_size=120,
+        gap_size=20,
+        test_size=20,
+        oos_size=40,
+        horizon=5,
+    )
+    # ~20 个新交易日 ⇒ +1 折; OOS 前滚到新的历史末端。
+    assert len(large.folds) == len(small.folds) + 1
+    assert large.oos_fold.test_end == grown[-1]
+    assert large.oos_fold.test_end > small.oos_fold.test_end
+
+
+def test_fail_closed_below_two_folds_reports_measured_count(
+    measured_calendar: list[date],
+) -> None:
+    """低于 2 折 (H≈180) 时 fail-closed, 报出实测日数与最小需求。"""
+    from app.backtest.walkforward import build_plan
+
+    short = measured_calendar[:180]
+    with pytest.raises(ValueError, match="insufficient history") as excinfo:
+        build_plan(
+            plan_id="wf-short2",
+            universe="cn-a-share",
+            asset_type="stock",
+            dates=short,
+            train_size=120,
+            gap_size=20,
+            test_size=20,
+            oos_size=40,
+            horizon=5,
+        )
+    message = str(excinfo.value)
+    assert "180 measured trading days" in message
+    assert "minimum 220" in message
+
+
+def test_overlapping_fold_geometry_fails_closed(
+    measured_calendar: list[date],
+) -> None:
+    """重叠折配置 fail-closed: 几何断言拒绝交叠的 test 段 (T-13-02)。"""
+    from app.backtest.walkforward import (
+        WalkForwardFold,
+        _assert_geometry,
+        _fold_chain_config,
+    )
+
+    dates = tuple(sorted(set(measured_calendar)))
+    config = _fold_chain_config("cn-a-share", "stock", dates[0], dates[40], 5)
+
+    def _fold(index: int, *, test_lo: int, test_hi: int) -> WalkForwardFold:
+        # train [0, test_lo-21), gap [test_lo-20, test_lo-1], test [test_lo, test_hi]
+        return WalkForwardFold(
+            fold_index=index,
+            is_oos=False,
+            train_start=dates[0],
+            train_end=dates[test_lo - 21],
+            gap_start=dates[test_lo - 20],
+            gap_end=dates[test_lo - 1],
+            test_start=dates[test_lo],
+            test_end=dates[test_hi],
+            membership_fingerprint="0" * 64,
+            chain_config=config,
+        )
+
+    # 第 0 折 test [30,49] 与第 1 折 test [40,59] 交叠 → 必须拒绝。
+    with pytest.raises(ValueError, match=r"tile contiguously|must be disjoint"):
+        _assert_geometry(
+            folds=(_fold(0, test_lo=30, test_hi=49), _fold(1, test_lo=40, test_hi=59)),
+            oos_fold=_fold(2, test_lo=80, test_hi=119),
+            trading_dates=dates,
+            oos_size=40,
+        )
+
+
+def test_oos_colliding_config_fails_closed(
+    measured_calendar: list[date],
+) -> None:
+    """OOS 冲突配置 fail-closed: 保留 OOS 与末折 test 段交叠时拒绝 (T-13-02)。"""
+    from app.backtest.walkforward import (
+        WalkForwardFold,
+        _assert_geometry,
+        _fold_chain_config,
+    )
+
+    dates = tuple(sorted(set(measured_calendar)))
+    config = _fold_chain_config("cn-a-share", "stock", dates[0], dates[40], 5)
+
+    def _fold(index: int, *, is_oos: bool, test_lo: int, test_hi: int) -> WalkForwardFold:
+        return WalkForwardFold(
+            fold_index=index,
+            is_oos=is_oos,
+            train_start=dates[0],
+            train_end=dates[test_lo - 21],
+            gap_start=dates[test_lo - 20],
+            gap_end=dates[test_lo - 1],
+            test_start=dates[test_lo],
+            test_end=dates[test_hi],
+            membership_fingerprint="0" * 64,
+            chain_config=config,
+        )
+
+    # 末折 test [30,49]; OOS test 起始 45 < 49 → 与末折 test 交叠。
+    with pytest.raises(ValueError, match="must not overlap"):
+        _assert_geometry(
+            folds=(_fold(0, is_oos=False, test_lo=30, test_hi=49),),
+            oos_fold=_fold(1, is_oos=True, test_lo=45, test_hi=84),
+            trading_dates=dates,
+            oos_size=40,
+        )
+
+
+def test_effective_days_label_buffer_reports_test_size_minus_horizon(
+    measured_calendar: list[date],
+) -> None:
+    """标签缓冲: 无缓冲时末 horizon 日被丢弃 → effective = test_size - horizon。"""
+    from app.backtest.walkforward import _effective_test_days
+
+    # 合成一段密集 weekday 日历, 复现 13-RESEARCH 的 20 日 test/5 日 horizon 契约。
+    days = _weekday_range(date(2025, 1, 2), date(2026, 1, 2))
+    test_start, test_end = days[80], days[99]  # 20 个 test 交易日
+    # 无标签缓冲: 计算窗终止于 test_end → 末 horizon 个交易日的前向收益为空。
+    no_buffer = _effective_test_days(days, test_start, test_end, test_end, 5)
+    assert no_buffer == 20 - 5
+    assert no_buffer >= 10  # 标签缓冲守卫 (T-13-04)
+    # 有缓冲 (end = test_end + horizon): 可评分日数 >= 无缓冲地板。
+    with_buffer = _effective_test_days(
+        days, test_start, test_end, test_end + timedelta(days=5), 5
+    )
+    assert with_buffer >= no_buffer
+    assert with_buffer >= 10
+
+
+def test_run_walk_forward_effective_days_below_10_raises(
+    research_repository: ResearchRepository,
+    measured_calendar: list[date],
+    stub_resolver,
+    stub_chain,
+    stub_backtest_service,
+) -> None:
+    """effective_days < 10 时 run_walk_forward fail-closed (不是静默截断)。"""
+    from app.backtest.walkforward import build_plan, run_walk_forward
+
+    # horizon=40 ⇒ 每个 test 段末 40 日的前向收益为空 ⇒ effective ≈ 8 < 10。
+    plan = build_plan(
+        plan_id="wf-horizon40",
+        universe="cn-a-share",
+        asset_type="stock",
+        dates=measured_calendar,
+        train_size=120,
+        gap_size=20,
+        test_size=20,
+        oos_size=40,
+        horizon=40,
+    )
+    with pytest.raises(ValueError, match="effective days"):
+        run_walk_forward(
+            plan,
+            strategy_id="fixture_strategy",
+            params={"ma_proximity": 0.01},
+            service=stub_backtest_service,
+            chain=stub_chain,
+            resolver=stub_resolver,
+            repo=research_repository,
+        )
+
+
+def test_reporting_surface_get_plan_list_folds_and_validated(
+    research_repository: ResearchRepository,
+    wf_fixture_plan,
+    stub_resolver,
+    stub_chain,
+    stub_backtest_service,
+) -> None:
+    """报告面 (13-05): get_wf_plan / list_wf_folds / list_wf_plans / list_wf_search_runs。"""
+    from app.backtest.walkforward import run_walk_forward
+
+    run_walk_forward(
+        wf_fixture_plan,
+        strategy_id="fixture_strategy",
+        params={"ma_proximity": 0.02},
+        service=stub_backtest_service,
+        chain=stub_chain,
+        resolver=stub_resolver,
+        repo=research_repository,
+    )
+    # get_wf_plan: trading_dates + fold_geometry 解包。
+    plan_row = research_repository.get_wf_plan(wf_fixture_plan.plan_id)
+    assert plan_row is not None
+    assert plan_row["id"] == wf_fixture_plan.plan_id
+    assert plan_row["trading_dates"] == [
+        day.isoformat() for day in wf_fixture_plan.trading_dates
+    ]
+    assert len(plan_row["fold_geometry"]["folds"]) == len(wf_fixture_plan.folds)
+    assert plan_row["fold_geometry"]["oos_fold"]["is_oos"] is True
+    # list_wf_plans: 全部钉住的 plan, 新→旧。
+    plans = research_repository.list_wf_plans()
+    assert [p["id"] for p in plans] == [wf_fixture_plan.plan_id]
+    # list_wf_folds(is_oos=1): 恰好一条 OOS 清单, chain_config/stats 解包。
+    oos_folds = research_repository.list_wf_folds(plan_id=wf_fixture_plan.plan_id, is_oos=True)
+    assert len(oos_folds) == 1
+    assert oos_folds[0]["is_oos"] == 1
+    assert "end" in oos_folds[0]["chain_config"]
+    assert oos_folds[0]["stats"]["effective_days"] >= 10
+    # list_wf_search_runs 读面存在 (空列表, limit 校验)。
+    assert research_repository.list_wf_search_runs() == []
+    with pytest.raises(ValueError, match="limit"):
+        research_repository.list_wf_search_runs(limit=0)
+    with pytest.raises(ValueError, match="limit"):
+        research_repository.list_wf_plans(limit=0)

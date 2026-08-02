@@ -405,3 +405,45 @@ def test_build_ensemble_window_trims_to_requested_dates(
         repo=research_repository,
     )
     assert out["date"].to_list() == ["2026-07-01"]
+
+
+# ---------------------------------------------------------------------------
+# 13-05: 报告面广度 — list_validated_strategies(passed_gate=1) 正是门禁查询
+# ---------------------------------------------------------------------------
+
+
+def test_ensemble_gate_consumes_passed_gate_filtered_reports(
+    research_repository: ResearchRepository,
+) -> None:
+    """门禁查询 = list_validated_strategies(passed_gate=1): 过滤面锁定同一数据源。"""
+    from app.backtest.ensemble import EnsembleConfig, build_ensemble
+
+    v1 = _validated_record(research_repository, strategy_id="s1")
+    v2 = _validated_record(research_repository, strategy_id="s2", plan_id="plan-w")
+    # passed_gate=1 报告行 = 门禁直接消费的记录集。
+    passed = research_repository.list_validated_strategies(passed_gate=True)
+    assert {row["id"] for row in passed} == {v1["id"], v2["id"]}
+    assert all(row["passed_gate"] == 1 for row in passed)
+    # 每条报告行携带 resolved_asset_ids (解包自 resolved_asset_ids_json) —
+    # Phase 14 组合快照绑定无需重解析。
+    assert all(isinstance(row["resolved_asset_ids"], list) for row in passed)
+    assert all(row["resolved_asset_ids"] == ["000001.SZ", "000002.SZ"] for row in passed)
+    # 同一过滤面驱动集成: 仅 passed 记录能过门禁。
+    config = EnsembleConfig(
+        strategy_ids=("s1", "s2"),
+        weights={"s1": 0.5, "s2": 0.5},
+        validation_record_ids=(v1["id"], v2["id"]),
+    )
+    signals = {
+        "s1": _signal_frame(["A", "B"], ["2026-07-01"], rank=1.0),
+        "s2": _signal_frame(["A", "B"], ["2026-07-01"], rank=3.0),
+    }
+    out = build_ensemble(
+        config=config, signals=signals, universe="cn-a-share", start="2026-07-01", end="2026-07-01", horizon=5,
+        repo=research_repository,
+    )
+    assert out.columns == ["symbol", "date", "ensemble_rank", "ensemble_zscore"]
+    assert out.height == 2
+    # 门禁 fail-closed: 报告面同样暴露非 passed 记录。
+    not_passed = research_repository.list_validated_strategies(passed_gate=False)
+    assert not_passed == []
