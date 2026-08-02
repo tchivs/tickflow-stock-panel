@@ -16,6 +16,7 @@ paper_rebalance_transitions 一张表。
 
 from __future__ import annotations
 
+import math
 from datetime import UTC, datetime
 
 from app.backtest.engine import MatcherConfig
@@ -88,6 +89,7 @@ def reject(
 
     仅可从 ``suggested`` 状态驳回; 已审批 / 已成交的计划抛 ValueError;
     幂等 (相同 idempotency_key 的重复 reject 返回已有 ``rejected`` 行)。
+    过期计划 fail-closed (与 approve / paper_fill 一致, 逐条迁移把关)。
     """
     plan = _require_valid_plan(plan_id, repository=repository)
     _require_not_expired(plan)
@@ -112,9 +114,10 @@ def paper_fill(
     """Value the plan's discrete lots at prices through MatcherConfig fees (RBAL-02).
 
     仅可从 ``approved`` 状态成交; 记录 ``filled`` 审计事实, 其
-    paper_position_delta_json = {symbol: shares} (离散手数原样记录)。本函数
-    绝不写 positions —— 唯一写入面是 repository.record_paper_transition
-    (落到 paper_rebalance_transitions 表)。
+    paper_position_delta_json = {symbol: shares} (离散手数原样记录)。计价通过
+    MatcherConfig 费用模型 (buy_cost_pct) 给每手数算确定性估值 —— 缺价 /
+    非有限 / 非正价格 fail-closed。本函数绝不写 positions —— 唯一写入面是
+    repository.record_paper_transition (落到 paper_rebalance_transitions 表)。
     """
     plan = _require_valid_plan(plan_id, repository=repository)
     _require_not_expired(plan)
@@ -122,16 +125,24 @@ def paper_fill(
     if state not in ("approved", "filled"):
         raise ValueError("cannot paper-fill a plan that has not been approved")
     lot_sizes = plan["lot_sizes"]
-    for symbol in lot_sizes:
+    buy_cost_pct = matcher_config.buy_cost_pct()
+    valuation: dict[str, float] = {}
+    for symbol, shares in lot_sizes.items():
         if symbol not in prices:
             raise ValueError(f"missing price for {symbol}")
-    # 计价仅用于审计事实的确定性 (费用校验 + 校验和计算); 离散手数原样记录。
-    buy_cost_pct = matcher_config.buy_cost_pct()
-    _ = buy_cost_pct  # 计价参考保留给 breadth (14-04); tracer 只记录手数。
-    return repository.record_paper_transition(
+        price = float(prices[symbol])
+        if not math.isfinite(price) or price <= 0:
+            raise ValueError(f"invalid price for {symbol}: {price}")
+        valuation[symbol] = round(shares * price * (1 + buy_cost_pct), 4)
+    record = repository.record_paper_transition(
         plan_id=plan_id,
         transition="filled",
         idempotency_key=f"fill-{plan_id}",
         previous_state=state,
         paper_position_delta_json=dict(lot_sizes),
     )
+    # 计价是审计事实的派生参考 (确定性, 按 MatcherConfig 费用模型); 持久化的
+    # paper_position_delta_json 仍是 {symbol: shares}。
+    record["fill_valuation"] = valuation
+    record["fill_value"] = round(sum(valuation.values()), 4)
+    return record
