@@ -2,19 +2,19 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: End-to-End Factor Portfolio Pipeline — in progress
-current_phase: 12
-current_phase_name: Risk Models & Attribution
-status: executing
+current_phase: 13
+current_phase_name: Walk-Forward Validation & Parameter Search
+status: planning
 stopped_at: Phase 12 complete (12-05 cross-model attribution + 12-06 drawdown breadth)
-last_updated: "2026-08-02T03:00:00.000Z"
+last_updated: "2026-08-02T02:33:18.240Z"
 last_activity: 2026-08-02
-last_activity_desc: Phase 12 Waves 3-4 complete (12-05 cross-model attribution + 12-06 drawdown breadth)
+last_activity_desc: Phase 12 complete, transitioned to Phase 13
 progress:
   total_phases: 6
-  completed_phases: 1
-  total_plans: 6
-  completed_plans: 6
-  percent: 100
+  completed_phases: 0
+  total_plans: 3
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
@@ -28,10 +28,10 @@ See: .planning/PROJECT.md (updated 2026-07-31)
 
 ## Current Position
 
-Phase: 12 — Risk Models & Attribution
-Plan: 12-06 (Wave 4 — drawdown attribution breadth: instrument × segment) complete
-Status: Phase 12 complete — ready for Phase 13 (walk-forward validation)
-Last activity: 2026-08-02 — Phase 12 Waves 3-4 complete (12-05 cross-model attribution + reconciliation breadth; 12-06 drawdown attribution breadth)
+Phase: 13 — Walk-Forward Validation & Parameter Search
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-08-02 — Phase 12 complete, transitioned to Phase 13
 
 Progress: [██████████] 100%
 

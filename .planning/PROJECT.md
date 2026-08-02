@@ -56,6 +56,12 @@ Building toward v1.2 (End-to-End Factor Portfolio Pipeline). Requirements are de
 - [x] FACT-05: Admitted factors stored in an immutable catalog with summary storage (coverage, finite counts, signature) and revision lineage — Phase 10.
 - [x] FACT-06: A single shared factor signal chain used identically by evaluation, multi-factor models, walk-forward, expected returns, and live as-of suggestions (no train/serve skew) — Phase 10.
 
+### Validated in v1.2 Phase 12
+
+- [x] RSK-01: Researcher can view risk exposure and marginal contribution attribution for an optimized portfolio, reconciling exactly to portfolio variance (hard cross-module assertion) — Phase 12.
+- [x] RSK-02: Risk-model suite includes semi-covariance, exponentially weighted covariance, and Ledoit-Wolf shrinkage, each with explicit PSD-repair provenance — Phase 12.
+- [x] RSK-03: Researcher can view drawdown attribution decomposed by instrument and time segment — Phase 12.
+
 ### Validated in v1.2 Phase 11
 
 - [x] PFOL-01: Researcher can build sample covariance from a governed panel with explicit recorded PSD repair (method, epsilon, eigenvalues before/after) in the immutable run record — never silent — Phase 11.
@@ -102,6 +108,15 @@ v1.0 validated the host architecture and locked its safety boundaries: one FastA
 - **Snapshot binding fail-closed** — `portfolio/snapshot.py` loads the composite via `catalog.get_composite_model` → checksum-verified artifact → as_of cross-section; `run.input_snapshot_sha256 == factor_model_composites.input_snapshot_sha256`; never calls `build_composite`; as_of beyond panel coverage rejected as lookahead.
 - **Constraint hardening** — solver-options whitelist enforced (unknown keys rejected); industry cap requested → recorded failed run 'industry mapping unavailable'; `created_at` = real UTC run time.
 
+## Phase 12 Decisions (2026-08-01)
+
+- **Exact variance reconciliation is a hard assertion** — `sum(MC) == wᵀΣw` at rtol 1e-12 enforced inside `attribution_report` before any evidence write; segment identity `Σc_i == segment_return` at rtol 1e-10 computed independently (never a tautology).
+- **Four-model risk suite** — sample + semi-covariance + EWMA (λ=0.94) + Ledoit-Wolf via a single `make_risk_model_family` dispatcher; every model's PSD repair records method/epsilon/eigenvalues before/after; Ledoit-Wolf lazy-imports sklearn 1.8.0 at the risk-model boundary only (never module-top).
+- **Covariance provenance in evidence** — every attribution evidence row carries `covariance_sha256` + `covariance_source` (`artifact` checksum-bound vs `recompute` from caller returns); tampered covariance raises `ArtifactReadError` with no evidence row.
+- **Finiteness fail-closed** — `run_attribution`/`reconcile_all_models` reject non-finite returns; `underwater_curve` rejects returns ≤ −1.0 (equity NaN guard).
+- **Drawdown attribution** — underwater curve → periods (module constants depth 2% / min 2 obs) → per-instrument × per-time-segment contributions with the segment-identity hard assertion; `run_drawdown` produces a full report + append-only evidence.
+- **Append-only attribution evidence** — `portfolio_risk_attribution_evidence` table + no_update/no_delete triggers; FK → optimization runs; `risk_model` equality filter ready for Phase 15 API.
+
 ## Source Context
 
 - Architecture source: `docs/ARCHITECTURE.md`
@@ -128,4 +143,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-08-01 after Phase 11*
+*Last updated: 2026-08-01 after Phase 12*
