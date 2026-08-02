@@ -5,16 +5,16 @@ milestone_name: End-to-End Factor Portfolio Pipeline — in progress
 current_phase: 13
 current_phase_name: Walk-Forward Validation & Parameter Search
 status: executing
-stopped_at: Phase 12 complete (12-05 cross-model attribution + 12-06 drawdown breadth)
-last_updated: "2026-08-02T07:45:07.727Z"
+stopped_at: Completed 13-01 Wave 1 tracer (next 13-03)
+last_updated: "2026-08-02T10:56:40.034Z"
 last_activity: 2026-08-02
-last_activity_desc: Phase 12 complete, transitioned to Phase 13
+last_activity_desc: Wave 0 (13-02) + Wave 1 tracer (13-01) landed; WFWD-01 spine proven on a fixture
 progress:
   total_phases: 6
   completed_phases: 0
-  total_plans: 4
-  completed_plans: 0
-  percent: 0
+  total_plans: 5
+  completed_plans: 2
+  percent: 40
 ---
 
 # Project State
@@ -29,11 +29,11 @@ See: .planning/PROJECT.md (updated 2026-07-31)
 ## Current Position
 
 Phase: 13 — Walk-Forward Validation & Parameter Search
-Plan: Not started
-Status: Ready to execute
-Last activity: 2026-08-02 — Phase 12 complete, transitioned to Phase 13
+Plan: 13-01 complete (Wave 1 tracer); 13-02 complete (Wave 0); next 13-03
+Status: In progress
+Last activity: 2026-08-02 — Wave 0 (13-02) + Wave 1 tracer (13-01) landed; WFWD-01 spine proven on a fixture
 
-Progress: [██████████] 100%
+Progress: [████░░░░░░] 40%
 
 ## v1.2 Phase Summary
 
@@ -42,7 +42,7 @@ Progress: [██████████] 100%
 | 10 Factor Library & Multi-Factor Model | FACT-01..06 | In progress (10-01..10-06 complete) |
 | 11 Portfolio Construction & Optimization | PFOL-01..04 | In progress (11-01, 11-02, 11-03, 11-04, 11-05, 11-06 complete) |
 | 12 Risk Models & Attribution | RSK-01..03 | Complete (12-02 Wave 0 + 12-01 Wave 1 + 12-03 + 12-04 Wave 2 + 12-05 Wave 3 + 12-06 Wave 4) |
-| 13 Walk-Forward Validation & Parameter Search | WFWD-01..03 | Not started |
+| 13 Walk-Forward Validation & Parameter Search | WFWD-01..03 | In progress (13-02 Wave 0 + 13-01 Wave 1 tracer complete) |
 | 14 Output & Boundary (RebalancePlan + Paper Rebalance) | RBAL-01..02 | Not started |
 | 15 API/SSE + Frontend Panels | UI-01..02 | Not started |
 
@@ -79,6 +79,7 @@ Progress: [██████████] 100%
 | Phase 12 P12-03 | 45 | 4 tasks | 7 files |
 | Phase 12 P12-05 | 35 | 3 tasks | 5 files |
 | Phase 12 P12-06 | 40 | 3 tasks | 3 files |
+| Phase 13 P13-01 | 18 | 3 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -92,6 +93,11 @@ Progress: [██████████] 100%
 ### v1.2 Decisions
 
 - [Roadmap]: Phases 10-15 follow research SUMMARY.md structure; every v1.2 requirement maps to exactly one phase (20/20, no orphans).
+- [Phase 13 / 13-01]: Fold geometry is derived from the measured trading calendar (train=120/gap=20/test=20, step=20, k=3, OOS=40) — fold boundaries snap to measured dates, never calendar-day arithmetic; the Feb-2026 CNY 14-day hole cannot shorten a 20-day test segment (calendar snapping).
+- [Phase 13 / 13-01]: Per-fold effective_days is counted over the per-fold compute window (day <= compute_end = test_end + horizon); the last `horizon` days of the extended window have null forward returns and are excluded; asserted >= 10 per fold.
+- [Phase 13 / 13-01]: Search-fold reruns take the append-only query path (idempotent via list_wf_folds match on plan/fold_index/is_oos/strategy/params_sha256); only the OOS fold takes the write path so its UNIQUE exactly-once guard stays live (second OOS evaluation -> ValueError).
+- [Phase 13 / 13-01]: Every fold computes through the SHARED FactorSignalChain with a per-fold SignalChainConfig(end=test_end+horizon) label buffer (FACT-06 anti train/serve skew); membership_fingerprint is read from frame.resolved_universe, never recomputed.
+- [Phase 13 / 13-01]: run_walk_forward exposes a fold_scorer seam (default = fixed-params strategy backtest variant through StrategyBacktestService, train + test windows recorded as train_stats/test_stats) so the Phase 14 per-fold portfolio-optimization scorer plugs in without forking the geometry.
 - [Roadmap]: v1.2 continues v1.1 numbering (no reset); phase IDs are sequential (`phase_naming: sequential`).
 - [Roadmap]: No execution authority is a hard acceptance criterion for Phase 14 — RebalancePlan is a research-only artifact; paper rebalance is a separate approved state machine (PA_Agent ApprovalTicket pattern).
 - [Roadmap]: Shared factor signal chain (`signal_chain.py`) lands in Phase 10 and is consumed identically by evaluation, models, walk-forward, expected returns, and live as-of plans (anti train/serve skew).
@@ -106,7 +112,7 @@ None.
 - [v1.2 / Phase 11]: Optimizer engine choice — cvxpy 1.9.2 vs scipy SLSQP — unresolved; must be decided during Phase 11 planning (cvxpy addition must pass the package-legitimacy approval gate).
 - [v1.2 / Phase 10]: Point-in-time universe snapshot design is the largest open data gap; without it Phases 11-13 silently inherit survivorship bias. Flag during Phase 10 planning.
 - [v1.2 / Phase 10]: Runtime install verification deferred — local `.venv` is empty; scipy 1.17.1 promotion to base deps and sklearn 1.8.0 lazy import must be verified in Phase 10, not assumed.
-- [v1.2 / Phase 13]: Walk-forward fold geometry (train/test size, gap) must be calibrated to available A-share history during Phase 13 planning.
+- [v1.2 / Phase 13]: ~~Walk-forward fold geometry (train/test size, gap) must be calibrated to available A-share history during Phase 13 planning.~~ RESOLVED — 13-01 calibrated to the measured 244-day calendar (train=120/gap=20/test=20, k=3, OOS=40).
 
 ## Deferred Items
 
@@ -118,8 +124,8 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-08-02T03:00:00.000Z
-Stopped at: Phase 12 complete (12-05 cross-model attribution + 12-06 drawdown breadth)
+Last session: 2026-08-02T10:55:39.521Z
+Stopped at: Completed 13-01 Wave 1 tracer (next 13-03)
 Resume file: None
 
 ## Operator Next Steps

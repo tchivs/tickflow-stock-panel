@@ -140,7 +140,14 @@ Six phases extend the shipped research platform from single-factor evaluation in
   2. Researcher can run parameter optimization scored on walk-forward OOS folds (never in-sample), with trial count, search space, and score distribution recorded to guard against multiple-comparison bias.
   3. Researcher can ensemble validated strategies via rank-average of their signals.
 
-**Plans**: 5 plans
+**Plans**: 2/5 plans executed
+
+- [x] 13-01-SUMMARY.md (tracer — WFWD-01 spine proven)
+- [x] 13-02-SUMMARY.md (Wave 0 foundations)
+- [ ] 13-03 (OOS-scored parameter search + validation gate)
+- [ ] 13-04 (rank-average ensemble)
+- [ ] 13-05 (geometry robustness + reporting breadth)
+
 *Planning research: fold geometry (train/test size, gap) calibrated to available A-share history; AlphaMaster's `WF_GAP=20` is a documented starting point.*
 
 ### Phase 14: Output & Boundary (RebalancePlan + Paper Rebalance)
@@ -182,7 +189,7 @@ Phases execute in numeric order: 10 → 11 → 12 → 13 → 14 → 15 (Phase 13
 | 10. Factor Library & Multi-Factor Model | 6/6 | Complete    | 2026-08-01 |
 | 11. Portfolio Construction & Optimization | 7/1 | Complete    | 2026-08-01 |
 | 12. Risk Models & Attribution | 6/1 | Complete    | 2026-08-02 |
-| 13. Walk-Forward Validation & Parameter Search | 0/5 | Not started | - |
+| 13. Walk-Forward Validation & Parameter Search | 2/5 | In progress | - |
 | 14. Output & Boundary (RebalancePlan + Paper Rebalance) | 0/3 | Not started | - |
 | 15. API/SSE + Frontend Panels | 0/4 | Not started | - |
 
