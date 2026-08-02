@@ -524,7 +524,11 @@ class QuoteService:
 
     @classmethod
     def realtime_mode(cls) -> str:
-        """当前实时行情模式: none / watchlist / full_market。"""
+        """当前实时行情模式: none / watchlist / full_market。
+
+        腾讯源免费无需 key, 恒为 full_market (全市场实时, 无档位限制);
+        TickFlow 才按档位区分 none/free→watchlist/starter+→full_market。
+        """
         from app.services import preferences
         if preferences.get_realtime_data_provider() != "tickflow":
             return "full_market"
@@ -680,6 +684,32 @@ class QuoteService:
                 self._fetch_full_market_quotes()
             return self._fetched_at > before
 
+
+    def _all_market_symbols(self) -> list[str]:
+        """全市场股票 + 指数 + ETF 代码 (instruments 表, 去重后带交易所后缀)。"""
+        if not self._repo:
+            return []
+        symbols: set[str] = set()
+        try:
+            inst = self._repo.get_instruments()
+            if not inst.is_empty() and "symbol" in inst.columns:
+                symbols.update(inst["symbol"].cast(pl.Utf8).to_list())
+        except Exception as e:
+            logger.warning("all_market_symbols instruments: %s", e)
+        try:
+            idx = self._repo.get_index_instruments()
+            if not idx.is_empty() and "symbol" in idx.columns:
+                symbols.update(idx["symbol"].cast(pl.Utf8).to_list())
+        except Exception as e:
+            logger.warning("all_market_symbols index: %s", e)
+        try:
+            etf = self._repo.get_etf_instruments()
+            if not etf.is_empty() and "symbol" in etf.columns:
+                symbols.update(etf["symbol"].cast(pl.Utf8).to_list())
+        except Exception as e:
+            logger.warning("all_market_symbols etf: %s", e)
+        return sorted(symbols)
+
     def _fetch_full_market_quotes(self) -> None:
         """拉取全市场行情 → 写 daily + 计算 enriched + 更新缓存。"""
         from app.services import preferences
@@ -692,8 +722,29 @@ class QuoteService:
                     t0 = time.perf_counter()
                     now_ts = time.perf_counter()
                     records = custom_sources.get_provider(provider_name).get_realtime()
-                except Exception as e:  # noqa: BLE001
+                except Exception as e:
                     logger.warning("自定义实时行情拉取失败: %s", e)
+                    return
+                self._process_full_market_records(records, t0=t0, now_ts=now_ts)
+                return
+            if provider_name == "tencent":
+                # 腾讯实时: 免费不封 IP, 从 instruments 拿全市场代码分批拉取。
+                from app.data_providers import chain as provider_chain
+
+                symbols = self._all_market_symbols()
+                if not symbols:
+                    logger.warning("腾讯实时拉取失败: 无 instruments 代码")
+                    return
+                try:
+                    t0 = time.perf_counter()
+                    now_ts = time.perf_counter()
+                    provider = provider_chain.tencent_provider()
+                    records = provider.get_realtime(symbols=symbols)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("腾讯实时拉取失败: %s", e)
+                    return
+                if not records:
+                    logger.warning("腾讯实时数据为空")
                     return
                 self._process_full_market_records(records, t0=t0, now_ts=now_ts)
                 return
@@ -850,14 +901,30 @@ class QuoteService:
         self._evaluate_monitors(daily_df, quote_extra)
 
     def _fetch_watchlist_quotes(self) -> None:
-        """Free 档自选股实时: 只拉取最多 5 个 symbols。"""
+        """自选股实时: 免费档最多 5 个; 腾讯源无需付费 key。"""
         from app.services import preferences
-        from app.tickflow.client import get_paid_realtime_client
 
         symbols = preferences.get_realtime_watchlist_symbols()
         if not symbols:
             logger.info("自选实时未配置标的, 跳过行情拉取")
             return
+
+        provider_name = preferences.get_realtime_data_provider()
+        if provider_name == "tencent":
+            from app.data_providers import chain as provider_chain
+
+            t0 = time.perf_counter()
+            now_ts = time.perf_counter()
+            try:
+                provider = provider_chain.tencent_provider()
+                records = provider.get_realtime(symbols=symbols)
+            except Exception as e:
+                logger.warning("腾讯自选实时拉取失败: %s", e)
+                return
+            self._process_watchlist_records(records, t0=t0, now_ts=now_ts)
+            return
+
+        from app.tickflow.client import get_paid_realtime_client
 
         tf = get_paid_realtime_client()
         if tf is None:
@@ -868,7 +935,7 @@ class QuoteService:
         now_ts = time.perf_counter()
         try:
             resp = tf.quotes.get(symbols=symbols) or []
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("自选实时拉取失败: %s", e)
             return
 
@@ -906,6 +973,13 @@ class QuoteService:
                 "session": q.get("session"),
             })
 
+        self._process_watchlist_records(records, t0=t0, now_ts=now_ts)
+
+    def _process_watchlist_records(self, records: list[dict], *, t0: float, now_ts: float) -> None:
+        """自选实时 records → 元信息 + 日K写盘 + enriched + 通知。"""
+        if not records:
+            logger.warning("自选实时行情数据为空")
+            return
         fetch_ms = (time.perf_counter() - t0) * 1000
         fetched_at = time.time() * 1000
         with self._lock:
@@ -930,6 +1004,7 @@ class QuoteService:
 
         self._broadcast_quote_updated()
         self._evaluate_monitors(daily_df, quote_extra)
+
 
     # ================================================================
     # 工具

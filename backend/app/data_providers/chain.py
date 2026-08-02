@@ -20,7 +20,7 @@ _BUILTIN_CHAIN: dict[str, list[str]] = {
     "daily": ["free_stockdb", "xyz", "tickflow"],
     "minute": ["free_stockdb", "xyz", "tickflow"],
     "adj_factor": ["free_stockdb", "tickflow"],
-    "realtime": ["tickflow"],
+    "realtime": ["tencent", "tickflow"],
     "financial": ["tickflow"],
     "instruments": ["tickflow"],
 }
@@ -48,6 +48,17 @@ def xyz_provider():
     return provider
 
 
+def tencent_provider():
+    """Return the shared Tencent realtime provider (lazy singleton)."""
+    from app.data_providers.tencent_provider import TencentRealtimeProvider
+
+    provider = _provider_cache.get("tencent")
+    if provider is None:
+        provider = TencentRealtimeProvider()
+        _provider_cache["tencent"] = provider
+    return provider
+
+
 def _get_provider(name: str):
     if name == "tickflow":
         from app.data_providers.registry import get_provider as get_tf
@@ -62,6 +73,8 @@ def _get_provider(name: str):
     from app.data_providers import custom as custom_sources
     if name == "xyz":
         return xyz_provider()
+    if name == "tencent":
+        return tencent_provider()
 
     return custom_sources.get_provider(name)
 
@@ -133,6 +146,14 @@ def health_check(name: str) -> str:
             probe = provider.get_daily(["000001"]) if hasattr(provider, "get_daily") else None
             return "ok" if probe is not None and not probe.is_empty() else "warn"
         except Exception as e:  # noqa: BLE001
+            logger.warning("health[%s]: %s", name, e)
+            return "error"
+    if name == "tencent":
+        try:
+            provider = _get_provider(name)
+            probe = provider.get_realtime(symbols=["000001.SZ"])
+            return "ok" if probe else "warn"
+        except Exception as e:
             logger.warning("health[%s]: %s", name, e)
             return "error"
     return "unknown"

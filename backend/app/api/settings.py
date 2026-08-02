@@ -441,6 +441,12 @@ def list_data_sources() -> dict:
             "health": provider_chain.health_check("xyz"),
         },
         {
+            "name": "tencent",
+            "display_name": "腾讯实时 (免费)",
+            "datasets": ["realtime"],
+            "health": provider_chain.health_check("tencent"),
+        },
+        {
             "name": "hhxg",
             "display_name": "hhxg 静态快照 (恢恢量化)",
             "datasets": ["snapshot", "margin", "calendar", "news"],
