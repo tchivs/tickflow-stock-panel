@@ -208,3 +208,100 @@ def test_attribution_spine_end_to_end_on_fixture_run(
     finally:
         cov_path.write_bytes(original)
     assert len(portfolio_repository.list_attribution_evidence(run_id=run_id)) == count_before
+
+
+RISK_MODELS_PHASE12 = (
+    "sample_covariance_v1",
+    "semi_covariance_v1",
+    "ewma_covariance_v1",
+    "ledoit_wolf_v1",
+)
+
+
+@pytest.mark.parametrize("risk_model", RISK_MODELS_PHASE12)
+def test_run_optimization_records_selected_risk_model_with_checksum_bound_covariance(
+    portfolio_repository: PortfolioRepository,
+    artifact_root: Path,
+    fixture_composite: dict[str, object],
+    risk_model: str,
+) -> None:
+    """RSK-02 (12-03): a run under each of the four risk models records the
+    selected name verbatim on the run row + risk_model_json, model params as
+    applicable, full PSD provenance, a 64-hex covariance_sha256, and a
+    checksum-verified covariance artifact; weights stay feasible. The default
+    request still records sample_covariance_v1.
+    """
+    request = {
+        "objective": "min_volatility",
+        "as_of": "2026-08-01",
+        "universe": "cn-a-share",
+        "model_id": "composite-model-v1",
+        "expected_return_method": "composite-zscore-v1",
+        "render_baselines": True,
+        "per_instrument_cap": 0.10,
+        "min_cash": 0.05,
+        "turnover_coef": 0.0014,
+        "risk_model": risk_model,
+    }
+    run = run_optimization(
+        request,
+        repository=portfolio_repository,
+        artifact_service_root=artifact_root,
+        snapshot=fixture_composite,
+        fixture_mode=True,
+    )
+    assert run["problem_status"] == "optimal"
+    assert run["risk_model"] == risk_model
+    detail = run["risk_model_detail"]
+    assert detail["risk_model"] == risk_model
+    assert detail["psd_repair"]["method"] in ("none", "eigen_clip")
+    assert len(detail["covariance_sha256"]) == 64
+    params = detail["model_params"]
+    if risk_model == "semi_covariance_v1":
+        assert params["benchmark"] == "mean"
+    elif risk_model == "ewma_covariance_v1":
+        assert params["lam"] == 0.94
+    elif risk_model == "ledoit_wolf_v1":
+        assert 0.0 < params["shrinkage"] <= 1.0
+        assert params["sklearn_version"]
+
+    # 协方差工件 checksum 校验读取: 工件字节与 risk_model_json 摘要一致。
+    service = PortfolioArtifactService(artifact_root)
+    cov_bytes = service.read_artifact(
+        detail["covariance_artifact_relative_path"],
+        checksum_sha256=detail["covariance_sha256"],
+    )
+    cov = np.asarray(json.loads(cov_bytes.decode("utf-8")), dtype=float)
+    assert cov.shape == (12, 12)
+
+    weights = run["output_weights"]
+    assert sum(weights.values()) <= 1 - 0.05 + 1e-8
+
+
+def test_run_optimization_default_records_sample_covariance(
+    portfolio_repository: PortfolioRepository,
+    artifact_root: Path,
+    fixture_composite: dict[str, object],
+) -> None:
+    """RSK-02 (12-03): the default request records sample_covariance_v1 verbatim."""
+    request = {
+        "objective": "min_volatility",
+        "as_of": "2026-08-01",
+        "universe": "cn-a-share",
+        "model_id": "composite-model-v1",
+        "expected_return_method": "composite-zscore-v1",
+        "render_baselines": True,
+        "per_instrument_cap": 0.10,
+        "min_cash": 0.05,
+        "turnover_coef": 0.0014,
+    }
+    run = run_optimization(
+        request,
+        repository=portfolio_repository,
+        artifact_service_root=artifact_root,
+        snapshot=fixture_composite,
+        fixture_mode=True,
+    )
+    assert run["risk_model"] == "sample_covariance_v1"
+    assert run["risk_model_detail"]["risk_model"] == "sample_covariance_v1"
+
