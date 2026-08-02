@@ -78,8 +78,8 @@ def build_ensemble(
     _validate_gate(config, repo)
 
     pieces: list[pl.DataFrame] = []
-    lo = _iso(start)
-    hi = _iso(end)
+    lo = _to_date(start)
+    hi = _to_date(end)
     for sid in config.strategy_ids:
         frame = signals.get(sid)
         if frame is None:
@@ -88,8 +88,12 @@ def build_ensemble(
         if missing:
             raise ValueError(f"strategy {sid} frame is missing columns: {sorted(missing)}")
         frame = frame.select(["symbol", "date", "_rank"])
+        # IN-03: 用 pl.Date 字面量比较, 而不是字符串词法比较 — 链的 Date 列与测试的
+        # Utf8 列都能正确处理; Datetime 列也会先 cast 到 Date 再比较 (字符串比较对
+        # Datetime 序列化 "2026-07-01 00:00:00" 会失败)。
         frame = frame.filter(
-            (pl.col("date").cast(pl.Utf8) >= lo) & (pl.col("date").cast(pl.Utf8) <= hi)
+            (pl.col("date").cast(pl.Date) >= pl.lit(lo, dtype=pl.Date))
+            & (pl.col("date").cast(pl.Date) <= pl.lit(hi, dtype=pl.Date))
         )
         pieces.append(frame.with_columns(pl.lit(weights[sid], dtype=pl.Float64).alias("_w")))
     if not pieces:
@@ -251,3 +255,15 @@ def _iso(value: Any) -> str:
     """``date``/``datetime``/``str`` → ISO 字符串 (窗口比较用)。"""
     iso = getattr(value, "isoformat", None)
     return iso() if iso is not None else str(value)
+
+
+def _to_date(value: Any) -> object:
+    """``date``/``datetime``/``str`` → 归一化 ``date`` (pl.Date 字面量用, IN-03)。"""
+    from datetime import date as _date
+
+    if isinstance(value, _date):
+        return value
+    if isinstance(value, str):
+        return _date.fromisoformat(value[:10])
+    iso = getattr(value, "isoformat", None)
+    return _date.fromisoformat(iso()[:10]) if iso is not None else value
