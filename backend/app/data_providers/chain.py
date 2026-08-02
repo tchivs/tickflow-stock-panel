@@ -6,8 +6,9 @@ non-overlapping gaps (complementary sources), not just fail over.
 """
 from __future__ import annotations
 
+import datetime as _dt
 import logging
-from typing import Callable
+from collections.abc import Callable
 
 import polars as pl
 
@@ -17,10 +18,9 @@ from app.data_providers.free_stockdb_provider import FreeStockDBProvider
 logger = logging.getLogger(__name__)
 
 _BUILTIN_CHAIN: dict[str, list[str]] = {
-    "daily": ["free_stockdb", "xyz", "tickflow"],
-    "minute": ["free_stockdb", "xyz", "tickflow"],
+    "daily": ["free_stockdb", "ifzq", "xyz", "tickflow"],
+    "minute": ["free_stockdb", "ifzq", "sina", "xyz", "tickflow"],
     "adj_factor": ["free_stockdb", "tickflow"],
-    "realtime": ["tencent", "tickflow"],
     "financial": ["tickflow"],
     "instruments": ["tickflow"],
 }
@@ -75,6 +75,14 @@ def _get_provider(name: str):
         return xyz_provider()
     if name == "tencent":
         return tencent_provider()
+    if name in {"ifzq", "sina"}:
+        from app.data_providers.ifzq_provider import IfzqKlineProvider, SinaKlineProvider
+
+        provider = _provider_cache.get(name)
+        if provider is None:
+            provider = IfzqKlineProvider() if name == "ifzq" else SinaKlineProvider()
+            _provider_cache[name] = provider
+        return provider
 
     return custom_sources.get_provider(name)
 
@@ -113,12 +121,12 @@ def fetch_with_chain(
     for name in chain:
         try:
             provider = _get_provider(name)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("chain[%s]: provider %s unavailable: %s", dataset, name, e)
             continue
         try:
             frame = fetch(provider)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("chain[%s]: provider %s failed: %s", dataset, name, e)
             continue
         if frame is None or frame.is_empty():
@@ -145,14 +153,21 @@ def health_check(name: str) -> str:
             provider = _get_provider(name)
             probe = provider.get_daily(["000001"]) if hasattr(provider, "get_daily") else None
             return "ok" if probe is not None and not probe.is_empty() else "warn"
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("health[%s]: %s", name, e)
             return "error"
-    if name == "tencent":
+    if name in {"tencent", "ifzq", "sina"}:
         try:
             provider = _get_provider(name)
-            probe = provider.get_realtime(symbols=["000001.SZ"])
-            return "ok" if probe else "warn"
+            if name == "tencent":
+                probe = provider.get_realtime(symbols=["000001.SZ"])
+            elif name == "sina":
+                probe = provider.get_daily(["000001.SZ"])
+            else:
+                probe = provider.get_daily(["000001.SZ"],
+                                           start_time=_dt.datetime(2026, 7, 30),
+                                           end_time=_dt.datetime(2026, 7, 31))
+            return "ok" if probe is not None and not probe.is_empty() else "warn"
         except Exception as e:
             logger.warning("health[%s]: %s", name, e)
             return "error"

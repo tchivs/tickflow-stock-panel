@@ -98,6 +98,7 @@ class TickFlowProvider:
         start_time: datetime | None = None,
         end_time: datetime | None = None,
         asset_type: AssetType = "stock",
+        freq: str = "1m",
     ) -> pl.DataFrame:
         # Existing minute sync remains in app.services.kline_sync for now.
         return pl.DataFrame()
