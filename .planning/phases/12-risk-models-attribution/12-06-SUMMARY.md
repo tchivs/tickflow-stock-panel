@@ -107,3 +107,23 @@ None — no security-relevant surface beyond the planned read/analyze layer. The
 - 3 commits recorded (2ddd822, 9c3c6d1, e7c8009), each verified via `git log`.
 - Per-plan verification command: 12 passed.
 - Related-file regression check: 19 passed (drawdown + pipeline) — re-run after Exec1205's df5f617 landed on the shared analyzer.py.
+
+## Code-Review Fix Summary (12-REVIEW → clean)
+
+Phase 12 code review found 0 blockers, 4 warnings, 7 infos. All fixed and committed atomically per finding:
+
+| Finding | Commit | Fix |
+|---|---|---|
+| WR-01 | `e5d8821` | `run_attribution` selection branch fails closed on non-finite returns (`ValueError("returns must be finite")`), matching `run_drawdown`; regression test asserts no evidence row on NaN panel. |
+| WR-02 | `8a930f5` | `underwater_curve` rejects returns `<= -1.0` (equity → 0/negative → NaN curve); regression test covers exactly −1.0, below, and the −0.9999 boundary. |
+| WR-03 | `35543c7` | Selection + identity paths record `covariance_sha256` + `covariance_source` (`"recompute"` / `"artifact"`) in the artifact payload and evidence `reconciliation_json` — the audit trail is self-verifying (Phase 15 can distinguish checksum-bound identity vs caller-returns recompute). |
+| WR-04 | `e1ffa04` | Finiteness gate at the top of `reconcile_all_models` (no silent reduced-window four-model "green"). |
+| IN-01 | `a881979` | `ewma_covariance` docstring: λ=1.0 is a special-cased jump (not the `outer(r_1,r_1)` recursion limit) and the recursion is non-demeaned (second-moment, includes mean²). |
+| IN-02 | `a881979` | `load_covariance_artifact` uses `.get()` and raises `ArtifactReadError("covariance artifact metadata missing")` instead of bare `KeyError`; regression test. |
+| IN-03 | `f88bb5b` | `_RISK_MODEL_NAMES` cross-reference comment → `schemas.RiskModel` / `repository._RISK_MODELS`. |
+| IN-04 | `f88bb5b` | Repository alias `_RISK_MODELS_PHASE12 = _RISK_MODELS` documented as intentional (12-02 option-a). |
+| IN-05 | `f88bb5b` | Migration comment: plan's conditional CHECK intentionally dropped for strict NOT NULL (self-contradictory plan combo). |
+| IN-06 | `f88bb5b` | `drawdown_periods` docstring aligned to strict `<` semantics (depth strictly above threshold). |
+| IN-07 | `a881979` | `semi_covariance` docstring: normalization over ALL common-window observations (`drops.shape[0]`, PyPortfolioOpt contract), not the subset count. |
+
+IN-08 (evidence id 32-hex validation) intentionally skipped — low priority, runs-table convention consistent. Full suite after fixes: `pytest tests/portfolio` 124 passed; main suite 1084 passed / 3 skipped; excluded dirs 75 passed (total 1159 passed).
