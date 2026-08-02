@@ -213,34 +213,83 @@ def sync_and_persist_daily_batch(
     if not symbols:
         return 0
 
-    provider_name = preferences.get_daily_data_provider()
-    if provider_name != "tickflow":
-        from app.data_providers import custom as custom_sources
-        if custom_sources.provider_has_dataset(provider_name, "daily"):
-            provider = custom_sources.get_provider(provider_name)
-            end_time = end_date or datetime.now()
-            days = count or 365
-            start_time = start_date or (end_time - timedelta(days=days))
-            df = provider.get_daily(
-                symbols,
-                start_time=start_time,
-                end_time=end_time,
-                on_chunk_done=on_chunk_done,
-            )
-            if df.is_empty():
-                return 0
-            repo.append_daily(df)
-            try:
-                d = repo.store.data_dir.as_posix()
-                repo.db.execute(
-                    f"""CREATE OR REPLACE VIEW kline_daily AS
-                        SELECT * FROM read_parquet('{d}/kline_daily/**/*.parquet', union_by_name=true)"""
-                )
-            except Exception as e:  # noqa: BLE001
-                logger.warning("refresh view failed: %s", e)
-            return df.height
-        # 自定义源未配置 daily → 回退 TickFlow
+    from app.data_providers import chain as provider_chain
 
+    provider_name = preferences.get_daily_data_provider()
+    chain_names: list[str] = []
+    if provider_name != "tickflow":
+        # User-selected custom source participates first; free_stockdb and xyz
+        # are builtin chain members always attempted before TickFlow.
+        from app.data_providers import custom as custom_sources
+
+        if custom_sources.provider_has_dataset(provider_name, "daily"):
+            chain_names.append(provider_name)
+        chain_names += ["free_stockdb", "xyz"]
+    else:
+        chain_names = ["free_stockdb", "xyz", "tickflow"]
+
+    end_time = end_date or datetime.now()
+    days = count or 365
+    start_time = start_date or (end_time - timedelta(days=days))
+
+    def _fetch_daily(provider) -> pl.DataFrame:
+        if hasattr(provider, "get_daily"):
+            try:
+                return provider.get_daily(
+                    symbols,
+                    start_time=start_time,
+                    end_time=end_time,
+                    on_chunk_done=on_chunk_done,
+                )
+            except TypeError:
+                return provider.get_daily(
+                    symbols,
+                    start_time=start_time,
+                    end_time=end_time,
+                )
+        return pl.DataFrame()
+
+    merged = provider_chain.fetch_with_chain("daily", _fetch_daily, providers=chain_names)
+    if not merged.is_empty():
+        repo.append_daily(merged)
+        try:
+            d = repo.store.data_dir.as_posix()
+            repo.db.execute(
+                f"""CREATE OR REPLACE VIEW kline_daily AS
+                    SELECT * FROM read_parquet('{d}/kline_daily/**/*.parquet', union_by_name=true)"""
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("refresh view failed: %s", e)
+        return merged.height
+
+    # 自定义源未配置 daily → 回退 TickFlow (capability-gated)
+
+    if not capset.has(Cap.KLINE_DAILY_BATCH):
+        return 0
+
+    limit = resolve_limit(capset, Cap.KLINE_DAILY_BATCH, default_batch=100)
+
+    df = sync_daily_batch(
+        symbols, count=count, batch_size=limit.batch, rpm=limit.rpm,
+        start_time=start_time, end_time=end_time,
+        on_chunk_done=on_chunk_done,
+    )
+
+    if df.is_empty():
+        return 0
+
+    repo.append_daily(df)
+
+    try:
+        d = repo.store.data_dir.as_posix()
+        repo.db.execute(
+            f"""CREATE OR REPLACE VIEW kline_daily AS
+                SELECT * FROM read_parquet('{d}/kline_daily/**/*.parquet', union_by_name=true)"""
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("refresh view failed: %s", e)
+
+    return df.height
     if not capset.has(Cap.KLINE_DAILY_BATCH):
         return 0
 
@@ -560,17 +609,36 @@ def sync_minute_batch(
     count 仅作为 fallback 保留。
     on_chunk_done(current, total) 每个 chunk 完成后回调。
     """
-    # 自定义数据源分流: minute provider
+    # 多源链: free_stockdb 近端 → xyz 在线历史 → TickFlow。用户自定义 minute
+    # provider 优先。缺口/失败自动逐级回退。
+    from app.data_providers import chain as provider_chain
+
     provider_name = preferences.get_minute_data_provider()
+    chain_names: list[str] = []
     if provider_name != "tickflow":
         from app.data_providers import custom as custom_sources
-        if custom_sources.provider_has_dataset(provider_name, "minute"):
-            provider = custom_sources.get_provider(provider_name)
-            return provider.get_minute(
-                symbols, start_time=start_time, end_time=end_time, on_chunk_done=on_chunk_done,
-            )
-        # 未配置 minute → 回退 TickFlow
 
+        if custom_sources.provider_has_dataset(provider_name, "minute"):
+            chain_names.append(provider_name)
+    chain_names += ["free_stockdb", "xyz"]
+
+    def _fetch_minute(provider) -> pl.DataFrame:
+        if not hasattr(provider, "get_minute"):
+            return pl.DataFrame()
+        try:
+            return provider.get_minute(
+                symbols, start_time=start_time, end_time=end_time,
+                on_chunk_done=on_chunk_done,
+            )
+        except TypeError:
+            return provider.get_minute(
+                symbols, start_time=start_time, end_time=end_time,
+            )
+
+    merged = provider_chain.fetch_with_chain("minute", _fetch_minute, providers=chain_names)
+    if not merged.is_empty():
+        return merged
+    # 链上 free_stockdb/custom 均无数据 → 回退 TickFlow
     tf = get_client()
     out: list[pl.DataFrame] = []
     chunks = chunked(symbols, batch_size)

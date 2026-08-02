@@ -624,6 +624,56 @@ async def lifespan(app: FastAPI):
     monitor_engine.set_history_loader(_screener_svc._load_enriched_history)
     # ETF 版历史加载器: asset_type=etf 的 strategy 型规则用 (读 kline_etf_enriched)。
     monitor_engine.set_history_loader_etf(_etf_screener_svc._load_enriched_history)
+    # 板块 loader: scope=sector 规则经 FreeStockDBProvider.get_boards 解析成员。
+    # 服务器未配置 (127.0.0.1) 或查询失败时返回 [] → sector 规则 fail-closed 空。
+    try:
+        from app.data_providers import chain as provider_chain
+        from app.data_providers.free_stockdb_provider import FreeStockDBProvider
+
+        _fsdb = provider_chain.free_stockdb_provider()
+
+        def _board_loader(sector: str | list[str]) -> list[dict]:
+            # sector 支持板块显示名 (如 "5G") 或板块指数代码 (如 "300843.TI")。
+            # get_boards 按 category-name 前缀做子串匹配, 先用它收窄到候选,
+            # 再在候选里做精确匹配 (name/code), 避免 "5G" 误命中 "F5G概念"。
+            if not sector or not isinstance(_fsdb, FreeStockDBProvider):
+                return []
+            names = [sector] if isinstance(sector, str) else list(sector)
+            # 代码形式 (如 "300843.TI" 或 "300843"): get_boards 的 category-name
+            # 子串收窄命中不了纯代码, 走 get_board_by_codes 按代码精确反查。
+            if any(n.strip().split(".")[0].isdigit() for n in names if n.strip()):
+                try:
+                    frame = _fsdb.get_board_by_codes(names)
+                except Exception as e:
+                    logger.warning("board loader codes %s failed: %s", names, e)
+                    frame = None
+                if frame is not None and not frame.is_empty():
+                    return frame.to_dicts()
+                return []
+            try:
+                frame = _fsdb.get_boards(names)
+                if frame is None or frame.is_empty():
+                    return []
+                rows = frame.to_dicts()
+            except Exception as e:
+                logger.warning("board loader %s failed: %s", sector, e)
+                return []
+            wanted = {str(n).strip().lower() for n in names if str(n).strip()}
+            exact = [
+                r for r in rows
+                if str(r.get("name") or "").strip().lower() in wanted
+                or str(r.get("code") or "").strip().lower() in wanted
+            ]
+            if exact:
+                return exact
+            # 精确未命中 → 退化为子串 (如 sector="白酒" 命中 "白酒概念")。
+            return [
+                r for r in rows
+                if any(w in str(r.get("name") or "").lower() for w in wanted)
+            ]
+        monitor_engine.set_board_loader(_board_loader)
+    except Exception as e:
+        logger.warning("board loader unavailable, scope=sector rules will fail-closed: %s", e)
 
     # 自动迁移: 把旧 strategy_monitor_ids 同步为 type=strategy 规则 (统一到监控页)
     try:

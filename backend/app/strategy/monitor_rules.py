@@ -165,11 +165,18 @@ def validate(rule: dict) -> None:
             for position_id in position_ids
         ):
             raise ValueError("scope=positions 时 position_ids 不能为空且必须为持仓 ID")
-    # sector 作用域的板块 JOIN 尚未实现: _apply_scope 目前会退化为「全市场」,
-    # 一条本意针对某板块的规则会对全市场每只命中都触发(告警风暴)。在板块 JOIN
-    # 落地前, 拒绝创建 sector 规则(fail-closed), 避免用户建出会刷屏的规则。
     if scope == "sector":
-        raise ValueError("scope=sector 暂未支持(板块 JOIN 未实现),请改用 scope=symbols 指定标的或 scope=all")
+        # 板块 JOIN 已落地 (_apply_scope 经 board loader 解析成员)。sector 字段
+        # 必须给出板块名/代码 (单个字符串或非空列表); 否则 fail-closed 拒绝,
+        # 避免板块规则退化为全市场。
+        sector = rule.get("sector")
+        if isinstance(sector, str):
+            if not sector.strip():
+                raise ValueError("scope=sector 时 sector 不能为空")
+        elif not isinstance(sector, list) or len(sector) == 0 or any(
+            not isinstance(s, str) or not s.strip() for s in sector
+        ):
+            raise ValueError("scope=sector 时 sector 必须是非空板块名/代码, 或非空字符串列表")
     if rule.get("type") == "position" and scope != "positions":
         raise ValueError("position 规则必须使用 scope=positions")
 

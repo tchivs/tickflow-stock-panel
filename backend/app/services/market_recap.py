@@ -211,7 +211,7 @@ def _build_user_prompt(overview: dict, news: list[dict], focus: str) -> str:
         parts.extend([
             "",
             "## 近期市场新闻",
-            "(暂无新闻数据:本功能新闻检索能力将在后续版本接入。"
+            "(暂无新闻数据:外部新闻源不可用。"
             "消息催化一节请直接从量价异动给出可能的催化逻辑结论,不要编造具体消息,也不要复述本说明。)",
         ])
 
@@ -265,8 +265,20 @@ async def recap_market_stream(
         quote_service / depth_service: 可选,数据装配依赖。
         as_of: 复盘日期,None 取最新有数据日。
         focus: 用户追加的复盘关注点。
-        news: 预检索的新闻列表(P1 不传,留 None 走降级说明;P3 由 news_search 注入)。
+        news: 预检索的新闻列表;None 时尝试从 hhxg 静态快照拉取焦点/宏观新闻,
+            失败则走降级说明 (不再依赖后续 news_search 注入)。
     """
+    if not news:
+        try:
+            from app.services.hhxg_market import HhxgMarketClient
+
+            # 静态快照盘后 ~20:00 更新; 8s 上限避免源站慢时拖住复盘。
+            hhxg = HhxgMarketClient(timeout=8.0)
+            hhxg_news = hhxg.snapshot_news()
+            if hhxg_news:
+                news = hhxg_news[:8]
+        except Exception as e:
+            logger.warning("hhxg news unavailable for recap: %s", e)
     # 1. 装配市场总览
     overview = build_market_overview(repo, quote_service, depth_service, as_of)
     as_of_str = overview.get("as_of")

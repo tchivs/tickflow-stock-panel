@@ -74,9 +74,22 @@ def _base_price_rule(scope: str) -> dict:
     }
 
 
-def test_validate_rejects_sector_scope():
+def test_validate_rejects_sector_without_name():
+    """sector 作用域必须给出板块名/代码, 否则 fail-closed 拒绝。"""
     with pytest.raises(ValueError):
         monitor_rules.validate(_base_price_rule("sector"))
+    bad = _base_price_rule("sector")
+    bad["sector"] = []
+    with pytest.raises(ValueError):
+        monitor_rules.validate(bad)
+
+
+def test_validate_accepts_sector_with_name():
+    """sector 作用域给出板块名/代码时合法。"""
+    for sector in ("5G", "300843.TI", ["5G", "人工智能"]):
+        rule = _base_price_rule("sector")
+        rule["sector"] = sector
+        monitor_rules.validate(rule)  # 不应抛
 
 
 def test_validate_accepts_symbols_scope():
@@ -85,15 +98,47 @@ def test_validate_accepts_symbols_scope():
     monitor_rules.validate(rule)  # 不应抛
 
 
-def test_apply_scope_sector_fails_closed():
-    """历史遗留 sector 规则在评估时应返回空(绝不退化为全市场)。"""
+def test_apply_scope_sector_fails_closed_without_loader():
+    """未注入 board loader 时 sector 规则返回空(绝不退化为全市场)。"""
     df = pl.DataFrame({"symbol": ["600000.SH", "000001.SZ"], "close": [10.0, 20.0]})
-    out = MonitorRuleEngine._apply_scope(df, {"id": "r_old", "scope": "sector"})
+    engine = MonitorRuleEngine()
+    out = engine._apply_scope(df, {"id": "r_old", "scope": "sector", "sector": "5G"})
     assert out.is_empty()
 
     # 对照: scope=all 返回全量, symbols 过滤子集
-    assert MonitorRuleEngine._apply_scope(df, {"scope": "all"}).height == 2
-    picked = MonitorRuleEngine._apply_scope(
+    assert engine._apply_scope(df, {"scope": "all"}).height == 2
+    picked = engine._apply_scope(
         df, {"scope": "symbols", "symbols": ["600000.SH"]}
     )
     assert picked.height == 1
+
+
+def test_apply_scope_sector_joins_members():
+    """注入 board loader 后 sector 规则只保留板块成员。"""
+    df = pl.DataFrame(
+        {
+            "symbol": ["600000.SH", "000001.SZ", "000016.SZ"],
+            "close": [10.0, 20.0, 30.0],
+        }
+    )
+
+    def loader(sector):
+        assert sector == "5G"
+        return [{"name": "5G", "members": ["000001", "000016"]}]
+    engine = MonitorRuleEngine()
+    engine.set_board_loader(loader)
+    out = engine._apply_scope(df, {"scope": "sector", "sector": "5G"})
+    # 600000.SH 不属于板块; 000001/000016 属于 → 只留这两行。
+    assert sorted(out["symbol"].to_list()) == ["000001.SZ", "000016.SZ"]
+
+
+def test_sector_symbols_extracts_members() -> None:
+    """_sector_symbols 从 board dict 提取 6 位代码 (兼容 members/symbols 键)。"""
+    from app.strategy.monitor import _sector_symbols
+
+    boards = [
+        {"name": "5G", "members": ["000016", "000049", "600000.SH"]},
+        {"name": "AI", "symbols": ["000063"]},
+        {"name": "junk", "members": ["abc", "12345", ""]},
+    ]
+    assert _sector_symbols(boards) == {"000016", "000049", "600000", "000063"}
