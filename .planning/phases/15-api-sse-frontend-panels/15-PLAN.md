@@ -135,7 +135,6 @@ All commands run from `backend/` (pytest) or `frontend/` (pnpm build / tsc) with
 **files_modified:**
 - backend/app/contracts/panels.py (extend — OptimizationRunDTO)
 - backend/app/api/portfolio_panels.py (extend — GET /api/portfolio/optimization-runs + /{id})
-- backend/app/api/main wiring (register the portfolio_panels router in backend/app/main.py)
 - frontend/src/lib/api.ts (extend — listOptimizationRuns / getOptimizationRun)
 - frontend/src/lib/queryKeys.ts (extend — optimizationRuns factories)
 - frontend/src/pages/portfolio/Optimization.tsx (new — the panel)
@@ -258,6 +257,8 @@ cd backend && .venv/bin/python -m pytest tests/api/test_portfolio_panels.py test
 
 The DTOs + routers + fixtures exist; the scaffold cases are provably RED until the route bodies land.
 
+**Zero-execution-UI gate (hard acceptance):** this foundations plan introduces NO UI panel and NO execute/order/submit affordance — the DTOs and routes are read-only (except the paper approve/reject POST stubs, which call `paper.approve`/`reject` — idempotent append-only, never a live path).
+
 ## Success Criteria
 
 - Server-owned strict DTOs pinned for all five panels; both typed read routers registered with response_model on every route.
@@ -316,7 +317,7 @@ cd backend && .venv/bin/python -m pytest tests/api/test_research_panels.py -x -q
 cd frontend && pnpm build
 ```
 
-**Zero-execution-UI gate:** no execute/order/submit affordance in either panel.
+**Zero-execution-UI gate (hard acceptance):** `grep -nE 'execute|placeOrder|submitOrder|trade' frontend/src/pages/backtest/ModelLibrary.tsx frontend/src/pages/backtest/WalkForward.tsx` == 0 — no execute/order/submit affordance in either panel.
 
 ## Success Criteria
 
