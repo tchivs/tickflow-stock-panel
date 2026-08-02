@@ -195,3 +195,76 @@ def fixture_attribution_run(
     )
     assert run["problem_status"] == "optimal"
     return run
+
+
+@pytest.fixture
+def fixture_rebalance_run(
+    portfolio_repository: PortfolioRepository,
+    artifact_root: Path,
+    fixture_composite: dict[str, object],
+) -> dict[str, object]:
+    """A recorded optimal Phase 11 run for the RebalancePlan spine (14-01/14-02).
+
+    Mirrors ``fixture_attribution_run``: one optimal min-vol run bound to the
+    fixture composite identity via ``run_optimization`` (fixture_mode=True).
+    ``build_rebalance_plan`` (14-01) consumes its ``output_weights``; the
+    repository-level 14-02 cases consume its ``id`` + ``input_snapshot_sha256``
+    to record rebalance_plans rows.
+    """
+    from app.portfolio.optimizer import run_optimization
+
+    request = {
+        "objective": "min_volatility",
+        "as_of": "2026-08-01",
+        "universe": "cn-a-share",
+        "model_id": "composite-model-v1",
+        "expected_return_method": "composite-zscore-v1",
+        "render_baselines": True,
+        "per_instrument_cap": 0.10,
+        "min_cash": 0.05,
+        "turnover_coef": 0.0014,
+    }
+    run = run_optimization(
+        request,
+        repository=portfolio_repository,
+        artifact_service_root=artifact_root,
+        snapshot=fixture_composite,
+        fixture_mode=True,
+    )
+    assert run["problem_status"] == "optimal"
+    return run
+
+
+@pytest.fixture
+def fixture_prices() -> dict[str, float]:
+    """Deterministic {symbol: price} for FIXTURE_SYMBOLS (14-01/14-03 lot-sizing)."""
+    return {
+        "600000.SH": 10.0,
+        "600001.SH": 20.0,
+        "600002.SH": 15.0,
+        "600003.SH": 30.0,
+    }
+
+
+@pytest.fixture
+def fixture_plan_inputs(
+    fixture_prices: dict[str, float],
+) -> dict[str, object]:
+    """Researcher-provided RebalancePlan inputs: equity, blocked set, fees, odd lots.
+
+    The lot-sizing adapter (14-01/14-03) consumes these: a blocked symbol
+    (``600002.SH``), one odd-lot position (``600001.SH`` at 150 = one 100-share
+    board lot + a 50-share odd remainder, so odd-lot sell is testable), and the
+    MatcherConfig fee model the adapter reuses from backtest/engine.py.
+    """
+    from app.backtest.engine import MatcherConfig
+
+    return {
+        "equity": 1_000_000.0,
+        "blocked": {"600002.SH"},
+        "matcher_config": MatcherConfig(
+            commission_pct=0.0003, stamp_tax_pct=0.001, slippage_bps=5.0
+        ),
+        "odd_lot_positions": {"600001.SH": 150},
+        "min_cash": 50_000.0,
+    }
