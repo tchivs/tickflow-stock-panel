@@ -442,6 +442,26 @@ def test_run_attribution_model_selection_non_finite_returns_fail_closed(
     assert len(portfolio_repository.list_attribution_evidence(run_id=run_id)) == count_before
 
 
+def test_reconcile_all_models_non_finite_returns_fail_closed(
+    portfolio_repository: PortfolioRepository,
+    artifact_root: Path,
+    fixture_multi_model_run: tuple[dict[str, object], np.ndarray],
+) -> None:
+    """WR-01/04: reconcile_all_models rejects non-finite returns with ValueError
+    instead of silently producing four reduced-window reconciled rows."""
+    run, returns = fixture_multi_model_run
+    run_id = str(run["id"])
+    dirty = returns.copy()
+    dirty[1, 2] = np.inf
+    with pytest.raises(ValueError, match="returns must be finite"):
+        reconcile_all_models(
+            run_id,
+            returns=dirty,
+            repository=portfolio_repository,
+            artifact_service_root=artifact_root,
+        )
+
+
 def test_reconcile_all_models_cross_model_matrix(
     portfolio_repository: PortfolioRepository,
     artifact_root: Path,

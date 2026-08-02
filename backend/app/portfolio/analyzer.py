@@ -208,6 +208,10 @@ def reconcile_all_models(
             "returns columns must align with the run's output_weights "
             f"(expected {weights.shape[0]}, got {panel.shape[1]})"
         )
+    # 同 run_attribution 选择路径的 fail-closed 契约: 非有限收益率绝不静默
+    # 进入四种模型重算 (dropna 收缩窗口会掩盖数据问题, all_reconciled 变假绿)。
+    if not np.all(np.isfinite(panel)):
+        raise ValueError("returns must be finite")
 
     models: list[dict[str, Any]] = []
     for name in _RISK_MODEL_NAMES:
