@@ -16,6 +16,15 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 Objective = Literal["min_volatility", "hrp", "max_sharpe"]
 
+# RSK-02: 四种风险模型枚举 (Phase 12 套件; 样本协方差是默认 —— 选择是显式的,
+# 绝不静默)。record 时原样写入 runs 行 + risk_model_json。
+RiskModel = Literal[
+    "sample_covariance_v1",
+    "semi_covariance_v1",
+    "ewma_covariance_v1",
+    "ledoit_wolf_v1",
+]
+
 # solve() 唯一可接受的选项面: 不在白名单内的键直接拒绝 (V5)。
 SOLVER_OPTIONS_ALLOWLIST: Final[frozenset[str]] = frozenset(
     {
@@ -42,6 +51,7 @@ class OptimizationRequest(BaseModel):
     universe: str = "cn-a-share"
     model_id: str | None = None  # expected_return_method == composite-zscore-v1 时必填 (仓库层强制)
     expected_return_method: Literal["composite-zscore-v1", "none"] = "composite-zscore-v1"
+    risk_model: RiskModel = "sample_covariance_v1"  # RSK-02 显式选择, 默认样本协方差
     render_baselines: bool = True  # 默认渲染基线 (PFOL-02)
     per_instrument_cap: float = Field(default=0.10, gt=0.0, le=1.0)
     min_cash: float = Field(default=0.05, ge=0.0, lt=1.0)

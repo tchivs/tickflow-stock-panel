@@ -27,12 +27,11 @@ _RUN_STATUSES = frozenset(
 )
 _OBJECTIVES = frozenset({"min_volatility", "hrp", "max_sharpe"})
 _EXPECTED_RETURN_METHODS = frozenset({"composite-zscore-v1", "none"})
-_RISK_MODELS = frozenset({"sample_covariance_v1"})
-# Phase 12 证据表枚举: portfolio_risk_attribution_evidence.risk_model 接受 4 模型
-# (12-02 option-a: runs 表 CHECK 已加宽到同一 4 模型枚举)。
-_RISK_MODELS_PHASE12 = frozenset(
+_RISK_MODELS = frozenset(
     {"sample_covariance_v1", "semi_covariance_v1", "ewma_covariance_v1", "ledoit_wolf_v1"}
 )
+# 12-02 option-a: runs 表 CHECK 已加宽到 4 模型枚举; 证据表使用同一枚举。
+_RISK_MODELS_PHASE12 = _RISK_MODELS
 _ATTRIBUTION_TYPES = frozenset({"exposure_contribution", "drawdown"})
 
 

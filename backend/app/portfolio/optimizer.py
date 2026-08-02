@@ -37,7 +37,7 @@ from app.portfolio.constraints import (
 )
 from app.portfolio.hrp import hrp_portfolio, hrp_weights, render_baseline
 from app.portfolio.repository import PortfolioRepository
-from app.portfolio.risk import check_psd, covariance_sha256, repair_psd, sample_covariance
+from app.portfolio.risk import check_psd, covariance_sha256, make_risk_model_family, repair_psd
 from app.portfolio.snapshot import SnapshotBindingError, load_composite_snapshot
 from app.research.repository import ResearchRepository
 
@@ -417,28 +417,19 @@ def _build_risk_model(
     *,
     window: tuple[str, str],
     epsilon: float = PSD_EPSILON_DEFAULT,
+    risk_model_name: str = "sample_covariance_v1",
 ) -> dict[str, Any]:
-    """Sample covariance → PSD check → recorded repair (never silent, PFOL-01)."""
-    cov = sample_covariance(returns, dropna=True)
-    min_eig, eigvals = check_psd(cov)
-    if min_eig < -epsilon:
-        repaired, provenance = repair_psd(cov, method="eigen_clip", epsilon=epsilon)
-        cov = repaired
-    else:
-        provenance = {
-            "method": "none",
-            "epsilon": epsilon,
-            "min_eigenvalue_before": min_eig,
-            "eigenvalues_before": eigvals.tolist(),
-            "eigenvalues_after": None,
-        }
-    risk_model_json = {
-        "risk_model": "sample_covariance_v1",
-        "window": list(window),
-        "dropna": True,
-        "psd_repair": provenance,
-        "covariance_sha256": covariance_sha256(cov),
-    }
+    """Risk-model covariance → PSD check → recorded repair (never silent, PFOL-01).
+
+    RSK-02: delegates to ``make_risk_model_family`` — the single PSD-provenance
+    dispatcher shared with Phase 13 (per-fold covariance). Sample remains the
+    default; the selected model name is recorded verbatim in risk_model_json.
+    """
+    block = make_risk_model_family(
+        returns, risk_model_name=risk_model_name, window=window, epsilon=epsilon
+    )
+    cov = block["covariance"]
+    risk_model_json = block["risk_model_json"]
     return {"covariance": cov, "risk_model_json": risk_model_json}
 
 
@@ -587,7 +578,7 @@ def _record_failed_run(
         "industry_cap": getattr(req, "industry_cap", None),
         "policy_version": "phase-11-policy-v1",
     }
-    risk_model_json = {"risk_model": "sample_covariance_v1", "psd_repair": None}
+    risk_model_json = {"risk_model": req.risk_model, "psd_repair": None}
     fields: dict[str, Any] = {
         "id": run_id,
         "objective": req.objective,
@@ -599,7 +590,7 @@ def _record_failed_run(
             repository, req, input_snapshot_sha256
         ),
         "expected_return_method": req.expected_return_method,
-        "risk_model": "sample_covariance_v1",
+        "risk_model": req.risk_model,
         "risk_model_json": risk_model_json,
         "constraint_stack_json": constraint_stack,
         "solver_name": "n/a",
@@ -694,7 +685,11 @@ def _run_optimization_impl(
             raise ValueError("snapshot mu length must match symbols")
         mu = np.asarray(snapshot_mu, dtype=float)
 
-    risk_block = _build_risk_model(returns, window=(req.as_of.isoformat(), req.as_of.isoformat()))
+    risk_block = _build_risk_model(
+        returns,
+        window=(req.as_of.isoformat(), req.as_of.isoformat()),
+        risk_model_name=req.risk_model,
+    )
     cov = risk_block["covariance"]
     risk_model_json = risk_block["risk_model_json"]
     ensure_psd_provenance(cov, risk_model_json["psd_repair"], epsilon=PSD_EPSILON_DEFAULT)
@@ -765,7 +760,7 @@ def _run_optimization_impl(
             composite_snapshot_id=composite_snapshot_id,
             input_snapshot_sha256=input_snapshot_sha256,
             expected_return_method=req.expected_return_method,
-            risk_model="sample_covariance_v1",
+            risk_model=req.risk_model,
             risk_model_json=risk_model_json,
             constraint_stack_json={
                 "cap": req.per_instrument_cap,
@@ -859,7 +854,7 @@ def _run_optimization_impl(
             composite_snapshot_id=composite_snapshot_id,
             input_snapshot_sha256=input_snapshot_sha256,
             expected_return_method=req.expected_return_method,
-            risk_model="sample_covariance_v1",
+            risk_model=req.risk_model,
             risk_model_json=risk_model_json,
             constraint_stack_json={
                 "cap": req.per_instrument_cap,
@@ -934,7 +929,7 @@ def _run_optimization_impl(
         composite_snapshot_id=composite_snapshot_id,
         input_snapshot_sha256=input_snapshot_sha256,
         expected_return_method=req.expected_return_method,
-        risk_model="sample_covariance_v1",
+        risk_model=req.risk_model,
         risk_model_json=risk_model_json,
         constraint_stack_json={
             "cap": req.per_instrument_cap,

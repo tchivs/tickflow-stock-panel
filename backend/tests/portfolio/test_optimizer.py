@@ -382,7 +382,7 @@ def test_indefinite_covariance_records_failed_run_in_orchestrator(
 
     indefinite = np.array([[1.0, 1.2], [1.2, 1.0]])  # min eig < 0, non-PSD
 
-    def _bypass_repair(returns, *, window, epsilon=1e-10):
+    def _bypass_repair(returns, *, window, epsilon=1e-10, risk_model_name="sample_covariance_v1"):
         # Bypass the PSD gate: hand the indefinite covariance straight to the solver.
         return {"covariance": indefinite, "risk_model_json": {"risk_model": "sample_covariance_v1", "psd_repair": None}}
 
