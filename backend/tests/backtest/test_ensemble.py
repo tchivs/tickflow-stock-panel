@@ -371,7 +371,7 @@ def test_save_ensemble_binds_membership_fingerprint_into_snapshot(
         {
             "strategy_ids": ["s1", "s2"],
             "weights": {"s1": 0.5, "s2": 0.5},
-            "validation_record_ids": [v1["id"], v2["id"]],
+            "validation_record_ids": sorted([v1["id"], v2["id"]]),
             "membership_fingerprint": fp,
         },
         sort_keys=True,
