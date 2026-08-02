@@ -37,7 +37,7 @@ from app.portfolio.constraints import (
 )
 from app.portfolio.hrp import hrp_portfolio, hrp_weights, render_baseline
 from app.portfolio.repository import PortfolioRepository
-from app.portfolio.risk import check_psd, covariance_sha256, make_risk_model_family, repair_psd
+from app.portfolio.risk import check_psd, make_risk_model_family
 from app.portfolio.snapshot import SnapshotBindingError, load_composite_snapshot
 from app.research.repository import ResearchRepository
 
