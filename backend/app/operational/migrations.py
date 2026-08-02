@@ -1810,6 +1810,54 @@ MIGRATIONS: tuple[str, ...] = (
     CREATE TRIGGER wf_ensembles_no_delete BEFORE DELETE ON wf_ensembles
     BEGIN SELECT RAISE(ABORT, 'walk-forward ensembles are append-only'); END;
     """,
+    """
+    -- Phase 14 append-only rebalance plans + paper-rebalance transition ledger
+    -- (RBAL-01/02, approved one-way-door option-a: ONE script, both tables).
+    -- A RebalancePlan is an immutable research-only artifact bound to its Phase 11
+    -- optimization run (optimization_run_id + input_snapshot_sha256 + output_sha256);
+    -- every paper-rebalance transition (suggested/approved/rejected/filled) is an
+    -- append-only audit fact with UNIQUE (plan_id, transition) idempotency.
+    -- All rows are INSERT-only.
+    CREATE TABLE rebalance_plans (
+        id TEXT PRIMARY KEY,
+        optimization_run_id TEXT NOT NULL REFERENCES portfolio_optimization_runs(id) ON DELETE RESTRICT,
+        input_snapshot_sha256 TEXT NOT NULL CHECK (length(input_snapshot_sha256) = 64),
+        as_of TEXT NOT NULL,
+        target_weights_json TEXT NOT NULL,
+        discrete_weights_json TEXT NOT NULL,
+        lot_sizes_json TEXT NOT NULL,
+        cash_residue REAL NOT NULL,
+        turnover_cost REAL NOT NULL,
+        blocked_instruments_json TEXT NOT NULL,
+        discretization_rmse REAL NOT NULL,
+        rmse_definition TEXT NOT NULL CHECK (rmse_definition IN ('simple', 'weighted')),
+        expires_at TEXT NOT NULL,
+        output_sha256 TEXT NOT NULL CHECK (length(output_sha256) = 64),
+        artifact_relative_path TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    );
+    CREATE INDEX idx_rebalance_plans_run ON rebalance_plans(optimization_run_id, created_at);
+    CREATE TRIGGER rebalance_plans_no_update BEFORE UPDATE ON rebalance_plans
+    BEGIN SELECT RAISE(ABORT, 'rebalance plans are append-only'); END;
+    CREATE TRIGGER rebalance_plans_no_delete BEFORE DELETE ON rebalance_plans
+    BEGIN SELECT RAISE(ABORT, 'rebalance plans are append-only'); END;
+
+    CREATE TABLE paper_rebalance_transitions (
+        id INTEGER PRIMARY KEY,
+        plan_id TEXT NOT NULL REFERENCES rebalance_plans(id) ON DELETE RESTRICT,
+        transition TEXT NOT NULL CHECK (transition IN ('suggested', 'approved', 'rejected', 'filled')),
+        idempotency_key TEXT NOT NULL,
+        previous_state TEXT,
+        paper_position_delta_json TEXT,
+        created_at TEXT NOT NULL,
+        UNIQUE (plan_id, transition)
+    );
+    CREATE INDEX idx_paper_rebalance_transitions_plan ON paper_rebalance_transitions(plan_id, id);
+    CREATE TRIGGER paper_rebalance_transitions_no_update BEFORE UPDATE ON paper_rebalance_transitions
+    BEGIN SELECT RAISE(ABORT, 'paper rebalance transitions are append-only'); END;
+    CREATE TRIGGER paper_rebalance_transitions_no_delete BEFORE DELETE ON paper_rebalance_transitions
+    BEGIN SELECT RAISE(ABORT, 'paper rebalance transitions are append-only'); END;
+    """,
 )
 
 
