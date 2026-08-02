@@ -5,16 +5,16 @@ milestone_name: End-to-End Factor Portfolio Pipeline — in progress
 current_phase: 12
 current_phase_name: Risk Models & Attribution
 status: executing
-stopped_at: Completed 12-01-PLAN.md (Wave 1 tracer)
-last_updated: "2026-08-02T01:10:00.000Z"
+stopped_at: Completed 12-04-PLAN.md (Wave 2 attribution breadth)
+last_updated: "2026-08-02T00:26:36.690Z"
 last_activity: 2026-08-02
-last_activity_desc: Phase 12 Wave 1 complete (12-01 attribution tracer)
+last_activity_desc: Phase 12 Wave 2 attribution breadth complete (12-04)
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 3
-  completed_plans: 2
-  percent: 67
+  completed_plans: 3
+  percent: 100
 ---
 
 # Project State
@@ -29,11 +29,11 @@ See: .planning/PROJECT.md (updated 2026-07-31)
 ## Current Position
 
 Phase: 12 — Risk Models & Attribution
-Plan: 12-01 (Wave 1 — end-to-end attribution tracer on a fixture run) complete
-Status: Ready to execute (next: 12-03/12-04 Wave 2 — risk-model breadth ∥ attribution breadth)
-Last activity: 2026-08-02 — Phase 12 Wave 1 complete (12-01)
+Plan: 12-04 (Wave 2 — attribution breadth: signed components + full report) complete
+Status: Ready to execute (next: 12-03 Wave 2 — risk-model suite breadth, then 12-05/12-06)
+Last activity: 2026-08-02 — Phase 12 Wave 2 attribution breadth complete (12-04)
 
-Progress: [███████░░░] 67%
+Progress: [██████████] 100%
 
 ## v1.2 Phase Summary
 
@@ -41,7 +41,7 @@ Progress: [███████░░░] 67%
 |-------|-------------|--------|
 | 10 Factor Library & Multi-Factor Model | FACT-01..06 | In progress (10-01..10-06 complete) |
 | 11 Portfolio Construction & Optimization | PFOL-01..04 | In progress (11-01, 11-02, 11-03, 11-04, 11-05, 11-06 complete) |
-| 12 Risk Models & Attribution | RSK-01..03 | In progress (12-02 Wave 0 + 12-01 Wave 1 complete)
+| 12 Risk Models & Attribution | RSK-01..03 | In progress (12-02 Wave 0 + 12-01 Wave 1 + 12-04 Wave 2 complete) |
 | 13 Walk-Forward Validation & Parameter Search | WFWD-01..03 | Not started |
 | 14 Output & Boundary (RebalancePlan + Paper Rebalance) | RBAL-01..02 | Not started |
 | 15 API/SSE + Frontend Panels | UI-01..02 | Not started |
@@ -75,6 +75,7 @@ Progress: [███████░░░] 67%
 | Phase 11 P11-06 | 75 | 3 tasks | 7 files |
 | Phase 12 P12-02 | 35 | 3 tasks | 6 files |
 | Phase 12 P12-01 | 35 | 6 tasks | 6 files |
+| Phase 12 P12-04 | 40 | 3 tasks | 3 files |
 
 ## Accumulated Context
 

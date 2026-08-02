@@ -118,17 +118,17 @@ Six phases extend the shipped research platform from single-factor evaluation in
   2. Researcher can select among sample, semi-covariance, exponentially weighted, and Ledoit-Wolf risk models, and every PSD repair records method, epsilon, and eigenvalues before/after.
   3. Researcher can inspect drawdown attribution decomposed by instrument and time segment.
 
-**Plans**: 2/3 plans executed (12-02 Wave 0 + 12-01 Wave 1 complete)
+**Plans**: 3/3 plans executed (12-02 Wave 0 + 12-01 Wave 1 + 12-04 Wave 2 complete)
 
 - [x] 12-02 Wave 0 — evidence migration + risk-model enum + test scaffolding (2026-08-02)
 - [x] 12-01 Wave 1 — tracer: end-to-end attribution on a fixture run (2026-08-02)
+- [x] 12-04 Wave 2 — attribution breadth (signed components + full summary report)
 
 *Planning notes: standard patterns (PyPortfolioOpt `risk_models` contracts) — skip research-phase.*
 
-**Plan Progress (12-03..12-06)**:
+**Plan Progress (12-03, 12-05, 12-06)**:
 
 - [ ] 12-03 Wave 2 — risk-model suite breadth (semi / EWMA / Ledoit-Wolf + dispatcher)
-- [ ] 12-04 Wave 2 — attribution breadth (signed components + full summary report)
 - [ ] 12-05 Wave 3 — cross-model attribution + reconciliation breadth
 - [ ] 12-06 Wave 4 — drawdown attribution breadth (instrument × segment)
 
@@ -184,7 +184,7 @@ Phases execute in numeric order: 10 → 11 → 12 → 13 → 14 → 15 (Phase 13
 |-------|----------------|--------|-----------|
 | 10. Factor Library & Multi-Factor Model | 6/6 | Complete    | 2026-08-01 |
 | 11. Portfolio Construction & Optimization | 7/1 | Complete    | 2026-08-01 |
-| 12. Risk Models & Attribution | 2/3 | In progress |  |
+| 12. Risk Models & Attribution | 3/3 | In progress |  |
 | 13. Walk-Forward Validation & Parameter Search | 0/4 | Not started | - |
 | 14. Output & Boundary (RebalancePlan + Paper Rebalance) | 0/3 | Not started | - |
 | 15. API/SSE + Frontend Panels | 0/4 | Not started | - |
