@@ -178,12 +178,14 @@ def test_ewma_covariance_matches_hand_computed_recursion() -> None:
 def test_ledoit_wolf_covariance_returns_psd_with_shrinkage(
     fixture_returns: np.ndarray,
 ) -> None:
-    """RSK-02: Ledoit-Wolf returns a PSD matrix with shrinkage in (0, 1]."""
+    """RSK-02: Ledoit-Wolf returns (PSD matrix, shrinkage/sklearn_version)."""
     from app.portfolio.risk import ledoit_wolf_covariance
 
-    cov = ledoit_wolf_covariance(fixture_returns)
+    cov, meta = ledoit_wolf_covariance(fixture_returns)
     assert np.linalg.eigvalsh(cov).min() >= -1e-9
     assert np.allclose(cov, cov.T, rtol=1e-12)
+    assert 0.0 < meta["shrinkage"] <= 1.0
+    assert meta["sklearn_version"]
 
 
 def test_make_risk_model_family_dispatches_all_four_models(
@@ -200,8 +202,24 @@ def test_make_risk_model_family_dispatches_all_four_models(
     ):
         block = make_risk_model_family(fixture_returns, risk_model_name=name)
         assert "covariance" in block
-        assert block["risk_model_json"]["risk_model"] == name
-        assert block["risk_model_json"]["psd_repair"]["method"] in ("none", "eigen_clip")
+        json_ = block["risk_model_json"]
+        assert json_["risk_model"] == name
+        assert json_["dropna"] is True
+        assert json_["psd_repair"]["method"] in ("none", "eigen_clip")
+        # 完整 PSD 溯源: epsilon + eigenvalues before/after 永不缺失 (never silent)。
+        assert "epsilon" in json_["psd_repair"]
+        assert "eigenvalues_before" in json_["psd_repair"]
+        assert "eigenvalues_after" in json_["psd_repair"]
+        assert len(json_["covariance_sha256"]) == 64
+        # 模型参数: benchmark/lam/shrinkage 按模型记录。
+        params = json_["model_params"]
+        if name == "semi_covariance_v1":
+            assert params["benchmark"] == "mean"
+        elif name == "ewma_covariance_v1":
+            assert params["lam"] == 0.94
+        elif name == "ledoit_wolf_v1":
+            assert 0.0 < params["shrinkage"] <= 1.0
+            assert params["sklearn_version"]
 
 
 def test_make_risk_model_family_rejects_unknown_name() -> None:
