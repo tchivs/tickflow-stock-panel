@@ -304,19 +304,27 @@ def test_expired_plan_fails_closed_on_post_creation_transitions(
 def test_no_execution_route_regression_gate(
     portfolio_repository: PortfolioRepository,
     fixture_rebalance_run: dict[str, object],
+    fixture_plan_inputs: dict[str, object],
+    fixture_prices: dict[str, float],
 ) -> None:
     """No INSERT INTO positions, no broker/submit/place_order vocabulary, no execute method."""
     import inspect
     import re
+    import sqlite3
 
     import app.portfolio.paper as paper_module
     import app.portfolio.rebalance as rebalance_module
+    from app.portfolio.paper import approve, create_suggestion, paper_fill
 
     for module in (paper_module, rebalance_module):
         source = inspect.getsource(module)
         assert "INSERT INTO positions" not in source
         assert "INSERT INTO" not in source
         assert not re.search(r"\b(broker|submit|place_order|live_)\b", source)
+        # no live-client import surface (requests / websocket / broker clients)
+        assert not re.search(
+            r"^\s*(from|import)\s+(requests|websocket|broker)\b", source, re.MULTILINE
+        )
     # the only public callables defined by paper.py are the four transitions
     public_callables = {
         name
@@ -327,3 +335,146 @@ def test_no_execution_route_regression_gate(
     }
     assert public_callables == {"create_suggestion", "approve", "reject", "paper_fill"}
     assert not any(name in public_callables for name in ("execute", "submit", "place_order"))
+    # paper.py has NO raw INSERT at all — all writes route through
+    # repository.record_paper_transition, whose only INSERT targets
+    # paper_rebalance_transitions (never positions).
+    transition_source = inspect.getsource(portfolio_repository.record_paper_transition)
+    assert "INSERT INTO paper_rebalance_transitions" in transition_source
+    assert "INSERT INTO positions" not in transition_source
+    import app.portfolio.repository as repository_module
+
+    assert "INSERT INTO positions" not in inspect.getsource(repository_module)
+    # a full suggestion→approve→fill leaves the positions table row count unchanged
+    _record_plan(portfolio_repository, fixture_rebalance_run)
+    with sqlite3.connect(portfolio_repository.database_path) as connection:
+        before = int(connection.execute("SELECT COUNT(*) FROM positions").fetchone()[0])
+    create_suggestion("paper-plan-1", repository=portfolio_repository)
+    approve("paper-plan-1", repository=portfolio_repository, idempotency_key="gate-approve")
+    paper_fill(
+        "paper-plan-1",
+        repository=portfolio_repository,
+        prices=fixture_prices,
+        matcher_config=fixture_plan_inputs["matcher_config"],
+    )
+    with sqlite3.connect(portfolio_repository.database_path) as connection:
+        after = int(connection.execute("SELECT COUNT(*) FROM positions").fetchone()[0])
+    assert after == before
+
+
+def test_full_ledger_ordinals_and_previous_state(
+    portfolio_repository: PortfolioRepository,
+    fixture_rebalance_run: dict[str, object],
+    fixture_plan_inputs: dict[str, object],
+    fixture_prices: dict[str, float],
+) -> None:
+    """suggestion→approve→filled appends three audit facts with increasing ordinals."""
+    from app.portfolio.paper import approve, create_suggestion, paper_fill
+
+    _record_plan(portfolio_repository, fixture_rebalance_run)
+    suggested = create_suggestion("paper-plan-1", repository=portfolio_repository)
+    approved = approve(
+        "paper-plan-1", repository=portfolio_repository, idempotency_key="key-a"
+    )
+    filled = paper_fill(
+        "paper-plan-1",
+        repository=portfolio_repository,
+        prices=fixture_prices,
+        matcher_config=fixture_plan_inputs["matcher_config"],
+    )
+    # increasing ordinals (id = insertion order) + previous_state per transition
+    assert suggested["id"] < approved["id"] < filled["id"]
+    assert suggested["previous_state"] is None
+    assert approved["previous_state"] == "suggested"
+    assert filled["previous_state"] == "approved"
+    ledger = portfolio_repository.list_paper_transitions(plan_id="paper-plan-1")
+    assert [t["transition"] for t in ledger] == ["suggested", "approved", "filled"]
+    assert [t["previous_state"] for t in ledger] == [None, "suggested", "approved"]
+
+
+def test_reject_and_fill_idempotency_mismatched_key_raises(
+    portfolio_repository: PortfolioRepository,
+    fixture_rebalance_run: dict[str, object],
+    fixture_plan_inputs: dict[str, object],
+    fixture_prices: dict[str, float],
+) -> None:
+    """Repeated reject / fill with a different idempotency key raises ValueError."""
+    from app.portfolio.paper import approve, create_suggestion, paper_fill, reject
+
+    # reject: matching key returns the same row; a different key raises
+    _record_plan(portfolio_repository, fixture_rebalance_run)
+    create_suggestion("paper-plan-1", repository=portfolio_repository)
+    rejected = reject("paper-plan-1", repository=portfolio_repository, idempotency_key="key-r")
+    rejected_again = reject(
+        "paper-plan-1", repository=portfolio_repository, idempotency_key="key-r"
+    )
+    assert rejected_again["id"] == rejected["id"]
+    with pytest.raises(ValueError, match="different idempotency key"):
+        reject("paper-plan-1", repository=portfolio_repository, idempotency_key="key-r2")
+
+    # fill: paper_fill uses a deterministic key, so a second fill returns the
+    # same row; a conflicting re-issue at the repository layer raises.
+    _record_plan(portfolio_repository, fixture_rebalance_run, plan_id="paper-plan-2")
+    create_suggestion("paper-plan-2", repository=portfolio_repository)
+    approve("paper-plan-2", repository=portfolio_repository, idempotency_key="key-a")
+    filled = paper_fill(
+        "paper-plan-2",
+        repository=portfolio_repository,
+        prices=fixture_prices,
+        matcher_config=fixture_plan_inputs["matcher_config"],
+    )
+    filled_again = paper_fill(
+        "paper-plan-2",
+        repository=portfolio_repository,
+        prices=fixture_prices,
+        matcher_config=fixture_plan_inputs["matcher_config"],
+    )
+    assert filled_again["id"] == filled["id"]
+    with pytest.raises(ValueError, match="different idempotency key"):
+        portfolio_repository.record_paper_transition(
+            plan_id="paper-plan-2",
+            transition="filled",
+            idempotency_key="other-fill-key",
+            previous_state="approved",
+        )
+
+
+def test_paper_fill_valuation_through_matcher_config_fees(
+    portfolio_repository: PortfolioRepository,
+    fixture_rebalance_run: dict[str, object],
+    fixture_plan_inputs: dict[str, object],
+    fixture_prices: dict[str, float],
+) -> None:
+    """paper_fill values the discrete lots at prices through MatcherConfig fees."""
+    from app.portfolio.paper import approve, create_suggestion, paper_fill
+
+    _record_plan(portfolio_repository, fixture_rebalance_run)
+    create_suggestion("paper-plan-1", repository=portfolio_repository)
+    approve("paper-plan-1", repository=portfolio_repository, idempotency_key="key-a")
+    matcher_config = fixture_plan_inputs["matcher_config"]
+    filled = paper_fill(
+        "paper-plan-1",
+        repository=portfolio_repository,
+        prices=fixture_prices,
+        matcher_config=matcher_config,
+    )
+    # paper_position_delta_json == {symbol: shares} — discrete lots verbatim
+    assert filled["paper_position_delta"] == {"600000.SH": 5000, "600001.SH": 2500}
+    # valuation = shares · price · (1 + buy_cost_pct), deterministic via MatcherConfig
+    buy_cost_pct = matcher_config.buy_cost_pct()
+    expected = {
+        "600000.SH": round(5000 * fixture_prices["600000.SH"] * (1 + buy_cost_pct), 4),
+        "600001.SH": round(2500 * fixture_prices["600001.SH"] * (1 + buy_cost_pct), 4),
+    }
+    assert filled["fill_valuation"] == expected
+    assert filled["fill_value"] == round(sum(expected.values()), 4)
+    # missing price fails closed
+    _record_plan(portfolio_repository, fixture_rebalance_run, plan_id="paper-plan-3")
+    create_suggestion("paper-plan-3", repository=portfolio_repository)
+    approve("paper-plan-3", repository=portfolio_repository, idempotency_key="key-a")
+    with pytest.raises(ValueError, match="missing price"):
+        paper_fill(
+            "paper-plan-3",
+            repository=portfolio_repository,
+            prices={"600000.SH": 10.0},
+            matcher_config=matcher_config,
+        )
