@@ -383,12 +383,16 @@ def test_wf_search_isolates_per_combo_failures():
 
 
 def test_wf_search_records_search_run_row():
-    """A completed search persists a wf_search_runs row with oos_excluded=1."""
+    """A completed search with no repo returns search_run_id=None (WR-10).
+
+    A fabricated uuid would never be persisted and would FK-fail later inside
+    evaluate_best_params(search_run_id=...) — returning None keeps that path honest.
+    """
     out = _wf_optimizer(lambda p: _FakeResult(stats={"sharpe": 1.0})).optimize(
         plan=_WF_PLAN_3_FOLDS, strategy_id="s",
         param_grid={"ma_proximity": [0.01]}, objective="sharpe",
     )
-    assert out["search_run_id"]
+    assert out["search_run_id"] is None  # repo=None → no fabricated id
 
 
 def test_wf_search_persists_search_run_row_when_repo_passed(research_repository):

@@ -368,6 +368,11 @@ class WalkForwardOptimizer:
         combos = expand_param_grid(params_meta, param_grid)  # GRID_MAX_COMBINATIONS 上限
         n_total = len(combos)
 
+        # WR-04: 先把 plan 钉入 wf_plans (幂等) — 之后 record_wf_search 的 FK 才能
+        # 解析; 未预先钉 plan 的调用不再撞原始 sqlite3.IntegrityError。
+        if repo is not None:
+            repo.create_wf_plan(plan)
+
         results: list[dict] = []
         done = 0
         lock = threading.Lock()
@@ -473,18 +478,18 @@ class WalkForwardOptimizer:
             r["rank"] = i + 1
             r.pop("_sort", None)
 
-        best = ranked[0] if ranked and ranked[0].get("pooled_score") is not None else None
-        best_score = best["pooled_score"] if best else None
+        best = ranked[0] if ranked and ranked[0].get("objective_raw") is not None else None
+        best_score = best["objective_raw"] if best else None  # WR-05: 原始指标空间
         per_trial = [
-            {"params": r["params"], "score": r.get("pooled_score"), "error": r.get("error")}
+            {"params": r["params"], "score": r.get("objective_raw"), "error": r.get("error")}
             for r in ranked
         ]
         per_fold_summary: dict[str, list[float]] = {}
         for r in ranked:
             for pf in r.get("per_fold", []):
-                score = pf.get("score")
-                if score is not None:
-                    per_fold_summary.setdefault(f"fold_{pf['fold_index']}", []).append(score)
+                raw = pf.get("objective_raw")
+                if raw is not None:
+                    per_fold_summary.setdefault(f"fold_{pf['fold_index']}", []).append(raw)
         per_fold_dist = {
             key: _dist(values, round_to=4)
             for key, values in per_fold_summary.items()
@@ -531,6 +536,10 @@ class WalkForwardOptimizer:
                 best_score=round(float(best_score), 6) if best_score is not None else None,
                 oos_excluded=1,
             )
+        else:
+            # WR-10: repo=None 时绝不伪造未持久化的 search_run_id — 把它传给
+            # evaluate_best_params(search_run_id=…) 会撞 FK 并得到误导性错误。
+            search_run_id = None
 
         return {
             "objective": objective,

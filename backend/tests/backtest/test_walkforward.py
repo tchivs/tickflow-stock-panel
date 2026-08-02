@@ -199,6 +199,27 @@ def test_wf_plan_pinned_idempotently_and_fold_recorded_exactly_once(
         )
 
 
+def test_create_wf_plan_raises_on_geometry_divergence(
+    research_repository: ResearchRepository,
+) -> None:
+    """WR-03: 同一 plan_id 以重测日历/不同 geometry 再钉 → ValueError, 不静默保留陈旧预约。"""
+    plan = _FakePlan()
+    research_repository.create_wf_plan(plan)
+
+    # 同一 plan_id, 但 OOS 尺寸变化 (重测日历 → 几何漂移)。
+    drifted = _FakePlan()
+    drifted.plan_id = plan.plan_id
+    drifted.oos_size = 50
+    with pytest.raises(ValueError, match="already pinned with different geometry"):
+        research_repository.create_wf_plan(drifted)
+
+    # 日历重测但几何一致 → 幂等返回既有行 (仍是合法重跑)。
+    same = _FakePlan()
+    row = research_repository.create_wf_plan(same)
+    assert row["id"] == plan.plan_id
+    assert row["oos_size"] == 40
+
+
 def test_fold_manifests_are_append_only_and_listable(
     research_repository: ResearchRepository,
 ) -> None:

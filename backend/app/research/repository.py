@@ -10,7 +10,7 @@ import re
 import sqlite3
 import uuid
 from collections.abc import Iterator, Mapping, Sequence
-from contextlib import contextmanager, suppress
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -825,6 +825,11 @@ class ResearchRepository:
         Append-only idempotent: a re-insert of the same plan_id returns the
         already-recorded row via the query path — never an error. This is the
         ``oos_pinned_at`` reservation recorded BEFORE any search reuse.
+
+        WR-03: 幂等重创建前比较几何 — 同一 plan_id 以重测日历 / 不同 geometry 再钉时
+        抛出 ValueError (绝不静默保留陈旧 OOS 预约)。几何以 (train_size, gap_size,
+        test_size, oos_size, horizon, start, end, trading_dates, fold_geometry)
+        的规范化序列判定。
         """
         plan_id = plan.plan_id
         trading_dates = _json(
@@ -860,8 +865,7 @@ class ResearchRepository:
         )
         now = _now()
         with self._connection() as connection, connection:
-            with suppress(sqlite3.IntegrityError):
-                # Idempotent re-create: same plan_id already pinned — return it.
+            try:
                 connection.execute(
                     """INSERT INTO wf_plans (
                            id, universe, asset_type, start, end, train_size, gap_size,
@@ -885,6 +889,41 @@ class ResearchRepository:
                         now,
                     ),
                 )
+            except sqlite3.IntegrityError:
+                # Idempotent re-create: same plan_id already pinned. WR-03: 先比较
+                # 几何 — 重测日历/改几何必须以 ValueError 暴露, 绝不静默保留陈旧预约。
+                stored = connection.execute(
+                    "SELECT * FROM wf_plans WHERE id = ?", (plan_id,)
+                ).fetchone()
+                if stored is None:
+                    raise
+                incoming_geometry = (
+                    _as_iso(plan.start),
+                    _as_iso(plan.end),
+                    int(plan.train_size),
+                    int(plan.gap_size),
+                    int(plan.test_size),
+                    int(plan.oos_size),
+                    int(plan.horizon),
+                    trading_dates,
+                    fold_geometry,
+                )
+                stored_geometry = (
+                    stored["start"],
+                    stored["end"],
+                    stored["train_size"],
+                    stored["gap_size"],
+                    stored["test_size"],
+                    stored["oos_size"],
+                    stored["horizon"],
+                    stored["trading_dates_json"],
+                    stored["fold_geometry_json"],
+                )
+                if incoming_geometry != stored_geometry:
+                    raise ValueError(
+                        "walk-forward plan already pinned with different geometry: "
+                        f"plan_id={plan_id} (re-measure the calendar or use a new plan_id)"
+                    ) from None
             row = connection.execute("SELECT * FROM wf_plans WHERE id = ?", (plan_id,)).fetchone()
         if row is None:
             raise RuntimeError("walk-forward plan was not persisted")
@@ -964,9 +1003,19 @@ class ResearchRepository:
                     ),
                 )
             except sqlite3.IntegrityError as error:
+                # IN-02: 只把真正的 UNIQUE 违反映射为 "OOS segment already evaluated";
+                # FK (缺 plan) / CHECK 失败保留原始错误, 不再误报。
+                message = str(error)
+                is_unique_violation = "UNIQUE constraint failed" in message
                 if fields.get("is_oos"):
-                    raise ValueError("OOS segment already evaluated") from error
-                raise ValueError("fold row conflicts with a persisted fold manifest") from error
+                    if is_unique_violation:
+                        raise ValueError("OOS segment already evaluated") from error
+                    raise ValueError(
+                        f"OOS fold row rejected by the database: {message}"
+                    ) from error
+                if is_unique_violation:
+                    raise ValueError("fold row conflicts with a persisted fold manifest") from error
+                raise ValueError(f"fold row rejected by the database: {message}") from error
             row = connection.execute("SELECT * FROM wf_folds WHERE id = ?", (fold_id,)).fetchone()
         if row is None:
             raise RuntimeError("walk-forward fold was not persisted")
@@ -1126,6 +1175,15 @@ class ResearchRepository:
                     ),
                 )
             except sqlite3.IntegrityError as error:
+                message = str(error)
+                # WR-10: search_run_id FK 违反 (引用不存在的搜索) 应报出缺失的搜索运行,
+                # 而非误导性的 "verdict conflicts" 消息。
+                if "FOREIGN KEY constraint failed" in message and fields.get("search_run_id"):
+                    raise ValueError(
+                        "validation verdict references an unknown search run: "
+                        f"search_run_id={fields['search_run_id']!r} "
+                        "(persist the search via WalkForwardOptimizer(repo=...) first)"
+                    ) from error
                 raise ValueError("validation verdict conflicts with a persisted OOS evidence fold") from error
             row = connection.execute(
                 "SELECT * FROM wf_validated_strategies WHERE id = ?", (verdict_id,)
