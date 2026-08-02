@@ -17,7 +17,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from app.portfolio.analyzer import run_attribution
+from app.portfolio.analyzer import reconcile_all_models, run_attribution
 from app.portfolio.artifacts import ArtifactReadError, PortfolioArtifactService
 from app.portfolio.attribution import (
     attribution_report,
@@ -29,6 +29,15 @@ from app.portfolio.attribution import (
 from app.portfolio.repository import PortfolioRepository
 
 SYMBOLS = ["600000.SH", "600001.SH", "600002.SH", "600003.SH"]
+
+# 12-05: the four RSK-02 risk models, in dispatcher order (make_risk_model_family).
+RISK_MODEL_NAMES = (
+    "sample_covariance_v1",
+    "semi_covariance_v1",
+    "ewma_covariance_v1",
+    "ledoit_wolf_v1",
+)
+MULTI_MODEL_SYMBOLS = [f"SYM{i:03d}" for i in range(12)]
 
 
 @pytest.fixture
@@ -325,3 +334,189 @@ def test_tampered_covariance_fails_closed_with_no_evidence_row(
         cov_path.write_bytes(original)
     # Fail closed: no evidence row was written for the failed analysis.
     assert len(portfolio_repository.list_attribution_evidence(run_id=run_id)) == count_before
+
+
+# ---------------------------------------------------------------------------
+# 12-05 breadth — cross-model attribution + reconciliation matrix
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def fixture_multi_model_run(
+    portfolio_repository: PortfolioRepository,
+    artifact_root: Path,
+    fixture_composite: dict[str, object],
+) -> tuple[dict[str, object], np.ndarray]:
+    """An optimal run built on a test-controlled 12-symbol returns panel.
+
+    Returns (run, returns): the returns panel is explicit (not the optimizer's
+    private fixture) so the model-selection path can recompute any of the four
+    RSK-02 covariances from the exact panel aligned to output_weights.
+    """
+    from app.portfolio.optimizer import run_optimization
+
+    rng = np.random.default_rng(20260802)
+    symbols = [f"SYM{i:03d}" for i in range(12)]
+    returns = rng.normal(0.0005, 0.008, size=(20, 12))
+    request = {
+        "objective": "min_volatility",
+        "as_of": "2026-08-01",
+        "universe": "cn-a-share",
+        "model_id": "composite-model-v1",
+        "expected_return_method": "composite-zscore-v1",
+        "render_baselines": True,
+        "per_instrument_cap": 0.10,
+        "min_cash": 0.05,
+        "turnover_coef": 0.0014,
+    }
+    run = run_optimization(
+        request,
+        repository=portfolio_repository,
+        artifact_service_root=artifact_root,
+        snapshot=fixture_composite,
+        returns=returns,
+        symbols=symbols,
+        fixture_mode=True,
+    )
+    assert run["problem_status"] == "optimal"
+    return run, returns
+
+
+@pytest.mark.parametrize("risk_model_name", list(RISK_MODEL_NAMES))
+def test_run_attribution_model_selection_reconciles_exactly_per_model(
+    portfolio_repository: PortfolioRepository,
+    artifact_root: Path,
+    fixture_multi_model_run: tuple[dict[str, object], np.ndarray],
+    risk_model_name: str,
+) -> None:
+    """RSK-01/02: under each of the four models the evidence row carries the
+    selected risk_model and reconciles EXACTLY (sum(MC) == variance, rtol 1e-12),
+    and the artifact is checksum-verified on read-back."""
+    run, returns = fixture_multi_model_run
+    run_id = str(run["id"])
+    service = PortfolioArtifactService(artifact_root)
+    evidence = run_attribution(
+        run_id,
+        repository=portfolio_repository,
+        artifact_service_root=artifact_root,
+        returns=returns,
+        risk_model_name=risk_model_name,
+    )
+    assert evidence["risk_model"] == risk_model_name
+    reconciliation = evidence["reconciliation"]
+    variance = reconciliation["portfolio_variance"]
+    assert variance >= 0.0
+    assert reconciliation["sum_contributions"] == pytest.approx(variance, rel=1e-12)
+    assert reconciliation["max_abs_error"] <= 1e-12 * variance + 1e-15
+    # Checksum-verified artifact read-back carries the selected model + exact variance.
+    payload = json.loads(
+        service.read_artifact(
+            evidence["artifact_relative_path"], checksum_sha256=evidence["output_sha256"]
+        ).decode("utf-8")
+    )
+    assert payload["risk_model"] == risk_model_name
+    assert payload["portfolio_variance"] == pytest.approx(variance, rel=1e-12)
+    assert payload["reconciliation"]["max_abs_error"] <= 1e-12 * variance + 1e-15
+
+
+def test_reconcile_all_models_cross_model_matrix(
+    portfolio_repository: PortfolioRepository,
+    artifact_root: Path,
+    fixture_multi_model_run: tuple[dict[str, object], np.ndarray],
+) -> None:
+    """RSK-01/02: reconcile_all_models returns all 4 rows with all_reconciled
+    True and the identity row (the run's recorded model) matches the recorded
+    covariance digest path (checksum-bound)."""
+    run, returns = fixture_multi_model_run
+    run_id = str(run["id"])
+    result = reconcile_all_models(
+        run_id,
+        returns=returns,
+        repository=portfolio_repository,
+        artifact_service_root=artifact_root,
+    )
+    assert result["run_id"] == run_id
+    assert len(result["models"]) == 4
+    assert result["all_reconciled"] is True
+    assert [row["risk_model"] for row in result["models"]] == list(RISK_MODEL_NAMES)
+    recorded_digest = run["risk_model_detail"]["covariance_sha256"]
+    for row in result["models"]:
+        assert row["portfolio_variance"] >= 0.0
+        assert row["reconciled"] is True
+        assert row["max_abs_error"] <= 1e-12 * row["portfolio_variance"] + 1e-15
+        if row["risk_model"] == run["risk_model"]:
+            # Identity row is checksum-bound to the run's recorded artifact digest.
+            assert row["covariance_sha256"] == recorded_digest
+
+
+def test_tampered_covariance_fails_identity_but_model_selection_reconciles(
+    portfolio_repository: PortfolioRepository,
+    artifact_root: Path,
+    fixture_multi_model_run: tuple[dict[str, object], np.ndarray],
+) -> None:
+    """RSK-01: tampered covariance bytes fail the identity path closed (no
+    evidence row) while the model-selection path (recompute from returns) still
+    reconciles and writes a distinct evidence row."""
+    run, returns = fixture_multi_model_run
+    run_id = str(run["id"])
+    cov_path = (
+        artifact_root / str(run["risk_model_detail"]["covariance_artifact_relative_path"])
+    )
+    original = cov_path.read_bytes()
+    count_before = len(portfolio_repository.list_attribution_evidence(run_id=run_id))
+    cov_path.write_bytes(b"tampered-covariance-bytes")
+    try:
+        with pytest.raises(ArtifactReadError):
+            run_attribution(
+                run_id, repository=portfolio_repository, artifact_service_root=artifact_root
+            )
+        assert len(portfolio_repository.list_attribution_evidence(run_id=run_id)) == count_before
+        # Model-selection path recomputes from returns — reconciles exactly.
+        evidence = run_attribution(
+            run_id,
+            repository=portfolio_repository,
+            artifact_service_root=artifact_root,
+            returns=returns,
+            risk_model_name="ewma_covariance_v1",
+        )
+        assert evidence["risk_model"] == "ewma_covariance_v1"
+        variance = evidence["reconciliation"]["portfolio_variance"]
+        assert evidence["reconciliation"]["max_abs_error"] <= 1e-12 * variance + 1e-15
+        assert len(portfolio_repository.list_attribution_evidence(run_id=run_id)) == count_before + 1
+    finally:
+        cov_path.write_bytes(original)
+
+
+def test_list_attribution_evidence_filters_by_risk_model(
+    portfolio_repository: PortfolioRepository,
+    artifact_root: Path,
+    fixture_multi_model_run: tuple[dict[str, object], np.ndarray],
+) -> None:
+    """RSK-01 (Phase 15 API): list_attribution_evidence(risk_model=...) returns
+    only rows for that model; combined run_id + type + risk_model works."""
+    run, returns = fixture_multi_model_run
+    run_id = str(run["id"])
+    # Seed two distinct per-model evidence rows.
+    run_attribution(
+        run_id,
+        repository=portfolio_repository,
+        artifact_service_root=artifact_root,
+        returns=returns,
+        risk_model_name="sample_covariance_v1",
+    )
+    run_attribution(
+        run_id,
+        repository=portfolio_repository,
+        artifact_service_root=artifact_root,
+        returns=returns,
+        risk_model_name="semi_covariance_v1",
+    )
+    semi_rows = portfolio_repository.list_attribution_evidence(risk_model="semi_covariance_v1")
+    assert semi_rows
+    assert all(row["risk_model"] == "semi_covariance_v1" for row in semi_rows)
+    combined = portfolio_repository.list_attribution_evidence(
+        run_id=run_id, attribution_type="exposure_contribution", risk_model="semi_covariance_v1"
+    )
+    assert all(row["risk_model"] == "semi_covariance_v1" for row in combined)
+    assert all(row["run_id"] == run_id for row in combined)
+    assert len(combined) == 1

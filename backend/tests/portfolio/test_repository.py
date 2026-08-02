@@ -116,3 +116,46 @@ def test_list_caps_at_limit(portfolio_repository: PortfolioRepository) -> None:
         portfolio_repository.list_optimization_runs(limit=0)
     with pytest.raises(ValueError, match="limit"):
         portfolio_repository.list_optimization_runs(limit=-1)
+
+
+def test_list_attribution_evidence_filters_by_risk_model_and_caps_limit(
+    portfolio_repository: PortfolioRepository,
+) -> None:
+    """RSK-01 (12-05): evidence list filters on run_id / type / risk_model and
+    fails closed on a non-positive limit (Phase 15 API surface)."""
+    run_id = "a" * 32
+    portfolio_repository.record_optimization_run(**_valid_run(id=run_id))
+    models = [
+        "sample_covariance_v1",
+        "semi_covariance_v1",
+        "ewma_covariance_v1",
+        "ledoit_wolf_v1",
+    ]
+    for index, risk_model in enumerate(models):
+        portfolio_repository.record_attribution_evidence(
+            id=f"{index:032d}",
+            attribution_type="exposure_contribution",
+            run_id=run_id,
+            risk_model=risk_model,
+            as_of="2026-08-01",
+            output_sha256="0" * 64,
+            artifact_relative_path=f"research_artifacts/{run_id}/attribution/x-{index}.json",
+            reconciliation_json={"portfolio_variance": 0.01},
+            created_at=f"2026-08-0{index + 1}T00:00:00Z",
+        )
+    semi = portfolio_repository.list_attribution_evidence(risk_model="semi_covariance_v1")
+    assert [row["id"] for row in semi] == [f"{1:032d}"]
+    assert all(row["risk_model"] == "semi_covariance_v1" for row in semi)
+    # Combined run_id + attribution_type + risk_model equality filter.
+    combined = portfolio_repository.list_attribution_evidence(
+        run_id=run_id, attribution_type="exposure_contribution", risk_model="ewma_covariance_v1"
+    )
+    assert [row["id"] for row in combined] == [f"{2:032d}"]
+    # Unknown risk_model fails closed (validated against the 4-model enum).
+    with pytest.raises(ValueError, match="risk_model"):
+        portfolio_repository.list_attribution_evidence(risk_model="black_litterman_v1")
+    # limit=0 / negative fail closed, mirroring list_optimization_runs.
+    with pytest.raises(ValueError, match="limit"):
+        portfolio_repository.list_attribution_evidence(limit=0)
+    with pytest.raises(ValueError, match="limit"):
+        portfolio_repository.list_attribution_evidence(limit=-1)
