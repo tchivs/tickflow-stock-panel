@@ -285,7 +285,7 @@ def test_wf_search_trials_use_per_fold_membership_symbols_when_resolver_passed(
     (explicit opt-out) the trial symbol set falls back to ``[]`` (empty), never the
     full lake universe via ``symbols=None``.
     """
-    from tests.backtest.conftest import StubSignalChain, StubUniverseResolver
+    from tests.backtest.conftest import StubUniverseResolver
 
     resolver = StubUniverseResolver(fixture_membership)
     seen: list[dict] = []
