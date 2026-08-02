@@ -440,6 +440,13 @@ def list_data_sources() -> dict:
             "datasets": ["daily", "minute"],
             "health": provider_chain.health_check("xyz"),
         },
+        {
+            "name": "hhxg",
+            "display_name": "hhxg 静态快照 (恢恢量化)",
+            "datasets": ["snapshot", "margin", "calendar", "news"],
+            "health": "ok",  # 静态快照低延迟; snapshot() 失败时动态降级
+            "base_url": "https://hhxg.top",
+        },
     ]
     return {
         "builtin": builtin,
