@@ -146,22 +146,22 @@ All 16 findings fixed in 6 atomic commits:
 |---|-----|--------|
 | BL-01 | Search trials scored on per-fold PIT membership symbols (thread `_fold_symbols(membership)` via new `resolver` param); search universe persisted in `search_space["universe"]`; orchestrator regression test | `8be11e6` |
 | WR-01 | OOS evaluation gated behind `evaluate_oos: bool = False` (default off) | `c9a9807` |
-| WR-02 | OOS objective validated BEFORE the exactly-once fold row is persisted; retry no longer burns the slot | `c9a9807` |
+| WR-02 | OOS objective validated BEFORE the exactly-once fold row is persisted; retry no longer burns the slot | `c9a9807` (+ regression test in `9ea598e`) |
 | WR-03 | `create_wf_plan` compares incoming vs stored geometry; raises on divergence | `35243e3` |
 | WR-04 | `optimize` pins the plan via idempotent `repo.create_wf_plan(plan)` before `record_wf_search` | `35243e3` |
-| WR-05 | `best_score` / per-fold values report raw objective space; signed value is internal sort key only | `35243e3` |
+| WR-05 | `best_score` / per-fold values report raw objective space; signed value is internal sort key only | `35243e3` (+ raw pooled `objective_raw` fix in `9ea598e`) |
 | WR-06 | `fold_evidence` auto-fed with the OOS fold stats when omitted (never `{}`) | `b427637` |
 | WR-07 | OOS fold membership symbols resolved and passed as `resolved_asset_ids` | `c9a9807` |
 | WR-08 | `build_plan` minimum corrected to `oos+train+gap+2*test+1`; 220/221 boundary test | `b427637` |
 | WR-09 | Label buffer snapped to `horizon` trading days on the measured calendar (search folds fully covered → `effective_days == test_size`) | `b427637` |
-| WR-10 | `repo=None` returns `search_run_id=None`; FK IntegrityError mapped to a clear missing-search-run message | `35243e3` |
+| WR-10 | `repo=None` returns `search_run_id=None`; FK IntegrityError mapped to a clear missing-search-run message | `35243e3` (+ regression test in `9ea598e`) |
 | IN-01 | Query path documented as cache-only | `b427637` |
 | IN-02 | Only genuine UNIQUE violations map to "OOS segment already evaluated" | `35243e3` |
 | IN-03 | Ensemble window filter compares `pl.Date` literals | `aea70b6` |
 | IN-04 | Window-union vs per-date membership documented in `_default_fold_score` | `b427637` |
 | IN-05 | Rank `method="max"` tie semantics documented in module contract | `aea70b6` |
 
-**Verification:** `pytest tests/backtest -q` → 111 passed; full main suite `pytest -q --tb=short -p no:cacheprovider --ignore=tests/test_phase5_optional_host.py --ignore=tests/shadow` → 1166 passed, 2 skipped; ruff clean.
+**Verification:** `pytest tests/backtest -q` → 114 passed; full main suite `pytest -q --tb=short -p no:cacheprovider --ignore=tests/test_phase5_optional_host.py --ignore=tests/shadow` → 1169 passed, 2 skipped; ruff clean.
 
 ---
 

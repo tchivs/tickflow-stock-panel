@@ -19,10 +19,10 @@ status: all_fixed
 - Fixed: 16
 - Skipped: 0
 
-All 16 findings from the Phase 13 code review were fixed across 6 atomic commits.
-Verification: `pytest tests/backtest -q` → **111 passed**; full main suite
+All 16 findings from the Phase 13 code review were fixed across 7 atomic commits.
+Verification: `pytest tests/backtest -q` → **114 passed**; full main suite
 `pytest -q --tb=short -p no:cacheprovider --ignore=tests/test_phase5_optional_host.py
---ignore=tests/shadow` → **1166 passed, 2 skipped**; `ruff check` clean on all
+--ignore=tests/shadow` → **1169 passed, 2 skipped**; `ruff check` clean on all
 modified modules.
 
 ## Fixed Issues
@@ -52,12 +52,13 @@ search folds never touch OOS.
 
 ### WR-02: Failed OOS backtest permanently burns the exactly-once slot
 
-**Files modified:** `backend/app/backtest/walkforward.py`
-**Commit:** `c9a9807`
+**Files modified:** `backend/app/backtest/walkforward.py`, `backend/tests/backtest/test_walkforward.py`
+**Commit:** `c9a9807`, `9ea598e`
 **Applied fix:** `evaluate_best_params` now validates that `test_stats[objective]`
 is present BEFORE the OOS fold row is persisted (`record_wf_fold`). A strategy
 that fails to produce the objective in the OOS window raises ValueError with
-nothing persisted, so a retry with corrected inputs is allowed.
+nothing persisted, so a retry with corrected inputs is allowed. Added
+`test_evaluate_best_params_wr02_no_oos_row_on_missing_objective`.
 
 ### WR-03: `create_wf_plan` idempotent re-create silently kept stale geometry
 
@@ -79,12 +80,13 @@ so FK failures on `record_wf_search` are no longer possible for un-pre-pinned pl
 
 ### WR-05: Min-direction objectives reported negated `best_score`
 
-**Files modified:** `backend/app/backtest/optimizer.py`
-**Commit:** `35243e3`
+**Files modified:** `backend/app/backtest/optimizer.py`, `backend/tests/backtest/test_optimizer_run.py`
+**Commit:** `35243e3`, `9ea598e`
 **Applied fix:** Per-fold `objective_raw` (raw metric) is preserved and used for
 display/persistence; `best_score` and `per_trial`/`per_fold` distributions now
 report the raw metric space (mirroring `StrategyOptimizer`), with the signed
-value used only as the internal sort key.
+value used only as the internal sort key. Added
+`test_wf_search_min_direction_reports_raw_best_score` to lock the raw sign.
 
 ### WR-06: Verdict `fold_evidence` empty by default
 
@@ -125,12 +127,13 @@ the calendar end). Fully-covered search folds now achieve
 
 ### WR-10: Fabricated `search_run_id` when no repo is supplied
 
-**Files modified:** `backend/app/backtest/optimizer.py`, `backend/app/research/repository.py`, `backend/tests/backtest/test_optimizer_run.py`
-**Commit:** `35243e3`
+**Files modified:** `backend/app/backtest/optimizer.py`, `backend/app/research/repository.py`, `backend/tests/backtest/test_optimizer_run.py`, `backend/tests/backtest/test_walkforward.py`
+**Commit:** `35243e3`, `9ea598e`
 **Applied fix:** `optimize(repo=None)` returns `search_run_id=None` instead of a
 fabricated uuid. `record_validated_strategy` maps the `search_run_id` FK
 IntegrityError to a clear message naming the missing search run. Test updated to
-assert `None` for the no-repo path.
+assert `None` for the no-repo path; added
+`test_evaluate_best_params_wr10_unknown_search_run_fk_mapped`.
 
 ### IN-01: `_find_existing_fold` query path is cache-only
 
