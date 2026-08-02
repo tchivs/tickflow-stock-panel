@@ -4,7 +4,7 @@
 对协方差工件做 checksum 校验读取 (绝不重算 live covariance) → 暴露度/边际贡献
 归因 + 硬对账 → O_EXCL 分析工件 (write_analysis_artifact) → append-only 证据行。
 run_drawdown 走同一编排: 组合收益率 = weights @ returns.T → 水下曲线 →
-回撤区间 → 逐标的 × 逐段归因 (drawdown_attribution, 段恒等式 Σc_i == 段收益
+回撤区间 → 逐标的 x 逐段归因 (drawdown_attribution, 段恒等式 Σc_i == 段收益
 rtol 1e-10 硬断言) → 完整报告工件 + 证据行。
 分析器是只读层: 绝不修改 run 记录, 任何失败都抛异常 (证据只在成功后写入)。
 
@@ -14,7 +14,6 @@ rtol 1e-10 硬断言) → 完整报告工件 + 证据行。
 
 from __future__ import annotations
 
-import json
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -35,26 +34,18 @@ from app.portfolio.drawdown import (
     underwater_curve,
 )
 from app.portfolio.repository import PortfolioRepository
+from app.portfolio.risk import load_covariance_artifact, make_risk_model_family
+
+_RISK_MODEL_NAMES = (
+    "sample_covariance_v1",
+    "semi_covariance_v1",
+    "ewma_covariance_v1",
+    "ledoit_wolf_v1",
+)
 
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
-
-
-def _load_checksum_verified_covariance(
-    run: dict[str, Any], *, artifact_service_root: Path
-) -> np.ndarray:
-    """Read the run's covariance ARTIFACT, checksum-verified (never recomputed)."""
-    risk_model = run["risk_model_detail"]
-    service = PortfolioArtifactService(artifact_service_root)
-    content = service.read_artifact(
-        risk_model["covariance_artifact_relative_path"],
-        checksum_sha256=risk_model["covariance_sha256"],
-    )
-    matrix = np.asarray(json.loads(content.decode("utf-8")), dtype=float)
-    if matrix.ndim != 2 or matrix.shape[0] != matrix.shape[1]:
-        raise ValueError("covariance artifact must decode to a square matrix")
-    return matrix
 
 
 def run_attribution(
@@ -62,23 +53,34 @@ def run_attribution(
     *,
     repository: PortfolioRepository,
     artifact_service_root: Path,
+    returns: np.ndarray | None = None,
+    risk_model_name: str | None = None,
 ) -> dict[str, Any]:
     """Exposure + marginal-contribution attribution for one run, append-only evidence.
 
-    跨模块完整性: 协方差来自 run 自己的工件字节 (covariance_sha256 校验), 归因在
-    该字节上硬对账 sum(MC) == wᵀΣw (rtol 1e-12), 然后写 O_EXCL 工件 + 证据行。
+    跨模块完整性: 协方差只有两个允许来源 —— (1) 身份路径 (risk_model_name=None):
+    run 自己的工件字节 (covariance_sha256 校验读取, 绝不重算); (2) 模型选择路径
+    (risk_model_name + returns): 从调用方提供的收益率面板用 make_risk_model_family
+    重算所选模型的协方差 (同一 PSD gate)。两条路径都在该协方差上硬对账
+    sum(MC) == wᵀΣw (rtol 1e-12), 然后写 O_EXCL 工件 + 证据行。证据行的
+    risk_model 记录实际使用的模型名 (选择路径可能不同于 run 行记录的模型)。
 
     Args:
         run_id: portfolio_optimization_runs.id。
         repository: PortfolioRepository。
         artifact_service_root: PortfolioArtifactService 的工件根目录。
+        returns: 模型选择路径必需的收益率面板 (n_obs, n_assets), 列与 run 的
+            output_weights 顺序对齐; 身份路径绝不读取。
+        risk_model_name: 四种 RSK-02 模型名之一; None = 身份路径 (checksum 绑定
+            工件字节)。
 
     Returns:
         record_attribution_evidence 返回的记录 (reconciliation 已展开)。
 
     Raises:
-        ValueError: run 不存在或缺少 output_weights。
-        ArtifactReadError: 协方差工件缺失 / checksum 不匹配。
+        ValueError: run 不存在或缺少 output_weights / 选择路径缺 returns 或
+            面板与权重不对齐。
+        ArtifactReadError: 身份路径协方差工件缺失 / checksum 不匹配。
         AssertionError: 对账失败 (hard, 绝不近似)。
     """
     run = repository.get_optimization_run(run_id)
@@ -87,10 +89,27 @@ def run_attribution(
     weights_map = run.get("output_weights")
     if not weights_map:
         raise ValueError(f"run {run_id} has no output weights (problem_status must be optimal)")
-    cov = _load_checksum_verified_covariance(run, artifact_service_root=artifact_service_root)
 
     symbols = list(weights_map.keys())
     weights = np.asarray(list(weights_map.values()), dtype=float)
+    if risk_model_name is None:
+        if returns is not None:
+            raise ValueError("returns are only used with risk_model_name (identity path reads the artifact)")
+        cov = load_covariance_artifact(run, artifact_service_root=artifact_service_root)
+        evidence_risk_model = run["risk_model"]
+    else:
+        if returns is None:
+            raise ValueError("returns are required when risk_model_name is selected")
+        panel = np.asarray(returns, dtype=float)
+        if panel.ndim != 2 or panel.shape[1] != weights.shape[0]:
+            raise ValueError(
+                "returns columns must align with the run's output_weights "
+                f"(expected {weights.shape[0]}, got {panel.shape[1]})"
+            )
+        block = make_risk_model_family(panel, risk_model_name=risk_model_name)
+        cov = block["covariance"]
+        evidence_risk_model = risk_model_name
+
     # 完整报告: 带符号暴露 + MC + 摘要 (top contributors / diversifiers)。
     # 负 MC = 分散化贡献, 绝不 abs (sum identity 依赖带符号分量)。
     report = attribution_report(weights, symbols, cov)
@@ -109,6 +128,7 @@ def run_attribution(
         filename=f"exposure_contribution-{analysis_id}.json",
         payload={
             "run_id": run_id,
+            "risk_model": evidence_risk_model,
             "as_of": run["as_of"],
             "symbols": symbols,
             "weights": weights.round(8).tolist(),
@@ -126,7 +146,7 @@ def run_attribution(
         id=analysis_id,
         attribution_type="exposure_contribution",
         run_id=run_id,
-        risk_model=run["risk_model"],
+        risk_model=evidence_risk_model,
         as_of=run["as_of"],
         output_sha256=descriptor.checksum_sha256,
         artifact_relative_path=descriptor.relative_path,
@@ -139,6 +159,83 @@ def run_attribution(
     )
 
 
+def reconcile_all_models(
+    run_id: str,
+    *,
+    returns: np.ndarray,
+    repository: PortfolioRepository,
+    artifact_service_root: Path,
+) -> dict[str, Any]:
+    """Cross-model reconciliation matrix — every RSK-02 model reconciles exactly.
+
+    对四种风险模型各做一次归因并硬对账 (sum(MC) == wᵀΣw, rtol 1e-12), 返回
+    model x variance x sum(MC) x max abs error 矩阵。run 自己记录的模型行
+    (identity row) 走 checksum 绑定工件路径 (load_covariance_artifact), 其余
+    模型行从 returns 重算 (make_risk_model_family)。任一模型对账失败抛
+    AssertionError (hard abort —— 绝不返回部分成功矩阵)。不写证据 (integrity
+    report, 不是一次新分析)。
+
+    Args:
+        run_id: portfolio_optimization_runs.id。
+        returns: (n_obs, n_assets) 收益率面板, 列与 run 的 output_weights 对齐。
+        repository: PortfolioRepository。
+        artifact_service_root: PortfolioArtifactService 的工件根目录。
+
+    Returns:
+        {"run_id", "models": [{risk_model, portfolio_variance, sum_contributions,
+        max_abs_error, reconciled}], "all_reconciled": bool}。
+
+    Raises:
+        ValueError: run 不存在或缺少 output_weights / 面板不对齐。
+        ArtifactReadError: 身份路径协方差工件缺失 / checksum 不匹配。
+        AssertionError: 任一模型对账失败 (hard)。
+    """
+    run = repository.get_optimization_run(run_id)
+    if run is None:
+        raise ValueError(f"no optimization run with id {run_id}")
+    weights_map = run.get("output_weights")
+    if not weights_map:
+        raise ValueError(f"run {run_id} has no output weights (problem_status must be optimal)")
+    symbols = list(weights_map.keys())
+    weights = np.asarray(list(weights_map.values()), dtype=float)
+    panel = np.asarray(returns, dtype=float)
+    if panel.ndim != 2 or panel.shape[1] != weights.shape[0]:
+        raise ValueError(
+            "returns columns must align with the run's output_weights "
+            f"(expected {weights.shape[0]}, got {panel.shape[1]})"
+        )
+
+    models: list[dict[str, Any]] = []
+    for name in _RISK_MODEL_NAMES:
+        if name == run["risk_model"]:
+            cov = load_covariance_artifact(run, artifact_service_root=artifact_service_root)
+            covariance_sha256 = run["risk_model_detail"]["covariance_sha256"]
+        else:
+            block = make_risk_model_family(panel, risk_model_name=name)
+            cov = block["covariance"]
+            covariance_sha256 = block["risk_model_json"]["covariance_sha256"]
+        report = attribution_report(weights, symbols, cov)  # 内部硬对账, 失败抛 AssertionError
+        variance = report["portfolio_variance"]
+        sum_contributions = report["sum_contributions"]
+        max_abs_error = report["reconciliation_error"]
+        reconciled = bool(max_abs_error <= 1e-12 * variance + 1e-15)
+        models.append(
+            {
+                "risk_model": name,
+                "portfolio_variance": variance,
+                "sum_contributions": sum_contributions,
+                "max_abs_error": max_abs_error,
+                "reconciled": reconciled,
+                "covariance_sha256": covariance_sha256,
+            }
+        )
+    return {
+        "run_id": run_id,
+        "models": models,
+        "all_reconciled": all(model["reconciled"] for model in models),
+    }
+
+
 def run_drawdown(
     run_id: str,
     *,
@@ -146,7 +243,7 @@ def run_drawdown(
     repository: PortfolioRepository,
     artifact_service_root: Path,
 ) -> dict[str, Any]:
-    """水下曲线 + 回撤区间 + 逐标的 × 逐段归因, append-only 证据 (RSK-03)。
+    """水下曲线 + 回撤区间 + 逐标的 x 逐段归因, append-only 证据 (RSK-03)。
 
     完整报告 (12-06): 权重来自 run 行, 组合收益率 = weights @ returns.T,
     underwater_curve + drawdown_periods + drawdown_attribution (段恒等式
@@ -190,7 +287,7 @@ def run_drawdown(
     portfolio_returns = weights @ panel.T
     underwater = underwater_curve(portfolio_returns)
     periods = drawdown_periods(underwater)
-    # 完整归因报告: 逐标的 × 逐段分解 + 摘要。段恒等式在写证据前硬断言。
+    # 完整归因报告: 逐标的 x 逐段分解 + 摘要。段恒等式在写证据前硬断言。
     attribution = drawdown_attribution(
         weights, panel, periods, symbols=list(weights_map.keys())
     )

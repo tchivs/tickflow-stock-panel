@@ -17,9 +17,12 @@ from __future__ import annotations
 
 import json
 from hashlib import sha256
+from pathlib import Path
+from typing import Any
 
 import numpy as np
 
+from app.portfolio.artifacts import PortfolioArtifactService
 from app.portfolio.constraints import PSD_EPSILON_DEFAULT
 
 
@@ -287,3 +290,36 @@ def make_risk_model_family(
         "covariance_sha256": covariance_sha256(cov),
     }
     return {"covariance": cov, "risk_model_json": risk_model_json}
+
+
+def load_covariance_artifact(run: dict[str, Any], artifact_service_root: Path) -> np.ndarray:
+    """Checksum-verified read of a run's recorded covariance artifact (RSK-01).
+
+    The ONLY covariance source for the attribution identity path: reads
+    ``risk_model_detail.covariance_artifact_relative_path`` via
+    ``PortfolioArtifactService.read_artifact`` against the run's recorded
+    ``covariance_sha256`` digest. A missing artifact or a checksum mismatch
+    raises ``ArtifactReadError`` (fail closed — the identity path NEVER silently
+    recomputes a covariance).
+
+    Args:
+        run: portfolio_optimization_runs 记录 (risk_model_detail 已展开)。
+        artifact_service_root: PortfolioArtifactService 的工件根目录。
+
+    Returns:
+        (n, n) 协方差矩阵 (工件字节经 8 位小数规范化序列化)。
+
+    Raises:
+        ArtifactReadError: 工件缺失 / 路径逃逸 / checksum 不匹配。
+        ValueError: 工件解码后不是方阵。
+    """
+    risk_model = run["risk_model_detail"]
+    service = PortfolioArtifactService(artifact_service_root)
+    content = service.read_artifact(
+        risk_model["covariance_artifact_relative_path"],
+        checksum_sha256=risk_model["covariance_sha256"],
+    )
+    matrix = np.asarray(json.loads(content.decode("utf-8")), dtype=float)
+    if matrix.ndim != 2 or matrix.shape[0] != matrix.shape[1]:
+        raise ValueError("covariance artifact must decode to a square matrix")
+    return matrix
