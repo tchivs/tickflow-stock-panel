@@ -31,6 +31,7 @@ import {
 import { useToggleRealtimeQuotes, useUpdateQuoteInterval } from '@/lib/useSharedMutations'
 import { QK } from '@/lib/queryKeys'
 import { PageHeader } from '@/components/PageHeader'
+import { providerDatasets, providerDisplayName } from '@/lib/dataSources'
 import { formatScheduleDatePart, formatScheduleTimePart, isToday } from '@/lib/format'
 
 // 拆分出的子组件
@@ -166,23 +167,18 @@ export function Data() {
     staleTime: 60_000,
   })
   const activeProvider = prefs.data?.daily_data_provider || 'tickflow'
-  const activeDataSourceName = activeProvider === 'tickflow'
-    ? 'TickFlow'
-    : (dataSources.data?.custom?.find(s => s.name === activeProvider)?.display_name || activeProvider)
-
-  // tierKey → 自定义数据集名映射 (用于数据画像 CapBadge 显示数据源名而非 TickFlow 档位)
+  const activeDataSourceName = providerDisplayName(dataSources.data, activeProvider)
+  const activeProviderDatasets = providerDatasets(dataSources.data, activeProvider)
+  // tierKey → provider 数据集 key 映射 (用于数据画像 CapBadge 显示源名)
   const TIERKEY_TO_DATASET: Record<string, string> = {
     daily: 'daily',
     adj_factor: 'adj_factor',
-    etf: 'daily',        // ETF 复用日K能力
+    etf: 'daily',
     minute: 'minute',
     financials: 'financial',
   }
-  // 当前 custom 源支持的数据集集合
-  const activeCustomDatasets = activeProvider !== 'tickflow'
-    ? new Set(dataSources.data?.custom?.find(s => s.name === activeProvider)?.datasets || [])
-    : new Set<string>()
-  // 给定 tierKey, 返回 custom provider 显示名 (走 custom 时) 或 null (走 TickFlow)
+  const activeCustomDatasets = new Set(activeProviderDatasets)
+  // 给定 tierKey, 返回 provider 显示名 (走非 tickflow 时) 或 null (走 TickFlow)
   const getCustomProviderName = (tierKey: string): string | null => {
     if (activeProvider === 'tickflow') return null
     const ds = TIERKEY_TO_DATASET[tierKey]

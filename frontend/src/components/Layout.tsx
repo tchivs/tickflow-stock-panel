@@ -21,6 +21,7 @@ import {
 } from '@/lib/useSharedMutations'
 import { QK } from '@/lib/queryKeys'
 import { tierRank } from '@/lib/capability-labels'
+import { providerDatasets, providerDisplayName, isNonTickflow } from '@/lib/dataSources'
 import {
   Star,
   ScanSearch,
@@ -422,21 +423,17 @@ export function Layout() {
   const isNoneTier = tier < 0
   const isWatchlistMode = tier === 0
   const realtimeModeLabel = isWatchlistMode ? '自选股' : '全市场'
-  // 当前实时行情数据源名称 (custom 时显示源名, tickflow 时不显示)
+  // 当前实时行情数据源名称 (非 tickflow 时显示源名)
   const realtimeProvider = prefs?.realtime_data_provider
   const realtimeProviderName = realtimeProvider && realtimeProvider !== 'tickflow'
-    ? (dataSources?.custom?.find(s => s.name === realtimeProvider)?.display_name || realtimeProvider)
+    ? providerDisplayName(dataSources, realtimeProvider)
     : null
 
   // 当前主数据源 (用于菜单底部状态条)
   const activeProvider = prefs?.daily_data_provider || 'tickflow'
-  const activeProviderName = activeProvider === 'tickflow'
-    ? 'TickFlow'
-    : (dataSources?.custom?.find(s => s.name === activeProvider)?.display_name || activeProvider)
-  const activeProviderDatasets = activeProvider === 'tickflow'
-    ? ['daily', 'adj_factor', 'realtime', 'minute']
-    : (dataSources?.custom?.find(s => s.name === activeProvider)?.datasets || [])
-  const isCustomActive = activeProvider !== 'tickflow'
+  const activeProviderName = providerDisplayName(dataSources, activeProvider)
+  const activeProviderDatasets = providerDatasets(dataSources, activeProvider)
+  const isCustomActive = isNonTickflow(activeProvider)
 
   // 轮询触发记录总数 → 更新监控中心徽标 (每 15 秒)
   const alertsTotalQuery = useQuery({

@@ -7,13 +7,9 @@ import { QK } from '@/lib/queryKeys'
 import { usePreferences } from '@/lib/useSharedQueries'
 import { toast } from '@/components/Toast'
 import { DataSourceEditor } from './DataSourceEditor'
+import { DATASET_LABELS, providerDisplayName } from '@/lib/dataSources'
 
-const DATASET_LABEL: Record<string, string> = {
-  daily: '日K',
-  adj_factor: '除权',
-  realtime: '实时',
-  minute: '分钟',
-}
+const DATASET_LABEL = DATASET_LABELS
 
 export function SettingsDataSourcesPanel() {
   const qc = useQueryClient()
@@ -158,10 +154,9 @@ export function SettingsDataSourcesPanel() {
           <span className="text-[10px] uppercase tracking-widest text-muted">当前</span>
           <span className="h-2 w-2 rounded-full bg-accent animate-pulse" />
           <span className="text-sm font-medium text-foreground">
-            {activeName === 'tickflow' ? 'TickFlow' : customList.find(s => s.name === activeName)?.display_name || activeName}
+            {providerDisplayName(sources.data, activeName)}
           </span>
         </div>
-
         {/* 数据源选择 - 横向卡片列表 */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
           {allItems.map(item => {
