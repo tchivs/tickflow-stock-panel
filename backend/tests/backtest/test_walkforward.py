@@ -12,7 +12,7 @@ Contract cases locked here (turned green by 13-01/13-03/13-05):
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 import polars as pl
 import pytest
@@ -244,8 +244,12 @@ def test_run_walk_forward_pins_plan_and_records_fingerprints(
     assert len(result["fold_manifests"]) == len(wf_fixture_plan.folds) + 1  # 3 + OOS
     oos_manifest = [m for m in result["fold_manifests"] if m["is_oos"] == 1]
     assert len(oos_manifest) == 1
-    # Every fold's chain config end == test_end + horizon (label buffer).
+    # Every fold's chain config end == test_end + horizon (label buffer), so
+    # labels stay finite through the whole test segment (FACT-06 anti skew).
     for manifest in result["fold_manifests"]:
+        test_end = date.fromisoformat(manifest["test_end"])
+        expected_end = (test_end + timedelta(days=wf_fixture_plan.horizon)).isoformat()
+        assert manifest["chain_config"]["end"] == expected_end
         assert len(manifest["membership_fingerprint"]) == 64
         assert manifest["stats"]["effective_days"] >= 10
     with pytest.raises(ValueError, match="OOS segment already evaluated"):
