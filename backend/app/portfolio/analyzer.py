@@ -97,6 +97,10 @@ def run_attribution(
             raise ValueError("returns are only used with risk_model_name (identity path reads the artifact)")
         cov = load_covariance_artifact(run, artifact_service_root=artifact_service_root)
         evidence_risk_model = run["risk_model"]
+        # WR-03: 身份路径也记录协方差摘要 + 来源 ("artifact") —— 证据行自证绑定
+        # 到 run 记录的 checksum 工件字节 (Phase 15 可独立核验)。
+        covariance_sha256 = run["risk_model_detail"]["covariance_sha256"]
+        covariance_source = "artifact"
     else:
         if returns is None:
             raise ValueError("returns are required when risk_model_name is selected")
@@ -113,6 +117,10 @@ def run_attribution(
         block = make_risk_model_family(panel, risk_model_name=risk_model_name)
         cov = block["covariance"]
         evidence_risk_model = risk_model_name
+        # WR-03: 选择路径重算协方差 — 证据行记录协方差摘要与来源 ("recompute"),
+        # 使 Phase 15 消费者能区分 checksum 绑定工件分析 vs 调用方 returns 重算。
+        covariance_sha256 = block["risk_model_json"]["covariance_sha256"]
+        covariance_source = "recompute"
 
     # 完整报告: 带符号暴露 + MC + 摘要 (top contributors / diversifiers)。
     # 负 MC = 分散化贡献, 绝不 abs (sum identity 依赖带符号分量)。
@@ -139,6 +147,8 @@ def run_attribution(
             "exposure": {key: round(value, 8) for key, value in exposure.items()},
             "marginal_contributions": mc,
             "portfolio_variance": variance,
+            "covariance_sha256": covariance_sha256,
+            "covariance_source": covariance_source,
             "reconciliation": {
                 "sum_contributions": reconciliation["sum_contributions"],
                 "max_abs_error": reconciliation["max_abs_error"],
@@ -158,6 +168,8 @@ def run_attribution(
             "portfolio_variance": reconciliation["portfolio_variance"],
             "sum_contributions": reconciliation["sum_contributions"],
             "max_abs_error": reconciliation["max_abs_error"],
+            "covariance_sha256": covariance_sha256,
+            "covariance_source": covariance_source,
         },
         created_at=_now(),
     )

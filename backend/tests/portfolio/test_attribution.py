@@ -242,12 +242,24 @@ def test_run_attribution_payload_carries_full_report(
     # Summary block present in the artifact.
     assert payload["summary"]["instrument_count"] == len(payload["symbols"])
     assert payload["summary"]["policy_version"] == "phase-12-attribution-v1"
-    # The evidence reconciliation payload matches the plan contract.
+    # The evidence reconciliation payload matches the plan contract (WR-03 adds
+    # covariance provenance: digest + source artifact|recompute).
     assert set(evidence["reconciliation"]) == {
         "portfolio_variance",
         "sum_contributions",
         "max_abs_error",
+        "covariance_sha256",
+        "covariance_source",
     }
+    # WR-03: the identity path is checksum-bound — the evidence records the run's
+    # own covariance artifact digest with source="artifact".
+    assert (
+        evidence["reconciliation"]["covariance_sha256"]
+        == run["risk_model_detail"]["covariance_sha256"]
+    )
+    assert evidence["reconciliation"]["covariance_source"] == "artifact"
+    assert payload["covariance_source"] == "artifact"
+    assert payload["covariance_sha256"] == run["risk_model_detail"]["covariance_sha256"]
 
 
 def test_run_attribution_evidence_invariants_fail_closed(
@@ -408,6 +420,9 @@ def test_run_attribution_model_selection_reconciles_exactly_per_model(
     assert variance >= 0.0
     assert reconciliation["sum_contributions"] == pytest.approx(variance, rel=1e-12)
     assert reconciliation["max_abs_error"] <= 1e-12 * variance + 1e-15
+    # WR-03: the selection path records the recomputed covariance digest + source.
+    assert len(reconciliation["covariance_sha256"]) == 64
+    assert reconciliation["covariance_source"] == "recompute"
     # Checksum-verified artifact read-back carries the selected model + exact variance.
     payload = json.loads(
         service.read_artifact(
@@ -417,6 +432,9 @@ def test_run_attribution_model_selection_reconciles_exactly_per_model(
     assert payload["risk_model"] == risk_model_name
     assert payload["portfolio_variance"] == pytest.approx(variance, rel=1e-12)
     assert payload["reconciliation"]["max_abs_error"] <= 1e-12 * variance + 1e-15
+    # WR-03: the artifact payload carries the same covariance provenance.
+    assert payload["covariance_source"] == "recompute"
+    assert payload["covariance_sha256"] == reconciliation["covariance_sha256"]
 
 
 def test_run_attribution_model_selection_non_finite_returns_fail_closed(
