@@ -1,4 +1,4 @@
-"""Phase 12 回撤 — 水下曲线 + 回撤区间识别 + 逐标的 × 逐段归因 (RSK-03)。
+"""Phase 12 回撤 — 水下曲线 + 回撤区间识别 + 逐标的 x 逐段归因 (RSK-03)。
 
 职责: 在组合收益率序列上做纯 numpy 的水下曲线
 (equity / running_max(equity) - 1) 与回撤区间识别 (连续低于
@@ -7,7 +7,7 @@
 (DRAWDOWN_DEPTH_THRESHOLD=0.02, DRAWDOWN_MIN_OBS=2 —— 裁量记录进证据
 reconciliation_json)。
 
-drawdown_attribution 对每个已识别的回撤段做逐标的 × 逐段分解:
+drawdown_attribution 对每个已识别的回撤段做逐标的 x 逐段分解:
 c_i = Σ_{t in [start,end]} w_i · r_{i,t}, 段收益 = Σ_t Σ_i w_i r_{i,t},
 并 HARD 断言 Σ c_i == 段收益 (rtol 1e-10 —— 线性分解, 精确于算术, 绝不
 近似; 与 RSK-01 的方差对账对称)。贡献是算术的 (非复利) 设计: 恒等式
@@ -101,7 +101,7 @@ def drawdown_attribution(
     *,
     symbols: Sequence[str] | None = None,
 ) -> dict[str, Any]:
-    """逐标的 × 逐时间段的回撤归因 (RSK-03)。
+    """逐标的 x 逐时间段的回撤归因 (RSK-03)。
 
     对每个已识别回撤段 {start_idx, end_idx}: 逐标的贡献
     c_i = Σ_{t in [start,end]} w_i · r_{i,t}, 段收益
