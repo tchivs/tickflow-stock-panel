@@ -129,6 +129,43 @@ class PortfolioArtifactService:
             raise ArtifactReadError("artifact checksum mismatch")
         return content
 
+    def write_analysis_artifact(
+        self,
+        run_id: str,
+        *,
+        subdir: str,
+        filename: str,
+        payload: object,
+    ) -> ArtifactDescriptor:
+        """Write an analysis artifact inside the run's EXISTING namespace.
+
+        Phase 12: attribution/drawdown analyzers land their O_EXCL + fsync +
+        sha256 artifacts under ``research_artifacts/<run_id>/<subdir>/``. The run
+        namespace is owned by the optimization bundle (``write_bundle``) — it is
+        NEVER recreated here (that would break the O_EXCL run-namespace
+        discipline); a missing namespace raises ``ArtifactWriteError``.
+
+        Args:
+            run_id: 32 位小写 hex (与 run 行 id 一致)。
+            subdir: 命名空间内的一级子目录 (managed basename, 拒绝 ``..`` 与分隔符)。
+            filename: 文件名 (managed basename)。
+            payload: JSON 可序列化对象。
+
+        Returns:
+            ArtifactDescriptor (含 checksum_sha256, 供证据行 output_sha256 使用)。
+        """
+        subdir = self._managed_name(subdir, field="subdir")
+        filename = self._managed_name(filename, field="filename")
+        namespace = self._namespace(run_id)
+        if not namespace.is_dir():
+            raise ArtifactWriteError(f"artifact namespace does not exist for run {run_id}")
+        target = namespace / subdir
+        try:
+            target.mkdir(parents=True, exist_ok=True)
+        except OSError as error:
+            raise ArtifactWriteError(f"could not create analysis subdir: {error}") from error
+        return self._write_json(target, run_id, filename, payload)
+
     def _namespace(self, run_id: str) -> Path:
         if not isinstance(run_id, str) or not _RUN_ID.fullmatch(run_id):
             raise ArtifactWriteError("run ID must be an opaque UUID hex value")
@@ -139,6 +176,15 @@ class PortfolioArtifactService:
             raise ArtifactWriteError("artifact namespace escapes the managed root") from error
         return namespace
 
+    @staticmethod
+    def _managed_name(name: str, *, field: str) -> str:
+        """Reject ``..``, empty names, and any path separators (escape guard)."""
+        if not isinstance(name, str) or name in ("", ".", ".."):
+            raise ArtifactWriteError(f"{field} must be a managed basename")
+        if Path(name).name != name or "/" in name or "\\" in name:
+            raise ArtifactWriteError(f"{field} must be a managed basename")
+        return name
+
     def _write_json(
         self,
         namespace: Path,
@@ -146,8 +192,7 @@ class PortfolioArtifactService:
         filename: str,
         payload: object,
     ) -> ArtifactDescriptor:
-        if filename != Path(filename).name:
-            raise ArtifactWriteError("artifact filename must be a managed basename")
+        filename = self._managed_name(filename, field="artifact filename")
         path = namespace / filename
         try:
             path.relative_to(self.root)

@@ -27,6 +27,12 @@ _RUN_STATUSES = frozenset(
 _OBJECTIVES = frozenset({"min_volatility", "hrp", "max_sharpe"})
 _EXPECTED_RETURN_METHODS = frozenset({"composite-zscore-v1", "none"})
 _RISK_MODELS = frozenset({"sample_covariance_v1"})
+# Phase 12 证据表枚举: portfolio_risk_attribution_evidence.risk_model 接受 4 模型
+# (12-02 option-a: runs 表 CHECK 已加宽到同一 4 模型枚举)。
+_RISK_MODELS_PHASE12 = frozenset(
+    {"sample_covariance_v1", "semi_covariance_v1", "ewma_covariance_v1", "ledoit_wolf_v1"}
+)
+_ATTRIBUTION_TYPES = frozenset({"exposure_contribution", "drawdown"})
 
 
 # 每个 run 的 immutable 事实用确定性 JSON 序列化 (排序键 + 紧凑分隔符), 与
@@ -60,6 +66,19 @@ def _record(row: sqlite3.Row | dict[str, Any] | None) -> dict[str, Any] | None:
     ):
         if column in value and value[column] is not None:
             value[target] = json.loads(value.pop(column))
+    return value
+
+
+def _record_evidence(row: sqlite3.Row | dict[str, Any] | None) -> dict[str, Any] | None:
+    """Un-wrap an attribution-evidence row: reconciliation_json → reconciliation.
+
+    The mirror of ``_record`` for portfolio_risk_attribution_evidence rows.
+    """
+    if row is None:
+        return None
+    value = dict(row)
+    if value.get("reconciliation_json") is not None:
+        value["reconciliation"] = json.loads(value.pop("reconciliation_json"))
     return value
 
 
@@ -192,6 +211,120 @@ class PortfolioRepository:
         return [
             unwrapped
             for unwrapped in (_record(record) for record in records)
+            if unwrapped is not None
+        ]
+
+    def record_attribution_evidence(self, **fields: Any) -> dict[str, Any]:
+        """Append one immutable attribution/drawdown evidence row (RSK-01/03).
+
+        镜像 record_optimization_run: 校验 attribution_type / risk_model 枚举、
+        output_sha256 64-hex、以及 (attribution_type == "exposure_contribution") ==
+        (reconciliation_json is not None) 不变量 (DB CHECK 镜像, 失败信息更友好);
+        reconciliation_json 经 _json 规范化后 INSERT。返回记录时 reconciliation_json
+        展开为 reconciliation。无 UPDATE/DELETE 面 (表触发器强制 append-only)。
+        """
+        required = {
+            "id",
+            "attribution_type",
+            "run_id",
+            "risk_model",
+            "as_of",
+            "output_sha256",
+            "artifact_relative_path",
+            "reconciliation_json",
+            "created_at",
+        }
+        missing = sorted(required - set(fields))
+        if missing:
+            raise ValueError(f"missing required evidence fields: {', '.join(missing)}")
+
+        attribution_type = fields["attribution_type"]
+        if attribution_type not in _ATTRIBUTION_TYPES:
+            raise ValueError(f"unknown attribution_type: {attribution_type}")
+        risk_model = fields["risk_model"]
+        if risk_model not in _RISK_MODELS_PHASE12:
+            raise ValueError(f"unknown risk_model: {risk_model}")
+        if not _SHA256.fullmatch(str(fields["output_sha256"])):
+            raise ValueError("output_sha256 must be a lowercase SHA-256 hex digest")
+        # DB NOT NULL 镜像: 每个分析事实都携带 reconciliation_json (exposure 的
+        # 对账载荷 + drawdown 的 period_count/max_depth)。缺省 fail closed。
+        reconciliation = fields.get("reconciliation_json")
+        if reconciliation is None:
+            raise ValueError("reconciliation_json is required for every evidence row")
+
+        columns = [
+            "id",
+            "attribution_type",
+            "run_id",
+            "risk_model",
+            "as_of",
+            "output_sha256",
+            "artifact_relative_path",
+            "reconciliation_json",
+            "created_at",
+        ]
+        serialized = dict(fields)
+        if reconciliation is not None:
+            serialized["reconciliation_json"] = _json(reconciliation, "reconciliation_json")
+        values = [serialized.get(column) for column in columns]
+        with self._connection() as connection, connection:
+            connection.execute(
+                f"INSERT INTO portfolio_risk_attribution_evidence ({', '.join(columns)}) "
+                f"VALUES ({', '.join('?' * len(columns))})",
+                values,
+            )
+            row = connection.execute(
+                "SELECT * FROM portfolio_risk_attribution_evidence WHERE id = ?",
+                (fields["id"],),
+            ).fetchone()
+        return _record_evidence(row)  # type: ignore[return-value]
+
+    def get_attribution_evidence(self, evidence_id: str) -> dict[str, Any] | None:
+        """Return one evidence row by id with reconciliation_json unwrapped."""
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM portfolio_risk_attribution_evidence WHERE id = ?",
+                (evidence_id,),
+            ).fetchone()
+        return _record_evidence(row)
+
+    def list_attribution_evidence(
+        self,
+        *,
+        run_id: str | None = None,
+        attribution_type: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """List evidence rows ordered by created_at, id with optional filters.
+
+        Args:
+            run_id: 只返回该 run 的证据行。
+            attribution_type: 只返回该类型 (exposure_contribution / drawdown)。
+            limit: 行数上限 (默认 200; 必须为正整数, 否则 fail closed)。
+        """
+        if not isinstance(limit, int) or limit < 1:
+            raise ValueError("limit must be a positive integer")
+        if attribution_type is not None and attribution_type not in _ATTRIBUTION_TYPES:
+            raise ValueError(f"unknown attribution_type: {attribution_type}")
+        clauses: list[str] = []
+        parameters: list[Any] = []
+        if run_id is not None:
+            clauses.append("run_id = ?")
+            parameters.append(run_id)
+        if attribution_type is not None:
+            clauses.append("attribution_type = ?")
+            parameters.append(attribution_type)
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        with self._connection() as connection:
+            rows = connection.execute(
+                f"SELECT * FROM portfolio_risk_attribution_evidence{where} "
+                "ORDER BY created_at, id LIMIT ?",
+                [*parameters, limit],
+            ).fetchall()
+        records = [dict(row) for row in rows]
+        return [
+            unwrapped
+            for unwrapped in (_record_evidence(record) for record in records)
             if unwrapped is not None
         ]
 
