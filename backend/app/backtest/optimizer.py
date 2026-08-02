@@ -8,7 +8,9 @@
 """
 from __future__ import annotations
 
+import hashlib
 import itertools
+import json
 import logging
 import statistics
 import threading
@@ -333,12 +335,18 @@ class WalkForwardOptimizer:
         progress_cb=None,
         cancel_event: threading.Event | None = None,
         repo=None,
+        resolver=None,
     ) -> dict:
         """OOS-scored 网格搜索: 只打 test 段; OOS 结构性排除; 记录多重比较簿记。
 
         传入 ``repo`` (ResearchRepository) 时把 n_trials/search_space/
         score_distribution 连同 ``oos_excluded=1`` 持久化到 wf_search_runs;
-        否则仍返回生成的 ``search_run_id``。
+        否则 ``search_run_id`` 为 None (绝不伪造未持久化的 id)。
+
+        传入 ``resolver`` (universe resolver) 时, 每个 search trial 使用与折/OOS
+        评分器相同的 per-fold PIT 成员符号集 (``_fold_symbols(membership)``) —
+        绝不 ``symbols=None`` (全湖 universe) (BL-01); 并把搜索 universe
+        (符号计数 / 指纹) 记入 ``search_space["universe"]`` 供审计。
 
         返回 dict 含 ``n_trials`` / ``search_space`` / ``score_distribution`` /
         ``best_params`` / ``best_score`` / ``results`` / ``search_run_id``。
@@ -364,6 +372,38 @@ class WalkForwardOptimizer:
         done = 0
         lock = threading.Lock()
 
+        # BL-01: 每折的 PIT 成员符号集 — 与折/OOS 评分器 (walkforward._default_fold_score
+        # 的 _fold_symbols(membership)) 完全一致, 搜索绝不 symbols=None (全湖 universe)。
+        if resolver is None:
+            logger.warning(
+                "walk-forward 搜索未传 resolver: 用全湖 universe 打分, "
+                "best_params 可能与 OOS PIT 成员集不可比 (BL-01)"
+            )
+
+        def _fold_trial_symbols(fold: Any) -> list[str]:
+            """解析折窗口的 PIT 成员并集 (与 walkforward._run_fold 同窗解析)。"""
+            if resolver is None:
+                return []
+            from app.backtest.walkforward import _calendar_days_before, _fold_symbols
+
+            chain_config = getattr(fold, "chain_config", None)
+            if chain_config is not None:
+                compute_end = chain_config.end
+                warmup = getattr(chain_config, "warmup_days", 0) or 0
+            else:
+                # 鸭子类型折 (测试替身): 回退到日历日标签缓冲, 与几何契约一致。
+                import datetime as _dt
+
+                compute_end = fold.test_end + _dt.timedelta(days=plan.horizon)
+                warmup = 0
+            membership = resolver.resolve_universe_daily(
+                universe_name=plan.universe,
+                start=_calendar_days_before(fold.train_start, warmup),
+                end=compute_end,
+                asset_type=plan.asset_type,
+            )
+            return _fold_symbols(membership)
+
         def _run_one(idx: int, combo: dict) -> dict | None:
             if cancel_event is not None and cancel_event.is_set():
                 return None
@@ -373,7 +413,7 @@ class WalkForwardOptimizer:
                 for fold in search_folds:
                     bt_cfg = StrategyBacktestConfig(
                         strategy_id=strategy_id,
-                        symbols=None,
+                        symbols=_fold_trial_symbols(fold),
                         start=fold.test_start,
                         end=fold.test_end,
                         params=dict(combo),
@@ -456,6 +496,24 @@ class WalkForwardOptimizer:
             **_dist(score_values, round_to=4),
         }
         search_space = {"param_grid": param_grid, "params_meta": params_meta}
+        # BL-01: 审计搜索 universe — 符号计数 + 每折 PIT 成员指纹 (写入 wf_search_runs.search_space_json)。
+        if resolver is not None:
+            per_fold_counts: dict[str, int] = {}
+            union_symbols: set[str] = set()
+            for fold in search_folds:
+                syms = _fold_trial_symbols(fold)
+                per_fold_counts[f"fold_{fold.fold_index}"] = len(syms)
+                union_symbols.update(syms)
+            search_space["universe"] = {
+                "n_symbols": len(union_symbols),
+                "symbols": sorted(union_symbols),
+                "per_fold_symbol_counts": per_fold_counts,
+                "fingerprint": hashlib.sha256(
+                    json.dumps(
+                        per_fold_counts, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+                    ).encode("utf-8")
+                ).hexdigest(),
+            }
         search_run_id = uuid.uuid4().hex
 
         if repo is not None:

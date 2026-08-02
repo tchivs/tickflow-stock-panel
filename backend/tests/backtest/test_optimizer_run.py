@@ -274,6 +274,70 @@ def test_wf_search_scores_test_folds_only_never_oos():
     assert out["best_params"] == {"ma_proximity": 0.01}
 
 
+def test_wf_search_trials_use_per_fold_membership_symbols_when_resolver_passed(
+    fixture_membership,
+) -> None:
+    """BL-01: search trials score on the per-fold PIT membership universe, never None.
+
+    With a resolver the optimizer threads each fold's ``_fold_symbols(membership)``
+    into every trial backtest — identical to the fold/OOS scorer — so best_params
+    and the OOS unbiased estimate live on the same universe. Without a resolver
+    (explicit opt-out) the trial symbol set falls back to ``[]`` (empty), never the
+    full lake universe via ``symbols=None``.
+    """
+    from tests.backtest.conftest import StubSignalChain, StubUniverseResolver
+
+    resolver = StubUniverseResolver(fixture_membership)
+    seen: list[dict] = []
+
+    def record_run(bt_cfg, progress_cb=None, cancel_event=None):  # type: ignore[no-untyped-def]
+        del progress_cb, cancel_event
+        seen.append(
+            {
+                "symbols": list(bt_cfg.symbols) if bt_cfg.symbols is not None else None,
+                "start": bt_cfg.start,
+                "end": bt_cfg.end,
+            }
+        )
+        return _FakeResult(stats={"sharpe": 1.0})
+
+    opt = _wf_optimizer(lambda p: _FakeResult(stats={"sharpe": 1.0}))
+    opt.service.run = record_run
+    out = opt.optimize(
+        plan=_WF_PLAN_3_FOLDS,
+        strategy_id="s",
+        param_grid={"ma_proximity": [0.01, 0.02]},
+        objective="sharpe",
+        resolver=resolver,
+    )
+    # 2 combos x 3 search folds = 6 trial runs; every trial carries the per-fold
+    # membership symbol set (never None / never the full lake universe).
+    assert len(seen) == 6
+    assert all(call["symbols"] is not None for call in seen)
+    assert all(call["symbols"] for call in seen)  # non-empty PIT membership
+    expected = sorted(set(fixture_membership["symbol"].to_list()))
+    assert all(sorted(call["symbols"]) == expected for call in seen)
+    # search_space records the auditable universe fingerprint.
+    universe = out["search_space"]["universe"]
+    assert universe["n_symbols"] == len(expected)
+    assert universe["per_fold_symbol_counts"] == {"fold_0": 4, "fold_1": 4, "fold_2": 4}
+    assert len(universe["fingerprint"]) == 64
+
+    # Without a resolver the optimizer must NOT fall back to symbols=None (the
+    # full-lake-universe bug); an explicit opt-out degrades to the empty set.
+    seen.clear()
+    opt2 = _wf_optimizer(lambda p: _FakeResult(stats={"sharpe": 1.0}))
+    opt2.service.run = record_run
+    opt2.optimize(
+        plan=_WF_PLAN_3_FOLDS,
+        strategy_id="s",
+        param_grid={"ma_proximity": [0.01]},
+        objective="sharpe",
+    )
+    assert len(seen) == 3
+    assert all(call["symbols"] == [] for call in seen)
+
+
 def test_wf_search_grid_cap_respected():
     """The GRID_MAX_COMBINATIONS cap is inherited; an over-cap grid raises first."""
     wide = [
