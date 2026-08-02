@@ -21,9 +21,7 @@ import numpy as np
 
 from app.portfolio.artifacts import PortfolioArtifactService
 from app.portfolio.attribution import (
-    marginal_contributions,
-    portfolio_exposure,
-    portfolio_variance,
+    attribution_report,
     reconcile_attribution,
 )
 from app.portfolio.drawdown import drawdown_periods, underwater_curve
@@ -84,11 +82,16 @@ def run_attribution(
 
     symbols = list(weights_map.keys())
     weights = np.asarray(list(weights_map.values()), dtype=float)
-    variance = portfolio_variance(weights, cov)
-    exposure = portfolio_exposure(weights, cov)
-    mc = marginal_contributions(weights, cov)
-    # 硬对账: sum(MC) == wᵀΣw (rtol 1e-12, 绝不近似)。
-    reconciliation = reconcile_attribution(weights, cov, mc, variance, symbols=symbols)
+    # 完整报告: 带符号暴露 + MC + 摘要 (top contributors / diversifiers)。
+    # 负 MC = 分散化贡献, 绝不 abs (sum identity 依赖带符号分量)。
+    report = attribution_report(weights, symbols, cov)
+    variance = report["portfolio_variance"]
+    exposure = report["exposure"]
+    mc = report["marginal_contributions"]
+    # 硬对账: sum(MC) == wᵀΣw (rtol 1e-12, 绝不近似)。传入报告记录的
+    # 精确 MC 字典值 (与工件 payload 一致的带符号向量)。
+    mc_vector = np.asarray(list(mc.values()), dtype=float)
+    reconciliation = reconcile_attribution(weights, cov, mc_vector, variance, symbols=symbols)
 
     analysis_id = uuid.uuid4().hex
     descriptor = PortfolioArtifactService(artifact_service_root).write_analysis_artifact(
@@ -100,13 +103,14 @@ def run_attribution(
             "as_of": run["as_of"],
             "symbols": symbols,
             "weights": weights.round(8).tolist(),
-            "exposure": exposure.round(8).tolist(),
-            "marginal_contributions": reconciliation["marginal_contributions"],
-            "portfolio_variance": reconciliation["portfolio_variance"],
+            "exposure": {key: round(value, 8) for key, value in exposure.items()},
+            "marginal_contributions": mc,
+            "portfolio_variance": variance,
             "reconciliation": {
                 "sum_contributions": reconciliation["sum_contributions"],
                 "max_abs_error": reconciliation["max_abs_error"],
             },
+            "summary": report["summary"],
         },
     )
     return repository.record_attribution_evidence(
