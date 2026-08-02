@@ -5,16 +5,16 @@ milestone_name: End-to-End Factor Portfolio Pipeline — in progress
 current_phase: 12
 current_phase_name: Risk Models & Attribution
 status: executing
-stopped_at: Completed 12-04-PLAN.md (Wave 2 attribution breadth)
-last_updated: "2026-08-02T00:26:36.690Z"
+stopped_at: Completed 12-03-PLAN.md (Wave 2 risk-model suite breadth)
+last_updated: "2026-08-02T01:30:00.000Z"
 last_activity: 2026-08-02
-last_activity_desc: Phase 12 Wave 2 attribution breadth complete (12-04)
+last_activity_desc: Phase 12 Wave 2 risk-model suite breadth complete (12-03)
 progress:
   total_phases: 6
   completed_phases: 0
-  total_plans: 3
-  completed_plans: 3
-  percent: 100
+  total_plans: 6
+  completed_plans: 4
+  percent: 67
 ---
 
 # Project State
@@ -29,11 +29,11 @@ See: .planning/PROJECT.md (updated 2026-07-31)
 ## Current Position
 
 Phase: 12 — Risk Models & Attribution
-Plan: 12-04 (Wave 2 — attribution breadth: signed components + full report) complete
-Status: Ready to execute (next: 12-03 Wave 2 — risk-model suite breadth, then 12-05/12-06)
-Last activity: 2026-08-02 — Phase 12 Wave 2 attribution breadth complete (12-04)
+Plan: 12-03 (Wave 2 — risk-model suite breadth: semi/EWMA/Ledoit-Wolf + dispatcher) complete
+Status: Ready to execute (next: 12-05 Wave 3 — cross-model attribution + reconciliation, then 12-06)
+Last activity: 2026-08-02 — Phase 12 Wave 2 risk-model suite breadth complete (12-03)
 
-Progress: [██████████] 100%
+Progress: [██████░░░░] 67%
 
 ## v1.2 Phase Summary
 
@@ -41,7 +41,7 @@ Progress: [██████████] 100%
 |-------|-------------|--------|
 | 10 Factor Library & Multi-Factor Model | FACT-01..06 | In progress (10-01..10-06 complete) |
 | 11 Portfolio Construction & Optimization | PFOL-01..04 | In progress (11-01, 11-02, 11-03, 11-04, 11-05, 11-06 complete) |
-| 12 Risk Models & Attribution | RSK-01..03 | In progress (12-02 Wave 0 + 12-01 Wave 1 + 12-04 Wave 2 complete) |
+| 12 Risk Models & Attribution | RSK-01..03 | In progress (12-02 Wave 0 + 12-01 Wave 1 + 12-03 + 12-04 Wave 2 complete) |
 | 13 Walk-Forward Validation & Parameter Search | WFWD-01..03 | Not started |
 | 14 Output & Boundary (RebalancePlan + Paper Rebalance) | RBAL-01..02 | Not started |
 | 15 API/SSE + Frontend Panels | UI-01..02 | Not started |
@@ -76,6 +76,7 @@ Progress: [██████████] 100%
 | Phase 12 P12-02 | 35 | 3 tasks | 6 files |
 | Phase 12 P12-01 | 35 | 6 tasks | 6 files |
 | Phase 12 P12-04 | 40 | 3 tasks | 3 files |
+| Phase 12 P12-03 | 45 | 4 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -115,13 +116,13 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-08-02T01:10:00.000Z
-Stopped at: Completed 12-01-PLAN.md (Wave 1 tracer)
+Last session: 2026-08-02T01:30:00.000Z
+Stopped at: Completed 12-03-PLAN.md (Wave 2 risk-model suite breadth)
 Resume file: None
 
 ## Operator Next Steps
 
-- Run `/gsd-execute-phase 12-03` + `/gsd-execute-phase 12-04` (Wave 2 — risk-model suite breadth ∥ attribution breadth, zero file overlap)
+- Run `/gsd-execute-phase 12-05` + `/gsd-execute-phase 12-06` (Wave 3/4 — cross-model attribution ∥ drawdown breadth)
 - Run the phase gate (full backend suite) only after ALL Phase 12 plans (12-01..12-06) land
 
 ## Decisions
@@ -129,7 +130,8 @@ Resume file: None
 - [Phase 12]: Attribution reconciliation is a HARD assertion — sum(MC) == wᵀΣw at rtol 1e-12 (np.testing.assert_allclose) on the run's own checksum-verified covariance bytes; never approximate; a perturbed MC vector raises AssertionError.
 - [Phase 12]: Analysis artifacts land under research_artifacts/<run_id>/attribution/ via write_analysis_artifact (O_EXCL + fsync + sha256) with run-scoped unique filenames (analysis_id) so every evidence row is a distinct immutable fact with no O_EXCL clash.
 - [Phase 12]: Analyzer evidence reconciliation_json is NOT NULL for every row (DB mirror) — drawdown rows carry {period_count, max_depth}; run_attribution carries {portfolio_variance, sum_contributions, max_abs_error}.
-- [Phase 12]: One-way-door option-a approved — portfolio_optimization_runs.risk_model CHECK widened to the 4-model enum (sample/semi/ewma/ledoit-wolf) via the Phase 7 table-rebuild pattern in the same migration as the evidence table; Phase 11 rows survive (test-proven).
+- [Phase 12]: make_risk_model_family is the single PSD-provenance dispatcher all four models pass through (check_psd → repair_psd → provenance); model_params (benchmark/lam/shrinkage/sklearn_version) recorded in risk_model_json; _build_risk_model delegates to it (12-03, RSK-02 seam).
+- [Phase 12]: OptimizationRequest.risk_model defaults to sample_covariance_v1 (4-model Literal); the selected name is recorded verbatim on the run row + risk_model_json — RSK-02 selection is explicit, never accidental; the repository _RISK_MODELS runs gate now accepts all four models (matching the 12-02 option-a widened CHECK).
 - [Phase 12]: Rebuild-before-evidence ordering in migration #28 — the runs rebuild runs first so the evidence run_id FK binds to the final runs table.
 - [Phase 12]: Evidence schema reconciliation_json TEXT NOT NULL for every row — exposure rows carry {portfolio_variance, sum_contributions, max_abs_error}; drawdown rows carry {period_count, max_depth, longest_period, segment_max_abs_error} (per 12-01/12-04/12-06 evidence shapes).
 - [Phase ?]: PIT universe: membership_fingerprint hashes the sorted per-date [symbol,date] frame

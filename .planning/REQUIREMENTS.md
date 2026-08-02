@@ -26,7 +26,7 @@ Requirements for the v1.2 milestone. Each maps to a roadmap phase.
 ### Risk Analysis & Attribution
 
 - [x] **RSK-01**: Researcher can view risk exposure and marginal contribution attribution for an optimized portfolio, and the attribution reconciles to portfolio variance (cross-module integrity check).
-- [ ] **RSK-02**: Risk-model suite includes semi-covariance, exponentially weighted covariance, and Ledoit-Wolf shrinkage with explicit PSD-repair provenance (P2).
+- [x] **RSK-02**: Risk-model suite includes semi-covariance, exponentially weighted covariance, and Ledoit-Wolf shrinkage with explicit PSD-repair provenance (P2).
 - [x] **RSK-03**: Researcher can view drawdown attribution decomposed by instrument and time segment (P2).
 
 ### Walk-Forward Validation & Parameter Search
@@ -95,7 +95,7 @@ Populated during roadmap creation (2026-07-31). Verified: all 20 v1 requirements
 | PFOL-03 | Phase 11 | Complete |
 | PFOL-04 | Phase 11 | Complete |
 | RSK-01 | Phase 12 | Complete |
-| RSK-02 | Phase 12 | Pending |
+| RSK-02 | Phase 12 | Complete |
 | RSK-03 | Phase 12 | Complete |
 | WFWD-01 | Phase 13 | Pending |
 | WFWD-02 | Phase 13 | Pending |
