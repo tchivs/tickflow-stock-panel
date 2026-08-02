@@ -41,6 +41,7 @@ def _validated_record(
             _FakePlan(plan_id=plan_id + "-" + strategy_id, now=now)
         )
         research_repository.record_wf_fold(
+            id=oos_fold_id,
             plan_id=plan_id + "-" + strategy_id,
             fold_index=0,
             is_oos=True,
@@ -120,7 +121,8 @@ def test_build_ensemble_rank_averages_validated_signals(
         "s2": _signal_frame(["A", "B"], ["2026-07-01"], rank=3.0),
     }
     out = build_ensemble(
-        config=config, signals=signals, universe="cn-a-share", start="2026-07-01", end="2026-07-01", horizon=5
+        config=config, signals=signals, universe="cn-a-share", start="2026-07-01", end="2026-07-01", horizon=5,
+        repo=research_repository,
     )
     assert out.columns == ["symbol", "date", "ensemble_rank", "ensemble_zscore"]
     # manual reference: per (symbol, date) mean of _rank = 2.0 for both symbols
@@ -144,7 +146,8 @@ def test_build_ensemble_fails_closed_on_unvalidated_strategy(
     signals = {"s1": _signal_frame(["A"], ["2026-07-01"], 1.0)}
     with pytest.raises(ValueError, match="not validated"):
         build_ensemble(
-            config=config, signals=signals, universe="cn-a-share", start="2026-07-01", end="2026-07-01", horizon=5
+            config=config, signals=signals, universe="cn-a-share", start="2026-07-01", end="2026-07-01", horizon=5,
+            repo=research_repository,
         )
 
 
