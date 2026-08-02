@@ -457,3 +457,25 @@ def test_wf_search_never_scores_train_or_oos_windows():
     assert len(seen) == 2 * 3
     assert all((s, e) == expected for s, e in seen)
 
+
+def test_wf_search_min_direction_reports_raw_best_score():
+    """WR-05: min-direction objectives report the RAW best_score, not the negated sign.
+
+    ``avg_holding_days`` is min-direction; a 1.0-day holding pool must surface as
+    +1.0 (raw metric space, comparable to OOS validation_score) — never -1.0.
+    """
+    def score(p):
+        return _FakeResult(stats={"avg_holding_days": p["ma_proximity"] * 100})
+
+    out = _wf_optimizer(score).optimize(
+        plan=_WF_PLAN_3_FOLDS, strategy_id="s",
+        param_grid={"ma_proximity": [0.01, 0.02]}, objective="avg_holding_days",
+    )
+    assert out["best_params"] == {"ma_proximity": 0.01}  # 最小者最优 (min 方向)
+    # best_score 在原始指标空间 = 0.01*100 = 1.0 (非取负的 -1.0)。
+    assert out["best_score"] == 1.0
+    # per_trial / per_fold 分布也报告原始值。
+    top = out["results"][0]
+    assert top["objective_raw"] == 1.0
+    assert out["score_distribution"]["min"] == 1.0
+

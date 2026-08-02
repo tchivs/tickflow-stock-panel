@@ -450,6 +450,62 @@ def test_evaluate_best_params_oos_exactly_once_and_validation_gate(
     assert verdicts[0]["validation_score"] == 1.0
 
 
+def test_evaluate_best_params_wr02_no_oos_row_on_missing_objective(
+    research_repository: ResearchRepository,
+    wf_fixture_plan,
+    stub_resolver,
+    stub_chain,
+) -> None:
+    """WR-02: 目标缺失时 OOS 折行绝不持久化 — 恰好一次槽位不被烧掉。"""
+    from app.backtest.walkforward import evaluate_best_params
+
+    class _NoObjectiveService:
+        def run(self, config, progress_cb=None, cancel_event=None):  # type: ignore[no-untyped-def]
+            del config, progress_cb, cancel_event
+            return SimpleNamespace(stats={"total_return": 0.05}, error=None)  # 无 sharpe
+
+    with pytest.raises(ValueError, match="has no objective 'sharpe'"):
+        evaluate_best_params(
+            wf_fixture_plan,
+            strategy_id="fixture_strategy",
+            best_params={"ma_proximity": 0.02},
+            service=_NoObjectiveService(),
+            chain=stub_chain,
+            resolver=stub_resolver,
+            repo=research_repository,
+            objective="sharpe",
+        )
+    # 目标验证先于写行: OOS 槽位未被消耗, 无 OOS 折、无裁决。
+    assert research_repository.list_wf_folds(
+        plan_id=wf_fixture_plan.plan_id, is_oos=True
+    ) == []
+    assert research_repository.list_validated_strategies() == []
+
+
+def test_evaluate_best_params_wr10_unknown_search_run_fk_mapped(
+    research_repository: ResearchRepository,
+    wf_fixture_plan,
+    stub_resolver,
+    stub_chain,
+    stub_backtest_service,
+) -> None:
+    """WR-10: 伪造 search_run_id 的 FK 违反映射为清晰的缺失搜索运行错误。"""
+    from app.backtest.walkforward import evaluate_best_params
+
+    with pytest.raises(ValueError, match="unknown search run"):
+        evaluate_best_params(
+            wf_fixture_plan,
+            strategy_id="fixture_strategy",
+            best_params={"ma_proximity": 0.02},
+            service=stub_backtest_service,
+            chain=stub_chain,
+            resolver=stub_resolver,
+            repo=research_repository,
+            objective="sharpe",
+            search_run_id="never-persisted-search-run",
+        )
+
+
 def test_evaluate_best_params_threshold_gate_min_and_max_direction(
     research_repository: ResearchRepository,
     wf_fixture_plan,

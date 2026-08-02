@@ -447,11 +447,17 @@ class WalkForwardOptimizer:
                 }
             scores = [pf["score"] for pf in per_fold if pf.get("score") is not None]
             pooled = statistics.fmean(scores) if scores else None
+            # WR-05: objective_raw 保留原始指标空间的 pooled 均值 (min 方向不取负),
+            # 供展示/持久化; _sort 只用带符号可比分数排序。
+            raw_scores = [
+                pf["objective_raw"] for pf in per_fold if pf.get("objective_raw") is not None
+            ]
+            pooled_raw = statistics.fmean(raw_scores) if raw_scores else None
             return {
                 "params": combo,
                 "per_fold": per_fold,
                 "pooled_score": pooled,
-                "objective_raw": pooled,
+                "objective_raw": pooled_raw,
                 "_sort": float(pooled) if pooled is not None else float("-inf"),
             }
 
@@ -466,11 +472,12 @@ class WalkForwardOptimizer:
                         results.append(r)
                     if progress_cb is not None:
                         best = next((x for x in results if x["_sort"] != float("-inf")), None)
+                        br = best.get("objective_raw") if best is not None else None
                         progress_cb({
                             "type": "optimizer_progress",
                             "done": done,
                             "total": n_total,
-                            "best_score": round(best["_sort"], 4) if best is not None else None,
+                            "best_score": round(br, 4) if br is not None else None,
                         })
 
         ranked = sorted(results, key=lambda x: x["_sort"], reverse=True)
