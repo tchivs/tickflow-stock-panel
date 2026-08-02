@@ -37,8 +37,8 @@ Requirements for the v1.2 milestone. Each maps to a roadmap phase.
 
 ### Output & Boundary
 
-- [ ] **RBAL-01**: Researcher can render a RebalancePlan from continuous optimizer weights through an A-share lot-sizing adapter — 100-share lots, odd-lot sell handling, cash residue, turnover cost, blocked instruments, expiry — as an immutable research-only artifact with discretization RMSE visible.
-- [ ] **RBAL-02**: Rebalance suggestions land in an auditable paper-rebalance state machine (append-only audit fact, human approval, idempotency) with no execution route anywhere; no execution authority is a hard acceptance criterion.
+- [x] **RBAL-01**: Researcher can render a RebalancePlan from continuous optimizer weights through an A-share lot-sizing adapter — 100-share lots, odd-lot sell handling, cash residue, turnover cost, blocked instruments, expiry — as an immutable research-only artifact with discretization RMSE visible.
+- [x] **RBAL-02**: Rebalance suggestions land in an auditable paper-rebalance state machine (append-only audit fact, human approval, idempotency) with no execution route anywhere; no execution authority is a hard acceptance criterion.
 
 ### API & Frontend
 
@@ -100,8 +100,8 @@ Populated during roadmap creation (2026-07-31). Verified: all 20 v1 requirements
 | WFWD-01 | Phase 13 | Complete |
 | WFWD-02 | Phase 13 | Complete |
 | WFWD-03 | Phase 13 | Complete |
-| RBAL-01 | Phase 14 | Pending |
-| RBAL-02 | Phase 14 | Pending |
+| RBAL-01 | Phase 14 | Complete |
+| RBAL-02 | Phase 14 | Complete |
 | UI-01 | Phase 15 | Pending |
 | UI-02 | Phase 15 | Pending |
 

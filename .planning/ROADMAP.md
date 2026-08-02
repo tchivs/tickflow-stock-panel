@@ -58,7 +58,7 @@ Six phases extend the shipped research platform from single-factor evaluation in
 - [x] **Phase 11: Portfolio Construction & Optimization** - Sample covariance with PSD repair, min-vol/HRP baselines, constraint stack, immutable run records (completed 2026-08-01)
 - [x] **Phase 12: Risk Models & Attribution** - Risk-model suite with PSD provenance, exposure/contribution and drawdown attribution (completed 2026-08-02)
 - [x] **Phase 13: Walk-Forward Validation & Parameter Search** - Rolling folds, reserved final OOS, OOS-scored parameter search, ensembling (completed 2026-08-02)
-- [ ] **Phase 14: Output & Boundary (RebalancePlan + Paper Rebalance)** - A-share lot-sized plans, auditable paper rebalance, zero execution authority
+- [x] **Phase 14: Output & Boundary (RebalancePlan + Paper Rebalance)** - A-share lot-sized plans, auditable paper rebalance, zero execution authority (completed 2026-08-02)
 - [ ] **Phase 15: API/SSE + Frontend Panels** - ModelLibrary/WalkForward and Optimization/RiskAttribution/RebalancePlan panels
 
 ## Phase Details
@@ -163,6 +163,8 @@ Six phases extend the shipped research platform from single-factor evaluation in
 
 **Plans**: 5/5 plans executed (14-02, 14-01, 14-03, 14-04, 14-05 complete; per-plan gates green)
 
+- [x] 14-PLAN.md
+
 - [x] 14-01-SUMMARY.md (tracer — end-to-end RebalancePlan → paper-rebalance slice)
 - [x] 14-02-SUMMARY.md (Wave 0 — rebalance_plans + paper_rebalance_transitions migration + repo + scaffolds)
 - [x] 14-03-SUMMARY.md (lot-sizing adapter breadth — odd-lot sell / cash residue / turnover / RMSE)
@@ -197,7 +199,7 @@ Phases execute in numeric order: 10 → 11 → 12 → 13 → 14 → 15 (Phase 13
 | 11. Portfolio Construction & Optimization | 7/1 | Complete    | 2026-08-01 |
 | 12. Risk Models & Attribution | 6/1 | Complete    | 2026-08-02 |
 | 13. Walk-Forward Validation & Parameter Search | 6/1 | Complete    | 2026-08-02 |
-| 14. Output & Boundary (RebalancePlan + Paper Rebalance) | 0/5 | Not started | - |
+| 14. Output & Boundary (RebalancePlan + Paper Rebalance) | 5/1 | Complete    | 2026-08-02 |
 | 15. API/SSE + Frontend Panels | 0/4 | Not started | - |
 
 ---
