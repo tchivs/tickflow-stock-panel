@@ -1,9 +1,14 @@
-"""Phase 11 样本协方差 + PSD 检查/修复 (PFOL-01)。
+"""Phase 11/12 风险模型套件 + PSD 检查/修复 (PFOL-01 / RSK-02)。
 
-职责: 从治理面板的收益率矩阵构建样本协方差; 检查对称矩阵是否半正定 (PSD);
-必要时用 eigen_clip 修复并返回完整溯源 (method/epsilon/eigenvalues before/after)。
-PSD 修复 NEVER silent —— provenance 是 risk_model_json 的强制字段, optimizer 在
-缺少溯源时 fail-closed (pitfall 1/3)。
+职责: 从治理面板的收益率矩阵构建四种风险模型协方差 —— 样本协方差 (Phase 11)、
+半协方差 (下行共同波动, below-mean benchmark, PyPortfolioOpt 契约为设计规格)、
+指数加权 EWMA (RiskMetrics λ=0.94)、Ledoit-Wolf 收缩 (scikit-learn 1.8.0
+惰性导入 —— 仅在模型边界函数体内 import, 绝无 module-top import; Phase 10
+import-audit 契约); 检查对称矩阵是否半正定 (PSD); 必要时用 eigen_clip 修复并
+返回完整溯源 (method/epsilon/eigenvalues before/after)。PSD 修复 NEVER silent ——
+provenance 是 risk_model_json 的强制字段, optimizer 在缺少溯源时 fail-closed
+(pitfall 1/3)。make_risk_model_family 是所有模型共用的单一 PSD-provenance
+分派器, Phase 13 walk-forward 每折协方差复用它 (RSK-02 接缝)。
 
 不知道: 求解逻辑 (optimizer.py)、约束栈 (constraints.py)、行业映射、
 市场时间序列 (留在 lake)。
@@ -31,6 +36,104 @@ def sample_covariance(returns: np.ndarray, *, dropna: bool = True) -> np.ndarray
     if dropna:
         returns = returns[np.all(np.isfinite(returns), axis=1)]
     return np.cov(returns, rowvar=False)
+
+
+def semi_covariance(returns: np.ndarray, *, benchmark: str = "mean") -> np.ndarray:
+    """Semi-covariance: downside co-movement below a per-observation benchmark.
+
+    benchmark "mean" = row-wise cross-sectional mean per observation, "zero" =
+    0.0. The below-benchmark co-movement is captured by truncating each row at
+    the benchmark (min with 0 after subtraction) and forming the Gram matrix of
+    the truncated panel, normalized by the observation count — the PyPortfolioOpt
+    ``risk_models.semicovariance`` contract as design spec (never a runtime
+    dependency). A degenerate subset (fewer observations than assets) still
+    returns a finite covariance; the PSD gate downstream records any
+    near-degeneracy repair with provenance.
+
+    Args:
+        returns: (n_obs, n_assets) 收益率矩阵。
+        benchmark: "mean" (行均值) 或 "zero" (0.0)。
+
+    Returns:
+        (n_assets, n_assets) 半协方差矩阵 (Gram 矩阵, 数值上 PSD)。
+    """
+    finite = returns[np.all(np.isfinite(returns), axis=1)]
+    if benchmark == "mean":
+        target = finite.mean(axis=1, keepdims=True)
+    elif benchmark == "zero":
+        target = np.zeros_like(finite)
+    else:
+        raise ValueError(f"unknown benchmark: {benchmark}")
+    drops = np.minimum(finite - target, 0.0)
+    return drops.T @ drops / drops.shape[0]
+
+
+def ewma_covariance(returns: np.ndarray, *, lam: float = 0.94, adjust: bool = True) -> np.ndarray:
+    """Exponentially weighted moving-average covariance (RiskMetrics λ=0.94).
+
+    Recursion ``Σ_t = lam * Σ_{t−1} + (1 − lam) * outer(r_t, r_t)`` starting from
+    ``Σ_1 = outer(r_1, r_1)`` (the standard EWMA; pandas ``adjust=True``
+    semantics — the first observation carries the full weight ``lam^{t−1}``, so
+    the weights sum to 1 and no extra normalization is needed). ``adjust=False``
+    gives the unadjusted recursion whose first observation also receives the
+    ``(1 − lam)`` weight (weight sum ``1 − lam^t``). λ=0.94 is the RiskMetrics
+    default. ``lam=1.0`` degenerates to the sample covariance on the common
+    window (documented test contract — recovers ``np.cov`` on demeaned data).
+
+    Args:
+        returns: (n_obs, n_assets) 收益率矩阵。
+        lam: 衰减因子 (RiskMetrics 标准 0.94)。
+        adjust: True (默认) 时首观测权重为 1.0 (权重和自动为 1); False 时首观测
+            也乘 (1 − lam) (未归一化递归, 权重和 1 − lam^t)。
+
+    Returns:
+        (n_assets, n_assets) EWMA 协方差矩阵。
+    """
+    finite = returns[np.all(np.isfinite(returns), axis=1)]
+    n_obs, n_assets = finite.shape
+    if n_obs == 0:
+        return np.zeros((n_assets, n_assets))
+    if lam == 1.0:
+        # 文档化测试契约: λ=1.0 时 EWMA 退化为样本协方差 (demeaned 数据上等于 np.cov)。
+        return np.cov(finite, rowvar=False)
+    first_weight = 1.0 if adjust else (1.0 - lam)
+    covariance = first_weight * np.outer(finite[0], finite[0])
+    for t in range(2, n_obs + 1):
+        covariance = lam * covariance + (1 - lam) * np.outer(finite[t - 1], finite[t - 1])
+    return covariance
+
+
+def ledoit_wolf_covariance(
+    returns: np.ndarray, *, block_size: int | None = None
+) -> tuple[np.ndarray, dict]:
+    """Ledoit-Wolf shrinkage covariance via scikit-learn (lazy-import boundary).
+
+    ``from sklearn.covariance import LedoitWolf`` lives INSIDE the function body
+    only — Phase 10 import-audit contract: importing ``app.portfolio.risk`` must
+    never load sklearn (subprocess gate in test_risk). Fits on the common finite
+    window and returns the shrunk covariance plus its provenance params.
+
+    Args:
+        returns: (n_obs, n_assets) 收益率矩阵。
+        block_size: sklearn LedoitWolf block_size (None 时用 sklearn 默认)。
+
+    Returns:
+        ((n_assets, n_assets) 协方差, {"shrinkage": float, "sklearn_version": str})。
+    """
+    # Phase 10 惰性导入契约: sklearn 只在模型边界函数体内导入 (subprocess gate
+    # 断言 import app.portfolio.risk 后 "sklearn" not in sys.modules)。
+    from sklearn import __version__ as sklearn_version
+    from sklearn.covariance import LedoitWolf
+
+    finite = returns[np.all(np.isfinite(returns), axis=1)]
+    kwargs: dict[str, int] = {}
+    if block_size is not None:
+        kwargs["block_size"] = block_size
+    model = LedoitWolf(**kwargs).fit(finite)
+    return (
+        model.covariance_,
+        {"shrinkage": float(model.shrinkage_), "sklearn_version": str(sklearn_version)},
+    )
 
 
 def check_psd(cov: np.ndarray, *, tol: float = 1e-8) -> tuple[float, np.ndarray]:
@@ -111,3 +214,76 @@ def covariance_sha256(cov: np.ndarray) -> str:
         matrix, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
     ).encode("utf-8")
     return sha256(content).hexdigest()
+
+
+def make_risk_model_family(
+    returns: np.ndarray,
+    *,
+    risk_model_name: str,
+    window: tuple[str, str] | None = None,
+    epsilon: float = PSD_EPSILON_DEFAULT,
+) -> dict:
+    """Single PSD-provenance dispatcher across the four RSK-02 risk models.
+
+    Dispatches ``sample_covariance_v1 | semi_covariance_v1 | ewma_covariance_v1
+    | ledoit_wolf_v1`` (unknown → ValueError), then runs the SAME
+    check_psd → repair_psd (eigen_clip, never silent) → provenance path for
+    every model and returns ``{"covariance", "risk_model_json"}`` with
+    ``risk_model`` = the selected name, model params (benchmark/lam/shrinkage)
+    recorded, ``window``, ``dropna: True``, ``psd_repair`` provenance
+    (method/epsilon/eigenvalues before/after — method "none" when no repair),
+    and ``covariance_sha256``. This is the Phase 13 per-fold covariance seam.
+
+    Args:
+        returns: (n_obs, n_assets) 收益率矩阵。
+        risk_model_name: 四种模型名之一。
+        window: (start, end) 窗口字符串对, 记录进 risk_model_json (测试可省略)。
+        epsilon: PSD 判定/修复容差。
+
+    Returns:
+        {"covariance": (n, n) 修复后矩阵, "risk_model_json": {...}}。
+
+    Raises:
+        ValueError: 未知模型名 (fail closed, 绝不静默回退样本协方差)。
+    """
+    finite = returns[np.all(np.isfinite(returns), axis=1)]
+    if risk_model_name == "sample_covariance_v1":
+        cov = sample_covariance(returns, dropna=True)
+        model_params: dict = {"dropna": True}
+    elif risk_model_name == "semi_covariance_v1":
+        cov = semi_covariance(finite, benchmark="mean")
+        model_params = {"benchmark": "mean"}
+    elif risk_model_name == "ewma_covariance_v1":
+        cov = ewma_covariance(finite, lam=0.94, adjust=True)
+        model_params = {"lam": 0.94, "adjust": True}
+    elif risk_model_name == "ledoit_wolf_v1":
+        lw_cov, lw_params = ledoit_wolf_covariance(finite)
+        cov = lw_cov
+        model_params = {
+            "shrinkage": lw_params["shrinkage"],
+            "sklearn_version": lw_params["sklearn_version"],
+        }
+    else:
+        raise ValueError(f"unknown risk model name: {risk_model_name}")
+
+    min_eig, eigvals = check_psd(cov)
+    if min_eig < -epsilon:
+        repaired, provenance = repair_psd(cov, method="eigen_clip", epsilon=epsilon)
+        cov = repaired
+    else:
+        provenance = {
+            "method": "none",
+            "epsilon": epsilon,
+            "min_eigenvalue_before": min_eig,
+            "eigenvalues_before": eigvals.tolist(),
+            "eigenvalues_after": None,
+        }
+    risk_model_json = {
+        "risk_model": risk_model_name,
+        "window": list(window) if window is not None else [],
+        "dropna": True,
+        "model_params": model_params,
+        "psd_repair": provenance,
+        "covariance_sha256": covariance_sha256(cov),
+    }
+    return {"covariance": cov, "risk_model_json": risk_model_json}
