@@ -28,9 +28,7 @@ def _now() -> str:
     return datetime.now(UTC).isoformat()
 
 
-def _require_valid_plan(
-    plan_id: str, *, repository: PortfolioRepository
-) -> dict[str, object]:
+def _require_valid_plan(plan_id: str, *, repository: PortfolioRepository) -> dict[str, object]:
     """Load a plan row; missing plans fail closed."""
     plan = repository.get_rebalance_plan(plan_id)
     if plan is None:
@@ -45,9 +43,7 @@ def _require_not_expired(plan: dict[str, object]) -> None:
         raise ValueError(f"rebalance plan expired at {plan['expires_at']}")
 
 
-def create_suggestion(
-    plan_id: str, *, repository: PortfolioRepository
-) -> dict[str, object]:
+def create_suggestion(plan_id: str, *, repository: PortfolioRepository) -> dict[str, object]:
     """Record the ``suggested`` audit fact for a rebalance plan (RBAL-02).
 
     幂等: 已存在 ``suggested`` 行时直接返回 (repository 的 UNIQUE
@@ -74,7 +70,7 @@ def approve(
     _require_not_expired(plan)
     state = repository.get_paper_state(plan_id)
     if state in _TERMINAL_STATES:
-        raise ValueError(f"cannot approve a plan in state {state!r}")
+        raise ValueError(f"cannot approve a plan in state '{state}'")
     if state not in ("suggested", "approved"):
         raise ValueError("cannot approve a plan that has not been suggested")
     return repository.record_paper_transition(
@@ -96,8 +92,6 @@ def reject(
     plan = _require_valid_plan(plan_id, repository=repository)
     _require_not_expired(plan)
     state = repository.get_paper_state(plan_id)
-    if state in _TERMINAL_STATES:
-        raise ValueError(f"cannot reject a plan in state {state!r}")
     if state not in ("suggested", "rejected"):
         raise ValueError("cannot reject a plan that has not been suggested")
     return repository.record_paper_transition(

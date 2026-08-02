@@ -106,7 +106,7 @@ def discretize_weights(
     buy_cost_pct)) / 100) * 100`` —— 复用既有撮合规则, 绝不另建第二套撮合器。
     blocked 标的离散权重恒为 0 并原样记录; 奇股持仓 (odd lot) 在目标低于
     一档时整单卖出 (A 股奇股可卖不可买), 目标仍 ≥ 一档时把奇股余数带进
-    目标仓位。现金残差 = equity − Σ share·price·(1 + buy_cost_pct), 绝不
+    目标仓位。现金残差 = equity - Σ share·price·(1 + buy_cost_pct), 绝不
     再分配; 换手成本 = Σ buy_value·buy_cost_pct + Σ sell_value·sell_cost_pct
     (REUSE MatcherConfig 费用模型); RMSE 在完整 universe (含 blocked) 上按
     simple / weighted 两种定义计算。
@@ -114,7 +114,7 @@ def discretize_weights(
     Args:
         target_weights: 连续权重 {symbol: weight} (Phase 11 output_weights)。
         prices: {symbol: price} — 每个非 blocked 标的都必须有价格。
-        equity: 组合净值 (现金预算 = equity − min_cash)。
+        equity: 组合净值 (现金预算 = equity - min_cash)。
         matcher_config: backtest/engine.py 的 MatcherConfig (费用模型复用)。
         blocked: 研究员提供的禁买标的集合 (原样记录, 离散权重 0)。
         odd_lot_positions: {symbol: 当前持仓股数} — 仅用于奇股卖出/余数携带。
@@ -132,22 +132,26 @@ def discretize_weights(
     _validate_weights(target_weights, field="target_weights")
     if not np.isfinite(equity) or equity <= 0:
         raise ValueError("equity must be a positive finite number")
-    if min_cash < 0 or not np.isfinite(min_cash):
-        raise ValueError("min_cash must be a non-negative finite number")
+    if min_cash < 0 or not np.isfinite(min_cash) or min_cash > equity:
+        raise ValueError("min_cash must be between zero and equity")
 
     blocked_set = frozenset(blocked or ())
     blocked_instruments = sorted(blocked_set)
     odd_lots = dict(odd_lot_positions or {})
+    for symbol, current in odd_lots.items():
+        if not np.isfinite(current) or current < 0 or int(current) != current:
+            raise ValueError(f"odd_lot_positions[{symbol}] must be non-negative whole shares")
+        odd_lots[symbol] = int(current)
     buy_cost_pct = matcher_config.buy_cost_pct()
     sell_cost_pct = matcher_config.sell_cost_pct()
 
     # 现金感知最大权重优先: 按 target value (= weight·equity) 降序, 符号名
-    # 做确定性 tie-break。金额预算 = equity − min_cash。
+    # 做确定性 tie-break。金额预算 = equity - min_cash。
     ordered = sorted(target_weights.keys(), key=lambda s: (-target_weights[s], s))
     budget = equity - min_cash
     remaining = budget
 
-    lot_sizes: dict[str, int] = {}
+    lot_sizes: dict[str, int] = {symbol: 0 for symbol in target_weights}
     for symbol in ordered:
         if symbol in blocked_set:
             continue
@@ -176,7 +180,7 @@ def discretize_weights(
     # 整单卖出 (含奇股余数)。new buys (无现有持仓) 保持纯整档。
     for symbol, current in odd_lots.items():
         target = lot_sizes.get(symbol, 0)
-        remainder = int(current) % 100
+        remainder = current % 100
         if remainder == 0:
             continue
         if target == 0:
@@ -186,7 +190,30 @@ def discretize_weights(
             continue
         lot_sizes[symbol] = target + remainder
 
-    # 换手成本: 买腿 (target − current > 0) 计 buy_cost_pct, 卖腿计 sell_cost_pct。
+    def _cash_residue() -> float:
+        return equity - sum(
+            shares * float(prices[symbol]) * (1 + buy_cost_pct)
+            for symbol, shares in lot_sizes.items()
+            if shares > 0
+        )
+
+    # Odd-lot carry can add a remainder after the board-lot budget was
+    # allocated. Reduce whole board lots deterministically until min_cash is
+    # restored; never create a partial buy to repair the budget.
+    while _cash_residue() < min_cash - 1e-9:
+        candidates = sorted(
+            (symbol for symbol, shares in lot_sizes.items() if shares >= 100),
+            key=lambda symbol: (-target_weights[symbol], symbol),
+        )
+        if not candidates:
+            break
+        symbol = candidates[0]
+        next_lots = lot_sizes[symbol] - 100
+        lot_sizes[symbol] = next_lots if next_lots >= 100 else 0
+
+    cash_residue = _cash_residue()
+
+    # 换手成本: 买腿 (target - current > 0) 计 buy_cost_pct, 卖腿计 sell_cost_pct。
     buy_value = 0.0
     sell_value = 0.0
     for symbol, price in prices.items():
@@ -199,12 +226,6 @@ def discretize_weights(
             sell_value += -delta * price
     turnover_cost = buy_value * buy_cost_pct + sell_value * sell_cost_pct
 
-    # 现金残差 = equity − Σ share·price·(1 + buy_cost_pct); 绝不重分配。
-    cash_residue = equity - sum(
-        shares * float(prices[symbol]) * (1 + buy_cost_pct)
-        for symbol, shares in lot_sizes.items()
-    )
-
     # 离散权重 = share·price·(1 + buy_cost_pct) / equity (8 位小数)。
     discrete_weights: dict[str, float] = {}
     for symbol in target_weights:
@@ -216,7 +237,7 @@ def discretize_weights(
         else:
             discrete_weights[symbol] = 0.0
 
-    # RMSE: 完整 universe (含 blocked, blocked 诚实地贡献 (w_cont − 0)²)。
+    # RMSE: 完整 universe (含 blocked, blocked 诚实地贡献 (w_cont - 0)²)。
     universe = sorted(target_weights.keys())
     w_cont = np.asarray([target_weights[s] for s in universe], dtype=float)
     w_disc = np.asarray([discrete_weights[s] for s in universe], dtype=float)
