@@ -12,12 +12,23 @@ Contract cases locked here (turned green by 13-01/13-03/13-05):
 """
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import date, timedelta
+from types import SimpleNamespace
 
 import polars as pl
 import pytest
 
 from app.research.repository import ResearchRepository
+
+
+class _HoldingDaysService:
+    """Backtest double exposing only ``avg_holding_days`` (min-direction gate case)."""
+
+    def run(self, config, progress_cb=None, cancel_event=None):  # type: ignore[no-untyped-def]
+        del config, progress_cb, cancel_event
+        return SimpleNamespace(stats={"avg_holding_days": 1.0}, error=None)
 
 
 class _FakeFold:
@@ -302,3 +313,154 @@ def test_membership_fingerprint_changes_when_membership_changes(
     fp_a = {m["fold_index"]: m["membership_fingerprint"] for m in result_a["fold_manifests"]}
     fp_b = {m["fold_index"]: m["membership_fingerprint"] for m in result_b["fold_manifests"]}
     assert fp_a != fp_b
+
+
+# ---------------------------------------------------------------------------
+# WFWD-02: best_params 验证门 — exactly-once OOS + wf_validated_strategies 裁决
+# ---------------------------------------------------------------------------
+
+
+def _record_search_run(repo: ResearchRepository, plan_id: str, *, search_id: str) -> None:
+    """Insert a real wf_search_runs row so the verdict FK (search_run_id) resolves."""
+    repo.record_wf_search(
+        id=search_id,
+        plan_id=plan_id,
+        strategy_id="fixture_strategy",
+        objective="sharpe",
+        direction="max",
+        search_space={"param_grid": {"ma_proximity": [0.01, 0.02, 0.03]}, "params_meta": []},
+        n_trials=3,
+        n_completed=3,
+        score_distribution={
+            "per_trial": [],
+            "per_fold": {},
+            "min": 0.5,
+            "median": 1.0,
+            "max": 1.5,
+            "mean": 1.0,
+            "std": 0.5,
+        },
+        best_params={"ma_proximity": 0.02},
+        best_score=1.5,
+        oos_excluded=1,
+    )
+
+
+def test_evaluate_best_params_oos_exactly_once_and_validation_gate(
+    research_repository: ResearchRepository,
+    wf_fixture_plan,
+    stub_resolver,
+    stub_chain,
+    stub_backtest_service,
+) -> None:
+    """OOS 只评估一次; 裁决绑定到 OOS 证据折 (oos_evidence_fold_id UNIQUE)。"""
+    from app.backtest.walkforward import evaluate_best_params, run_walk_forward
+
+    # 预热: 先走一遍 walk-forward (不同 params), 钉住 plan 并记录 3 个搜索折 + 该
+    # params 键的 OOS 折 — 模拟真实流程: 搜索先用一组探索参数跑折, 再评估 best_params。
+    run_walk_forward(
+        wf_fixture_plan,
+        strategy_id="fixture_strategy",
+        params={"ma_proximity": 0.01},
+        service=stub_backtest_service,
+        chain=stub_chain,
+        resolver=stub_resolver,
+        repo=research_repository,
+    )
+    preheat_oos = research_repository.list_wf_folds(plan_id=wf_fixture_plan.plan_id, is_oos=True)
+    assert len(preheat_oos) == 1  # 预热 params 键的 OOS 已记录
+    _record_search_run(research_repository, wf_fixture_plan.plan_id, search_id="wf-search-run-1")
+
+    # 评估 best_params: 该 params 键的 OOS 首次评估 → 新建 OOS 证据折 + 裁决。
+    out = evaluate_best_params(
+        wf_fixture_plan,
+        strategy_id="fixture_strategy",
+        best_params={"ma_proximity": 0.02},
+        service=stub_backtest_service,
+        chain=stub_chain,
+        resolver=stub_resolver,
+        repo=research_repository,
+        objective="sharpe",
+        search_run_id="wf-search-run-1",
+        validation_threshold=0.0,
+    )
+    assert out["params_sha256"] == hashlib.sha256(
+        json.dumps(
+            {"ma_proximity": 0.02}, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        ).encode("utf-8")
+    ).hexdigest()
+    assert out["passed_gate"] is True
+    assert out["validation_score"] == 1.0  # stub 服务 sharpe=1.0
+    assert out["oos_manifest"]["id"] not in {row["id"] for row in preheat_oos}
+    assert out["verdict"]["oos_evidence_fold_id"] == out["oos_manifest"]["id"]
+
+    # 第二次评估同一 (plan, strategy, params) → 恰好一次守卫
+    with pytest.raises(ValueError, match="OOS segment already evaluated"):
+        evaluate_best_params(
+            wf_fixture_plan,
+            strategy_id="fixture_strategy",
+            best_params={"ma_proximity": 0.02},
+            service=stub_backtest_service,
+            chain=stub_chain,
+            resolver=stub_resolver,
+            repo=research_repository,
+            objective="sharpe",
+            search_run_id="wf-search-run-1",
+            validation_threshold=0.0,
+        )
+    # 同一 OOS 证据折不能再产生第二个裁决 (oos_evidence_fold_id UNIQUE)
+    verdicts = research_repository.list_validated_strategies(
+        strategy_id="fixture_strategy", plan_id=wf_fixture_plan.plan_id
+    )
+    assert len(verdicts) == 1
+    assert verdicts[0]["oos_evidence_fold_id"] == out["oos_manifest"]["id"]
+    assert verdicts[0]["passed_gate"] == 1
+    assert verdicts[0]["validation_score"] == 1.0
+
+
+def test_evaluate_best_params_threshold_gate_min_and_max_direction(
+    research_repository: ResearchRepository,
+    wf_fixture_plan,
+    stub_resolver,
+    stub_chain,
+    stub_backtest_service,
+) -> None:
+    """机械门: max 方向 OOS 表现 >= 阈值通过; min 方向 <= 阈值通过。"""
+    from app.backtest.walkforward import evaluate_best_params
+
+    out_pass = evaluate_best_params(
+        wf_fixture_plan,
+        strategy_id="fixture_strategy",
+        best_params={"ma_proximity": 0.02},
+        service=stub_backtest_service,
+        chain=stub_chain,
+        resolver=stub_resolver,
+        repo=research_repository,
+        objective="sharpe",
+        search_run_id=None,  # 无搜索运行: 固定参数直接验证
+        validation_threshold=0.5,
+    )
+    assert out_pass["passed_gate"] is True  # 1.0 >= 0.5 (max 方向)
+    assert out_pass["params_sha256"] == out_pass["verdict"]["params_sha256"]
+
+    # min 方向: avg_holding_days 越小越好 — OOS 1.0 <= 阈值 0.5? 否 → 失败。
+    out_fail = evaluate_best_params(
+        wf_fixture_plan,
+        strategy_id="fixture_strategy",
+        best_params={"ma_proximity": 0.03},
+        service=_HoldingDaysService(),
+        chain=stub_chain,
+        resolver=stub_resolver,
+        repo=research_repository,
+        objective="avg_holding_days",
+        search_run_id=None,
+        validation_threshold=0.5,
+    )
+    assert out_fail["passed_gate"] is False  # 1.0 > 0.5 (min 方向) 失败
+    assert out_fail["validation_score"] == 1.0
+    # passed_gate=0 行可被 list_validated_strategies(passed_gate=False) 过滤出来
+    failed = research_repository.list_validated_strategies(
+        strategy_id="fixture_strategy", plan_id=wf_fixture_plan.plan_id, passed_gate=False
+    )
+    assert [v["strategy_id"] for v in failed] == ["fixture_strategy"]
+    assert all(v["params_sha256"] == out_fail["params_sha256"] for v in failed)

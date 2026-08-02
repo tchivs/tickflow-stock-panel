@@ -17,6 +17,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import date
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -470,6 +471,7 @@ class WalkForwardOptimizer:
                 score_distribution=score_distribution,
                 best_params=dict(best["params"]) if best is not None else {},
                 best_score=round(float(best_score), 6) if best_score is not None else None,
+                oos_excluded=1,
             )
 
         return {

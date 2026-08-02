@@ -326,3 +326,66 @@ def test_wf_search_records_search_run_row():
     )
     assert out["search_run_id"]
 
+
+def test_wf_search_persists_search_run_row_when_repo_passed(research_repository):
+    """With a repo the search persists wf_search_runs (oos_excluded=1 enforced)."""
+    research_repository.create_wf_plan(_WF_PLAN_3_FOLDS)  # FK: plan must exist first
+    out = _wf_optimizer(lambda p: _FakeResult(stats={"sharpe": 1.0})).optimize(
+        plan=_WF_PLAN_3_FOLDS, strategy_id="s",
+        param_grid={"ma_proximity": [0.01, 0.02]}, objective="sharpe",
+        repo=research_repository,
+    )
+    assert out["search_run_id"]
+    import sqlite3
+
+    with sqlite3.connect(research_repository.database_path) as connection:
+        row = connection.execute(
+            "SELECT oos_excluded, n_trials, plan_id FROM wf_search_runs WHERE id = ?",
+            (out["search_run_id"],),
+        ).fetchone()
+    assert row is not None
+    assert row[0] == 1  # oos_excluded=1 persisted
+    assert row[1] == 2  # n_trials == len(combos)
+    assert row[2] == "wf-plan-oos"
+
+
+def test_wf_search_oos_excluded_zero_fails_closed(research_repository):
+    """record_wf_search fails closed unless oos_excluded=1 (WFWD-02 guard)."""
+    with pytest.raises(ValueError, match="oos_excluded=1"):
+        research_repository.record_wf_search(
+            plan_id="wf-plan-oos",
+            strategy_id="s",
+            objective="sharpe",
+            direction="max",
+            search_space={"param_grid": {}, "params_meta": []},
+            n_trials=1,
+            n_completed=1,
+            score_distribution={"per_trial": [], "per_fold": {}, "min": 1.0, "max": 1.0},
+            best_params={},
+            best_score=1.0,
+            oos_excluded=0,
+        )
+
+
+def test_wf_search_never_scores_train_or_oos_windows():
+    """WFWD-02: a scorer that records every window sees only fold test segments."""
+    seen: list[tuple[date, date]] = []
+
+    def record_run(bt_cfg, progress_cb=None, cancel_event=None):  # type: ignore[no-untyped-def]
+        del progress_cb, cancel_event
+        seen.append((bt_cfg.start, bt_cfg.end))
+        return _FakeResult(stats={"sharpe": 1.0})
+
+    opt = _wf_optimizer(lambda p: _FakeResult(stats={"sharpe": 1.0}))
+    opt.service.run = record_run
+    out = opt.optimize(
+        plan=_WF_PLAN_3_FOLDS, strategy_id="s",
+        param_grid={"ma_proximity": [0.01, 0.02]}, objective="sharpe",
+    )
+    assert out["n_trials"] == 2
+    # 2 combos x 3 search folds = 6 test-window runs; every window is exactly the
+    # fold test segment (2026-03-02..2026-03-27) — never a train window, never OOS.
+    expected = (date(2026, 3, 2), date(2026, 3, 27))
+    assert len(seen) == 2 * 3
+    assert all((s, e) == expected for s, e in seen)
+
