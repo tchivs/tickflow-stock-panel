@@ -10,7 +10,7 @@ import re
 import sqlite3
 import uuid
 from collections.abc import Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -42,6 +42,33 @@ def _record(row: sqlite3.Row | None) -> dict[str, Any] | None:
         if column in value:
             value[target] = json.loads(value.pop(column))
     return value
+
+
+def _unpack_json(row: sqlite3.Row | None, columns: Mapping[str, str]) -> dict[str, Any] | None:
+    """Convert a row to a dict, decoding the named ``*_json`` columns."""
+    if row is None:
+        return None
+    value = dict(row)
+    for column, target in columns.items():
+        if column in value:
+            value[target] = json.loads(value.pop(column))
+    return value
+
+
+def _wf_sha256(value: str, field: str) -> None:
+    if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value):
+        raise ValueError(f"{field} must be a lowercase SHA-256 hex digest")
+
+
+_SHA256_HEX = re.compile(r"[0-9a-f]{64}\Z")
+
+
+def _as_iso(value: object) -> str:
+    """Normalize a ``date``/``datetime``/ISO string to an ISO date string."""
+    if isinstance(value, str):
+        return value
+    iso = value.isoformat()
+    return iso[:10] if len(iso) > 10 else iso
 
 
 class ResearchRepository:
@@ -784,3 +811,354 @@ class ResearchRepository:
                 (model_id,),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    # =====================================================================
+    # Phase 13 walk-forward records (WFWD-01/02/03) — append-only.
+    # Every row is INSERT-only; the migration enforces immutability triggers
+    # at the SQL level. The exactly-once OOS contract maps sqlite3
+    # IntegrityError to ValueError mirroring create_experiment (L338-341).
+    # =====================================================================
+
+    def create_wf_plan(self, plan: object) -> dict[str, Any]:
+        """Pin a walk-forward plan (OOS reservation) or return the existing row.
+
+        Append-only idempotent: a re-insert of the same plan_id returns the
+        already-recorded row via the query path — never an error. This is the
+        ``oos_pinned_at`` reservation recorded BEFORE any search reuse.
+        """
+        plan_id = plan.plan_id
+        trading_dates = _json(list(plan.trading_dates), "trading dates")
+        fold_geometry = _json(
+            {
+                "folds": [
+                    {
+                        "fold_index": fold.fold_index,
+                        "is_oos": fold.is_oos,
+                        "train_start": _as_iso(fold.train_start),
+                        "train_end": _as_iso(fold.train_end),
+                        "gap_start": _as_iso(fold.gap_start),
+                        "gap_end": _as_iso(fold.gap_end),
+                        "test_start": _as_iso(fold.test_start),
+                        "test_end": _as_iso(fold.test_end),
+                    }
+                    for fold in plan.folds
+                ],
+                "oos_fold": {
+                    "fold_index": plan.oos_fold.fold_index,
+                    "is_oos": True,
+                    "train_start": _as_iso(plan.oos_fold.train_start),
+                    "train_end": _as_iso(plan.oos_fold.train_end),
+                    "gap_start": _as_iso(plan.oos_fold.gap_start),
+                    "gap_end": _as_iso(plan.oos_fold.gap_end),
+                    "test_start": _as_iso(plan.oos_fold.test_start),
+                    "test_end": _as_iso(plan.oos_fold.test_end),
+                },
+            },
+            "fold geometry",
+        )
+        now = _now()
+        with self._connection() as connection, connection:
+            with suppress(sqlite3.IntegrityError):
+                # Idempotent re-create: same plan_id already pinned — return it.
+                connection.execute(
+                    """INSERT INTO wf_plans (
+                           id, universe, asset_type, start, end, train_size, gap_size,
+                           test_size, oos_size, horizon, trading_dates_json,
+                           fold_geometry_json, oos_pinned_at, created_at
+                       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        plan_id,
+                        plan.universe,
+                        plan.asset_type,
+                        _as_iso(plan.start),
+                        _as_iso(plan.end),
+                        plan.train_size,
+                        plan.gap_size,
+                        plan.test_size,
+                        plan.oos_size,
+                        plan.horizon,
+                        trading_dates,
+                        fold_geometry,
+                        now,
+                        now,
+                    ),
+                )
+            row = connection.execute("SELECT * FROM wf_plans WHERE id = ?", (plan_id,)).fetchone()
+        if row is None:
+            raise RuntimeError("walk-forward plan was not persisted")
+        return _unpack_json(
+            row,
+            {"trading_dates_json": "trading_dates", "fold_geometry_json": "fold_geometry"},
+        )  # type: ignore[return-value]
+
+    def get_wf_plan(self, plan_id: str) -> dict[str, Any] | None:
+        """Return the pinned walk-forward plan with JSON unwrapped."""
+        with self._connection() as connection:
+            row = connection.execute("SELECT * FROM wf_plans WHERE id = ?", (plan_id,)).fetchone()
+        return _unpack_json(
+            row,
+            {"trading_dates_json": "trading_dates", "fold_geometry_json": "fold_geometry"},
+        )
+
+    def record_wf_fold(self, **fields: Any) -> dict[str, Any]:
+        """Append one fold manifest (search fold OR the reserved OOS).
+
+        The ``UNIQUE (plan_id, fold_index, is_oos, strategy_id, params_sha256)``
+        constraint makes the OOS exactly-once: a second evaluation of the same
+        (plan, strategy, params) raises ValueError (mirroring L338-341).
+        """
+        fold_id = fields.get("id") or uuid.uuid4().hex
+        _wf_sha256(fields["params_sha256"], "params_sha256")
+        _wf_sha256(fields["membership_fingerprint"], "membership_fingerprint")
+        now = _now()
+        with self._connection() as connection, connection:
+            try:
+                connection.execute(
+                    """INSERT INTO wf_folds (
+                           id, plan_id, fold_index, is_oos, strategy_id, params_sha256,
+                           train_start, train_end, test_start, test_end,
+                           membership_fingerprint, chain_config_json, stats_json, created_at
+                       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        fold_id,
+                        fields["plan_id"],
+                        int(fields["fold_index"]),
+                        int(bool(fields["is_oos"])),
+                        fields["strategy_id"],
+                        fields["params_sha256"],
+                        _as_iso(fields["train_start"]),
+                        _as_iso(fields["train_end"]),
+                        _as_iso(fields["test_start"]),
+                        _as_iso(fields["test_end"]),
+                        fields["membership_fingerprint"],
+                        _json(dict(fields.get("chain_config") or {}), "chain config"),
+                        _json(dict(fields.get("stats") or {}), "fold stats"),
+                        now,
+                    ),
+                )
+            except sqlite3.IntegrityError as error:
+                if fields.get("is_oos"):
+                    raise ValueError("OOS segment already evaluated") from error
+                raise ValueError("fold row conflicts with a persisted fold manifest") from error
+            row = connection.execute("SELECT * FROM wf_folds WHERE id = ?", (fold_id,)).fetchone()
+        if row is None:
+            raise RuntimeError("walk-forward fold was not persisted")
+        return _unpack_json(
+            row,
+            {"chain_config_json": "chain_config", "stats_json": "stats"},
+        )  # type: ignore[return-value]
+
+    def list_wf_folds(
+        self, *, plan_id: str | None = None, is_oos: bool | None = None, limit: int = 200
+    ) -> list[dict[str, Any]]:
+        """All fold manifests, ordered by plan_id then fold_index, capped at limit."""
+        if not isinstance(limit, int) or limit < 1:
+            raise ValueError("limit must be a positive integer")
+        clauses: list[str] = []
+        parameters: list[Any] = []
+        if plan_id is not None:
+            clauses.append("plan_id = ?")
+            parameters.append(plan_id)
+        if is_oos is not None:
+            clauses.append("is_oos = ?")
+            parameters.append(int(is_oos))
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
+        with self._connection() as connection:
+            rows = connection.execute(
+                f"""SELECT * FROM wf_folds{where}
+                   ORDER BY plan_id, fold_index, id LIMIT ?""",
+                (*parameters, limit),
+            ).fetchall()
+        return [
+            _unpack_json(
+                row,
+                {"chain_config_json": "chain_config", "stats_json": "stats"},
+            )
+            for row in rows
+        ]  # type: ignore[list-item]
+
+    def record_wf_search(self, **fields: Any) -> dict[str, Any]:
+        """Append one OOS-scored search run with multiple-comparison bookkeeping.
+
+        Fails closed with ValueError unless ``oos_excluded == 1`` — the search
+        must never touch the reserved OOS (WFWD-02).
+        """
+        if not fields.get("oos_excluded"):
+            raise ValueError("walk-forward search must exclude the reserved OOS (oos_excluded=1)")
+        search_id = fields.get("id") or uuid.uuid4().hex
+        with self._connection() as connection, connection:
+            connection.execute(
+                """INSERT INTO wf_search_runs (
+                       id, plan_id, strategy_id, objective, direction, search_space_json,
+                       n_trials, n_completed, score_distribution_json, best_params_json,
+                       best_score, oos_excluded, created_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    search_id,
+                    fields["plan_id"],
+                    fields["strategy_id"],
+                    fields["objective"],
+                    fields["direction"],
+                    _json(dict(fields.get("search_space") or {}), "search space"),
+                    int(fields["n_trials"]),
+                    int(fields["n_completed"]),
+                    _json(dict(fields.get("score_distribution") or {}), "score distribution"),
+                    _json(dict(fields.get("best_params") or {}), "best params"),
+                    fields.get("best_score"),
+                    1,
+                    _now(),
+                ),
+            )
+            row = connection.execute("SELECT * FROM wf_search_runs WHERE id = ?", (search_id,)).fetchone()
+        if row is None:
+            raise RuntimeError("walk-forward search run was not persisted")
+        return _unpack_json(
+            row,
+            {
+                "search_space_json": "search_space",
+                "score_distribution_json": "score_distribution",
+                "best_params_json": "best_params",
+            },
+        )  # type: ignore[return-value]
+
+    def record_validated_strategy(self, **fields: Any) -> dict[str, Any]:
+        """Append one validation verdict tied to the once-evaluated OOS.
+
+        ``oos_evidence_fold_id`` is UNIQUE — one OOS evaluation per
+        strategy/params, the unbiased estimate (WFWD-02).
+        """
+        _wf_sha256(fields["params_sha256"], "params_sha256")
+        verdict_id = fields.get("id") or uuid.uuid4().hex
+        resolved_asset_ids = fields.get("resolved_asset_ids", [])
+        with self._connection() as connection, connection:
+            try:
+                connection.execute(
+                    """INSERT INTO wf_validated_strategies (
+                           id, strategy_id, plan_id, search_run_id, params_sha256,
+                           oos_evidence_fold_id, resolved_asset_ids_json, validation_score,
+                           fold_evidence_json, passed_gate, created_at
+                       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        verdict_id,
+                        fields["strategy_id"],
+                        fields["plan_id"],
+                        fields.get("search_run_id"),
+                        fields["params_sha256"],
+                        fields["oos_evidence_fold_id"],
+                        _json(list(resolved_asset_ids), "resolved asset ids"),
+                        float(fields["validation_score"]),
+                        _json(dict(fields.get("fold_evidence") or {}), "fold evidence"),
+                        int(bool(fields["passed_gate"])),
+                        _now(),
+                    ),
+                )
+            except sqlite3.IntegrityError as error:
+                raise ValueError("validation verdict conflicts with a persisted OOS evidence fold") from error
+            row = connection.execute(
+                "SELECT * FROM wf_validated_strategies WHERE id = ?", (verdict_id,)
+            ).fetchone()
+        if row is None:
+            raise RuntimeError("validation verdict was not persisted")
+        return _unpack_json(
+            row,
+            {
+                "resolved_asset_ids_json": "resolved_asset_ids",
+                "fold_evidence_json": "fold_evidence",
+            },
+        )  # type: ignore[return-value]
+
+    def list_validated_strategies(
+        self,
+        *,
+        strategy_id: str | None = None,
+        plan_id: str | None = None,
+        passed_gate: bool | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """Validation verdicts, filtered and capped at limit."""
+        if not isinstance(limit, int) or limit < 1:
+            raise ValueError("limit must be a positive integer")
+        clauses: list[str] = []
+        parameters: list[Any] = []
+        if strategy_id is not None:
+            clauses.append("strategy_id = ?")
+            parameters.append(strategy_id)
+        if plan_id is not None:
+            clauses.append("plan_id = ?")
+            parameters.append(plan_id)
+        if passed_gate is not None:
+            clauses.append("passed_gate = ?")
+            parameters.append(int(passed_gate))
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
+        with self._connection() as connection:
+            rows = connection.execute(
+                f"""SELECT * FROM wf_validated_strategies{where}
+                   ORDER BY created_at, id LIMIT ?""",
+                (*parameters, limit),
+            ).fetchall()
+        return [
+            _unpack_json(
+                row,
+                {
+                    "resolved_asset_ids_json": "resolved_asset_ids",
+                    "fold_evidence_json": "fold_evidence",
+                },
+            )
+            for row in rows
+        ]  # type: ignore[list-item]
+
+    def record_wf_ensemble(self, **fields: Any) -> dict[str, Any]:
+        """Append one ensemble output bound to a checksum-verified artifact."""
+        _wf_sha256(fields["input_snapshot_sha256"], "input_snapshot_sha256")
+        _wf_sha256(fields["output_sha256"], "output_sha256")
+        ensemble_id = fields.get("id") or uuid.uuid4().hex
+        with self._connection() as connection, connection:
+            connection.execute(
+                """INSERT INTO wf_ensembles (
+                       id, name, strategy_ids_json, weights_json,
+                       validation_record_ids_json, input_snapshot_sha256, output_sha256,
+                       artifact_relative_path, created_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        ensemble_id,
+                        fields["name"],
+                        _json(sorted(fields["strategy_ids"]), "strategy ids"),
+                        _json(dict(fields["weights"]), "weights"),
+                        _json(sorted(fields["validation_record_ids"]), "validation record ids"),
+                        fields["input_snapshot_sha256"],
+                        fields["output_sha256"],
+                        fields["artifact_relative_path"],
+                        _now(),
+                    ),
+            )
+            row = connection.execute("SELECT * FROM wf_ensembles WHERE id = ?", (ensemble_id,)).fetchone()
+        if row is None:
+            raise RuntimeError("walk-forward ensemble was not persisted")
+        return _unpack_json(
+            row,
+            {
+                "strategy_ids_json": "strategy_ids",
+                "weights_json": "weights",
+                "validation_record_ids_json": "validation_record_ids",
+            },
+        )  # type: ignore[return-value]
+
+    def list_wf_ensembles(self, *, limit: int = 200) -> list[dict[str, Any]]:
+        """All ensemble outputs, newest first, capped at limit."""
+        if not isinstance(limit, int) or limit < 1:
+            raise ValueError("limit must be a positive integer")
+        with self._connection() as connection:
+            rows = connection.execute(
+                "SELECT * FROM wf_ensembles ORDER BY created_at DESC, id LIMIT ?", (limit,)
+            ).fetchall()
+        return [
+            _unpack_json(
+                row,
+                {
+                    "strategy_ids_json": "strategy_ids",
+                    "weights_json": "weights",
+                    "validation_record_ids_json": "validation_record_ids",
+                },
+            )
+            for row in rows
+        ]  # type: ignore[list-item]
