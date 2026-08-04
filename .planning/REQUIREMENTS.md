@@ -1,116 +1,88 @@
-# Requirements: AthenaQuant v1.2 End-to-End Factor Portfolio Pipeline
+# Requirements: AthenaQuant v1.3 竞价选股引擎
 
-**Defined:** 2026-07-31
+**Defined:** 2026-08-04
 **Core Value:** An investor can turn reliable market data and their own holdings into an auditable, actionable research and monitoring workflow without operating multiple disconnected tools.
 
 ## v1 Requirements
 
-Requirements for the v1.2 milestone. Each maps to a roadmap phase.
+Requirements for the v1.3 milestone. Each maps to a roadmap phase.
 
-### Factor Library & Multi-Factor Model
+### 竞价数据层 (Auction Data)
 
-- [x] **FACT-01**: Researcher can run factor admission gates — train/val IC threshold, no-lookahead check, no-label-leakage check, and similarity dedup — and every admission verdict is recorded as an immutable append-only record with the candidate trail (including rejections).
-- [x] **FACT-02**: Factor evaluation reports ICIR, monthly robustness, and coverage alongside IC/RankIC, with the full monthly evidence set exposed (not a scalar mean).
-- [x] **FACT-03**: Researcher can compose admitted factors into a deterministic multi-factor expected-return model (equal-weight or IC-weighted cross-sectional z-score, no ML), consumed by portfolio optimization.
-- [x] **FACT-04**: Factor DSL extension enforces a partition-context contract — every operator declares per-date / per-symbol / pointwise semantics, label fields are denied in the allowlist, and a deterministic shifted-label leakage test gates DSL changes.
-- [x] **FACT-05**: Admitted factors are stored in an immutable catalog with summary storage (coverage, finite counts, signature) and revision lineage.
-- [x] **FACT-06**: A single shared factor signal chain computes cross-sectional factor values from compiled DSL over governed panels, used identically by evaluation, multi-factor models, walk-forward, expected returns, and live as-of rebalance suggestions (no train/serve skew).
+- [ ] **DATA-01**: Researcher can enable minute-K sync and verify 1m bars land in `kline_minute` Parquet with correct 09:30+ timestamps and no corruption of the existing daily-K lake.
+- [ ] **DATA-02**: Researcher can compute and persist an 开盘涨幅 (open-gap) factor — `open / prev_close − 1` — as a governed, unit-tested column consumed by strategy filters (derivable today from daily-K enriched).
+- [ ] **DATA-03**: Platform probes for true 集合竞价 match data (9:15–9:25 竞价量/金额/虚拟成交) behind a capability gate; when unavailable, the feature fails closed to derived open-gap factors and never labels the 09:30 continuous-trading bar as auction data (P2).
 
-### Portfolio Construction & Optimization
+### 竞价策略族 (Auction Strategy Family)
 
-- [x] **PFOL-01**: Researcher can build sample covariance from a governed panel with PSD check, and any PSD repair is an explicit recorded step (method, epsilon, eigenvalues before/after) in the immutable run record.
-- [x] **PFOL-02**: Researcher can solve a long-only minimum-volatility portfolio and an HRP baseline; max-Sharpe is available only as an explicit non-default option with baselines rendered alongside.
-- [x] **PFOL-03**: Optimizer supports a constraint stack: long-only bounds, per-instrument cap, minimum cash, and convex turnover cost; industry cap is deferred until a governed industry mapping exists (fail-closed otherwise).
-- [x] **PFOL-04**: Every optimization run is an immutable record with input-snapshot SHA-256, expected-return method, risk model, solver name/version/options, problem status, and output weights; failed runs are retained with their failure reason.
+- [ ] **STRAT-01**: Researcher can run at least 3 auction strategies (竞价多头, 盘前强势量化, 早盘之星) authored as builtin strategy files in `strategy/builtin/`, auto-discovered by `StrategyEngine`, each with honest first-principles factor definitions (reference names are product labels, not public specs).
+- [ ] **STRAT-02**: Auction strategies expose per-stock factor-hit tagging so a results row reports which strategies hit it (关联因子), feeding cross-resonance.
+- [ ] **STRAT-03**: No third strategy registration track is introduced — auction strategies land in `strategy/builtin/` only, and the strategies API dedups against `PRESET_STRATEGIES` (P2).
 
-### Risk Analysis & Attribution
+### 股池 Hub (Pool Hub)
 
-- [x] **RSK-01**: Researcher can view risk exposure and marginal contribution attribution for an optimized portfolio, and the attribution reconciles to portfolio variance (cross-module integrity check).
-- [x] **RSK-02**: Risk-model suite includes semi-covariance, exponentially weighted covariance, and Ledoit-Wolf shrinkage with explicit PSD-repair provenance (P2).
-- [x] **RSK-03**: Researcher can view drawdown attribution decomposed by instrument and time segment (P2).
+- [ ] **POOL-01**: User can open a pool hub showing strategy cards with当日 per-strategy pool counts, and drill into each strategy's stock list (code, 开盘涨幅, 涨跌幅, 概念板块, 关联因子) backed by `screener_results/` persistence with a single as_of source of truth.
+- [ ] **POOL-02**: User can filter the pool by 概念 and highlight 交叉共振 — stocks hit by multiple auction strategies.
+- [ ] **POOL-03**: Pool data is a research-only projection; no execution authority or order routing exists anywhere in the pool feature (P2).
 
-### Walk-Forward Validation & Parameter Search
+### 游客/VIP 脱敏 (Guest Access)
 
-- [x] **WFWD-01**: Researcher can run rolling (non-expanding) walk-forward validation with an explicit gap between train and test folds, disjoint recorded folds, and a reserved independent final OOS segment evaluated exactly once and never touched by selection or parameter search.
-- [x] **WFWD-02**: Parameter optimization is scored on walk-forward OOS folds (not in-sample), with trial count, search space, and score distribution recorded to guard against multiple-comparison bias (P2).
-- [x] **WFWD-03**: Researcher can ensemble validated strategies via rank-average of their signals (P2).
+- [ ] **GUEST-01**: Non-VIP (guest) sessions see only 涨跌幅 and 概念板块, with stock code/name masked (`******`) applied server-authoritatively at the API DTO boundary; VIP sessions receive明文. No client-side masking is trusted.
+- [ ] **GUEST-02**: Guest masking does not degrade the strategy engine's own internal correctness — masked fields are display-only, underlying factor computation remains unmasked (P2).
 
-### Output & Boundary
+## v2 Requirements (Future)
 
-- [x] **RBAL-01**: Researcher can render a RebalancePlan from continuous optimizer weights through an A-share lot-sizing adapter — 100-share lots, odd-lot sell handling, cash residue, turnover cost, blocked instruments, expiry — as an immutable research-only artifact with discretization RMSE visible.
-- [x] **RBAL-02**: Rebalance suggestions land in an auditable paper-rebalance state machine (append-only audit fact, human approval, idempotency) with no execution route anywhere; no execution authority is a hard acceptance criterion.
+Deferred to later releases. Tracked but not in current roadmap.
 
-### API & Frontend
+### Auction Data
 
-- [ ] **UI-01**: Backtest workspace gains ModelLibrary and WalkForward panels backed by typed server-owned contracts (P2).
-- [ ] **UI-02**: Portfolio workspace gains Optimization, RiskAttribution, and RebalancePlan panels backed by typed server-owned contracts (P2).
+- **DATA-04**: True 集合竞价 match data columns (竞价量/金额/虚拟成交) become first-class when a reliable source is confirmed.
+- **DATA-05**: Pre-open (before 09:30) pool availability when an auction data source supports real-time pre-market evaluation.
 
-## v2 Requirements
+### Strategy
 
-Deferred to future releases. Tracked but not in current roadmap.
+- **STRAT-04**: Additional auction strategies beyond the core 3 (竞价阿尔法, 极速抢筹, T+1闪电, 竞价全面策略, 金色两点半) as factor definitions are derived and validated.
+- **STRAT-05**: 早盘之星/盘前策略 intraday confirmation — strategies that re-evaluate during 09:30–10:00 based on minute-K confirmation.
 
-### Portfolio
+### Pool Hub
 
-- **PFOL-05**: Black-Litterman expected returns with structured Q/P/omega view objects (natural language cannot bypass structured confidence transforms).
-- **PFOL-06**: Max-Sharpe as a first-class objective with full baseline comparison (currently explicit non-default option only).
-- **PFOL-07**: Short selling / leverage.
-- **PFOL-08**: Auto-rebalance scheduling.
-
-### Factor
-
-- **FACT-07**: LLM proposes DSL expressions interactively through a mining loop with trajectory audit (restricted to DSL, never free Python).
-
-### Optimization
-
-- **OPT-01**: ML-based expected returns.
-- **OPT-02**: Multi-period / path-dependent objectives.
+- **POOL-04**: 日期导航 (per-trading-day historical pool browsing) — deferred; as_of single-date view ships first.
+- **POOL-05**: Pool watchlist integration and alerting from pool membership changes.
 
 ## Out of Scope
 
 | Feature | Reason |
 |---------|--------|
-| Automated live broker execution | Platform-wide boundary since v1.0; RebalancePlan and paper rebalance carry zero execution authority |
-| Industry cap in optimizer | Governed industry mapping does not exist; sector JOIN is fail-closed — cap deferred until mapping exists |
-| Storing full factor value matrices | Anti-feature per research — summary storage only |
-| "One-click best portfolio" autopilot | Hides constraint/objective tradeoffs; baselines must be rendered |
+| Automated live broker execution | Platform-wide boundary since v1.0; pool feature carries zero execution authority (POOL-03) |
+| Replicating proprietary strategy recipes verbatim (陈星量化 etc.) | No public spec; strategies are first-principles and honestly named |
+| Client-side guest masking | Bypassable; masking is server-authoritative at the DTO boundary |
+| Adding a third strategy registration track | Causes drift; builtin dir + preset dedup only (STRAT-03) |
 | External database or message queue | Architecture constraint since v1.0 |
-| PyPortfolioOpt / skfolio / riskfolio-lib as runtime deps | Use their contracts as design spec only; cvxpy + scipy provide the solver stack |
-| MLflow or external experiment tracking | Existing SQLite append-only records already cover run provenance |
-| Expanding-window walk-forward | Re-leaks early validation data; rolling only |
+| Storing full intraday tick data | Minute-K buckets suffice; full-tick is a different cost class |
 
 ## Traceability
 
-Populated during roadmap creation (2026-07-31). Verified: all 20 v1 requirements mapped to exactly one phase; Status remains Pending.
+Populated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| FACT-01 | Phase 10 | Complete |
-| FACT-02 | Phase 10 | Complete |
-| FACT-03 | Phase 10 | Complete |
-| FACT-04 | Phase 10 | Complete |
-| FACT-05 | Phase 10 | Complete |
-| FACT-06 | Phase 10 | Complete |
-| PFOL-01 | Phase 11 | Complete |
-| PFOL-02 | Phase 11 | Complete |
-| PFOL-03 | Phase 11 | Complete |
-| PFOL-04 | Phase 11 | Complete |
-| RSK-01 | Phase 12 | Complete |
-| RSK-02 | Phase 12 | Complete |
-| RSK-03 | Phase 12 | Complete |
-| WFWD-01 | Phase 13 | Complete |
-| WFWD-02 | Phase 13 | Complete |
-| WFWD-03 | Phase 13 | Complete |
-| RBAL-01 | Phase 14 | Complete |
-| RBAL-02 | Phase 14 | Complete |
-| UI-01 | Phase 15 | Pending |
-| UI-02 | Phase 15 | Pending |
+| DATA-01 | Phase 16 (竞价数据层) | Pending |
+| DATA-02 | Phase 16 (竞价数据层) | Pending |
+| DATA-03 | Phase 16 (竞价数据层) | Pending |
+| STRAT-01 | Phase 17 (竞价策略族) | Pending |
+| STRAT-02 | Phase 17 (竞价策略族) | Pending |
+| STRAT-03 | Phase 17 (竞价策略族) | Pending |
+| POOL-01 | Phase 18 (股池 Hub) | Pending |
+| POOL-02 | Phase 18 (股池 Hub) | Pending |
+| POOL-03 | Phase 18 (股池 Hub) | Pending |
+| GUEST-01 | Phase 19 (游客/VIP 脱敏 + 前端) | Pending |
+| GUEST-02 | Phase 19 (游客/VIP 脱敏 + 前端) | Pending |
 
 **Coverage:**
-
-- v1 requirements: 20 total (14 P1, 6 P2)
-- Mapped to phases: 20
+- v1 requirements: 11 total (9 P1, 2 P2)
+- Mapped to phases: 11
 - Unmapped: 0 ✓
 
 ---
-*Requirements defined: 2026-07-31*
-*Last updated: 2026-08-01 — 10-06 complete: FACT-03 composite (catalog IC evidence + snapshot-immutable outputs) and FACT-05 admitted-factor summaries (coverage/finite-counts/signature + revision lineage) landed; Phase 10 all six FACT requirements complete*
+*Requirements defined: 2026-08-04*
+*Last updated: 2026-08-04 — initial definition*
