@@ -9,8 +9,10 @@ Task 2/3 的 GUEST-02 显示层证明与游客面安全守卫在后续提交追�
 """
 from __future__ import annotations
 
+import ast
 import copy
 import json
+import re
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -20,11 +22,11 @@ from fastapi.testclient import TestClient
 
 from app.api import pool as pool_api
 from app.api import screener as screener_api
-from app.services.guest_masking import mask_guest_hub
+from app.services.guest_masking import MASKED_IDENTITY, mask_guest_hub
+
 from app.services.pool_hub import build_pool_hub
 
 _AS_OF = "2026-08-04"
-
 # 符号映射: X / Y / Z / W
 _SYMBOLS = {
     "X": "600000.SH",
@@ -296,3 +298,100 @@ def test_invalid_cookie_returns_guest(tmp_path, monkeypatch):
     assert body["mode"] == "guest"
     row = body["strategies"][0]["rows"][0]
     assert row["code"] == "******"
+
+
+# ================================================================
+# Task 2 — GUEST-02 显示层证明
+# ================================================================
+
+
+def test_build_pool_hub_rows_stay_unmasked(tmp_path):
+    """服务层恒明文 (GUEST-02): build_pool_hub 行带真实 code/name/open_gap。"""
+    _write_strategy_cache(tmp_path)
+    _write_concept_fixture(tmp_path)
+    hub = build_pool_hub(tmp_path)
+
+    assert hub["as_of"] == _AS_OF
+    for strategy in hub["strategies"]:
+        for row in strategy["rows"]:
+            assert row["code"] != "******"
+            assert row["name"] != "******"
+            assert row["name"]  # 名称投影有值
+            assert "open_gap" in row
+
+
+def test_guest_mask_does_not_mutate_cache_or_hub(tmp_path):
+    """掩码是纯序列化拷贝: 原 hub 与磁盘 strategy_cache.json 仍含真实身份。"""
+    _write_strategy_cache(tmp_path)
+    _write_concept_fixture(tmp_path)
+    hub = build_pool_hub(tmp_path)
+    before = copy.deepcopy(hub)
+
+    masked = mask_guest_hub(hub)
+    assert hub == before  # 输入 hub 未被修改
+
+    # 磁盘缓存仍明文 (含真实 symbol/name/open_gap)
+    raw = json.loads(
+        (tmp_path / "user_data" / "strategy_cache.json").read_text(encoding="utf-8")
+    )
+    x_row = raw["results"]["auction_bullish"]["rows"][0]
+    assert x_row["symbol"] == _SYMBOLS["X"]
+    assert x_row["name"] == _NAMES["X"]
+    assert x_row["open_gap"] == 3.21
+
+    # 掩码输出确实不含真实身份
+    masked_row = masked["strategies"][0]["rows"][0]
+    assert masked_row["symbol"] == MASKED_IDENTITY
+
+
+# ================================================================
+# Task 2 — guest_masking.py 隔离守卫 (AST, 镜像 POOL-03)
+# ================================================================
+
+_GUEST_BANNED_IMPORT = re.compile(
+    r"engine|strategy_cache|persistence|parquet|broker|order|execution|portfolio|"
+    r"watchlist|position|account|trade",
+    re.IGNORECASE,
+)
+
+_WRITE_PATTERNS = (
+    re.compile(r"open\s*\(\s*[^,)]*,\s*[\"']w"),
+    re.compile(r"open\s*\(\s*[^,)]*,\s*[\"']wb"),
+    re.compile(r"open\s*\(\s*[^,)]*,\s*[\"']a"),
+    re.compile(r"write_parquet"),
+    re.compile(r"os\.replace"),
+    re.compile(r"unlink\s*\("),
+    re.compile(r"mkdir\s*\("),
+)
+
+
+def _guest_masking_source() -> str:
+    backend = Path(__file__).resolve().parents[1]
+    return (backend / "app" / "services" / "guest_masking.py").read_text(encoding="utf-8")
+
+
+def _imported_module_names(source: str) -> list[str]:
+    tree = ast.parse(source)
+    names: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names.extend(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            names.append(node.module)
+    return names
+
+
+def test_guest_masking_imports_no_engine_or_persistence():
+    """guest_masking.py 不得 import 任何 engine/persistence/execution 模块 (GUEST-02)。"""
+    src = _guest_masking_source()
+    for module in _imported_module_names(src):
+        assert not _GUEST_BANNED_IMPORT.search(module), (
+            f"guest_masking.py 引入了禁用模块: {module}"
+        )
+
+
+def test_guest_masking_has_no_write_path():
+    """掩码是纯读者/拷贝器: 无写模式 open / write_parquet / os.replace / unlink / mkdir。"""
+    src = _guest_masking_source()
+    for pattern in _WRITE_PATTERNS:
+        assert not pattern.search(src), f"guest_masking.py 出现写路径: {pattern.pattern}"
