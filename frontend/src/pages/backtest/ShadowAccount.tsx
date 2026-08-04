@@ -250,11 +250,14 @@ export function ShadowAccount() {
   const previewRevisionRef = useRef(0)
 
   const capabilityQuery = useQuery({ queryKey: QK.phase5Capabilities, queryFn: phase5Api.capabilities, placeholderData: keepPreviousData })
-  const batchesQuery = useQuery({ queryKey: QK.shadow.batches(batchOffset, PAGE_SIZE), queryFn: () => phase5Api.shadowBatches(batchOffset, PAGE_SIZE), placeholderData: keepPreviousData })
-  const evidenceQuery = useQuery({ queryKey: QK.shadow.evidenceSets(evidenceOffset, PAGE_SIZE), queryFn: () => phase5Api.shadowEvidenceSets(evidenceOffset, PAGE_SIZE), placeholderData: keepPreviousData })
-  const candidatesQuery = useQuery({ queryKey: QK.shadow.candidates(candidateOffset, PAGE_SIZE), queryFn: () => phase5Api.shadowCandidates(candidateOffset, PAGE_SIZE), placeholderData: keepPreviousData })
-  const evaluationsQuery = useQuery({ queryKey: QK.shadow.evaluations(null, evaluationOffset, PAGE_SIZE), queryFn: () => phase5Api.shadowEvaluations(undefined, evaluationOffset, PAGE_SIZE), placeholderData: keepPreviousData })
-  const retentionsQuery = useQuery({ queryKey: QK.shadow.retentions(null, retentionOffset, PAGE_SIZE), queryFn: () => phase5Api.shadowRetentions(undefined, retentionOffset, PAGE_SIZE), placeholderData: keepPreviousData })
+  // 模块未启用时不再发 doomed 请求 (每页加载 5 次 503 噪音);
+  // 禁用状态下走下方「此部署未启用 Shadow 蒸馏模块」提示分支。
+  const shadowEnabled = capabilityQuery.data?.modules?.shadow?.available === true
+  const batchesQuery = useQuery({ queryKey: QK.shadow.batches(batchOffset, PAGE_SIZE), queryFn: () => phase5Api.shadowBatches(batchOffset, PAGE_SIZE), placeholderData: keepPreviousData, enabled: shadowEnabled })
+  const evidenceQuery = useQuery({ queryKey: QK.shadow.evidenceSets(evidenceOffset, PAGE_SIZE), queryFn: () => phase5Api.shadowEvidenceSets(evidenceOffset, PAGE_SIZE), placeholderData: keepPreviousData, enabled: shadowEnabled })
+  const candidatesQuery = useQuery({ queryKey: QK.shadow.candidates(candidateOffset, PAGE_SIZE), queryFn: () => phase5Api.shadowCandidates(candidateOffset, PAGE_SIZE), placeholderData: keepPreviousData, enabled: shadowEnabled })
+  const evaluationsQuery = useQuery({ queryKey: QK.shadow.evaluations(null, evaluationOffset, PAGE_SIZE), queryFn: () => phase5Api.shadowEvaluations(undefined, evaluationOffset, PAGE_SIZE), placeholderData: keepPreviousData, enabled: shadowEnabled })
+  const retentionsQuery = useQuery({ queryKey: QK.shadow.retentions(null, retentionOffset, PAGE_SIZE), queryFn: () => phase5Api.shadowRetentions(undefined, retentionOffset, PAGE_SIZE), placeholderData: keepPreviousData, enabled: shadowEnabled })
 
   const capability = capabilityQuery.data?.modules?.shadow
   const batches = Array.isArray(batchesQuery.data?.batches) ? batchesQuery.data.batches : []

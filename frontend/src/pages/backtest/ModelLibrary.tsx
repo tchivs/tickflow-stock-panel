@@ -81,6 +81,9 @@ function FactorRow({ factor }: { factor: FactorRevisionDTO }) {
   const verdictQuery = useQuery({
     queryKey: QK.panelFactorVerdict(factor.id),
     queryFn: () => api.getAdmissionVerdict(factor.id),
+    // 懒加载: 行未展开不请求; 404 = 该修订无准入记录 (fail-closed), 不重试。
+    enabled: expanded,
+    retry: 0,
   })
   const admitted = factor.status === 'admitted' || verdictQuery.data?.admitted === true
 
@@ -118,6 +121,9 @@ function FactorRow({ factor }: { factor: FactorRevisionDTO }) {
                 <div className="text-[10px] font-medium uppercase tracking-wider text-muted">表达式</div>
                 <code className="mt-0.5 block font-mono text-[11px] text-secondary">{factor.expression}</code>
               </div>
+              {verdictQuery.isError && (
+                <div className="text-[11px] text-muted">无准入记录(该修订未经过录取闸门)</div>
+              )}
               {verdictQuery.data && (
                 <div>
                   <div className="text-[10px] font-medium uppercase tracking-wider text-muted">准入结论 · {verdictQuery.data.policy_version}</div>
