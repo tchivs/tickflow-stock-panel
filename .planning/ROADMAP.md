@@ -49,7 +49,7 @@ Four phases add 集合竞价-driven quantitative stock selection to the shipped 
 
 - [x] **Phase 16: 竞价数据层 (Auction Data)** - Enable minute-K sync, land the governed open-gap factor, and probe true 集合竞价 match data behind a capability gate — DATA-01..03
 - [x] **Phase 17: 竞价策略族 (Auction Strategy Family)** - Author ≥3 auction strategies (竞价多头/盘前强势量化/早盘之星) as builtin strategy files with factor-hit tagging — STRAT-01..03 (completed 2026-08-04)
-- [ ] **Phase 18: 股池 Hub (Pool Hub)** - Strategy cards with pool counts, drill-down stock lists, concept filter, 交叉共振 multi-hit highlight — POOL-01..03
+- [x] **Phase 18: 股池 Hub (Pool Hub)** - Strategy cards with pool counts, drill-down stock lists, concept filter, 交叉共振 multi-hit highlight — POOL-01..03 (completed 2026-08-04)
 - [ ] **Phase 19: 游客/VIP 脱敏 + 前端 (Guest Access & Frontend)** - Server-authoritative guest masking, VIP plaintext, frontend pool page — GUEST-01..02
 
 ## Phase Details
@@ -101,7 +101,7 @@ Plans:
   2. User can filter the pool by 概念 and see 交叉共振 (stocks hit by multiple auction strategies) highlighted.
   3. No execution authority exists anywhere in the pool feature — no API endpoint, UI affordance, or service path can push a pool to a live broker.
 
-**Plans:** 2/2 plans executed
+**Plans:** 2/2 plans complete
 
 Plans:
 
@@ -127,7 +127,7 @@ Phases execute in numeric order: 16 → 17 → 18 → 19
 |-------|-------------|--------|
 | 16. 竞价数据层 | DATA-01..03 | Complete    |
 | 17. 竞价策略族 | STRAT-01..03 | Complete    |
-| 18. 股池 Hub | POOL-01..03 | In Progress|
+| 18. 股池 Hub | POOL-01..03 | Complete    |
 | 19. 游客/VIP 脱敏 + 前端 | GUEST-01..02 | Not started |
 
 ---
