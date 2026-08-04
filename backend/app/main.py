@@ -40,6 +40,8 @@ from app.api import (
     strategy,
     watchlist,
 )
+from app.api import portfolio_panels
+from app.api import research_panels
 from app.api import analysis as analysis_menus
 from app.api import auth as auth_api
 from app.api import settings as settings_api
@@ -49,6 +51,7 @@ from app.jobs import daily_pipeline
 from app.operational.repository import OperationalRepository
 from app.optional_modules import install_optional_module_routes
 from app.portfolio.service import PortfolioService
+from app.portfolio.repository import PortfolioRepository
 from app.services.quote_service import QuoteService
 from app.tickflow import client as tf_client
 from app.tickflow.policy import detect_capabilities
@@ -176,6 +179,7 @@ async def lifespan(app: FastAPI):
 
     research_repository = ResearchRepository(operational.database_path)
     artifact_service = EvaluationArtifactService(store.data_dir)
+    app.state.portfolio_repository = PortfolioRepository(operational.database_path)
     app.state.research_repository = research_repository
     app.state.factor_registry = FactorRegistry(research_repository)
     app.state.research_artifact_service = artifact_service
@@ -842,6 +846,8 @@ app.include_router(signals.router)
 app.include_router(monitor_rules.router)
 app.include_router(portfolio.router)
 app.include_router(decision.router)
+app.include_router(research_panels.router)
+app.include_router(portfolio_panels.router)
 app.include_router(alerts.router)
 app.include_router(rps.router)
 

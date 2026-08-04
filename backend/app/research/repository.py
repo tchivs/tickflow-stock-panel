@@ -763,6 +763,21 @@ class ResearchRepository:
         record["weights"] = json.loads(record.pop("weights_json"))
         return record
 
+    def list_model_definitions(self) -> list[dict[str, Any]]:
+        """All composite model definitions, ordered by name then model_id."""
+        with self._connection() as connection:
+            rows = connection.execute(
+                """SELECT * FROM factor_model_models
+                   ORDER BY name COLLATE NOCASE, model_id"""
+            ).fetchall()
+        results: list[dict[str, Any]] = []
+        for row in rows:
+            record = dict(row)
+            record["revision_ids"] = json.loads(record.pop("revision_ids_json"))
+            record["weights"] = json.loads(record.pop("weights_json"))
+            results.append(record)
+        return results
+
     def insert_model_composite(
         self,
         *,
