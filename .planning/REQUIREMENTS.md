@@ -15,9 +15,9 @@ Requirements for the v1.3 milestone. Each maps to a roadmap phase.
 
 ### 竞价策略族 (Auction Strategy Family)
 
-- [ ] **STRAT-01**: Researcher can run at least 3 auction strategies (竞价多头, 盘前强势量化, 早盘之星) authored as builtin strategy files in `strategy/builtin/`, auto-discovered by `StrategyEngine`, each with honest first-principles factor definitions (reference names are product labels, not public specs).
+- [x] **STRAT-01**: Researcher can run at least 3 auction strategies (竞价多头, 盘前强势量化, 早盘之星) authored as builtin strategy files in `strategy/builtin/`, auto-discovered by `StrategyEngine`, each with honest first-principles factor definitions (reference names are product labels, not public specs).
 - [x] **STRAT-02**: Auction strategies expose per-stock factor-hit tagging so a results row reports which strategies hit it (关联因子), feeding cross-resonance.
-- [ ] **STRAT-03**: No third strategy registration track is introduced — auction strategies land in `strategy/builtin/` only, and the strategies API dedups against `PRESET_STRATEGIES` (P2).
+- [x] **STRAT-03**: No third strategy registration track is introduced — auction strategies land in `strategy/builtin/` only, and the strategies API dedups against `PRESET_STRATEGIES` (P2).
 
 ### 股池 Hub (Pool Hub)
 
@@ -69,9 +69,9 @@ Populated during roadmap creation.
 | DATA-01 | Phase 16 (竞价数据层) | Complete |
 | DATA-02 | Phase 16 (竞价数据层) | Complete |
 | DATA-03 | Phase 16 (竞价数据层) | Complete |
-| STRAT-01 | Phase 17 (竞价策略族) | Pending |
+| STRAT-01 | Phase 17 (竞价策略族) | Complete |
 | STRAT-02 | Phase 17 (竞价策略族) | Complete |
-| STRAT-03 | Phase 17 (竞价策略族) | Pending |
+| STRAT-03 | Phase 17 (竞价策略族) | Complete |
 | POOL-01 | Phase 18 (股池 Hub) | Pending |
 | POOL-02 | Phase 18 (股池 Hub) | Pending |
 | POOL-03 | Phase 18 (股池 Hub) | Pending |

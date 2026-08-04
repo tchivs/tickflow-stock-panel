@@ -48,7 +48,7 @@ Four phases add 集合竞价-driven quantitative stock selection to the shipped 
 - v1.2 ended at Phase 15; v1.3 continues at Phase 16 (`phase_naming: sequential`)
 
 - [x] **Phase 16: 竞价数据层 (Auction Data)** - Enable minute-K sync, land the governed open-gap factor, and probe true 集合竞价 match data behind a capability gate — DATA-01..03
-- [ ] **Phase 17: 竞价策略族 (Auction Strategy Family)** - Author ≥3 auction strategies (竞价多头/盘前强势量化/早盘之星) as builtin strategy files with factor-hit tagging — STRAT-01..03
+- [x] **Phase 17: 竞价策略族 (Auction Strategy Family)** - Author ≥3 auction strategies (竞价多头/盘前强势量化/早盘之星) as builtin strategy files with factor-hit tagging — STRAT-01..03 (completed 2026-08-04)
 - [ ] **Phase 18: 股池 Hub (Pool Hub)** - Strategy cards with pool counts, drill-down stock lists, concept filter, 交叉共振 multi-hit highlight — POOL-01..03
 - [ ] **Phase 19: 游客/VIP 脱敏 + 前端 (Guest Access & Frontend)** - Server-authoritative guest masking, VIP plaintext, frontend pool page — GUEST-01..02
 
@@ -83,12 +83,12 @@ Plans:
   2. Each strategy exposes factor-hit tags so a results row can report 关联因子 (which strategies hit it).
   3. No new strategy registry exists; auction strategies are discovered from the builtin dir and the strategies API dedups against `PRESET_STRATEGIES`.
 
-**Plans:** 2 plans
+**Plans:** 2/2 plans complete
 
 Plans:
 
-- [ ] 17-01-PLAN.md — 3 first-principles auction strategies (竞价多头/盘前强势量化/早盘之星) as builtin files + engine discovery + PRESET_STRATEGIES dedup (STRAT-01, STRAT-03)
-- [ ] 17-02-PLAN.md — 关联因子 factor-hit tagging contract + screener run_all wiring (STRAT-02)
+- [x] 17-01-PLAN.md — 3 first-principles auction strategies (竞价多头/盘前强势量化/早盘之星) as builtin files + engine discovery + PRESET_STRATEGIES dedup (STRAT-01, STRAT-03)
+- [x] 17-02-PLAN.md — 关联因子 factor-hit tagging contract + screener run_all wiring (STRAT-02)
 
 ### Phase 18: 股池 Hub (Pool Hub)
 
@@ -119,7 +119,7 @@ Phases execute in numeric order: 16 → 17 → 18 → 19
 | Phase | Requirements | Status |
 |-------|-------------|--------|
 | 16. 竞价数据层 | DATA-01..03 | Complete    |
-| 17. 竞价策略族 | STRAT-01..03 | Not started |
+| 17. 竞价策略族 | STRAT-01..03 | Complete    |
 | 18. 股池 Hub | POOL-01..03 | Not started |
 | 19. 游客/VIP 脱敏 + 前端 | GUEST-01..02 | Not started |
 
