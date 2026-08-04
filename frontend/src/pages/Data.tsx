@@ -489,10 +489,15 @@ export function Data() {
           />
         )
       case 'minute':
+        // UI-SPEC 16 状态词汇: 启用且有覆盖 → 分钟K同步中·覆盖{N}天; 否则 → 分钟K未启用 (muted)
+        const minuteDays = s?.minute?.trading_days ?? 0
+        const minuteSyncing = hasMinuteCap && minuteAuto
         return (
           <StatCard
             title="分钟 K"
-            hint="全市场同步"
+            hint={minuteSyncing && minuteDays > 0
+              ? <><span className="text-secondary">分钟K同步中·覆盖</span><span className="font-mono tabular-nums text-secondary">{minuteDays}</span><span className="text-secondary">天</span></>
+              : <span className="text-muted">分钟K未启用</span>}
             stats={s?.minute}
             loading={isLoading}
             active={activeCard === 'minute'}

@@ -96,7 +96,7 @@ export function StatCard({
   auto, onSettings, onShowFields, settingsOpen, subLabel, localBadgeSuffix, fieldTabs,
 }: {
   title: string
-  hint: string
+  hint: React.ReactNode
   stats: any | null | undefined
   isInstrument?: boolean
   loading?: boolean
