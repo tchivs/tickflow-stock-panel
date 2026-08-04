@@ -2,19 +2,19 @@
 gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: 竞价选股引擎 — planning
-current_phase: 16
+current_phase: 17
+current_phase_name: 竞价策略族 (Auction Strategy Family)
 status: planning
 stopped_at: Completed 16-02-PLAN.md
-last_updated: "2026-08-04T12:56:00.000Z"
+last_updated: "2026-08-04T13:11:41.402Z"
 last_activity: 2026-08-04
-last_activity_desc: Phase 16 plan 2 complete — open_gap factor + auction probe
+last_activity_desc: Phase 16 complete, transitioned to Phase 17
 progress:
   total_phases: 4
   completed_phases: 1
   total_plans: 2
   completed_plans: 2
   percent: 25
-current_phase_name: 16-auction-data
 ---
 
 # Project State
@@ -27,10 +27,11 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 **Current focus:** v1.3 竞价选股引擎 (planning)
 
 ## Current Position
-Phase: 16 竞价数据层
-Plan: 2/2 (16-02 complete — open_gap factor + auction probe & honest fail-closed labels)
-Status: Completed — Phase 16 delivered (DATA-01..03)
-Last activity: 2026-08-04 — Phase 16 plan 2 complete
+
+Phase: 17 — 竞价策略族 (Auction Strategy Family)
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-08-04 — Phase 16 complete, transitioned to Phase 17
 
 Progress: [██░░░░░░░░] 25% (1/4 phases)
 
@@ -85,6 +86,7 @@ Resume file: None
 - [Roadmap]: Pool hub is research-only with zero execution authority (POOL-03), matching the platform boundary since v1.0.
 - [Phase 16 / P1]: Minute-K sync enable path proven hermetically; `minute_sync_symbols` scope knob shipped (API/preference-only, empty = full universe); 09:30 timestamp convention regression-locked.
 - [Phase 16 / P2]: Auction-probe verdict is server-authoritative (not_configured/available/fail_closed/error) and the Data page renders only server statuses; open_gap (`open / prev_close − 1`) is a governed persisted column; the 09:30 bar is regression-locked never to be labeled 集合竞价 data.
+
 ---
 *Last updated: 2026-08-04 — Phase 16 complete (DATA-01..03)*
 

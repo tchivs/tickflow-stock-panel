@@ -65,7 +65,7 @@ Four phases add 集合竞价-driven quantitative stock selection to the shipped 
   2. Researcher can compute 开盘涨幅 (`open / prev_close − 1`) as a governed column, unit-tested on a known fixture and consumed by strategy filters.
   3. Researcher can run the auction-data probe and observe the verdict (available / fail-closed to derived factors); when unavailable, no UI or strategy labels the 09:30 bar as auction data.
 
-**Plans:** 2/2 plans executed
+**Plans:** 2/2 plans complete
 
 Plans:
 
@@ -111,7 +111,7 @@ Phases execute in numeric order: 16 → 17 → 18 → 19
 
 | Phase | Requirements | Status |
 |-------|-------------|--------|
-| 16. 竞价数据层 | DATA-01..03 | Complete |
+| 16. 竞价数据层 | DATA-01..03 | Complete    |
 | 17. 竞价策略族 | STRAT-01..03 | Not started |
 | 18. 股池 Hub | POOL-01..03 | Not started |
 | 19. 游客/VIP 脱敏 + 前端 | GUEST-01..02 | Not started |
