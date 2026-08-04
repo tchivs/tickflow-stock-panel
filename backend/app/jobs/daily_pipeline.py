@@ -654,7 +654,14 @@ def _refresh_single_view(repo: KlineRepository, name: str) -> None:
 
 
 def _resolve_minute_symbols(capset: CapabilitySet) -> list[str]:
-    """分钟 K 同步标的 — 与日K共用同一标的池。"""
+    """分钟 K 同步标的 — 默认与日K共用同一标的池。
+
+    运算符可通过 minute_sync_symbols 偏好限定同步范围 (空列表 = 全量, 默认行为不变),
+    用于廉价的验证/spot 同步 (research PITFALLS.md pitfall 3)。
+    """
+    scoped = _prefs.get_minute_sync_symbols()
+    if scoped:
+        return scoped
     return _resolve_universe(capset)
 
 

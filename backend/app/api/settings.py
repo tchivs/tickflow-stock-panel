@@ -317,6 +317,7 @@ def _realtime_allowed() -> bool:
 class MinuteSyncPrefs(BaseModel):
     minute_sync_enabled: bool
     minute_sync_days: int = 5
+    minute_sync_symbols: list[str] = []
 
 
 class DataProvidersIn(BaseModel):
@@ -374,9 +375,9 @@ def get_preferences() -> dict:
     return {
         "realtime_quotes_enabled": preferences.get_realtime_quotes_enabled(),
         "realtime_allowed": _realtime_allowed(),
-        "indices_nav_pinned": preferences.get_indices_nav_pinned(),
         "minute_sync_enabled": preferences.get_minute_sync_enabled(),
         "minute_sync_days": preferences.get_minute_sync_days(),
+        "minute_sync_symbols": preferences.get_minute_sync_symbols(),
         "daily_data_provider": preferences.get_daily_data_provider(),
         "adj_factor_provider": preferences.get_adj_factor_provider(),
         "minute_data_provider": preferences.get_minute_data_provider(),
@@ -681,6 +682,7 @@ def update_minute_sync(req: MinuteSyncPrefs) -> dict:
     """保存分钟 K 同步偏好。"""
     from app.services import preferences
     days = max(1, min(30, req.minute_sync_days))
+    symbols = preferences.set_minute_sync_symbols(req.minute_sync_symbols)
     preferences.save({
         "minute_sync_enabled": req.minute_sync_enabled,
         "minute_sync_days": days,
@@ -688,6 +690,7 @@ def update_minute_sync(req: MinuteSyncPrefs) -> dict:
     return {
         "minute_sync_enabled": req.minute_sync_enabled,
         "minute_sync_days": days,
+        "minute_sync_symbols": symbols,
     }
 
 

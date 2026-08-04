@@ -98,6 +98,33 @@ def get_minute_intraday_refresh() -> bool:
 def get_minute_sync_days() -> int:
     return max(1, min(30, load().get("minute_sync_days", 5)))
 
+def _normalize_symbol_list(value) -> list[str]:
+    """规范化标的列表: 按逗号/换行拆分、去空白、去空、保序去重。"""
+    if value is None:
+        return []
+    items = [value] if isinstance(value, str) else [str(v) for v in value]
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        for sym in item.replace("\n", ",").split(","):
+            sym = sym.strip()
+            if sym and sym not in seen:
+                seen.add(sym)
+                out.append(sym)
+    return out
+
+
+def get_minute_sync_symbols() -> list[str]:
+    """可选分钟 K 同步标的范围; 空列表 = 全量标的池 (research pitfall 3)。"""
+    return _normalize_symbol_list(load().get("minute_sync_symbols", []))
+
+
+def set_minute_sync_symbols(symbols: list[str]) -> list[str]:
+    """保存分钟 K 同步标的范围, 返回规范化后的列表; 空列表 = 全量。"""
+    clean = _normalize_symbol_list(symbols)
+    save({"minute_sync_symbols": clean})
+    return clean
+
 
 # ===== 数据源选择 =====
 #

@@ -186,3 +186,51 @@ def test_minute_sync_gate_skips_when_disabled_or_capability_missing(tmp_path, mo
         assert not list((data_dir / "kline_minute").rglob("*.parquet"))
     finally:
         store.db.close()
+
+# ============================================================
+# minute_sync_symbols preference (research pitfall 3) unit tests
+# ============================================================
+
+
+def test_minute_sync_symbols_normalization_and_round_trip(tmp_path, monkeypatch):
+    from app.config import settings
+    data_dir = tmp_path / "data"
+    monkeypatch.setattr(settings, "data_dir", data_dir)
+
+    from app.services import preferences
+    # Default: empty -> full universe
+    assert preferences.get_minute_sync_symbols() == []
+
+    # Messy input is normalized: commas/newlines, stripped, deduped, order kept
+    clean = preferences.set_minute_sync_symbols([" 000001.SZ ", ",600000.SH\n", "000001.SZ"])
+    assert clean == ["000001.SZ", "600000.SH"]
+    assert preferences.get_minute_sync_symbols() == clean
+
+    # String form stored directly is normalized on read
+    preferences.save({"minute_sync_symbols": " 000001.SZ , 600000.SH\n"})
+    assert preferences.get_minute_sync_symbols() == ["000001.SZ", "600000.SH"]
+
+    # Empty / whitespace-only -> []
+    assert preferences.set_minute_sync_symbols([", \n", "  "]) == []
+    assert preferences.get_minute_sync_symbols() == []
+
+
+def test_resolve_minute_symbols_honors_scope(tmp_path, monkeypatch):
+    from app.config import settings
+    data_dir = tmp_path / "data"
+    monkeypatch.setattr(settings, "data_dir", data_dir)
+
+    from app.jobs import daily_pipeline
+    from app.services import preferences
+    from app.tickflow.capabilities import CapabilitySet
+
+    universe = ["000001.SZ", "600000.SH", "000002.SZ"]
+    monkeypatch.setattr(daily_pipeline, "_resolve_universe", lambda capset: list(universe))
+
+    # Empty scope -> full universe (unchanged default behavior)
+    preferences.save({"minute_sync_symbols": []})
+    assert daily_pipeline._resolve_minute_symbols(CapabilitySet()) == universe
+
+    # Non-empty scope -> scoped list honored
+    preferences.save({"minute_sync_symbols": ["600000.SH"]})
+    assert daily_pipeline._resolve_minute_symbols(CapabilitySet()) == ["600000.SH"]
