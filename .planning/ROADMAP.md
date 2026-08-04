@@ -118,7 +118,7 @@ Plans:
   1. Guest session responses mask stock code/name (`******`) at the API DTO boundary and expose only 涨跌幅/概念板块; VIP responses are明文. No client-side masking is trusted.
   2. Masking is display-only — underlying factor computation and strategy results remain unmasked and correct for all sessions.
 
-**Plans:** 2/2 plans executed
+**Plans:** 2/2 plans complete
 
 - [x] 19-01-PLAN.md — server-authoritative guest masking at the GET /api/pool/hub DTO boundary: guest session → masked code/name/symbol + `mode` field + guest read-only access path; VIP 明文; display-only GUEST-02 (GUEST-01, GUEST-02)
 - [x] 19-02-PLAN.md — PoolHubPage guest presentation: GuestModeBanner, masked-cell rendering verbatim, 名称 column, guest column set hides 开盘涨幅, no client-side masking (grep guard) (GUEST-01, GUEST-02)
