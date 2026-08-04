@@ -26,6 +26,7 @@ const Trading = lazy(() => import('./pages/Trading').then(m => ({ default: m.Tra
 const Dashboard = lazy(() => import('./pages/Dashboard').then(m => ({ default: m.Dashboard })))
 const AnalysisDetail = lazy(() => import('./pages/AnalysisDetail').then(m => ({ default: m.AnalysisDetail })))
 const ConceptAnalysis = lazy(() => import('./pages/ConceptAnalysis').then(m => ({ default: m.ConceptAnalysis })))
+const PoolHubPage = lazy(() => import('./pages/PoolHubPage').then(m => ({ default: m.PoolHubPage })))
 const IndustryAnalysis = lazy(() => import('./pages/IndustryAnalysis').then(m => ({ default: m.IndustryAnalysis })))
 const StockAnalysis = lazy(() => import('./pages/StockAnalysis').then(m => ({ default: m.StockAnalysis })))
 const Review = lazy(() => import('./pages/Review').then(m => ({ default: m.Review })))
@@ -79,6 +80,7 @@ export const router = createBrowserRouter([
       { path: 'analysis', element: <Navigate to="/settings?tab=ext-pages" replace /> },
       { path: 'analysis/:menuId', element: <AnalysisDetail /> },
       { path: 'concept-analysis', element: <ConceptAnalysis /> },
+      { path: 'pool-hub', element: <PoolHubPage /> },
       { path: 'industry-analysis', element: <IndustryAnalysis /> },
       { path: 'stock-analysis', element: <StockAnalysis /> },
       { path: 'review', element: <Review /> },

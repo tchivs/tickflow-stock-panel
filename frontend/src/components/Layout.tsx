@@ -74,6 +74,7 @@ const nav = [
   { to: '/',                label: '看板',     icon: LayoutDashboard },
   { to: '/watchlist',  label: '自选',   icon: Star },
   { to: '/screener',   label: '策略',   icon: ScanSearch },
+  { to: '/pool-hub',    label: '股池',   icon: Layers3 },
   { to: '/backtest',   label: '回测',   icon: History },
   { to: '/stock-analysis',    label: '个股分析', icon: TrendingUp },
   { to: '/limit-ladder', label: '连板梯队', icon: Flame },

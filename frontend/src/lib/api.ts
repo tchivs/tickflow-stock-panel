@@ -678,6 +678,32 @@ export interface MarketSnapshotRow {
   [key: string]: any
 }
 
+// ===== 股池 Hub (Phase 18) =====
+/** 股池个股行: 五列 + 交叉共振标志, 全部服务端投影 (POOL-01/02, 单 as_of 源) */
+export interface PoolHubRow {
+  symbol: string
+  code: string
+  open_gap: number | null
+  change_pct: number | null
+  concept_board: string[]
+  hit_factors: string[]
+  cross_resonance: boolean
+}
+
+export interface PoolHubStrategy {
+  id: string
+  name: string
+  total: number
+  rows: PoolHubRow[]
+}
+
+export interface PoolHubResponse {
+  as_of: string | null
+  updated_at: number | null
+  strategies: PoolHubStrategy[]
+  resonance_count: number
+}
+
 export interface OverviewDimensionRankItem {
   name: string
   count: number
@@ -2011,6 +2037,7 @@ export const api = {
     request<{ as_of: string | null; results: Record<string, { total: number; as_of: string; rows: any[] }> }>(
       '/api/screener/run_all', { method: 'POST', body: JSON.stringify({ as_of: asOf ?? null, strategy_ids: strategyIds ?? null, ext_columns: extColumns || null }) },
     ),
+
   screenerCached: (extColumns?: string) =>
     request<{ as_of: string | null; results: Record<string, { total: number; as_of: string; rows: any[] }>; today_ever_matched: Record<string, string[]> | null; today_ever_rows: Record<string, Record<string, any>> | null; updated_at: number | null }>(
       extColumns
@@ -2033,6 +2060,17 @@ export const api = {
     const qs = params.toString()
     return request<LimitLadderResult>(
       `/api/screener/limit-ladder${qs ? `?${qs}` : ''}`,
+    )
+  },
+
+  // 股池 Hub: 单 as_of 只读投影 (POOL-01/02; concept 为可选, 前端默认客户端投影不传)
+  poolHub: (asOf?: string, concept?: string) => {
+    const params = new URLSearchParams()
+    if (asOf) params.set('as_of', asOf)
+    if (concept) params.set('concept', concept)
+    const qs = params.toString()
+    return request<PoolHubResponse>(
+      `/api/pool/hub${qs ? `?${qs}` : ''}`,
     )
   },
 
