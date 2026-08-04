@@ -1,5 +1,22 @@
 # Milestones
 
+## v1.3 v1.3 (Shipped: 2026-08-04)
+
+**Phases completed:** 4 phases, 8 plans, 23 tasks
+
+**Key accomplishments:**
+
+- Hermetic proof that enabling minute-K sync persists canonical 1m bars to `kline_minute` with 09:30+ timestamps while leaving the daily-K lake byte-identical, plus a `minute_sync_symbols` scope knob and a regression-locked 09:30 timestamp convention
+- Server-authoritative auction-data probe (not_configured / available / fail_closed / error) wired service → GET/POST /api/data/auction-probe → Data-page 竞价数据 panel with the approved honest vocabulary, plus a governed persisted `open_gap` column (`open / prev_close − 1`) that strategy filters can consume — and regression-locked proof that a 09:30 continuous bar is never labeled 集合竞价 data
+- 三个第一性原理竞价策略 (竞价多头 / 盘前强势量化 / 早盘之星) 落地 `strategy/builtin/`, 引擎自动发现、仅消费 Phase 16 受管列 (open_gap/change_pct/vol_ratio_5d)、评分权重和恒为 1.0, 并以 11 个 fixture 测试锁死 STRAT-03: API 去重 + 无第三条注册轨道。
+- Pure, server-derived per-stock factor-hit aggregation (`build_factor_hits`/`attach_factor_hits`) wired additively into the screener `run_all` response so every result row reports which strategies hit it — the seam Phase 18 cross-resonance consumes
+- Single-as_of pool-hub projection service (`build_pool_hub`) reading `screener_results/` persistence via `strategy_cache.read_cache`, projecting per-strategy counts + 5-column drill rows with server-computed 交叉共振 and a concept filter, exposed through read-only `GET /api/pool/hub`, with a POOL-03 zero-execution-authority guard suite.
+- 股池 (Pool Hub) single-as_of read-only workspace — strategy cards with 当日池数, exact five-column drill-down table, client-side 概念 filter, and 交叉共振 highlight — with an automated POOL-03 zero-execution guard and committed visual-regression evidence.
+- Guest sessions now read GET /api/pool/hub as `mode: "guest"` with code/name/symbol masked to `
+- PoolHubPage is now mode-aware from the server `mode` field: guest sessions render the exact GuestModeBanner, server-masked `
+
+---
+
 ## v1.0 MVP (Shipped: 2026-07-27)
 
 **Phases completed:** 5 phases, 106 plans, 186 tasks
