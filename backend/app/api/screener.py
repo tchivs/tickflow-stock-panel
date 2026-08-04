@@ -17,6 +17,11 @@ from pydantic import BaseModel
 from app.services.screener import PRESET_STRATEGIES, ScreenerService, strategy_supports_asset
 from app.services import strategy_cache
 from app.strategy import config as strategy_config
+from app.strategy.factor_hits import (
+    HIT_FACTORS_COLUMN,
+    attach_factor_hits,
+    build_factor_hits,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -389,6 +394,22 @@ def market_snapshot(request: Request):
     return {"as_of": str(as_of), "rows": rows}
 
 
+def _strategy_display_name(engine, sid: str) -> str:
+    """把策略 id 解析为显示名 (关联因子 hit_factors 用, T-17-06)。
+
+    优先级: PRESET_STRATEGIES 的内置名 -> 引擎策略 META["name"] -> 策略 id 兜底。
+    engine.get 包 try/except: 未知 id 退化为 sid, 绝不 500 整个 run_all。
+    """
+    if sid in PRESET_STRATEGIES:
+        return PRESET_STRATEGIES[sid].get("name") or sid
+    if engine is not None:
+        try:
+            return engine.get(sid).meta.get("name") or sid
+        except Exception:  # noqa: BLE001 — 未知 id 防御性降级
+            return sid
+    return sid
+
+
 @router.post("/run_all")
 def run_all(request: Request, body: Optional[dict] = None):
     """批量运行指定策略,只返回每个策略的命中数。
@@ -482,6 +503,15 @@ def run_all(request: Request, body: Optional[dict] = None):
             results[sid] = {"total": r.total, "as_of": str(as_of), "rows": safe_rows}
         except (ValueError, Exception):
             continue
+
+    # 关联因子 (STRAT-02): 聚合每个策略的命中行, 给结果行附加 hit_factors。
+    # 纯服务端聚合 (T-17-05), 追加字段不改变 total/as_of (T-17-07)。
+    hits = build_factor_hits(
+        results,
+        name_for=lambda sid: _strategy_display_name(engine, sid),
+    )
+    for sid, r in results.items():
+        r["rows"] = attach_factor_hits(r.get("rows", []), hits)
 
     elapsed = (time.perf_counter() - t_total) * 1000
     logger.info("run_all: total took %.1fms (%d strategies)", elapsed, len(all_ids))
