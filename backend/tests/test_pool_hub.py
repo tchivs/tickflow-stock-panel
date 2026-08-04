@@ -3,11 +3,14 @@
 - Task 1: ``build_pool_hub`` 投影 — 单一 as_of 计数 + 五列行 + 交叉共振 +
   概念筛选 (hermetic fixture, 不依赖真实数据)。
 - Task 2: ``GET /api/pool/hub`` 端点回归。
-- Task 3: POOL-03 零执行权限 AST 守卫 (T-18-01)。
+- Task 3: POOL-03 零执行权限 AST 守卫 (T-18-01) — 任何把 broker/order/execution
+  模块引入 pool 特性、新增 mutating 路由、或给投影加写路径的改动都会让本套件失败。
 """
 from __future__ import annotations
 
+import ast
 import json
+import re
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -436,3 +439,88 @@ def test_get_pool_hub_json_serializable_roundtrip(tmp_path):
     # json.dumps 不抛; 往返后结构一致
     reloaded = json.loads(json.dumps(payload))
     assert reloaded == payload
+
+
+# ================================================================
+# Task 3 — POOL-03 零执行权限守卫 (T-18-01)
+# ================================================================
+
+# 执行族 token: 出现在 pool 特性 import / 路由 / 响应键中即失败
+_EXECUTION_TOKEN = re.compile(
+    r"broker|order|execution|trade|portfolio|watchlist|position|account|transaction|下单|委托",
+    re.IGNORECASE,
+)
+
+_WRITE_PATTERNS = (
+    re.compile(r"open\s*\(\s*[^,)]*,\s*[\"']w"),
+    re.compile(r"open\s*\(\s*[^,)]*,\s*[\"']wb"),
+    re.compile(r"open\s*\(\s*[^,)]*,\s*[\"']a"),
+    re.compile(r"write_parquet"),
+    re.compile(r"os\.replace"),
+    re.compile(r"unlink\s*\("),
+    re.compile(r"mkdir\s*\("),
+)
+
+_ROUTE_METHODS = ("get", "post", "put", "delete", "patch")
+
+
+def _feature_sources() -> tuple[str, str]:
+    backend = Path(__file__).resolve().parents[1]
+    service_src = (backend / "app" / "services" / "pool_hub.py").read_text(encoding="utf-8")
+    api_src = (backend / "app" / "api" / "pool.py").read_text(encoding="utf-8")
+    return service_src, api_src
+
+
+def _imported_module_names(source: str) -> list[str]:
+    tree = ast.parse(source)
+    names: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names.extend(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            names.append(node.module)
+    return names
+
+
+def test_pool_hub_no_execution_imports():
+    """pool_hub.py / pool.py 不得 import 任何执行族模块 (T-18-01)。"""
+    service_src, api_src = _feature_sources()
+    for src in (service_src, api_src):
+        for module in _imported_module_names(src):
+            assert not _EXECUTION_TOKEN.search(module), (
+                f"pool 特性引入了执行族模块: {module}"
+            )
+
+
+def test_pool_api_is_get_only():
+    """pool.py 只允许 GET 路由 (T-18-01)。"""
+    _service_src, api_src = _feature_sources()
+    methods = re.findall(r"@router\.(get|post|put|delete|patch)\b", api_src)
+    assert methods == ["get"], f"pool API 出现了非 GET 路由: {methods}"
+
+
+def test_build_pool_hub_has_no_write_path():
+    """build_pool_hub 是纯读者: 无写模式 open / write_parquet / os.replace / unlink / mkdir。"""
+    service_src, _api_src = _feature_sources()
+    for pattern in _WRITE_PATTERNS:
+        assert not pattern.search(service_src), f"pool_hub.py 出现写路径: {pattern.pattern}"
+
+
+def _all_keys(obj):
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            yield k
+            yield from _all_keys(v)
+    elif isinstance(obj, list):
+        for item in obj:
+            yield from _all_keys(item)
+
+
+def test_hub_response_has_no_execution_vocabulary(tmp_path):
+    """Hub 响应键不含 orders/execution/broker/deals 等执行词汇。"""
+    _write_strategy_cache(tmp_path)
+    _write_concept_fixture(tmp_path)
+    hub = build_pool_hub(tmp_path)
+    keys = list(_all_keys(hub))
+    for banned in ("orders", "execution", "broker", "deals"):
+        assert banned not in keys, f"Hub 响应含执行词汇键: {banned}"
