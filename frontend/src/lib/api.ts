@@ -683,6 +683,8 @@ export interface MarketSnapshotRow {
 export interface PoolHubRow {
   symbol: string
   code: string
+  /** 股票名称 — VIP 明文; 游客会话由服务端脱敏为固定掩码串, 前端原样渲染 (GUEST-01) */
+  name: string
   open_gap: number | null
   change_pct: number | null
   concept_board: string[]
@@ -700,6 +702,8 @@ export interface PoolHubStrategy {
 export interface PoolHubResponse {
   as_of: string | null
   updated_at: number | null
+  /** 服务端声明的展示模式 (GUEST-01) — 前端只消费, 绝不从行值推导 */
+  mode: 'guest' | 'vip'
   strategies: PoolHubStrategy[]
   resonance_count: number
 }

@@ -9,6 +9,7 @@ import { EmptyState } from '@/components/EmptyState'
 import { StrategyCardGrid } from '@/components/pool-hub/StrategyCardGrid'
 import { ConceptFilter } from '@/components/pool-hub/ConceptFilter'
 import { StockListTable } from '@/components/pool-hub/StockListTable'
+import { GuestModeBanner } from '@/components/pool-hub/GuestModeBanner'
 
 const RESEARCH_FOOTER = '本页面仅用于研究参考，不提供任何交易执行功能。'
 
@@ -33,6 +34,9 @@ export function PoolHubPage() {
 
   const data = hubQuery.data
   const asOf = data?.as_of ?? null
+  // 服务端声明的展示模式 (GUEST-01): 只消费 server mode, 绝不从行值推导;
+  // 缺失/未知 mode 安全回退 vip — 页面默认不明文掩码。
+  const mode = data?.mode === 'guest' ? 'guest' : 'vip'
   // 默认选中第一个策略, 进入页面即可看到明细表
   const activeStrategy =
     data?.strategies.find(s => s.id === activeId) ?? data?.strategies[0] ?? null
@@ -115,6 +119,9 @@ export function PoolHubPage() {
           </div>
         )}
 
+        {/* 游客模式横幅 — 会话策略状态: 加载/错误时 mode 未知, 不渲染 (无闪烁) */}
+        {data && mode === 'guest' && <GuestModeBanner />}
+
         {/* 当日无股池结果 */}
         {data && data.strategies.length === 0 && (
           <EmptyState
@@ -150,6 +157,7 @@ export function PoolHubPage() {
               <section aria-label={`${activeStrategy.name} · 股池明细`} className="space-y-3">
                 <h2 className="text-sm font-semibold text-foreground">{activeStrategy.name} · 股池明细</h2>
                 <StockListTable
+                  mode={mode}
                   strategy={activeStrategy}
                   rows={filteredRows}
                   filterText={filterText}

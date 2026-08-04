@@ -10,11 +10,14 @@ const STRATEGY_TAG_CLS = 'inline-block px-1.5 py-px rounded text-[10px] font-med
 const CONCEPT_CHIP_CLS = 'inline-block max-w-40 truncate px-1.5 py-px rounded text-[10px] font-medium leading-tight bg-elevated text-secondary border border-border'
 const RESONANCE_BADGE_CLS = 'inline-block px-1.5 py-px rounded text-[10px] font-semibold leading-tight bg-accent/10 text-accent border border-accent/30'
 
-const COLUMNS = ['代码', '开盘涨幅', '涨跌幅', '概念板块', '关联因子'] as const
+const GUEST_COLUMNS = ['代码', '名称', '涨跌幅', '概念板块', '关联因子'] as const
+const VIP_COLUMNS = ['代码', '名称', '开盘涨幅', '涨跌幅', '概念板块', '关联因子'] as const
 
 interface StockListTableProps {
   /** 当前选中的策略 (计数与行同源) */
   strategy: PoolHubStrategy | null
+  /** 服务端声明的展示模式 (GUEST-01): guest 隐藏 开盘涨幅, 代码/名称 渲染脱敏值原样 */
+  mode: 'guest' | 'vip'
   /** 客户端概念投影后的行 */
   rows: PoolHubRow[]
   /** 筛选词 (非空 = 筛选激活) */
@@ -80,6 +83,7 @@ function PctCell({ value }: { value: number | null }) {
  */
 export function StockListTable({
   strategy,
+  mode,
   rows,
   filterText,
   total,
@@ -91,6 +95,7 @@ export function StockListTable({
 }: StockListTableProps) {
   if (!strategy) return null
   const filterActive = filterText.trim().length > 0
+  const columns = mode === 'guest' ? GUEST_COLUMNS : VIP_COLUMNS
 
   return (
     <div className="space-y-2">
@@ -150,36 +155,55 @@ export function StockListTable({
           <table className="w-full text-sm" style={{ minWidth: 720 }}>
             <thead className="bg-elevated">
               <tr className="text-left text-secondary">
-                {COLUMNS.map(c => (
+                {columns.map(c => (
                   <th key={c} scope="col" className="px-3 py-2.5 font-medium whitespace-nowrap">{c}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {rows.map(row => {
+              {rows.map((row, index) => {
                 const board = boardTag(row.symbol)
                 const cross = row.cross_resonance
+                const isGuest = mode === 'guest'
+                // 游客行 key = 策略作用域序号 — 绝不用脱敏 symbol (T-19-10 duplicate-key 防御)
+                const rowKey = isGuest ? `${strategy.id}-${index}` : row.symbol
                 return (
                   <tr
-                    key={row.symbol}
+                    key={rowKey}
                     className={cn(
                       'border-t border-border hover:bg-elevated/50 transition-colors duration-150 ease-smooth',
                       cross && 'bg-accent/[0.06]',
                     )}
                   >
                     <td className={cn('px-4 py-2 whitespace-nowrap', cross && 'border-l-2 border-accent/60')}>
-                      <div className="flex items-center gap-2">
-                        {board ? (
-                          <span className={`shrink-0 inline-flex items-center justify-center w-[18px] h-[18px] rounded text-[9px] font-bold leading-none border ${board.color}`}>
-                            {board.label}
-                          </span>
-                        ) : (
-                          <span className="shrink-0 w-[18px]" />
-                        )}
-                        <span className="num tabular-nums text-secondary">{row.code}</span>
-                      </div>
+                      {isGuest ? (
+                        /* 游客 代码: 服务端脱敏值原样渲染 (mono muted), 无板块标识 */
+                        <span className="num tabular-nums text-muted">{row.code}</span>
+                      ) : (
+                        <div className="flex items-center gap-2">
+                          {board ? (
+                            <span className={`shrink-0 inline-flex items-center justify-center w-[18px] h-[18px] rounded text-[9px] font-bold leading-none border ${board.color}`}>
+                              {board.label}
+                            </span>
+                          ) : (
+                            <span className="shrink-0 w-[18px]" />
+                          )}
+                          <span className="num tabular-nums text-secondary">{row.code}</span>
+                        </div>
+                      )}
                     </td>
-                    <td className="px-3 py-2"><PctCell value={row.open_gap} /></td>
+                    <td className="px-3 py-2">
+                      {isGuest ? (
+                        /* 游客 名称: 服务端脱敏值原样渲染 (mono muted), 永不空/— */
+                        <span className="num tabular-nums text-muted">{row.name}</span>
+                      ) : row.name ? (
+                        <span className="block max-w-40 truncate text-foreground">{row.name}</span>
+                      ) : (
+                        <span className="text-muted">—</span>
+                      )}
+                    </td>
+                    {/* 开盘涨幅 — 仅 VIP: 游客整列不渲染 (UI-SPEC guest contract) */}
+                    {!isGuest && <td className="px-3 py-2"><PctCell value={row.open_gap} /></td>}
                     <td className="px-3 py-2"><PctCell value={row.change_pct} /></td>
                     <td className="px-3 py-2"><ConceptChips concepts={row.concept_board} /></td>
                     <td className="px-3 py-2">
