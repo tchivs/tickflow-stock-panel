@@ -59,6 +59,27 @@ def can_sync_minute(capset: CapabilitySet) -> bool:
     )
 
 
+def _build_chain(dataset: str, selected: str | None) -> list[str]:
+    """Build the provider chain for a dataset.
+
+    Uses the authoritative builtin chain (``chain_for`` — includes ifzq/sina
+    fallbacks) and puts the user-selected source first, deduping.  When the
+    selected source is tickflow (or unset) the builtin chain is returned
+    unchanged, so free sources are always attempted before the paid one.
+
+    Returns a non-empty ordered provider-name list; the last member is the
+    final fallback (tickflow).
+    """
+    from app.data_providers import chain as provider_chain
+
+    base = provider_chain.chain_for(dataset)
+    if not selected or selected == "tickflow":
+        return base
+    out = [selected]
+    out += [name for name in base if name != selected]
+    return out
+
+
 def _atomic_write_parquet(df: pl.DataFrame, out) -> None:
     """先写临时文件再原子替换, 避免进程中断留下损坏的 parquet。
 
@@ -215,18 +236,7 @@ def sync_and_persist_daily_batch(
 
     from app.data_providers import chain as provider_chain
 
-    provider_name = preferences.get_daily_data_provider()
-    chain_names: list[str] = []
-    if provider_name != "tickflow":
-        # User-selected custom source participates first; free_stockdb and xyz
-        # are builtin chain members always attempted before TickFlow.
-        from app.data_providers import custom as custom_sources
-
-        if custom_sources.provider_has_dataset(provider_name, "daily"):
-            chain_names.append(provider_name)
-        chain_names += ["free_stockdb", "xyz"]
-    else:
-        chain_names = ["free_stockdb", "xyz", "tickflow"]
+    chain_names = _build_chain("daily", preferences.get_daily_data_provider())
 
     end_time = end_date or datetime.now()
     days = count or 365
@@ -613,14 +623,7 @@ def sync_minute_batch(
     # provider 优先。缺口/失败自动逐级回退。
     from app.data_providers import chain as provider_chain
 
-    provider_name = preferences.get_minute_data_provider()
-    chain_names: list[str] = []
-    if provider_name != "tickflow":
-        from app.data_providers import custom as custom_sources
-
-        if custom_sources.provider_has_dataset(provider_name, "minute"):
-            chain_names.append(provider_name)
-    chain_names += ["free_stockdb", "xyz"]
+    chain_names = _build_chain("minute", preferences.get_minute_data_provider())
 
     def _fetch_minute(provider) -> pl.DataFrame:
         if not hasattr(provider, "get_minute"):

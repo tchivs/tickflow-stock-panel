@@ -160,14 +160,18 @@ def health_check(name: str) -> str:
         try:
             provider = _get_provider(name)
             if name == "tencent":
+                # Tencent realtime returns quote_service-shaped records (list),
+                # not a Polars frame — check list emptiness.
                 probe = provider.get_realtime(symbols=["000001.SZ"])
+                return "ok" if probe else "warn"
             elif name == "sina":
                 probe = provider.get_daily(["000001.SZ"])
+                return "ok" if probe is not None and not probe.is_empty() else "warn"
             else:
                 probe = provider.get_daily(["000001.SZ"],
                                            start_time=_dt.datetime(2026, 7, 30),
                                            end_time=_dt.datetime(2026, 7, 31))
-            return "ok" if probe is not None and not probe.is_empty() else "warn"
+                return "ok" if probe is not None and not probe.is_empty() else "warn"
         except Exception as e:
             logger.warning("health[%s]: %s", name, e)
             return "error"

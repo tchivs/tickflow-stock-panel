@@ -101,7 +101,11 @@ def get_minute_sync_days() -> int:
 
 # ===== 数据源选择 (默认 TickFlow；第一阶段仅日K切换入口) =====
 
-_ALLOWED_DATA_PROVIDERS = {"tickflow", "tencent", "ifzq", "sina"}
+# 可切换的数据源白名单: tickflow + 内置链成员 (chain._BUILTIN_CHAIN) + 腾讯实时。
+# 注意: 必须与前端 /settings/data-sources 的 builtin 列表保持一致 —
+# 前端 builtin 里可切换的 free_stockdb / xyz 若不在白名单, 保存后会被过滤回
+# tickflow, 造成「切换成功但实际永远走 tickflow」的假象。
+_ALLOWED_DATA_PROVIDERS = {"tickflow", "tencent", "ifzq", "sina", "free_stockdb", "xyz"}
 
 
 def _allowed_data_providers() -> set[str]:
