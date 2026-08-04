@@ -44,6 +44,7 @@ import { ExtendHistoryPanel } from '@/components/data/ExtendHistoryPanel'
 import { RepairDailyPanel } from '@/components/data/RepairDailyPanel'
 import { EnrichedRebuildPanel } from '@/components/data/EnrichedRebuildPanel'
 import { MinuteSyncConfig } from '@/components/data/MinuteSyncConfig'
+import { AuctionProbeCard } from '@/components/data/AuctionProbeCard'
 import { PipelineScopeConfig } from '@/components/data/PipelineScopeConfig'
 import { PageSettingsModal, getCardVisibility, getCardOrder, type CardKey } from '@/components/data/PageSettingsModal'
 import { QuoteConfigCard } from '@/components/data/QuoteConfigCard'
@@ -891,6 +892,14 @@ export function Data() {
                 暂无同步记录 — 点右上角"立即同步"开始。
               </div>
             )}
+          </div>
+        </div>
+
+        {/* 竞价数据 */}
+        <div>
+          <SectionTitle icon={WandSparkles}>竞价数据</SectionTitle>
+          <div className="mt-3 max-w-2xl">
+            <AuctionProbeCard />
           </div>
         </div>
 

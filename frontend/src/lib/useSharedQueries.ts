@@ -4,7 +4,7 @@
  * 实时数据走 SSE invalidation，无需前端轮询。
  * 只有管线进度等非 SSE 数据才用 refetchInterval。
  */
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from './api'
 import { QK } from './queryKeys'
 
@@ -78,5 +78,26 @@ export function useDataStatus(opts?: {
     queryFn: api.dataStatus,
     staleTime: opts?.staleTime,
     refetchInterval: opts?.refetchInterval,
+  })
+}
+
+/** 竞价数据探测判定 — 30s staleTime, 与服务端 30s TTL 缓存对齐。 */
+export function useAuctionProbe() {
+  return useQuery({
+    queryKey: QK.auctionProbe,
+    queryFn: api.auctionProbe,
+    staleTime: 30_000,
+  })
+}
+
+/** 重新探测竞价数据 — 绕过缓存, 成功后立即用新判定刷新面板。 */
+export function useRedetectAuctionProbe() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: api.redetectAuctionProbe,
+    onSuccess: (data) => {
+      qc.setQueryData(QK.auctionProbe, data)
+      qc.invalidateQueries({ queryKey: QK.auctionProbe })
+    },
   })
 }

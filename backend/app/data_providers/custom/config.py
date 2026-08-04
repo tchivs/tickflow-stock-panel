@@ -7,7 +7,7 @@ from typing import Any, Literal
 
 import yaml
 
-DatasetName = Literal["daily", "adj_factor", "realtime", "minute", "financial"]
+DatasetName = Literal["daily", "adj_factor", "realtime", "minute", "financial", "auction"]
 
 
 @dataclass(frozen=True)
@@ -80,7 +80,7 @@ def load_config(path: Path) -> CustomSourceConfig:
     datasets = {
         name: _dataset_from_dict(cfg)
         for name, cfg in (raw.get("datasets") or {}).items()
-        if name in {"daily", "adj_factor", "realtime", "minute", "financial"} and isinstance(cfg, dict)
+        if name in {"daily", "adj_factor", "realtime", "minute", "financial", "auction"} and isinstance(cfg, dict)
     }
     name = str(raw.get("name", path.stem) or path.stem).lower()
     return CustomSourceConfig(

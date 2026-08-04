@@ -23,7 +23,7 @@ class ProviderCapabilities:
     minute: bool = False
     realtime: bool = False
     financial: bool = False
-
+    auction: bool = False
 
 class MarketDataProvider(Protocol):
     name: str

@@ -63,6 +63,16 @@ export interface CapabilitiesResponse {
   capabilities: Record<string, CapabilityLimits>
 }
 
+// ===== 竞价数据探测 (DATA-03) =====
+export interface AuctionProbeVerdict {
+  status: 'not_configured' | 'available' | 'fail_closed' | 'error'
+  source: string | null
+  probed_at: string | null
+  window: string
+  fallback: string
+  detail: string
+}
+
 // ===== Financials =====
 export interface FinancialStatus {
   available: boolean
@@ -2125,6 +2135,10 @@ export const api = {
     ),
 
   dataStatus: () => request<DataStatus>('/api/data/status'),
+
+  auctionProbe: () => request<AuctionProbeVerdict>('/api/data/auction-probe'),
+  redetectAuctionProbe: () =>
+    request<AuctionProbeVerdict>('/api/data/auction-probe/redetect', { method: 'POST' }),
   dataClear: () => request<{ deleted_files: number }>('/api/data/clear', { method: 'POST' }),
   refreshCache: () => request<{ ok: boolean }>('/api/data/refresh-cache', { method: 'POST' }),
   enrichedSchema: (table: string) => request<EnrichedField[]>(`/api/data/schema/${table}`),

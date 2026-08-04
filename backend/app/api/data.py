@@ -52,6 +52,11 @@ _table_cache_lock = threading.Lock()
 _last_finished_cache: dict[str, str | None] | None = None
 _last_finished_lock = threading.Lock()
 
+# 竞价数据探测缓存: 单值判定, 30s TTL, 避免重复面板加载反复探测已配置的源。
+_auction_probe_cache: dict | None = None
+_auction_probe_cache_ts: float = 0.0
+_AUCTION_PROBE_TTL = 30.0
+
 
 def invalidate_data_cache(table: str | None = None) -> None:
     """数据写入/清除后调用。
@@ -593,13 +598,13 @@ def status(request: Request) -> dict:
     return {
         "daily":       _get_table_stats("daily",       lambda: _safe_aggregate_daily(repo)),
         "enriched":    _get_table_stats("enriched",    lambda: _safe_aggregate_enriched(repo)),
-    "index_daily":       _get_table_stats("index_daily",       lambda: _safe_aggregate_index_daily(repo)),
-    "index_enriched":    _get_table_stats("index_enriched",    lambda: _safe_aggregate_index_enriched(repo)),
-    "index_instruments": _get_table_stats("index_instruments", lambda: _safe_aggregate_index_instruments(repo)),
-    "etf_daily":         _get_table_stats("etf_daily",         lambda: _safe_aggregate_etf_daily(repo)),
-    "etf_enriched":      _get_table_stats("etf_enriched",      lambda: _safe_aggregate_etf_enriched(repo)),
-    "etf_instruments":   _get_table_stats("etf_instruments",   lambda: _safe_aggregate_etf_instruments(repo)),
-    "minute":      _get_table_stats("minute",      lambda: _safe_aggregate_minute(repo)),
+        "index_daily":       _get_table_stats("index_daily",       lambda: _safe_aggregate_index_daily(repo)),
+        "index_enriched":    _get_table_stats("index_enriched",    lambda: _safe_aggregate_index_enriched(repo)),
+        "index_instruments": _get_table_stats("index_instruments", lambda: _safe_aggregate_index_instruments(repo)),
+        "etf_daily":         _get_table_stats("etf_daily",         lambda: _safe_aggregate_etf_daily(repo)),
+        "etf_enriched":      _get_table_stats("etf_enriched",      lambda: _safe_aggregate_etf_enriched(repo)),
+        "etf_instruments":   _get_table_stats("etf_instruments",   lambda: _safe_aggregate_etf_instruments(repo)),
+        "minute":            _get_table_stats("minute",            lambda: _safe_aggregate_minute(repo)),
         "adj_factor":  _get_table_stats("adj_factor",  lambda: _safe_aggregate_adj_factor(repo)),
         "instruments": _get_table_stats("instruments", lambda: _safe_aggregate_instruments(repo)),
         "financials":  _get_table_stats("financials",  lambda: _safe_aggregate_financials(repo)),
@@ -616,6 +621,33 @@ def status(request: Request) -> dict:
         # 指标缓存就绪标志 (启动时 enriched 异步预热, 完成前为 false)
         "indicators_ready": getattr(request.app.state, "indicators_ready", True),
     }
+
+
+@router.get("/auction-probe")
+def auction_probe() -> dict:
+    """竞价数据探测 — 服务端权威判定, 30s TTL 缓存。"""
+    global _auction_probe_cache, _auction_probe_cache_ts
+    now = time.time()
+    if _auction_probe_cache is not None and (now - _auction_probe_cache_ts) < _AUCTION_PROBE_TTL:
+        return _auction_probe_cache
+    from app.services.auction_probe import resolve_auction_probe
+
+    verdict = resolve_auction_probe().to_dict()
+    _auction_probe_cache = verdict
+    _auction_probe_cache_ts = now
+    return verdict
+
+
+@router.post("/auction-probe/redetect")
+def redetect_auction_probe() -> dict:
+    """重新探测竞价数据 — 绕过缓存返回全新判定 (支撑「重新探测」动作)。"""
+    global _auction_probe_cache, _auction_probe_cache_ts
+    from app.services.auction_probe import resolve_auction_probe
+
+    verdict = resolve_auction_probe().to_dict()
+    _auction_probe_cache = verdict
+    _auction_probe_cache_ts = time.time()
+    return verdict
 
 
 @router.post("/clear")

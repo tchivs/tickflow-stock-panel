@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, time
 from pathlib import Path
 from typing import Any
 
@@ -125,6 +125,39 @@ class GenericHTTPProvider:
             if on_chunk_done:
                 on_chunk_done(i + 1, len(chunks))
         return pl.concat(frames, how="diagonal_relaxed") if frames else pl.DataFrame()
+
+    def get_auction(self, symbols: list[str], trade_date: datetime) -> pl.DataFrame:
+        """拉取集合竞价匹配数据 (09:15–09:25 窗口)。
+
+        返回 canonical 列: symbol, datetime, auction_volume, auction_amount。
+        只保留时间落在 09:15–09:25 窗口内的行 —— 09:30 起的连续竞价 bar 永不会混入。
+        """
+        cfg = self._dataset("auction")
+        start_time = datetime.combine(trade_date, time(9, 15))
+        end_time = datetime.combine(trade_date, time(9, 26))
+        frames: list[pl.DataFrame] = []
+        chunks = chunked(symbols, cfg.batch)
+        for i, chunk in enumerate(chunks):
+            sleep_between_batches(i, cfg.rpm)
+            rows = self._request_rows(cfg, symbols=chunk, start_time=start_time, end_time=end_time)
+            df = self._mapped_frame(cfg, rows)
+            df = self._normalize_auction(df)
+            if not df.is_empty():
+                frames.append(df)
+        return pl.concat(frames, how="diagonal_relaxed") if frames else pl.DataFrame()
+
+    @staticmethod
+    def _normalize_auction(df: pl.DataFrame) -> pl.DataFrame:
+        """把映射后的 df 裁剪为 auction canonical 列, 只保留 09:15–09:25 窗口内行。"""
+        if df.is_empty():
+            return df
+        if "datetime" in df.columns:
+            if df.schema["datetime"] != pl.Datetime("us"):
+                df = df.with_columns(pl.col("datetime").cast(pl.Datetime("us"), strict=False))
+            _mins = pl.col("datetime").dt.hour().cast(pl.Int32) * 60 + pl.col("datetime").dt.minute().cast(pl.Int32)
+            df = df.filter((_mins >= 555) & (_mins <= 565))
+        keep = [c for c in ("symbol", "datetime", "auction_volume", "auction_amount") if c in df.columns]
+        return df.select(keep) if keep else pl.DataFrame()
 
     def get_financials(
         self,
