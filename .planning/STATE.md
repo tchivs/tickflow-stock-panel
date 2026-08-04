@@ -5,16 +5,16 @@ milestone_name: 竞价选股引擎 — planning
 current_phase: 17
 current_phase_name: 竞价策略族 (Auction Strategy Family)
 status: planning
-stopped_at: Completed 16-02-PLAN.md
-last_updated: "2026-08-04T13:11:41.402Z"
+stopped_at: Completed 17-02-PLAN.md
+last_updated: "2026-08-04T13:30:15.961Z"
 last_activity: 2026-08-04
 last_activity_desc: Phase 16 complete, transitioned to Phase 17
 progress:
   total_phases: 4
-  completed_phases: 1
-  total_plans: 2
-  completed_plans: 2
-  percent: 25
+  completed_phases: 2
+  total_plans: 4
+  completed_plans: 4
+  percent: 50
 ---
 
 # Project State
@@ -72,8 +72,8 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-08-04T12:48:35.471Z
-Stopped at: Completed 16-02-PLAN.md
+Last session: 2026-08-04T13:30:15.943Z
+Stopped at: Completed 17-02-PLAN.md
 Resume file: None
 
 ## Operator Next Steps
@@ -90,9 +90,12 @@ Resume file: None
 ---
 *Last updated: 2026-08-04 — Phase 16 complete (DATA-01..03)*
 
+- [Phase ?]: Phase 17 P2: hit_factors values sorted by Unicode codepoint (deterministic; PLAN sample order corrected: 盘前强势量化 before 竞价多头)
+
 ## Performance Metrics
 
 | Plan | Duration | Tasks | Files |
 |------|----------|-------|-------|
 | Phase 16 P1 | 25 | 3 tasks | 5 files |
 | Phase 16 P2 | 20 | 3 tasks | 14 files |
+| Phase 17 P2 | 32 | 2 tasks | 3 files |
