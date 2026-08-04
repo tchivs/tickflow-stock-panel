@@ -59,25 +59,15 @@ def can_sync_minute(capset: CapabilitySet) -> bool:
     )
 
 
-def _build_chain(dataset: str, selected: str | None) -> list[str]:
-    """Build the provider chain for a dataset.
+def _build_chain(dataset: str, _selected: str | None = None) -> list[str]:
+    """Return the ordered provider chain for a dataset.
 
-    Uses the authoritative builtin chain (``chain_for`` — includes ifzq/sina
-    fallbacks) and puts the user-selected source first, deduping.  When the
-    selected source is tickflow (or unset) the builtin chain is returned
-    unchanged, so free sources are always attempted before the paid one.
-
-    Returns a non-empty ordered provider-name list; the last member is the
-    final fallback (tickflow).
+    The authoritative source is ``preferences.get_provider_chain(dataset)``
+    (per-dataset enable/disable + order).  The ``_selected`` positional is
+    kept for backward compatibility and ignored — callers that previously
+    passed the primary provider now just read the user-configured chain.
     """
-    from app.data_providers import chain as provider_chain
-
-    base = provider_chain.chain_for(dataset)
-    if not selected or selected == "tickflow":
-        return base
-    out = [selected]
-    out += [name for name in base if name != selected]
-    return out
+    return preferences.get_provider_chain(dataset)
 
 
 def _atomic_write_parquet(df: pl.DataFrame, out) -> None:
@@ -236,7 +226,7 @@ def sync_and_persist_daily_batch(
 
     from app.data_providers import chain as provider_chain
 
-    chain_names = _build_chain("daily", preferences.get_daily_data_provider())
+    chain_names = _build_chain("daily")
 
     end_time = end_date or datetime.now()
     days = count or 365
@@ -623,7 +613,7 @@ def sync_minute_batch(
     # provider 优先。缺口/失败自动逐级回退。
     from app.data_providers import chain as provider_chain
 
-    chain_names = _build_chain("minute", preferences.get_minute_data_provider())
+    chain_names = _build_chain("minute")
 
     def _fetch_minute(provider) -> pl.DataFrame:
         if not hasattr(provider, "get_minute"):

@@ -325,6 +325,8 @@ class DataProvidersIn(BaseModel):
     minute_data_provider: str | None = None
     realtime_data_provider: str | None = None
     financial_data_provider: str | None = None
+    # per-dataset 有序启用链: {"daily": ["xyz", "free_stockdb", "tickflow"], ...}
+    provider_chains: dict[str, list[str]] | None = None
 
 
 class CustomSourceTestIn(BaseModel):
@@ -380,6 +382,7 @@ def get_preferences() -> dict:
         "minute_data_provider": preferences.get_minute_data_provider(),
         "realtime_data_provider": preferences.get_realtime_data_provider(),
         "financial_data_provider": preferences.get_financial_provider(),
+        "provider_chains": preferences.get_all_provider_chains(),
         "realtime_watchlist_symbols": preferences.get_realtime_watchlist_symbols(),
         **preferences.get_realtime_quote_scope(),
         "pipeline_pull_a_share": preferences.get_pipeline_pull_a_share(),
@@ -433,6 +436,18 @@ def list_data_sources() -> dict:
             "datasets": ["daily", "minute", "boards"],
             "health": provider_chain.health_check("free_stockdb"),
             "base_url": settings.free_stockdb_url,
+        },
+        {
+            "name": "ifzq",
+            "display_name": "ifzq 免费K线",
+            "datasets": ["daily", "minute"],
+            "health": provider_chain.health_check("ifzq"),
+        },
+        {
+            "name": "sina",
+            "display_name": "新浪 分钟K (免费)",
+            "datasets": ["minute"],
+            "health": provider_chain.health_check("sina"),
         },
         {
             "name": "xyz",
@@ -494,23 +509,16 @@ def install_plugin(name: str) -> dict:
 def uninstall_plugin(name: str) -> dict:
     """卸载指定插件的依赖 (删除 node_modules / pip uninstall), 完成后重新扫描。
 
-    如果该插件当前正被使用, 自动回退到 tickflow。
+    如果该插件在某数据集启用链中, 自动从链中移除 (首选顺延)。
     """
     from app.data_providers import custom as custom_sources
     from app.services import preferences
     if not custom_sources.is_builtin(name):
         raise HTTPException(status_code=404, detail=f"插件 '{name}' 不存在")
     ok, message = custom_sources.uninstall_plugin(name)
-    # 卸载后若该插件正被使用, 回退 tickflow
-    for getter, key, default in [
-        (preferences.get_daily_data_provider, "daily_data_provider", "tickflow"),
-        (preferences.get_minute_data_provider, "minute_data_provider", "tickflow"),
-        (preferences.get_realtime_data_provider, "realtime_data_provider", "tickflow"),
-        (preferences.get_financial_provider, "financial_data_provider", "tickflow"),
-        (preferences.get_adj_factor_provider, "adj_factor_provider", "same_as_daily"),
-    ]:
-        if getter() == name:
-            preferences.save({key: default})
+    # 卸载后若该插件在任一数据集链中, 从链中移除 (首选自然顺延)。
+    for dataset in preferences._LEGACY_PROVIDER_KEYS:
+        preferences.remove_provider(dataset, name)
     custom_sources.load_all()
     result = list_data_sources()
     result["uninstall_ok"] = ok
@@ -584,12 +592,24 @@ def test_data_source(req: CustomSourceTestIn) -> dict:
 
 @router.put("/preferences/data-providers")
 def update_data_providers(req: DataProvidersIn) -> dict:
-    """保存数据源选择。"""
+    """保存数据源选择。
+
+    支持两种输入:
+    - provider_chains: per-dataset 有序启用链 (完整替换该数据集链)。
+    - 旧单值字段 (daily_data_provider 等): 兼容旧前端, 写为首选源。
+    新模型优先; 两者同时给时链模型生效。
+    """
     from app.services import preferences
-    updates = req.model_dump(exclude_none=True)
-    if updates:
-        preferences.save(updates)
+    body = req.model_dump(exclude_none=True)
+    chains = body.pop("provider_chains", None) or {}
+    if chains:
+        for dataset, names in chains.items():
+            if dataset in preferences._LEGACY_PROVIDER_KEYS:
+                preferences.set_provider_chain(dataset, names)
+    if body:
+        preferences.save(body)
     return {
+        **preferences.get_all_provider_chains(),
         "daily_data_provider": preferences.get_daily_data_provider(),
         "adj_factor_provider": preferences.get_adj_factor_provider(),
         "minute_data_provider": preferences.get_minute_data_provider(),

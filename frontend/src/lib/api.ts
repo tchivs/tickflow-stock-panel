@@ -1334,6 +1334,8 @@ export interface Preferences {
   minute_data_provider?: string
   realtime_data_provider?: string
   financial_data_provider?: string
+  /** per-dataset 有序启用链 (首选在前) */
+  provider_chains?: Partial<Record<'daily' | 'adj_factor' | 'minute' | 'realtime' | 'financial', string[]>>
   realtime_watchlist_symbols?: string[]
   realtime_pull_stock?: boolean
   realtime_pull_etf?: boolean
@@ -1625,8 +1627,8 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ provider, dataset, symbols }),
     }),
-  updateDataProviders: (cfg: Partial<Pick<Preferences, 'daily_data_provider' | 'adj_factor_provider' | 'minute_data_provider' | 'realtime_data_provider' | 'financial_data_provider'>>) =>
-    request<Pick<Preferences, 'daily_data_provider' | 'adj_factor_provider' | 'minute_data_provider' | 'realtime_data_provider'>>(
+  updateDataProviders: (cfg: Partial<Pick<Preferences, 'daily_data_provider' | 'adj_factor_provider' | 'minute_data_provider' | 'realtime_data_provider' | 'financial_data_provider'>> & { provider_chains?: Preferences['provider_chains'] }) =>
+    request<Preferences['provider_chains'] & Pick<Preferences, 'daily_data_provider' | 'adj_factor_provider' | 'minute_data_provider' | 'realtime_data_provider' | 'financial_data_provider'>>(
       '/api/settings/preferences/data-providers',
       { method: 'PUT', body: JSON.stringify(cfg) },
     ),

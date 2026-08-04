@@ -99,13 +99,29 @@ def get_minute_sync_days() -> int:
     return max(1, min(30, load().get("minute_sync_days", 5)))
 
 
-# ===== 数据源选择 (默认 TickFlow；第一阶段仅日K切换入口) =====
+# ===== 数据源选择 =====
+#
+# 模型: 每个数据集 (daily/minute/realtime/adj_factor/financial) 一个「有序启用链」,
+# 存储在 provider_chains[dataset] = [首选源, 回退1, 回退2, ...]。取数按链顺序尝试,
+# 主源缺数据时自动从后续源补齐。
+#
+# 兼容层: 旧的单值字段 (daily_data_provider 等) 仍会写入 (链首选 = 旧字段), 且
+# get_daily_data_provider() 等 getter 继续返回链首选 —— 因此既有调用方零改动。
 
 # 可切换的数据源白名单: tickflow + 内置链成员 (chain._BUILTIN_CHAIN) + 腾讯实时。
 # 注意: 必须与前端 /settings/data-sources 的 builtin 列表保持一致 —
 # 前端 builtin 里可切换的 free_stockdb / xyz 若不在白名单, 保存后会被过滤回
 # tickflow, 造成「切换成功但实际永远走 tickflow」的假象。
 _ALLOWED_DATA_PROVIDERS = {"tickflow", "tencent", "ifzq", "sina", "free_stockdb", "xyz"}
+
+# 数据集 → 旧单值字段 key (迁移/兼容用)。
+_LEGACY_PROVIDER_KEYS = {
+    "daily": "daily_data_provider",
+    "adj_factor": "adj_factor_provider",
+    "minute": "minute_data_provider",
+    "realtime": "realtime_data_provider",
+    "financial": "financial_data_provider",
+}
 
 
 def _allowed_data_providers() -> set[str]:
@@ -116,7 +132,82 @@ def _allowed_data_providers() -> set[str]:
         return set(_ALLOWED_DATA_PROVIDERS)
 
 
+def _builtin_chain(dataset: str) -> list[str]:
+    """内置权威链 (含 ifzq/sina 等 UI 不直接展示的回退源)。"""
+    from app.data_providers import chain as provider_chain
+    return list(provider_chain.chain_for(dataset))
+
+
+def _sanitize_chain(dataset: str, names: list[str]) -> list[str]:
+    """过滤白名单 + 去重 + 保证非空 + 确保 tickflow 兜底。"""
+    allowed = _allowed_data_providers()
+    out: list[str] = []
+    for n in names:
+        n = str(n).lower()
+        if n in allowed and n not in out:
+            out.append(n)
+    if not out:
+        out = _builtin_chain(dataset)
+    if "tickflow" not in out:
+        out.append("tickflow")
+    return out
+
+
+def _default_chain(dataset: str) -> list[str]:
+    """未配置 provider_chains 时的默认链。
+
+    等价于历史 _build_chain(dataset, selected): 首选 = 旧单值字段; 未配置或
+    首选为 tickflow 时返回内置链 (免费源优先, tickflow 兜底)。adj_factor
+    的 same_as_daily 表示跟随 daily 链。
+    """
+    base = _builtin_chain(dataset)
+    if dataset == "adj_factor":
+        legacy = str(load().get(_LEGACY_PROVIDER_KEYS[dataset], "tickflow") or "tickflow").lower()
+        if legacy == "same_as_daily":
+            return _default_chain("daily")
+    lv = str(load().get(_LEGACY_PROVIDER_KEYS[dataset], "tickflow") or "tickflow").lower()
+    if lv in _allowed_data_providers() and lv != "tickflow":
+        return [lv] + [n for n in base if n != lv]
+    return base
+
+
+def get_provider_chain(dataset: str) -> list[str]:
+    """返回某数据集当前启用的有序 provider 链 (首选在前)。"""
+    chains = load().get("provider_chains") or {}
+    stored = chains.get(dataset)
+    if stored:
+        return _sanitize_chain(dataset, stored)
+    return _default_chain(dataset)
+
+
+def get_all_provider_chains() -> dict[str, list[str]]:
+    """返回全部数据集的有序链 (给 settings API 用)。"""
+    return {ds: get_provider_chain(ds) for ds in _LEGACY_PROVIDER_KEYS}
+
+
+def set_provider_chain(dataset: str, names: list[str]) -> list[str]:
+    """保存某数据集的有序启用链；同步写旧单值字段 (首选)。"""
+    clean = _sanitize_chain(dataset, names)
+    chains = load().get("provider_chains") or {}
+    chains[dataset] = clean
+    updates: dict = {"provider_chains": chains}
+    legacy_key = _LEGACY_PROVIDER_KEYS.get(dataset)
+    if legacy_key:
+        updates[legacy_key] = clean[0]
+    save(updates)
+    return clean
+
+
+def remove_provider(dataset: str, name: str) -> None:
+    """从某数据集的启用链移除一个源 (卸载插件时调用)。"""
+    chain = get_provider_chain(dataset)
+    if name not in chain:
+        return
+    set_provider_chain(dataset, [n for n in chain if n != name])
+
+
 def get_daily_data_provider() -> str:
+    """返回日K主源 (链首选)。未配置时为 tickflow (历史默认)。"""
     provider = str(load().get("daily_data_provider", "tickflow") or "tickflow").lower()
     return provider if provider in _allowed_data_providers() else "tickflow"
 
@@ -142,8 +233,6 @@ def get_financial_provider() -> str:
     provider = str(load().get("financial_data_provider", "tickflow") or "tickflow").lower()
     return provider if provider in _allowed_data_providers() else "tickflow"
 
-
-# ===== 盘后管道拉取内容开关 (A股 / ETF / 指数 独立控制) =====
 
 def get_pipeline_pull_a_share() -> bool:
     """A 股日K固定拉取。"""

@@ -419,26 +419,32 @@ def test_on_demand_fetches_use_selected_providers(monkeypatch):
 
 
 def test_uninstall_plugin_resets_explicit_adj_factor_provider(monkeypatch):
+    """卸载插件时从各数据集链中移除该源 (新链模型)。"""
     from app.api import settings as settings_api
     from app.data_providers import custom as custom_sources
     from app.services import preferences
 
-    saved = []
+    removed: list[tuple[str, str]] = []
     monkeypatch.setattr(custom_sources, "is_builtin", lambda name: True)
     monkeypatch.setattr(custom_sources, "uninstall_plugin", lambda name: (True, "ok"))
     monkeypatch.setattr(custom_sources, "load_all", lambda: None)
     monkeypatch.setattr(settings_api, "list_data_sources", lambda: {})
-    monkeypatch.setattr(preferences, "get_daily_data_provider", lambda: "tickflow")
-    monkeypatch.setattr(preferences, "get_minute_data_provider", lambda: "tickflow")
-    monkeypatch.setattr(preferences, "get_realtime_data_provider", lambda: "tickflow")
-    monkeypatch.setattr(preferences, "get_financial_provider", lambda: "tickflow")
-    monkeypatch.setattr(preferences, "get_adj_factor_provider", lambda: "stocksdk")
-    monkeypatch.setattr(preferences, "save", lambda update: saved.append(update))
+    monkeypatch.setattr(preferences, "_LEGACY_PROVIDER_KEYS", {
+        "daily": "daily_data_provider",
+        "adj_factor": "adj_factor_provider",
+        "minute": "minute_data_provider",
+        "realtime": "realtime_data_provider",
+        "financial": "financial_data_provider",
+    })
+    monkeypatch.setattr(preferences, "remove_provider", lambda ds, name: removed.append((ds, name)))
 
     result = settings_api.uninstall_plugin("stocksdk")
 
     assert result["uninstall_ok"] is True
-    assert {"adj_factor_provider": "same_as_daily"} in saved
+    # 每个数据集链都尝试移除 stocksdk
+    assert ("daily", "stocksdk") in removed
+    assert ("adj_factor", "stocksdk") in removed
+    assert ("financial", "stocksdk") in removed
 
 
 def test_custom_minute_universe_uses_local_instruments_without_tickflow_capability():
