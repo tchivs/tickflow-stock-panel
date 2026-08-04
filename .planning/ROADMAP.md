@@ -64,10 +64,12 @@ Four phases add 集合竞价-driven quantitative stock selection to the shipped 
   1. Researcher can enable minute-K sync and verify 1m bars land in `kline_minute` Parquet with correct 09:30+ timestamps; existing daily-K partitions are unchanged.
   2. Researcher can compute 开盘涨幅 (`open / prev_close − 1`) as a governed column, unit-tested on a known fixture and consumed by strategy filters.
   3. Researcher can run the auction-data probe and observe the verdict (available / fail-closed to derived factors); when unavailable, no UI or strategy labels the 09:30 bar as auction data.
-**Plans:** 2 plans
+
+**Plans:** 1/2 plans executed
 
 Plans:
-- [ ] 16-01-PLAN.md — Minute-K sync enable + verify, symbol scoping, 09:30 timestamp convention (DATA-01)
+
+- [x] 16-01-PLAN.md — Minute-K sync enable + verify, symbol scoping, 09:30 timestamp convention (DATA-01)
 - [ ] 16-02-PLAN.md — Governed open-gap factor + auction-data probe & honest fail-closed labels (DATA-02, DATA-03)
 
 ### Phase 17: 竞价策略族 (Auction Strategy Family)
@@ -109,7 +111,7 @@ Phases execute in numeric order: 16 → 17 → 18 → 19
 
 | Phase | Requirements | Status |
 |-------|-------------|--------|
-| 16. 竞价数据层 | DATA-01..03 | Not started |
+| 16. 竞价数据层 | DATA-01..03 | In Progress |
 | 17. 竞价策略族 | STRAT-01..03 | Not started |
 | 18. 股池 Hub | POOL-01..03 | Not started |
 | 19. 游客/VIP 脱敏 + 前端 | GUEST-01..02 | Not started |

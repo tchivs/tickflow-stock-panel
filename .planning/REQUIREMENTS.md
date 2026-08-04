@@ -9,7 +9,7 @@ Requirements for the v1.3 milestone. Each maps to a roadmap phase.
 
 ### 竞价数据层 (Auction Data)
 
-- [ ] **DATA-01**: Researcher can enable minute-K sync and verify 1m bars land in `kline_minute` Parquet with correct 09:30+ timestamps and no corruption of the existing daily-K lake.
+- [x] **DATA-01**: Researcher can enable minute-K sync and verify 1m bars land in `kline_minute` Parquet with correct 09:30+ timestamps and no corruption of the existing daily-K lake.
 - [ ] **DATA-02**: Researcher can compute and persist an 开盘涨幅 (open-gap) factor — `open / prev_close − 1` — as a governed, unit-tested column consumed by strategy filters (derivable today from daily-K enriched).
 - [ ] **DATA-03**: Platform probes for true 集合竞价 match data (9:15–9:25 竞价量/金额/虚拟成交) behind a capability gate; when unavailable, the feature fails closed to derived open-gap factors and never labels the 09:30 continuous-trading bar as auction data (P2).
 
@@ -66,7 +66,7 @@ Populated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| DATA-01 | Phase 16 (竞价数据层) | Pending |
+| DATA-01 | Phase 16 (竞价数据层) | Complete |
 | DATA-02 | Phase 16 (竞价数据层) | Pending |
 | DATA-03 | Phase 16 (竞价数据层) | Pending |
 | STRAT-01 | Phase 17 (竞价策略族) | Pending |
@@ -79,6 +79,7 @@ Populated during roadmap creation.
 | GUEST-02 | Phase 19 (游客/VIP 脱敏 + 前端) | Pending |
 
 **Coverage:**
+
 - v1 requirements: 11 total (9 P1, 2 P2)
 - Mapped to phases: 11
 - Unmapped: 0 ✓
