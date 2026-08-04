@@ -83,6 +83,13 @@ Plans:
   2. Each strategy exposes factor-hit tags so a results row can report 关联因子 (which strategies hit it).
   3. No new strategy registry exists; auction strategies are discovered from the builtin dir and the strategies API dedups against `PRESET_STRATEGIES`.
 
+**Plans:** 2 plans
+
+Plans:
+
+- [ ] 17-01-PLAN.md — 3 first-principles auction strategies (竞价多头/盘前强势量化/早盘之星) as builtin files + engine discovery + PRESET_STRATEGIES dedup (STRAT-01, STRAT-03)
+- [ ] 17-02-PLAN.md — 关联因子 factor-hit tagging contract + screener run_all wiring (STRAT-02)
+
 ### Phase 18: 股池 Hub (Pool Hub)
 
 **Goal**: Users can open a pool hub showing strategy cards with per-day pool counts, drill into each strategy's stock list (code, 开盘涨幅, 涨跌幅, 概念板块, 关联因子), filter by 概念, and highlight 交叉共振 — all research-only.
