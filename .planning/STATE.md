@@ -5,15 +5,15 @@ milestone_name: 竞价选股引擎 — planning
 current_phase: 19
 current_phase_name: 游客/VIP 脱敏 + 前端 (Guest Access & Frontend)
 status: planning
-stopped_at: Completed 18-02-PLAN.md
-last_updated: "2026-08-04T14:35:37.283Z"
+stopped_at: Completed 19-01-PLAN.md
+last_updated: "2026-08-04T15:11:21.430Z"
 last_activity: 2026-08-04
 last_activity_desc: Phase 18 complete, transitioned to Phase 19
 progress:
   total_phases: 4
   completed_phases: 3
-  total_plans: 6
-  completed_plans: 6
+  total_plans: 8
+  completed_plans: 7
   percent: 75
 ---
 
@@ -29,11 +29,11 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 ## Current Position
 
 Phase: 19 — 游客/VIP 脱敏 + 前端 (Guest Access & Frontend)
-Plan: Not started
-Status: Ready to plan
-Last activity: 2026-08-04 — Phase 18 complete, transitioned to Phase 19
+Plan: 1/2
+Status: In progress
+Last activity: 2026-08-04 — Phase 19 P1 (guest masking backend) complete
 
-Progress: [██████████] 100% (1/4 phases)
+Progress: [█████████░] 88% (7/8 plans)
 
 ## v1.3 Phase Summary
 
@@ -41,7 +41,7 @@ Progress: [██████████] 100% (1/4 phases)
 |-------|-------------|--------|
 | 16 竞价数据层 | DATA-01..03 | Complete |
 | 18 股池 Hub | POOL-01..03 | Complete |
-| 19 游客/VIP 脱敏 + 前端 | GUEST-01..02 | Not started |
+| 19 游客/VIP 脱敏 + 前端 | GUEST-01..02 | In progress (1/2) |
 
 ## Accumulated Context
 
@@ -72,8 +72,8 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-08-04T14:10:46.729Z
-Stopped at: Completed 18-02-PLAN.md
+Last session: 2026-08-04T15:10:32.531Z
+Stopped at: Completed 19-01-PLAN.md
 Resume file: None
 
 ## Operator Next Steps
@@ -86,6 +86,10 @@ Resume file: None
 - [Roadmap]: Pool hub is research-only with zero execution authority (POOL-03), matching the platform boundary since v1.0.
 - [Phase 16 / P1]: Minute-K sync enable path proven hermetically; `minute_sync_symbols` scope knob shipped (API/preference-only, empty = full universe); 09:30 timestamp convention regression-locked.
 - [Phase 16 / P2]: Auction-probe verdict is server-authoritative (not_configured/available/fail_closed/error) and the Data page renders only server statuses; open_gap (`open / prev_close − 1`) is a governed persisted column; the 09:30 bar is regression-locked never to be labeled 集合竞价 data.
+- [Phase 19 / P1]: Guest masking is a copy-safe DTO transform applied only at the API boundary in pool.py; build_pool_hub stays unmasked in all modes (GUEST-02).
+- [Phase 19 / P1]: mode = vip iff request.state.reviewer_principal resolves, else guest — never from client input or row values.
+- [Phase 19 / P1]: Guest rows omit open_gap entirely (ROADMAP letter: guests see only 涨跌幅+概念板块); code/name/symbol mask to the literal ******.
+- [Phase 19 / P1]: Guest surface is exactly GET /api/pool/hub + GET /api/screener/strategies (GET-only); everything else still 401.
 
 ---
 *Last updated: 2026-08-04 — Phase 16 complete (DATA-01..03)*
@@ -102,3 +106,4 @@ Resume file: None
 | Phase 17 P2 | 32 | 2 tasks | 3 files |
 | Phase 18 P1 | 20 | 3 tasks | 4 files |
 | Phase 18-pool-hub P2 | 45 | 3 tasks | 10 files |
+| Phase 19 P1 | 55 | 3 tasks | 6 files |

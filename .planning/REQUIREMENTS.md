@@ -27,8 +27,8 @@ Requirements for the v1.3 milestone. Each maps to a roadmap phase.
 
 ### 游客/VIP 脱敏 (Guest Access)
 
-- [ ] **GUEST-01**: Non-VIP (guest) sessions see only 涨跌幅 and 概念板块, with stock code/name masked (`******`) applied server-authoritatively at the API DTO boundary; VIP sessions receive明文. No client-side masking is trusted.
-- [ ] **GUEST-02**: Guest masking does not degrade the strategy engine's own internal correctness — masked fields are display-only, underlying factor computation remains unmasked (P2).
+- [x] **GUEST-01**: Non-VIP (guest) sessions see only 涨跌幅 and 概念板块, with stock code/name masked (`******`) applied server-authoritatively at the API DTO boundary; VIP sessions receive明文. No client-side masking is trusted.
+- [x] **GUEST-02**: Guest masking does not degrade the strategy engine's own internal correctness — masked fields are display-only, underlying factor computation remains unmasked (P2).
 
 ## v2 Requirements (Future)
 
@@ -75,8 +75,8 @@ Populated during roadmap creation.
 | POOL-01 | Phase 18 (股池 Hub) | Complete |
 | POOL-02 | Phase 18 (股池 Hub) | Complete |
 | POOL-03 | Phase 18 (股池 Hub) | Complete |
-| GUEST-01 | Phase 19 (游客/VIP 脱敏 + 前端) | Pending |
-| GUEST-02 | Phase 19 (游客/VIP 脱敏 + 前端) | Pending |
+| GUEST-01 | Phase 19 (游客/VIP 脱敏 + 前端) | Complete |
+| GUEST-02 | Phase 19 (游客/VIP 脱敏 + 前端) | Complete |
 
 **Coverage:**
 
