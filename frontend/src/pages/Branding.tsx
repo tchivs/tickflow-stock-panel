@@ -88,7 +88,7 @@ export function Branding() {
         subtitle="名字保持 TickFlow Stock Panel,4 种赛博朋克 + 高级感的视觉处理 — 字重、字距、配色、图标各不同。挑你最喜欢的告诉我。"
       />
 
-      <div className="px-8 py-6">
+      <div className="px-4 py-5 sm:px-6 sm:py-6 lg:px-8">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
           {VARIANTS.map((v) => (
             <Sample key={v.id} v={v} />
@@ -114,10 +114,10 @@ function Sample({ v }: { v: Variant }) {
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
-      className="rounded-card border border-border overflow-hidden bg-base flex"
+      className="flex flex-col overflow-hidden rounded-card border border-border bg-base sm:flex-row"
     >
       {/* 模拟侧边栏 */}
-      <div className="w-56 bg-surface border-r border-border flex flex-col">
+      <div className="w-full border-b border-border bg-surface sm:w-56 sm:border-b-0 sm:border-r">
         {/* Logo 区 */}
         <div className="px-5 py-5 border-b border-border">
           <div className="flex items-center gap-2.5">

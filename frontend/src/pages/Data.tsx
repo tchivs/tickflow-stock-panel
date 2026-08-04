@@ -533,7 +533,7 @@ export function Data() {
         title="数据"
         subtitle="本地数据画像 · 同步状态 · 历史记录"
         right={
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-2">
             {!hasData && !isLoading && (
               <span className="text-xs text-accent animate-pulse">首次使用请点击右侧按钮同步数据</span>
             )}
@@ -565,7 +565,7 @@ export function Data() {
               修正数据
             </button>
             <div className="w-px h-4 bg-border" />
-            <div className="flex items-center gap-1.5">
+            <div className="flex min-w-0 flex-wrap items-center gap-1.5 max-md:basis-full max-md:w-full">
               <button
                 onClick={() => setShowCreateExt(true)}
                 className="inline-flex items-center gap-1 px-2 py-1 rounded-btn text-secondary hover:text-accent hover:bg-accent/8 text-xs transition-colors duration-150"
@@ -609,7 +609,7 @@ export function Data() {
         }
       />
 
-      <div className="px-8 py-6 space-y-6 max-w-6xl">
+      <div className="px-4 py-5 space-y-6 max-w-6xl sm:px-6 sm:py-6 lg:px-8">
         {/* None 档提示 —— 非阻断: 无需 Key 也可获取历史日K, 仅实时行情等扩展能力受限 */}
         {isNoKey && (
           <div className="flex items-center gap-2 rounded-card border border-border bg-elevated/40 px-3 py-2 text-xs">

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Activity, Loader2, Lock, RefreshCw, Search } from 'lucide-react'
+import { Activity, ChevronDown, Loader2, Lock, RefreshCw, Search } from 'lucide-react'
 import { api, type IndexInstrument, type KlineRow, type MinuteKlineRow } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { useCapabilities } from '@/lib/useSharedQueries'
@@ -73,6 +73,7 @@ export function Indices() {
   const [selected, setSelected] = useState<string>(symbolParam)
   const [range, setRange] = useState(defaultRange)
   const [selectedDate, setSelectedDate] = useState<string | null>(null)
+  const [mobileIndexListOpen, setMobileIndexListOpen] = useState(false)
   const [linkedPrice, setLinkedPrice] = useState<number | null>(null)
 
   // 分时数据需 Pro+ (kline.minute.batch) 能力
@@ -110,6 +111,7 @@ export function Indices() {
   const selectIndex = (symbol: string) => {
     setSelected(symbol)
     setSearchParams({ symbol })
+    setMobileIndexListOpen(false)
   }
 
   const quotes = useQuery({
@@ -200,21 +202,46 @@ export function Indices() {
       </button>
     )
   }
+  const indexListPanel = (
+    <>
+      <div className="relative mb-3">
+        <Search className="pointer-events-none absolute left-2 top-2 h-3.5 w-3.5 text-muted" />
+        <input
+          value={keyword}
+          onChange={e => setKeyword(e.target.value)}
+          placeholder="搜索指数代码/名称"
+          className="w-full rounded-btn border border-border bg-base py-1.5 pl-7 pr-2 text-xs text-foreground outline-none focus:border-accent"
+        />
+      </div>
+      <div className="mb-3 space-y-1 border-b border-border/60 pb-3">
+        {topRows.map(renderIndexItem)}
+      </div>
+      <div className="max-h-[calc(100vh-24rem)] space-y-1 overflow-auto pr-1">
+        {(list.isLoading || search.isLoading) && <div className="py-4 text-center text-xs text-muted">加载中…</div>}
+        {!list.isLoading && listRows.length === 0 && (
+          <div className="rounded-btn bg-elevated p-3 text-xs text-muted">
+            {keyword.trim() ? '无匹配指数。' : '暂无更多指数，先点击“同步指数列表”。'}
+          </div>
+        )}
+        {listRows.map(renderIndexItem)}
+      </div>
+    </>
+  )
 
   return (
     <div className="h-full overflow-auto bg-base p-4">
-      <div className="mb-4 flex items-center justify-between gap-3">
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-lg font-semibold text-foreground">指数</h1>
           <p className="mt-1 text-xs text-muted">
             指数使用独立 kline_index_* parquet，不进入股票选股和策略链路。
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="grid grid-cols-2 gap-2 sm:flex sm:items-center">
           <button
             onClick={() => syncInstruments.mutate()}
             disabled={syncInstruments.isPending}
-            className="inline-flex items-center gap-1.5 rounded-btn bg-elevated px-3 py-1.5 text-xs text-secondary hover:text-foreground disabled:opacity-50"
+            className="inline-flex min-w-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-btn bg-elevated px-3 py-1.5 text-xs text-secondary hover:text-foreground disabled:opacity-50"
           >
             {syncInstruments.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
             同步指数列表
@@ -222,7 +249,7 @@ export function Indices() {
           <button
             onClick={() => syncDaily.mutate()}
             disabled={syncDaily.isPending}
-            className="inline-flex items-center gap-1.5 rounded-btn bg-accent px-3 py-1.5 text-xs font-medium text-base hover:bg-accent/90 disabled:opacity-50"
+            className="inline-flex min-w-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-btn bg-accent px-3 py-1.5 text-xs font-medium text-base hover:bg-accent/90 disabled:opacity-50"
           >
             {syncDaily.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
             同步指数日K
@@ -230,33 +257,26 @@ export function Indices() {
         </div>
       </div>
 
-      <div className="grid grid-cols-[15rem_1fr] gap-4">
-        <aside className="rounded-card border border-border bg-surface p-3">
-          <div className="relative mb-3">
-            <Search className="pointer-events-none absolute left-2 top-2 h-3.5 w-3.5 text-muted" />
-            <input
-              value={keyword}
-              onChange={e => setKeyword(e.target.value)}
-              placeholder="搜索指数代码/名称"
-              className="w-full rounded-btn border border-border bg-base py-1.5 pl-7 pr-2 text-xs text-foreground outline-none focus:border-accent"
-            />
-          </div>
-          <div className="mb-3 space-y-1 border-b border-border/60 pb-3">
-            {topRows.map(renderIndexItem)}
-          </div>
-          <div className="max-h-[calc(100vh-24rem)] space-y-1 overflow-auto pr-1">
-            {(list.isLoading || search.isLoading) && <div className="py-4 text-center text-xs text-muted">加载中…</div>}
-            {!list.isLoading && listRows.length === 0 && (
-              <div className="rounded-btn bg-elevated p-3 text-xs text-muted">
-                {keyword.trim() ? '无匹配指数。' : '暂无更多指数，先点击“同步指数列表”。'}
-              </div>
-            )}
-            {listRows.map(renderIndexItem)}
-          </div>
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[15rem_minmax(0,1fr)]">
+        <div className="rounded-card border border-border bg-surface lg:hidden">
+          <button
+            type="button"
+            onClick={() => setMobileIndexListOpen(value => !value)}
+            className="flex min-h-11 w-full items-center gap-2 px-3 text-left"
+            aria-expanded={mobileIndexListOpen}
+          >
+            <span className="shrink-0 text-xs font-medium text-secondary">选择指数</span>
+            <span className="min-w-0 flex-1 truncate text-xs text-foreground">{selectedInfo?.name || selectedSymbol || '未选择指数'}</span>
+            <ChevronDown className={`h-4 w-4 shrink-0 text-muted transition-transform ${mobileIndexListOpen ? 'rotate-180' : ''}`} />
+          </button>
+          {mobileIndexListOpen && <div className="border-t border-border p-3">{indexListPanel}</div>}
+        </div>
+        <aside className="hidden rounded-card border border-border bg-surface p-3 lg:block">
+          {indexListPanel}
         </aside>
 
         <main className="min-w-0 rounded-card border border-border bg-surface p-3">
-          <div className="mb-3 flex items-center justify-between gap-3">
+          <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <div className="min-w-0">
               <div className="flex items-center gap-2">
                 <Activity className="h-4 w-4 text-accent" />
@@ -271,7 +291,7 @@ export function Indices() {
                 实时缓存 {quotes.data?.count ?? 0} 只指数 · 日K来源 {daily.data?.source ?? '--'}
               </div>
             </div>
-            <div className="flex items-center gap-2 text-xs">
+            <div className="flex flex-wrap items-center gap-2 text-xs">
               <input
                 type="date"
                 value={range.start}
@@ -296,7 +316,7 @@ export function Indices() {
             </div>
           )}
           {chartRows.length > 0 && (
-            <div className="flex items-start gap-3">
+            <div className="flex flex-col gap-3 xl:flex-row">
               <div className="min-w-0 flex-1">
                 <EChartsCandlestick
                   data={chartRows}
@@ -311,7 +331,7 @@ export function Indices() {
                   activeIndicators={['vol', 'macd']}
                 />
               </div>
-              <div className="min-w-0 flex-1 border-l border-border pl-3" style={{ height: 620 }}>
+              <div className="min-w-0 flex-1 border-t border-border pt-3 xl:border-l xl:border-t-0 xl:pl-3 xl:pt-0" style={{ height: 620 }}>
                 {!hasMinuteCap ? (
                   <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
                     <Lock className="h-5 w-5 text-muted" />

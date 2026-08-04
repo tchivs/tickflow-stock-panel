@@ -256,11 +256,11 @@ export function ExtDimensionAnalysis({
         title={activeTitle}
         subtitle={menu ? `${menu.template} · ${menu.data_source}` : subtitle}
         right={
-          <div className="flex items-center gap-2">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
             <select
               value={activeConfigId}
               onChange={(e) => { setSelectedConfigId(e.target.value); setDimensionField(''); setSelectedGroup(null) }}
-              className="h-8 min-w-40 rounded-btn border border-border bg-surface px-2 text-xs text-foreground focus:outline-none focus:border-accent/50"
+              className="h-8 w-full min-w-0 rounded-btn border border-border bg-surface px-2 text-xs text-foreground focus:outline-none focus:border-accent/50 sm:w-auto sm:min-w-40"
             >
               {availableConfigs.length === 0 ? (
                 <option value="">暂无扩展数据</option>
@@ -272,7 +272,7 @@ export function ExtDimensionAnalysis({
               value={activeDimensionField}
               onChange={(e) => { setDimensionField(e.target.value); setSelectedGroup(null) }}
               disabled={!activeConfig}
-              className="h-8 min-w-36 rounded-btn border border-border bg-surface px-2 text-xs text-foreground disabled:opacity-50 focus:outline-none focus:border-accent/50"
+              className="h-8 w-full min-w-0 rounded-btn border border-border bg-surface px-2 text-xs text-foreground disabled:opacity-50 focus:outline-none focus:border-accent/50 sm:w-auto sm:min-w-36"
             >
               {dimensionOptions.length === 0 ? (
                 <option value="">暂无字段</option>

@@ -517,7 +517,7 @@ export function Screener() {
         title="策略"
         subtitle="基于本地 enriched 表 · 毫秒级 SQL"
         right={
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2 max-md:gap-1">
             {/* 资产类型切换: 股票 / ETF */}
             <div className="flex items-center h-7 rounded-btn border border-border overflow-hidden">
               {(['stock', 'etf'] as const).map(t => (
@@ -620,7 +620,7 @@ export function Screener() {
         }
       />
 
-      <div className="px-8 py-4 space-y-3">
+      <div className="px-4 py-4 space-y-3 sm:px-6 lg:px-8">
         {/* 策略卡片 */}
         {cardSize !== 'hidden' && (
         <section>

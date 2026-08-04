@@ -67,6 +67,7 @@ export function Monitor() {
   const qc = useQueryClient()
   const [editorOpen, setEditorOpen] = useState(false)
   const [editingRule, setEditingRule] = useState<MonitorRule | null>(null)
+  const [mobileSection, setMobileSection] = useState<'alerts' | 'rules'>('alerts')
 
   // 触发记录: 类型、严重级别与投递状态均来自持久化历史。
   const [filter, setFilter] = useState<'all' | 'position' | 'strategy' | 'signal' | 'price' | 'market'>('all')
@@ -127,8 +128,12 @@ export function Monitor() {
     <div className="flex flex-col h-full">
       <PageHeader title="监控中心" subtitle="实时信号与规则管理" />
       <div className="flex-1 min-h-0 px-4 py-4 sm:px-5">
-        <div className="mx-auto flex h-full max-w-7xl flex-col gap-4 md:flex-row">
-          <section aria-label="触发记录" className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-card border border-border bg-surface/40">
+        <div className="mx-auto flex h-full max-w-7xl flex-col gap-3 md:flex-row md:gap-4">
+          <div className="grid grid-cols-2 gap-1 rounded-card border border-border bg-surface/60 p-1 md:hidden" role="tablist" aria-label="监控面板">
+            <button type="button" role="tab" aria-selected={mobileSection === 'alerts'} onClick={() => setMobileSection('alerts')} className={`min-h-11 rounded-btn px-3 text-xs font-medium ${mobileSection === 'alerts' ? 'bg-accent/15 text-accent' : 'text-muted'}`}>触发记录</button>
+            <button type="button" role="tab" aria-selected={mobileSection === 'rules'} onClick={() => setMobileSection('rules')} className={`min-h-11 rounded-btn px-3 text-xs font-medium ${mobileSection === 'rules' ? 'bg-accent/15 text-accent' : 'text-muted'}`}>监控规则</button>
+          </div>
+          <section aria-label="触发记录" className={`min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-card border border-border bg-surface/40 ${mobileSection === 'alerts' ? 'flex' : 'hidden'} md:flex`}>
             <div className="flex flex-wrap items-center gap-2 border-b border-border/60 bg-surface/60 px-3 py-3">
               <SectionHeader icon={BellRing} title="触发记录" />
               <div className="order-3 flex w-full flex-wrap items-center gap-1 md:order-none md:w-auto" aria-label="告警类型筛选">
@@ -149,7 +154,7 @@ export function Monitor() {
           </section>
 
           {/* 右栏: 监控规则 */}
-          <section aria-label="监控规则" className="flex min-h-0 w-full flex-col overflow-hidden rounded-card border border-border bg-surface/40 md:w-[400px] md:shrink-0">
+          <section aria-label="监控规则" className={`min-h-0 w-full flex-col overflow-hidden rounded-card border border-border bg-surface/40 ${mobileSection === 'rules' ? 'flex' : 'hidden'} md:flex md:w-[400px] md:shrink-0`}>
             <div className="flex items-center gap-3 border-b border-border/60 bg-surface/60 px-4 py-2.5">
               <SectionHeader icon={ListChecks} title="监控规则" />
               <span className="rounded-md bg-elevated/50 px-1.5 py-0.5 text-[10px] font-medium text-muted">{rulesCount}</span>

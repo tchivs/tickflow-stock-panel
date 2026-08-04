@@ -1341,7 +1341,7 @@ function ExtConfigDialog({ fields, onSave, onClose }: {
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
         exit={{ opacity: 0, scale: 0.95 }}
-        className="bg-surface border border-border rounded-lg shadow-xl max-w-[95vw] overflow-hidden"
+        className="w-[calc(100vw-2rem)] max-w-3xl max-h-[calc(100vh-2rem)] overflow-y-auto rounded-lg border border-border bg-surface shadow-xl"
         onClick={e => e.stopPropagation()}
       >
         {/* 头部 */}
@@ -1350,8 +1350,8 @@ function ExtConfigDialog({ fields, onSave, onClose }: {
           <button onClick={onClose} className="p-0.5 text-muted hover:text-foreground"><X className="h-4 w-4" /></button>
         </div>
         {/* 三列平铺 */}
-        <div className="flex gap-0 border-b border-border px-2 overflow-hidden">
-          <div className="flex-1 min-w-0 p-3 border-r border-border" style={{ minWidth: 180 }}>
+        <div className="grid grid-cols-1 gap-0 border-b border-border px-2 sm:grid-cols-3">
+          <div className="min-w-0 border-b border-border p-3 sm:border-r sm:border-b-0">
             <span className="text-[10px] font-semibold text-sky-400 uppercase tracking-wider mb-2 block">概念</span>
             <ExtFieldSection item={draft.concept} onChange={v => setDraft(d => ({ ...d, concept: v }))} options={options} />
             <div className="h-px bg-border my-3" />
@@ -1359,7 +1359,7 @@ function ExtConfigDialog({ fields, onSave, onClose }: {
             <div className="h-px bg-border my-2" />
             <Toggle label="显示分组概念统计" checked={draft.showConceptGroupStats ?? false} onChange={v => setDraft(d => ({ ...d, showConceptGroupStats: v }))} />
           </div>
-          <div className="flex-1 min-w-0 p-3 border-r border-border" style={{ minWidth: 180 }}>
+          <div className="min-w-0 border-b border-border p-3 sm:border-r sm:border-b-0">
             <span className="text-[10px] font-semibold text-blue-400 uppercase tracking-wider mb-2 block">行业</span>
             <ExtFieldSection item={draft.industry} onChange={v => setDraft(d => ({ ...d, industry: v }))} options={options} />
             <div className="h-px bg-border my-3" />
@@ -1367,7 +1367,7 @@ function ExtConfigDialog({ fields, onSave, onClose }: {
             <div className="h-px bg-border my-2" />
             <Toggle label="显示分组行业统计" checked={draft.showIndustryGroupStats ?? false} onChange={v => setDraft(d => ({ ...d, showIndustryGroupStats: v }))} />
           </div>
-          <div className="flex-1 min-w-0 p-3" style={{ minWidth: 160 }}>
+          <div className="min-w-0 p-3">
             <span className="text-[10px] font-semibold text-muted uppercase tracking-wider mb-2 block">炸板/断板</span>
             <BrokenFailedSection bf={{ ...DEFAULT_BF, ...draft.bf }} onChange={v => setDraft(d => ({ ...d, bf: v }))} />
           </div>
@@ -1547,7 +1547,7 @@ export function LimitUpLadder() {
           </div>
         }
         right={
-          <div className="flex items-center gap-1">
+          <div className="flex flex-wrap items-center gap-1">
             {/* 封单模式: 成交量/金额(仅 sealed 就绪时显示) — 胶囊式 */}
             {data?.sealed_ready && (
               <>

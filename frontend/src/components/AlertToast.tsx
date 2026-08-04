@@ -106,7 +106,7 @@ export function AlertToastContainer() {
       role="status"
       aria-live="polite"
       aria-atomic="false"
-      className="fixed bottom-4 right-4 z-[9999] flex flex-col gap-2 w-[320px] pointer-events-none"
+      className="fixed bottom-4 right-4 z-[9999] flex w-[calc(100vw-2rem)] max-w-[320px] flex-col gap-2 pointer-events-none"
     >
       <AnimatePresence>
         {items

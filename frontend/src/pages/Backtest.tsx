@@ -57,7 +57,7 @@ export function Backtest() {
   }
 
   const modeSwitch = (
-    <div role="tablist" aria-label="回测模式" className="inline-flex rounded-btn border border-border bg-surface/80 p-0.5 shadow-sm">
+    <div role="tablist" aria-label="回测模式" className="flex w-full rounded-btn border border-border bg-surface/80 p-0.5 shadow-sm sm:inline-flex sm:w-auto">
       {(['factor', 'strategy', 'optimizer'] as const).map(tab => {
         const Icon = TAB_ICONS[tab]
         const active = activeTab === tab
@@ -71,7 +71,7 @@ export function Backtest() {
             tabIndex={active ? 0 : -1}
             onClick={() => setActiveTab(tab)}
             onKeyDown={event => handleModeKeyDown(event, tab)}
-            className={`inline-flex min-h-11 items-center gap-1.5 rounded-[5px] px-3 py-1.5 text-xs font-medium transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-base ${
+            className={`inline-flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-[5px] px-2 py-1.5 text-xs font-medium transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-base sm:flex-none sm:px-3 ${
               active
                 ? 'bg-accent text-white shadow-sm'
                 : 'text-secondary hover:bg-elevated hover:text-foreground'
