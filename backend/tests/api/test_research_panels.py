@@ -268,7 +268,7 @@ def _seed_wf(repo: ResearchRepository, *, plan_id: str = "wf-plan-panel") -> str
 
 
 def test_list_factors_empty(panel_client: TestClient) -> None:
-    response = panel_client.get("/api/research/factors")
+    response = panel_client.get("/api/research/factor-catalog")
     assert response.status_code == 200
     assert response.json() == []
 
@@ -341,7 +341,7 @@ def test_list_factors_projects_revision_fields(
     revision_id = _seed_factor(research_repository, name="Momentum", expression="close")
     _seed_verdict(research_repository, revision_id=revision_id, verdict="admitted")
 
-    response = panel_client.get("/api/research/factors")
+    response = panel_client.get("/api/research/factor-catalog")
     assert response.status_code == 200
     payload = response.json()
     assert len(payload) == 1
@@ -362,7 +362,7 @@ def test_list_factors_ic_and_rank_ic_are_distinct_fields(
     revision_id = _seed_factor(research_repository)
     _seed_retained_experiment(research_repository, revision_id=revision_id, ic=0.12, rank_ic=0.18)
 
-    factor = panel_client.get("/api/research/factors").json()[0]
+    factor = panel_client.get("/api/research/factor-catalog").json()[0]
     # Two distinct keys exist — never collapsed into one column.
     assert "ic" in factor
     assert "rank_ic" in factor
@@ -376,7 +376,7 @@ def test_list_factors_without_evidence_has_null_ic_rank_ic(
 ) -> None:
     """A revision with no retained evidence still lists, with null IC/RankIC."""
     _seed_factor(research_repository, revision_id="rev-bare")
-    factor = panel_client.get("/api/research/factors").json()[0]
+    factor = panel_client.get("/api/research/factor-catalog").json()[0]
     assert factor["status"] == "unadmitted"
     assert factor["ic"] is None
     assert factor["rank_ic"] is None

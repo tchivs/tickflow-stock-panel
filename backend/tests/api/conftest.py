@@ -13,7 +13,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.api import portfolio_panels, research_panels
+from app.api import portfolio_panels, research_panels, walkforward_sse
 from app.portfolio.repository import PortfolioRepository
 from app.research.repository import ResearchRepository
 
@@ -45,4 +45,5 @@ def panel_client(
     app.state.research_repository = research_repository
     app.include_router(research_panels.router)
     app.include_router(portfolio_panels.router)
+    app.include_router(walkforward_sse.router)
     yield TestClient(app)

@@ -78,12 +78,17 @@ def _factor_dto(
     )
 
 
-@router.get("/factors", response_model=list[FactorRevisionDTO])
+@router.get("/factor-catalog", response_model=list[FactorRevisionDTO])
 async def list_factors(
     request: Request,
     limit: int = Query(200, ge=1, le=500),
 ) -> list[FactorRevisionDTO]:
     """Admitted factor catalog — current revisions only.
+
+    Path note: the legacy research router already owns ``GET /factors``
+    (all revisions, dict envelope) for the factor-backtest workspace, so the
+    panel surface lives at ``/factor-catalog`` — a strict typed list of
+    current revisions with DISTINCT IC and RankIC fields.
 
     Each row carries its admission status (``admitted`` / ``rejected`` /
     ``unadmitted``) and the DISTINCT IC and RankIC from its latest retained

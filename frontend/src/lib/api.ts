@@ -2962,7 +2962,9 @@ export const api = {
   listFactors: (params?: { limit?: number }) => {
     const qs = new URLSearchParams()
     qs.set('limit', String(params?.limit ?? 200))
-    return request<FactorRevisionDTO[]>(`/api/research/factors?${qs}`)
+    // /factor-catalog: the legacy /factors route (dict envelope) stays owned
+    // by the factor-backtest workspace; this is the strict typed panel surface.
+    return request<FactorRevisionDTO[]>(`/api/research/factor-catalog?${qs}`)
   },
   getAdmissionVerdict: (revisionId: string, policyVersion = 'v1') =>
     request<AdmissionVerdictDTO>(`/api/research/factors/${encodeURIComponent(revisionId)}/verdict?policy_version=${encodeURIComponent(policyVersion)}`),
@@ -2991,6 +2993,11 @@ export const api = {
     qs.set('limit', String(params?.limit ?? 200))
     return request<WfValidatedStrategyDTO[]>(`/api/research/wf/validated?${qs}`)
   },
+  runWfPlan: (planId: string) =>
+    request<{ ok: boolean; key: string; plan_id: string; folds: number; oos: number }>(
+      `/api/research/wf/plans/${encodeURIComponent(planId)}/run`,
+      { method: 'POST' },
+    ),
   listWfEnsembles: (params?: { limit?: number }) => {
     const qs = new URLSearchParams()
     qs.set('limit', String(params?.limit ?? 200))

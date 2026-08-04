@@ -137,6 +137,7 @@ async def approve_rebalance_plan(
         previous_state=previous,
     )
     current = repo.get_paper_state(plan_id)
+    _notify_fanout(request)
     return PaperActionResponse(
         plan_id=plan_id,
         transition="approved",
@@ -162,9 +163,21 @@ async def reject_rebalance_plan(
         previous_state=previous,
     )
     current = repo.get_paper_state(plan_id)
+    _notify_fanout(request)
     return PaperActionResponse(
         plan_id=plan_id,
         transition="rejected",
         current_state=current or "rejected",
         idempotent=record.get("idempotency_key") != body.idempotency_key,
     )
+
+
+def _notify_fanout(request: Request) -> None:
+    """Fan out a paper-transition change through the shared SSE stream so the
+    RebalancePlan panel auto-refreshes (SSE_INVALIDATE_PREFIXES rebalance-plans/paper)."""
+    qs = getattr(request.app.state, "quote_service", None)
+    notify = getattr(qs, "notify_quote", None)
+    if callable(notify):
+        notify()
+
+

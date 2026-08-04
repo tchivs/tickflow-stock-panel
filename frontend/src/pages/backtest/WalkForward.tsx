@@ -1,10 +1,120 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { ChevronDown, ChevronRight, FlaskConical, GitBranch, CheckCircle2 } from 'lucide-react'
+import { ChevronDown, ChevronRight, FlaskConical, GitBranch, CheckCircle2, Play, RefreshCw } from 'lucide-react'
 import { api, type WfPlanDTO, type WfFoldDTO, type WfSearchRunDTO, type WfValidatedStrategyDTO, type WfEnsembleDTO } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
+import { toast } from '@/components/Toast'
+
+interface WfStreamState {
+  status: 'idle' | 'running' | 'done' | 'error' | 'reconnecting'
+  foldIndex: number
+  totalFolds: number
+  isOos: boolean
+  error?: string
+}
+
+function useWfStream(planId: string | undefined) {
+  const [state, setState] = useState<WfStreamState>({ status: 'idle', foldIndex: 0, totalFolds: 0, isOos: false })
+  const [running, setRunning] = useState(false)
+  const esRef = useRef<EventSource | null>(null)
+
+  const start = async () => {
+    if (!planId) return
+    setRunning(true)
+    try {
+      await api.runWfPlan(planId)
+    } catch {
+      toast('无法启动前推验证', 'error')
+      setRunning(false)
+      return
+    }
+  }
+
+  useEffect(() => {
+    if (!planId) return
+    setState({ status: 'idle', foldIndex: 0, totalFolds: 0, isOos: false })
+    const es = new EventSource(`/api/research/wf/plans/${encodeURIComponent(planId)}/stream`)
+    esRef.current = es
+
+    es.onopen = () => setState(prev => prev.status === 'done' ? prev : { ...prev, status: prev.status === 'running' ? prev.status : 'running' })
+    es.addEventListener('progress', (e: MessageEvent) => {
+      try {
+        const data = JSON.parse(e.data)
+        setState({
+          status: 'running',
+          foldIndex: data.fold_index ?? 0,
+          totalFolds: data.total_folds ?? 0,
+          isOos: Boolean(data.is_oos),
+        })
+      } catch { /* ignore malformed */ }
+    })
+    es.addEventListener('done', () => {
+      setState(prev => ({ ...prev, status: 'done' }))
+      setRunning(false)
+      es.close()
+    })
+    es.onerror = () => {
+      setState(prev => prev.status === 'done' ? prev : { ...prev, status: 'reconnecting' })
+    }
+    return () => es.close()
+  }, [planId])
+
+  return { state, running, start }
+}
+function LiveProgress({ planId }: { planId: string }) {
+  const { state, running, start } = useWfStream(planId)
+  const pct = state.totalFolds > 0 ? Math.round((state.foldIndex / state.totalFolds) * 100) : 0
+
+  return (
+    <div className="rounded-card border border-border bg-surface p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="text-xs font-semibold text-foreground">
+          实时进度
+          <span className={`ml-2 rounded px-1.5 py-0.5 text-[10px] font-medium ${
+            state.status === 'done' ? 'bg-bear/15 text-bear'
+              : state.status === 'running' ? 'bg-accent/15 text-accent'
+                : state.status === 'reconnecting' ? 'bg-warning/15 text-warning'
+                  : 'bg-elevated text-muted'
+          }`}>
+            {state.status === 'done' ? '已完成'
+              : state.status === 'running' ? '运行中'
+                : state.status === 'reconnecting' ? '重连中'
+                  : '未运行'}
+          </span>
+        </div>
+        <button
+          onClick={start}
+          disabled={running || state.status === 'running'}
+          className="inline-flex min-h-8 items-center gap-1 rounded-btn border border-border bg-elevated px-2.5 py-1 text-xs font-medium text-secondary transition-colors hover:text-foreground disabled:opacity-50"
+        >
+          {running || state.status === 'running'
+            ? <><RefreshCw className="h-3.5 w-3.5 animate-spin" />运行中…</>
+            : <><Play className="h-3.5 w-3.5" />运行前推</>}
+        </button>
+      </div>
+      {state.status === 'running' && (
+        <div className="mt-2.5">
+          <div className="flex items-center justify-between text-[10px] text-muted">
+            <span>{state.isOos ? '保留 OOS 折' : `折 ${state.foldIndex + 1} / ${state.totalFolds}`}</span>
+            <span className="font-mono tabular-nums">{pct}%</span>
+          </div>
+          <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-elevated">
+            <div
+              className={`h-full rounded-full transition-all duration-300 ${state.isOos ? 'bg-warning' : 'bg-accent'}`}
+              style={{ width: `${Math.max(4, pct)}%` }}
+            />
+          </div>
+        </div>
+      )}
+      {state.status === 'error' && state.error && (
+        <div className="mt-2 text-[11px] text-danger">{state.error}</div>
+      )}
+    </div>
+  )
+}
+
 
 export function WalkForward() {
   const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null)
@@ -90,6 +200,7 @@ export function WalkForward() {
             ) : (
               <>
                 <PlanHeader plan={selectedPlan} />
+                <LiveProgress planId={selectedPlan.id} />
                 <FoldsSection planId={selectedPlan.id} folds={foldsQuery.data ?? []} loading={foldsQuery.isLoading} />
                 <SearchRunsSection runs={searchRunsQuery.data ?? []} loading={searchRunsQuery.isLoading} />
                 <ValidatedSection rows={validatedQuery.data ?? []} loading={validatedQuery.isLoading} />

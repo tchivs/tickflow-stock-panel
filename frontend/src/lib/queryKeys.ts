@@ -195,6 +195,7 @@ export const QK = {
   panelWfSearchRuns:    (planId?: string) => ['research-panel', 'wf', 'search-runs', planId ?? 'all'] as const,
   panelWfValidated:     () => ['research-panel', 'wf', 'validated'] as const,
   panelWfEnsembles:     () => ['research-panel', 'wf', 'ensembles'] as const,
+  wfPlanStream:         (planId: string) => ['research-panel', 'wf', 'stream', planId] as const,
 } as const
 
 // ===== SSE 应该 invalidate 的 key 前缀列表 =====
@@ -215,4 +216,5 @@ export const SSE_INVALIDATE_PREFIXES = [
   'portfolio-holdings',
   'optimization-runs',
   'rebalance-plans',
+  'paper',
 ] as const
