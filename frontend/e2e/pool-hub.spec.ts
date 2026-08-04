@@ -11,18 +11,19 @@ const HUB_UPDATED_AT = 1_754_310_000
 
 /** 交叉共振行: 被 竞价多头 + 盘前强势量化 同时命中 (hit_factors ≥ 2) */
 const doublyHitRow = {
-  symbol: '300750.SZ', code: '300750', open_gap: 0.0234, change_pct: 0.0512,
+  symbol: '300750.SZ', code: '300750', name: '宁德时代', open_gap: 0.0234, change_pct: 0.0512,
   concept_board: ['新能源', '人工智能'], hit_factors: ['竞价多头', '盘前强势量化'], cross_resonance: true,
 }
 /** 单策略命中行: 仅 竞价多头 */
 const singleHitRow = {
-  symbol: '600519.SH', code: '600519', open_gap: 0.0105, change_pct: -0.0012,
+  symbol: '600519.SH', code: '600519', name: '贵州茅台', open_gap: 0.0105, change_pct: -0.0012,
   concept_board: ['白酒'], hit_factors: ['竞价多头'], cross_resonance: false,
 }
 
 const hubPayload = {
   as_of: HUB_AS_OF,
   updated_at: HUB_UPDATED_AT,
+  mode: 'vip',
   strategies: [
     { id: 'auction_bullish', name: '竞价多头', total: 2, rows: [doublyHitRow, singleHitRow] },
     { id: 'auction_preopen_quant', name: '盘前强势量化', total: 1, rows: [doublyHitRow] },
@@ -30,11 +31,12 @@ const hubPayload = {
   resonance_count: 1,
 }
 
-const emptyHubPayload = { as_of: HUB_AS_OF, updated_at: HUB_UPDATED_AT, strategies: [], resonance_count: 0 }
+const emptyHubPayload = { as_of: HUB_AS_OF, updated_at: HUB_UPDATED_AT, mode: 'vip', strategies: [], resonance_count: 0 }
 
 const zeroHitHubPayload = {
   as_of: HUB_AS_OF,
   updated_at: HUB_UPDATED_AT,
+  mode: 'vip',
   strategies: [
     ...hubPayload.strategies,
     { id: 'auction_early_star', name: '早盘之星', total: 0, rows: [] as typeof doublyHitRow[] },
@@ -45,11 +47,34 @@ const zeroHitHubPayload = {
 const noResonanceHubPayload = {
   as_of: HUB_AS_OF,
   updated_at: HUB_UPDATED_AT,
+  mode: 'vip',
   strategies: [
     { id: 'auction_bullish', name: '竞价多头', total: 1, rows: [singleHitRow] },
   ],
   resonance_count: 0,
 }
+
+// ===== 游客夹具: 服务端脱敏 (code/name/symbol = ******, open_gap 键省略) =====
+// 注意: ****** 字面量只允许出现在 e2e 夹具里断言服务端输出, 生产源码禁止 (grep guard)。
+const guestDoublyHitRow = {
+  symbol: '******', code: '******', name: '******',
+  change_pct: 0.0512, concept_board: ['新能源', '人工智能'], hit_factors: ['竞价多头', '盘前强势量化'], cross_resonance: true,
+}
+const guestSingleHitRow = {
+  symbol: '******', code: '******', name: '******',
+  change_pct: -0.0012, concept_board: ['白酒'], hit_factors: ['竞价多头'], cross_resonance: false,
+}
+const hubPayloadGuest = {
+  as_of: HUB_AS_OF,
+  updated_at: HUB_UPDATED_AT,
+  mode: 'guest',
+  strategies: [
+    { id: 'auction_bullish', name: '竞价多头', total: 2, rows: [guestDoublyHitRow, guestSingleHitRow] },
+    { id: 'auction_preopen_quant', name: '盘前强势量化', total: 1, rows: [guestDoublyHitRow] },
+  ],
+  resonance_count: 1,
+}
+const emptyHubPayloadGuest = { as_of: HUB_AS_OF, updated_at: HUB_UPDATED_AT, mode: 'guest', strategies: [], resonance_count: 0 }
 
 /** 已知策略全集 (preset 列表) — 不在 hub 载荷里的策略渲染 数据不可用 */
 const knownStrategies = [
@@ -63,27 +88,45 @@ const knownStrategies = [
 const VISUAL_LONG_NAME = '竞价高开强度叠加盘前量能与连板因子共振筛选策略（超长名称用于截断演示）'
 
 const visualRows: typeof doublyHitRow[] = [
-  { symbol: '300750.SZ', code: '300750', open_gap: 0.0234, change_pct: 0.0512, concept_board: ['新能源', '人工智能', '动力电池', '固态电池', '超级充电', '锂电池隔膜'], hit_factors: ['竞价多头', '盘前强势量化'], cross_resonance: true },
-  { symbol: '600519.SH', code: '600519', open_gap: 0.0105, change_pct: null, concept_board: ['白酒'], hit_factors: ['竞价多头'], cross_resonance: false },
-  { symbol: '000001.SZ', code: '000001', open_gap: null, change_pct: -0.0012, concept_board: [], hit_factors: [], cross_resonance: false },
-  { symbol: '688981.SH', code: '688981', open_gap: 0.0188, change_pct: 0.002, concept_board: ['半导体', '芯片'], hit_factors: ['竞价多头'], cross_resonance: false },
-  { symbol: '832566.BJ', code: '832566', open_gap: -0.004, change_pct: -0.02, concept_board: ['北交所'], hit_factors: ['盘前强势量化'], cross_resonance: false },
-  { symbol: '000010.SZ', code: '000010', open_gap: 0.003, change_pct: 0.011, concept_board: ['银行'], hit_factors: ['竞价多头'], cross_resonance: false },
-  { symbol: '000011.SZ', code: '000011', open_gap: 0.006, change_pct: 0.018, concept_board: ['券商'], hit_factors: ['竞价多头'], cross_resonance: false },
-  { symbol: '000012.SZ', code: '000012', open_gap: 0.009, change_pct: 0.024, concept_board: ['地产'], hit_factors: ['竞价多头'], cross_resonance: false },
-  { symbol: '000013.SZ', code: '000013', open_gap: -0.002, change_pct: -0.008, concept_board: ['钢铁'], hit_factors: ['竞价多头'], cross_resonance: false },
-  { symbol: '000014.SZ', code: '000014', open_gap: 0.014, change_pct: 0.031, concept_board: ['煤炭'], hit_factors: ['竞价多头'], cross_resonance: false },
-  { symbol: '000015.SZ', code: '000015', open_gap: 0.001, change_pct: 0.005, concept_board: ['石油'], hit_factors: ['竞价多头'], cross_resonance: false },
-  { symbol: '000016.SZ', code: '000016', open_gap: 0.02, change_pct: 0.045, concept_board: ['军工'], hit_factors: ['竞价多头'], cross_resonance: false },
+  { symbol: '300750.SZ', code: '300750', name: '宁德时代', open_gap: 0.0234, change_pct: 0.0512, concept_board: ['新能源', '人工智能', '动力电池', '固态电池', '超级充电', '锂电池隔膜'], hit_factors: ['竞价多头', '盘前强势量化'], cross_resonance: true },
+  { symbol: '600519.SH', code: '600519', name: '贵州茅台', open_gap: 0.0105, change_pct: null, concept_board: ['白酒'], hit_factors: ['竞价多头'], cross_resonance: false },
+  { symbol: '000001.SZ', code: '000001', name: '平安银行', open_gap: null, change_pct: -0.0012, concept_board: [], hit_factors: [], cross_resonance: false },
+  { symbol: '688981.SH', code: '688981', name: '中芯国际', open_gap: 0.0188, change_pct: 0.002, concept_board: ['半导体', '芯片'], hit_factors: ['竞价多头'], cross_resonance: false },
+  { symbol: '832566.BJ', code: '832566', name: '北证样本', open_gap: -0.004, change_pct: -0.02, concept_board: ['北交所'], hit_factors: ['盘前强势量化'], cross_resonance: false },
+  { symbol: '000010.SZ', code: '000010', name: '招商银行', open_gap: 0.003, change_pct: 0.011, concept_board: ['银行'], hit_factors: ['竞价多头'], cross_resonance: false },
+  { symbol: '000011.SZ', code: '000011', name: '中信证券', open_gap: 0.006, change_pct: 0.018, concept_board: ['券商'], hit_factors: ['竞价多头'], cross_resonance: false },
+  { symbol: '000012.SZ', code: '000012', name: '万科A', open_gap: 0.009, change_pct: 0.024, concept_board: ['地产'], hit_factors: ['竞价多头'], cross_resonance: false },
+  { symbol: '000013.SZ', code: '000013', name: '宝钢股份', open_gap: -0.002, change_pct: -0.008, concept_board: ['钢铁'], hit_factors: ['竞价多头'], cross_resonance: false },
+  { symbol: '000014.SZ', code: '000014', name: '中国神华', open_gap: 0.014, change_pct: 0.031, concept_board: ['煤炭'], hit_factors: ['竞价多头'], cross_resonance: false },
+  { symbol: '000015.SZ', code: '000015', name: '中国石化', open_gap: 0.001, change_pct: 0.005, concept_board: ['石油'], hit_factors: ['竞价多头'], cross_resonance: false },
+  { symbol: '000016.SZ', code: '000016', name: '中国船舶', open_gap: 0.02, change_pct: 0.045, concept_board: ['军工'], hit_factors: ['竞价多头'], cross_resonance: false },
 ]
+
+/** 游客版视觉载荷: 大量共享 ****** 身份的行 (Backstop 3: 视觉可区分) */
+const visualGuestRows: typeof guestDoublyHitRow[] = visualRows.map(r => ({
+  symbol: '******', code: '******', name: '******',
+  change_pct: r.change_pct, concept_board: r.concept_board, hit_factors: r.hit_factors, cross_resonance: r.cross_resonance,
+}))
 
 const visualHubPayload = {
   as_of: HUB_AS_OF,
   updated_at: HUB_UPDATED_AT,
+  mode: 'vip',
   strategies: [
     { id: 'auction_bullish', name: '竞价多头', total: visualRows.length, rows: visualRows },
     { id: 'auction_long_name', name: VISUAL_LONG_NAME, total: 1, rows: [doublyHitRow] },
     { id: 'auction_early_star', name: '早盘之星', total: 0, rows: [] as typeof doublyHitRow[] },
+  ],
+  resonance_count: 1,
+}
+const visualHubPayloadGuest = {
+  as_of: HUB_AS_OF,
+  updated_at: HUB_UPDATED_AT,
+  mode: 'guest',
+  strategies: [
+    { id: 'auction_bullish', name: '竞价多头', total: visualGuestRows.length, rows: visualGuestRows },
+    { id: 'auction_long_name', name: VISUAL_LONG_NAME, total: 1, rows: [guestDoublyHitRow] },
+    { id: 'auction_early_star', name: '早盘之星', total: 0, rows: [] as typeof guestDoublyHitRow[] },
   ],
   resonance_count: 1,
 }
@@ -147,10 +190,10 @@ test.describe('Phase 18 pool hub', () => {
     await expect(page.getByRole('button', { name: /当日池 2 只/ })).toBeVisible()
     await expect(page.getByRole('button', { name: /当日池 1 只/ })).toBeVisible()
 
-    // 明细表: 五个列头 + 默认第一个策略 (竞价多头, total=2) 的 footer 共 2 只
+    // 明细表: VIP 六列头 + 默认第一个策略 (竞价多头, total=2) 的 footer 共 2 只
     const table = page.getByRole('table')
     await expect(table).toBeVisible()
-    for (const header of ['代码', '开盘涨幅', '涨跌幅', '概念板块', '关联因子']) {
+    for (const header of ['代码', '名称', '开盘涨幅', '涨跌幅', '概念板块', '关联因子']) {
       await expect(table.getByRole('columnheader', { name: header })).toBeVisible()
     }
     await expect(page.getByText(/共 2 只/)).toBeVisible()
@@ -162,6 +205,50 @@ test.describe('Phase 18 pool hub', () => {
 
     // 研究参考声明
     await expect(page.getByText('本页面仅用于研究参考，不提供任何交易执行功能。')).toBeVisible()
+  })
+
+  test('guest mode renders banner, masked cells, and the 5-column guest set', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
+    await installShell(page)
+    await page.route('**/api/pool/hub**', route => json(route, hubPayloadGuest))
+
+    await page.goto('/pool-hub')
+    await expect(page.getByRole('button', { name: /竞价多头/ })).toBeVisible()
+
+    // 横幅: 精确文案 + role=status
+    const banner = page.getByRole('status').filter({ hasText: '游客模式：股票代码与名称已脱敏' })
+    await expect(banner).toBeVisible()
+    await expect(page.getByText('游客模式：股票代码与名称已脱敏')).toBeVisible()
+    await expect(page.getByText('仅展示涨跌幅与概念板块。')).toBeVisible()
+
+    // 5 列游客列头 — 无 开盘涨幅
+    const table = page.getByRole('table')
+    for (const header of ['代码', '名称', '涨跌幅', '概念板块', '关联因子']) {
+      await expect(table.getByRole('columnheader', { name: header })).toBeVisible()
+    }
+    await expect(table.getByRole('columnheader', { name: '开盘涨幅' })).toHaveCount(0)
+
+    // 脱敏单元格原样渲染: 2 行 × (代码+名称) = 4 处 ******
+    await expect(page.getByText('******', { exact: true })).toHaveCount(4)
+    await expect(page.getByText('300750', { exact: true })).toHaveCount(0)
+    await expect(page.getByText('宁德时代', { exact: true })).toHaveCount(0)
+
+    // footer 计数不变
+    await expect(page.getByText(/共 2 只/)).toBeVisible()
+    // 研究参考声明
+    await expect(page.getByText('本页面仅用于研究参考，不提供任何交易执行功能。')).toBeVisible()
+  })
+
+  test('guest empty hub still renders the guest banner (session-policy state)', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
+    await installShell(page)
+    await page.route('**/api/pool/hub**', route => json(route, emptyHubPayloadGuest))
+
+    await page.goto('/pool-hub')
+
+    await expect(page.getByRole('heading', { name: '当日无股池结果' })).toBeVisible()
+    const banner = page.getByRole('status').filter({ hasText: '游客模式：股票代码与名称已脱敏' })
+    await expect(banner).toBeVisible()
   })
 
   test('empty hub renders 当日无股池结果 with the as_of hint', async ({ page }, testInfo) => {
@@ -242,6 +329,83 @@ test.describe('Phase 18 pool hub', () => {
     await expect(page.getByText(/交叉共振 · 2 策略/)).toBeVisible()
     await expect(page.getByText('交叉共振：被 ≥2 个竞价策略同时命中的个股')).toBeVisible()
     // 单命中行 600519 不渲染徽标
+    await expect(page.getByText('交叉共振 · 2 策略')).toHaveCount(1)
+  })
+
+  test('vip mode renders 明文 with 名称 and 开盘涨幅', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
+    await installShell(page)
+    await page.route('**/api/pool/hub**', route => json(route, hubPayload))
+
+    await page.goto('/pool-hub')
+    await expect(page.getByRole('button', { name: /竞价多头/ })).toBeVisible()
+
+    // 无游客横幅
+    await expect(page.getByText('游客模式：股票代码与名称已脱敏')).toHaveCount(0)
+
+    // VIP 6 列头
+    const table = page.getByRole('table')
+    for (const header of ['代码', '名称', '开盘涨幅', '涨跌幅', '概念板块', '关联因子']) {
+      await expect(table.getByRole('columnheader', { name: header })).toBeVisible()
+    }
+
+    // 明文: 真实代码 + 名称 + 开盘涨幅 fmtPct
+    await expect(page.getByText('300750', { exact: true })).toBeVisible()
+    await expect(page.getByText('宁德时代', { exact: true })).toBeVisible()
+    await expect(page.getByText('600519', { exact: true })).toBeVisible()
+    await expect(page.getByText('贵州茅台', { exact: true })).toBeVisible()
+    await expect(page.getByText('+2.34%', { exact: true })).toBeVisible()
+    await expect(page.getByText('+1.05%', { exact: true })).toBeVisible()
+  })
+
+  test('guest↔vip mode switch toggles the 开盘涨幅 column from the server mode field', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
+    await installShell(page)
+    let hubCalls = 0
+    const pageErrors: string[] = []
+    page.on('pageerror', err => pageErrors.push(err.message))
+    await page.route('**/api/pool/hub**', route => {
+      hubCalls += 1
+      // 第一次调用 = guest, 刷新后 = vip (mode 完全由服务端声明)
+      if (hubCalls === 1) return json(route, hubPayloadGuest)
+      return json(route, hubPayload)
+    })
+
+    await page.goto('/pool-hub')
+    await expect(page.getByText('游客模式：股票代码与名称已脱敏')).toBeVisible()
+
+    // guest: 5 列, 无 开盘涨幅
+    let table = page.getByRole('table')
+    await expect(table.getByRole('columnheader', { name: '开盘涨幅' })).toHaveCount(0)
+    for (const header of ['代码', '名称', '涨跌幅', '概念板块', '关联因子']) {
+      await expect(table.getByRole('columnheader', { name: header })).toBeVisible()
+    }
+
+    // 刷新 → 服务端改声明 vip → 横幅消失 + 6 列 + 明文
+    await page.getByRole('button', { name: '刷新股池' }).click()
+    await expect(page.getByText('游客模式：股票代码与名称已脱敏')).toHaveCount(0)
+    table = page.getByRole('table')
+    for (const header of ['代码', '名称', '开盘涨幅', '涨跌幅', '概念板块', '关联因子']) {
+      await expect(table.getByRole('columnheader', { name: header })).toBeVisible()
+    }
+    await expect(page.getByText('300750', { exact: true })).toBeVisible()
+
+    // 大量共享 ****** 身份的行不得触发 duplicate-key 或任何未捕获错误
+    expect(pageErrors).toEqual([])
+  })
+
+  test('guest 交叉共振 badge and legend remain visible', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
+    await installShell(page)
+    await page.route('**/api/pool/hub**', route => json(route, hubPayloadGuest))
+
+    await page.goto('/pool-hub')
+    await expect(page.getByRole('button', { name: /竞价多头/ })).toBeVisible()
+
+    // 交叉共振徽标 + legend 在游客模式仍渲染 (关联因子是策略标签, 非 PII)
+    await expect(page.getByText(/交叉共振 · 2 策略/)).toBeVisible()
+    await expect(page.getByText('交叉共振：被 ≥2 个竞价策略同时命中的个股')).toBeVisible()
+    // 单命中行不渲染徽标
     await expect(page.getByText('交叉共振 · 2 策略')).toHaveCount(1)
   })
 
@@ -486,5 +650,84 @@ test.describe('Phase 18 pool hub', () => {
 
     // 数据不可用 卡片 (40% 不透明度 + tooltip)
     await expect(page.getByRole('button', { name: /动量增强/ })).toHaveScreenshot('pool-card-unavailable.png', { maxDiffPixelRatio: 0.02 })
+  })
+
+  test('frontend contains no client-side masking code (grep guard)', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
+    const frontendRoot = process.cwd()
+    const files = [
+      'src/pages/PoolHubPage.tsx',
+      'src/components/pool-hub/GuestModeBanner.tsx',
+      'src/components/pool-hub/StockListTable.tsx',
+      'src/components/pool-hub/ConceptFilter.tsx',
+      'src/components/pool-hub/StrategyCardGrid.tsx',
+      'src/lib/api.ts',
+    ]
+    // GUEST-01 / PITFALL #8: 生产源码零客户端掩码能力 —
+    // 无掩码字面量, 无 row-value 模式推导, 无 mask 标识符/函数。
+    const MASKED_LITERAL_RE = /\*{6,}/
+    const ROW_MODE_DERIVATION_RE = /\.(?:code|symbol)\s*===\s*['"`]\*{6,}['"`]/
+    const MASK_IDENT_RE = /\bmask/i
+    for (const f of files) {
+      const src = readFileSync(path.join(frontendRoot, f), 'utf8')
+      expect(src, `${f} contains a masked literal`).not.toMatch(MASKED_LITERAL_RE)
+      expect(src, `${f} derives guest mode from row values`).not.toMatch(ROW_MODE_DERIVATION_RE)
+      expect(src, `${f} contains a masking function/constant`).not.toMatch(MASK_IDENT_RE)
+    }
+  })
+
+  test('guest accessibility and copy contract', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
+    await installShell(page)
+    await page.route('**/api/pool/hub**', route => json(route, hubPayloadGuest))
+
+    await page.goto('/pool-hub')
+    await expect(page.getByRole('button', { name: /竞价多头/ })).toBeVisible()
+
+    // 横幅 role=status + 可访问文本精确匹配 UI-SPEC
+    const banner = page.getByRole('status').filter({ hasText: '游客模式：股票代码与名称已脱敏' })
+    await expect(banner).toHaveAccessibleName('游客模式：股票代码与名称已脱敏，仅展示涨跌幅与概念板块。')
+
+    // 脱敏单元格是真实文本节点 (非空、非 —), 且不携带任何身份泄露 affordance
+    const maskedCells = page.getByText('******', { exact: true })
+    await expect(maskedCells).toHaveCount(4)
+    const cellCount = await maskedCells.count()
+    for (let i = 0; i < cellCount; i++) {
+      const cell = maskedCells.nth(i)
+      await expect(cell).toBeVisible()
+      await expect(cell).not.toBeEmpty()
+      await expect(cell).not.toHaveText('—')
+      expect(await cell.getAttribute('title'), `masked cell ${i} leaks via title`).toBeNull()
+      expect(await cell.getAttribute('aria-label'), `masked cell ${i} leaks via aria-label`).toBeNull()
+    }
+  })
+
+  test('captures visual evidence for guest mode backstops', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
+    await installShell(page)
+    await page.route('**/api/pool/hub**', route => json(route, visualHubPayloadGuest))
+    await page.route('**/api/screener/strategies**', route => json(route, { presets: knownStrategies }))
+
+    await page.goto('/pool-hub')
+    await expect(page.getByRole('button', { name: /竞价多头/ })).toBeVisible()
+    await page.waitForTimeout(400)
+
+    // Backstop 1/2: 游客横幅与卡片网格共存; 长策略名仍 truncate
+    await expect(page.getByRole('region', { name: '策略卡片' })).toHaveScreenshot('pool-guest-grid.png', { maxDiffPixelRatio: 0.02 })
+    // 游客脱敏明细表 + 横幅
+    await expect(page.getByRole('region', { name: /竞价多头 · 股池明细/ })).toHaveScreenshot('pool-guest-masked.png', { maxDiffPixelRatio: 0.02 })
+
+    // Backstop 3: 大量共享脱敏身份的行保持视觉可区分 (行数 + footer 计数)
+    const maskedCount = await page.getByText('******', { exact: true }).count()
+    expect(maskedCount).toBeGreaterThanOrEqual(24)
+    await expect(page.getByText(/共 12 只/)).toBeVisible()
+
+    // Backstop 4: 服务端改声明 vip → 6 列明文, 无整页 reflow (刷新后覆盖路由)
+    await page.route('**/api/pool/hub**', route => json(route, visualHubPayload))
+    await page.getByRole('button', { name: '刷新股池' }).click()
+    await expect(page.getByRole('columnheader', { name: '开盘涨幅' })).toBeVisible()
+    await expect(page.getByText('300750', { exact: true })).toBeVisible()
+    await page.waitForTimeout(300)
+    await expect(page.getByRole('region', { name: /竞价多头 · 股池明细/ })).toHaveScreenshot('pool-vip-plaintext.png', { maxDiffPixelRatio: 0.02 })
   })
 })
