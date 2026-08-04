@@ -12,6 +12,7 @@ from fastapi import APIRouter, Query, Request
 
 from app.api.screener import _strategy_display_name
 from app.services.pool_hub import build_pool_hub
+from app.services.guest_masking import mask_guest_hub
 
 router = APIRouter(prefix="/api/pool", tags=["pool"])
 
@@ -35,4 +36,12 @@ def get_pool_hub(
     def name_for(sid: str) -> str:
         return _strategy_display_name(engine, sid)
 
-    return build_pool_hub(data_dir, as_of=as_of, concept=concept, name_for=name_for)
+    hub = build_pool_hub(data_dir, as_of=as_of, concept=concept, name_for=name_for)
+
+    # 服务端声明展示模式 (GUEST-01, CONTEXT D-03): 已解析的会话 principal = VIP,
+    # 否则 guest。模式绝不由客户端输入或行值推导 (T-19-02)。
+    is_vip = getattr(request.state, "reviewer_principal", None) is not None
+    hub["mode"] = "vip" if is_vip else "guest"
+    if not is_vip:
+        hub = mask_guest_hub(hub)
+    return hub

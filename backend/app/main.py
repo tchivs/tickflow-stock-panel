@@ -773,6 +773,15 @@ app.add_middleware(
 _AUTH_WHITELIST_PREFIX = ("/api/auth/",)
 _AUTH_WHITELIST_EXACT = ("/health", "/api/health", "/openapi.json", "/docs", "/redoc")
 
+# 游客可读路径: 恰好是股池页的两个只读 GET 数据端点 (GUEST-01 / UI-SPEC)。
+# 任何扩宽都会触发 tests/test_guest_masking.py 的守卫 (T-19-03)。
+_GUEST_READ_GET_PATHS = frozenset({"/api/pool/hub", "/api/screener/strategies"})
+
+
+def _is_guest_readable(path: str, method: str) -> bool:
+    """游客仅可读股池页数据的两个 GET 端点; 其他路径/方法一律不放行。"""
+    return method == "GET" and path in _GUEST_READ_GET_PATHS
+
 
 def _is_trusted_unconfigured_request(request: Request) -> bool:
     """Admit only exact deployment-owned loopback Host/Origin combinations."""
@@ -819,6 +828,10 @@ async def auth_middleware(request: Request, call_next):
         if principal:
             request.state.reviewer_principal = principal
             return await call_next(request)
+    # 游客分支 (GUEST-01): 无有效会话时, 仅放行股池页的两个只读 GET 端点;
+    # 不设置 reviewer_principal (池端点据此派生 mode="guest")。其余一律 401。
+    if _is_guest_readable(path, request.method):
+        return await call_next(request)
     return JSONResponse(status_code=401, content={"detail": "未登录或会话已过期"})
 
 

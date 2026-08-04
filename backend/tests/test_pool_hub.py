@@ -31,6 +31,14 @@ _SYMBOLS = {
     "W": "600003.SH",
 }
 
+# 持久化行真实名称 (名称投影来源)
+_NAMES = {
+    "X": "人工智能龙头",
+    "Y": "宁德新能源",
+    "Z": "新能科技",
+    "W": "早盘之星科技",
+}
+
 
 def _write_strategy_cache(data_dir: Path) -> None:
     """写入 hermetic 策略缓存 — 单一 as_of, 3 个竞价策略。
@@ -48,12 +56,14 @@ def _write_strategy_cache(data_dir: Path) -> None:
                 "rows": [
                     {
                         "symbol": _SYMBOLS["X"],
+                        "name": _NAMES["X"],
                         "open_gap": 3.21,
                         "change_pct": 5.1,
                         "hit_factors": ["竞价多头"],
                     },
                     {
                         "symbol": _SYMBOLS["Y"],
+                        "name": _NAMES["Y"],
                         "open_gap": 1.5,
                         "change_pct": 2.3,
                         "hit_factors": ["盘前强势量化", "竞价多头"],
@@ -66,11 +76,13 @@ def _write_strategy_cache(data_dir: Path) -> None:
                 "rows": [
                     {
                         "symbol": _SYMBOLS["Y"],
+                        "name": _NAMES["Y"],
                         "open_gap": 1.5,
                         "hit_factors": ["盘前强势量化", "竞价多头"],
                     },
                     {
                         "symbol": _SYMBOLS["Z"],
+                        "name": _NAMES["Z"],
                         "open_gap": 0.5,
                         # change_pct 缺失 → 前端渲染 —
                         "hit_factors": ["盘前强势量化"],
@@ -83,6 +95,7 @@ def _write_strategy_cache(data_dir: Path) -> None:
                 "rows": [
                     {
                         "symbol": _SYMBOLS["W"],
+                        "name": _NAMES["W"],
                         "open_gap": 0.1,
                         "change_pct": 0.9,
                         "hit_factors": ["早盘之星"],
@@ -138,7 +151,7 @@ def _strategies_by_id(hub: dict) -> dict[str, dict]:
 
 
 def test_build_pool_hub_single_as_of_counts_and_columns(tmp_path):
-    """单一 as_of 来源: 每策略 total == 持久化行数, 每行恰含五列 + cross_resonance。"""
+    """单一 as_of 来源: 每策略 total == 持久化行数, 每行恰含六列 + cross_resonance。"""
     _write_strategy_cache(tmp_path)
     _write_concept_fixture(tmp_path)
     hub = build_pool_hub(tmp_path)
@@ -153,6 +166,7 @@ def test_build_pool_hub_single_as_of_counts_and_columns(tmp_path):
     expected_keys = {
         "symbol",
         "code",
+        "name",
         "open_gap",
         "change_pct",
         "concept_board",
@@ -357,10 +371,17 @@ class _FakeEngine:
 
 
 def _make_client(tmp_path: Path, engine=None) -> TestClient:
+    """最小应用 + 绑定 VIP 会话 principal (端点回归期望 明文 rows; 游客脱敏见 test_guest_masking)。"""
     app = FastAPI()
     app.include_router(pool_api.router)
     app.state.repo = _FakeRepo(tmp_path)
     app.state.strategy_engine = engine
+
+    @app.middleware("http")
+    async def bind_vip(request, call_next):
+        request.state.reviewer_principal = "reviewer_test"
+        return await call_next(request)
+
     return TestClient(app)
 
 
@@ -423,7 +444,7 @@ def test_get_pool_hub_missing_cache_empty(tmp_path):
     client = _make_client(tmp_path)
     resp = client.get("/api/pool/hub")
     assert resp.status_code == 200
-    assert resp.json() == {"as_of": None, "updated_at": None, "strategies": [], "resonance_count": 0}
+    assert resp.json() == {"as_of": None, "updated_at": None, "strategies": [], "resonance_count": 0, "mode": "vip"}
 
 
 def test_get_pool_hub_json_serializable_roundtrip(tmp_path):

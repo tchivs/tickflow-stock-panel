@@ -4,7 +4,7 @@
 - 从 strategy_cache 读取单一 as_of 的策略结果 (其 ``results`` 形状即
   ``screener_results/`` 持久化形状), 卡片 ``total`` 与明细 ``rows`` 来自同一次
   读取, 永不漂移 (PITFALL #10, D-02)。
-- 每行投影出五列: code / 开盘涨幅 (open_gap) / 涨跌幅 (change_pct) /
+- 每行投影出六列: code / 名称 (name) / 开盘涨幅 (open_gap) / 涨跌幅 (change_pct) /
   概念板块 (concept_board) / 关联因子 (hit_factors), 外加服务端计算的
   交叉共振 (cross_resonance = len(hit_factors) >= 2, D-03)。
 - 概念筛选是当前 as_of 池上的投影: 只收窄 rows, ``total`` 保持权威全量 (D-04)。
@@ -118,6 +118,7 @@ def build_pool_hub(
             projected = {
                 "symbol": symbol,
                 "code": symbol.split(".", 1)[0],
+                "name": str(row.get("name") or ""),
                 "open_gap": _safe_num(row.get("open_gap")),
                 "change_pct": _safe_num(row.get("change_pct")),
                 "concept_board": concept_map.get(symbol.upper(), []),
