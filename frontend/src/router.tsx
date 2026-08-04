@@ -6,6 +6,7 @@ import { Auth } from './pages/Auth'
 import { useSettings } from './lib/useSharedQueries'
 import { Logo } from './components/Logo'
 
+import { NotFound } from './pages/NotFound'
 // 代码分割: 页面全部 lazy 加载, 避免首屏打包所有页面 (ECharts / lightweight-charts /
 // framer-motion 等重库) → 大幅减小首屏 bundle。命名导出用 .then 映射为 default。
 // Layout / Onboarding / Auth 为应用外壳与入口, 保持同步加载。
@@ -104,6 +105,8 @@ export const router = createBrowserRouter([
       { path: 'settings/keys', element: <Navigate to="/settings?tab=account" replace /> },
       { path: 'settings/ai', element: <Navigate to="/settings?tab=ai" replace /> },
       { path: 'settings/queries', element: <Navigate to="/settings?tab=queries" replace /> },
+      // 未匹配路径: 友好 404 页(否则 React Router 抛出 Unexpected Application Error)
+      { path: '*', element: <NotFound /> },
     ],
   },
 ])

@@ -886,6 +886,10 @@ if _static.exists():
         index.html 禁止缓存 (Cache-Control: no-store), 确保浏览器每次拿到
         最新版本引用的 JS/CSS 文件名 (assets 带 hash, 可长缓存)。
         """
+        # 未匹配的 /api/* 必须是 404 JSON — 前端 fetch 到 HTML 会解析失败,
+        # 且会掩盖拼错的路径 / 缺失的路由。SPA 回退只服务非 API 路径。
+        if full_path.startswith("api/") or full_path == "api":
+            return JSONResponse(status_code=404, content={"detail": "Not Found"})
         index = _static / "index.html"
         if index.exists():
             return FileResponse(
