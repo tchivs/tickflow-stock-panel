@@ -13,16 +13,20 @@ export function PageHeader({ title, subtitle, titleExtra, right, className }: Pr
   return (
     <header
       className={cn(
-        'px-5 pt-3 pb-2 border-b border-border flex items-center justify-between gap-4',
+        'flex flex-col items-stretch gap-2 border-b border-border px-3 pt-2.5 pb-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-5 sm:pt-3 sm:pb-2',
         className,
       )}
     >
-      <div className="flex items-center gap-2">
-        <h1 data-phase5-typography className="text-[24px] font-semibold leading-[1.25] tracking-tight text-foreground">{title}</h1>
-        {titleExtra}
-        {subtitle && <span className="text-xs text-muted">{subtitle}</span>}
+      <div className="flex min-w-0 items-center gap-2">
+        <h1 data-phase5-typography className="shrink-0 whitespace-nowrap text-[22px] font-semibold leading-[1.25] tracking-tight text-foreground sm:text-[24px]">{title}</h1>
+        {titleExtra && <div className="shrink-0">{titleExtra}</div>}
+        {subtitle && <span className="min-w-0 truncate text-xs text-muted">{subtitle}</span>}
       </div>
-      {right}
+      {right && (
+        <div className="min-w-0 max-w-full overflow-x-auto whitespace-nowrap [scrollbar-width:none] [&::-webkit-scrollbar]:hidden max-md:[&_button]:min-h-11 max-md:[&_button]:min-w-11 sm:shrink-0">
+          <div className="w-full sm:w-max">{right}</div>
+        </div>
+      )}
     </header>
   )
 }

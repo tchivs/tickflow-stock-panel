@@ -61,7 +61,7 @@ export function Financials() {
     return (
       <>
         <PageHeader title="财务分析" subtitle="利润表 / 资负表 / 现金流 / 关键指标 / AI分析 · Expert" />
-        <div className="px-8 py-10">
+        <div className="px-4 py-8 sm:px-6 sm:py-10 lg:px-8">
           <div className="mx-auto max-w-md rounded-card border border-warning/30 bg-warning/[0.04] p-8 text-center">
             <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-warning/10">
               <Lock className="h-6 w-6 text-warning" />
@@ -186,7 +186,7 @@ export function Financials() {
         }
       />
 
-      <div className="px-8 py-6 space-y-6 max-w-7xl">
+      <div className="px-4 py-5 space-y-6 max-w-7xl sm:px-6 sm:py-6 lg:px-8">
         {syncing && (
           <div className="flex items-center gap-2 rounded-card border border-accent/30 bg-accent/[0.06] px-3 py-2 text-xs text-accent">
             <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />

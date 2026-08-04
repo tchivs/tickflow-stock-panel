@@ -744,6 +744,7 @@ export function StrategyBacktest({ onStrategyChange }: { onStrategyChange?: (str
   // 跨会话/拉新代码后自动渲染一个可能对应已失效策略的旧结果会造成困惑
   // (切页不卸载组件,内存中的 result 仍保留,无需靠 localStorage 恢复)。
   const [result, setResult] = useState<StrategyBacktestResult | null>(null)
+  const [mobilePanel, setMobilePanel] = useState<'config' | 'result'>('config')
   const [resultTab, setResultTab] = useState<'daily' | 'trades' | 'picks'>('daily')
   const [dailyPage, setDailyPage] = useState(0)
   const [tradePage, setTradePage] = useState(0)
@@ -835,6 +836,7 @@ export function StrategyBacktest({ onStrategyChange }: { onStrategyChange?: (str
       setResultTaskId(backtestTask.id)
       setRetainedExperiment(null)
       setResultTab('daily')
+      setMobilePanel('result')
       setDailyPage(0)
       setTradePage(0)
       storage.strategyBacktestLast.set({
@@ -946,6 +948,7 @@ export function StrategyBacktest({ onStrategyChange }: { onStrategyChange?: (str
     })
     setRetainedExperiment(null)
     setResultTaskId(null)
+    setMobilePanel('result')
   }
 
   // 提取统计
@@ -1168,9 +1171,14 @@ export function StrategyBacktest({ onStrategyChange }: { onStrategyChange?: (str
     .filter(item => item.value > 0)
 
   return (
-    <div className="h-full min-h-0 overflow-hidden rounded-card border border-border bg-surface/80 grid grid-cols-1 xl:grid-cols-[18rem_minmax(0,1fr)]">
+    <>
+      <div className="mb-2 grid grid-cols-2 gap-1 rounded-btn border border-border bg-surface/70 p-1 xl:hidden" role="tablist" aria-label="回测面板">
+        <button type="button" role="tab" aria-selected={mobilePanel === 'config'} onClick={() => setMobilePanel('config')} className={`min-h-11 rounded-btn px-3 text-xs font-medium ${mobilePanel === 'config' ? 'bg-accent/15 text-accent' : 'text-muted'}`}>回测配置</button>
+        <button type="button" role="tab" aria-selected={mobilePanel === 'result'} onClick={() => setMobilePanel('result')} className={`min-h-11 rounded-btn px-3 text-xs font-medium ${mobilePanel === 'result' ? 'bg-accent/15 text-accent' : 'text-muted'}`}>回测结果</button>
+      </div>
+      <div className="h-full min-h-0 overflow-hidden rounded-card border border-border bg-surface/80 grid grid-cols-1 xl:grid-cols-[18rem_minmax(0,1fr)]">
       {/* 配置面板 */}
-      <section className="space-y-3 border-b xl:border-b-0 xl:border-r border-border bg-base/25 px-3 py-3 xl:overflow-y-auto">
+      <section className={`${mobilePanel === 'config' ? 'flex flex-col' : 'hidden'} xl:flex space-y-3 border-b xl:border-b-0 xl:border-r border-border bg-base/25 px-3 py-3 xl:overflow-y-auto`}>
         <div>
           <div className="flex items-center justify-between mb-1.5">
             <label className="text-xs font-medium text-secondary">选择策略</label>
@@ -1298,7 +1306,7 @@ export function StrategyBacktest({ onStrategyChange }: { onStrategyChange?: (str
             </span>
           </div>
 
-          <div className="mt-2 grid grid-cols-2 gap-2">
+          <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
             <div>
               <label className="text-[11px] text-secondary block mb-1">开始</label>
               <DatePicker
@@ -1397,7 +1405,7 @@ export function StrategyBacktest({ onStrategyChange }: { onStrategyChange?: (str
           )}
         </div>
 
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           <div>
             <div className="flex items-center gap-1 mb-1.5">
               <label className="text-xs font-medium text-secondary">建仓口径</label>
@@ -1418,7 +1426,7 @@ export function StrategyBacktest({ onStrategyChange }: { onStrategyChange?: (str
         </div>
 
         {simMode === 'position' && (
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           <div>
             <label className="text-xs font-medium text-secondary block mb-1.5">初始资金</label>
             <input type="number" value={initialCapital} onChange={e => setInitialCapital(e.target.value)}
@@ -1444,7 +1452,7 @@ export function StrategyBacktest({ onStrategyChange }: { onStrategyChange?: (str
         </div>
         )}
         {simMode === 'position' && (
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
           <div>
             <label className="text-[10px] font-medium text-secondary block mb-1">佣金 ‱</label>
             <input type="number" min={0} value={fees} onChange={e => setFees(e.target.value)} className={INPUT_CLS} />
@@ -1498,7 +1506,7 @@ export function StrategyBacktest({ onStrategyChange }: { onStrategyChange?: (str
       </section>
 
       {/* 结果面板 */}
-      <section className="min-w-0 space-y-3 bg-base/15 px-3 py-3 xl:overflow-y-auto">
+      <section className={`${mobilePanel === 'result' ? 'block' : 'hidden'} xl:block min-w-0 space-y-3 bg-base/15 px-3 py-3 xl:overflow-y-auto`}>
         {/* 模式切换: 仓位模拟 / 全量模拟 */}
         <div className="flex items-center justify-between gap-2">
           <div className="inline-flex rounded-btn border border-border bg-surface/80 p-0.5 shadow-sm">
@@ -2461,5 +2469,6 @@ export function StrategyBacktest({ onStrategyChange }: { onStrategyChange?: (str
 
       <TradeKlineModal trade={selectedTrade} onClose={() => setSelectedTrade(null)} />
     </div>
+    </>
   )
 }

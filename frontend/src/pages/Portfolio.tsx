@@ -129,8 +129,8 @@ export function Portfolio() {
               </div>
             </section>
             <section aria-label="账户与持仓" className="space-y-3">
-              <div className="flex flex-wrap items-center gap-2 border-y border-border py-3">
-                <label className="relative min-w-0 flex-1 sm:max-w-xs" htmlFor="portfolio-account-filter">
+              <div className="flex flex-col gap-2 border-y border-border py-3 sm:flex-row sm:flex-wrap sm:items-center">
+                <label className="relative w-full sm:min-w-0 sm:flex-1 sm:max-w-xs" htmlFor="portfolio-account-filter">
                   <span className="sr-only">选择账户</span>
                   <select id="portfolio-account-filter" value={selectedAccountId ?? ''} onChange={event => setSelectedAccountId(event.target.value ? Number(event.target.value) : undefined)} disabled={accountsQuery.isLoading} className="h-8 w-full appearance-none rounded-btn border border-border bg-surface px-3 pr-8 text-sm text-foreground outline-none focus:border-accent focus:ring-2 focus:ring-accent/30 max-md:min-h-11">
                     <option value="">全部账户{accounts.length ? ` · ${accounts.length}` : ''}</option>
@@ -138,9 +138,11 @@ export function Portfolio() {
                   </select>
                   <ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" />
                 </label>
-                <button type="button" onClick={() => setAccountDialog(selectedAccount ? 'edit' : 'create')} className="inline-flex min-h-8 items-center gap-1.5 rounded-btn border border-border px-3 text-sm text-secondary hover:bg-elevated hover:text-foreground max-md:min-h-11"><Settings2 className="h-4 w-4" />管理账户</button>
-                <button type="button" aria-pressed={showArchived} onClick={() => setShowArchived(value => !value)} className="inline-flex min-h-8 items-center gap-1.5 rounded-btn px-2 text-sm text-muted hover:bg-elevated hover:text-secondary max-md:min-h-11"><Archive className="h-4 w-4" />{showArchived ? '隐藏已归档' : '显示已归档'}</button>
-                <span className="ml-auto text-xs text-muted">{freshnessState.label === '暂无法估值' ? '— 暂无法估值' : freshnessState.label.startsWith('实时') ? '● 实时行情' : '● 最新治理收盘价'}</span>
+                <div className="grid grid-cols-2 gap-2 sm:contents">
+                  <button type="button" onClick={() => setAccountDialog(selectedAccount ? 'edit' : 'create')} className="inline-flex min-h-8 items-center justify-center gap-1.5 rounded-btn border border-border px-3 text-sm text-secondary hover:bg-elevated hover:text-foreground max-md:min-h-11"><Settings2 className="h-4 w-4" />管理账户</button>
+                  <button type="button" aria-pressed={showArchived} onClick={() => setShowArchived(value => !value)} className="inline-flex min-h-8 items-center justify-center gap-1.5 rounded-btn px-2 text-sm text-muted hover:bg-elevated hover:text-secondary max-md:min-h-11"><Archive className="h-4 w-4" />{showArchived ? '隐藏已归档' : '显示已归档'}</button>
+                </div>
+                <span className="text-xs text-muted sm:ml-auto">{freshnessState.label === '暂无法估值' ? '— 暂无法估值' : freshnessState.label.startsWith('实时') ? '● 实时行情' : '● 最新治理收盘价'}</span>
               </div>
               {isError && summary && <p role="status" className="text-sm text-warning">刷新投资组合失败，正在显示上次结果。<button type="button" onClick={retry} className="ml-2 text-accent underline">重新加载投资组合</button></p>}
               {holdingsQuery.isLoading && holdings.length === 0 ? <HoldingSkeletons /> : holdings.length === 0 ? (
