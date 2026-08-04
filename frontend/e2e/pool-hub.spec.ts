@@ -1,5 +1,7 @@
 import type { Page, Route } from '@playwright/test'
 import { expect, test } from '@playwright/test'
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
 
 const DESKTOP_PROJECT = 'desktop-chromium'
 
@@ -57,6 +59,35 @@ const knownStrategies = [
   { id: 'auction_momentum', name: '动量增强', description: '开盘动量', source: 'builtin' },
 ]
 
+// ===== Task 3: 视觉证据 (UI-SPEC 5 个 backstop 标量) =====
+const VISUAL_LONG_NAME = '竞价高开强度叠加盘前量能与连板因子共振筛选策略（超长名称用于截断演示）'
+
+const visualRows: typeof doublyHitRow[] = [
+  { symbol: '300750.SZ', code: '300750', open_gap: 0.0234, change_pct: 0.0512, concept_board: ['新能源', '人工智能', '动力电池', '固态电池', '超级充电', '锂电池隔膜'], hit_factors: ['竞价多头', '盘前强势量化'], cross_resonance: true },
+  { symbol: '600519.SH', code: '600519', open_gap: 0.0105, change_pct: null, concept_board: ['白酒'], hit_factors: ['竞价多头'], cross_resonance: false },
+  { symbol: '000001.SZ', code: '000001', open_gap: null, change_pct: -0.0012, concept_board: [], hit_factors: [], cross_resonance: false },
+  { symbol: '688981.SH', code: '688981', open_gap: 0.0188, change_pct: 0.002, concept_board: ['半导体', '芯片'], hit_factors: ['竞价多头'], cross_resonance: false },
+  { symbol: '832566.BJ', code: '832566', open_gap: -0.004, change_pct: -0.02, concept_board: ['北交所'], hit_factors: ['盘前强势量化'], cross_resonance: false },
+  { symbol: '000010.SZ', code: '000010', open_gap: 0.003, change_pct: 0.011, concept_board: ['银行'], hit_factors: ['竞价多头'], cross_resonance: false },
+  { symbol: '000011.SZ', code: '000011', open_gap: 0.006, change_pct: 0.018, concept_board: ['券商'], hit_factors: ['竞价多头'], cross_resonance: false },
+  { symbol: '000012.SZ', code: '000012', open_gap: 0.009, change_pct: 0.024, concept_board: ['地产'], hit_factors: ['竞价多头'], cross_resonance: false },
+  { symbol: '000013.SZ', code: '000013', open_gap: -0.002, change_pct: -0.008, concept_board: ['钢铁'], hit_factors: ['竞价多头'], cross_resonance: false },
+  { symbol: '000014.SZ', code: '000014', open_gap: 0.014, change_pct: 0.031, concept_board: ['煤炭'], hit_factors: ['竞价多头'], cross_resonance: false },
+  { symbol: '000015.SZ', code: '000015', open_gap: 0.001, change_pct: 0.005, concept_board: ['石油'], hit_factors: ['竞价多头'], cross_resonance: false },
+  { symbol: '000016.SZ', code: '000016', open_gap: 0.02, change_pct: 0.045, concept_board: ['军工'], hit_factors: ['竞价多头'], cross_resonance: false },
+]
+
+const visualHubPayload = {
+  as_of: HUB_AS_OF,
+  updated_at: HUB_UPDATED_AT,
+  strategies: [
+    { id: 'auction_bullish', name: '竞价多头', total: visualRows.length, rows: visualRows },
+    { id: 'auction_long_name', name: VISUAL_LONG_NAME, total: 1, rows: [doublyHitRow] },
+    { id: 'auction_early_star', name: '早盘之星', total: 0, rows: [] as typeof doublyHitRow[] },
+  ],
+  resonance_count: 1,
+}
+
 const json = (route: Route, body: unknown, status = 200) =>
   route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
 
@@ -106,7 +137,7 @@ test.describe('Phase 18 pool hub', () => {
 
     await page.goto('/pool-hub')
 
-    await expect(page.getByRole('heading', { name: '股池' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: '股池', exact: true })).toBeVisible()
     await expect(page.getByText('竞价策略 · 数据日期 2026-08-04 · 仅研究参考')).toBeVisible()
 
     // 两张策略卡片 + 当日池数
@@ -272,5 +303,188 @@ test.describe('Phase 18 pool hub', () => {
     await expect(page.getByText(/今日无交叉共振/)).toBeVisible()
     await expect(page.getByText('暂无个股被 ≥2 个竞价策略同时命中。')).toBeVisible()
     await expect(page.getByText(/交叉共振 · \d+ 策略/)).toHaveCount(0)
+  })
+  test('pool page renders zero execution affordances (POOL-03)', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
+    await installShell(page)
+    await page.route('**/api/pool/hub**', route => json(route, hubPayload))
+    await page.route('**/api/screener/strategies**', route => json(route, { presets: knownStrategies }))
+
+    await page.goto('/pool-hub')
+    await expect(page.getByRole('button', { name: /竞价多头/ })).toBeVisible()
+
+    // 作用域限定在 main (布局侧边栏的「交易」导航不属于股池功能面)
+    const main = page.getByRole('main')
+    const EXECUTION_RE = /买入|卖出|委托|下单|交易|buy|sell|order|trade|execute/i
+    await expect(main.getByRole('button', { name: EXECUTION_RE })).toHaveCount(0)
+    await expect(main.getByRole('link', { name: EXECUTION_RE })).toHaveCount(0)
+
+    // 研究参考声明
+    await expect(page.getByText('本页面仅用于研究参考，不提供任何交易执行功能。')).toBeVisible()
+
+    // 白名单: 股池页唯一交互 = 刷新 / 卡片钻取 / 概念输入 / 清除筛选
+    const ALLOWED_RE = /刷新股池|当日池|当日无命中|数据不可用|清除筛选|清除概念筛选|重试|收起|\+\d+/
+    const btnCount = await main.getByRole('button').count()
+    for (let i = 0; i < btnCount; i++) {
+      const btn = main.getByRole('button').nth(i)
+      const name = (await btn.getAttribute('aria-label')) ?? (await btn.textContent()) ?? ''
+      expect(name.trim(), `unexpected interactive control: ${name.trim()}`).toMatch(ALLOWED_RE)
+    }
+  })
+
+  test('pool page never issues a mutating request (POOL-03)', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
+    await installShell(page)
+    const captured: string[] = []
+    page.on('request', r => {
+      const url = new URL(r.url())
+      if (url.pathname.startsWith('/api/')) captured.push(`${r.method()} ${url.pathname}`)
+    })
+    await page.route('**/api/pool/hub**', route => json(route, hubPayload))
+    await page.route('**/api/screener/strategies**', route => json(route, { presets: knownStrategies }))
+
+    await page.goto('/pool-hub')
+    await expect(page.getByRole('button', { name: /竞价多头/ })).toBeVisible()
+
+    // 交互: 刷新 / 概念输入 / 卡片钻取 — 全部只读
+    await page.getByRole('button', { name: '刷新股池' }).click()
+    await page.getByLabel('概念筛选').fill('新能源')
+    await page.getByRole('button', { name: /盘前强势量化/ }).click()
+
+    const nonGet = captured.filter(c => !/^GET /.test(c))
+    expect(nonGet, `non-GET requests: ${nonGet.join(', ')}`).toEqual([])
+    const execPaths = captured.filter(c => /order|trade|broker|portfolio|execution|deals/.test(c))
+    expect(execPaths, `execution-family endpoints hit: ${execPaths.join(', ')}`).toEqual([])
+  })
+
+  test('pool page source contains no execution API call or form', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
+    const frontendRoot = process.cwd()
+    const files = [
+      'src/pages/PoolHubPage.tsx',
+      'src/components/pool-hub/StrategyCardGrid.tsx',
+      'src/components/pool-hub/ConceptFilter.tsx',
+      'src/components/pool-hub/StockListTable.tsx',
+    ]
+    const EXEC_API_RE = /api\.\w*(order|trade|execute|broker|transaction|deals)\w*/i
+    for (const f of files) {
+      const src = readFileSync(path.join(frontendRoot, f), 'utf8')
+      expect(src, `${f} contains <form>`).not.toMatch(/<form/i)
+      expect(src, `${f} calls an execution-family API`).not.toMatch(EXEC_API_RE)
+      expect(src, `${f} contains a mutating fetch verb`).not.toMatch(/fetch\([^)]*,\s*\{\s*method:\s*['"](POST|PUT|DELETE|PATCH)/)
+    }
+  })
+
+  test('drill-down refresh failure renders inline 股池明细加载失败 alert with 重试', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
+    await installShell(page)
+    let hubCalls = 0
+    await page.route('**/api/pool/hub**', route => {
+      hubCalls += 1
+      if (hubCalls === 1) return json(route, hubPayload)
+      return json(route, { detail: '后台刷新失败' }, 500)
+    })
+
+    await page.goto('/pool-hub')
+    await expect(page.getByRole('button', { name: /竞价多头/ })).toBeVisible()
+
+    // 刷新失败 (已有载荷) → 行内明细 alert, 页面不整体崩溃
+    await page.getByRole('button', { name: '刷新股池' }).click()
+    await expect(page.getByRole('alert')).toBeVisible()
+    await expect(page.getByText(/股池明细加载失败：后台刷新失败。请重试。/)).toBeVisible()
+    await expect(page.getByRole('button', { name: '重试' })).toBeVisible()
+    // 卡片仍在
+    await expect(page.getByRole('button', { name: /竞价多头/ })).toBeVisible()
+  })
+
+  test('accessibility and copy compliance on the pool surface', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
+    await installShell(page)
+    await page.route('**/api/pool/hub**', route => json(route, visualHubPayload))
+    await page.route('**/api/screener/strategies**', route => json(route, { presets: knownStrategies }))
+
+    await page.goto('/pool-hub')
+    await expect(page.getByRole('button', { name: /竞价多头/ })).toBeVisible()
+
+    // 可见 label 关联真实 input (aria-describedby 关联帮助文本)
+    const input = page.getByLabel('概念筛选')
+    await expect(page.locator('label[for="pool-concept-filter"]')).toBeVisible()
+    await expect(input).toBeVisible()
+    await expect(input).toHaveAttribute('placeholder', '输入概念名筛选…')
+    await expect(input).toHaveAttribute('aria-describedby', 'pool-concept-filter-help')
+
+    // 涨跌方向: 符号 + 颜色并存 (绝不只靠颜色)
+    await expect(page.getByText('+2.34%', { exact: true })).toBeVisible()
+    await expect(page.getByText('-0.12%', { exact: true })).toBeVisible()
+
+    // 交叉共振行: accent 底色 + 左边框 + 徽标文本并存 (不只靠颜色)
+    const resonanceRow = page.getByRole('row').filter({ hasText: '300750' })
+    const rowClass = await resonanceRow.getAttribute('class')
+    expect(rowClass ?? '').toContain('bg-accent')
+    await expect(resonanceRow.getByText(/交叉共振 · 2 策略/)).toBeVisible()
+
+    // Backstop 1: 数据不可用 卡片 40% 不透明度 + 无点击
+    const unavailableCard = page.getByRole('button', { name: /动量增强/ })
+    await expect(unavailableCard.getByText('数据不可用')).toBeVisible()
+    const cardClass = await unavailableCard.getAttribute('class')
+    expect(cardClass ?? '').toContain('opacity-40')
+    await expect(unavailableCard).toBeDisabled()
+
+    // Backstop 2: 长策略名 truncate (卡片名行)
+    const longCard = page.getByRole('button', { name: new RegExp(VISUAL_LONG_NAME) })
+    const nameSpan = longCard.locator('span').first()
+    expect((await nameSpan.getAttribute('class')) ?? '').toContain('truncate')
+
+    // Backstop 3: 缺失单元格渲染 — (开盘/概念/因子 3 处), 单命中行无徽标
+    const missingRow = page.getByRole('row').filter({ hasText: '000001' })
+    await expect(missingRow.getByText('—')).toHaveCount(3)
+    await expect(missingRow.getByText(/交叉共振/)).toHaveCount(0)
+
+    // Backstop 4: 多行在 overflow-x-auto 容器内滚动, 代码列不被截断
+    const scrollContainer = page.getByRole('table').locator('..')
+    const containerClass = await scrollContainer.getAttribute('class')
+    expect(containerClass ?? '').toContain('overflow-x-auto')
+    const codeCell = page.getByRole('cell', { name: /688981/ }).first()
+    const codeCellClass = await codeCell.getAttribute('class')
+    expect(codeCellClass ?? '').toContain('whitespace-nowrap')
+    // Backstop 5: 长概念 chip truncate (展开后检查隐藏的长概念)
+    await resonanceRow.getByRole('button', { name: '+3' }).click()
+    const longChip = page.getByText('锂电池隔膜')
+    const chipClass = await longChip.getAttribute('class')
+    expect(chipClass ?? '').toContain('truncate')
+  })
+
+  test('captures visual evidence for the five UI-SPEC backstop scalars', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
+    await installShell(page)
+    await page.route('**/api/pool/hub**', route => json(route, visualHubPayload))
+    await page.route('**/api/screener/strategies**', route => json(route, { presets: knownStrategies }))
+
+    await page.goto('/pool-hub')
+    await expect(page.getByRole('button', { name: /竞价多头/ })).toBeVisible()
+    // 等 250ms motion reveal 完成, 截取稳定帧
+    await page.waitForTimeout(400)
+
+    // (1)(2) 卡片网格: populated + 数据不可用卡片 + 长名截断
+    await expect(page.getByRole('region', { name: '策略卡片' })).toHaveScreenshot('pool-grid-populated.png', { maxDiffPixelRatio: 0.02 })
+    // (3)(4) 明细表: 交叉共振行 + — 单元格 + 多行滚动容器
+    await expect(page.getByRole('region', { name: /竞价多头 · 股池明细/ })).toHaveScreenshot('pool-table-resonance.png', { maxDiffPixelRatio: 0.02 })
+
+    // 概念筛选激活: 筛选后 1 只 / 共 12 只 (客户端投影)
+    await page.getByLabel('概念筛选').fill('新能源')
+    await expect(page.getByText(/筛选后 1 只 \/ 共 12 只/)).toBeVisible()
+    await page.waitForTimeout(300)
+    await expect(page.getByRole('region', { name: /竞价多头 · 股池明细/ })).toHaveScreenshot('pool-table-filter-active.png', { maxDiffPixelRatio: 0.02 })
+
+    // 零命中钻取空态
+    await page.getByRole('button', { name: /清除筛选/ }).click()
+    await page.getByRole('button', { name: /早盘之星/ }).click()
+    await expect(page.getByRole('region', { name: /早盘之星 · 股池明细/ })).toBeVisible()
+    await expect(page.getByRole('region', { name: /早盘之星 · 股池明细/ }).getByText('当日无命中')).toBeVisible()
+    await page.waitForTimeout(300)
+    await expect(page.getByRole('region', { name: /早盘之星 · 股池明细/ })).toHaveScreenshot('pool-empty-zero-hit.png', { maxDiffPixelRatio: 0.02 })
+
+    // 数据不可用 卡片 (40% 不透明度 + tooltip)
+    await expect(page.getByRole('button', { name: /动量增强/ })).toHaveScreenshot('pool-card-unavailable.png', { maxDiffPixelRatio: 0.02 })
   })
 })
