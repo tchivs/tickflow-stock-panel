@@ -180,3 +180,71 @@ def test_auction_strategies_only_use_governed_columns():
         ("auction_bullish", "auction_preopen_quant", "auction_early_star"),
     ):
         assert strat.META["id"] == stem
+
+
+# ================================================================
+# Task 3: STRAT-03 regression — builtin-only 发现 + PRESET_STRATEGIES 去重, 无第三条注册轨道
+# ================================================================
+
+
+def _fake_repo(tmp_path):
+    """最小 repo 桩: 仅提供 strategies 端点用到的 store.data_dir。"""
+    from types import SimpleNamespace
+
+    return SimpleNamespace(store=SimpleNamespace(data_dir=tmp_path))
+
+
+def _screener_client(tmp_path):
+    """最小 FastAPI + screener.router + 真实 builtin 引擎, 无网络无真实数据湖。"""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.api import screener as screener_api
+
+    app = FastAPI()
+    app.include_router(screener_api.router)
+    app.state.repo = _fake_repo(tmp_path)
+    app.state.strategy_engine = _engine()
+    return TestClient(app)
+
+
+def test_auction_strategies_appear_once_in_strategies_api(tmp_path):
+    """strategies API: 每个竞价 id 恰好一次, source=builtin; load_errors 干净。"""
+    client = _screener_client(tmp_path)
+    resp = client.get("/api/screener/strategies?asset_type=stock")
+    assert resp.status_code == 200
+    presets = resp.json()["presets"]
+    for sid in _AUCTION_IDS:
+        entries = [p for p in presets if p["id"] == sid]
+        assert len(entries) == 1, f"{sid} 应恰好出现一次, 实际 {len(entries)}"
+        assert entries[0]["source"] == "builtin"
+    auction_files = {
+        "auction_bullish.py",
+        "auction_preopen_quant.py",
+        "auction_early_star.py",
+    }
+    for err in resp.json().get("load_errors", []):
+        assert err.get("file") not in auction_files
+
+
+def test_auction_ids_never_collide_with_presets():
+    """去重前提: 三个竞价 id 均不在 PRESET_STRATEGIES 键中, 永不会双列。"""
+    from app.services.screener import PRESET_STRATEGIES
+
+    for sid in _AUCTION_IDS:
+        assert sid not in PRESET_STRATEGIES
+
+
+def test_no_third_registry_track():
+    """无第三条注册轨道: 竞价策略只能经 builtin 目录被 engine 发现。"""
+    engine = _engine()
+    listed = {m["id"] for m in engine.list_strategies()}
+    for sid in _AUCTION_IDS:
+        assert sid in listed, f"{sid} 必须由 engine 从 strategy/builtin 自动发现"
+
+    # 除 strategy/builtin/*.py 之外, 不应有任何硬注册出现竞价 id
+    engine_src = (_BUILTIN_DIR.parent / "engine.py").read_text(encoding="utf-8")
+    init_src = (_BUILTIN_DIR / "__init__.py").read_text(encoding="utf-8")
+    for sid in _AUCTION_IDS:
+        assert sid not in engine_src
+        assert sid not in init_src
