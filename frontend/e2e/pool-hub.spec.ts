@@ -30,6 +30,33 @@ const hubPayload = {
 
 const emptyHubPayload = { as_of: HUB_AS_OF, updated_at: HUB_UPDATED_AT, strategies: [], resonance_count: 0 }
 
+const zeroHitHubPayload = {
+  as_of: HUB_AS_OF,
+  updated_at: HUB_UPDATED_AT,
+  strategies: [
+    ...hubPayload.strategies,
+    { id: 'auction_early_star', name: '早盘之星', total: 0, rows: [] as typeof doublyHitRow[] },
+  ],
+  resonance_count: 1,
+}
+
+const noResonanceHubPayload = {
+  as_of: HUB_AS_OF,
+  updated_at: HUB_UPDATED_AT,
+  strategies: [
+    { id: 'auction_bullish', name: '竞价多头', total: 1, rows: [singleHitRow] },
+  ],
+  resonance_count: 0,
+}
+
+/** 已知策略全集 (preset 列表) — 不在 hub 载荷里的策略渲染 数据不可用 */
+const knownStrategies = [
+  { id: 'auction_bullish', name: '竞价多头', description: '竞价高开强度', source: 'builtin' },
+  { id: 'auction_preopen_quant', name: '盘前强势量化', description: '盘前量化强度', source: 'builtin' },
+  { id: 'auction_early_star', name: '早盘之星', description: '早盘强势', source: 'builtin' },
+  { id: 'auction_momentum', name: '动量增强', description: '开盘动量', source: 'builtin' },
+]
+
 const json = (route: Route, body: unknown, status = 200) =>
   route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
 
@@ -146,5 +173,104 @@ test.describe('Phase 18 pool hub', () => {
 
     // 延迟返回后进入 populated 状态
     await expect(page.getByRole('button', { name: /竞价多头/ })).toBeVisible()
+  })
+  test('concept filter projects client-side over the loaded payload with 筛选后/共 footer', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
+    await installShell(page)
+    let hubRequests = 0
+    page.on('request', r => {
+      if (new URL(r.url()).pathname === '/api/pool/hub') hubRequests += 1
+    })
+    await page.route('**/api/pool/hub**', route => json(route, hubPayload))
+
+    await page.goto('/pool-hub')
+    await expect(page.getByRole('button', { name: /竞价多头/ })).toBeVisible()
+
+    // 输入 新能源 → 仅 300750 (新能源) 保留, 600519 (白酒) 消失; 不发第二次 fetch
+    await page.getByLabel('概念筛选').fill('新能源')
+    await expect(page.getByText(/筛选后 1 只 \/ 共 2 只/)).toBeVisible()
+    await expect(page.getByText('600519', { exact: true })).toHaveCount(0)
+    await expect(page.getByText('300750', { exact: true })).toBeVisible()
+    expect(hubRequests).toBe(1)
+
+    // 清除筛选 → 恢复全量
+    await page.getByRole('button', { name: '清除筛选' }).click()
+    await expect(page.getByText(/共 2 只/)).toBeVisible()
+    await expect(page.getByText('600519', { exact: true })).toBeVisible()
+    expect(hubRequests).toBe(1)
+  })
+
+  test('交叉共振 row renders the badge and legend; single-hit row omits it', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
+    await installShell(page)
+    await page.route('**/api/pool/hub**', route => json(route, hubPayload))
+
+    await page.goto('/pool-hub')
+
+    // 默认选中 竞价多头 (total=2): 300750 被 2 个策略命中 → 徽标 + legend
+    await expect(page.getByText(/交叉共振 · 2 策略/)).toBeVisible()
+    await expect(page.getByText('交叉共振：被 ≥2 个竞价策略同时命中的个股')).toBeVisible()
+    // 单命中行 600519 不渲染徽标
+    await expect(page.getByText('交叉共振 · 2 策略')).toHaveCount(1)
+  })
+
+  test('concept filter with no match renders 无符合「{概念}」的个股 with 清除筛选', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
+    await installShell(page)
+    await page.route('**/api/pool/hub**', route => json(route, hubPayload))
+
+    await page.goto('/pool-hub')
+    await page.getByLabel('概念筛选').fill('不存在的概念')
+
+    await expect(page.getByText('无符合「不存在的概念」的个股')).toBeVisible()
+    await expect(page.getByText('试试切换其他概念或清除筛选。')).toBeVisible()
+    await expect(page.getByRole('button', { name: '清除筛选' }).first()).toBeVisible()
+  })
+
+  test('zero-hit strategy drills to 当日无命中 empty state', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
+    await installShell(page)
+    await page.route('**/api/pool/hub**', route => json(route, zeroHitHubPayload))
+    await page.route('**/api/screener/strategies**', route => json(route, { presets: knownStrategies }))
+
+    await page.goto('/pool-hub')
+
+    const earlyStar = page.getByRole('button', { name: /早盘之星/ })
+    await expect(earlyStar).toBeVisible()
+    await expect(earlyStar.getByText('当日无命中')).toBeVisible()
+    await earlyStar.click()
+    await expect(page.getByText('早盘之星 · 股池明细')).toBeVisible()
+    const drill = page.getByRole('region', { name: /早盘之星 · 股池明细/ })
+    await expect(drill.getByText('该策略当日无命中个股。')).toBeVisible()
+  })
+
+  test('strategy absent from the payload renders 数据不可用 with no click', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
+    await installShell(page)
+    await page.route('**/api/pool/hub**', route => json(route, hubPayload))
+    await page.route('**/api/screener/strategies**', route => json(route, { presets: knownStrategies }))
+
+    await page.goto('/pool-hub')
+
+    const unavailableCard = page.getByRole('button', { name: /动量增强/ })
+    await expect(unavailableCard.getByText('数据不可用')).toBeVisible()
+    await expect(unavailableCard).toBeDisabled()
+    await expect(unavailableCard.locator('..')).toHaveAttribute('title', '该策略无 2026-08-04 的持久化结果')
+
+    // 其余卡片保持可用, 默认选中策略仍是 竞价多头
+    await expect(page.getByRole('button', { name: /竞价多头/ })).toBeEnabled()
+    await expect(page.getByText('竞价多头 · 股池明细')).toBeVisible()
+  })
+
+  test('no cross resonance renders 今日无交叉共振 footnote', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
+    await installShell(page)
+    await page.route('**/api/pool/hub**', route => json(route, noResonanceHubPayload))
+
+    await page.goto('/pool-hub')
+
+    await expect(page.getByText(/今日无交叉共振/)).toBeVisible()
+    await expect(page.getByText('暂无个股被 ≥2 个竞价策略同时命中。')).toBeVisible()
+    await expect(page.getByText(/交叉共振 · \d+ 策略/)).toHaveCount(0)
   })
 })
