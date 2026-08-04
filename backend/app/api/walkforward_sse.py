@@ -24,9 +24,14 @@ router = APIRouter(prefix="/api/research/wf", tags=["research-panels"])
 
 
 class _WfJob:
-    """One walk-forward job's state, kept module-level for reconnect replay."""
+    """One walk-forward job's state, kept module-level for reconnect replay.
 
-    __slots__ = ("key", "progress", "result", "error", "done", "finish_ts")
+    A job exists from the FIRST stream connect (idle placeholder, ``started``
+    False) so a run started later lands in the SAME object every connected
+    stream already holds — never a per-stream copy that would miss the run.
+    """
+
+    __slots__ = ("key", "progress", "result", "error", "done", "started", "created_ts", "finish_ts")
 
     def __init__(self, key: str):
         self.key = key
@@ -34,6 +39,8 @@ class _WfJob:
         self.result: dict | None = None
         self.error: str | None = None
         self.done = False
+        self.started = False
+        self.created_ts: float = time.time()
         self.finish_ts: float = 0.0
 
 
@@ -41,12 +48,18 @@ class _WfJob:
 _wf_jobs: dict[str, _WfJob] = {}
 _wf_jobs_lock = threading.Lock()
 _WF_JOB_TTL = 300  # keep completed jobs for 5 minutes
+_WF_IDLE_TTL = 300  # idle placeholders (connected stream, never run) also expire
 
 
 def _cleanup_stale_wf_jobs() -> None:
     now = time.time()
     with _wf_jobs_lock:
-        stale = [k for k, j in _wf_jobs.items() if j.done and now - j.finish_ts > _WF_JOB_TTL]
+        stale = [
+            k
+            for k, j in _wf_jobs.items()
+            if (j.done and now - j.finish_ts > _WF_JOB_TTL)
+            or (not j.started and now - j.created_ts > _WF_IDLE_TTL)
+        ]
         for k in stale:
             _wf_jobs.pop(k, None)
 
@@ -78,8 +91,21 @@ async def run_walk_forward(request: Request, plan_id: str) -> dict:
         if job is None:
             job = _WfJob(key)
             _wf_jobs[key] = job
-        elif not job.done:
+        elif job.started and not job.done:
             raise HTTPException(status_code=409, detail="walk-forward already running for this plan")
+        else:
+            # Re-run after completion (or an idle placeholder a stream
+            # registered earlier): the fresh run REPLACES the recorded
+            # history.  Without this reset, a re-run's folds would append
+            # after the first run's ``done`` event — every stream client
+            # closes at the first ``done`` and the re-run never surfaces
+            # (and a reconnect would replay stale history).
+            job.progress.clear()
+            job.done = False
+            job.finish_ts = 0.0
+            job.error = None
+            job.result = None
+        job.started = True
 
     total_folds = 5
     oos = total_folds - 1
@@ -126,14 +152,18 @@ async def stream_walk_forward(request: Request, plan_id: str):
       - error: {message}
     """
     key = _job_key(plan_id, None)
+
     def event_generator():
+        _cleanup_stale_wf_jobs()
         with _wf_jobs_lock:
             job = _wf_jobs.get(key)
-        if job is None:
-            # No run has started for this plan yet — keep the connection alive
-            # with a local placeholder instead of registering an empty job that
-            # would conflict with a subsequent POST run.
-            job = _WfJob(key)
+            if job is None:
+                # No run has started for this plan yet — register a SHARED
+                # idle placeholder so a later POST run records into the very
+                # object this stream is already watching (a per-stream local
+                # copy would never see the run's progress).
+                job = _WfJob(key)
+                _wf_jobs[key] = job
 
         cursor = 0
         try:

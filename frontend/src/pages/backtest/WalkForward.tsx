@@ -19,26 +19,20 @@ function useWfStream(planId: string | undefined) {
   const [state, setState] = useState<WfStreamState>({ status: 'idle', foldIndex: 0, totalFolds: 0, isOos: false })
   const [running, setRunning] = useState(false)
   const esRef = useRef<EventSource | null>(null)
+  const planRef = useRef(planId)
+  planRef.current = planId
 
-  const start = async () => {
-    if (!planId) return
-    setRunning(true)
-    try {
-      await api.runWfPlan(planId)
-    } catch {
-      toast('无法启动前推验证', 'error')
-      setRunning(false)
-      return
-    }
-  }
-
-  useEffect(() => {
-    if (!planId) return
+  const open = () => {
+    const current = planRef.current
+    if (!current) return
     setState({ status: 'idle', foldIndex: 0, totalFolds: 0, isOos: false })
-    const es = new EventSource(`/api/research/wf/plans/${encodeURIComponent(planId)}/stream`)
+    esRef.current?.close()
+    const es = new EventSource(`/api/research/wf/plans/${encodeURIComponent(current)}/stream`)
     esRef.current = es
 
-    es.onopen = () => setState(prev => prev.status === 'done' ? prev : { ...prev, status: prev.status === 'running' ? prev.status : 'running' })
+    es.onopen = () => { /* no-op: opening the stream proves nothing about job
+      state.  'running' is only claimed on a real progress event; otherwise the
+      idle chip would lie ("运行中" with 0 folds) whenever no run is active. */ }
     es.addEventListener('progress', (e: MessageEvent) => {
       try {
         const data = JSON.parse(e.data)
@@ -58,8 +52,31 @@ function useWfStream(planId: string | undefined) {
     es.onerror = () => {
       setState(prev => prev.status === 'done' ? prev : { ...prev, status: 'reconnecting' })
     }
-    return () => es.close()
+  }
+
+  useEffect(() => {
+    open()
+    return () => esRef.current?.close()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [planId])
+
+  const start = async () => {
+    if (!planRef.current) return
+    setRunning(true)
+    try {
+      await api.runWfPlan(planRef.current)
+    } catch {
+      toast('无法启动前推验证', 'error')
+      setRunning(false)
+      return
+    }
+    // The previous run's ``done`` closed the stream.  Reopen AFTER the POST
+    // so the replay carries the fresh run (a reopen before the reset would
+    // replay the stale completed history and close again).
+    if (!esRef.current || esRef.current.readyState === EventSource.CLOSED) {
+      open()
+    }
+  }
 
   return { state, running, start }
 }

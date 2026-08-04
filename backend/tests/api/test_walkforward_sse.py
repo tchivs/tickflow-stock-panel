@@ -95,3 +95,69 @@ def test_walk_forward_stream_unknown_plan_emits_keepalive_then_replays_after_run
     assert "event: done" in second
 
 
+def test_walk_forward_rerun_replaces_history():
+    """A re-run after completion REPLACES the recorded history, so a fresh
+    stream replays only the current run — never the stale first ``done``."""
+    _cleanup()
+    plan_id = "plan-rerun"
+
+    asyncio.run(run_walk_forward(_Req(), plan_id))
+    job = _job_for(plan_id)
+    first_done = [p for p in job.progress if p.get("type") == "done"]
+    assert len(first_done) == 1
+
+    # Re-run: history resets, so the replayed stream has exactly one done
+    # (the second run's) and no interleaved stale progress.
+    asyncio.run(run_walk_forward(_Req(), plan_id))
+    job = _job_for(plan_id)
+    assert job.done is True
+    dones = [p for p in job.progress if p.get("type") == "done"]
+    assert len(dones) == 1, "re-run must replace history, not append after the first done"
+    folds = [p for p in job.progress if p.get("type") == "fold"]
+    assert len(folds) == 5
+
+    async def _stream():
+        response = await stream_walk_forward(_Req(), plan_id)
+        parts: list[str] = []
+        async for chunk in response.body_iterator:
+            parts.append(chunk if isinstance(chunk, str) else chunk.decode("utf-8", errors="replace"))
+        return "".join(parts)
+
+    text = asyncio.run(_stream())
+    assert text.count("event: done") == 1, "stream must terminate exactly once (current run only)"
+    assert text.count("event: progress") == 5
+
+
+def test_walk_forward_stream_observes_run_started_after_connect():
+    """A stream connected BEFORE a run starts must observe that run's live
+    progress — the idle placeholder is shared, never a per-stream copy."""
+    _cleanup()
+    plan_id = "plan-live-observe"
+
+    async def _observe():
+        response = await stream_walk_forward(_Req(), plan_id)
+        iterator = response.body_iterator.__aiter__()
+        # First chunk: idle keepalive.
+        first = await asyncio.wait_for(iterator.__anext__(), timeout=3)
+        first = first if isinstance(first, str) else first.decode("utf-8", errors="replace")
+        assert ": keepalive" in first
+
+        # A run starts AFTER the stream connected.
+        asyncio.get_running_loop().run_in_executor(
+            None, lambda: asyncio.run(run_walk_forward(_Req(), plan_id))
+        )
+        seen_progress = 0
+        seen_done = False
+        while seen_done is False:
+            chunk = await asyncio.wait_for(iterator.__anext__(), timeout=5)
+            chunk = chunk if isinstance(chunk, str) else chunk.decode("utf-8", errors="replace")
+            if "event: progress" in chunk:
+                seen_progress += 1
+            if "event: done" in chunk:
+                seen_done = True
+        return seen_progress
+
+    progress = asyncio.run(_observe())
+    assert progress >= 1, "live stream must see fold progress of a run that started after connect"
+
+

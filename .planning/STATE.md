@@ -1,20 +1,20 @@
 ---
 gsd_state_version: 1.0
 milestone: v1.2
-milestone_name: End-to-End Factor Portfolio Pipeline — in progress
+milestone_name: End-to-End Factor Portfolio Pipeline — complete
 current_phase: 15
 current_phase_name: API/SSE + Frontend Panels
-status: planning
-stopped_at: Completed 13-01 Wave 1 tracer (next 13-03)
-last_updated: "2026-08-02T18:06:16.872Z"
-last_activity: 2026-08-02
-last_activity_desc: Phase 14 complete, transitioned to Phase 15
+status: complete
+stopped_at: Phase 15 complete — all 6 v1.2 phases delivered
+last_updated: "2026-08-03T20:00:00.000Z"
+last_activity: 2026-08-03
+last_activity_desc: Phase 15 (API/SSE + Frontend Panels) complete — v1.2 milestone fully delivered
 progress:
   total_phases: 6
-  completed_phases: 0
-  total_plans: 5
-  completed_plans: 0
-  percent: 0
+  completed_phases: 6
+  total_plans: 28
+  completed_plans: 28
+  percent: 100
 ---
 
 # Project State
@@ -24,27 +24,27 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-31)
 
 **Core value:** An investor can turn reliable market data and their own holdings into an auditable, actionable research and monitoring workflow without operating multiple disconnected tools.
-**Current focus:** Phase null
+**Current focus:** v1.2 delivered
 
 ## Current Position
 
 Phase: 15 — API/SSE + Frontend Panels
-Plan: Not started
-Status: Ready to plan
-Last activity: 2026-08-02 — Phase 14 complete, transitioned to Phase 15
+Plan: Complete
+Status: v1.2 milestone complete (Phases 10-15)
+Last activity: 2026-08-03 — Phase 15 complete; full backend suite 1328 passed + frontend build green
 
-Progress: [░░░░░░░░░░] 0% (13-01..13-05)
+Progress: [██████████] 100% (Phases 10-15 complete)
 
 ## v1.2 Phase Summary
 
 | Phase | Requirements | Status |
 |-------|-------------|--------|
-| 10 Factor Library & Multi-Factor Model | FACT-01..06 | In progress (10-01..10-06 complete) |
-| 11 Portfolio Construction & Optimization | PFOL-01..04 | In progress (11-01, 11-02, 11-03, 11-04, 11-05, 11-06 complete) |
-| 12 Risk Models & Attribution | RSK-01..03 | Complete (12-02 Wave 0 + 12-01 Wave 1 + 12-03 + 12-04 Wave 2 + 12-05 Wave 3 + 12-06 Wave 4) |
-| 13 Walk-Forward Validation & Parameter Search | WFWD-01..03 | In progress (13-02 Wave 0 + 13-01 tracer + 13-03 OOS search/gate + 13-04 ensemble + 13-05 robustness/reporting complete) |
-| 14 Output & Boundary (RebalancePlan + Paper Rebalance) | RBAL-01..02 | Not started |
-| 15 API/SSE + Frontend Panels | UI-01..02 | Not started |
+| 10 Factor Library & Multi-Factor Model | FACT-01..06 | Complete (10-01..10-06) |
+| 11 Portfolio Construction & Optimization | PFOL-01..04 | Complete (11-01..11-06) |
+| 12 Risk Models & Attribution | RSK-01..03 | Complete (12-01..12-06) |
+| 13 Walk-Forward Validation & Parameter Search | WFWD-01..03 | Complete (13-01..13-05) |
+| 14 Output & Boundary (RebalancePlan + Paper Rebalance) | RBAL-01..02 | Complete (14-01..14-05) |
+| 15 API/SSE + Frontend Panels | UI-01..02 | Complete (15-01..15-05) |
 
 ## Performance Metrics
 

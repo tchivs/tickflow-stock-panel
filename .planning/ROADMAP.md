@@ -38,14 +38,14 @@ Archive:
 
 ---
 
-### v1.2 End-to-End Factor Portfolio Pipeline — in progress (Phases 10-15)
+### v1.2 End-to-End Factor Portfolio Pipeline — complete (Phases 10-15)
 
 Six phases extend the shipped research platform from single-factor evaluation into an auditable factor → portfolio → risk → walk-forward → rebalance-suggestion pipeline with zero execution authority: a factor library and multi-factor model, portfolio construction and optimization, risk models and attribution, walk-forward validation and parameter search, the RebalancePlan output and paper-rebalance boundary, and the API/SSE + frontend panels that surface it all.
 
 - Requirements: 20/20 mapped (14 P1, 6 P2)
-- Phases: 6 planned (Phase 10-15), 0 complete
-- Plans: 6/6 Phase 10 plans executed (10-01..10-06 complete)
-- Boundary: RebalancePlan and paper rebalance carry zero execution authority (hard acceptance criterion)
+- Phases: 6/6 complete (Phase 10-15)
+- Plans: all 6 phases executed (10-01..15-05 complete)
+- Boundary: RebalancePlan and paper rebalance carry zero execution authority (hard acceptance criterion — held through Phase 15 UI)
 
 ## Phases
 
@@ -59,7 +59,7 @@ Six phases extend the shipped research platform from single-factor evaluation in
 - [x] **Phase 12: Risk Models & Attribution** - Risk-model suite with PSD provenance, exposure/contribution and drawdown attribution (completed 2026-08-02)
 - [x] **Phase 13: Walk-Forward Validation & Parameter Search** - Rolling folds, reserved final OOS, OOS-scored parameter search, ensembling (completed 2026-08-02)
 - [x] **Phase 14: Output & Boundary (RebalancePlan + Paper Rebalance)** - A-share lot-sized plans, auditable paper rebalance, zero execution authority (completed 2026-08-02)
-- [ ] **Phase 15: API/SSE + Frontend Panels** - ModelLibrary/WalkForward and Optimization/RiskAttribution/RebalancePlan panels
+- [x] **Phase 15: API/SSE + Frontend Panels** - ModelLibrary/WalkForward and Optimization/RiskAttribution/RebalancePlan panels (completed 2026-08-03)
 
 ## Phase Details
 
@@ -184,8 +184,14 @@ Six phases extend the shipped research platform from single-factor evaluation in
   2. Researcher can open the Optimization, RiskAttribution, and RebalancePlan panels in the Portfolio workspace and inspect immutable runs, attribution, and paper-rebalance suggestions backed by typed server-owned contracts.
   3. Walk-forward runs stream progress over SSE through the durable job pattern, and optimization/plan updates fan out through the existing shared SSE stream.
 
-**Plans**: 4 plans
-**UI hint**: yes
+**Plans**: 5/5 plans executed (15-02, 15-01, 15-03, 15-04, 15-05 complete; per-plan gates green)
+
+- [x] 15-02 Wave 0 — server-owned DTOs + route scaffolding + TestClient fixtures + UI-SPEC sign-off
+- [x] 15-01 Tracer — Optimization panel end-to-end (typed DTO → route → api.ts → panel with baselines)
+- [x] 15-03 Backtest panels breadth — ModelLibrary + WalkForward (IC/RankIC separate, OOS honest)
+- [x] 15-04 Portfolio panels breadth — RiskAttribution + RebalancePlan (paper approve/reject, zero-exec)
+- [x] 15-05 SSE streaming + fan-out — walk-forward durable job + optimization/plan fan-out
+
 *Planning notes: standard patterns — existing typed `api.ts` / `queryKeys.ts` / SSE hooks; avoid UX pitfalls: never label RankIC as generic IC, never present optimizer output as "optimal" without baselines, never offer an "execute" affordance on plans, label selection-validation vs reserved OOS honestly.*
 
 ## Progress
