@@ -176,6 +176,13 @@ export const QK = {
 
   // 概念涨幅轮动矩阵
   rpsRotation:          (days: number) => ['rps-rotation', days] as const,
+
+  // ===== Phase 15 Panels =====
+  optimizationRuns:     (objective?: string) => ['optimization-runs', objective ?? 'all'] as const,
+  optimizationRun:      (runId: string) => ['optimization-run', runId] as const,
+  attribution:          (runId?: string) => ['attribution', runId ?? 'all'] as const,
+  rebalancePlans:       (runId?: string) => ['rebalance-plans', runId ?? 'all'] as const,
+  paperState:           (planId: string) => ['paper-state', planId] as const,
 } as const
 
 // ===== SSE 应该 invalidate 的 key 前缀列表 =====
@@ -194,4 +201,6 @@ export const SSE_INVALIDATE_PREFIXES = [
   'limit-ladder',
   'portfolio-summary',
   'portfolio-holdings',
+  'optimization-runs',
+  'rebalance-plans',
 ] as const

@@ -2916,6 +2916,40 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ strategy_id: strategyId, code, name: meta?.name ?? '', description: meta?.description ?? '' }),
     }),
+  // ===== Phase 15 Panel Routes =====
+  listOptimizationRuns: (params?: { objective?: string; as_of?: string; limit?: number }) => {
+    const qs = new URLSearchParams()
+    if (params?.objective) qs.set('objective', params.objective)
+    if (params?.as_of) qs.set('as_of', params.as_of)
+    qs.set('limit', String(params?.limit ?? 200))
+    return request<OptimizationRunDTO[]>(`/api/portfolio/optimization-runs?${qs}`)
+  },
+  getOptimizationRun: (runId: string) =>
+    request<OptimizationRunDTO>(`/api/portfolio/optimization-runs/${encodeURIComponent(runId)}`),
+  listAttribution: (params?: { run_id?: string; attribution_type?: string; risk_model?: string; limit?: number }) => {
+    const qs = new URLSearchParams()
+    if (params?.run_id) qs.set('run_id', params.run_id)
+    if (params?.attribution_type) qs.set('attribution_type', params.attribution_type)
+    if (params?.risk_model) qs.set('risk_model', params.risk_model)
+    qs.set('limit', String(params?.limit ?? 200))
+    return request<AttributionEvidenceDTO[]>(`/api/portfolio/attribution?${qs}`)
+  },
+  listRebalancePlans: (params?: { run_id?: string; limit?: number }) => {
+    const qs = new URLSearchParams()
+    if (params?.run_id) qs.set('run_id', params.run_id)
+    qs.set('limit', String(params?.limit ?? 200))
+    return request<RebalancePlanDTO[]>(`/api/portfolio/rebalance-plans?${qs}`)
+  },
+  getPaperState: (planId: string) =>
+    request<PaperStateDTO>(`/api/portfolio/rebalance-plans/${encodeURIComponent(planId)}/paper`),
+  approveRebalance: (planId: string, idempotencyKey: string) =>
+    request<PaperActionResponse>(`/api/portfolio/rebalance-plans/${encodeURIComponent(planId)}/approve`, {
+      method: 'POST', body: JSON.stringify({ idempotency_key: idempotencyKey }),
+    }),
+  rejectRebalance: (planId: string, idempotencyKey: string) =>
+    request<PaperActionResponse>(`/api/portfolio/rebalance-plans/${encodeURIComponent(planId)}/reject`, {
+      method: 'POST', body: JSON.stringify({ idempotency_key: idempotencyKey }),
+    }),
 }
 
 // ===== Pipeline =====
@@ -3115,4 +3149,83 @@ export interface AnalysisMenu {
   created_at?: string | null
   updated_at?: string | null
   builtin?: boolean
+}
+
+// ===== Phase 15 Panel DTOs (strict, server-owned) =====
+export interface OptimizationRunDTO {
+  id: string
+  objective: string
+  as_of: string
+  universe: string
+  model_id: string | null
+  composite_snapshot_id: string | null
+  input_snapshot_sha256: string
+  expected_return_method: string
+  risk_model: string
+  risk_model_detail: Record<string, unknown> | null
+  constraint_stack: Record<string, unknown> | null
+  solver_name: string
+  solver_version: string
+  solver_options: Record<string, unknown> | null
+  problem_status: string
+  failure_reason: string | null
+  output_weights: Record<string, number> | null
+  baseline_weights: Record<string, number> | null
+  output_sha256: string
+  weights_artifact_relative_path: string | null
+  created_at: string
+}
+
+export interface AttributionEvidenceDTO {
+  id: string
+  run_id: string
+  attribution_type: string
+  risk_model: string | null
+  contributions: Record<string, unknown> | null
+  reconciliation: Record<string, unknown> | null
+  output_sha256: string | null
+  artifact_relative_path: string | null
+  created_at: string
+}
+
+export interface RebalancePlanDTO {
+  id: string
+  optimization_run_id: string
+  input_snapshot_sha256: string
+  as_of: string
+  target_weights: Record<string, number> | null
+  discrete_weights: Record<string, number> | null
+  lot_sizes: Record<string, unknown> | null
+  cash_residue: number
+  turnover_cost: number
+  blocked_instruments: Record<string, unknown> | null
+  discretization_rmse: number
+  rmse_definition: string
+  expires_at: string
+  output_sha256: string
+  artifact_relative_path: string | null
+  created_at: string
+}
+
+export interface PaperTransitionDTO {
+  id: number
+  plan_id: string
+  transition: string
+  idempotency_key: string
+  previous_state: string | null
+  paper_position_delta: Record<string, unknown> | null
+  created_at: string
+}
+
+export interface PaperStateDTO {
+  plan_id: string
+  current_state: string | null
+  transitions: PaperTransitionDTO[]
+}
+
+export interface PaperActionResponse {
+  plan_id: string
+  transition: string
+  current_state: string
+  idempotent: boolean
 }
