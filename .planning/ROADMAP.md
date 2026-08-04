@@ -101,11 +101,11 @@ Plans:
   2. User can filter the pool by 概念 and see 交叉共振 (stocks hit by multiple auction strategies) highlighted.
   3. No execution authority exists anywhere in the pool feature — no API endpoint, UI affordance, or service path can push a pool to a live broker.
 
-**Plans:** 0/2 plans complete
+**Plans:** 1/2 plans executed
 
 Plans:
 
-- [ ] 18-01-PLAN.md — pool hub projection service + read-only GET /api/pool/hub + concept filter + 交叉共振 + zero-execution guard (POOL-01, POOL-02, POOL-03)
+- [x] 18-01-PLAN.md — pool hub projection service + read-only GET /api/pool/hub + concept filter + 交叉共振 + zero-execution guard (POOL-01, POOL-02, POOL-03)
 - [ ] 18-02-PLAN.md — 股池 PoolHubPage: strategy cards, drill-down stock list, concept filter, 交叉共振 highlight, POOL-03 no-execution UI guard (POOL-01, POOL-02, POOL-03)
 
 ### Phase 19: 游客/VIP 脱敏 + 前端 (Guest Access & Frontend)
@@ -127,7 +127,7 @@ Phases execute in numeric order: 16 → 17 → 18 → 19
 |-------|-------------|--------|
 | 16. 竞价数据层 | DATA-01..03 | Complete    |
 | 17. 竞价策略族 | STRAT-01..03 | Complete    |
-| 18. 股池 Hub | POOL-01..03 | Not started |
+| 18. 股池 Hub | POOL-01..03 | In Progress|
 | 19. 游客/VIP 脱敏 + 前端 | GUEST-01..02 | Not started |
 
 ---

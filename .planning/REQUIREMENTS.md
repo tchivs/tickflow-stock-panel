@@ -21,9 +21,9 @@ Requirements for the v1.3 milestone. Each maps to a roadmap phase.
 
 ### 股池 Hub (Pool Hub)
 
-- [ ] **POOL-01**: User can open a pool hub showing strategy cards with当日 per-strategy pool counts, and drill into each strategy's stock list (code, 开盘涨幅, 涨跌幅, 概念板块, 关联因子) backed by `screener_results/` persistence with a single as_of source of truth.
-- [ ] **POOL-02**: User can filter the pool by 概念 and highlight 交叉共振 — stocks hit by multiple auction strategies.
-- [ ] **POOL-03**: Pool data is a research-only projection; no execution authority or order routing exists anywhere in the pool feature (P2).
+- [x] **POOL-01**: User can open a pool hub showing strategy cards with当日 per-strategy pool counts, and drill into each strategy's stock list (code, 开盘涨幅, 涨跌幅, 概念板块, 关联因子) backed by `screener_results/` persistence with a single as_of source of truth.
+- [x] **POOL-02**: User can filter the pool by 概念 and highlight 交叉共振 — stocks hit by multiple auction strategies.
+- [x] **POOL-03**: Pool data is a research-only projection; no execution authority or order routing exists anywhere in the pool feature (P2).
 
 ### 游客/VIP 脱敏 (Guest Access)
 
@@ -72,9 +72,9 @@ Populated during roadmap creation.
 | STRAT-01 | Phase 17 (竞价策略族) | Complete |
 | STRAT-02 | Phase 17 (竞价策略族) | Complete |
 | STRAT-03 | Phase 17 (竞价策略族) | Complete |
-| POOL-01 | Phase 18 (股池 Hub) | Pending |
-| POOL-02 | Phase 18 (股池 Hub) | Pending |
-| POOL-03 | Phase 18 (股池 Hub) | Pending |
+| POOL-01 | Phase 18 (股池 Hub) | Complete |
+| POOL-02 | Phase 18 (股池 Hub) | Complete |
+| POOL-03 | Phase 18 (股池 Hub) | Complete |
 | GUEST-01 | Phase 19 (游客/VIP 脱敏 + 前端) | Pending |
 | GUEST-02 | Phase 19 (游客/VIP 脱敏 + 前端) | Pending |
 

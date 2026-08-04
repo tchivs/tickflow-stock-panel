@@ -5,15 +5,15 @@ milestone_name: 竞价选股引擎 — planning
 current_phase: 18
 current_phase_name: 股池 Hub (Pool Hub)
 status: planning
-stopped_at: Completed 17-02-PLAN.md
-last_updated: "2026-08-04T13:32:59.591Z"
+stopped_at: Completed 18-01-PLAN.md
+last_updated: "2026-08-04T13:53:41.478Z"
 last_activity: 2026-08-04
 last_activity_desc: Phase 17 complete, transitioned to Phase 18
 progress:
   total_phases: 4
   completed_phases: 2
-  total_plans: 4
-  completed_plans: 4
+  total_plans: 6
+  completed_plans: 5
   percent: 50
 ---
 
@@ -29,18 +29,18 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 ## Current Position
 
 Phase: 18 — 股池 Hub (Pool Hub)
-Plan: Not started
-Status: Ready to plan
-Last activity: 2026-08-04 — Phase 17 complete, transitioned to Phase 18
+Plan: 1/2 (18-01 backend complete; 18-02 frontend in progress)
+Status: In Progress
+Last activity: 2026-08-04 — 18-01 backend pool hub complete (POOL-01/02/03)
 
-Progress: [██░░░░░░░░] 25% (1/4 phases)
+Progress: [████████░░] 83% (1/4 phases)
 
 ## v1.3 Phase Summary
 
 | Phase | Requirements | Status |
 |-------|-------------|--------|
 | 16 竞价数据层 | DATA-01..03 | Complete |
-| 18 股池 Hub | POOL-01..03 | Not started |
+| 18 股池 Hub | POOL-01..03 | In Progress |
 | 19 游客/VIP 脱敏 + 前端 | GUEST-01..02 | Not started |
 
 ## Accumulated Context
@@ -72,8 +72,8 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-08-04T13:30:15.943Z
-Stopped at: Completed 17-02-PLAN.md
+Last session: 2026-08-04T13:53:41.461Z
+Stopped at: Completed 18-01-PLAN.md
 Resume file: None
 
 ## Operator Next Steps
@@ -91,6 +91,7 @@ Resume file: None
 *Last updated: 2026-08-04 — Phase 16 complete (DATA-01..03)*
 
 - [Phase ?]: Phase 17 P2: hit_factors values sorted by Unicode codepoint (deterministic; PLAN sample order corrected: 盘前强势量化 before 竞价多头)
+- [Phase ?]: Pool hub backend: single-as_of projection over strategy_cache; concept filter keeps total authoritative; cross_resonance = hit_factors>=2; GET /api/pool/hub is GET-only with no execution imports/write path (POOL-03).
 
 ## Performance Metrics
 
@@ -99,3 +100,4 @@ Resume file: None
 | Phase 16 P1 | 25 | 3 tasks | 5 files |
 | Phase 16 P2 | 20 | 3 tasks | 14 files |
 | Phase 17 P2 | 32 | 2 tasks | 3 files |
+| Phase 18 P1 | 20 | 3 tasks | 4 files |
