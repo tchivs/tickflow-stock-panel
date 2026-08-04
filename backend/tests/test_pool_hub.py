@@ -56,7 +56,7 @@ def _write_strategy_cache(data_dir: Path) -> None:
                         "symbol": _SYMBOLS["Y"],
                         "open_gap": 1.5,
                         "change_pct": 2.3,
-                        "hit_factors": ["竞价多头", "盘前强势量化"],
+                        "hit_factors": ["盘前强势量化", "竞价多头"],
                     },
                 ],
             },
@@ -67,8 +67,7 @@ def _write_strategy_cache(data_dir: Path) -> None:
                     {
                         "symbol": _SYMBOLS["Y"],
                         "open_gap": 1.5,
-                        "change_pct": 2.3,
-                        "hit_factors": ["竞价多头", "盘前强势量化"],
+                        "hit_factors": ["盘前强势量化", "竞价多头"],
                     },
                     {
                         "symbol": _SYMBOLS["Z"],
