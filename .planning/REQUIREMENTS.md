@@ -51,27 +51,27 @@ Populated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| DATA-04 | — | Open |
-| DATA-05 | — | Open |
-| DATA-06 | — | Open |
-| STRAT-04 | — | Open |
-| STRAT-05 | — | Open |
-| STRAT-06 | — | Open |
-| STRAT-07 | — | Open |
-| STRAT-08 | — | Open |
-| STRAT-09 | — | Open |
-| POOL-04 | — | Open |
-| POOL-05 | — | Open |
-| POOL-06 | — | Open |
-| FRONT-01 | — | Open |
-| FRONT-02 | — | Open |
+| DATA-04 | Phase 20 | Open |
+| DATA-05 | Phase 20 | Open |
+| DATA-06 | Phase 20 | Open |
+| STRAT-04 | Phase 21 | Open |
+| STRAT-05 | Phase 21 | Open |
+| STRAT-06 | Phase 21 | Open |
+| STRAT-07 | Phase 21 | Open |
+| STRAT-08 | Phase 21 | Open |
+| STRAT-09 | Phase 21 | Open |
+| POOL-04 | Phase 22 | Open |
+| POOL-05 | Phase 22 | Open |
+| POOL-06 | Phase 22 | Open |
+| FRONT-01 | Phase 23 | Open |
+| FRONT-02 | Phase 23 | Open |
 
 **Coverage:**
 
 - v2 requirements: 14 total (9 P1, 5 P2)
-- Mapped to phases: 0 (roadmap pending)
-- Unmapped: 14
+- Mapped to phases: 14 (roadmap created — Phases 20-23)
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-08-04*
-*Last updated: 2026-08-04 — v2.0 milestone started*
+*Last updated: 2026-08-04 — v2.0 milestone started; traceability populated (Phases 20-23)*
