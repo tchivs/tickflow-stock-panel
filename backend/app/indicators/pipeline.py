@@ -63,6 +63,7 @@ ENRICHED_STORAGE_COLS = [
     "consecutive_limit_ups",                   # 递推状态, 需从历史 cum_sum
     "consecutive_limit_downs",
     "quote_ts",                                # 行情时间戳(ms): 盘后校验/量比折算/跨天完整性
+    "open_gap",                                # 开盘涨幅 (open/prev_close−1), 同天 open/前日 close
 ]
 
 
@@ -87,11 +88,11 @@ ENRICHED_COLUMNS: dict[str, dict[str, str]] = {
     "turnover_rate":           "换手率",
     "consecutive_limit_ups":   "连板数",
     "consecutive_limit_downs": "连跌数",
-    # ── 基础指标 ─────────────────────────────────────────
     "prev_close":              "前收盘价",
     "change_pct":              "日涨跌幅(小数, 如 0.05 = 5%)",
     "change_amount":           "日涨跌额",
     "amplitude":               "日振幅 (最高-最低)/昨收",
+    "open_gap":                "开盘涨幅 (open/prev_close−1, 小数)",
     # ── 均线 MA ──────────────────────────────────────────
     "ma5":                     "5日简单均线",
     "ma10":                    "10日简单均线",
@@ -161,8 +162,7 @@ ENRICHED_COLUMNS: dict[str, dict[str, str]] = {
 
 # 仅供 AI/开发者快速索引: 按类别的列名列表
 ENRICHED_COLUMNS_BY_CATEGORY: dict[str, list[str]] = {
-    "storage":  [k for k in ENRICHED_COLUMNS if k in ENRICHED_STORAGE_COLS],
-    "basic":    ["prev_close", "change_pct", "change_amount", "amplitude"],
+    "basic":    ["prev_close", "change_pct", "change_amount", "amplitude", "open_gap"],
     "ma":       ["ma5", "ma10", "ma20", "ma30", "ma60"],
     "ema":      ["ema5", "ema10", "ema20", "ema30", "ema60"],
     "macd":     ["macd_dif", "macd_dea", "macd_hist"],
@@ -301,6 +301,7 @@ _INDICATOR_DEPS: dict[str, set[str]] = {
     "rsi_6": {"_delta", "_gain", "_loss"},
     "rsi_14": {"_delta", "_gain", "_loss"},
     "rsi_24": {"_delta", "_gain", "_loss"},
+    "open_gap": {"prev_close"},
 }
 
 # compute_indicators 可产出的全部指标/临时列 (needed=None 时即为此全集, 行为不变)
@@ -312,8 +313,8 @@ _ALL_INDICATOR_COLS: frozenset[str] = frozenset({
     "macd_dif", "boll_upper", "boll_lower", "macd_dea", "macd_hist",
     "kdj_k", "kdj_d", "kdj_j",
     "atr_14", "vol_ratio_5d",
-    "momentum_5d", "momentum_10d", "momentum_20d", "momentum_30d", "momentum_60d",
     "change_pct", "change_amount", "amplitude", "_daily_pct", "annual_vol_20d",
+    "open_gap",
     "rsi_6", "rsi_14", "rsi_24",
 })
 
@@ -486,6 +487,15 @@ def compute_indicators(df: pl.DataFrame, needed: set[str] | None = None) -> pl.D
               .then((pl.col("high") - pl.col("low")) / pl.col("close").shift(1).over("symbol"))
               .otherwise(None)
               .alias("amplitude"),
+        )
+    if "open_gap" in want:
+        # 开盘涨幅 = 同天 open / 前日 close − 1 (prev_close 来自 Pass 1: close.shift(1).over("symbol"))。
+        # 绝不 shift open —— 那会跨天并引入 lookahead。
+        df = df.with_columns(
+            pl.when(pl.col("prev_close") > 0)
+              .then(pl.col("open") / pl.col("prev_close") - 1)
+              .otherwise(None)
+              .alias("open_gap"),
         )
     if "_daily_pct" in want:
         df = df.with_columns(
