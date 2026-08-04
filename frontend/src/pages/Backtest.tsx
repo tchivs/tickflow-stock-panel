@@ -10,9 +10,11 @@ import { ResearchLibrary } from './backtest/ResearchLibrary'
 import { ExperimentComparison } from './backtest/ExperimentComparison'
 import { ShadowAccount } from './backtest/ShadowAccount'
 import { AdvancedResearchPanels } from '@/components/advanced/AdvancedResearchPanels'
-import { BarChart3, FlaskConical, SlidersHorizontal } from 'lucide-react'
+import { BarChart3, FlaskConical, SlidersHorizontal, Library, Route } from 'lucide-react'
+import { ModelLibrary } from './backtest/ModelLibrary'
+import { WalkForward } from './backtest/WalkForward'
 
-type Tab = 'factor' | 'strategy' | 'optimizer'
+type Tab = 'factor' | 'strategy' | 'optimizer' | 'library' | 'walkforward'
 
 const MODES: Record<Tab, { title: string; subtitle: string; hint: string }> = {
   factor: {
@@ -30,12 +32,24 @@ const MODES: Record<Tab, { title: string; subtitle: string; hint: string }> = {
     subtitle: '网格搜索最优参数组合',
     hint: '并行回测所有参数组合，按夏普/索提诺等目标排序，找到最优参数。',
   },
+  library: {
+    title: '模型库',
+    subtitle: '已准入因子与组合模型',
+    hint: '因子目录携带 IC / RankIC 证据，组合模型展示权重与谱系。',
+  },
+  walkforward: {
+    title: '走步验证',
+    subtitle: '固定窗口折叠与保留 OOS',
+    hint: '看 train / gap / test 几何、OOS 参数搜索与验证门槛结果。',
+  },
 }
 
 const TAB_ICONS: Record<Tab, typeof BarChart3> = {
   factor: BarChart3,
   strategy: FlaskConical,
   optimizer: SlidersHorizontal,
+  library: Library,
+  walkforward: Route,
 }
 
 export function Backtest() {
@@ -50,7 +64,7 @@ export function Backtest() {
   const handleModeKeyDown = (event: KeyboardEvent<HTMLButtonElement>, tab: Tab) => {
     if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
     event.preventDefault()
-    const tabs = ['factor', 'strategy', 'optimizer'] as const
+    const tabs = ['factor', 'strategy', 'optimizer', 'library', 'walkforward'] as const
     const next = tabs[(tabs.indexOf(tab) + (event.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length]
     setActiveTab(next)
     document.getElementById(`backtest-mode-tab-${next}`)?.focus()
@@ -58,7 +72,7 @@ export function Backtest() {
 
   const modeSwitch = (
     <div role="tablist" aria-label="回测模式" className="flex w-full rounded-btn border border-border bg-surface/80 p-0.5 shadow-sm sm:inline-flex sm:w-auto">
-      {(['factor', 'strategy', 'optimizer'] as const).map(tab => {
+      {(['factor', 'strategy', 'optimizer', 'library', 'walkforward'] as const).map(tab => {
         const Icon = TAB_ICONS[tab]
         const active = activeTab === tab
         return (
@@ -105,6 +119,8 @@ export function Backtest() {
         {activeTab === 'factor' && <div id="backtest-mode-panel-factor" role="tabpanel" aria-labelledby="backtest-mode-tab-factor" className="space-y-4"><FactorBacktest /><ResearchLibrary /><ExperimentComparison /></div>}
         {activeTab === 'strategy' && <div id="backtest-mode-panel-strategy" role="tabpanel" aria-labelledby="backtest-mode-tab-strategy" className="space-y-4"><StrategyBacktest onStrategyChange={setSelectedStrategyId} /><ResearchLibrary /><ExperimentComparison /><ShadowAccount /><AdvancedResearchPanels binding={binding.data?.binding ?? null} bindingError={selectedStrategyId ? (binding.isLoading ? '正在解析服务器研究资产绑定。' : binding.isError ? '服务器研究资产绑定不可用；高级研究操作已禁用。' : null) : '请选择已安装策略以解析服务器研究资产绑定。'} /></div>}
         {activeTab === 'optimizer' && <div id="backtest-mode-panel-optimizer" role="tabpanel" aria-labelledby="backtest-mode-tab-optimizer"><StrategyOptimizer /></div>}
+        {activeTab === 'library' && <div id="backtest-mode-panel-library" role="tabpanel" aria-labelledby="backtest-mode-tab-library"><ModelLibrary /></div>}
+        {activeTab === 'walkforward' && <div id="backtest-mode-panel-walkforward" role="tabpanel" aria-labelledby="backtest-mode-tab-walkforward"><WalkForward /></div>}
       </main>
     </div>
   )

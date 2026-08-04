@@ -518,6 +518,54 @@ class ResearchRepository:
                    ORDER BY retained_at, created_at, id"""
             ).fetchall()
             return [self._experiment_row(connection, row["id"]) for row in rows]  # type: ignore[list-item]
+    def latest_experiment_metrics(
+        self, revision_ids: Sequence[str]
+    ) -> dict[str, dict[str, Any]]:
+        """Merge the metrics of the latest retained validated experiment per revision.
+
+        Panel read (15-03): the factor catalog surfaces IC (Pearson) and RankIC
+        (Spearman) as DISTINCT fields sourced from recorded evaluation evidence
+        (``ic_summary`` / ``rank_ic_summary``) — never conflated. Returns one merged
+        metrics dict per revision that has retained evidence; revisions without
+        evidence are absent.
+        """
+        if not revision_ids:
+            return {}
+        placeholders = ",".join("?" for _ in revision_ids)
+        with self._connection() as connection:
+            latest_rows = connection.execute(
+                f"""SELECT factor_revision_id, id FROM research_experiments
+                    WHERE factor_revision_id IN ({placeholders})
+                      AND status = 'completed'
+                      AND validated = 1
+                      AND retained_at IS NOT NULL
+                    ORDER BY factor_revision_id, retained_at DESC, created_at DESC, id DESC""",
+                tuple(revision_ids),
+            ).fetchall()
+            latest_experiment: dict[str, str] = {}
+            for row in latest_rows:
+                revision_id = row["factor_revision_id"]
+                if revision_id not in latest_experiment:
+                    latest_experiment[revision_id] = row["id"]
+            if not latest_experiment:
+                return {}
+            experiment_ids = tuple(latest_experiment.values())
+            experiment_placeholders = ",".join("?" for _ in experiment_ids)
+            metric_rows = connection.execute(
+                f"""SELECT experiment_id, metric_json FROM research_experiment_metrics
+                    WHERE experiment_id IN ({experiment_placeholders}) ORDER BY id""",
+                experiment_ids,
+            ).fetchall()
+        merged: dict[str, dict[str, Any]] = {}
+        for row in metric_rows:
+            payload = json.loads(row["metric_json"])
+            if isinstance(payload, dict):
+                merged.setdefault(row["experiment_id"], {}).update(payload)
+        return {
+            revision_id: merged[experiment_id]
+            for revision_id, experiment_id in latest_experiment.items()
+            if experiment_id in merged
+        }
 
     # ------------------------------------------------------------------
     # Phase 10 append-only tables (PIT universe + admission + composite).
@@ -707,6 +755,28 @@ class ResearchRepository:
         record["candidate_trail"] = json.loads(record.pop("candidate_trail_json"))
         record["resolved_universe"] = json.loads(record.pop("resolved_universe_json"))
         return record
+    def latest_admission_verdicts(self, revision_ids: Sequence[str]) -> dict[str, str]:
+        """Map each revision to its latest admission verdict string (15-03 panel).
+
+        Returns ``admitted`` / ``rejected`` for the most recent verdict per revision;
+        revisions with no verdict are absent (the panel labels them ``unadmitted``).
+        """
+        if not revision_ids:
+            return {}
+        placeholders = ",".join("?" for _ in revision_ids)
+        with self._connection() as connection:
+            rows = connection.execute(
+                f"""SELECT revision_id, verdict FROM factor_admission_verdicts
+                    WHERE revision_id IN ({placeholders})
+                    ORDER BY revision_id, created_at DESC, id DESC""",
+                tuple(revision_ids),
+            ).fetchall()
+        latest: dict[str, str] = {}
+        for row in rows:
+            revision_id = row["revision_id"]
+            if revision_id not in latest:
+                latest[revision_id] = row["verdict"]
+        return latest
 
     def insert_model_definition(
         self,

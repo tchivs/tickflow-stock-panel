@@ -1,5 +1,5 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
-import { Archive, ChevronDown, CircleHelp, Plus, RefreshCw, Settings2, WalletCards } from 'lucide-react'
+import { Archive, ChevronDown, CircleHelp, ClipboardList, PieChart, Plus, RefreshCw, Settings2, SlidersHorizontal, WalletCards } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api, type PortfolioPosition } from '@/lib/api'
@@ -109,6 +109,12 @@ export function Portfolio() {
           </div>
         }
       />
+      <nav aria-label="组合研究面板" className="flex flex-wrap items-center gap-2 border-y border-border px-5 py-2 max-md:px-4">
+        <span className="text-xs text-muted">研究面板:</span>
+        <button type="button" onClick={() => navigate('/portfolio/optimization')} className="inline-flex min-h-8 items-center gap-1.5 rounded-btn border border-border bg-surface px-3 text-xs font-medium text-secondary hover:bg-elevated hover:text-foreground max-md:min-h-11"><SlidersHorizontal className="h-3.5 w-3.5" />优化运行</button>
+        <button type="button" onClick={() => navigate('/portfolio/risk-attribution')} className="inline-flex min-h-8 items-center gap-1.5 rounded-btn border border-border bg-surface px-3 text-xs font-medium text-secondary hover:bg-elevated hover:text-foreground max-md:min-h-11"><PieChart className="h-3.5 w-3.5" />风险归因</button>
+        <button type="button" onClick={() => navigate('/portfolio/rebalance-plan')} className="inline-flex min-h-8 items-center gap-1.5 rounded-btn border border-border bg-surface px-3 text-xs font-medium text-secondary hover:bg-elevated hover:text-foreground max-md:min-h-11"><ClipboardList className="h-3.5 w-3.5" />再平衡计划</button>
+      </nav>
       <div className="space-y-5 p-5 max-md:p-4">
         {isInitialLoading && !summary ? <PortfolioSkeleton /> : isError && !summary ? (
           <div className="rounded-card border border-border bg-surface">

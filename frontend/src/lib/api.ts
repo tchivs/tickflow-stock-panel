@@ -2950,6 +2950,52 @@ export const api = {
     request<PaperActionResponse>(`/api/portfolio/rebalance-plans/${encodeURIComponent(planId)}/reject`, {
       method: 'POST', body: JSON.stringify({ idempotency_key: idempotencyKey }),
     }),
+
+  // ===== Research panel routes (UI-01) =====
+  listModels: (params?: { limit?: number }) => {
+    const qs = new URLSearchParams()
+    qs.set('limit', String(params?.limit ?? 200))
+    return request<ModelDefinitionDTO[]>(`/api/research/models?${qs}`)
+  },
+  listModelComposites: (modelId: string) =>
+    request<ModelCompositeDTO[]>(`/api/research/models/${encodeURIComponent(modelId)}/composites`),
+  listFactors: (params?: { limit?: number }) => {
+    const qs = new URLSearchParams()
+    qs.set('limit', String(params?.limit ?? 200))
+    return request<FactorRevisionDTO[]>(`/api/research/factors?${qs}`)
+  },
+  getAdmissionVerdict: (revisionId: string, policyVersion = 'v1') =>
+    request<AdmissionVerdictDTO>(`/api/research/factors/${encodeURIComponent(revisionId)}/verdict?policy_version=${encodeURIComponent(policyVersion)}`),
+  listWfPlans: (params?: { limit?: number }) => {
+    const qs = new URLSearchParams()
+    qs.set('limit', String(params?.limit ?? 200))
+    return request<WfPlanDTO[]>(`/api/research/wf/plans?${qs}`)
+  },
+  listWfFolds: (params?: { plan_id?: string; is_oos?: boolean; limit?: number }) => {
+    const qs = new URLSearchParams()
+    if (params?.plan_id) qs.set('plan_id', params.plan_id)
+    if (params?.is_oos !== undefined) qs.set('is_oos', String(params.is_oos))
+    qs.set('limit', String(params?.limit ?? 200))
+    return request<WfFoldDTO[]>(`/api/research/wf/folds?${qs}`)
+  },
+  listWfSearchRuns: (params?: { plan_id?: string; strategy_id?: string; limit?: number }) => {
+    const qs = new URLSearchParams()
+    if (params?.plan_id) qs.set('plan_id', params.plan_id)
+    if (params?.strategy_id) qs.set('strategy_id', params.strategy_id)
+    qs.set('limit', String(params?.limit ?? 200))
+    return request<WfSearchRunDTO[]>(`/api/research/wf/search-runs?${qs}`)
+  },
+  listWfValidated: (params?: { strategy_id?: string; limit?: number }) => {
+    const qs = new URLSearchParams()
+    if (params?.strategy_id) qs.set('strategy_id', params.strategy_id)
+    qs.set('limit', String(params?.limit ?? 200))
+    return request<WfValidatedStrategyDTO[]>(`/api/research/wf/validated?${qs}`)
+  },
+  listWfEnsembles: (params?: { limit?: number }) => {
+    const qs = new URLSearchParams()
+    qs.set('limit', String(params?.limit ?? 200))
+    return request<WfEnsembleDTO[]>(`/api/research/wf/ensembles?${qs}`)
+  },
 }
 
 // ===== Pipeline =====
@@ -3228,4 +3274,109 @@ export interface PaperActionResponse {
   transition: string
   current_state: string
   idempotent: boolean
+}
+
+// ===== Research panel DTOs (UI-01, strict server-owned) =====
+export interface FactorRevisionDTO {
+  id: string
+  factor_id: string
+  revision_number: number
+  name: string
+  expression: string
+  description: string
+  status: string
+  // IC (Pearson) and RankIC (Spearman) are DISTINCT metrics — never collapsed.
+  ic: number | null
+  rank_ic: number | null
+  fields: string[] | null
+  operators: string[] | null
+  functions: string[] | null
+  provenance: Record<string, unknown> | null
+  created_at: string
+}
+
+export interface AdmissionVerdictDTO {
+  revision_id: string
+  policy_version: string
+  admitted: boolean
+  reason: string | null
+  details: Record<string, unknown> | null
+  created_at: string
+}
+
+export interface ModelDefinitionDTO {
+  model_id: string
+  name: string
+  weighting: string
+  revision_ids: string[]
+  weights: Record<string, number> | null
+  input_snapshot_sha256: string | null
+  created_at: string
+}
+
+export interface ModelCompositeDTO {
+  id: string
+  model_id: string
+  input_snapshot_sha256: string
+  output_sha256: string
+  output_artifact_relative_path: string | null
+  mean_ic: number | null
+  membership_fingerprint: string | null
+  created_at: string
+}
+
+export interface WfPlanDTO {
+  id: string
+  strategy_id: string | null
+  n_folds: number
+  train_size: number
+  test_size: number
+  gap: number
+  oos_start: string | null
+  oos_end: string | null
+  pinned: boolean
+  created_at: string
+}
+
+export interface WfFoldDTO {
+  id: string
+  plan_id: string
+  fold_index: number
+  train_start: string
+  train_end: string
+  test_start: string
+  test_end: string
+  is_oos: boolean
+  created_at: string
+}
+
+export interface WfSearchRunDTO {
+  id: string
+  plan_id: string | null
+  strategy_id: string | null
+  n_trials: number
+  best_score: number | null
+  best_params: Record<string, unknown> | null
+  score_distribution: Record<string, unknown> | null
+  status: string
+  created_at: string
+}
+
+export interface WfValidatedStrategyDTO {
+  id: string
+  strategy_id: string
+  plan_id: string | null
+  validated: boolean
+  oos_score: number | null
+  details: Record<string, unknown> | null
+  created_at: string
+}
+
+export interface WfEnsembleDTO {
+  id: string
+  name: string
+  strategy_ids: string[]
+  method: string
+  output_snapshot_sha256: string | null
+  created_at: string
 }

@@ -121,9 +121,13 @@ class FactorRevisionDTO(_Strict):
     expression: str
     description: str = ""
     status: str
-    fields: dict[str, Any] | None = None
-    operators: dict[str, Any] | None = None
-    functions: dict[str, Any] | None = None
+    # IC (Pearson) and RankIC (Spearman) are DISTINCT metrics — never collapsed
+    # into one column. Sourced from the latest retained experiment evidence.
+    ic: float | None = None
+    rank_ic: float | None = None
+    fields: list[str] | None = None
+    operators: list[str] | None = None
+    functions: list[str] | None = None
     provenance: dict[str, Any] | None = None
     created_at: str
 

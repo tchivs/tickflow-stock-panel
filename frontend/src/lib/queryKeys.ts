@@ -183,6 +183,18 @@ export const QK = {
   attribution:          (runId?: string) => ['attribution', runId ?? 'all'] as const,
   rebalancePlans:       (runId?: string) => ['rebalance-plans', runId ?? 'all'] as const,
   paperState:           (planId: string) => ['paper-state', planId] as const,
+
+  // Research panels (UI-01) — distinct 'research-panel' prefix so the panel
+  // queries never collide with the legacy research workspace cache.
+  panelModels:          () => ['research-panel', 'models'] as const,
+  panelModelComposites: (modelId: string) => ['research-panel', 'models', modelId, 'composites'] as const,
+  panelFactors:         () => ['research-panel', 'factors'] as const,
+  panelFactorVerdict:   (revisionId: string) => ['research-panel', 'factors', revisionId, 'verdict'] as const,
+  panelWfPlans:         () => ['research-panel', 'wf', 'plans'] as const,
+  panelWfFolds:         (planId?: string) => ['research-panel', 'wf', 'folds', planId ?? 'all'] as const,
+  panelWfSearchRuns:    (planId?: string) => ['research-panel', 'wf', 'search-runs', planId ?? 'all'] as const,
+  panelWfValidated:     () => ['research-panel', 'wf', 'validated'] as const,
+  panelWfEnsembles:     () => ['research-panel', 'wf', 'ensembles'] as const,
 } as const
 
 // ===== SSE 应该 invalidate 的 key 前缀列表 =====

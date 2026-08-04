@@ -187,3 +187,204 @@ def test_tracer_objective_filter(
     )
     assert response.status_code == 200
     assert len(response.json()) == 2
+
+
+# ================================================================
+# Wave 2 breadth cases (15-04) — attribution, rebalance, paper state
+# ================================================================
+
+
+def _record_fixture_evidence(
+    repo: PortfolioRepository,
+    *,
+    evidence_id: str = "attr-001",
+    run_id: str = "run-tracer-001",
+) -> dict:
+    """Record one attribution-evidence row bound to a fixture optimization run."""
+    return repo.record_attribution_evidence(
+        id=evidence_id,
+        attribution_type="exposure_contribution",
+        run_id=run_id,
+        risk_model="sample_covariance_v1",
+        as_of="2026-08-01",
+        output_sha256="a" * 64,
+        artifact_relative_path=f"portfolio_artifacts/{evidence_id}/attribution.json",
+        reconciliation_json={"reconciled": True, "drift": 0.0004, "max_depth": 3},
+        created_at="2026-08-01T00:00:00Z",
+    )
+
+
+def _record_fixture_plan(
+    repo: PortfolioRepository,
+    *,
+    plan_id: str = "plan-001",
+    run_id: str = "run-tracer-001",
+) -> dict:
+    """Record one immutable rebalance plan bound to a fixture optimization run."""
+    return repo.record_rebalance_plan(
+        id=plan_id,
+        optimization_run_id=run_id,
+        input_snapshot_sha256="a" * 64,
+        as_of="2026-08-01",
+        target_weights_json={"600000.SH": 0.6, "600001.SH": 0.4},
+        discrete_weights_json={"600000.SH": 0.6, "600001.SH": 0.4},
+        lot_sizes_json={"600000.SH": 600, "600001.SH": 400},
+        cash_residue=0.0008,
+        turnover_cost=0.0021,
+        blocked_instruments_json={},
+        discretization_rmse=0.00012,
+        rmse_definition="simple",
+        expires_at="2026-09-01T00:00:00Z",
+        output_sha256="b" * 64,
+        artifact_relative_path=f"portfolio_artifacts/{plan_id}/plan.json",
+        created_at="2026-08-01T00:00:00Z",
+    )
+
+
+def test_attribution_list_returns_recorded_evidence(
+    portfolio_repository: PortfolioRepository, panel_client: TestClient
+) -> None:
+    _record_fixture_run(portfolio_repository)
+    _record_fixture_evidence(portfolio_repository)
+    response = panel_client.get("/api/portfolio/attribution")
+    assert response.status_code == 200
+    rows = response.json()
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["id"] == "attr-001"
+    assert row["attribution_type"] == "exposure_contribution"
+    assert row["risk_model"] == "sample_covariance_v1"
+    assert row["run_id"] == "run-tracer-001"
+    # exposure-contribution evidence MUST carry a reconciliation payload
+    assert row["reconciliation"] == {"reconciled": True, "drift": 0.0004, "max_depth": 3}
+
+
+def test_attribution_filters_by_risk_model(
+    portfolio_repository: PortfolioRepository, panel_client: TestClient
+) -> None:
+    _record_fixture_run(portfolio_repository)
+    _record_fixture_evidence(portfolio_repository)
+    miss = panel_client.get(
+        "/api/portfolio/attribution", params={"risk_model": "semi_covariance_v1"}
+    )
+    assert miss.status_code == 200
+    assert miss.json() == []
+    hit = panel_client.get(
+        "/api/portfolio/attribution", params={"risk_model": "sample_covariance_v1"}
+    )
+    assert hit.status_code == 200
+    assert len(hit.json()) == 1
+
+
+def test_rebalance_plan_list_returns_recorded_plan(
+    portfolio_repository: PortfolioRepository, panel_client: TestClient
+) -> None:
+    _record_fixture_run(portfolio_repository)
+    _record_fixture_plan(portfolio_repository)
+    response = panel_client.get("/api/portfolio/rebalance-plans")
+    assert response.status_code == 200
+    plans = response.json()
+    assert len(plans) == 1
+    plan = plans[0]
+    assert plan["id"] == "plan-001"
+    assert plan["optimization_run_id"] == "run-tracer-001"
+    assert plan["target_weights"] == {"600000.SH": 0.6, "600001.SH": 0.4}
+    assert plan["discrete_weights"] == {"600000.SH": 0.6, "600001.SH": 0.4}
+    assert plan["lot_sizes"] == {"600000.SH": 600, "600001.SH": 400}
+    assert plan["cash_residue"] == 0.0008
+    assert plan["turnover_cost"] == 0.0021
+    assert plan["discretization_rmse"] == 0.00012
+    assert plan["rmse_definition"] == "simple"
+    assert plan["expires_at"] == "2026-09-01T00:00:00Z"
+    assert plan["output_sha256"] == "b" * 64
+
+
+def test_paper_state_empty_before_any_transition(
+    portfolio_repository: PortfolioRepository, panel_client: TestClient
+) -> None:
+    _record_fixture_run(portfolio_repository)
+    _record_fixture_plan(portfolio_repository)
+    response = panel_client.get("/api/portfolio/rebalance-plans/plan-001/paper")
+    assert response.status_code == 200
+    state = response.json()
+    assert state["plan_id"] == "plan-001"
+    assert state["current_state"] is None
+    assert state["transitions"] == []
+
+
+def test_paper_state_approve_is_idempotent(
+    portfolio_repository: PortfolioRepository, panel_client: TestClient
+) -> None:
+    _record_fixture_run(portfolio_repository)
+    _record_fixture_plan(portfolio_repository)
+
+    first = panel_client.post(
+        "/api/portfolio/rebalance-plans/plan-001/approve",
+        json={"idempotency_key": "approve-key-1"},
+    )
+    assert first.status_code == 200
+    first_body = first.json()
+    assert first_body["transition"] == "approved"
+    assert first_body["current_state"] == "approved"
+
+    # Re-POSTing the SAME idempotency key replays the existing transition — no
+    # duplicate row, same derived state (UNIQUE (plan_id, transition)).
+    replay = panel_client.post(
+        "/api/portfolio/rebalance-plans/plan-001/approve",
+        json={"idempotency_key": "approve-key-1"},
+    )
+    assert replay.status_code == 200
+    assert replay.json()["current_state"] == "approved"
+
+    state = panel_client.get("/api/portfolio/rebalance-plans/plan-001/paper").json()
+    assert state["current_state"] == "approved"
+    assert len(state["transitions"]) == 1
+    assert state["transitions"][0]["transition"] == "approved"
+    assert state["transitions"][0]["idempotency_key"] == "approve-key-1"
+
+
+def test_paper_state_reject_after_approve_appends_audit_fact(
+    portfolio_repository: PortfolioRepository, panel_client: TestClient
+) -> None:
+    """The route is append-only audit, not a guarded state machine: a later
+    'rejected' transition is a distinct (plan_id, transition) row, so the
+    derived current_state advances to 'rejected'. There is no execute path."""
+    _record_fixture_run(portfolio_repository)
+    _record_fixture_plan(portfolio_repository)
+    panel_client.post(
+        "/api/portfolio/rebalance-plans/plan-001/approve",
+        json={"idempotency_key": "approve-key-1"},
+    )
+    reject = panel_client.post(
+        "/api/portfolio/rebalance-plans/plan-001/reject",
+        json={"idempotency_key": "reject-key-1"},
+    )
+    assert reject.status_code == 200
+    assert reject.json()["transition"] == "rejected"
+    assert reject.json()["current_state"] == "rejected"
+
+    # Re-reject with the same key replays idempotently.
+    replay = panel_client.post(
+        "/api/portfolio/rebalance-plans/plan-001/reject",
+        json={"idempotency_key": "reject-key-1"},
+    )
+    assert replay.status_code == 200
+    assert replay.json()["current_state"] == "rejected"
+
+    state = panel_client.get("/api/portfolio/rebalance-plans/plan-001/paper").json()
+    assert state["current_state"] == "rejected"
+    transitions = [t["transition"] for t in state["transitions"]]
+    assert transitions == ["approved", "rejected"]
+
+
+def test_paper_state_nonexistent_plan_404(panel_client: TestClient) -> None:
+    response = panel_client.get("/api/portfolio/rebalance-plans/nonexistent/paper")
+    assert response.status_code == 404
+
+
+def test_paper_approve_nonexistent_plan_404(panel_client: TestClient) -> None:
+    response = panel_client.post(
+        "/api/portfolio/rebalance-plans/nonexistent/approve",
+        json={"idempotency_key": "approve-key-1"},
+    )
+    assert response.status_code == 404

@@ -16,6 +16,10 @@ const Financials = lazy(() => import('./pages/Financials').then(m => ({ default:
 const Data = lazy(() => import('./pages/Data').then(m => ({ default: m.Data })))
 const Portfolio = lazy(() => import('./pages/Portfolio').then(m => ({ default: m.Portfolio })))
 const Optimization = lazy(() => import('./pages/portfolio/Optimization').then(m => ({ default: m.Optimization })))
+const RiskAttribution = lazy(() => import('./pages/portfolio/RiskAttribution').then(m => ({ default: m.RiskAttribution })))
+const RebalancePlan = lazy(() => import('./pages/portfolio/RebalancePlan').then(m => ({ default: m.RebalancePlan })))
+const ModelLibrary = lazy(() => import('./pages/backtest/ModelLibrary').then(m => ({ default: m.ModelLibrary })))
+const WalkForward = lazy(() => import('./pages/backtest/WalkForward').then(m => ({ default: m.WalkForward })))
 const Monitor = lazy(() => import('./pages/Monitor').then(m => ({ default: m.Monitor })))
 const Trading = lazy(() => import('./pages/Trading').then(m => ({ default: m.Trading })))
 const Dashboard = lazy(() => import('./pages/Dashboard').then(m => ({ default: m.Dashboard })))
@@ -80,10 +84,14 @@ export const router = createBrowserRouter([
       { path: 'watchlist', element: <Watchlist /> },
       { path: 'screener', element: <Screener /> },
       { path: 'backtest', element: <Backtest /> },
+      { path: 'backtest/model-library', element: <ModelLibrary /> },
+      { path: 'backtest/walk-forward', element: <WalkForward /> },
       { path: 'financials', element: <Financials /> },
       { path: 'data', element: <Data /> },
       { path: 'portfolio', element: <Portfolio /> },
       { path: 'portfolio/optimization', element: <Optimization /> },
+      { path: 'portfolio/risk-attribution', element: <RiskAttribution /> },
+      { path: 'portfolio/rebalance-plan', element: <RebalancePlan /> },
       { path: 'monitor', element: <Monitor /> },
       { path: 'trading', element: <Trading /> },
       { path: 'limit-ladder', element: <LimitUpLadder /> },
