@@ -50,7 +50,7 @@ Four phases add 集合竞价-driven quantitative stock selection to the shipped 
 - [x] **Phase 16: 竞价数据层 (Auction Data)** - Enable minute-K sync, land the governed open-gap factor, and probe true 集合竞价 match data behind a capability gate — DATA-01..03
 - [x] **Phase 17: 竞价策略族 (Auction Strategy Family)** - Author ≥3 auction strategies (竞价多头/盘前强势量化/早盘之星) as builtin strategy files with factor-hit tagging — STRAT-01..03 (completed 2026-08-04)
 - [x] **Phase 18: 股池 Hub (Pool Hub)** - Strategy cards with pool counts, drill-down stock lists, concept filter, 交叉共振 multi-hit highlight — POOL-01..03 (completed 2026-08-04)
-- [ ] **Phase 19: 游客/VIP 脱敏 + 前端 (Guest Access & Frontend)** - Server-authoritative guest masking, VIP plaintext, frontend pool page — GUEST-01..02
+- [x] **Phase 19: 游客/VIP 脱敏 + 前端 (Guest Access & Frontend)** - Server-authoritative guest masking, VIP plaintext, frontend pool page — GUEST-01..02 (completed 2026-08-04)
 
 ## Phase Details
 
@@ -118,10 +118,10 @@ Plans:
   1. Guest session responses mask stock code/name (`******`) at the API DTO boundary and expose only 涨跌幅/概念板块; VIP responses are明文. No client-side masking is trusted.
   2. Masking is display-only — underlying factor computation and strategy results remain unmasked and correct for all sessions.
 
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans executed
 
 - [x] 19-01-PLAN.md — server-authoritative guest masking at the GET /api/pool/hub DTO boundary: guest session → masked code/name/symbol + `mode` field + guest read-only access path; VIP 明文; display-only GUEST-02 (GUEST-01, GUEST-02)
-- [ ] 19-02-PLAN.md — PoolHubPage guest presentation: GuestModeBanner, masked-cell rendering verbatim, 名称 column, guest column set hides 开盘涨幅, no client-side masking (grep guard) (GUEST-01, GUEST-02)
+- [x] 19-02-PLAN.md — PoolHubPage guest presentation: GuestModeBanner, masked-cell rendering verbatim, 名称 column, guest column set hides 开盘涨幅, no client-side masking (grep guard) (GUEST-01, GUEST-02)
 
 ## Progress
 
@@ -133,7 +133,7 @@ Phases execute in numeric order: 16 → 17 → 18 → 19
 | 16. 竞价数据层 | DATA-01..03 | Complete    |
 | 17. 竞价策略族 | STRAT-01..03 | Complete    |
 | 18. 股池 Hub | POOL-01..03 | Complete    |
-| 19. 游客/VIP 脱敏 + 前端 | GUEST-01..02 | In Progress|
+| 19. 游客/VIP 脱敏 + 前端 | GUEST-01..02 | Complete    |
 
 ---
 *Last updated: 2026-08-04 — Phase 16 complete (DATA-01..03), plans 1-2 executed*

@@ -4,17 +4,17 @@ milestone: v1.3
 milestone_name: 竞价选股引擎 — planning
 current_phase: 19
 current_phase_name: 游客/VIP 脱敏 + 前端 (Guest Access & Frontend)
-status: planning
-stopped_at: Completed 19-01-PLAN.md
-last_updated: "2026-08-04T15:11:21.430Z"
+status: verifying
+stopped_at: Completed 19-02-PLAN.md
+last_updated: "2026-08-04T15:36:34.391Z"
 last_activity: 2026-08-04
-last_activity_desc: Phase 18 complete, transitioned to Phase 19
+last_activity_desc: Phase 19 P2 (frontend guest presentation) complete — phase 19 complete (GUEST-01/02)
 progress:
   total_phases: 4
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 8
-  completed_plans: 7
-  percent: 75
+  completed_plans: 8
+  percent: 100
 ---
 
 # Project State
@@ -29,11 +29,11 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 ## Current Position
 
 Phase: 19 — 游客/VIP 脱敏 + 前端 (Guest Access & Frontend)
-Plan: 1/2
-Status: In progress
-Last activity: 2026-08-04 — Phase 19 P1 (guest masking backend) complete
+Plan: 2 of 2
+Status: Phase complete — ready for verification
+Last activity: 2026-08-04 — Phase 19 P2 (frontend guest presentation) complete
 
-Progress: [█████████░] 88% (7/8 plans)
+Progress: [██████████] 100% (8/8 plans)
 
 ## v1.3 Phase Summary
 
@@ -41,7 +41,7 @@ Progress: [█████████░] 88% (7/8 plans)
 |-------|-------------|--------|
 | 16 竞价数据层 | DATA-01..03 | Complete |
 | 18 股池 Hub | POOL-01..03 | Complete |
-| 19 游客/VIP 脱敏 + 前端 | GUEST-01..02 | In progress (1/2) |
+| 19 游客/VIP 脱敏 + 前端 | GUEST-01..02 | Complete |
 
 ## Accumulated Context
 
@@ -72,8 +72,8 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-08-04T15:10:32.531Z
-Stopped at: Completed 19-01-PLAN.md
+Last session: 2026-08-04T15:36:33.310Z
+Stopped at: Completed 19-02-PLAN.md
 Resume file: None
 
 ## Operator Next Steps
@@ -96,6 +96,10 @@ Resume file: None
 
 - [Phase ?]: Phase 17 P2: hit_factors values sorted by Unicode codepoint (deterministic; PLAN sample order corrected: 盘前强势量化 before 竞价多头)
 - [Phase ?]: Pool hub backend: single-as_of projection over strategy_cache; concept filter keeps total authoritative; cross_resonance = hit_factors>=2; GET /api/pool/hub is GET-only with no execution imports/write path (POOL-03).
+- [Phase ?]: Presentation mode consumed ONLY from response.mode; missing/unknown mode defaults to vip (frontend never masks by default, never infers from row values).
+- [Phase ?]: Guest masked cells are inert text (no title/aria-label/tooltip) so real identity never reaches the DOM.
+- [Phase ?]: Guest rows keyed by strategy-scoped ordinal, never the masked symbol (no duplicate React keys).
+- [Phase ?]: 开盘涨幅 header+cells render only when mode==='vip' (guest column set hides it).
 
 ## Performance Metrics
 
@@ -107,3 +111,4 @@ Resume file: None
 | Phase 18 P1 | 20 | 3 tasks | 4 files |
 | Phase 18-pool-hub P2 | 45 | 3 tasks | 10 files |
 | Phase 19 P1 | 55 | 3 tasks | 6 files |
+| Phase 19 P2 | 25min | 3 tasks | 11 files |
