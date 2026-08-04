@@ -8,16 +8,15 @@ AthenaQuant is a shipped, self-hosted quantitative research platform for individ
 
 An investor can turn reliable market data and their own holdings into an auditable, actionable research and monitoring workflow without operating multiple disconnected tools.
 
-## Current Milestone: v1.2 End-to-End Factor Portfolio Pipeline
+## Current Milestone: v1.3 竞价选股引擎
 
-**Goal:** Extend the research platform from single-factor evaluation into an auditable factor → portfolio → risk pipeline that outputs rebalance suggestions (no automated execution).
+**Goal:** 在现有选股引擎(Screener)基础上,新增集合竞价(9:15–9:25)数据驱动的量化选股能力,落地竞价/盘前策略族与股池展示。
 
 **Target features:**
-- **Factor library & multi-factor model**: restricted factor DSL with whitelist parsing, IC/RankIC/ICIR/monthly-robustness evaluation, admission gates (train/val IC, no lookahead, no label leakage, similarity dedup), catalog+summary storage
-- **Portfolio construction & optimization**: expected-return + covariance + constraints layering, stable objectives (min volatility / HRP) as baselines, long-only, per-instrument/industry caps, min cash, turnover cost, immutable optimization run records
-- **Risk analysis & attribution**: risk models (sample/semi/exponential/Ledoit-Wolf + PSD repair), exposure, contribution, drawdown attribution
-- **Deeper strategy research**: rolling walk-forward validation (not expanding, reserved independent OOS segment), parameter optimization & ensembling, shared backtest/live signal chain
-- **Output & boundary**: RebalancePlan (target weights, A-share discrete lots, cash, turnover cost, blocked instruments, expiry), suggestions to auditable paper rebalance — no execution authority
+- 竞价数据源接入:9:15–9:25 集合竞价匹配数据(竞价量、金额、虚拟成交、开盘涨幅等)
+- 竞价因子与策略:竞价多头、盘前强势量化、早盘之星、竞价阿尔法、T+1闪电等策略(内置策略文件形式,复用 Polars 策略引擎)
+- 前端股池页:策略卡片(股池数)、开盘涨幅/涨跌幅排序、概念筛选、交叉共振(多策略命中)、游客脱敏模式
+- 沿平台边界:选股结果为零执行权研究建议,无自动下单
 
 ## Success Metric
 
@@ -27,7 +26,7 @@ The v1.0 release is successful when all 23 requirements are verified end to end,
 
 ### Active
 
-Building toward v1.2 (End-to-End Factor Portfolio Pipeline). Requirements are defined in `.planning/REQUIREMENTS.md`.
+Building toward v1.3 (竞价选股引擎). Requirements are defined in `.planning/REQUIREMENTS.md`.
 
 ### Validated in v1.1
 
@@ -158,4 +157,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-08-01 after Phase 13*
+*Last updated: 2026-08-04 — v1.3 milestone started (竞价选股引擎)*

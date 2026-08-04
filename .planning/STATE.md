@@ -1,20 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.2
-milestone_name: End-to-End Factor Portfolio Pipeline — complete
-current_phase: 15
-current_phase_name: API/SSE + Frontend Panels
-status: complete
-stopped_at: Phase 15 complete — all 6 v1.2 phases delivered
-last_updated: "2026-08-03T20:00:00.000Z"
-last_activity: 2026-08-03
-last_activity_desc: Phase 15 (API/SSE + Frontend Panels) complete — v1.2 milestone fully delivered
+milestone: v1.3
+milestone_name: 竞价选股引擎
+status: planning
+last_updated: "2026-08-04T09:53:03.371Z"
+last_activity: 2026-08-04
 progress:
-  total_phases: 6
-  completed_phases: 6
-  total_plans: 28
-  completed_plans: 28
-  percent: 100
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
@@ -28,12 +24,10 @@ See: .planning/PROJECT.md (updated 2026-07-31)
 
 ## Current Position
 
-Phase: 15 — API/SSE + Frontend Panels
-Plan: Complete
-Status: v1.2 milestone complete (Phases 10-15)
-Last activity: 2026-08-03 — Phase 15 complete; full backend suite 1328 passed + frontend build green
-
-Progress: [██████████] 100% (Phases 10-15 complete)
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-08-04 — Milestone v1.3 started
 
 ## v1.2 Phase Summary
 
