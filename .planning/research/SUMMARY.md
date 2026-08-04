@@ -1,170 +1,178 @@
-# Project Research Summary
+# Research Summary
 
 **Project:** AthenaQuant
-**Domain:** A-share quantitative factor research → portfolio construction → risk attribution → walk-forward validation → paper rebalance suggestions (research-only, no execution authority)
-**Researched:** 2026-07-31
-**Confidence:** HIGH
+**Milestone:** v2.0 竞价深度与历史股池 (POOL-04 / STRAT-04·05 / DATA-04·05)
+**Domain:** A股集合竞价选股引擎深化 — 按交易日浏览历史股池、竞价策略族扩展、真集合竞价数据列
+**Researched:** 2026-08-04
+**Confidence:** HIGH (栈/架构/陷阱均以 v1.3 落地代码逐条核验); DATA-04 数据源可用性为 MEDIUM (probe 门控, 取决于探测结果)
 
 ## Executive Summary
 
-AthenaQuant v1.2 ("End-to-End Factor Portfolio Pipeline") extends a shipped single-factor research platform into an auditable factor → portfolio → risk → rebalance-suggestion pipeline for A-share individual investors. Experts build this class of system with three non-negotiable seams: (1) **one shared factor signal chain** used identically by evaluation, multi-factor scoring, walk-forward folds, expected returns, and live as-of suggestions (eliminates train/serve skew — the AlphaMaster flagship lesson); (2) **immutable, hash-bound run records** (every weight/plan traces to a canonical `PortfolioInputSnapshot` SHA-256, following the existing frozen-panel contract); and (3) a **hard research-only output boundary** where the deliverable is a discrete A-share RebalancePlan suggestion with zero execution authority. The milestone reuses ~60% of existing scaffolding (DSL parser, IC/RankIC evaluation, factor registry with similarity dedup, immutable catalog, SHA-256 frozen panels, A-share-aware matching engine) and adds a new `portfolio/` domain plus the signal-chain backbone.
+AthenaQuant v2.0 是在 v1.3 已锁定的 A股量化研究平台（单容器、data-lake-first、研究建议零执行权）之上深化集合竞价选股。用户（短线打板/复盘文化，参照开盘啦、淘股吧、同花顺问财）默认三件事：能按**交易日**回看任意一天的历史股池（POOL-04）、看到**完整的竞价策略族**（STRAT-04/05）、并拥有**真实的 09:25 撮合成交数据列**（DATA-04/05）——这些不是增值特性而是产品地基。专家构建此类系统的三个不可妥协点：(1) **诚实标签铁律**——真竞价列只在 probe 判定 `available` 时存在，09:30 连续竞价 bar 永不标"竞价量"；(2) **冻结式点快照**——历史股池归档"当次计算的行集"而非当日多次运行累计的 union；(3) **确定性回放 vs 逐日存档的诚实区分**——回放优先（零存储、可审计），存档仅作可选增强。
 
-The recommended approach is a dependency-aware build: promote scipy to base deps and add cvxpy 1.9.2 as the optimization engine; land the shared signal chain before any consumer; then admit factors → compose multi-factor expected returns → solve min-vol/HRP baselines → render A-share RebalancePlans → walk-forward validate → wire API/frontend. Max-Sharpe is explicitly **not** a default objective (numerical instability + PyPortfolioOpt variable-substitution warning), Black-Litterman is deferred, and industry cap is gated on a governed industry mapping that does not yet exist (sector JOIN is fail-closed).
+推荐做法：三项特性**全部复用 v1.3 锁定栈，新增运行时依赖为零**（Polars 1.40.1 + DuckDB 1.5.3 + Parquet/pyarrow 24.0.0 + SQLite + FastAPI 0.136.1 + React Query 5.55 已含全部所需原语）。构建顺序必须**数据优先**：先 DATA-04/05（probe 门控的真竞价列 + `kline_auction/` 湖 + 交易日历），再 STRAT-04/05（5 个第一性原理策略 + 可计算时间窗声明），然后 POOL-04（`strategy_cache` 日期分区 + 最新指针 + 独立只读端点 + EOD 持久化 job），最后前端 DateNavigator。理由：竞价列是策略筛选的价值前置（无真列则 5 个策略塌缩为同一组 open_gap+量比 组合），逐日缓存是历史浏览的前提，日期导航是纯展示层消费。
 
-The key risks, each with a deterministic guard: lookahead/label leakage when the DSL is extended (shifted-label leakage test + compiler partition-context contract); survivorship bias from the missing point-in-time universe contract (the largest open data gap); silent PSD repair and un-audited optimization runs (repair method/epsilon/eigenvalues recorded in the immutable run); walk-forward leakage (rolling not expanding folds with explicit gap + reserved final OOS); and the pipeline drifting into execution authority (RebalancePlan as an immutable research-only artifact + a separate approved paper-rebalance state machine). Three integration pitfalls — governed-data boundary bypass, divergent cross-module computation, and RebalancePlan crossing into portfolio-mutation endpoints — are the top gotchas when wiring new modules into the existing host.
+最大风险是 DATA-04 数据源可用性未知：probe 未确认 `available` 前，全部策略与 UI 必须以 fail-closed 为前提设计（竞价列缺列、降级到派生 `open_gap`）。其次是历史股池的语义陷阱：`strategy_cache.write_cache` 的单日合并是 **union** 语义（`today_ever_rows` 并集），若直接按日归档会把"当日累计并集"冒充"点时刻快照"，必须引入冻结式点快照（`as_of` + `computed_at` + 策略版本指纹，永不回填/追加）；回放必须 PIT（只读 `<= D` 分区），否则用今天已修正的数据重算过去的池子，研究结论不可信。另有一个必须诚实处理的归类问题：**金色两点半是尾盘/隔夜策略（14:30 后选股、隔夜持有、次日早盘卖），不是 09:15–09:25 竞价策略**，塞进竞价窗口即语义造假。
 
 ## Key Findings
 
 ### Recommended Stack
 
-The stack is a **minimal addition** to an existing locked FastAPI / Polars / DuckDB / SQLite host. Core recommendation: **cvxpy 1.9.2 as the primary optimization dependency** — the only maintained convex DSL supporting Python 3.11–3.14 with bundled solvers (OSQP/Clarabel/SCS/HiGHS), compiles the exact QP needed (long-only box + per-instrument cap + industry cap + min cash + convex turnover penalty), and records solver/options/status for the audit contract. **scipy must be declared directly and pinned 1.17.1 (NOT 1.18.0 — it requires Python ≥3.12; project floor is 3.11)**; HRP is ~50 lines over `scipy.cluster.hierarchy.linkage`. **scikit-learn 1.8.0** (Ledoit-Wolf shrinkage) is promoted out of the `shadow` extra into an `optimization` extra with the existing lazy-import discipline. numpy 2.4.6 and pandas 3.0.3 are declared directly, but pandas stays confined to the `PortfolioOptimizationRun` boundary (ADR-19); factor evaluation **stays in Polars, not DuckDB SQL**. The hand-rolled factor DSL parser is kept — **no pyparsing/lark rewrite**. New deps land via `uv add --extra optimization`.
+v2.0 不需要任何新运行时包：历史股池的缺口不是"缺库"而是"缺按日持久化"——`strategy_cache.py` 只保留单一 as_of（read-merge-write 覆盖 `results`/`as_of`），而 `screener_results/` 目录在数据湖布局中只作为空占位目录存在，全仓无写入方。因此 POOL-04 的落点是新的**持久化 seam**：把每日 `run_all` 结果写成按 `date=` 分区的 Parquet 湖表，用 Polars `scan_parquet(hive_partitioning=True)` 读单日、用 DuckDB 冷 SQL 做日期索引。DATA-04 的 provider 契约已存在（`ProviderCapabilities.auction` 能力位、`custom/provider.py::get_auction` 已返回 canonical 列 `symbol/datetime/auction_volume/auction_amount` 且严格限定 09:15–09:25 窗口、探针判定状态机 + 30s TTL 的 `/api/data/auction-probe`），缺的只是湖内持久化与读路径门控。
 
 **Core technologies:**
-- **cvxpy 1.9.2**: portfolio optimization modeling — direct convex DSL with bundled solvers; auditable solver/options/status
-- **scipy 1.17.1** (pinned `<1.18`): HRP clustering, PSD-repair helpers, distance transforms — declare explicitly
-- **scikit-learn 1.8.0**: Ledoit-Wolf covariance shrinkage — promote from `shadow` extra, lazy-import at risk-model boundary
-- **numpy 2.4.6 / pandas 3.0.3**: declare directly; pandas only at the optimization boundary
-- **Polars 1.40.1 + DuckDB 1.5.3 + Parquet** (unchanged): factor evaluation stays Polars-native; DuckDB only for cold ad-hoc queries
-- **Existing backtest engine + optimizer**: reuse pure-Polars `BacktestEngine.load_panel` and grid-search pattern (`GRID_MAX_COMBINATIONS` cap) extended to walk-forward folds
+- **Polars 1.40.1**: 历史股池单日投影读取、策略引擎帧、竞价列入 enriched 面板 — `pl.scan_parquet(<dir>, hive_partitioning=True)` 传目录自动开 hive 分区推断，`filter(date==d)` 谓词下推只读目标分区（Context7 验证）
+- **DuckDB 1.5.3**: `screener_results/` / `kline_auction/` 的冷查询日期索引 — `read_parquet('dir/**/*.parquet', hive_partitioning=true)` + `SELECT DISTINCT date` 列可用交易日与每日计数，与既有 "DuckDB 冷 → Polars 温 → 内存热" 分层一致
+- **FastAPI 0.136.1**: 扩展 `GET /api/pool/hub?as_of=` 语义、新增 `GET /api/pool/dates` — 可选 query param `= None` / Pydantic query-param model，现有 `Optional[str] as_of` 模式已达标
+- **SQLite (operational.db, stdlib)**: 竞价可用性的按日门控标记与历史簿记 — 只存操作状态不存研究行，延续平台 "SQLite 存状态 / 湖存研究数据" 分工
+- **Parquet (pyarrow) 24.0.0**: `screener_results/` + `kline_auction/` 两个新湖表按 `date=` hive 分区 — 追加式按日写（temp + `os.replace` 原子替换，延续 `kline_sync._atomic_write_parquet` 模式）
+- **React + TanStack Query** (react 18.3.1 / 5.55.0): 前端日期导航 ‹ › 步进 + 日期列表、as_of 重取 — `PoolHubPage` 已按 `data.as_of` 做 `key` 重渲染，复用现有 `useQuery` 缓存
 
-**Do NOT add:** PyPortfolioOpt/skfolio/riskfolio-lib as runtime deps (use their contracts as design spec), qlib wholesale (contracts only), MLflow (existing SQLite append-only records), vectorbt/numba, statsmodels/arch, PyTorch/jax (gated behind `forecast` extra), lark. scipy.optimize only for HRP cluster allocation, never as the general optimizer.
+**Supporting / conditional:** apscheduler 3.11.2（仅当 STRAT-05 盘中确认纳入本期）、sse-starlette 3.4.4（仅池页实时刷新）、exchange-calendars 4.13.2（默认**不用**——日期列表以湖分区为准；仅跨节假日 step 才从 `forecast` extra 提升）、pydantic 2.13.4（query-param model）、Playwright 1.61.1（e2e 视觉回归）。
+
+**What NOT to use:** 新数据库（Postgres/Redis/MongoDB）；akshare/tushare 整包 SDK（provider 链 + `get_auction` seam 已是集成点）；Arrow/Feather 存历史（IPC 是暂态格式）；前端交易日历库/日期选择器组件库（日期由后端权威给出）；第三个策略注册轨（STRAT-03：只进 `strategy/builtin/` 自动发现）；ML/forecast 栈进入池路径（竞价策略是确定性因子过滤，池路径零 AI 执行权）；ORM 管 operational.db（既有版本化迁移足够）；把 09:30 连续竞价 bar 当竞价量（T-16-01 锁死，严格窗口分类）。
 
 ### Expected Features
 
-**Must have (table stakes / MVP launch):** factor admission gates (train/val IC threshold, no-lookahead, no-label-leakage, similarity dedup); ICIR + monthly robustness + coverage in evaluation; admitted factor catalog with summary storage; multi-factor composite expected returns (deterministic equal/IC-weight z-score, no ML); sample covariance + PSD check/repair; long-only min-volatility optimizer; HRP baseline; immutable optimization run records; RebalancePlan (continuous weights → A-share 100-share lots, cash, turnover, blocked instruments, expiry); suggestions to an auditable paper rebalance with **NO execution authority**; rolling walk-forward (not expanding) with a reserved independent final OOS segment; risk exposure + contribution attribution.
+**Must have (P1 / v2.0 核心):**
+- **竞价量/金额一级列 (DATA-04, probe-gated)** — 探测 `available` 时把 `auction_volume/auction_amount`（真实 09:25 撮合，窗口 09:15–09:25）落为 enriched 受管列；不可用则缺列 + fail-closed 降级 `open_gap`。**全部下游的入口。**
+- **日期导航 · 确定性回放 (POOL-04)** — 交易日历步进 + 日期选择；按日 `run_all(as_of)` 回放（引擎已支持，enriched 已有 246 个交易日分区）；`strategy_cache` 泛化为按日键；无数据日空态；概念标签标注「当前快照」。
+- **极速抢筹 + 竞价阿尔法 (STRAT-04 前 2)** — 第一性原理因子（竞价量比/竞价金额/竞价涨幅甜点区 2.8%–3.5%、>7% 风险；open_gap+量比+金额强度综合），落 `strategy/builtin/`，带 hit_factors。
+- **金色两点半（诚实归类）** — 尾盘（14:30+）选股因子（T 日涨幅 3%–5% + 尾盘分钟确认），命名/描述明确「尾盘隔夜」，**不混入竞价窗口**。
+- **派生列：竞价未匹配金额（可选输入）** — 委托量可得时派生；无委托量回退量比+金额。
 
-**Should have (differentiators / add-after):** shared backtest/live signal chain (anti train/serve skew); deterministic admission gates as first-class rigor; Ledoit-Wolf/semi/exponential covariance + PSD-repair options; drawdown attribution; parameter optimization scored on walk-forward OOS folds; strategy ensembling; industry cap (gated on governed industry mapping); LLM proposes DSL expressions only (never free Python code).
+**Should have (P2 / add-after validation):** 竞价全面策略（综合版，DATA-04 稳定后）；T+1闪电（次日早盘分钟 K 卖出择时，STRAT-05 落地后）；STRAT-05 盘中确认（09:30–10:00 分钟 K 复评收窄，复用 `kline_minute`，不加新数据轨道）；竞价换手/委托失衡派生列（需 auction 源扩展 order 字段）。
 
-**Defer (v2+):** max-Sharpe as an explicit, non-default objective; Black-Litterman (needs structured view object); short selling/leverage; auto-rebalance scheduling; ML-based expected returns; multi-period/path-dependent objectives.
+**Defer (v2.1+ / P3):** 虚拟成交实时列/历史竞价图（需实时竞价源 + 盘中快照，EOD 源无法支撑）；DATA-05 盘前股池（09:30 前可用，需实时源，排在 DATA-04 稳定后）；逐日存档模式（非回放，触发后才做）；POOL-05 自选股联动。
 
-**Anti-features to reject:** max-Sharpe as default; free-form Python factor code; expanding-window walk-forward; industry cap without governed mapping; storing full factor value matrices; "one-click best portfolio" autopilot; external DB/message queue.
+**Anti-features（明确拒绝）:** 把金色两点半当 09:15–09:25 竞价策略实现；用 09:30 连续竞价 bar 充当竞价量/金额；把「虚拟成交」作为历史序列持久化（实时预撮合估计，非最终成交）；逐日全量存档无限膨胀（回放优先，零存储）；复刻专有策略配方（陈星量化等——第一性原理 + 诚实命名，META 写清"参考标签的诚实解读"）；日期导航放行任意日期（受限在真实交易日集合内，空态而非报错）；在 DATA-04 探测确认前一次性实现全部 5 个策略（顺序化，先探测先落 2 个）。
 
 ### Architecture Approach
 
-One engine, one panel seam: **every** new computation reads governed market data exclusively through `BacktestEngine.load_panel()`, never direct repository/Parquet reads. A new **`app/research/signal_chain.py`** is the shared factor-value backbone (revision IDs → one governed panel → cross-sectional values/rank/zscore) consumed by evaluation, models, walk-forward, expected returns, and live as-of plans. All new state is **append-only SQLite rows with `input_snapshot_sha256`**; heavy matrices (covariance, weights) are managed immutable artifacts under `data/research_artifacts/`; every optimization/rebalance suggestion stays research-only.
+v2.0 的三个特性线程全部挂接在既有分层上，不引入新存储或第三方注册轨道。三条数据主链：
+
+```
+[A] 真竞价列: provider.get_auction → auction_sync [NEW] → kline_auction/date=*/ 湖
+    → indicators.pipeline 按 (symbol,date) 窗口聚合 → auction_* 受管列（probe 门控）
+    → 竞价策略 filter（probe 不可用 → 列缺席, 策略空安全退化 open_gap）
+[B] 历史股池: run_all(as_of) → strategy_cache/{as_of}.json [NEW]（最新指针 + 日期分区）
+    → pool_hub 按日期投影 → GET /api/pool/hub?as_of → DateNavigator
+[C] 新策略族: strategy/builtin/*.py 自动发现 → engine.run_all
+    → build_factor_hits 逐日期聚合 → hit_factors/交叉共振（无改动）
+```
 
 **Major components:**
-1. `research/signal_chain.py` (NEW) — single factor-value implementation; anti train/serve skew; one compile→evaluate→score path
-2. `research/admission.py` + `research/models.py` (NEW) — admission gate pipeline (append-only verdicts) + multi-factor composite models
-3. `portfolio/{optimizer,risk,rebalance,repository,schemas}.py` (NEW) — immutable optimization runs, risk models + PSD-repair provenance, A-share RebalancePlans, strict DTOs
-4. `backtest/walkforward.py` + `backtest/ensemble.py` (NEW) — rolling folds + reserved OOS; `backtest/optimizer.py` gains OOS reservation
-5. `api/optimization.py` (NEW) + `api/research.py`/`api/backtest.py` (MODIFY) — thin typed projection + walk-forward SSE (durable job pattern)
-6. Modified: `research/{factor_registry,evaluation,catalog,repository}.py`, `portfolio/service.py`, `operational/migrations.py`, `services/quote_service.py`, frontend `api.ts`/`queryKeys.ts` + panels (ModelLibrary, WalkForward, Optimization, RiskAttribution, RebalancePlan)
+1. `services/auction_sync.py` (NEW) — 从 provider `get_auction()` 拉取 09:15–09:25 匹配行，按 `date=` 分区写入 `kline_auction/`，镜像 `kline_sync` 的原子写+分区+视图刷新模式
+2. `services/auction_probe.py` (MOD) — 判定（not_configured/available/fail_closed/error）下沉为进程内可复用结果（`auction_available_for(date)`），供 pipeline 与策略消费，30s TTL 缓存语义不变
+3. `indicators/pipeline.py` (MOD) — probe 门控的 `auction_volume/auction_amount/auction_virtual_fill` 受管列；窗口内按 symbol 聚合为每日一行，**绝不从 09:30 bar 取数**
+4. `strategy/engine.py` (MOD) — `META["requires_auction_data"]` + 空安全约定（列缺席→过滤器整体为假→空池）
+5. `strategy/builtin/*.py` (NEW, 5 文件) — 竞价阿尔法/极速抢筹/T+1闪电/竞价全面策略/金色两点半，遵守 STRAT-03 只进 builtin 自动发现
+6. `services/strategy_cache.py` (MOD) — 按日期分区写（`{as_of}.json`）+ 保留 `strategy_cache.json` 为最新指针；锁/原子替换语义不变
+7. `services/pool_history.py` (NEW) — 枚举可用股池日期（分区缓存 ∩ enriched 日期）、触发历史回填
+8. `services/pool_hub.py` (MOD) — 按请求 as_of 读对应日期缓存；无 as_of → 最新指针（现契约不变）
+9. `api/pool.py` (MOD+NEW) — `GET /api/pool/hub` 真实多日期语义 + 新增 `GET /api/pool/dates`
+10. `frontend/.../DateNavigator.tsx` (NEW) — 交易日前后翻页 + 日期列表
 
-Build order (architecture "Waves 0–6"): contracts/migrations/scipy-promote → signal_chain + evaluation refactor → admission gates + models + catalog → portfolio risk + optimizer + repository → rebalance + paper boundary → walk-forward/OOS/ensemble (can overlap 3–4) → API/SSE + frontend.
+关键架构模式：(1) **Probe 门控的受管列**——列族可用性由服务端权威判定，available 才物化，否则列缺席（fail-closed）；(2) **最新指针 + 日期分区缓存**——`strategy_cache.json` 语义保持"最新一天"不变，历史浏览读分区文件，不破坏 single-as_of 契约（D-01/D-02）与 monitor 叠加路径；(3) **日期分区湖 + 窗口内聚合**——原始多时间戳行情按 (symbol, trade_date) 聚合为每日一行，保持 enriched 日线框架基数 1 行/股/日。缩放优先序：先解决历史回填的同步阻塞（EOD 预生成 job + 首日一次性后台回填），再解决日期列表扫描（缓存已排序列表）。
 
 ### Critical Pitfalls
 
-1. **Lookahead / label leakage in the DSL** (Phase 10) — new multi-factor operators can silently acquire full-panel semantics. Guard: every operator declares partition context (per-date/per-symbol/pointwise) in the compiler; label fields denied in the allowlist; deterministic shifted-label test (IC must collapse when the label shifts) as the gate.
-2. **Survivorship bias / no point-in-time universe** (Phase 10 + 13) — today's universe used for all history inflates IC and returns. Guard: persist PIT universe snapshots (validity ranges, delisted markers, membership as-of); resolve universe per evaluation date and per walk-forward fold; record resolved universe in every manifest.
-3. **IC robustness overfitting & silent PSD repair** (Phases 10 + 12) — scalar mean-IC hides a few hot months; unrecorded eigen-clips make stated risk wrong. Guard: full monthly evidence set + fixed policy thresholds + candidate trail (incl. rejections); PSD repair is an explicit recorded step (method, epsilon, eigenvalues before/after) in the immutable run.
-4. **Walk-forward leakage & multiple-comparison bias** (Phase 13) — expanding/overlapping folds and best-of-N search inflate OOS. Guard: rolling windows with explicit gap (`WF_GAP`), disjoint recorded folds, reserved final OOS evaluated exactly once; record trial count, search space, score distribution.
-5. **Max-Sharpe default & continuous weights as orders** (Phases 11 + 14) — unstable objective + infeasible plans. Guard: min-vol + HRP as defaults, max-Sharpe explicit opt-in with baselines rendered; RebalancePlan has strict layering (continuous weights immutable → discrete lots with RMSE + cash + blocked + expiry) and no execution route.
-6. **Execution-authority leak** (Phase 14, integration) — RebalancePlan wired to existing portfolio-mutation endpoints. Guard: plan is a research-only artifact; paper rebalance is a separate approved state machine (PA_Agent ApprovalTicket pattern); UI never offers "execute"; audit every plan→paper transition append-only.
-7. **Train/serve skew & divergent cross-module computation** (integration) — separate backtest/live implementations silently diverge. Guard: one shared signal chain; reconciliation checks (risk attribution sums to portfolio variance; library IC == optimizer scores).
+1. **union 冒充点快照（Pitfall #1）** — `strategy_cache.write_cache` 的单日合并语义是 union（`today_ever_rows` 并集）。规避：POOL-04 必须引入**冻结式点快照**——固定时刻（盘后 run_all 完成后）把当次 `results` 原样序列化到 `screener_results/date={as_of}/` 或等价归档目录，快照携带 `as_of` + `computed_at` + 策略版本指纹，永不回填/追加，绝不落 `today_ever_rows`。
+2. **回放滚动重算 non-PIT（Pitfall #2）** — 用今天已修正/已复权的数据重算过去股池（`change_pct` 是典型的未来 bar——盘前不可知）。规避：回放只读 `<= D` 分区，复用 `_load_enriched_history(D, lookback)` 的 PIT 语义并加回归锁；归档快照直接存行集，浏览历史只投影不重跑；概念归属标注「当前板块归属」。
+3. **未来 bar 回看 lookahead（Pitfall #7）** — STRAT-05 盘中确认把 10:00 后分钟 bar 算进"当前确认"；盘前策略用当日收盘字段。规避：每个策略声明**可计算时间窗**（`pre_open` / `intraday` / `post_close`），STRAT-05 按 `evaluation_time` 截断分钟帧（`df.filter(datetime <= eval_time)`），日内量比做 `time_factor` 折算，引擎按窗口校验字段可用性。
+4. **09:30 bar 当集合竞价数据（Pitfall #8/#10）** — 分钟层 `_bucket_minutes` 结构上丢弃 09:15–09:25 盘前 bar，09:30 是连续竞价起点。规避：策略只能消费 `get_auction()` canonical 列（provider 层已裁剪窗口）；真竞价列只在 probe `available` 时出现；给每个"竞价"策略加回归——输入只有 09:30+ bar 时必须 fail-closed 空或明确标 derived。
+5. **破坏 single-as_of 契约（Pitfall #5）** — 为支持日期导航原地扩写 `GET /api/pool/hub`（加 date 参数重算/写缓存）。规避：日期导航走**独立只读端点**（`/api/pool/dates` + hub 的 as_of 多日期投影），不写 `strategy_cache.json`、不触发 run_all；既有 `resolved_as_of` 反漂移契约保留并补回归测试；POOL-03 AST 守卫扩展到全部 `/api/pool/*`。
+6. **probe 静默 fail-open（Pitfall #11）** — 非 `available` 时新代码仍返回竞价列或回退不更新状态标识。规避：竞价列生产路径以 probe 判定为前置，非 available → 列 null/缺列 + 状态标识保持 probe 原值；任何回退显式 fail-closed（沿用 `FAIL_CLOSED_DETAIL` 文案）；新增 probe 四状态 × 竞价列返回矩阵测试。
+
+其他要点：交易日/自然日歧义（非交易日必须显式回显最近交易日，禁止静默跳日）；陈缓存误标最新（`latest_date()` 与缓存 as_of 不一致时回显缓存日期）；策略命名暗示公开配方（第一性原理描述 + 文档计数对账，现有 20 vs 18 漂移）；评分权重和 != 1.0 / 缺失评分列静默跳过（策略加载自检）；列单位歧义（手 vs 股、元 vs 万元，canonical 单位在 `get_auction` 边界锁定 + 表头标注 + `虚拟成交` 独立命名 `auction_virtual_fill`）。
 
 ## Implications for Roadmap
 
-Based on combined research, suggested phase structure (continuing v1.1's numbering; Phase 10 = first v1.2 phase). Phases 10–14 follow the pitfall-research mapping; Phase 15 carries the Wave 6 API/SSE + frontend integration.
+基于组合研究，v2.0 建议按**数据 → 策略 → 股池 → 前端**四阶段推进（延续 v1.3 的 Phase 编号，DATA-04 是 STRAT-04 的价值前置，逐日缓存是 POOL-04 的前提，前端是纯展示消费）。EOD 股池持久化 job 在股池层落地，保证日期导航自给自足。
 
-### Phase 10: Factor Library & Multi-Factor Model (foundations + backbone)
-**Rationale:** Everything downstream depends on the signal chain and the append-only contract; admission gates MUST precede portfolio construction (unvalidated factors poison expected returns). The catalog extension should land with the first new module so later phases inherit it.
-**Delivers:** migrations for `portfolio_*`/`factor_model_*`/`admission_*` tables; `portfolio/schemas.py`; scipy promoted to base; `research/signal_chain.py`; evaluation refactor (ICIR/monthly robustness/coverage); `admission.py` gates; `models.py` multi-factor composition; catalog summaries; PIT universe snapshot contract + manifest extension.
-**Addresses:** admission gates, ICIR/robustness/coverage, admitted catalog, composite expected returns, shared signal chain (all P1).
-**Avoids:** Pitfalls 1 (leakage test), 2 (PIT universe), 3 (fixed thresholds + candidate trail), 11/12 (boundary + auditability from first module).
-**Uses:** scipy 1.17.1, sklearn 1.8.0 (lazy Ledoit-Wolf later), existing DSL unchanged.
+### Phase 1: 数据层 — 真集合竞价数据列 (DATA-04/05)
+**Rationale:** 竞价列是策略筛选的前提；probe 判定决定后续全部策略与 UI 的形态（可用即一级列，不可用则全程 fail-closed）。交易日历应在本层相邻落地，作为日期导航的解析底座。
+**Delivers:** `sync_auction` 阶段 + `kline_auction/date=*/` 湖 + probe 门控的 `auction_*` 受管列；交易日历解析服务（`as_of → 最近的 <= 该日交易日`，显式回显）；canonical 单位契约（股/元）。
+**Addresses:** DATA-04 (P1)、交易日历约束 (P1)。
+**Avoids:** Pitfalls #8/#10 (09:30 bar 永不产生竞价值)、#11 (probe 矩阵测试)、#12 (单位 fixture)、#3 (交易日/自然日歧义)。
+**Uses:** Parquet 湖 + Polars/DuckDB（STACK.md 既有栈，零新依赖）。
+**Research flag:** **需要 `--research-phase`** — DATA-04 数据源可用性是本期最大不确定项；规划前必须先做 probe 探测（Tushare `stk_auction_o` vs 自定义 auction 数据集），虚拟成交（`auction_virtual_fill`）字段语义依赖具体上游，物化前实测确认，不做来源推测。
 
-### Phase 11: Portfolio Construction & Optimization
-**Rationale:** Sample covariance + PSD check must exist before the optimizer consumes it; immutable run records are the audit contract for every later phase.
-**Delivers:** `portfolio/risk.py` (sample covariance + PSD check/repair), `portfolio/optimizer.py` (min-vol + HRP baselines; long-only, per-instrument cap, min cash, turnover constraint stack), `portfolio/repository.py` (immutable runs with `input_snapshot_sha256`), `api/optimization.py` (run creation).
-**Addresses:** sample covariance + PSD, min-vol optimizer, HRP baseline, immutable run records (P1).
-**Avoids:** Pitfall 5 (max-Sharpe not default; baselines rendered), Pitfall 4 (PSD repair recorded — begins here, completes in Phase 12), Pitfall 11 (run audit fields).
-**Uses:** cvxpy 1.9.2 (or scipy SLSQP if the constraint set stays minimal — **decision flag**, see Gaps), scipy linkage for HRP.
-**Research flag:** **needs planning research** — cvxpy vs scipy.optimize engine choice must be resolved; stack research recommends cvxpy 1.9.2 as primary, architecture research cautions scipy-only unless a true QP is required and notes the package-legitimacy approval gate.
+### Phase 2: 策略层 — 竞价策略族 (STRAT-04/05)
+**Rationale:** 依赖数据层竞价列；5 个新策略的区分度来自真实竞价量/金额/量比，无真列则彼此塌缩。命名与时间窗纪律应在第一批提交时就锁定。
+**Delivers:** 5 个 `strategy/builtin/*.py`（竞价阿尔法/极速抢筹/T+1闪电/竞价全面策略/金色两点半——金色两点半诚实归类为尾盘/隔夜）；`requires_auction_data` 空安全；可计算时间窗声明；策略加载自检（scoring 列存在 + 权重和 > 0）；STRAT-05 盘中确认（分钟帧 `<= eval_time` 截断，复用 `kline_minute` + apscheduler，不加新数据轨道）。
+**Addresses:** STRAT-04 前 2 个 (P1，极速抢筹/竞价阿尔法)、金色两点半 (P1)、STRAT-05/T+1闪电/竞价全面策略 (P2，按数据可用性分批)。
+**Avoids:** Pitfalls #6 (命名暗示公开配方 + 文档计数对账)、#7 (lookahead 窗口规约 + 截断测试)、#9 (scoring 自检)。
+**Research flag:** **中等** — 第一性原理因子阈值（量比/甜点区/金额强度）需按 A 股历史校准；STRAT-05 的 `eval_time` 截断与 `time_factor` 折算规则需要专门规划研究。
 
-### Phase 12: Risk Models & Attribution
-**Rationale:** Feeds optimization (recorded risk model) and produces attribution; reconciliation checks (attribution sums to portfolio variance) are the cross-module integrity guard.
-**Delivers:** full risk-model suite (sample/semi/exponential/Ledoit-Wolf) + explicit PSD-repair provenance (method/epsilon/eigenvalues) in the run record; exposure + marginal contribution attribution; drawdown attribution (add-after trigger).
-**Addresses:** Ledoit-Wolf/semi/exponential + PSD options (P2), risk exposure + contribution (P1), drawdown (P2).
-**Avoids:** Pitfall 4 (recorded PSD repair, never silent), Pitfall 13 (reconciliation checks).
-**Research flag:** standard patterns (PyPortfolioOpt `risk_models` contracts) — skip research-phase.
+### Phase 3: 股池层 — 历史股池日期导航 (POOL-04)
+**Rationale:** 依赖策略层 `run_all` 可逐日期产出；这是 v1.3→v2.0 最脆弱的接口边界，点快照语义必须在持久化设计时定死，否则归档格式定错后难以迁移。
+**Delivers:** `strategy_cache` 日期分区写（`{as_of}.json`）+ 最新指针（`strategy_cache.json` 语义不变）；冻结式点快照（`as_of` + `computed_at` + 策略版本指纹，不落 `today_ever_rows`）；`pool_history.py` 日期列表/回填；`GET /api/pool/dates` + `GET /api/pool/hub?as_of` 真实多日期投影；EOD 持久化 job（盘后自动 `run_all(当日)` 落日期缓存，请求只读缓存不阻塞）；PIT 概念标注（「当前快照」或随快照冻结）。
+**Addresses:** POOL-04 (P1)、历史股池双模式（回放优先，存档可选）。
+**Avoids:** Pitfalls #1 (union 冒充点快照)、#2 (non-PIT 回放)、#4 (陈缓存误标最新)、#5 (破坏 single-as_of 契约——独立只读端点 + AST 守卫扩展)。
+**Research flag:** **需要 `--research-phase`** — 回填策略（首日一次性后台回填 vs 请求内同步）与日期列表缓存失效设计需要细化；概念板块 PIT 的历史 ext 分区目前不存在，历史视图概念标注方案需专门研究。
 
-### Phase 13: Walk-Forward Validation & Parameter Search
-**Rationale:** Depends only on Phase 10 + 11 (signal chain + optimizer); OOS reservation must be defined before any existing grid search is reused. Can overlap Phases 11–12 for throughput.
-**Delivers:** `backtest/walkforward.py` (rolling folds + explicit gap + reserved final OOS evaluated exactly once), `backtest/optimizer.py` OOS reservation, `backtest/ensemble.py` (rank-average of validated strategies), search bookkeeping (trial count, space, score distribution).
-**Addresses:** rolling walk-forward + reserved OOS (P1), parameter optimization on OOS folds (P2), ensembling (P2).
-**Avoids:** Pitfall 8 (rolling not expanding, disjoint folds, reserved OOS), Pitfall 9 (multiple-comparison bookkeeping), Pitfall 2 (per-fold PIT universe resolution).
-**Research flag:** **medium** — fold design (train/test size, `WF_GAP` value) against A-share history length; AlphaMaster's `WF_GAP=20` is a documented starting point.
-
-### Phase 14: Output & Boundary — RebalancePlan + Paper Rebalance
-**Rationale:** The milestone's raison d'être: continuous weights → A-share reality as a research-only suggestion with zero execution authority. Reuses the existing A-share matching layer — the plan path must NOT build a naive second matcher.
-**Delivers:** `portfolio/rebalance.py` (100-share lots, odd-lot sell handling, cash residue, turnover/cost, `blocked_instruments`, `expires_at`, discretization RMSE), paper-rebalance state machine (append-only audit fact, human approval, idempotency), no execution route anywhere.
-**Addresses:** RebalancePlan + A-share lots, paper suggestion no-execution (P1).
-**Avoids:** Pitfall 6 (A-share microstructure reuses matching layer), Pitfall 10 (lot-sizing adapter, RMSE visible), Pitfall 14 (execution-authority leak — hard acceptance criterion).
-**Research flag:** standard patterns — existing `backtest/engine.py` already proves the A-share rules (T+1, limits, suspension, lots, fees); skip research-phase.
-
-### Phase 15: API/SSE + Frontend Panels
-**Rationale:** Thin typed projection over server-owned state; wiring last so contracts (immutable runs, plans) are stable before UI.
-**Delivers:** walk-forward SSE (durable job pattern), `quote_service` `notify_portfolio_run_updated`, frontend `ModelLibrary` + `WalkForward` panels in Backtest workspace; `Optimization`/`RiskAttribution`/`RebalancePlan` panels in Portfolio workspace.
-**Addresses:** all P1 features' user-facing surfaces.
-**Avoids:** UX pitfalls — never label RankIC as generic IC, never present optimizer output as "optimal" without baselines, never offer an "execute" affordance on plans, label selection-validation vs reserved OOS honestly.
-**Research flag:** standard patterns — existing typed `api.ts`/`queryKeys.ts`/SSE hooks; skip research-phase.
+### Phase 4: 前端层 — DateNavigator 与竞价列展示
+**Rationale:** 纯展示层消费；等股池层 API 契约（`/api/pool/dates`、hub as_of 投影）稳定后再接线，避免返工。
+**Delivers:** `DateNavigator.tsx` ‹ › 步进 + 日期列表（来源 `GET /api/pool/dates`）；卡片计数/明细随 as_of 重取（复用现有 `useQuery` 缓存）；竞价列（probe=available 且 VIP 时显示，表头标注单位与「集合竞价(真) vs 派生(open_gap)」）；guest 历史视图仍只显 涨跌幅+概念；无数据日空态文案。
+**Addresses:** POOL-04 的 UX 面、DATA-04 的展示面。
+**Avoids:** UX 陷阱（非交易日禁用、虚拟成交与真实成交分列、「最新」视图显示缓存 as_of 与不一致提示、盘前策略空态展示 probe/窗口状态）。
+**Research flag:** 标准模式 — 既有 typed `api.ts`/`queryKeys.ts`/SSE hooks/Playwright 截图断言；跳过 research-phase。
 
 ### Phase Ordering Rationale
-- **Strict dependency chain:** admission gates → admitted catalog → composite returns + covariance → optimization → RebalancePlan → paper suggestion; walk-forward feeds parameter search and ensembling. This is the single most important ordering constraint (FEATURES dependency graph).
-- **Shared signal chain first:** evaluation, models, expected returns, walk-forward, and live plans all consume it; a second implementation is a bug, not a feature.
-- **Risk precedes/wraps optimization:** recorded PSD repair and reconciliation are prerequisites for trusting optimizer output; Phases 11–12 are tightly coupled and can merge if the milestone wants fewer phases.
-- **Phase 13 can run parallel to 11–12** (depends only on the chain + admission), but its OOS reservation must be pinned before any parameter search is reused.
-- **Phase 14 is the boundary phase** — no execution authority is a hard acceptance criterion, not a nicety.
-- **Phase 15 last:** server-owned state and strict DTOs stabilize before frontend wiring.
+- **严格依赖链：数据 → 策略 → 股池 → 前端。** 竞价列是策略筛选的前提（STRAT-04 的区分度来自真实量/金额）；逐日缓存是历史浏览的前提（POOL-04 需要 `run_all` 逐日期产出）；日期导航是纯展示消费。这是 FEATURES 依赖图给出的最强约束。
+- **诚实边界在数据层定死，消费端强制执行。** 诚实标签（probe 门控 + 09:30 bar 永不标竞价）由 pipeline 列定义与策略空安全双重锁定；点快照语义（union vs 点快照）必须在 POOL-04 持久化设计时定死，不能等归档格式落地后再迁移。
+- **probe 先行、分批做策略。** 先探测 → 先落 2 个真列可支撑的策略（极速抢筹/竞价阿尔法），其余按数据可用性分批，避免无真列时 5 个策略同质化。
+- **金色两点半不依赖竞价数据**（需要 T 日 change_pct + 分钟 K），其语义断裂体现在命名/描述/分组，而非数据依赖顺序。
+- **EOD 持久化 job 属于股池层**，保证日期导航自给自足，首请求不阻塞在请求内 run_all。
 
 ### Research Flags
 
 Phases likely needing deeper research during planning (`/gsd-plan-phase --research-phase`):
-- **Phase 11:** optimizer engine — cvxpy 1.9.2 vs scipy SLSQP; stack research and architecture research diverge. Resolve before planning; constraint stack (caps/min-cash/turnover) is the deciding factor; cvxpy addition must pass the package-legitimacy approval gate.
-- **Phase 10 (data sub-item):** point-in-time universe snapshot design — how to persist validity ranges/delisted markers/membership-as-of in the existing governed lake without a second datastore. Largest open data question.
-- **Phase 13:** walk-forward fold geometry (train/test size, gap) calibrated to available A-share history.
+- **Phase 1 (DATA-04/05):** 数据源可用性探测与虚拟成交字段语义——本期最大不确定项；Tushare `stk_auction_o`/`stk_auction` vs BigQuant `cn_stock_factors_auction` vs 自定义 auction 数据集的可达性与窗口内时间戳。
+- **Phase 2 (STRAT-04/05):** 第一性原理因子阈值校准 + STRAT-05 的 `eval_time` 截断/`time_factor` 折算规约。
+- **Phase 3 (POOL-04):** 历史回填策略（EOD 预生成 job 设计）+ 概念板块 PIT 的历史 ext 分区缺口。
 
 Phases with standard patterns (skip research-phase):
-- **Phase 12:** risk models + PSD repair — PyPortfolioOpt `risk_models` contracts are well documented.
-- **Phase 14:** A-share lot rules — already proven in `backtest/engine.py`; reuse, don't research.
-- **Phase 15:** frontend/SSE — existing typed client + SSE hook conventions.
+- **Phase 4 (前端):** 既有 typed 客户端 + `useQuery` 缓存 + Playwright 截图断言惯例。
+- **Phase 1 的子项（湖写入）:** `kline_sync` 的原子写+分区+视图刷新模式已证明，直接复用。
 
 ## Confidence Assessment
 
 | Area | Confidence | Notes |
 |------|------------|-------|
-| Stack | HIGH | PyPI metadata verified 2026-07-31 + `backend/uv.lock` cross-check; cvxpy is a genuine lockfile addition (not yet installed — .venv empty) |
-| Features | HIGH | Grounded in local knowledge-base DEEP-ANALYSIS docs + v1.0 shipped code; clear P1/P2/P3 triage with MVP definition |
-| Architecture | HIGH | Code-verified against shipped v1.0/v1.1 host; wave build order derived from dependency analysis; component inventory explicit |
-| Pitfalls | HIGH | 14 critical pitfalls + technical-debt/security/UX tables + pitfall-to-phase mapping; mitigations from reference projects |
+| Stack | HIGH (DATA-04 源可用性 MEDIUM) | `backend/uv.lock` 锁定版本仓库内验证 + Context7 佐证；probe 门控使数据源可用性本身为运行期变量 |
+| Features | MEDIUM | Tushare/BigQuant 官方文档直取 + 多中文量化源 web 交叉；既有 seam（`run_all(as_of)` 回放、`get_auction` canonical 列、246 日分区）为 HIGH |
+| Architecture | HIGH (虚拟成交语义 MEDIUM) | 全部集成路径源码核实（auction_probe / strategy_cache / engine / pool_hub / custom provider / daily_pipeline）；虚拟成交字段依赖具体上游 |
+| Pitfalls | HIGH | 逐条代码核验（`write_cache` union 合并、`read_cache` 移除 mtime 校验、`_apply_scoring` 静默跳列、`_bucket_minutes` 丢弃盘前 bar） |
 
-**Overall confidence:** HIGH
+**Overall confidence:** HIGH —— 除 DATA-04 数据源可用性（probe 门控，属运行期变量）与虚拟成交字段语义外，栈/架构/陷阱均以 v1.3 落地代码核验。本次里程碑规划可直接基于本摘要进行。
 
-### Gaps to Address
+## Gaps to Address
 
-- **cvxpy vs scipy.optimize engine decision:** stack research recommends cvxpy 1.9.2 as the primary optimization dep; architecture research recommends scipy-only "unless a true QP is required" and flags a package-legitimacy approval gate. Resolve at Phase 11 planning. The constraint stack (per-instrument/industry caps, min cash, turnover) is convex-QP territory where scipy SLSQP degrades; a leaner alternative is cvxpy for the QP + scipy only for HRP.
-- **Point-in-time universe snapshots (survivorship bias):** the governed lake stores the current instrument snapshot with no per-date universe table; the milestone's data-layer work for PIT snapshots is unplanned. Highest-impact data gap — flag during Phase 10 planning; without it, Phases 11–13 silently inherit the bias.
-- **Industry mapping:** sector JOIN is fail-closed ("sector JOIN 未实现"); industry cap must be deferred until a governed industry mapping column exists. Do NOT ship a cap on ungoverned ext_data.
-- **Runtime install verification deferred:** local `.venv` exists but is empty (no installed packages); cvxpy/scipy/sklearn install must be verified in Phase 10, not assumed.
-- **HRP dependency:** HRP requires scipy linkage — scipy must be promoted to base deps in Phase 10 or HRP falls to P2 and min-vol ships alone.
-- **Merge option:** Phases 11 and 12 are tightly coupled (PSD provenance feeds the optimizer); the roadmapper may merge them into a single "Portfolio Construction & Risk" phase.
+- **DATA-04 数据源可用性未知：** 规划时先做 probe 探测；全部下游（STRAT-04 区分度、UI 竞价列）以 fail-closed 为前提设计，探测 available 是"启用"而非"假设"。
+- **虚拟成交（`auction_virtual_fill`）语义依赖上游：** 物化前以 probe 实测确认（实时盘口快照 vs 盘后派生）；盘后只能派生并标注"估计"，绝不冒充历史观测。
+- **概念板块 PIT：** 当前 ext 概念映射是当下快照，历史日池子的概念标签 = T 日标签而非 D 日标签；历史视图需标注「当前快照」或引入历史 ext 分区（目前不存在）。这是 POOL-04 唯一的数据语义缺口。
+- **单位契约：** 手 vs 股、元 vs 万元多口径；canonical 单位（股/元）必须在 `get_auction` 边界锁定 + 表头标注 + fixture 换算测试，否则污染所有下游因子。
+- **exchange-calendars 是否提升：** 默认不用（日期列表以湖分区为准）；仅当 UI 需要跨节假日 step 推算 prev/next 交易日时从 `forecast` extra 提升（与 numpy 2.4.6 兼容性需确认）。
+- **STRAT-05 是否纳入本期：** 影响是否需要 apscheduler 新 stage（09:30–10:00 复评）；FEATURES 将其列为 P2（竞价池已有、假阳性反馈后触发）。
+- **策略计数文档对账：** 现有 `docs/features.md` 20 vs 源码 18 的漂移；新增 5 策略必须同里程碑内对账，消除"Looks Done But Isn't"检查清单项。
+- **历史回填的同步阻塞：** 首请求某历史日无缓存时在请求内跑 run_all 会卡页面；必须由 EOD 持久化 job 预生成 + 首日一次性后台回填解决。
 
 ## Sources
 
 ### Primary (HIGH confidence)
-- **Stack:** PyPI metadata for cvxpy/pyportfolioopt/riskfolio/skfolio/lark/pyparsing/scipy/numpy (fetched 2026-07-31); `backend/uv.lock` + `backend/pyproject.toml` locked versions; CVXPY install/changes docs; SciPy 1.17.0 release notes; PyPortfolioOpt/AlphaAgent/qlib/AlphaMaster DEEP-ANALYSIS (knowledge base); AthenaQuant v1.0 phase-2 research; verified repo seams (`factor_dsl.py`, `evaluation.py`, `engine.py`, `frozen_panel.py`, `migrations.py`)
-- **Features:** AlphaAgent/PyPortfolioOpt/Qlib/AlphaMaster/Lean/PA_Agent/tickflow-stock-panel DEEP-ANALYSIS docs; `07-策略与信号系统篇.md`, `10-SYNTHESIS.md`, Alpha Evolution Lab QUICK-START, joinquant-skill QUICK-START; AthenaQuant shipped code (`factor_dsl.py`, `evaluation.py`, `factor_registry.py`, `catalog.py`, `frozen_panel.py`, `engine.py`, `optimizer.py`, `portfolio/service.py`, `shadow/`); `.planning/PROJECT.md`
-- **Architecture:** AthenaQuant codebase verification (`app/research/*`, `app/portfolio/*`, `app/backtest/*`, `app/api/*`, `services/quote_service.py`, `frontend/src/*`); `docs/ARCHITECTURE.md`, `.planning/codebase/ARCHITECTURE.md`; `.planning/PROJECT.md`; qlib/alphaagent/pyportfolioopt/alphamaster/lean DEEP-ANALYSIS docs
-- **Pitfalls:** AlphaAgent/AlphaMaster/PyPortfolioOpt/Qlib DEEP-ANALYSIS docs; `10-SYNTHESIS.md`, `07-策略与信号系统篇.md`; AthenaQuant v1.0 phase artifacts (`02-RESEARCH.md`, `02-CONTEXT.md`, `02-VERIFICATION.md`, `02-UI-SPEC.md`); `docs/ARCHITECTURE.md`; `.planning/PROJECT.md`
+- **Stack:** `backend/uv.lock`（polars 1.40.1 / duckdb 1.5.3 / fastapi 0.136.1 / pyarrow 24.0.0 / apscheduler 3.11.2 / exchange-calendars 4.13.2 等锁定版本）；Context7（Polars `scan_parquet` hive_partitioning/try_parse_hive_dates、DuckDB `read_parquet` glob + 分区剪枝、FastAPI 可选 query param）；仓库 seam 核验（`strategy_cache.py`、`pool_hub.py`、`auction_probe.py`、`custom/provider.py`、`indicators/pipeline.py`、`PoolHubPage.tsx`）
+- **Features:** Tushare `stk_auction_o` / `stk_auction` / `stk_mins` 官方文档；BigQuant `cn_stock_factors_auction` 官方数据页；集合竞价规则多源；金色两点半尾盘选股法多源；v1.3 代码核验（`auction_probe.py`、`pool_hub.py`、`strategy_cache.py`、`run_all`、`kline_daily_enriched/` 246 日分区）
+- **Architecture:** 源码核实（`auction_probe.py`、`strategy/engine.py`、`factor_hits.py`、`builtin/auction_*.py`、`strategy_cache.py`、`pool_hub.py`、`api/pool.py`、`api/screener.py`、`api/data.py`、`indicators/pipeline.py`、`custom/provider.py`、`jobs/daily_pipeline.py`、`PoolHubPage.tsx`）；`.planning/REQUIREMENTS.md` / `ROADMAP.md` / `PROJECT.md`
+- **Pitfalls:** 代码核验（`pool_hub.py` single-as_of 契约、`strategy_cache.py` union 合并与 read_cache 注释、`auction_probe.py` + `test_auction_probe.py`、`engine.py::_apply_scoring`、`free_stockdb_provider.py::_minute_ts/_bucket_minutes` + `test_minute_timestamp_convention.py`）；`.planning/research/v1.3-auction/PITFALLS.md`
 
 ### Secondary (MEDIUM confidence)
-- `15-数据底座与采集底座篇.md` — Parquet/DuckDB/Polars data-base layer (architecture MEDIUM)
-- Alpha Evolution Lab QUICK-START + joinquant-skill QUICK-START — promotion-gate and AST-lint patterns (features MEDIUM)
+- 同花顺问财/55188/SuperMind 竞价抢筹与量比甜点区公式；开盘啦竞价系统 + 历史竞价图 UX；`docs/features.md` 策略计数漂移观察；A股成交单位多口径惯例（手/股、元/万元）
 
 ### Tertiary (LOW confidence)
-- None — all four research files are code-verified and knowledge-base-grounded; remaining uncertainty is captured in Gaps to Address rather than source quality.
+- 无 —— 四份研究文件均以仓库代码核验为主；残余不确定项（DATA-04 源可用性、虚拟成交语义、概念 PIT）已落入 Gaps to Address，而非源质量不足
 
 ---
-*Research completed: 2026-07-31*
+*Research completed: 2026-08-04*
 *Ready for roadmap: yes*
