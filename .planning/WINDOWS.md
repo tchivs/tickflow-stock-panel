@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 0
+open_count: 1
 waived_count: 0
 fixed_count: 5
-total_count: 5
-last_updated: 2026-08-01T17:29:00.110Z
+total_count: 6
+last_updated: 2026-08-04T12:55:10.383Z
 ---
 
 # Broken Windows Ledger
@@ -20,6 +20,7 @@ last_updated: 2026-08-01T17:29:00.110Z
 | 3 | 05 | unrun-verify | backend/scripts/verify_phase5_final_gate.py | 1200 | 05-44 unique final orchestration could not produce native Linux JUnit because wsl.exe has no installed distribution; scoped VALIDATION remains pending | fixed |  | 2026-07-26T20:13:12.349Z | 2026-07-26T21:41:15.935Z |
 | 4 | 05 | deviation | backend/scripts/verify_phase5_final_gate.py | 1200 | 05-44 WSL preflight originally crashed while decoding native UTF-16LE help output; fix adb7a09 was committed but not rerun under the one-orchestration rule | fixed |  | 2026-07-26T20:13:12.851Z | 2026-07-26T20:22:53.282Z |
 | 5 | 11 | stub | backend/tests/portfolio/test_repository.py | 1 | RED scaffold: append-only record/get/list methods land in 11-01 | fixed | resolved by 11-01 | 2026-08-01T16:43:05.110Z | 2026-08-01T17:29:00.000Z |
+| 6 | 16 | unrun-verify | frontend/src/components/data/AuctionProbeCard.tsx |  | Data-page browser smoke of the 竞价数据 panel visuals/interaction not run in headless executor (covered by tsc + backend suites; tracked via SUMMARY coverage D5) | open |  | 2026-08-04T12:55:10.383Z |  |
 
 ````json
 [
@@ -82,6 +83,18 @@ last_updated: 2026-08-01T17:29:00.110Z
     "reason": "resolved by 11-01",
     "recorded_at": "2026-08-01T16:43:05.110Z",
     "resolved_at": "2026-08-01T17:29:00.000Z"
+  },
+  {
+    "id": 6,
+    "kind": "unrun-verify",
+    "phase": "16",
+    "file": "frontend/src/components/data/AuctionProbeCard.tsx",
+    "line": null,
+    "description": "Data-page browser smoke of the 竞价数据 panel visuals/interaction not run in headless executor (covered by tsc + backend suites; tracked via SUMMARY coverage D5)",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-04T12:55:10.383Z",
+    "resolved_at": null
   }
 ]
 ````

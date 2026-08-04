@@ -2,18 +2,19 @@
 gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: 竞价选股引擎 — planning
-current_phase_name: 16-auction-data
+current_phase: 16
 status: planning
-stopped_at: Completed 16-01-PLAN.md
-last_updated: "2026-08-04T12:48:35.855Z"
+stopped_at: Completed 16-02-PLAN.md
+last_updated: "2026-08-04T12:56:00.000Z"
 last_activity: 2026-08-04
-last_activity_desc: Phase 16 plan 1 (DATA-01) executed and committed
+last_activity_desc: Phase 16 plan 2 complete — open_gap factor + auction probe
 progress:
   total_phases: 4
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 2
-  completed_plans: 1
-  percent: 0
+  completed_plans: 2
+  percent: 25
+current_phase_name: 16-auction-data
 ---
 
 # Project State
@@ -26,20 +27,18 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 **Current focus:** v1.3 竞价选股引擎 (planning)
 
 ## Current Position
-
 Phase: 16 竞价数据层
-Plan: 1/2 (16-01 complete — minute-K sync enable path proven; 16-02 running)
-Status: In Progress — plan 16-01 (DATA-01) executed and committed
-Last activity: 2026-08-04 — Phase 16 plan 1 complete
+Plan: 2/2 (16-02 complete — open_gap factor + auction probe & honest fail-closed labels)
+Status: Completed — Phase 16 delivered (DATA-01..03)
+Last activity: 2026-08-04 — Phase 16 plan 2 complete
 
-Progress: [█████░░░░░] 50% (0/4 phases)
+Progress: [██░░░░░░░░] 25% (1/4 phases)
 
 ## v1.3 Phase Summary
 
 | Phase | Requirements | Status |
 |-------|-------------|--------|
-| 16 竞价数据层 | DATA-01..03 | In Progress (P1 done) |
-| 17 竞价策略族 | STRAT-01..03 | Not started |
+| 16 竞价数据层 | DATA-01..03 | Complete |
 | 18 股池 Hub | POOL-01..03 | Not started |
 | 19 游客/VIP 脱敏 + 前端 | GUEST-01..02 | Not started |
 
@@ -73,25 +72,25 @@ None.
 ## Session Continuity
 
 Last session: 2026-08-04T12:48:35.471Z
-Stopped at: Completed 16-01-PLAN.md
+Stopped at: Completed 16-02-PLAN.md
 Resume file: None
 
 ## Operator Next Steps
 
-- Run `/gsd:discuss-phase 16` (竞价数据层) to gather context and clarify approach
-- Or `/gsd:plan-phase 16` to plan directly
+- Phase 16 (竞价数据层) complete — proceed to `/gsd:discuss-phase 17` (竞价策略族)
 
 ## Decisions
 
 - [Roadmap]: Auction strategy family is 3 core strategies (竞价多头/盘前强势量化/早盘之星) in v1.3; the remaining reference names (竞价阿尔法/极速抢筹/T+1闪电/竞价全面策略/金色两点半) are v2 STRAT-04 unless a user wants them pulled forward.
 - [Roadmap]: Pool hub is research-only with zero execution authority (POOL-03), matching the platform boundary since v1.0.
 - [Phase 16 / P1]: Minute-K sync enable path proven hermetically; `minute_sync_symbols` scope knob shipped (API/preference-only, empty = full universe); 09:30 timestamp convention regression-locked.
-
+- [Phase 16 / P2]: Auction-probe verdict is server-authoritative (not_configured/available/fail_closed/error) and the Data page renders only server statuses; open_gap (`open / prev_close − 1`) is a governed persisted column; the 09:30 bar is regression-locked never to be labeled 集合竞价 data.
 ---
-*Last updated: 2026-08-04 — v1.3 roadmap created (Phases 16-19, 11/11 requirements mapped)*
+*Last updated: 2026-08-04 — Phase 16 complete (DATA-01..03)*
 
 ## Performance Metrics
 
 | Plan | Duration | Tasks | Files |
 |------|----------|-------|-------|
 | Phase 16 P1 | 25 | 3 tasks | 5 files |
+| Phase 16 P2 | 20 | 3 tasks | 14 files |

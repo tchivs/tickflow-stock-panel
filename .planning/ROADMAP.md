@@ -47,7 +47,7 @@ Four phases add 集合竞价-driven quantitative stock selection to the shipped 
 
 - v1.2 ended at Phase 15; v1.3 continues at Phase 16 (`phase_naming: sequential`)
 
-- [ ] **Phase 16: 竞价数据层 (Auction Data)** - Enable minute-K sync, land the governed open-gap factor, and probe true 集合竞价 match data behind a capability gate — DATA-01..03
+- [x] **Phase 16: 竞价数据层 (Auction Data)** - Enable minute-K sync, land the governed open-gap factor, and probe true 集合竞价 match data behind a capability gate — DATA-01..03
 - [ ] **Phase 17: 竞价策略族 (Auction Strategy Family)** - Author ≥3 auction strategies (竞价多头/盘前强势量化/早盘之星) as builtin strategy files with factor-hit tagging — STRAT-01..03
 - [ ] **Phase 18: 股池 Hub (Pool Hub)** - Strategy cards with pool counts, drill-down stock lists, concept filter, 交叉共振 multi-hit highlight — POOL-01..03
 - [ ] **Phase 19: 游客/VIP 脱敏 + 前端 (Guest Access & Frontend)** - Server-authoritative guest masking, VIP plaintext, frontend pool page — GUEST-01..02
@@ -65,12 +65,12 @@ Four phases add 集合竞价-driven quantitative stock selection to the shipped 
   2. Researcher can compute 开盘涨幅 (`open / prev_close − 1`) as a governed column, unit-tested on a known fixture and consumed by strategy filters.
   3. Researcher can run the auction-data probe and observe the verdict (available / fail-closed to derived factors); when unavailable, no UI or strategy labels the 09:30 bar as auction data.
 
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans executed
 
 Plans:
 
 - [x] 16-01-PLAN.md — Minute-K sync enable + verify, symbol scoping, 09:30 timestamp convention (DATA-01)
-- [ ] 16-02-PLAN.md — Governed open-gap factor + auction-data probe & honest fail-closed labels (DATA-02, DATA-03)
+- [x] 16-02-PLAN.md — Governed open-gap factor + auction-data probe & honest fail-closed labels (DATA-02, DATA-03)
 
 ### Phase 17: 竞价策略族 (Auction Strategy Family)
 
@@ -111,10 +111,10 @@ Phases execute in numeric order: 16 → 17 → 18 → 19
 
 | Phase | Requirements | Status |
 |-------|-------------|--------|
-| 16. 竞价数据层 | DATA-01..03 | In Progress |
+| 16. 竞价数据层 | DATA-01..03 | Complete |
 | 17. 竞价策略族 | STRAT-01..03 | Not started |
 | 18. 股池 Hub | POOL-01..03 | Not started |
 | 19. 游客/VIP 脱敏 + 前端 | GUEST-01..02 | Not started |
 
 ---
-*Last updated: 2026-08-04 — v1.3 roadmap created (Phases 16-19, 11/11 requirements mapped)*
+*Last updated: 2026-08-04 — Phase 16 complete (DATA-01..03), plans 1-2 executed*
