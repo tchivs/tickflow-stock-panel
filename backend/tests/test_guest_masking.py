@@ -395,3 +395,92 @@ def test_guest_masking_has_no_write_path():
     src = _guest_masking_source()
     for pattern in _WRITE_PATTERNS:
         assert not pattern.search(src), f"guest_masking.py 出现写路径: {pattern.pattern}"
+
+
+# ================================================================
+# Task 3 — 游客面安全守卫 (ASVS L1 后端闭合)
+# ================================================================
+
+
+def test_guest_cannot_read_authed_surfaces(tmp_path, monkeypatch):
+    """游客面恰好是股池页的两个只读 GET; 其余 /api/ 面一律 401 (T-19-03)。"""
+    _write_strategy_cache(tmp_path)
+    client = _make_guest_client(tmp_path, monkeypatch)
+
+    for path in ("/api/settings", "/api/portfolio", "/api/watchlist"):
+        assert client.get(path).status_code == 401, f"游客应无法读取 {path}"
+    assert client.get("/api/pool/hub").status_code == 200
+    assert client.get("/api/screener/strategies").status_code == 200
+
+
+def test_guest_read_paths_are_get_only(tmp_path, monkeypatch):
+    """游客可读路径上任何非 GET 方法都不得放行 (无游客写路径, T-19-03)。"""
+    _write_strategy_cache(tmp_path)
+    client = _make_guest_client(tmp_path, monkeypatch)
+
+    for path in ("/api/pool/hub", "/api/screener/strategies"):
+        for method in ("post", "put", "delete", "patch"):
+            resp = getattr(client, method)(path)
+            assert resp.status_code != 200, f"游客 {method.upper()} {path} 不应成功"
+        assert client.get(path).status_code == 200
+
+
+def test_guest_mode_vocabulary_and_no_identity_leak(tmp_path, monkeypatch):
+    """mode 词汇锁定 {guest, vip}; 游客响应无 open_gap 键、无 6 位股票代码 (T-19-01/02/04)。"""
+    _write_strategy_cache(tmp_path)
+    _write_concept_fixture(tmp_path)
+    client = _make_guest_client(tmp_path, monkeypatch)
+
+    body = client.get("/api/pool/hub").json()
+    assert body["mode"] in {"guest", "vip"}
+
+    serialized = json.dumps(body, ensure_ascii=False)
+    assert not re.search(r"\b\d{6}\b", serialized), "游客响应泄露 6 位股票代码"
+
+    for strategy in body["strategies"]:
+        for row in strategy["rows"]:
+            assert "open_gap" not in row
+            assert row["code"] == row["name"] == row["symbol"] == "******"
+    # 策略名是可见标签 (非 PII), 保留
+    assert {s["name"] for s in body["strategies"]}
+
+
+def test_guest_response_json_serializable_roundtrip(tmp_path, monkeypatch):
+    """guest 与 vip 两种模式均 JSON 安全: json.dumps 可往返 (T-19-06)。"""
+    from app.services import auth as auth_service
+
+    _write_strategy_cache(tmp_path)
+    _write_concept_fixture(tmp_path)
+    client = _make_guest_client(tmp_path, monkeypatch)
+
+    guest_payload = client.get("/api/pool/hub").json()
+    assert json.loads(json.dumps(guest_payload)) == guest_payload
+
+    monkeypatch.setattr(auth_service, "is_valid_session", lambda token: True)
+    monkeypatch.setattr(auth_service, "resolve_authenticated_reviewer", lambda token: "reviewer_test")
+    client.cookies.set("tf_session", "t")
+    vip_payload = client.get("/api/pool/hub").json()
+    assert vip_payload["mode"] == "vip"
+    assert json.loads(json.dumps(vip_payload)) == vip_payload
+
+
+def test_guest_mask_preserves_total_and_resonance(tmp_path):
+    """掩码只改身份, 不改计数与共振 (T-19-01/05): total/resonance_count 保留。"""
+    _write_strategy_cache(tmp_path)
+    _write_concept_fixture(tmp_path)
+    hub = build_pool_hub(tmp_path)
+    masked = mask_guest_hub(hub)
+
+    assert masked["as_of"] == hub["as_of"]
+    assert masked["updated_at"] == hub["updated_at"]
+    assert masked["resonance_count"] == hub["resonance_count"]
+    for original, guest in zip(hub["strategies"], masked["strategies"]):
+        assert guest["id"] == original["id"]
+        assert guest["name"] == original["name"]
+        assert guest["total"] == original["total"]
+        assert len(guest["rows"]) == len(original["rows"])
+        for original_row, guest_row in zip(original["rows"], guest["rows"]):
+            assert guest_row["concept_board"] == original_row["concept_board"]
+            assert guest_row["hit_factors"] == original_row["hit_factors"]
+            assert guest_row["cross_resonance"] == original_row["cross_resonance"]
+            assert guest_row["change_pct"] == original_row["change_pct"]
