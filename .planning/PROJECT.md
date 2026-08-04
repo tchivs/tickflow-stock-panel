@@ -8,15 +8,15 @@ AthenaQuant is a shipped, self-hosted quantitative research platform for individ
 
 An investor can turn reliable market data and their own holdings into an auditable, actionable research and monitoring workflow without operating multiple disconnected tools.
 
-## Current Milestone: v1.3 竞价选股引擎
+## Current Milestone: v2.0 竞价深度与历史股池
 
-**Goal:** 在现有选股引擎(Screener)基础上,新增集合竞价(9:15–9:25)数据驱动的量化选股能力,落地竞价/盘前策略族与股池展示。
+**Goal:** 在 v1.3 竞价选股引擎基础上深化:解锁真实集合竞价数据列(probe-gated)、补充竞价策略族,并支持按交易日浏览历史股池。
 
 **Target features:**
-- 竞价数据源接入:9:15–9:25 集合竞价匹配数据(竞价量、金额、虚拟成交、开盘涨幅等)
-- 竞价因子与策略:竞价多头、盘前强势量化、早盘之星、竞价阿尔法、T+1闪电等策略(内置策略文件形式,复用 Polars 策略引擎)
-- 前端股池页:策略卡片(股池数)、开盘涨幅/涨跌幅排序、概念筛选、交叉共振(多策略命中)、游客脱敏模式
-- 沿平台边界:选股结果为零执行权研究建议,无自动下单
+- 日期导航:按交易日浏览历史股池,突破当前 single as_of 股池视图(POOL-04)
+- 更多竞价策略:竞价阿尔法、极速抢筹、T+1闪电、竞价全面策略、金色两点半(STRAT-04/05)
+- 真集合竞价数据列:竞价量、金额、虚拟成交等为一级列,依赖数据源可用性(probe-gated,DATA-04/05)
+- 沿平台边界:选股/股池结果始终为零执行权研究建议,无自动下单
 
 ## Success Metric
 

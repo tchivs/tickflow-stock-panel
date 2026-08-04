@@ -1,20 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.3
-milestone_name: 竞价选股引擎 — planning
-status: Awaiting next milestone
-stopped_at: Completed 19-02-PLAN.md
-last_updated: "2026-08-04T15:48:25.193Z"
+milestone: v2.0
+milestone_name: 竞价深度与历史股池
+status: planning
+last_updated: "2026-08-04T16:14:03.003Z"
 last_activity: 2026-08-04
-last_activity_desc: Milestone v1.3 completed and archived
 progress:
-  total_phases: 4
-  completed_phases: 4
-  total_plans: 8
-  completed_plans: 8
-  percent: 100
-current_phase: 19
-current_phase_name: 游客/VIP 脱敏 + 前端 (Guest Access & Frontend)
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
@@ -28,10 +24,10 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 
 ## Current Position
 
-Phase: Milestone v1.3 complete
+Phase: Not started (defining requirements)
 Plan: —
-Status: Awaiting next milestone
-Last activity: 2026-08-04 — Milestone v1.3 completed and archived
+Status: Defining requirements
+Last activity: 2026-08-04 — Milestone v2.0 started
 
 ## v1.3 Phase Summary
 
