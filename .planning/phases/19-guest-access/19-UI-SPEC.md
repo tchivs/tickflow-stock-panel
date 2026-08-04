@@ -1,9 +1,10 @@
 ---
 phase: 19
 slug: guest-access
-status: draft
+status: approved
 shadcn_initialized: false
 preset: none
+reviewed_at: 2026-08-04
 created: 2026-08-04
 ---
 
@@ -272,7 +273,7 @@ Use clear Chinese task language, not unexplained internal implementation names. 
 > live in `## Copywriting Contract` above — this section covers state coverage and references
 > those rows rather than restating the copy (de-dup).
 
-Applicable state considerations resolved: 13 covered, 4 backstop, 0 unresolved — guest/VIP presentation layer over the Phase-18 single-`as_of` pool workspace.
+Applicable state considerations resolved: 11 covered, 4 backstop, 0 unresolved — guest/VIP presentation layer over the Phase-18 single-`as_of` pool workspace.
 
 | Category | Element(s) | Status | Resolution / Reason |
 |---|---|---|---|
@@ -314,11 +315,11 @@ Applicable state considerations resolved: 13 covered, 4 backstop, 0 unresolved �
 
 ## Checker Sign-Off
 
-- [ ] Dimension 1 Copywriting: exact Simplified Chinese strings for the guest banner (`游客模式：股票代码与名称已脱敏` + body `仅展示涨跌幅与概念板块。`), guest/VIP column-header sets, masked cell `******`, and all retained Phase-18 states; research-only disclaimer unchanged; no execution vocabulary anywhere; the guest banner uses words, never the `******` literal, to state the policy
-- [ ] Dimension 2 Visuals: existing dark-first page shell and Phase-18 component tree (PageHeader → GuestModeBanner → ConceptFilter → StrategyCardGrid → StockListTable → research footer); no new shell or design language; guest banner is one neutral element inserted into the existing `space-y-3` shell; component tree matches the Phase-19 presentation layer with no client masking component
-- [ ] Dimension 3 Color: established 60/30/10 tokens; accent reserved for 交叉共振 highlight + active card + focus (unchanged); guest banner uses neutral `elevated`/`border`/`secondary`; masked cell uses `muted` only; warning stays `数据不可用`-only; bull/bear market-direction-only with sign redundancy; 4.5:1 contrast + text/icon redundancy
-- [ ] Dimension 4 Typography: four-size/two-weight scale (12/14/16/20, 400/600); mono + `tabular-nums` for codes/counts/percentages and the `******` cell; safe-wrap status copy incl. guest banner; 65ch prose cap; no new type roles
-- [ ] Dimension 5 Spacing: 4px-based scale (4/8/16/24/32/48/64); banner uses `px-3 py-2` (md); 44×44px touch-target exceptions below 768px retained; ≥8px touch-target gaps; table scroll without masked-cell truncation
-- [ ] Dimension 6 Registry Safety: no shadcn initialization and no third-party registry; timestamped absence evidence recorded (scanned 2026-08-04, re-verified this session)
+- [x] Dimension 1 Copywriting: exact Simplified Chinese strings for the guest banner (`游客模式：股票代码与名称已脱敏` + body `仅展示涨跌幅与概念板块。`), guest/VIP column-header sets, masked cell `******`, and all retained Phase-18 states; research-only disclaimer unchanged; no execution vocabulary anywhere; the guest banner uses words, never the `******` literal, to state the policy
+- [x] Dimension 2 Visuals: existing dark-first page shell and Phase-18 component tree (PageHeader → GuestModeBanner → ConceptFilter → StrategyCardGrid → StockListTable → research footer); no new shell or design language; guest banner is one neutral element inserted into the existing `space-y-3` shell; component tree matches the Phase-19 presentation layer with no client masking component
+- [x] Dimension 3 Color: established 60/30/10 tokens; accent reserved for 交叉共振 highlight + active card + focus (unchanged); guest banner uses neutral `elevated`/`border`/`secondary`; masked cell uses `muted` only; warning stays `数据不可用`-only; bull/bear market-direction-only with sign redundancy; 4.5:1 contrast + text/icon redundancy
+- [x] Dimension 4 Typography: four-size/two-weight scale (12/14/16/20, 400/600); mono + `tabular-nums` for codes/counts/percentages and the `******` cell; safe-wrap status copy incl. guest banner; 65ch prose cap; no new type roles
+- [x] Dimension 5 Spacing: 4px-based scale (4/8/16/24/32/48/64); banner uses `px-3 py-2` (md); 44×44px touch-target exceptions below 768px retained; ≥8px touch-target gaps; table scroll without masked-cell truncation
+- [x] Dimension 6 Registry Safety: no shadcn initialization and no third-party registry; timestamped absence evidence recorded (scanned 2026-08-04, re-verified this session)
 
-**Approval:** pending
+**Approval:** approved (2026-08-04)
