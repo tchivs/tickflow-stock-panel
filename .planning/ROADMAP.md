@@ -101,6 +101,13 @@ Plans:
   2. User can filter the pool by 概念 and see 交叉共振 (stocks hit by multiple auction strategies) highlighted.
   3. No execution authority exists anywhere in the pool feature — no API endpoint, UI affordance, or service path can push a pool to a live broker.
 
+**Plans:** 0/2 plans complete
+
+Plans:
+
+- [ ] 18-01-PLAN.md — pool hub projection service + read-only GET /api/pool/hub + concept filter + 交叉共振 + zero-execution guard (POOL-01, POOL-02, POOL-03)
+- [ ] 18-02-PLAN.md — 股池 PoolHubPage: strategy cards, drill-down stock list, concept filter, 交叉共振 highlight, POOL-03 no-execution UI guard (POOL-01, POOL-02, POOL-03)
+
 ### Phase 19: 游客/VIP 脱敏 + 前端 (Guest Access & Frontend)
 
 **Goal**: Guests see only 涨跌幅 and 概念板块 with stock code/name masked server-authoritatively; VIP sessions see明文; the frontend pool page composes cards, lists, filtering, and resonance into one workspace.
