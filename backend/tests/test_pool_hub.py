@@ -1,17 +1,21 @@
 """POOL-01/02/03 股池 Hub — 投影服务 + 只读 API + 零执行权限守卫。
 
-- Task 1 (本文件阶段): ``build_pool_hub`` 投影 — 单一 as_of 计数 + 五列行 +
-  交叉共振 + 概念筛选 (hermetic fixture, 不依赖真实数据)。
-- Task 2: 追加 ``GET /api/pool/hub`` 端点回归。
-- Task 3: 追加 POOL-03 零执行权限 AST 守卫 (T-18-01)。
+- Task 1: ``build_pool_hub`` 投影 — 单一 as_of 计数 + 五列行 + 交叉共振 +
+  概念筛选 (hermetic fixture, 不依赖真实数据)。
+- Task 2: ``GET /api/pool/hub`` 端点回归。
+- Task 3: POOL-03 零执行权限 AST 守卫 (T-18-01)。
 """
 from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import polars as pl
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
+from app.api import pool as pool_api
 from app.services.pool_hub import build_pool_hub
 
 _AS_OF = "2026-08-04"
@@ -318,3 +322,117 @@ def test_build_pool_hub_echoes_cache_as_of_on_mismatch(tmp_path):
     _write_strategy_cache(tmp_path)
     hub = build_pool_hub(tmp_path, as_of="2026-01-01")
     assert hub["as_of"] == _AS_OF
+
+
+# ================================================================
+# Task 2 — GET /api/pool/hub 端点回归
+# ================================================================
+
+
+class _FakeRepo:
+    """最小 repo 桩: 只需 store.data_dir (与 test_factor_hits 同型)。"""
+
+    def __init__(self, data_dir: Path):
+        self.store = SimpleNamespace(data_dir=data_dir)
+
+
+class _FakeStrategy:
+    def __init__(self, name: str):
+        self.meta = {"name": name}
+
+
+class _FakeEngine:
+    """注入的伪策略引擎: get(sid).meta['name'] 返回中文显示名。"""
+
+    _NAMES = {
+        "auction_bullish": "竞价多头",
+        "auction_preopen_quant": "盘前强势量化",
+        "auction_early_star": "早盘之星",
+    }
+
+    def get(self, sid: str) -> _FakeStrategy:
+        return _FakeStrategy(self._NAMES[sid])
+
+
+def _make_client(tmp_path: Path, engine=None) -> TestClient:
+    app = FastAPI()
+    app.include_router(pool_api.router)
+    app.state.repo = _FakeRepo(tmp_path)
+    app.state.strategy_engine = engine
+    return TestClient(app)
+
+
+def test_get_pool_hub_returns_single_as_of_payload(tmp_path):
+    """GET /api/pool/hub → 200, 单一 as_of, 3 策略, 名称服务端解析。"""
+    _write_strategy_cache(tmp_path)
+    _write_concept_fixture(tmp_path)
+    client = _make_client(tmp_path)
+
+    resp = client.get("/api/pool/hub")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["as_of"] == _AS_OF
+    assert len(body["strategies"]) == 3
+
+    # engine=None → 名称退化为 sid (不 500)
+    by_id = {s["id"]: s["name"] for s in body["strategies"]}
+    assert by_id["auction_bullish"] == "auction_bullish"
+    assert by_id["auction_preopen_quant"] == "auction_preopen_quant"
+
+    # 注入引擎 → 名称解析为中文显示名 (T-18-02)
+    client2 = _make_client(tmp_path, engine=_FakeEngine())
+    body2 = client2.get("/api/pool/hub").json()
+    by_id2 = {s["id"]: s["name"] for s in body2["strategies"]}
+    assert by_id2 == {
+        "auction_bullish": "竞价多头",
+        "auction_preopen_quant": "盘前强势量化",
+        "auction_early_star": "早盘之星",
+    }
+
+
+def test_get_pool_hub_concept_filter_keeps_total(tmp_path):
+    """?concept=新能源 → rows 收窄, total 保持权威全量。"""
+    _write_strategy_cache(tmp_path)
+    _write_concept_fixture(tmp_path)
+    client = _make_client(tmp_path)
+
+    resp = client.get("/api/pool/hub", params={"concept": "新能源"})
+    assert resp.status_code == 200
+    body = resp.json()
+    by_id = {s["id"]: s for s in body["strategies"]}
+    assert by_id["auction_bullish"]["total"] == 2
+    assert [r["symbol"] for r in by_id["auction_bullish"]["rows"]] == [_SYMBOLS["Y"]]
+    assert by_id["auction_early_star"]["total"] == 1
+    assert by_id["auction_early_star"]["rows"] == []
+
+
+def test_get_pool_hub_mismatched_as_of_returns_cache_date(tmp_path):
+    """?as_of=不一致 → 返回缓存日期 (单一数据源, 不伪造第二个日期)。"""
+    _write_strategy_cache(tmp_path)
+    client = _make_client(tmp_path)
+
+    resp = client.get("/api/pool/hub", params={"as_of": "2026-01-01"})
+    assert resp.status_code == 200
+    assert resp.json()["as_of"] == _AS_OF
+
+
+def test_get_pool_hub_missing_cache_empty(tmp_path):
+    """无缓存 → 200 空 Hub。"""
+    client = _make_client(tmp_path)
+    resp = client.get("/api/pool/hub")
+    assert resp.status_code == 200
+    assert resp.json() == {"as_of": None, "updated_at": None, "strategies": [], "resonance_count": 0}
+
+
+def test_get_pool_hub_json_serializable_roundtrip(tmp_path):
+    """响应 JSON 安全: json.dumps(resp.json()) 可往返 (T-18-04)。"""
+    _write_strategy_cache(tmp_path)
+    _write_concept_fixture(tmp_path)
+    client = _make_client(tmp_path)
+
+    resp = client.get("/api/pool/hub")
+    assert resp.status_code == 200
+    payload = resp.json()
+    # json.dumps 不抛; 往返后结构一致
+    reloaded = json.loads(json.dumps(payload))
+    assert reloaded == payload

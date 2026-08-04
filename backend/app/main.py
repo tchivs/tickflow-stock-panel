@@ -31,6 +31,7 @@ from app.api import (
     monitor_rules,
     overview,
     pipeline,
+    pool,
     portfolio,
     research,
     rps,
@@ -826,6 +827,7 @@ app.include_router(core_router)
 app.include_router(auth_api.router)
 app.include_router(kline.router)
 app.include_router(watchlist.router)
+app.include_router(pool.router)
 app.include_router(screener.router)
 app.include_router(backtest.router)
 app.include_router(research.router)
