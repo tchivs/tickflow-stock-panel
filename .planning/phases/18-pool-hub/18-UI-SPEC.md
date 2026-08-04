@@ -26,7 +26,7 @@ created: 2026-08-04
 | `frontend/src/pages/Screener.tsx` | Card-grid + results-table workspace pattern; client-side filter projection over the loaded payload; filtered-count convention `命中 N 只 / 共 M 只`; PageHeader + EmptyState + motion reveal idioms. |
 | `frontend/src/components/screener/ScreenerTable.tsx` | 关联因子/strategy tags reuse the existing amber tag treatment (`STRATEGY_TAG_CLS`); board 创/科/北 tag from `stock-table/primitives.tsx`; numeric cells via `fmtPct` + `priceColorClass`. |
 | `frontend/src/components/stock-table/StockDataTable.tsx` | Shared table skeleton: sticky/scrollable container `rounded-card border border-border overflow-x-auto`, `border-t border-border hover:bg-elevated/50` row base. |
-| `frontend/src/components/ConceptAnalysis.tsx` / `analysis-shared.tsx` | 概念 display idioms: concept chips, `无符合…` empty copy, `正在计算…` loading copy. |
+| `frontend/src/pages/ConceptAnalysis.tsx` + `frontend/src/components/analysis-shared.tsx` | 概念 display idioms: concept chips, `无符合…` empty copy, `正在计算…` loading copy. |
 | `.impeccable/design.json` + `frontend/src/index.css` + `tailwind.config.ts` | Binding dark-first tokens (`base`/`surface`/`elevated`/`border`/`foreground`/`secondary`/`muted`/`accent`/`bull`/`bear`/`warning`/`danger`), 4px spacing scale, four-size/two-weight type scale, mono for data/identifiers, radii `rounded-input` 4 / `rounded-btn` 6 / `rounded-card` 8 / `rounded-dialog` 12, `ease-smooth` timing. |
 | `16-UI-SPEC.md` (approved v1.3 convention) | Same UI-SPEC structure, required-status-vocabulary style, Simplified Chinese copy voice, and 6-dimension self-check discipline. |
 
