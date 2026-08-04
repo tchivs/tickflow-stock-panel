@@ -101,6 +101,51 @@ def test_raising_provider_is_error():
 
 
 # ================================================================
+# 诚实标签回归 (DATA-03 / T-16-01) —— 09:30 bar 永不是集合竞价数据
+# ================================================================
+
+
+def test_verdict_window_and_fallback_are_fixed_for_every_status():
+    """每个状态都携带固定的 window="09:15-09:25" 与 fallback="open_gap"。"""
+    cases = {
+        "not_configured": lambda: resolve_auction_probe(source_resolver=lambda: []).to_dict(),
+        "available": lambda: _probe(FakeAuctionProvider(rows=_rows((16, 0)))),
+        "fail_closed": lambda: _probe(FakeAuctionProvider(rows=_rows((31, 0)))),
+        "error": lambda: _probe(FakeAuctionProvider(exc=RuntimeError("boom"))),
+    }
+    for status, build in cases.items():
+        verdict = build()
+        assert verdict["status"] == status
+        assert verdict["window"] == "09:15-09:25"
+        assert verdict["fallback"] == "open_gap"
+
+
+def test_all_0930_rows_can_never_produce_available():
+    """结构性守卫: 全部 >= 09:30 的行只能 fail_closed, 永不 available。"""
+    for rows in [_rows((30, 0)), _rows((31, 0), (35, 0))]:
+        verdict = _probe(FakeAuctionProvider(rows=rows))
+        assert verdict["status"] == "fail_closed"
+        assert verdict["status"] != "available"
+
+
+def test_fail_closed_detail_matches_approved_copy_verbatim():
+    """fail-closed 详情串在服务端逐字匹配批准文案, 诚实标签不可漂移。"""
+    verdict = _probe(FakeAuctionProvider(rows=_rows((30, 0))))
+    assert verdict["detail"] == (
+        "平台未检测到可用的集合竞价匹配数据，已退化到派生开盘涨幅因子"
+        "（open / prev_close − 1）。09:30 起的连续竞价 bar 不会被标记为集合竞价数据。"
+    )
+
+
+def test_not_configured_detail_matches_approved_copy_verbatim():
+    verdict = resolve_auction_probe(source_resolver=lambda: []).to_dict()
+    assert verdict["detail"] == (
+        "尚未配置竞价数据源；配置后平台将自动探测 9:15–9:25 "
+        "集合竞价匹配数据的可用性。"
+    )
+
+
+# ================================================================
 # FastAPI endpoints
 # ================================================================
 
