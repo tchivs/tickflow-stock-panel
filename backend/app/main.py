@@ -773,13 +773,18 @@ app.add_middleware(
 _AUTH_WHITELIST_PREFIX = ("/api/auth/",)
 _AUTH_WHITELIST_EXACT = ("/health", "/api/health", "/openapi.json", "/docs", "/redoc")
 
-# 游客可读路径: 恰好是股池页的两个只读 GET 数据端点 (GUEST-01 / UI-SPEC)。
+# 游客可读路径: 股池页的只读 GET 数据端点 (GUEST-01 / UI-SPEC) + 日期导航 (RQ5 E7)。
 # 任何扩宽都会触发 tests/test_guest_masking.py 的守卫 (T-19-03)。
-_GUEST_READ_GET_PATHS = frozenset({"/api/pool/hub", "/api/screener/strategies"})
+_GUEST_READ_GET_PATHS = frozenset({
+    "/api/pool/hub",
+    "/api/screener/strategies",
+    "/api/pool/dates",
+    "/api/pool/history",
+})
 
 
 def _is_guest_readable(path: str, method: str) -> bool:
-    """游客仅可读股池页数据的两个 GET 端点; 其他路径/方法一律不放行。"""
+    """游客仅可读股池页数据的只读 GET 端点 (hub/strategies + 日期导航); 其他路径/方法一律不放行。"""
     return method == "GET" and path in _GUEST_READ_GET_PATHS
 
 

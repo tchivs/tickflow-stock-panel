@@ -403,7 +403,7 @@ def test_guest_masking_has_no_write_path():
 
 
 def test_guest_cannot_read_authed_surfaces(tmp_path, monkeypatch):
-    """游客面恰好是股池页的两个只读 GET; 其余 /api/ 面一律 401 (T-19-03)。"""
+    """游客面恰好是股池页的只读 GET; 其余 /api/ 面一律 401 (T-19-03 / RQ5 E7)。"""
     _write_strategy_cache(tmp_path)
     client = _make_guest_client(tmp_path, monkeypatch)
 
@@ -411,14 +411,18 @@ def test_guest_cannot_read_authed_surfaces(tmp_path, monkeypatch):
         assert client.get(path).status_code == 401, f"游客应无法读取 {path}"
     assert client.get("/api/pool/hub").status_code == 200
     assert client.get("/api/screener/strategies").status_code == 200
+    # 日期导航端点与游客 hub 读一致 (RQ5 E7); history 缺 as_of → 200 空态
+    assert client.get("/api/pool/dates").status_code == 200
+    assert client.get("/api/pool/history").status_code == 200
 
 
 def test_guest_read_paths_are_get_only(tmp_path, monkeypatch):
-    """游客可读路径上任何非 GET 方法都不得放行 (无游客写路径, T-19-03)。"""
+    """游客可读路径上任何非 GET 方法都不得放行 (无游客写路径, T-19-03 / RQ5 E7)。"""
     _write_strategy_cache(tmp_path)
     client = _make_guest_client(tmp_path, monkeypatch)
 
-    for path in ("/api/pool/hub", "/api/screener/strategies"):
+    for path in ("/api/pool/hub", "/api/screener/strategies",
+                 "/api/pool/dates", "/api/pool/history"):
         for method in ("post", "put", "delete", "patch"):
             resp = getattr(client, method)(path)
             assert resp.status_code != 200, f"游客 {method.upper()} {path} 不应成功"
@@ -443,6 +447,13 @@ def test_guest_mode_vocabulary_and_no_identity_leak(tmp_path, monkeypatch):
             assert row["code"] == row["name"] == row["symbol"] == "******"
     # 策略名是可见标签 (非 PII), 保留
     assert {s["name"] for s in body["strategies"]}
+
+    # 日期导航历史响应同样保持 mode 词汇 + 无 6 位代码泄露 (RQ5 E7);
+    # 快照缺失日为空态 (strategies=[]) 时词汇断言仍应通过。
+    history = client.get("/api/pool/history", params={"as_of": "2026-08-04"}).json()
+    assert history["mode"] in {"guest", "vip"}
+    serialized_history = json.dumps(history, ensure_ascii=False)
+    assert not re.search(r"\b\d{6}\b", serialized_history), "游客 history 响应泄露 6 位股票代码"
 
 
 def test_guest_response_json_serializable_roundtrip(tmp_path, monkeypatch):
