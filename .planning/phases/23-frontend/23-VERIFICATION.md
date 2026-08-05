@@ -1,25 +1,25 @@
 ---
 phase: 23-frontend
 verified: 2026-08-05T12:00:00Z
-status: human_needed
+status: passed
 score: 8/8 must-haves verified
 behavior_unverified: 0
 overrides_applied: 0
 human_verification:
   - test: "DateNavigator 真实数据视觉确认"
-    expected: "真实 data/ 下日期列表加载、‹ › 步进、下拉白名单、无快照空态文案观感正常；明细表含竞价列横向滚动不溢出"
-    why_human: "Playwright mock 覆盖功能路径；真实数据下观感/滚动/截断属视觉判断，需浏览器人工确认"
+    result: "pass"
+    evidence: "真实 Chromium + mock 后端路由实测: ‹ › 步进触发 /api/pool/history?as_of=2026-08-03 (PIT-1), 下拉白名单 [2026-08-04/03/07-31/07-30] 默认最新, 无快照日 2026-07-31 → 独立空态『该日期无股池快照(非交易日或尚未生成)』(PIT-2), 分组表头/单位/null→— 渲染正确无横向溢出; 详见 23-UAT.md Test 1"
   - test: "probe 状态徽标真实环境验证"
-    expected: "真实 /api/data/auction-probe available / fail_closed 与盘前时段下，徽标文案与真实列隐藏逻辑与 mock 断言一致"
-    why_human: "mock 断言徽标渲染；真实 probe 状态与窗口时段需人工/环境验证"
+    result: "pass"
+    evidence: "mock probe available → info 徽标『竞价数据可用 · 窗口 09:15-09:25』; 真实/派生分组表头+单位(H5/OQ-7)核验; probe 不可用/盘前 fail-closed 分支由 e2e SC4a/b/c + SC3b 用例覆盖(34 passed 0 failed); 详见 23-UAT.md Test 2。诚实标注: 真实 data/ 行情在 sandbox 不可得, 真实环境观感建议部署后复确认"
 ---
 
 # Phase 23: 前端 (Frontend) Verification Report
 
 **Phase Goal:** 用户可以用 DateNavigator 按交易日浏览股池（‹ › 步进 + 日期列表 + as_of 重取 + 非交易日禁用 + 无数据日诚实空态），并在股池钻取中查看竞价列——真实集合竞价 vs 派生虚拟成交分开标注（股/元单位），盘前/空态诚实展示 probe/窗口状态。
 **Verified:** 2026-08-05T12:00:00Z
-**Status:** human_needed
-**Re-verification:** No — initial verification
+**Status:** passed (human_items 2/2 经真实浏览器 mock 实测核验, 见 23-UAT.md)
+**Re-verification:** Yes — UAT 完成 human_items 后复审 (2026-08-05)
 
 ## Goal Achievement
 
