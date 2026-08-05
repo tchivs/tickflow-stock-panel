@@ -82,15 +82,21 @@ def _minute_frame(symbols, times) -> pl.DataFrame:
 def _allround_fixture(with_turnover: bool = False) -> pl.DataFrame:
     """竞价全面 fixture: 600101 全达标; 600102 量比不足; 600103 金额不足; 600104 涨幅不足;
     600105 全达标但换手 1% (<3%, 仅 with_turnover 变体存在)。"""
-    data = {
-        "symbol": ["600101", "600102", "600103", "600104", "600105"],
-        "open_gap": [0.03, 0.03, 0.03, 0.01, 0.03],
-        "auction_volume_ratio": [2.0, 1.0, 2.0, 2.0, 2.0],
-        "auction_amount": [3_000_000, 3_000_000, 500_000, 3_000_000, 3_000_000],
-    }
     if with_turnover:
-        data["turnover_rate"] = [0.05, 0.05, 0.05, 0.05, 0.01]
-    return pl.DataFrame(data)
+        return pl.DataFrame({
+            "symbol": ["600101", "600102", "600103", "600104", "600105"],
+            "open_gap": [0.03, 0.03, 0.03, 0.01, 0.03],
+            "auction_volume_ratio": [2.0, 1.0, 2.0, 2.0, 2.0],
+            "auction_amount": [3_000_000, 3_000_000, 500_000, 3_000_000, 3_000_000],
+            "turnover_rate": [0.05, 0.05, 0.05, 0.05, 0.01],
+        })
+    return pl.DataFrame({
+        "symbol": ["600101", "600102", "600103", "600104"],
+        "open_gap": [0.03, 0.03, 0.03, 0.01],
+        "auction_volume_ratio": [2.0, 1.0, 2.0, 2.0],
+        "auction_amount": [3_000_000, 3_000_000, 500_000, 3_000_000],
+    })
+
 
 
 def _t1_fixture() -> pl.DataFrame:
@@ -102,7 +108,6 @@ def _t1_fixture() -> pl.DataFrame:
         "auction_volume_ratio": [2.5, 1.5, 2.5, 2.5],
         "auction_amount": [3_000_000, 3_000_000, 1_000_000, 3_000_000],
     })
-
 
 def _filter_body(src: str) -> str:
     """提取第一个 def filter(...) 函数体 (到下一个模块级 def 或文件尾)。"""
