@@ -145,7 +145,7 @@ Plans:
   4. probe 非 `available` 时，研究者无论在策略还是 UI 上都看不到竞价列，只能看到派生列与 `open_gap`；没有任何 UI 或策略把 09:30 bar 标为集合竞价数据。
 **Plans**: 2 plans
 Plans:
-- [ ] 20-01-PLAN.md — DATA-05: `auction_sync` 湖摄入 + `kline_auction/date={d}/` 分区湖 + Step 2.6 stage + 偏好旋钮 + `kline_auction` DuckDB 视图登记 (wave 1)
+- [x] 20-01-PLAN.md — DATA-05: `auction_sync` 湖摄入 + `kline_auction/date={d}/` 分区湖 + Step 2.6 stage + 偏好旋钮 + `kline_auction` DuckDB 视图登记 (completed 2026-08-05)
 - [ ] 20-02-PLAN.md — DATA-04/06: 受管竞价列注册表 + 读路径左联 (probe×分区双闸门) + probe×列矩阵 + 派生未匹配金额 proxy + schema 面 (wave 1)
 **Research flag**: 需要 `--research-phase` — DATA-04 数据源可用性探测与虚拟成交（`auction_virtual_fill`）字段语义是本期最大不确定项，规划前先做 probe 探测。
 
@@ -204,7 +204,7 @@ Phases execute in numeric order: 16 → 17 → 18 → 19 → 20 → 21 → 22 �
 | 17. 竞价策略族 | STRAT-01..03 | Complete    |
 | 18. 股池 Hub | POOL-01..03 | Complete    |
 | 19. 游客/VIP 脱敏 + 前端 | GUEST-01..02 | Complete    |
-| 20. 竞价数据层 | DATA-04..06 | Not started |
+| 20. 竞价数据层 | DATA-04..06 | In progress |
 | 21. 竞价策略族 | STRAT-04..09 | Not started |
 | 22. 股池日期导航 | POOL-04..06 | Not started |
 | 23. 前端 | FRONT-01..02 | Not started |

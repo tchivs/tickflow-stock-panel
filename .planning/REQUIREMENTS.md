@@ -10,7 +10,7 @@ Requirements for the v2.0 milestone. Each maps to a roadmap phase. Research basi
 ### 竞价数据层 (Auction Data)
 
 - [ ] **DATA-04**: Researcher can persist true 集合竞价 match-data columns — 竞价量 (`auction_volume`) and 竞价金额 (`auction_amount`), the real 09:15–09:25 call-auction fill — as governed enriched columns behind the auction probe gate; when probe is not `available`, columns are absent and the feature fails closed to derived `open_gap` (never a silent fill).
-- [ ] **DATA-05**: Auction match data lands in a `kline_auction/date={d}/` hive-partitioned Parquet lake via an `auction_sync` service, gated by the probe verdict; the lake stores only real auction-window rows and the 09:30 continuous bar is structurally excluded.
+- [x] **DATA-05**: Auction match data lands in a `kline_auction/date={d}/` hive-partitioned Parquet lake via an `auction_sync` service, gated by the probe verdict; the lake stores only real auction-window rows and the 09:30 continuous bar is structurally excluded. (completed 2026-08-05)
 - [ ] **DATA-06**: Researcher can view a derived 竞价未匹配金额 (unmatched-order proxy) column when delegation volume input is available; when unavailable, the strategy falls back to volume-ratio + amount strength (P2).
 
 ### 竞价策略族 (Auction Strategy Family)
@@ -52,7 +52,7 @@ Populated during roadmap creation.
 | Requirement | Phase | Status |
 |-------------|-------|--------|
 | DATA-04 | Phase 20 | Open |
-| DATA-05 | Phase 20 | Open |
+| DATA-05 | Phase 20 | Complete |
 | DATA-06 | Phase 20 | Open |
 | STRAT-04 | Phase 21 | Open |
 | STRAT-05 | Phase 21 | Open |

@@ -1,16 +1,20 @@
 ---
 gsd_state_version: 1.0
 milestone: v2.0
-milestone_name: 竞价深度与历史股池
-status: planning
-last_updated: "2026-08-04T16:30:00.000Z"
-last_activity: 2026-08-04
+milestone_name: 竞价深度与历史股池 — planning
+current_phase: 20
+current_phase_name: 竞价数据层 (Auction Data)
+status: executing
+stopped_at: v2.0 roadmap created (Phases 20-23); Phase 20 ready to plan
+last_updated: "2026-08-05T00:54:29.000Z"
+last_activity: 2026-08-05
+last_activity_desc: Phase 20 plan 1 (DATA-05 auction lake) completed
 progress:
-  total_phases: 4
+  total_phases: 8
   completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
-  percent: 0
+  total_plans: 2
+  completed_plans: 1
+  percent: 50
 ---
 
 # Project State
@@ -20,16 +24,17 @@ progress:
 See: .planning/PROJECT.md (updated 2026-08-04)
 
 **Core value:** An investor can turn reliable market data and their own holdings into an auditable, actionable research and monitoring workflow without operating multiple disconnected tools.
-**Current focus:** v2.0 竞价深度与历史股池 (roadmap created; Phase 20 ready to plan)
+**Current focus:** Phase 20 — 竞价数据层 (Auction Data)
 
 ## Current Position
 
-Phase: 20 of 23 (竞价数据层 / Auction Data)
-Plan: — (0 of TBD in current phase)
-Status: Ready to plan (roadmap approved)
-Last activity: 2026-08-04 — v2.0 roadmap created (Phases 20-23)
+Phase: 20 (竞价数据层 (Auction Data)) — EXECUTING
+Plan: 2 of 2
+Status: Executing Phase 20
+Last activity: 2026-08-05 — Phase 20 plan 1 completed
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [█████░░░░░] 50%
+
 
 ## v1.3 Phase Summary (shipped 2026-08-04)
 
@@ -82,8 +87,8 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-08-04T16:14:03.003Z
-Stopped at: v2.0 roadmap created (Phases 20-23); Phase 20 ready to plan
+Last session: 2026-08-05T00:54:29.000Z
+Stopped at: Completed 20-01-PLAN.md
 Resume file: None
 
 ## Operator Next Steps
@@ -103,6 +108,8 @@ Resume file: None
 - [Phase 19 / P1]: Guest masking is a copy-safe DTO transform applied only at the API boundary in pool.py; build_pool_hub stays unmasked in all modes (GUEST-02).
 - [Phase 19 / P1]: mode = vip iff request.state.reviewer_principal resolves, else guest — never from client input or row values; guest surface is exactly GET /api/pool/hub + GET /api/screener/strategies (GET-only).
 - [Phase 19 / P1]: Guest masked cells are inert text (no title/aria-label/tooltip); rows keyed by strategy-scoped ordinal; 开盘涨幅 header+cells render only when mode==='vip'.
+- [Phase 20 / P1]: Auction lake write gate is the probe verdict (`resolve_auction_probe().status == available`), not a capability — `can_sync_auction` keeps the capset signature for alignment only; 09:30 continuous bar is structurally excluded by the shared 555..565 predicate (single source of truth with provider `_normalize_auction`).
+- [Phase 20 / P1]: `kline_auction` empty lake registers no view (existing empty-dir semantics) — read path degrades to 0 rows; `auction_sync_enabled` defaults False (explicit opt-in mirroring minute).
 
 ## Performance Metrics
 
@@ -115,6 +122,7 @@ Resume file: None
 | Phase 18-pool-hub P2 | 45 | 3 tasks | 10 files |
 | Phase 19 P1 | 55 | 3 tasks | 6 files |
 | Phase 19 P2 | 25min | 3 tasks | 11 files |
+| Phase 20 P1 | 32 | 3 tasks | 5 files |
 
 ---
-*Last updated: 2026-08-04 — v2.0 roadmap created (Phases 20-23)*
+*Last updated: 2026-08-05 — Phase 20 plan 1 (DATA-05 auction lake) complete*
