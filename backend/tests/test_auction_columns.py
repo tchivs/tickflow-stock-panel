@@ -295,3 +295,66 @@ def test_schema_surface_lists_kline_auction(tmp_path, monkeypatch):
     assert "股" in fields["auction_volume"]
     assert "auction_unmatched_amount" in fields
     assert "估算" in fields["auction_unmatched_amount"]
+
+
+# ================================================================
+# DATA-06 派生未匹配金额 proxy (委托量输入可得才派生, 估算标注, 与真实列分列)
+# ================================================================
+
+
+def test_unmatched_proxy_input_present():
+    """输入含 auction_unmatched_volume × auction_virtual_price → 派生 auction_unmatched_amount == 乘积。"""
+    from app.services.auction_columns import compute_auction_unmatched_amount
+    df = pl.DataFrame({
+        "symbol": ["000001"],
+        "auction_unmatched_volume": [8000],
+        "auction_virtual_price": [5.25],
+    })
+    out = compute_auction_unmatched_amount(df)
+    assert "auction_unmatched_amount" in out.columns
+    assert out.select("auction_unmatched_amount").item() == 8000 * 5.25
+    assert out.select("auction_unmatched_amount").item() == 42000.0
+    # 输入列保留 (原样叠加派生列, 不破坏输入)
+    assert "auction_unmatched_volume" in out.columns
+    assert "auction_virtual_price" in out.columns
+
+
+def test_unmatched_proxy_input_absent():
+    """缺任一输入列 → 输出帧不含 auction_unmatched_amount (列缺席即回退)。"""
+    from app.services.auction_columns import compute_auction_unmatched_amount
+    df = pl.DataFrame({
+        "symbol": ["000001"],
+        "auction_unmatched_volume": [8000],  # 缺 auction_virtual_price
+    })
+    out = compute_auction_unmatched_amount(df)
+    assert "auction_unmatched_amount" not in out.columns
+    assert out.columns == ["symbol", "auction_unmatched_volume"]  # 原样返回
+
+
+def test_unmatched_proxy_never_mixed_with_real():
+    """真实竞价列与派生列 schema 独立 (列名不同、可同时存在), 永不相加/混排; 描述带估算标注。"""
+    from app.indicators.pipeline import ENRICHED_COLUMNS
+    from app.services.auction_columns import compute_auction_unmatched_amount
+    df = pl.DataFrame({
+        "symbol": ["000001"],
+        "auction_volume": [8000],          # 真实竞价量 (股)
+        "auction_amount": [42000.0],        # 真实竞价金额 (元)
+        "auction_unmatched_volume": [8000],
+        "auction_virtual_price": [5.25],
+    })
+    out = compute_auction_unmatched_amount(df)
+    # 三列各自独立存在
+    assert "auction_volume" in out.columns
+    assert "auction_amount" in out.columns
+    assert "auction_unmatched_amount" in out.columns
+    assert out.columns == [
+        "symbol", "auction_volume", "auction_amount",
+        "auction_unmatched_volume", "auction_virtual_price", "auction_unmatched_amount",
+    ]
+    # 无聚合表达式把派生列并入真实列 (列名不同、schema 独立)
+    assert out.select("auction_amount").item() == 42000.0
+    # Registry 断言: 派生列描述带「估算」且明确「非真实成交」否定标注, 与真实列描述分列
+    desc = ENRICHED_COLUMNS["auction_unmatched_amount"]
+    assert "估算" in desc
+    assert "非真实成交" in desc
+    assert desc != ENRICHED_COLUMNS["auction_amount"]

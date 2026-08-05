@@ -31,6 +31,25 @@ _AUCTION_UNMATCHED_AMOUNT_COL = "auction_unmatched_amount"
 _AUCTION_REAL_COLS = ("auction_volume", "auction_amount")
 
 
+def compute_auction_unmatched_amount(df: pl.DataFrame) -> pl.DataFrame:
+    """派生竞价未匹配金额 (DATA-06) —— 委托量输入可得时才派生。
+
+    语义 = 虚拟未匹配量(股) × 虚拟参考价(元/股) = 未匹配金额(元) (RESEARCH A1)。
+    派生估算列, 非真实成交; 只与真实竞价列分列共存, 永不求和/混排。
+    缺少任一输入列 (``auction_unmatched_volume`` / ``auction_virtual_price``) → 原样返回
+    (列缺席 → 策略引擎对缺失派生列静默跳过, 回退量比+金额强度)。
+    """
+    if df is None or df.is_empty():
+        return df
+    if _AUCTION_UNMATCHED_VOLUME_COL not in df.columns or _AUCTION_VIRTUAL_PRICE_COL not in df.columns:
+        return df
+    return df.with_columns(
+        (pl.col(_AUCTION_UNMATCHED_VOLUME_COL) * pl.col(_AUCTION_VIRTUAL_PRICE_COL)).alias(
+            _AUCTION_UNMATCHED_AMOUNT_COL
+        )
+    )
+
+
 def attach_auction_columns(df: pl.DataFrame, trade_date: date, repo: KlineRepository) -> pl.DataFrame:
     """读路径左联注入竞价列 (probe×分区双闸门)。
 
@@ -40,7 +59,8 @@ def attach_auction_columns(df: pl.DataFrame, trade_date: date, repo: KlineReposi
     否则原样返回 (诚实按日空态, 非 null-as-present)。
 
     通过后: 先按 symbol 去重为每 symbol 单行 (防多窗口行 fan-out 把日线帧拉成
-    N 行/标的), 再对 df 左联注入真实竞价列。df 以 symbol 为键、已限定到
+    N 行/标的), 再对 df 左联注入真实竞价列 (以及委托量输入可得时派生的
+    ``auction_unmatched_amount``)。df 以 symbol 为键、已限定到
     trade_date; 分区内有行但某 symbol 缺席 → 该 symbol 列值为 null
     (诚实按标的缺席, 非整日 null-as-present)。
     """
@@ -63,8 +83,12 @@ def attach_auction_columns(df: pl.DataFrame, trade_date: date, repo: KlineReposi
         logger.debug("attach_auction_columns: partition empty for %s, columns absent", trade_date)
         return df
 
+    # 委托量输入可得时派生估算未匹配金额 (与真实竞价列同帧携带, 独立命名, 永不相加)
+    if _AUCTION_UNMATCHED_VOLUME_COL in auction.columns and _AUCTION_VIRTUAL_PRICE_COL in auction.columns:
+        auction = compute_auction_unmatched_amount(auction)
+
     # 真实竞价列裁剪 (canonical 列; 缺列即不注入, 诚实缺列)
-    keep = [c for c in ("symbol", *_AUCTION_REAL_COLS) if c in auction.columns]
+    keep = [c for c in ("symbol", *_AUCTION_REAL_COLS, _AUCTION_UNMATCHED_AMOUNT_COL) if c in auction.columns]
     auction = auction.select(keep)
 
     # 防 fan-out: 每 symbol 只保留一行 (20-01 写路径已按 symbol+datetime 去重,
