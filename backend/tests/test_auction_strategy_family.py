@@ -369,3 +369,227 @@ def test_auction_volume_ratio_registry_discipline():
     assert "auction_volume_ratio" in ENRICHED_COLUMNS_BY_CATEGORY["auction"]
     assert "auction_volume_ratio" not in ENRICHED_STORAGE_COLS
     assert "auction_volume_ratio" not in _ALL_INDICATOR_COLS
+
+# ================================================================
+# Task 3: P1 三策略 — auction_fast_grab / auction_alpha / golden_230
+# ================================================================
+
+
+def test_fast_grab_bands():
+    """甜点区 2.8%–3.5% + >7% 风险带剔除 + 量比/金额阈值。"""
+    engine = _engine()
+    fixture = pl.DataFrame({
+        "symbol": ["A1", "A2", "A3", "A4", "A5", "A6", "A7"],
+        "open_gap": [0.030, 0.020, 0.050, 0.080, 0.030, 0.030, 0.035],
+        "auction_volume": [8000] * 7,  # 短路闸门列: requires_auction_data 要求存在
+        "auction_volume_ratio": [2.0, 2.0, 2.0, 2.0, 1.0, 2.0, 2.0],
+        "auction_amount": [3_000_000.0, 3_000_000.0, 3_000_000.0, 3_000_000.0, 3_000_000.0, 1_000_000.0, 3_000_000.0],
+    })
+    result = _run_auction(engine, "auction_fast_grab", fixture)
+    hits = {r["symbol"] for r in result.rows}
+    assert hits == {"A1", "A7"}       # A1 甜点内三因子全达标; A7 恰在上界 3.5% 入选
+    assert "A2" not in hits           # 甜点外 (2.0% < 2.8%)
+    assert "A3" not in hits           # 甜点外 (5.0% > 3.5%)
+    assert "A4" not in hits           # >7% 风险带剔除
+    assert "A5" not in hits           # 量比 1.0 < 1.5
+    assert "A6" not in hits           # 金额 1M < 2M
+
+
+def test_fast_grab_fail_closed(repo_env, monkeypatch):
+    """probe 非 available 三态 → 竞价列缺席 → 引擎短路空池 (双保险)。"""
+    from app.services.auction_probe import (
+        _ERROR_DETAIL_MAX,
+        AuctionProbeStatus,
+        AuctionProbeVerdict,
+    )
+    from app.services.auction_columns import attach_auction_columns
+    repo, _ = repo_env
+    statuses = [
+        (AuctionProbeStatus.not_configured, "not configured"),
+        (AuctionProbeStatus.fail_closed, "fail closed"),
+        (AuctionProbeStatus.error, ("x" * (_ERROR_DETAIL_MAX + 10))[:_ERROR_DETAIL_MAX]),
+    ]
+    for status, detail in statuses:
+        verdict = AuctionProbeVerdict(status=status, source="fake", probed_at=None, detail=detail)
+        _patch_probe(monkeypatch, verdict)
+        frame = attach_auction_columns(_daily_frame(), date(2026, 8, 4), repo)
+        assert "auction_volume" not in frame.columns
+        result = _run_auction(_engine(), "auction_fast_grab", frame)
+        assert result.total == 0, f"probe {status.value} 下应空池"
+        assert result.rows == []
+
+
+def test_alpha_branch_exclusive():
+    """真列分支与派生分支互斥: 同帧绝不混用, 阈值各自生效。"""
+    engine = _engine()
+    # 真列 fixture → 只走真列阈值 (gap 1.6% 入选, 1.0% 落选, 量比 0.5 落选)
+    real_fixture = pl.DataFrame({
+        "symbol": ["R1", "R2", "R3"],
+        "open_gap": [0.016, 0.010, 0.025],
+        "auction_volume_ratio": [1.2, 1.2, 0.5],
+        "auction_amount": [2_000_000.0, 2_000_000.0, 2_000_000.0],
+    })
+    real_hits = {r["symbol"] for r in _run_auction(engine, "auction_alpha", real_fixture).rows}
+    assert real_hits == {"R1"}
+
+    # 派生 fixture → 只走派生阈值 (gap 2.5% + 量比 1.5 + 金额 2M 入选)
+    derived_fixture = pl.DataFrame({
+        "symbol": ["D1", "D2", "D3"],
+        "open_gap": [0.025, 0.015, 0.025],
+        "vol_ratio_5d": [1.5, 1.5, 1.0],
+        "amount": [2_000_000.0, 2_000_000.0, 2_000_000.0],
+    })
+    derived_hits = {r["symbol"] for r in _run_auction(engine, "auction_alpha", derived_fixture).rows}
+    assert derived_hits == {"D1"}
+
+    # 互斥: 无任何符号同时由两分支输出
+    assert real_hits.isdisjoint(derived_hits)
+
+
+def test_alpha_scoring_renormalize():
+    """scoring 超集权重和=1.0; 缺真列 fixture 跑 run 不崩溃, score 非负。"""
+    from app.strategy.builtin import auction_alpha
+    assert sum(auction_alpha.META["scoring"].values()) == pytest.approx(1.0)
+
+    engine = _engine()
+    derived_fixture = pl.DataFrame({
+        "symbol": ["D1", "D2"],
+        "open_gap": [0.025, 0.015],
+        "vol_ratio_5d": [1.5, 1.5],
+        "amount": [2_000_000.0, 2_000_000.0],
+    })
+    result = _run_auction(engine, "auction_alpha", derived_fixture)
+    assert result.total == 1
+    assert all(v >= 0 for v in result.scores.values())
+
+
+def test_golden_230_window():
+    """META 诚实归类 post_close (id 无竞价前缀, 描述尾盘/隔夜) + filter 带 + 收阳 + W-5 grep 门禁。"""
+    from app.strategy.builtin import golden_230
+    meta = golden_230.META
+    assert meta["time_window"] == "post_close"
+    assert meta["evaluation_time"] == "15:00"
+    assert meta["minute_confirm_required"] is False
+    assert meta["id"] == "golden_230"
+    assert not meta["id"].startswith("auction_")
+    assert "尾盘" in meta["description"]
+    assert "隔夜" in meta["description"]
+    assert "非竞价窗口" in meta["description"]
+
+    engine = _engine()
+    fixture = pl.DataFrame({
+        "symbol": ["G1", "G2", "G3", "G4"],
+        "open": [10.0, 10.0, 10.0, 10.0],
+        "close": [10.4, 10.5, 10.3, 9.6],   # G3 收阳; G4 阴线 (close < open)
+        "change_pct": [0.04, 0.055, 0.03, 0.04],
+    })
+    result = _run_auction(engine, "golden_230", fixture)
+    hits = {r["symbol"] for r in result.rows}
+    assert hits == {"G1", "G3"}   # 3%–5% + 收阳
+    assert "G2" not in hits       # 5.5% > 5% 落选
+    assert "G4" not in hits       # 阴线落选
+
+    # W-5 grep 门禁: 文件全文无 auction_ 列引用 (label-drift 回归锁)
+    src = (_BUILTIN_DIR / "golden_230.py").read_text(encoding="utf-8")
+    assert "auction_" not in src
+
+
+def test_golden_230_minute_confirm_optional(tmp_path):
+    """分钟数据缺席 → 日线核心池仍产出; 有弱尾盘 bar → 池收窄 (可选增强, A3)。"""
+    daily = pl.DataFrame({
+        "symbol": ["G1", "G2"],
+        "open": [10.0, 10.0],
+        "close": [10.4, 10.4],
+        "change_pct": [0.04, 0.04],
+    })
+    # 1) 分钟数据缺席 (空帧) → 跳过确认, 日线池保留
+    r1 = _run_auction(_engine(minute_loader=lambda symbols, d: pl.DataFrame()), "golden_230", daily)
+    assert r1.total == 2
+
+    # 2) 分钟帧含 14:30–15:00 弱尾盘 → 池收窄 (G2 尾盘弱 9.9 < 10.0 → 剔除)
+    minute_bars = pl.DataFrame({
+        "symbol": ["G1", "G1", "G2", "G2"],
+        "datetime": [
+            datetime(2026, 8, 4, 14, 30), datetime(2026, 8, 4, 15, 0),
+            datetime(2026, 8, 4, 14, 30), datetime(2026, 8, 4, 15, 0),
+        ],
+        "open": [10.0, 10.0, 10.0, 10.0],
+        "high": [10.0, 10.0, 10.0, 10.0],
+        "low": [10.0, 10.0, 10.0, 10.0],
+        "close": [10.3, 10.1, 10.3, 9.9],  # G1 尾盘不弱 (10.1>=10.0); G2 弱 (9.9<10.0)
+        "volume": [100] * 4,
+        "amount": [1000.0] * 4,
+    })
+
+    def loader(symbols, trade_date):
+        return minute_bars.filter(pl.col("symbol").is_in(symbols))
+
+    r2 = _run_auction(_engine(minute_loader=loader), "golden_230", daily)
+    assert {r["symbol"] for r in r2.rows} == {"G1"}
+
+
+def test_preopen_no_eod_cols():
+    """B-1 grep 门禁: pre_open filter 禁 EOD 列 (change_pct/vol_ratio_5d/amount/close)。"""
+    fast_grab_src = (_BUILTIN_DIR / "auction_fast_grab.py").read_text(encoding="utf-8")
+    alpha_src = (_BUILTIN_DIR / "auction_alpha.py").read_text(encoding="utf-8")
+
+    def _filter_body(src: str) -> str:
+        return src[src.index("def filter"):]
+
+    fg_body = _filter_body(fast_grab_src)
+    for col in ("change_pct", "vol_ratio_5d", "amount", "close"):
+        assert not re.search(rf"\b{re.escape(col)}\b", fg_body), \
+            f"auction_fast_grab filter 禁引用 {col}"
+
+    alpha_body = _filter_body(alpha_src)
+    for col in ("change_pct", "close"):
+        assert not re.search(rf"\b{re.escape(col)}\b", alpha_body), \
+            f"auction_alpha filter 禁引用 {col}"
+    # REQUIREMENTS 授权例外: 派生分支合法引用 vol_ratio_5d/amount
+    assert re.search(r"\bvol_ratio_5d\b", alpha_body)
+    assert re.search(r"\bamount\b", alpha_body)
+
+
+def _fake_repo(tmp_path):
+    """最小 repo 桩: 仅提供 strategies 端点用到的 store.data_dir。"""
+    from types import SimpleNamespace
+    return SimpleNamespace(store=SimpleNamespace(data_dir=tmp_path))
+
+
+def _screener_client(tmp_path):
+    """最小 FastAPI + screener.router + 真实 builtin 引擎, 无网络无真实数据湖。"""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api import screener as screener_api
+
+    app = FastAPI()
+    app.include_router(screener_api.router)
+    app.state.repo = _fake_repo(tmp_path)
+    app.state.strategy_engine = _engine()
+    return TestClient(app)
+
+
+def test_no_third_registry(tmp_path):
+    """P1 三 id 仅 builtin 自动发现 + PRESET 零碰撞 + strategies API 恰好一次。"""
+    engine = _engine()
+    metas = {m["id"]: m for m in engine.list_strategies()}
+    for sid in _P1_IDS:
+        assert sid in metas, f"{sid} 必须由 builtin 自动发现"
+        assert metas[sid]["source"] == "builtin"
+        assert metas[sid]["time_window"] in ("pre_open", "post_close")
+
+    from app.services.screener import PRESET_STRATEGIES
+    for sid in _P1_IDS:
+        assert sid not in PRESET_STRATEGIES
+
+    client = _screener_client(tmp_path)
+    resp = client.get("/api/screener/strategies?asset_type=stock")
+    assert resp.status_code == 200
+    presets = resp.json()["presets"]
+    for sid in _P1_IDS:
+        entries = [p for p in presets if p["id"] == sid]
+        assert len(entries) == 1, f"{sid} 应恰好出现一次, 实际 {len(entries)}"
+        assert entries[0]["source"] == "builtin"
+    p1_files = {f"{sid}.py" for sid in _P1_IDS}
+    for err in resp.json().get("load_errors", []):
+        assert err.get("file") not in p1_files
