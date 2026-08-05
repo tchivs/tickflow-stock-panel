@@ -215,3 +215,13 @@ None - 零新增外部运行时依赖, 无环境变量配置。
 ---
 *Phase: 21-auction-strategy-family*
 *Completed: 2026-08-05*
+
+## Self-Check: PASSED
+
+- 创建的 4 个文件 (3 策略 + 1 测试) 全部存在 (`[ -f ]` 逐一验证)。
+- 3 个 task commit + 1 个 metadata commit 全部存在于 git 历史:
+  - `f08f3b9` (Task 1) / `28de2ff` (Task 2) / `80c99a3` (Task 3) / `c6f73a3` (docs)。
+- 测试证据: `pytest tests/test_auction_strategy_family.py -q` 16 passed; 四项回归门禁
+  `test_auction_probe.py` + `test_auction_columns.py` + `test_auction_sync.py` +
+  `test_auction_strategies.py` 46 passed (62 合计)。
+- `frontend/src/pages/Watchlist.tsx` 未被本计划触碰 (`git log -- <file>` 0 hits)。
