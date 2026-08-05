@@ -39,6 +39,10 @@ export const QK = {
   marketSnapshot:       ['market-snapshot'] as const,
   limitLadder:          (asOf?: string) => ['limit-ladder', asOf] as const,
   poolHub:            (asOf?: string) => ['pool-hub', asOf ?? 'latest'] as const,
+  // Phase 23 (FRONT-01/02): 股池可用交易日 + 历史 as_of 只读取池 — 与 poolHub 物理分离
+  // (历史必走 /api/pool/history, PIT-1: /hub?as_of= 反漂移会静默返回最新日)。
+  poolDates:          ['pool-dates'] as const,
+  poolHistory:        (asOf: string) => ['pool-history', asOf] as const,
 
   // Backtest
   backtestStatus:       ['backtest-status'] as const,

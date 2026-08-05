@@ -678,8 +678,21 @@ export interface MarketSnapshotRow {
   [key: string]: any
 }
 
-// ===== 股池 Hub (Phase 18) =====
-/** 股池个股行: 五列 + 交叉共振标志, 全部服务端投影 (POOL-01/02, 单 as_of 源) */
+// ===== 股池 Hub (Phase 18 / Phase 23 扩展) =====
+/** 服务端冻结的竞价列存在性声明 (OQ-2) — real 只在该快照 probe available 时非空 */
+export interface AuctionColumnsDecl {
+  real: string[]
+  derived: string[]
+}
+
+/** 股池可用交易日列表 (POOL-05) — ISO desc; 空 → {dates: [], count: 0, latest: null} */
+export interface PoolDatesResponse {
+  dates: string[]
+  count: number
+  latest: string | null
+}
+
+/** 股池个股行: 五列 + 交叉共振 + 竞价列透传, 全部服务端投影 (POOL-01/02, 单 as_of 源) */
 export interface PoolHubRow {
   symbol: string
   code: string
@@ -690,6 +703,14 @@ export interface PoolHubRow {
   concept_board: string[]
   hit_factors: string[]
   cross_resonance: boolean
+  /** 竞价量 (股) — 仅 probe available 日存在; 列存在性由 auction_columns 声明 (guest 永无) */
+  auction_volume?: number | null
+  /** 竞价金额 (元) — 仅 probe available 日存在 */
+  auction_amount?: number | null
+  /** 竞价量比 (派生) */
+  auction_volume_ratio?: number | null
+  /** 虚拟未匹配金额 (元·估算, 派生) */
+  auction_unmatched_amount?: number | null
 }
 
 export interface PoolHubStrategy {
@@ -701,11 +722,18 @@ export interface PoolHubStrategy {
 
 export interface PoolHubResponse {
   as_of: string | null
-  updated_at: number | null
+  /** PIT-8 双型容忍: hub=epoch ms / history=ISO 串 / 空态 null */
+  updated_at: number | string | null
   /** 服务端声明的展示模式 (GUEST-01) — 前端只消费, 绝不从行值推导 */
   mode: 'guest' | 'vip'
   strategies: PoolHubStrategy[]
   resonance_count: number
+  /** 快照缺失诚实空态 (200 语义, 非 404) — 仅 history 缺失日返回 */
+  available?: boolean
+  /** 服务端冻结的竞价列存在性声明 (OQ-2); guest 响应由掩码剥离, 永无此键 */
+  auction_columns?: AuctionColumnsDecl
+  /** 概念归属标注 (实时 join 当前 ext, 不冻结历史标签) */
+  concept_attribution?: string
 }
 
 export interface OverviewDimensionRankItem {
@@ -2077,6 +2105,14 @@ export const api = {
       `/api/pool/hub${qs ? `?${qs}` : ''}`,
     )
   },
+
+  // Phase 23 (FRONT-01): 股池可用交易日列表 (POOL-05) — source of truth = screener_results/date=* 分区
+  poolDates: () => request<PoolDatesResponse>('/api/pool/dates'),
+
+  // Phase 23 (FRONT-01/02, PIT-1 最高危防线): 历史 as_of 独立只读取池 —
+  // 历史必走 /api/pool/history, 绝不用 /hub?as_of= (反漂移会静默返回最新日)
+  poolHistory: (asOf: string) =>
+    request<PoolHubResponse>(`/api/pool/history?as_of=${encodeURIComponent(asOf)}`),
 
   backtestStatus: () => request<{ available: boolean }>('/api/backtest/status'),
 
