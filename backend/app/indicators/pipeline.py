@@ -322,6 +322,7 @@ _ALL_INDICATOR_COLS: frozenset[str] = frozenset({
     "atr_14", "vol_ratio_5d",
     "change_pct", "change_amount", "amplitude", "_daily_pct", "annual_vol_20d",
     "open_gap",
+    "momentum_5d", "momentum_10d", "momentum_20d", "momentum_30d", "momentum_60d",
     "rsi_6", "rsi_14", "rsi_24",
 })
 
