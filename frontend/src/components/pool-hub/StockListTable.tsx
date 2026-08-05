@@ -1,9 +1,10 @@
 import { useState } from 'react'
-import { Loader2, RotateCcw } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, Loader2, RotateCcw } from 'lucide-react'
 import { cn } from '@/lib/cn'
-import type { PoolHubRow, PoolHubStrategy } from '@/lib/api'
+import type { AuctionColumnsDecl, PoolHubRow, PoolHubStrategy } from '@/lib/api'
 import { boardTag } from '@/components/stock-table/primitives'
-import { fmtPct, priceColorClass } from '@/lib/format'
+import { fmtBigNum, fmtPct, isToday, priceColorClass } from '@/lib/format'
+import { useAuctionProbe, useQuoteStatus } from '@/lib/useSharedQueries'
 
 // 复用既有标签处理: 关联因子 = 策略名 amber 标签; 概念板块 = 概念 chips
 const STRATEGY_TAG_CLS = 'inline-block px-1.5 py-px rounded text-[10px] font-medium leading-tight bg-amber-500/10 text-amber-600 border border-amber-500/20'
@@ -32,6 +33,8 @@ interface StockListTableProps {
   onClearFilter: () => void
   /** 全池交叉共振股数 (服务端派生) */
   resonanceCount: number
+  /** 服务端冻结的竞价列存在性声明 (OQ-2/H1); null/guest → 不渲染竞价列, 表结构既有不变 */
+  auctionColumns?: AuctionColumnsDecl | null
 }
 
 /** 概念板块 chips — 首 3 个 + `+{N}` 展开/收起, 绝不截断标签中间 */
@@ -76,6 +79,71 @@ function PctCell({ value }: { value: number | null }) {
   )
 }
 
+/** 大数单元格 (竞价量/金额/未匹配金额): fmtBigNum 万/亿, 右对齐, 不套涨跌色 (H2/PIT-4) */
+function BigNumCell({ value }: { value: number | null | undefined }) {
+  if (value == null || Number.isNaN(value)) return <span className="text-muted">—</span>
+  return <span className="num tabular-nums">{fmtBigNum(value)}</span>
+}
+
+/** 竞价量比单元格: 倍数 (×) 非百分比 — toFixed(2)+'×', 不用 fmtPct (OQ-7) */
+function RatioCell({ value }: { value: number | null | undefined }) {
+  if (value == null || Number.isNaN(value)) return <span className="text-muted">—</span>
+  return <span className="num tabular-nums">{value.toFixed(2)}×</span>
+}
+
+/**
+ * AuctionColumnStatusBadge — 竞价列诚实状态徽标 (UI-SPEC §3.3/§4.3, H3 双轨)。
+ * 冻结列存在性 (auction_columns.real) 驱动主徽标; 实时 probe/时段只驱动
+ * warning 分支与盘前 secondary 行 — 历史快照不因今日 probe 状态被重写。
+ */
+export function AuctionColumnStatusBadge({
+  auctionColumns,
+  asOf,
+}: {
+  /** 服务端冻结的竞价列存在性声明; null = 无竞价列契约 (guest/后端未透传) → 不渲染 */
+  auctionColumns: AuctionColumnsDecl | null
+  /** 当前载荷 as_of (用于「盘前」判定: 查看日 == 今日) */
+  asOf: string | null
+}) {
+  const probe = useAuctionProbe()
+  const quoteStatus = useQuoteStatus()
+
+  if (!auctionColumns) return null
+
+  const realCols = auctionColumns.real ?? []
+  const hasReal = realCols.some(c => c === 'auction_volume' || c === 'auction_amount')
+  const probeAvailable = probe.data?.status === 'available'
+  const viewingToday = asOf != null && isToday(asOf)
+  const tradingHours = quoteStatus.data?.is_trading_hours ?? false
+
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+      {hasReal ? (
+        <span className="inline-flex items-center gap-1.5 font-medium text-accent">
+          <CheckCircle2 className="h-3.5 w-3.5 shrink-0" aria-hidden />
+          竞价数据可用 · 窗口 09:15-09:25
+        </span>
+      ) : probeAvailable ? (
+        <span className="inline-flex items-center gap-1.5 font-medium text-warning">
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden />
+          该快照计算时无真实竞价数据，仅展示派生列
+        </span>
+      ) : (
+        <span className="inline-flex items-center gap-1.5 font-medium text-warning">
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden />
+          竞价数据未接入，仅展示派生列
+        </span>
+      )}
+      {viewingToday && !tradingHours && (
+        <span className="inline-flex items-center gap-1.5 text-secondary">
+          <span className="h-1.5 w-1.5 rounded-full bg-muted" aria-hidden />
+          盘前/休市 · 竞价窗口 09:15-09:25 未开始
+        </span>
+      )}
+    </div>
+  )
+}
+
 /**
  * 股池钻取明细表 — 研究只读面 (POOL-03): 无任何行内编辑/交易操作。
  * 表头精确 代码 | 开盘涨幅 | 涨跌幅 | 概念板块 | 关联因子;
@@ -92,10 +160,21 @@ export function StockListTable({
   onRetry,
   onClearFilter,
   resonanceCount,
+  auctionColumns = null,
 }: StockListTableProps) {
   if (!strategy) return null
   const filterActive = filterText.trim().length > 0
   const columns = mode === 'guest' ? GUEST_COLUMNS : VIP_COLUMNS
+
+  // 竞价列分组 (OQ-2/H1): 列存在性完全由服务端 auction_columns 声明驱动, 绝不从行值推导 (PIT-3)。
+  // real 组整组同存同隐; open_gap 已留基础列「开盘涨幅」渲染, 不搬入派生组不重复渲染 (OQ-5)。
+  const realCols = auctionColumns?.real ?? []
+  const derivedCols = auctionColumns?.derived ?? []
+  const hasReal = realCols.some(c => c === 'auction_volume' || c === 'auction_amount')
+  const hasDerived = derivedCols.some(c => c === 'auction_volume_ratio' || c === 'auction_unmatched_amount')
+  const hasAuctionCols = hasReal || hasDerived
+  // guest/无声明 → 既有单行表头, 无竞价列无分组无徽标 (H7); 两者皆无可渲染列 → 等同无竞价列
+  const grouped = mode === 'vip' && hasAuctionCols
 
   return (
     <div className="space-y-2">
@@ -152,13 +231,52 @@ export function StockListTable({
       {/* 表 */}
       {!loading && !error && rows.length > 0 && (
         <div className="rounded-card border border-border overflow-x-auto">
-          <table className="w-full text-sm" style={{ minWidth: 720 }}>
+          <table className="w-full text-sm" style={{ minWidth: grouped ? 940 : 720 }}>
             <thead className="bg-elevated">
-              <tr className="text-left text-secondary">
-                {columns.map(c => (
-                  <th key={c} scope="col" className="px-3 py-2.5 font-medium whitespace-nowrap">{c}</th>
-                ))}
-              </tr>
+              {grouped ? (
+                /* 两行分组表头 (UI-SPEC §3.2): 基础列 rowSpan=2 + 真实集合竞价/派生·虚拟成交 colSpan=2 组带 */
+                <>
+                  <tr className="text-left text-secondary">
+                    {columns.map(c => (
+                      <th key={c} rowSpan={2} scope="col" className="px-3 py-2.5 font-medium whitespace-nowrap">{c}</th>
+                    ))}
+                    {hasReal && (
+                      <th colSpan={2} scope="colgroup"
+                        title="集合竞价撮合成交（09:15-09:25），仅在快照计算时竞价数据可用且分区有行时存在。"
+                        className="px-3 py-2 font-semibold text-accent bg-accent/[0.06] border-t border-accent/30 text-center text-xs whitespace-nowrap">
+                        真实集合竞价
+                      </th>
+                    )}
+                    {hasDerived && (
+                      <th colSpan={2} scope="colgroup"
+                        title="由竞价量与历史均量、委托量输入派生的估算值，非真实成交。"
+                        className="px-3 py-2 font-medium text-secondary bg-elevated text-center text-xs whitespace-nowrap">
+                        派生 · 虚拟成交
+                      </th>
+                    )}
+                  </tr>
+                  <tr className="text-left text-secondary">
+                    {hasReal && (
+                      <>
+                        <th scope="col" title="竞价量 = 集合竞价撮合成交量（单位：股）。" className="px-3 py-2 font-medium whitespace-nowrap text-xs">竞价量（股）</th>
+                        <th scope="col" title="竞价金额 = 集合竞价撮合成交额（单位：元）。" className="px-3 py-2 font-medium whitespace-nowrap text-xs">竞价金额（元）</th>
+                      </>
+                    )}
+                    {hasDerived && (
+                      <>
+                        <th scope="col" title="竞价量 ÷ 前 5 日均量（不含当日）。" className="px-3 py-2 font-medium whitespace-nowrap text-xs">竞价量比（×）</th>
+                        <th scope="col" title="虚拟未匹配量 × 虚拟参考价的估算值，非真实成交金额。" className="px-3 py-2 font-medium whitespace-nowrap text-xs">虚拟未匹配金额（元·估算）</th>
+                      </>
+                    )}
+                  </tr>
+                </>
+              ) : (
+                <tr className="text-left text-secondary">
+                  {columns.map(c => (
+                    <th key={c} scope="col" className="px-3 py-2.5 font-medium whitespace-nowrap">{c}</th>
+                  ))}
+                </tr>
+              )}
             </thead>
             <tbody>
               {rows.map((row, index) => {
@@ -220,6 +338,19 @@ export function StockListTable({
                         )}
                       </div>
                     </td>
+                    {/* 竞价列 (VIP + 服务端声明): 真实组 (股/元) + 派生组 (×/估算), 紧跟基础列末尾, 无涨跌色 (H2) */}
+                    {!isGuest && hasReal && (
+                      <>
+                        <td className="px-3 py-2 text-right"><BigNumCell value={row.auction_volume} /></td>
+                        <td className="px-3 py-2 text-right"><BigNumCell value={row.auction_amount} /></td>
+                      </>
+                    )}
+                    {!isGuest && hasDerived && (
+                      <>
+                        <td className="px-3 py-2 text-right"><RatioCell value={row.auction_volume_ratio} /></td>
+                        <td className="px-3 py-2 text-right"><BigNumCell value={row.auction_unmatched_amount} /></td>
+                      </>
+                    )}
                   </tr>
                 )
               })}
