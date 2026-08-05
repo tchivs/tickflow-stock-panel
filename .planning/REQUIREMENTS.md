@@ -24,9 +24,9 @@ Requirements for the v2.0 milestone. Each maps to a roadmap phase. Research basi
 
 ### 股池 Hub 日期导航 (Pool Hub Date Navigation)
 
-- [ ] **POOL-04**: User can browse historical pools per trading day via 冻结式点快照 (frozen point snapshot) — `as_of` + `computed_at` + strategy-version fingerprint persisted to `screener_results/date={as_of}/`, never the `today_ever_rows` union, never backfilled/appended.
-- [ ] **POOL-05**: User can list available pool dates (`GET /api/pool/dates`) and fetch a pool at `as_of=YYYY-MM-DD` through an independent read-only endpoint; the existing single-as_of contract of `GET /api/pool/hub` is preserved and unmodified.
-- [ ] **POOL-06**: Platform persists pools end-of-day via a scheduled post-close `run_all` job so historical browsing is self-sufficient (no first-request blocking replay).
+- [x] **POOL-04**: User can browse historical pools per trading day via 冻结式点快照 (frozen point snapshot) — `as_of` + `computed_at` + strategy-version fingerprint persisted to `screener_results/date={as_of}/`, never the `today_ever_rows` union, never backfilled/appended.
+- [x] **POOL-05**: User can list available pool dates (`GET /api/pool/dates`) and fetch a pool at `as_of=YYYY-MM-DD` through an independent read-only endpoint; the existing single-as_of contract of `GET /api/pool/hub` is preserved and unmodified.
+- [x] **POOL-06**: Platform persists pools end-of-day via a scheduled post-close `run_all` job so historical browsing is self-sufficient (no first-request blocking replay).
 
 ### 前端 (Frontend)
 
@@ -60,9 +60,9 @@ Populated during roadmap creation.
 | STRAT-07 | Phase 21 | Complete |
 | STRAT-08 | Phase 21 | Complete |
 | STRAT-09 | Phase 21 | Complete |
-| POOL-04 | Phase 22 | Open |
-| POOL-05 | Phase 22 | Open |
-| POOL-06 | Phase 22 | Open |
+| POOL-04 | Phase 22 | Complete |
+| POOL-05 | Phase 22 | Complete |
+| POOL-06 | Phase 22 | Complete |
 | FRONT-01 | Phase 23 | Open |
 | FRONT-02 | Phase 23 | Open |
 
