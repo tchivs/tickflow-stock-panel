@@ -143,7 +143,10 @@ Plans:
   2. `auction_sync` 服务把真实 09:15–09:25 竞价窗口行按 `date=` hive 分区写入 `kline_auction/` 湖；湖内只存真实竞价窗口行，09:30 连续竞价 bar 被结构上排除（回归锁死）。
   3. 委托量输入可得时，研究者能查看派生的竞价未匹配金额（unmatched-order proxy）列；输入不可得时策略回退到量比 + 金额强度。
   4. probe 非 `available` 时，研究者无论在策略还是 UI 上都看不到竞价列，只能看到派生列与 `open_gap`；没有任何 UI 或策略把 09:30 bar 标为集合竞价数据。
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 20-01-PLAN.md — DATA-05: `auction_sync` 湖摄入 + `kline_auction/date={d}/` 分区湖 + Step 2.6 stage + 偏好旋钮 + `kline_auction` DuckDB 视图登记 (wave 1)
+- [ ] 20-02-PLAN.md — DATA-04/06: 受管竞价列注册表 + 读路径左联 (probe×分区双闸门) + probe×列矩阵 + 派生未匹配金额 proxy + schema 面 (wave 1)
 **Research flag**: 需要 `--research-phase` — DATA-04 数据源可用性探测与虚拟成交（`auction_virtual_fill`）字段语义是本期最大不确定项，规划前先做 probe 探测。
 
 ### Phase 21: 竞价策略族 (Auction Strategy Family)
