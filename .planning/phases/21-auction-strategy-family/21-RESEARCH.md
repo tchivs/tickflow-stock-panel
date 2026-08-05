@@ -176,7 +176,7 @@ if "builtin" in str(path).replace("\\", "/"):
 
 `list_strategies()`（engine.py:239-244）返回 `{**s.meta, "source": s.source}`——**META 新增字段天然流入 API**。
 
-**API 去重（VERIFIED）:** `api/screener.py:218-251` `strategies()`：先遍历 `PRESET_STRATEGIES`（screener.py:28-185，13 个键，与 `auction_*`/`golden_230`/`t1_flash` 零碰撞）填 `seen_ids`，再 `engine.list_strategies()` 跳过已见 id；`load_errors` 显式暴露。**无第三条注册轨道**（17-01-PLAN Task 3 已回归锁定）。
+**API 去重（VERIFIED）:** `api/screener.py:218-251` `strategies()`：先遍历 `PRESET_STRATEGIES`（screener.py:28-185，12 个键：trend_breakout/ma_golden_cross/macd_golden/volume_price_surge/low_volatility_leader/broken_board_recovery/oversold_bounce/boll_breakout/bullish_alignment/consecutive_limit_ups/pullback_to_support/n_day_low_reversal，与 `auction_*`/`golden_230`/`t1_flash` 零碰撞）填 `seen_ids`，再 `engine.list_strategies()` 跳过已见 id；`load_errors` 显式暴露。**无第三条注册轨道**（17-01-PLAN Task 3 已回归锁定）。
 
 **时间窗字段: 不存在，必须新增（VERIFIED grep 无匹配）:** `backend/app/strategy` 全目录 grep `requires_auction_data|evaluation_time|time_window` → **0 命中**。ROADMAP/研究基线（v1.3 research ARCHITECTURE.md）把 `requires_auction_data` 规划为引擎改动，尚未落地。**推荐新增 META 字段**（引擎读取、API 透传、Phase 23 前端可显示）：
 
@@ -382,27 +382,29 @@ for col, weight in weights.items():
 | A4 | `evaluation_time` 默认 09:45（STRAT-09）与 15:00（STRAT-06 尾盘）为可配参数 | RQ3 | 默认时刻影响池子规模与可复现性；需 discuss 确认默认值 |
 | A5 | STRAT-08 的 T+1 卖出确认只作为 EXIT/描述语义，不计算池成员 | RQ2-STRAT-08 | 若用户期待池子含"次日可卖出"确认，需引入 T+1 分钟数据 → 池变 lookahead；强烈建议维持现推荐 |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **`auction_volume_ratio` 分母口径（A1）**
+> 下列开放项全部在 21-01/21-02 计划中以 must_haves / task 规格落定，标记 RESOLVED：
+
+1. **`auction_volume_ratio` 分母口径（A1）— RESOLVED in 21-01 Task 2**（采用前 5 日均量不含当日，`get_enriched_history(trade_date,6)` + `date < trade_date` + `tail(5)` 均值；禁用反推 `vol_ratio_5d` 含当日 EOD 量的 lookahead 口径）
    - What we know: 前 5 日均量（不含当日）PIT-safe；`vol_ratio_5d` 反推含当日 EOD 量（lookahead）。
    - What's unclear: 是否接受 `get_enriched_history` 每日期扫描的开销（可加 per-date 缓存）。
    - Recommendation: 采用前 5 日均量（不含当日），在 `attach_auction_columns` 内按 (trade_date) 缓存；若扫描成本不可接受，改为在 `_compute_enriched_full` warmup 路径顺带计算。
 
-2. **STRAT-06 分钟确认的必需性（A3）**
+2. **STRAT-06 分钟确认的必需性（A3）— RESOLVED in 21-01 Task 3**（日线核心池 + 分钟确认增强；`minute_confirm_required=False`，分钟数据缺席时跳过确认保留日线池，`test_golden_230_minute_confirm_optional` 锁死）
    - What we know: 成功标准 3 列出"14:30 尾盘分钟确认"；平台分钟同步默认未开启时该日分钟数据可能缺席。
    - What's unclear: 缺分钟数据时是空池（严格）还是日线代理池（诚实标注）。
    - Recommendation: 日线核心池 + 分钟确认增强（有数据才收窄），描述诚实标注；若 discuss 倾向严格，改 `minute_confirm_required=True`。
 
-3. **STRAT-09 默认 `evaluation_time`（A4）**
+3. **STRAT-09 默认 `evaluation_time`（A4）— RESOLVED in 21-02 Task 1**（默认 09:45，参数化可调；`test_time_factor` 锁 09:45→elapsed=15→time_factor=16.0）
    - What we know: ROADMAP 写 09:30–10:00；PITFALLS #7 用 `df.filter(datetime <= eval_time)`。
    - What's unclear: 09:30/09:45/10:00 哪个默认。
    - Recommendation: 默认 09:45（15 分钟已交易，`time_factor=16.0` 直观），参数化可调。
 
-4. **P2 三策略的验收口径（STRAT-07/08/09）**
+4. **P2 三策略的验收口径（STRAT-07/08/09）— RESOLVED in 21-02 Task 2/1**（竞价全面核心 AND 严格 `pre_open` 合规禁 EOD 列；`turnover_rate` 明确标注"盘后参考（EOD，默认关）"为白名单显式例外；T+1 闪电卖出=EXIT 语义不进池；盘中确认 `minute_confirm_required=True` 缺分钟空池）
    - What we know: 三者为 P2；ROADMAP 成功标准 4 要求"研究者可以运行"。
-   - What's unclear: 竞价全面是否允许引用 EOD `turnover_rate`（pre_open 窗口 vs 全因子复合的张力）。
-   - Recommendation: 严格 `pre_open` 合规（禁 EOD 列）；`turnover_rate` 若需要则明确标注"盘后参考"并移出 `pre_open` 窗口白名单（或策略声明为 `post_close` 变体）。
+   - What's known (resolved): 竞价全面核心 AND 引用 EOD `turnover_rate` 仅在 `use_turnover=True` 且帧已含该列时收窄，description/params 显式标注"盘后参考（EOD 列，默认关）"为 pre_open 白名单例外，绝不冒充盘前可算。
+   - Resolution: 采用"显式标注例外"路线（21-02 Task 2）：核心 AND 严格 `pre_open` 合规；`turnover_rate` 作为默认关的可选收窄，标注盘后参考；grep 门禁禁列清单（`change_pct`/`vol_ratio_5d`/`amount`/`close`）不含 `turnover_rate`。
 
 ## Environment Availability
 
