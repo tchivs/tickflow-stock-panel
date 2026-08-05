@@ -15,9 +15,9 @@ Requirements for the v2.0 milestone. Each maps to a roadmap phase. Research basi
 
 ### 竞价策略族 (Auction Strategy Family)
 
-- [ ] **STRAT-04**: Researcher can run 极速抢筹 (rapid-bid capture) — first-principles factors: auction volume ratio + auction amount + pre-open gain sweet-spot (2.8%–3.5%, >7% risk band) — as a builtin strategy in `strategy/builtin/` with honest naming.
-- [ ] **STRAT-05**: Researcher can run 竞价阿尔法 (auction alpha) — composite of `open_gap` + auction volume/amount strength — as a builtin strategy, probe-gated to real auction columns when available, else failing closed to derived factors.
-- [ ] **STRAT-06**: Researcher can run 金色两点半 (14:30 tail-window) — honestly classified as a 尾盘/隔夜 strategy (T-day gain 3%–5% + tail-window minute confirmation, next-day hold), never mixed into the auction window.
+- [x] **STRAT-04**: Researcher can run 极速抢筹 (rapid-bid capture) — first-principles factors: auction volume ratio + auction amount + pre-open gain sweet-spot (2.8%–3.5%, >7% risk band) — as a builtin strategy in `strategy/builtin/` with honest naming. (completed 2026-08-05)
+- [x] **STRAT-05**: Researcher can run 竞价阿尔法 (auction alpha) — composite of `open_gap` + auction volume/amount strength — as a builtin strategy, probe-gated to real auction columns when available, else failing closed to derived factors. (completed 2026-08-05)
+- [x] **STRAT-06**: Researcher can run 金色两点半 (14:30 tail-window) — honestly classified as a 尾盘/隔夜 strategy (T-day gain 3%–5% + tail-window minute confirmation, next-day hold), never mixed into the auction window. (completed 2026-08-05)
 - [ ] **STRAT-07**: Researcher can run 竞价全面策略 (auction all-factor composite) combining the full factor set (P2).
 - [ ] **STRAT-08**: Researcher can run T+1闪电 — auction-buy signal with next-morning minute-K sell confirmation (P2).
 - [ ] **STRAT-09**: Researcher can run 盘中确认 (intraday confirmation) — strategies re-evaluate during 09:30–10:00 on minute-K frames truncated to `evaluation_time`, never lookahead (P2).
@@ -54,9 +54,9 @@ Populated during roadmap creation.
 | DATA-04 | Phase 20 | Complete |
 | DATA-05 | Phase 20 | Complete |
 | DATA-06 | Phase 20 | Complete |
-| STRAT-04 | Phase 21 | Open |
-| STRAT-05 | Phase 21 | Open |
-| STRAT-06 | Phase 21 | Open |
+| STRAT-04 | Phase 21 | Complete |
+| STRAT-05 | Phase 21 | Complete |
+| STRAT-06 | Phase 21 | Complete |
 | STRAT-07 | Phase 21 | Open |
 | STRAT-08 | Phase 21 | Open |
 | STRAT-09 | Phase 21 | Open |

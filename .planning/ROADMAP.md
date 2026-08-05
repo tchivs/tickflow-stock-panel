@@ -165,7 +165,11 @@ Plans:
   4. 研究者可以运行竞价全面策略（STRAT-07）、T+1闪电（STRAT-08，次日早盘分钟 K 卖出确认）与盘中确认（STRAT-09，09:30–10:00 分钟帧截断到 `evaluation_time`，绝不 lookahead）(P2)。
   5. 每个策略声明可计算时间窗（pre_open/intraday/post_close）且所需列缺席时返回空池（fail-closed）；策略仅经 `strategy/builtin/` 自动发现，无第三条注册轨道（STRAT-03 不变）。
 
-**Plans**: TBD
+**Plans**: 1/2 plans executed
+
+- [x] 21-01-PLAN.md
+- [ ] 21-02-PLAN.md
+
 **Research flag**: 中等 — 第一性原理因子阈值（量比/甜点区/金额强度）需按 A 股历史校准；STRAT-09 的 `eval_time` 截断与 `time_factor` 折算规约需要规划研究。
 
 ### Phase 22: 股池日期导航 (Pool Hub Date Navigation)
@@ -211,7 +215,7 @@ Phases execute in numeric order: 16 → 17 → 18 → 19 → 20 → 21 → 22 �
 | 18. 股池 Hub | POOL-01..03 | Complete    |
 | 19. 游客/VIP 脱敏 + 前端 | GUEST-01..02 | Complete    |
 | 20. 竞价数据层 | DATA-04..06 | Complete    |
-| 21. 竞价策略族 | STRAT-04..09 | Not started |
+| 21. 竞价策略族 | STRAT-04..09 | In Progress|
 | 22. 股池日期导航 | POOL-04..06 | Not started |
 | 23. 前端 | FRONT-01..02 | Not started |
 

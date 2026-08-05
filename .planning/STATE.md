@@ -5,15 +5,15 @@ milestone_name: 竞价深度与历史股池 — planning
 current_phase: 21
 current_phase_name: 竞价策略族 (Auction Strategy Family)
 status: planning
-stopped_at: Completed 20-02-PLAN.md
-last_updated: "2026-08-05T05:18:43.648Z"
+stopped_at: Completed 21-01-PLAN.md
+last_updated: "2026-08-05T06:59:44.606Z"
 last_activity: 2026-08-05
 last_activity_desc: Phase 20 complete, transitioned to Phase 21
 progress:
   total_phases: 8
   completed_phases: 1
-  total_plans: 2
-  completed_plans: 2
+  total_plans: 4
+  completed_plans: 3
   percent: 13
 ---
 
@@ -33,7 +33,7 @@ Plan: Not started
 Status: Ready to plan
 Last activity: 2026-08-05 — Phase 20 complete, transitioned to Phase 21
 
-Progress: [██████████] 100%
+Progress: [████████░░] 75%
 
 ## v1.3 Phase Summary (shipped 2026-08-04)
 
@@ -86,8 +86,8 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-08-05T00:58:01.000Z
-Stopped at: Completed 20-02-PLAN.md
+Last session: 2026-08-05T06:59:44.596Z
+Stopped at: Completed 21-01-PLAN.md
 Resume file: None
 
 ## Operator Next Steps
@@ -95,6 +95,10 @@ Resume file: None
 - Phase 20 (DATA-04..06) complete — proceed to `/gsd-plan-phase 21` (竞价策略族, STRAT-04..09).
 
 ## Decisions
+
+- [Phase 21 / P1]: StrategyDef 新字段 (minute_confirm_fn/evaluation_time/minute_confirm_required) 置于 file_path 之后 (dataclass 默认值字段必须尾随非默认字段)
+- [Phase 21 / P1]: auction_volume_ratio 受管列 = 竞价量/前5日均量(不含当日, PIT-safe), 注册进 ENRICHED_COLUMNS + BY_CATEGORY['auction'], 绝不进存储窄表/计算闭包; 无历史即列缺席
+- [Phase 21 / P1]: 引擎 requires_auction_data 短路空池 (缺 auction_volume → 空 StrategyResult) + 策略 filter pl.lit(False) 守卫双保险; 分钟确认 seam 单点 datetime.time() <= evaluation_time 截断, minute_confirm_required 决定缺分钟数据空池/跳过
 
 ### v1.3 Decisions (carried)
 
@@ -126,6 +130,7 @@ Resume file: None
 | Phase 19 P2 | 25min | 3 tasks | 11 files |
 | Phase 20 P1 | 32 | 3 tasks | 5 files |
 | Phase 20 P2 | 41 | 3 tasks | 5 files |
+| Phase 21 P1 | 36 | 3 tasks | 7 files |
 
 ---
-*Last updated: 2026-08-05 — Phase 20 plan 2 (DATA-04/06 auction columns + unmatched proxy) complete; Phase 20 (DATA-04..06) complete*
+*Last updated: 2026-08-05 — Phase 21 plan 1 (STRAT-04/05/06 engine seam + managed column + P1 strategies) complete; Phase 21 in progress (plan 2 parallel)*
