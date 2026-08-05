@@ -30,8 +30,8 @@ Requirements for the v2.0 milestone. Each maps to a roadmap phase. Research basi
 
 ### 前端 (Frontend)
 
-- [ ] **FRONT-01**: User can navigate pools by trading day with a DateNavigator (‹ › stepping + date list), as_of re-query, non-trading-day disabled state, and honest empty/status display for days without snapshots.
-- [ ] **FRONT-02**: User can view auction columns (竞价量/金额, real vs derived 虚拟成交 separated) in the pool drill-down; pre-open/empty states show probe/window status honestly (P2).
+- [x] **FRONT-01**: User can navigate pools by trading day with a DateNavigator (‹ › stepping + date list), as_of re-query, non-trading-day disabled state, and honest empty/status display for days without snapshots.
+- [x] **FRONT-02**: User can view auction columns (竞价量/金额, real vs derived 虚拟成交 separated) in the pool drill-down; pre-open/empty states show probe/window status honestly (P2).
 
 ## Out of Scope
 
@@ -63,8 +63,8 @@ Populated during roadmap creation.
 | POOL-04 | Phase 22 | Complete |
 | POOL-05 | Phase 22 | Complete |
 | POOL-06 | Phase 22 | Complete |
-| FRONT-01 | Phase 23 | Open |
-| FRONT-02 | Phase 23 | Open |
+| FRONT-01 | Phase 23 | Complete |
+| FRONT-02 | Phase 23 | Complete |
 
 **Coverage:**
 

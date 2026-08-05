@@ -59,7 +59,7 @@ Four phases add 集合竞价-driven quantitative stock selection to the shipped 
 - [x] **Phase 20: 竞价数据层 (Auction Data)** - Probe 门控的真实集合竞价列（竞价量/金额）作为受管增强列 + `kline_auction/date=*/` 湖 + 派生未匹配金额 proxy — DATA-04..06 (completed 2026-08-05)
 - [x] **Phase 21: 竞价策略族 (Auction Strategy Family)** - 六个第一性原理竞价/尾盘策略（极速抢筹/竞价阿尔法/金色两点半/竞价全面/T+1闪电/盘中确认）作为 builtin 内置策略、诚实命名与时间窗 — STRAT-04..09 (completed 2026-08-05)
 - [x] **Phase 22: 股池日期导航 (Pool Hub Date Navigation)** - 冻结式点快照按日股池 + 独立只读日期/as_of 端点 + 盘后 EOD 持久化 job — POOL-04..06 (completed 2026-08-05)
-- [ ] **Phase 23: 前端 (Frontend)** - DateNavigator 按交易日浏览 + 竞价列展示（真实 vs 派生）与诚实 probe/窗口状态 — FRONT-01..02
+- [x] **Phase 23: 前端 (Frontend)** - DateNavigator 按交易日浏览 + 竞价列展示（真实 vs 派生）与诚实 probe/窗口状态 — FRONT-01..02 (completed 2026-08-05)
 
 ## Phase Details
 
@@ -203,8 +203,9 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 23-01-PLAN.md — 后端 _project_hub 透传竞价列 + auction_columns 声明 + 游客剥离 + 前端查询层 (api.poolDates/poolHistory)
-- [ ] 23-02-PLAN.md — DateNavigator 按交易日浏览 + 无快照诚实空态 + 竞价列分组钻取 + probe/盘前诚实状态
+
+- [x] 23-01-PLAN.md — 后端 _project_hub 透传竞价列 + auction_columns 声明 + 游客剥离 + 前端查询层 (api.poolDates/poolHistory)
+- [x] 23-02-PLAN.md — DateNavigator 按交易日浏览 + 无快照诚实空态 + 竞价列分组钻取 + probe/盘前诚实状态
 
 **UI hint**: yes
 
@@ -222,7 +223,7 @@ Phases execute in numeric order: 16 → 17 → 18 → 19 → 20 → 21 → 22 �
 | 20. 竞价数据层 | DATA-04..06 | Complete    |
 | 21. 竞价策略族 | STRAT-04..09 | Complete    |
 | 22. 股池日期导航 | POOL-04..06 | Complete    |
-| 23. 前端 | FRONT-01..02 | Not started |
+| 23. 前端 | FRONT-01..02 | Complete    |
 
 ---
 *Last updated: 2026-08-05 — v2.0 Phase 20 (DATA-04..06) completed*
