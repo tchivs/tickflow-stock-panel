@@ -27,6 +27,10 @@ def mask_guest_hub(hub: dict) -> dict:
     ``open_gap`` 键被省略; 其余游客可见字段原样保留。策略级 ``id`` /
     ``name`` / ``total`` 以及顶层 ``as_of`` / ``updated_at`` /
     ``resonance_count`` 不变。服务层/持久化结果永远不被触碰。
+
+    Phase 23 (H7/PIT-7): 顶层 ``auction_columns`` 竞价列存在性声明是价格/量
+    敏感元信息, 在返回前 ``pop`` 剥离; 行级 ``auction_*``/``open_gap`` 已由
+    ``_GUEST_VISIBLE`` 白名单重建 masked_row 时天然丢弃 (不在白名单)。
     """
     strategies: list[dict[str, Any]] = []
     for strategy in hub.get("strategies", []):
@@ -45,4 +49,6 @@ def mask_guest_hub(hub: dict) -> dict:
             masked_row.update({key: row[key] for key in _GUEST_VISIBLE if key in row})
             rows.append(masked_row)
         strategies.append({**strategy, "rows": rows})
-    return {**hub, "strategies": strategies}
+    masked = {**hub, "strategies": strategies}
+    masked.pop("auction_columns", None)
+    return masked

@@ -136,6 +136,38 @@ def _write_concept_fixture(data_dir: Path) -> None:
     df.write_parquet(config_dir / "part.parquet")
 
 
+def _write_strategy_cache_with_auction(data_dir: Path) -> None:
+    """写入含竞价列的 hermetic 策略缓存 (H7/PIT-7 端点守卫夹具)。
+
+    复用既有 payload 形状, 给 X 行加 ``auction_volume`` / ``auction_amount`` 键
+    (顶层结果 shape 同 ``_write_strategy_cache``)。
+    """
+    payload = {
+        "as_of": _AS_OF,
+        "results": {
+            "auction_bullish": {
+                "total": 1,
+                "as_of": _AS_OF,
+                "rows": [
+                    {
+                        "symbol": _SYMBOLS["X"],
+                        "name": _NAMES["X"],
+                        "open_gap": 3.21,
+                        "change_pct": 5.1,
+                        "hit_factors": ["竞价多头"],
+                        "auction_volume": 1234567.0,
+                        "auction_amount": 89012345.0,
+                    },
+                ],
+            },
+        },
+        "updated_at": 1722758400000,
+    }
+    path = data_dir / "user_data" / "strategy_cache.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+
 class _FakeRepo:
     """最小 repo 桩: 只需 store.data_dir (与 test_pool_hub 同型)。"""
 
@@ -165,11 +197,19 @@ def _make_guest_client(tmp_path: Path, monkeypatch, engine=None) -> TestClient:
 
 
 def _sample_hub() -> dict:
-    """一份 明文 Hub (与 build_pool_hub 投影形状一致), 供纯变换单元测试。"""
+    """一份 明文 Hub (与 build_pool_hub 投影形状一致), 供纯变换单元测试。
+
+    Phase 23 (H7): 显式携带顶层 ``auction_columns`` 声明与行级竞价列, 供游客
+    剥离守卫测试使用 (与真实投影形状一致)。
+    """
     return {
         "as_of": _AS_OF,
         "updated_at": 1722758400000,
         "resonance_count": 1,
+        "auction_columns": {
+            "real": ["auction_volume", "auction_amount"],
+            "derived": ["auction_volume_ratio", "auction_unmatched_amount", "open_gap"],
+        },
         "strategies": [
             {
                 "id": "auction_bullish",
@@ -185,6 +225,8 @@ def _sample_hub() -> dict:
                         "concept_board": ["人工智能"],
                         "hit_factors": ["竞价多头"],
                         "cross_resonance": False,
+                        "auction_volume": 1234567.0,
+                        "auction_amount": 89012345.0,
                     }
                 ],
             }
@@ -298,6 +340,66 @@ def test_invalid_cookie_returns_guest(tmp_path, monkeypatch):
     assert body["mode"] == "guest"
     row = body["strategies"][0]["rows"][0]
     assert row["code"] == "******"
+
+
+def test_guest_hub_strips_top_level_auction_columns():
+    """H7 顶层剥离: masked 顶层无 auction_columns; 行无 auction_* / open_gap; 市场因子保留。"""
+    masked = mask_guest_hub(_sample_hub())
+
+    assert "auction_columns" not in masked
+    row = masked["strategies"][0]["rows"][0]
+    assert "auction_volume" not in row
+    assert "auction_amount" not in row
+    assert "auction_volume_ratio" not in row
+    assert "auction_unmatched_amount" not in row
+    assert "open_gap" not in row
+    assert row["change_pct"] == 5.1
+    assert row["concept_board"] == ["人工智能"]
+    assert row["hit_factors"] == ["竞价多头"]
+    assert row["cross_resonance"] is False
+
+
+def test_guest_endpoint_no_auction_columns(tmp_path, monkeypatch):
+    """端点守卫 (H7/PIT-7): guest GET /api/pool/hub → 顶层无 auction_columns,
+    行无 auction_* / open_gap / 6 位代码; 同一缓存 VIP 对照响应有 auction_columns
+    (证明是掩码剥离, 非投影缺失)。W-23-01-1: 无 ``_make_client`` fixture, 用既有
+    ``_make_guest_client`` + cookie 模式构造 VIP 对照。
+    """
+    from app.services import auth as auth_service
+
+    _write_strategy_cache_with_auction(tmp_path)
+    _write_concept_fixture(tmp_path)
+    client = _make_guest_client(tmp_path, monkeypatch)
+
+    # 游客: 零泄露
+    resp = client.get("/api/pool/hub")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["mode"] == "guest"
+    assert "auction_columns" not in body
+    for strategy in body["strategies"]:
+        for row in strategy["rows"]:
+            assert "auction_volume" not in row
+            assert "auction_amount" not in row
+            assert "auction_volume_ratio" not in row
+            assert "auction_unmatched_amount" not in row
+            assert "open_gap" not in row
+            assert row["code"] == row["name"] == row["symbol"] == "******"
+
+    # VIP 对照 (同一缓存): 顶层声明 + 行级竞价列保留 → 剥离发生在掩码层
+    monkeypatch.setattr(auth_service, "is_valid_session", lambda token: True)
+    monkeypatch.setattr(auth_service, "resolve_authenticated_reviewer", lambda token: "reviewer_test")
+    vip_client = _make_guest_client(tmp_path, monkeypatch)
+    vip_client.cookies.set("tf_session", "valid-token")
+    vip_body = vip_client.get("/api/pool/hub").json()
+    assert vip_body["mode"] == "vip"
+    assert vip_body["auction_columns"] == {
+        "real": ["auction_volume", "auction_amount"],
+        "derived": ["open_gap"],
+    }
+    vip_row = vip_body["strategies"][0]["rows"][0]
+    assert vip_row["auction_volume"] == 1234567.0
+    assert vip_row["auction_amount"] == 89012345.0
 
 
 # ================================================================
