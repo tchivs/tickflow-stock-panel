@@ -58,7 +58,7 @@ def persist_point_snapshot(
 
     - 非法 as_of (不匹配 ``^\\d{4}-\\d{2}-\\d{2}$``) → 抛 ValueError (防路径穿越)。
     - payload 只含当次 ``results`` 与元数据, 结构上无 union 键 (T-22-02)。
-    - temp + ``os.replace`` 原子替换; 异常吞掉记 warning (与 write_cache 一致的非致命语义)。
+    - temp + ``os.replace`` 原子替换; 异常吞掉记 warning (非致命语义, 不阻塞请求)。
 
     Args:
         data_dir: 数据根目录。

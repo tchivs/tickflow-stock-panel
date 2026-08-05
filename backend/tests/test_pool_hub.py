@@ -602,6 +602,91 @@ def test_get_pool_hub_json_serializable_roundtrip(tmp_path):
 
 
 # ================================================================
+# Task 2/3 (POOL-05) — /api/pool/dates + /api/pool/history 端点
+# ================================================================
+
+
+def test_pool_dates_api(tmp_path):
+    """GET /api/pool/dates → 排序日期列表 (ISO desc); 无快照目录排除; 空 → 空态。"""
+    client = _make_client(tmp_path)
+    _write_snapshot(tmp_path, as_of="2026-08-04")
+    _write_snapshot(tmp_path, as_of="2026-08-01")
+    (tmp_path / "screener_results" / "date=2026-08-02").mkdir(parents=True)
+
+    resp = client.get("/api/pool/dates")
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "dates": ["2026-08-04", "2026-08-01"],
+        "count": 2,
+        "latest": "2026-08-04",
+    }
+
+    # 无快照 → 空态
+    client2 = _make_client(tmp_path / "empty")
+    assert client2.get("/api/pool/dates").json() == {
+        "dates": [], "count": 0, "latest": None,
+    }
+
+
+def test_pool_history_snapshot(tmp_path):
+    """GET /api/pool/history?as_of= 有快照 → 与 hub 同形状, total 权威, 含 mode。"""
+    _write_snapshot(
+        tmp_path,
+        results={
+            "auction_bullish": {
+                "total": 2,
+                "as_of": _AS_OF,
+                "rows": [
+                    {
+                        "symbol": _SYMBOLS["X"],
+                        "name": _NAMES["X"],
+                        "open_gap": 3.21,
+                        "change_pct": 5.1,
+                        "hit_factors": ["竞价多头"],
+                    },
+                ],
+            },
+        },
+    )
+    client = _make_client(tmp_path, engine=_FakeEngine())
+    resp = client.get("/api/pool/history", params={"as_of": _AS_OF})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["as_of"] == _AS_OF
+    assert body["mode"] == "vip"
+    assert body["strategies"][0]["total"] == 2
+    assert len(body["strategies"][0]["rows"]) == 1
+    # 与 hub 同形状键集
+    assert {
+        "as_of", "updated_at", "strategies", "resonance_count", "concept_attribution",
+    } <= set(body)
+
+
+def test_pool_history_missing_available_false(tmp_path):
+    """快照缺失 → 200 + available False 空态 (非 404)。"""
+    client = _make_client(tmp_path)
+    resp = client.get("/api/pool/history", params={"as_of": _AS_OF})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["available"] is False
+    assert body["as_of"] is None
+    assert body["strategies"] == []
+    assert body["updated_at"] is None
+
+
+def test_pool_history_rejects_bad_as_of(tmp_path):
+    """非法 as_of → 400 (防路径穿越); 缺失 as_of → 200 空态。"""
+    client = _make_client(tmp_path)
+    for bad in ("2026-8-4", "../../x", "2026-08-4", "2026-13-01"):
+        resp = client.get("/api/pool/history", params={"as_of": bad})
+        assert resp.status_code == 400, bad
+    # 缺失 as_of → 200 空态
+    resp = client.get("/api/pool/history")
+    assert resp.status_code == 200
+    assert resp.json()["available"] is False
+
+
+# ================================================================
 # Task 3 — POOL-03 零执行权限守卫 (T-18-01)
 # ================================================================
 
@@ -624,11 +709,12 @@ _WRITE_PATTERNS = (
 _ROUTE_METHODS = ("get", "post", "put", "delete", "patch")
 
 
-def _feature_sources() -> tuple[str, str]:
+def _feature_sources() -> tuple[str, str, str]:
     backend = Path(__file__).resolve().parents[1]
     service_src = (backend / "app" / "services" / "pool_hub.py").read_text(encoding="utf-8")
     api_src = (backend / "app" / "api" / "pool.py").read_text(encoding="utf-8")
-    return service_src, api_src
+    snapshot_src = (backend / "app" / "services" / "pool_snapshot.py").read_text(encoding="utf-8")
+    return service_src, api_src, snapshot_src
 
 
 def _imported_module_names(source: str) -> list[str]:
@@ -643,9 +729,9 @@ def _imported_module_names(source: str) -> list[str]:
 
 
 def test_pool_hub_no_execution_imports():
-    """pool_hub.py / pool.py 不得 import 任何执行族模块 (T-18-01)。"""
-    service_src, api_src = _feature_sources()
-    for src in (service_src, api_src):
+    """pool_hub.py / pool.py / pool_snapshot.py 不得 import 任何执行族模块 (T-18-01, E1)。"""
+    service_src, api_src, snapshot_src = _feature_sources()
+    for src in (service_src, api_src, snapshot_src):
         for module in _imported_module_names(src):
             assert not _EXECUTION_TOKEN.search(module), (
                 f"pool 特性引入了执行族模块: {module}"
@@ -653,17 +739,65 @@ def test_pool_hub_no_execution_imports():
 
 
 def test_pool_api_is_get_only():
-    """pool.py 只允许 GET 路由 (T-18-01)。"""
-    _service_src, api_src = _feature_sources()
+    """pool.py 只允许 GET 路由 (T-18-01, E4)。"""
+    _service_src, api_src, _snapshot_src = _feature_sources()
     methods = re.findall(r"@router\.(get|post|put|delete|patch)\b", api_src)
-    assert methods == ["get"], f"pool API 出现了非 GET 路由: {methods}"
+    # 全部路由必须都是 GET (E4): 新增 /dates + /history 也是 GET-only
+    assert methods and set(methods) == {"get"}, f"pool API 出现了非 GET 路由: {methods}"
 
 
 def test_build_pool_hub_has_no_write_path():
     """build_pool_hub 是纯读者: 无写模式 open / write_parquet / os.replace / unlink / mkdir。"""
-    service_src, _api_src = _feature_sources()
+    service_src, _api_src, _snapshot_src = _feature_sources()
     for pattern in _WRITE_PATTERNS:
         assert not pattern.search(service_src), f"pool_hub.py 出现写路径: {pattern.pattern}"
+
+
+def test_pool_snapshot_writes_only_screener_results():
+    """pool_snapshot 是写入者 (E2): 只写 screener_results/ 湖, 写路径必须经 _SNAPSHOT_ROOT 派生。"""
+    _service_src, _api_src, snapshot_src = _feature_sources()
+    # 模块常量 _SNAPSHOT_ROOT == "screener_results"
+    m = re.search(r'_SNAPSHOT_ROOT\s*=\s*"([^"]+)"', snapshot_src)
+    assert m is not None, "pool_snapshot.py 缺少 _SNAPSHOT_ROOT 常量"
+    assert m.group(1) == "screener_results"
+
+    tree = ast.parse(snapshot_src)
+    write_funcs = {"replace", "mkdir"}
+
+    def _has_write(node) -> bool:
+        for c in ast.walk(node):
+            if isinstance(c, ast.Call):
+                f = c.func
+                if isinstance(f, ast.Attribute) and f.attr in write_funcs:
+                    return True
+                if isinstance(f, ast.Name) and f.id == "open":
+                    return True
+        return False
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and _has_write(node):
+            func_src = ast.get_source_segment(snapshot_src, node) or ""
+            assert "_SNAPSHOT_ROOT" in func_src, (
+                f"{node.name} 含写路径但未引用 _SNAPSHOT_ROOT (只写 screener_results)"
+            )
+
+
+def test_pool_snapshot_never_writes_runtime_cache():
+    """pool_snapshot 不 import/reference strategy_cache (运行时缓存隔离, E3)。"""
+    _service_src, _api_src, snapshot_src = _feature_sources()
+    for module in _imported_module_names(snapshot_src):
+        assert "strategy_cache" not in module, (
+            f"pool_snapshot.py 引入了运行时缓存模块: {module}"
+        )
+    assert "strategy_cache.json" not in snapshot_src, "pool_snapshot.py 引用了 strategy_cache.json"
+    assert "write_cache" not in snapshot_src, "pool_snapshot.py 引用了 write_cache"
+
+
+def test_pool_api_no_compute_trigger():
+    """pool.py 不得触发任何计算/持久化 (E5): 禁止 run_all/run_preset/write_cache/persist_point_snapshot。"""
+    _service_src, api_src, _snapshot_src = _feature_sources()
+    for token in ("run_all", "run_preset", "write_cache", "persist_point_snapshot"):
+        assert token not in api_src, f"pool.py 出现了计算触发调用: {token}"
 
 
 def _all_keys(obj):
@@ -677,10 +811,16 @@ def _all_keys(obj):
 
 
 def test_hub_response_has_no_execution_vocabulary(tmp_path):
-    """Hub 响应键不含 orders/execution/broker/deals 等执行词汇。"""
+    """Hub / history / dates 响应键不含 orders/execution/broker/deals 等执行词汇 (E6)。"""
     _write_strategy_cache(tmp_path)
     _write_concept_fixture(tmp_path)
+    _write_snapshot(tmp_path)
+    client = _make_client(tmp_path)
+
     hub = build_pool_hub(tmp_path)
     keys = list(_all_keys(hub))
+    # POOL-05 新端点响应同受词汇守卫约束
+    keys.extend(_all_keys(client.get("/api/pool/history", params={"as_of": _AS_OF}).json()))
+    keys.extend(_all_keys(client.get("/api/pool/dates").json()))
     for banned in ("orders", "execution", "broker", "deals"):
-        assert banned not in keys, f"Hub 响应含执行词汇键: {banned}"
+        assert banned not in keys, f"pool 响应含执行词汇键: {banned}"
