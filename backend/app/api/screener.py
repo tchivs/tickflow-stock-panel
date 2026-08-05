@@ -15,13 +15,8 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from app.services.screener import PRESET_STRATEGIES, ScreenerService, strategy_supports_asset
-from app.services import strategy_cache
+from app.services import pool_snapshot, strategy_cache
 from app.strategy import config as strategy_config
-from app.strategy.factor_hits import (
-    HIT_FACTORS_COLUMN,
-    attach_factor_hits,
-    build_factor_hits,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -434,92 +429,31 @@ def run_all(request: Request, body: Optional[dict] = None):
     if not as_of:
         return {"as_of": None, "results": {}}
 
-    # 一次读取目标日期的全部数据
-    t0 = time.perf_counter()
-    precomputed = svc._load_enriched_for_date(as_of)
-    logger.info("run_all: _load_enriched_for_date took %.1fms", (time.perf_counter() - t0) * 1000)
-
-    results: dict[str, dict] = {}
-    data_dir = request.app.state.repo.store.data_dir
-
-    # 收集需要运行的策略 ID (如果指定了 strategy_ids 则只跑这些)
-    requested_ids = body.get("strategy_ids")
-    all_ids = list(PRESET_STRATEGIES.keys())
+    data_dir = repo.store.data_dir
     engine = getattr(request.app.state, "strategy_engine", None)
-    if engine:
-        for meta in engine.list_strategies():
-            sid = meta["id"]
-            if sid not in PRESET_STRATEGIES:
-                all_ids.append(sid)
 
-    if requested_ids and isinstance(requested_ids, list):
-        id_set = set(requested_ids)
-        all_ids = [sid for sid in all_ids if sid in id_set]
-
-    if not all_ids:
-        return {"as_of": str(as_of), "results": {}}
-
-    # 批量预加载所有 override 配置
-    t0 = time.perf_counter()
-    all_overrides = strategy_config.list_overrides(data_dir)
-    logger.info("run_all: list_overrides took %.1fms (%d overrides)", (time.perf_counter() - t0) * 1000, len(all_overrides))
-
-    # 历史策略: 只在需要时加载 (只加载 all_ids 中包含的 filter_history 策略)
-    t0 = time.perf_counter()
-    shared_history = None
-    id_set = set(all_ids)
-    if engine:
-        history_strats = [
-            (sid, s) for sid, s in engine._strategies.items()
-            if s.filter_history_fn and sid in id_set
-        ]
-        if history_strats:
-            max_lb = min(max(s.lookback_days for _, s in history_strats), 30)
-            shared_history = svc._load_enriched_history(as_of, max(1, max_lb))
-    else:
-        history_strats = []
-    logger.info("run_all: _load_enriched_history took %.1fms (history_strats=%d)", (time.perf_counter() - t0) * 1000, len(history_strats))
-
-    for sid in all_ids:
-        try:
-            overrides = all_overrides.get(sid, {})
-            bf = overrides.get("basic_filter") if overrides else None
-            dl = overrides.get("display_limit") if overrides else None
-            if dl is None and overrides and "display_limit" in overrides:
-                dl = 0
-
-            if sid in PRESET_STRATEGIES:
-                r = svc.run_preset(sid, as_of=as_of, precomputed=precomputed, basic_filter=bf, display_limit=dl)
-            else:
-                r = engine.run(
-                    sid, as_of, overrides=overrides or None,
-                    precomputed=precomputed, precomputed_history=shared_history,
-                )
-                if dl is not None and dl > 0:
-                    r.rows = r.rows[:dl]
-                    r.total = min(r.total, dl)
-
-            safe_rows = _safe(asdict(r)).get("rows", [])
-            results[sid] = {"total": r.total, "as_of": str(as_of), "rows": safe_rows}
-        except (ValueError, Exception):
-            continue
-
-    # 关联因子 (STRAT-02): 聚合每个策略的命中行, 给结果行附加 hit_factors。
-    # 纯服务端聚合 (T-17-05), 追加字段不改变 total/as_of (T-17-07)。
-    hits = build_factor_hits(
-        results,
-        name_for=lambda sid: _strategy_display_name(engine, sid),
-    )
-    for sid, r in results.items():
-        r["rows"] = attach_factor_hits(r.get("rows", []), hits)
+    # 共享核心 (ScreenerService.run_all_with_hits): 一次读取目标日数据 +
+    # 逐策略运行 + hit_factors 聚合 (路由与 EOD job 共用一条代码路径)
+    results = svc.run_all_with_hits(as_of, body.get("strategy_ids"), engine=engine)
 
     elapsed = (time.perf_counter() - t_total) * 1000
-    logger.info("run_all: total took %.1fms (%d strategies)", elapsed, len(all_ids))
+    logger.info("run_all: total took %.1fms (%d strategies)", elapsed, len(results))
 
     # 写入策略缓存 (供页面秒加载)
     if results:
         try:
             strategy_cache.write_cache(data_dir, str(as_of), results)
+        except Exception:  # noqa: BLE001
+            pass
+        # POOL-04 调用点 1: write_cache 之后落冻结式点快照 (只落当次 results, 无 union 键)
+        try:
+            pool_snapshot.persist_point_snapshot(
+                data_dir,
+                str(as_of),
+                results,
+                strategy_version=pool_snapshot.strategy_fingerprint(engine),
+                computed_at=datetime.now().isoformat(timespec="seconds"),
+            )
         except Exception:  # noqa: BLE001
             pass
 

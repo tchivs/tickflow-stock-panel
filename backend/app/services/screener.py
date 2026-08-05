@@ -8,13 +8,15 @@
 from __future__ import annotations
 
 import logging
+import math
 import time
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import date, timedelta
 
 import polars as pl
 
 from app.parquet import scan_enriched_parquet
+from app.strategy.factor_hits import attach_factor_hits, build_factor_hits
 from app.tickflow.repository import KlineRepository
 
 logger = logging.getLogger(__name__)
@@ -188,6 +190,32 @@ PRESET_STRATEGIES: dict[str, dict] = {
 def strategy_supports_asset(strat: dict, asset_type: str) -> bool:
     """策略是否支持该资产类型。默认仅 stock（未标注 asset_types 的自定义/AI 策略保守视为股票专用）。"""
     return asset_type in strat.get("asset_types", ["stock"])
+
+
+def _json_safe(result_dict: dict) -> dict:
+    """JSON 消毒 (镜像 api/screener._safe): rows 内 float NaN/Inf → None, 不改 total/as_of。"""
+    rows = result_dict.get("rows", [])
+    for r in rows:
+        for k, v in list(r.items()):
+            if isinstance(v, float) and not math.isfinite(v):
+                r[k] = None
+    return result_dict
+
+
+def _strategy_display_name(engine, sid: str) -> str:
+    """把策略 id 解析为显示名 (hit_factors 用, 与 api/screener 同逻辑)。
+
+    优先级: PRESET_STRATEGIES 的内置名 -> 引擎策略 META["name"] -> 策略 id 兜底。
+    engine.get 包 try/except: 未知 id 退化为 sid, 绝不 500 整个 run_all。
+    """
+    if sid in PRESET_STRATEGIES:
+        return PRESET_STRATEGIES[sid].get("name") or sid
+    if engine is not None:
+        try:
+            return engine.get(sid).meta.get("name") or sid
+        except Exception:  # noqa: BLE001 — 未知 id 防御性降级
+            return sid
+    return sid
 
 
 @dataclass
@@ -691,3 +719,93 @@ class ScreenerService:
         except Exception:  # noqa: BLE001
             return None
         return None
+
+    def run_all_with_hits(
+        self,
+        as_of: date,
+        strategy_ids: list[str] | None = None,
+        engine=None,
+    ) -> dict:
+        """批量运行策略的共享核心 (路由 run_all 与 EOD job 共用, POOL-04 调用点)。
+
+        - 一次读取目标日 enriched (precomputed), 所有策略共享; 历史策略惰性加载
+          ``_load_enriched_history`` (PIT: 只含 <= as_of)。
+        - 输出与 ``api/screener.run_all`` 同形 ``{sid: {total, as_of, rows}}``,
+          rows 每行附加 hit_factors (STRAT-02, 纯服务端聚合, total/as_of 不变)。
+        - ``strategy_ids`` 空/None → 全部 (PRESET + engine 非 PRESET); 空列表 → ``{}``。
+        - ``engine`` 为 kwargs (非构造参数): 路由传 ``request.app.state.strategy_engine``,
+          EOD job 传 ``app_state.strategy_engine``; engine=None 容错只跑 PRESET。
+        """
+        data_dir = self.repo.store.data_dir
+        precomputed = self._load_enriched_for_date(as_of)
+
+        results: dict[str, dict] = {}
+
+        # 收集需要运行的策略 ID (指定 strategy_ids 则只跑这些)
+        all_ids = list(PRESET_STRATEGIES.keys())
+        if engine:
+            for meta in engine.list_strategies():
+                sid = meta["id"]
+                if sid not in PRESET_STRATEGIES:
+                    all_ids.append(sid)
+
+        if strategy_ids and isinstance(strategy_ids, list):
+            id_set = set(strategy_ids)
+            all_ids = [sid for sid in all_ids if sid in id_set]
+
+        if not all_ids:
+            return {}
+
+        # 批量预加载所有 override 配置
+        from app.strategy import config as strategy_config
+        all_overrides = strategy_config.list_overrides(data_dir)
+
+        # 历史策略: 只在需要时加载 (只加载 all_ids 中包含的 filter_history 策略)
+        shared_history = None
+        id_set = set(all_ids)
+        if engine:
+            history_strats = [
+                (sid, s) for sid, s in engine._strategies.items()
+                if s.filter_history_fn and sid in id_set
+            ]
+            if history_strats:
+                max_lb = min(max(s.lookback_days for _, s in history_strats), 30)
+                shared_history = self._load_enriched_history(as_of, max(1, max_lb))
+
+        for sid in all_ids:
+            try:
+                overrides = all_overrides.get(sid, {})
+                bf = overrides.get("basic_filter") if overrides else None
+                dl = overrides.get("display_limit") if overrides else None
+                if dl is None and overrides and "display_limit" in overrides:
+                    dl = 0
+
+                if sid in PRESET_STRATEGIES:
+                    r = self.run_preset(
+                        sid, as_of=as_of, precomputed=precomputed,
+                        basic_filter=bf, display_limit=dl,
+                    )
+                else:
+                    r = engine.run(
+                        sid, as_of, overrides=overrides or None,
+                        precomputed=precomputed, precomputed_history=shared_history,
+                    )
+                    if dl is not None and dl > 0:
+                        r.rows = r.rows[:dl]
+                        r.total = min(r.total, dl)
+
+                safe_rows = _json_safe(asdict(r)).get("rows", [])
+                results[sid] = {"total": r.total, "as_of": str(as_of), "rows": safe_rows}
+            except (ValueError, Exception):
+                continue
+
+        # 关联因子 (STRAT-02): 聚合每个策略的命中行, 给结果行附加 hit_factors。
+        # 纯服务端聚合, 追加字段不改变 total/as_of。
+        hits = build_factor_hits(
+            results,
+            name_for=lambda sid: _strategy_display_name(engine, sid),
+        )
+        for sid, r in results.items():
+            r["rows"] = attach_factor_hits(r.get("rows", []), hits)
+
+        return results
