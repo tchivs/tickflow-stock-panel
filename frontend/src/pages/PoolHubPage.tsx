@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { motion, useReducedMotion } from 'framer-motion'
-import { Loader2, RefreshCw, ScanSearch } from 'lucide-react'
+import { CalendarX, Loader2, RefreshCw, ScanSearch } from 'lucide-react'
 import { api } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { PageHeader } from '@/components/PageHeader'
@@ -9,6 +9,7 @@ import { EmptyState } from '@/components/EmptyState'
 import { StrategyCardGrid } from '@/components/pool-hub/StrategyCardGrid'
 import { ConceptFilter } from '@/components/pool-hub/ConceptFilter'
 import { StockListTable } from '@/components/pool-hub/StockListTable'
+import { DateNavigator } from '@/components/pool-hub/DateNavigator'
 import { GuestModeBanner } from '@/components/pool-hub/GuestModeBanner'
 
 const RESEARCH_FOOTER = '本页面仅用于研究参考，不提供任何交易执行功能。'
@@ -17,12 +18,24 @@ export function PoolHubPage() {
   const [activeId, setActiveId] = useState<string | null>(null)
   const [filterText, setFilterText] = useState('')
   const reduceMotion = useReducedMotion()
+  // 当前选中日期: null = 最新 (/api/pool/hub); 非 null = 历史快照 (/api/pool/history, PIT-1)
+  const [selectedDate, setSelectedDate] = useState<string | null>(null)
+
+  // 有快照的交易日白名单 (FRONT-01): 驱动 DateNavigator ‹ › 步进与下拉 options
+  const datesQuery = useQuery({
+    queryKey: QK.poolDates,
+    queryFn: api.poolDates,
+    retry: 1,
+  })
 
   // 单 as_of 载荷 (D-02): 卡片计数与明细行来自同一个 strategies 数组, 永不漂移 (PITFALL #10)。
-  const hubQuery = useQuery({
-    queryKey: QK.poolHub(),
-    queryFn: () => api.poolHub(),
+  // 按 selectedDate 切换数据源: 历史必走 /api/pool/history, 最新走 /api/pool/hub (PIT-1)。
+  // placeholderData 同款 Dashboard: 切换日期保留旧数据, 防整页闪空; 副标题以旧载荷真实 as_of 为准 (诚实)。
+  const poolQuery = useQuery({
+    queryKey: selectedDate ? QK.poolHistory(selectedDate) : QK.poolHub(),
+    queryFn: () => (selectedDate ? api.poolHistory(selectedDate) : api.poolHub()),
     retry: 1,
+    placeholderData: (prev) => prev,
   })
   // 已知策略全集 — 用于把「无持久化结果」的策略渲染成 数据不可用 卡片 (不参与计数/明细)。
   const strategiesQuery = useQuery({
@@ -32,8 +45,9 @@ export function PoolHubPage() {
     retry: 1,
   })
 
-  const data = hubQuery.data
-  const asOf = data?.as_of ?? null
+  const data = poolQuery.data
+  // 诚实 as_of: 占位期 (key 切换未落地) 显示旧载荷真实 as_of, 绝不伪造目标日期的 as_of (PIT-2/H4)
+  const asOf = data?.as_of ?? selectedDate ?? null
   // 服务端声明的展示模式 (GUEST-01): 只消费 server mode, 绝不从行值推导;
   // 缺失/未知 mode 安全回退 vip — 页面默认不明文掩码。
   const mode = data?.mode === 'guest' ? 'guest' : 'vip'
@@ -57,14 +71,14 @@ export function PoolHubPage() {
     )
   }, [activeStrategy, filterText])
 
-  const pending = hubQuery.isFetching
+  const pending = poolQuery.isFetching
   const refresh = () => {
-    void hubQuery.refetch()
+    void poolQuery.refetch()
   }
   const errorText = (err: unknown) =>
     err instanceof Error ? err.message : String(err ?? '未知错误')
   // 后台刷新失败但已有载荷 → 行内明细错误 (stale-while-revalidate)
-  const drillError = hubQuery.isError && data && activeStrategy ? errorText(hubQuery.error) : null
+  const drillError = poolQuery.isError && data && activeStrategy ? errorText(poolQuery.error) : null
 
   return (
     <>
@@ -90,8 +104,19 @@ export function PoolHubPage() {
       />
 
       <div className="px-4 py-4 space-y-3 sm:px-6 lg:px-8">
+        {/* 日期导航 — 按交易日浏览股池 (FRONT-01); 白名单下标步进, 非交易日物理不可达 (PIT-5) */}
+        <DateNavigator
+          dates={datesQuery.data?.dates ?? []}
+          latest={datesQuery.data?.latest ?? null}
+          selectedDate={selectedDate}
+          loading={datesQuery.isPending}
+          error={datesQuery.isError ? errorText(datesQuery.error) : null}
+          onRetry={() => void datesQuery.refetch()}
+          onChange={setSelectedDate}
+        />
+
         {/* Hub 加载中: 文本 + 骨架占位, 预留布局高度 */}
-        {hubQuery.isPending && !data && (
+        {poolQuery.isPending && !data && (
           <div role="status" className="flex flex-col gap-3" aria-live="polite">
             <div className="flex items-center gap-2 text-sm text-muted">
               <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
@@ -106,9 +131,9 @@ export function PoolHubPage() {
         )}
 
         {/* Hub 加载失败: 危险色容器 + 重试 */}
-        {hubQuery.isError && !data && (
+        {poolQuery.isError && !data && (
           <div role="alert" className="text-sm text-danger bg-danger/10 border border-danger/30 rounded-btn px-3 py-2">
-            <span className="mr-2">股池加载失败：{errorText(hubQuery.error)}。请检查数据源后重试。</span>
+            <span className="mr-2">股池加载失败：{errorText(poolQuery.error)}。请检查数据源后重试。</span>
             <button
               onClick={refresh}
               className="inline-flex items-center h-6 px-2 rounded text-xs font-medium
@@ -121,6 +146,15 @@ export function PoolHubPage() {
 
         {/* 游客模式横幅 — 会话策略状态: 加载/错误时 mode 未知, 不渲染 (无闪烁) */}
         {data && mode === 'guest' && <GuestModeBanner />}
+
+        {/* 无快照日 (200 语义, PIT-2): 先于零池分支短路 — 独立诚实空态, 绝不伪装零池 */}
+        {data && data.available === false && (
+          <EmptyState
+            icon={CalendarX}
+            title="该日期无股池快照"
+            hint={`${selectedDate ?? ''} 无股池快照（非交易日或尚未生成）。请选择其他日期或返回最新。`}
+          />
+        )}
 
         {/* 当日无股池结果 */}
         {data && data.strategies.length === 0 && (
