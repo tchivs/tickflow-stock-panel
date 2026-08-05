@@ -29,6 +29,7 @@ _AUCTION_UNMATCHED_AMOUNT_COL = "auction_unmatched_amount"
 
 # kline_auction 湖 canonical 列 (与 20-01 写路径一致); 派生列在输入可得时同帧携带
 _AUCTION_REAL_COLS = ("auction_volume", "auction_amount")
+_AUCTION_VOLUME_RATIO_COL = "auction_volume_ratio"
 
 
 def compute_auction_unmatched_amount(df: pl.DataFrame) -> pl.DataFrame:
@@ -47,6 +48,41 @@ def compute_auction_unmatched_amount(df: pl.DataFrame) -> pl.DataFrame:
         (pl.col(_AUCTION_UNMATCHED_VOLUME_COL) * pl.col(_AUCTION_VIRTUAL_PRICE_COL)).alias(
             _AUCTION_UNMATCHED_AMOUNT_COL
         )
+    )
+
+
+def _attach_auction_volume_ratio(
+    auction: pl.DataFrame,
+    trade_date: date,
+    repo: KlineRepository,
+) -> pl.DataFrame:
+    """派生受管列 ``auction_volume_ratio`` = 竞价量 ÷ 前 5 日均量 (不含当日, PIT-safe)。
+
+    分母取 ``repo.get_enriched_history(trade_date, 6)`` 过滤 ``date < trade_date`` 后按
+    symbol ``tail(5)`` 的 ``volume`` 均值 —— 只用前日数据, 绝不混入当日 EOD 量
+    (内联 ``volume/vol_ratio_5d`` 会引入当日量 → pre_open lookahead, 禁止)。
+
+    无历史缓存或 prior 为空 → 跳过派生, 列缺席 (诚实缺列, 绝不 0 填充)。
+    """
+    if "auction_volume" not in auction.columns:
+        return auction
+    hist = repo.get_enriched_history(trade_date, 6)
+    if hist is None or hist.is_empty():
+        return auction
+    prior = hist.filter(pl.col("date") < trade_date).sort(["symbol", "date"])
+    if prior.is_empty():
+        return auction
+    avg = prior.group_by("symbol").agg(
+        pl.col("volume").tail(5).mean().alias("_prior_5d_avg_volume")
+    )
+    return (
+        auction.join(avg, on="symbol", how="left")
+        .with_columns(
+            (pl.col("auction_volume") / pl.col("_prior_5d_avg_volume")).alias(
+                _AUCTION_VOLUME_RATIO_COL
+            )
+        )
+        .drop("_prior_5d_avg_volume")
     )
 
 
@@ -87,8 +123,21 @@ def attach_auction_columns(df: pl.DataFrame, trade_date: date, repo: KlineReposi
     if _AUCTION_UNMATCHED_VOLUME_COL in auction.columns and _AUCTION_VIRTUAL_PRICE_COL in auction.columns:
         auction = compute_auction_unmatched_amount(auction)
 
+    # 派生受管列 auction_volume_ratio = 竞价量 ÷ 前5日均量(不含当日) (Phase 21, PIT-safe);
+    # 无历史/prior 为空 → 列缺席 (诚实缺列, 绝不 0 填充)。
+    auction = _attach_auction_volume_ratio(auction, trade_date, repo)
+
     # 真实竞价列裁剪 (canonical 列; 缺列即不注入, 诚实缺列)
-    keep = [c for c in ("symbol", *_AUCTION_REAL_COLS, _AUCTION_UNMATCHED_AMOUNT_COL) if c in auction.columns]
+    keep = [
+        c
+        for c in (
+            "symbol",
+            *_AUCTION_REAL_COLS,
+            _AUCTION_UNMATCHED_AMOUNT_COL,
+            _AUCTION_VOLUME_RATIO_COL,
+        )
+        if c in auction.columns
+    ]
     auction = auction.select(keep)
 
     # 防 fan-out: 每 symbol 只保留一行 (20-01 写路径已按 symbol+datetime 去重,

@@ -158,6 +158,7 @@ ENRICHED_COLUMNS: dict[str, dict[str, str]] = {
     "auction_volume":          "竞价量 (集合竞价撮合成交量, 单位: 股; 仅 probe available 时存在)",
     "auction_amount":          "竞价金额 (集合竞价撮合成交额, 单位: 元; 仅 probe available 时存在)",
     "auction_unmatched_amount": "派生未匹配金额 (估算, 非真实成交; 委托量输入可得时存在)",
+    "auction_volume_ratio": "竞价量比 (竞价量/前5日均量(不含当日), 仅 probe available 且分区有行时存在)",
     # ── JOIN 列 (由 repository 从 instruments 表补充) ───
     "name":                    "股票名称 (来自 instruments)",
     "total_shares":            "总股本 (来自 instruments)",
@@ -180,7 +181,7 @@ ENRICHED_COLUMNS_BY_CATEGORY: dict[str, list[str]] = {
     "rsi":      ["rsi_6", "rsi_14", "rsi_24"],
     "signals":  [k for k in ENRICHED_COLUMNS if k.startswith("signal_")],
     "join":     ["name", "total_shares", "float_shares"],
-    "auction":  ["auction_volume", "auction_amount", "auction_unmatched_amount"],
+    "auction":  ["auction_volume", "auction_amount", "auction_unmatched_amount", "auction_volume_ratio"],
 }
 
 

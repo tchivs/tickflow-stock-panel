@@ -230,3 +230,142 @@ def minute_confirm(df_minute: pl.DataFrame, params: dict) -> pl.DataFrame:
     )
     assert result.total == 0
     assert result.rows == []
+
+# ================================================================
+# Task 2: 受管列 auction_volume_ratio (前 5 日均量分母, PIT-safe) + 注册纪律
+# ================================================================
+
+
+@pytest.fixture
+def repo_env(tmp_path, monkeypatch):
+    """隔离的 data_dir + DataStore + KlineRepository (镜像 test_auction_columns)。"""
+    from app.config import settings
+    data_dir = tmp_path / "data"
+    monkeypatch.setattr(settings, "data_dir", data_dir)
+
+    from app.tickflow.repository import DataStore, KlineRepository
+    store = DataStore(data_dir)
+    repo = KlineRepository(store)
+    try:
+        yield repo, data_dir
+    finally:
+        store.db.close()
+
+
+def _daily_frame() -> pl.DataFrame:
+    """单日帧: symbol/date/open/close/open_gap。"""
+    return pl.DataFrame({
+        "symbol": ["000001", "600000"],
+        "date": [date(2026, 8, 4), date(2026, 8, 4)],
+        "open": [10.0, 20.0],
+        "close": [10.5, 20.5],
+        "open_gap": [0.01, 0.02],
+    })
+
+
+def _available_verdict():
+    from app.services.auction_probe import AuctionProbeStatus, AuctionProbeVerdict
+    return AuctionProbeVerdict(
+        status=AuctionProbeStatus.available, source="fake", probed_at=None, detail="available",
+    )
+
+
+def _patch_probe(monkeypatch, verdict) -> None:
+    from app.services import auction_columns
+    monkeypatch.setattr(auction_columns, "resolve_auction_probe", lambda: verdict)
+
+
+def _write_auction_partition(data_dir, trade_date: date, rows: pl.DataFrame) -> None:
+    out = data_dir / "kline_auction" / f"date={trade_date.isoformat()}" / "part.parquet"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    rows.write_parquet(out)
+
+
+def _auction_rows() -> pl.DataFrame:
+    """canonical 四列 (symbol, datetime, auction_volume, auction_amount), 09:20 窗口内。"""
+    return pl.DataFrame({
+        "symbol": ["000001", "600000"],
+        "datetime": [datetime(2026, 8, 4, 9, 20), datetime(2026, 8, 4, 9, 20)],
+        "auction_volume": [8000, 9000],
+        "auction_amount": [42000.0, 48000.0],
+    })
+
+
+def _seed_history_cache(repo, trade_date: date, per_symbol_volumes: dict[str, list[float]]) -> None:
+    """直接写 repo._enriched_history_cache: 前 5 交易日 + trade_date + 覆盖校验早期行。"""
+    prior_dates = [trade_date - timedelta(days=i) for i in range(5, 0, -1)]  # d-5..d-1
+    early = trade_date - timedelta(days=140)
+    rows = []
+    for sym, vols in per_symbol_volumes.items():
+        assert len(vols) == 6, f"{sym}: 需要 6 个值 [d-5..d-1, d]"
+        for d, v in zip([*prior_dates, trade_date], vols):
+            rows.append({"symbol": sym, "date": d, "volume": v})
+        # get_enriched_history 覆盖校验: cache_min <= warmup_start (lookback 6 → 132 日历日前)
+        rows.append({"symbol": sym, "date": early, "volume": 1.0})
+    repo._enriched_history_cache = pl.DataFrame(rows)
+
+
+def test_auction_volume_ratio_prior_5d(repo_env, monkeypatch):
+    """probe available + 分区有行 + 前 5 日历史 → auction_volume_ratio == 竞价量/前5日均量。"""
+    repo, data_dir = repo_env
+    _patch_probe(monkeypatch, _available_verdict())
+    _write_auction_partition(data_dir, date(2026, 8, 4), _auction_rows())
+    # 前 5 日均量: 000001 = 300.0, 600000 = 200.0
+    _seed_history_cache(repo, date(2026, 8, 4), {
+        "000001": [300.0, 300.0, 300.0, 300.0, 300.0, 500.0],
+        "600000": [200.0, 200.0, 200.0, 200.0, 200.0, 500.0],
+    })
+
+    from app.services.auction_columns import attach_auction_columns
+    out = attach_auction_columns(_daily_frame(), date(2026, 8, 4), repo)
+
+    assert "auction_volume_ratio" in out.columns
+    assert out.filter(pl.col("symbol") == "000001").select("auction_volume_ratio").item() == pytest.approx(8000 / 300.0)
+    assert out.filter(pl.col("symbol") == "600000").select("auction_volume_ratio").item() == pytest.approx(9000 / 200.0)
+
+
+def test_auction_volume_ratio_excludes_today_eod(repo_env, monkeypatch):
+    """历史含 trade_date 当日 EOD 巨量 → 分母 = 前 5 日均量 (绝不含当日 EOD, PIT-safe)。"""
+    repo, data_dir = repo_env
+    _patch_probe(monkeypatch, _available_verdict())
+    _write_auction_partition(data_dir, date(2026, 8, 4), _auction_rows())
+    # 当日 volume = 1_000_000 (EOD 巨量); 前 5 日均量仍 = 300.0
+    _seed_history_cache(repo, date(2026, 8, 4), {
+        "000001": [300.0, 300.0, 300.0, 300.0, 300.0, 1_000_000.0],
+        "600000": [200.0, 200.0, 200.0, 200.0, 200.0, 1_000_000.0],
+    })
+
+    from app.services.auction_columns import attach_auction_columns
+    out = attach_auction_columns(_daily_frame(), date(2026, 8, 4), repo)
+
+    assert "auction_volume_ratio" in out.columns
+    # 若内联含当日 EOD 量: (300*5 + 1e6)/6 ≈ 167k → ratio ≈ 0.048, 断言 26.6667 锁死禁用
+    assert out.filter(pl.col("symbol") == "000001").select("auction_volume_ratio").item() == pytest.approx(8000 / 300.0)
+
+
+def test_auction_volume_ratio_absent_without_history(repo_env, monkeypatch):
+    """无历史缓存 → auction_volume_ratio 列缺席 (诚实缺列, 不 0 填充)。"""
+    repo, data_dir = repo_env
+    _patch_probe(monkeypatch, _available_verdict())
+    _write_auction_partition(data_dir, date(2026, 8, 4), _auction_rows())
+    # repo._enriched_history_cache 默认 None → get_enriched_history 返回 None
+
+    from app.services.auction_columns import attach_auction_columns
+    out = attach_auction_columns(_daily_frame(), date(2026, 8, 4), repo)
+
+    assert "auction_volume_ratio" not in out.columns
+    assert "auction_volume" in out.columns  # 真实竞价列照常注入
+
+
+def test_auction_volume_ratio_registry_discipline():
+    """注册纪律: 在 ENRICHED_COLUMNS + BY_CATEGORY['auction'], 绝不在存储窄表/计算闭包。"""
+    from app.indicators.pipeline import (
+        ENRICHED_COLUMNS,
+        ENRICHED_COLUMNS_BY_CATEGORY,
+        ENRICHED_STORAGE_COLS,
+        _ALL_INDICATOR_COLS,
+    )
+    assert "auction_volume_ratio" in ENRICHED_COLUMNS
+    assert "auction_volume_ratio" in ENRICHED_COLUMNS_BY_CATEGORY["auction"]
+    assert "auction_volume_ratio" not in ENRICHED_STORAGE_COLS
+    assert "auction_volume_ratio" not in _ALL_INDICATOR_COLS
