@@ -202,3 +202,148 @@ def test_p2_preopen_no_eod_cols():
         for col in _FORBIDDEN_EOD_COLS:
             assert not re.search(rf'pl\.col\("{col}"\)', filter_src), \
                 f"{name}.py filter 段禁引用 EOD 列 {col}"
+
+
+# ================================================================
+# STRAT-09: 盘中确认 (auction_intraday_confirm) — 截断 + time_factor + fail-closed
+# ================================================================
+
+
+def _intraday_daily_frame() -> pl.DataFrame:
+    """盘中确认日线初筛 fixture: 含 auction_volume 通过引擎 requires_auction_data 短路,
+    判定完全由 pre_open 可算列 open_gap 决定 (EOD 列缺席不参与)。"""
+    return pl.DataFrame({
+        "symbol": ["600301", "600302"],
+        "open_gap": [0.03, 0.03],
+        "auction_volume": [1_000_000, 1_000_000],
+    })
+
+
+def test_intraday_truncation(tmp_path, monkeypatch):
+    """引擎单点截断: minute_confirm 只收到 <= evaluation_time=09:45 的 bar; 池成员只来自前 4 bar。
+    (T-21-01 "确认时刻之后无输入" 回归)"""
+    from app.strategy.builtin import auction_intraday_confirm
+
+    times = [dt_time(9, 30), dt_time(9, 35), dt_time(9, 40), dt_time(9, 45),
+             dt_time(9, 50), dt_time(10, 0)]
+    frame = _minute_frame(["600301", "600302"], times)
+    _write_minute_partition(tmp_path, date(2026, 8, 4), frame)
+
+    orig = auction_intraday_confirm.minute_confirm
+
+    def asserting(df_minute, params):
+        if not df_minute.is_empty():
+            assert df_minute["datetime"].max().time() <= dt_time(9, 45)
+        return orig(df_minute, params)
+
+    monkeypatch.setattr(auction_intraday_confirm, "minute_confirm", asserting)
+
+    # 直接喂未截断帧 (含 10:00 bar) → 断言触发, 证明门禁有效
+    with pytest.raises(AssertionError):
+        asserting(frame, {})
+
+    # 经引擎: 单点截断后断言静默, 池只来自 09:45 及之前 bar 可达的 symbol
+    engine = _engine(minute_loader=lambda syms, d: pl.read_parquet(
+        tmp_path / "kline_minute" / f"date={d.isoformat()}" / "part.parquet"))
+    result = _run_auction(engine, "auction_intraday_confirm", _intraday_daily_frame())
+    assert result.total == 2
+
+
+def test_time_factor():
+    """eval=09:45 → elapsed=15 → time_factor=16.0; minute_confirm 的 volume_scale == cum * 16.0 (T-21-05)."""
+    from app.market_time import trading_minutes_elapsed_from_dt
+    from app.strategy.builtin import auction_intraday_confirm
+
+    elapsed = trading_minutes_elapsed_from_dt(datetime.combine(date(2026, 8, 4), dt_time(9, 45)))
+    assert elapsed == pytest.approx(15.0)
+    assert 240.0 / elapsed == pytest.approx(16.0)
+
+    frame = _minute_frame(
+        ["600301"], [dt_time(9, 30), dt_time(9, 35), dt_time(9, 40), dt_time(9, 45)]
+    )
+    out = auction_intraday_confirm.minute_confirm(frame, {})
+    row = out.filter(pl.col("symbol") == "600301").to_dicts()[0]
+    assert row["volume_scale"] == pytest.approx(float(frame["volume"].sum()) * 16.0)
+
+
+def test_intraday_minute_absent_empty():
+    """minute_confirm_required=True + 空分钟帧 → 空池 (fail-closed)."""
+    engine = _engine(minute_loader=lambda syms, d: pl.DataFrame())
+    result = _run_auction(engine, "auction_intraday_confirm", _intraday_daily_frame())
+    assert result.total == 0
+
+
+def test_intraday_prefilter_no_eod():
+    """日线初筛只认 open_gap (pre_open 可算列); filter 段无 EOD 列引用;
+    fixture 缺 EOD 列时池判定完全由 open_gap 决定。"""
+    from app.strategy.builtin import auction_intraday_confirm
+
+    text = (_BUILTIN_DIR / "auction_intraday_confirm.py").read_text(encoding="utf-8")
+    filter_src = _filter_body(text)
+    for col in _FORBIDDEN_EOD_COLS:
+        assert not re.search(rf'pl\.col\("{col}"\)', filter_src), \
+            f"auction_intraday_confirm.py filter 段禁引用 EOD 列 {col}"
+
+    df = pl.DataFrame({"symbol": ["600301", "600302"], "open_gap": [0.03, 0.01]})
+    hits = set(df.filter(auction_intraday_confirm.filter(df, {})).get_column("symbol"))
+    assert hits == {"600301"}
+
+
+# ================================================================
+# P2 评分权重 + STRAT-03 注册回归 (与 21-01 的 P1 同形测试互补)
+# ================================================================
+
+
+def test_p2_scoring_weights_sum_to_one():
+    """P2 三策略多因子评分权重和恒为 1.0 (PITFALL #7)。"""
+    from app.strategy.builtin import auction_allround, auction_intraday_confirm, t1_flash
+
+    for strat in (auction_allround, t1_flash, auction_intraday_confirm):
+        assert sum(strat.META["scoring"].values()) == pytest.approx(1.0)
+
+
+def _fake_repo(tmp_path):
+    """最小 repo 桩: 仅提供 strategies 端点用到的 store.data_dir。"""
+    from types import SimpleNamespace
+
+    return SimpleNamespace(store=SimpleNamespace(data_dir=tmp_path))
+
+
+def _screener_client(tmp_path):
+    """最小 FastAPI + screener.router + 真实 builtin 引擎, 无网络无真实数据湖。"""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.api import screener as screener_api
+
+    app = FastAPI()
+    app.include_router(screener_api.router)
+    app.state.repo = _fake_repo(tmp_path)
+    app.state.strategy_engine = _engine()
+    return TestClient(app)
+
+
+def test_no_third_registry_p2(tmp_path):
+    """STRAT-03 回归: P2 三 id 仅经 builtin 自动发现; PRESET 零碰撞; strategies API 恰好一次。"""
+    engine = _engine()
+    listed = {m["id"]: m for m in engine.list_strategies()}
+    for sid in _P2_IDS:
+        assert sid in listed, f"{sid} 必须由 engine 从 strategy/builtin 自动发现"
+        assert listed[sid]["source"] == "builtin"
+
+    from app.services.screener import PRESET_STRATEGIES
+
+    for sid in _P2_IDS:
+        assert sid not in PRESET_STRATEGIES
+
+    client = _screener_client(tmp_path)
+    resp = client.get("/api/screener/strategies?asset_type=stock")
+    assert resp.status_code == 200
+    presets = resp.json()["presets"]
+    for sid in _P2_IDS:
+        entries = [p for p in presets if p["id"] == sid]
+        assert len(entries) == 1, f"{sid} 应恰好出现一次, 实际 {len(entries)}"
+        assert entries[0]["source"] == "builtin"
+    p2_files = {f"{sid}.py" for sid in _P2_IDS}
+    for err in resp.json().get("load_errors", []):
+        assert err.get("file") not in p2_files
