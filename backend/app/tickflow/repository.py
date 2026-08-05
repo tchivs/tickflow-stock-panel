@@ -55,6 +55,7 @@ class DataStore:
             "kline_etf_enriched",
             "kline_etf_minute",
             "kline_minute",
+            "kline_auction",
             "adj_factor",
             "adj_factor_etf",
             "financials",
@@ -158,6 +159,8 @@ class DataStore:
                 SELECT * FROM read_parquet('{d}/kline_etf_minute/**/*.parquet', union_by_name=true)""",
             f"""CREATE OR REPLACE VIEW kline_minute AS
                 SELECT * FROM read_parquet('{d}/kline_minute/**/*.parquet', union_by_name=true)""",
+            f"""CREATE OR REPLACE VIEW kline_auction AS
+                SELECT * FROM read_parquet('{d}/kline_auction/**/*.parquet', union_by_name=true)""",
             f"""CREATE OR REPLACE VIEW adj_factor AS
                 SELECT * FROM read_parquet('{d}/adj_factor/**/*.parquet', union_by_name=true)""",
             f"""CREATE OR REPLACE VIEW adj_factor_etf AS
@@ -1663,6 +1666,7 @@ class KlineRepository:
             "kline_etf_enriched": f"{d}/kline_etf_enriched/**/*.parquet",
             "kline_etf_minute": f"{d}/kline_etf_minute/**/*.parquet",
             "kline_minute": f"{d}/kline_minute/**/*.parquet",
+            "kline_auction": f"{d}/kline_auction/**/*.parquet",
             "adj_factor": f"{d}/adj_factor/**/*.parquet",
             "adj_factor_etf": f"{d}/adj_factor_etf/**/*.parquet",
             "instruments": f"{d}/instruments/**/*.parquet",

@@ -316,3 +316,63 @@ def test_resolve_auction_symbols_honors_scope(tmp_path, monkeypatch):
     # 非空范围 → 限定列表
     preferences.save({"auction_sync_symbols": ["600000.SH"]})
     assert daily_pipeline._resolve_auction_symbols(CapabilitySet()) == ["600000.SH"]
+
+# ================================================================
+# Task 3 — kline_auction DuckDB 视图登记 (DataStore 子目录 + rebuild_views + 单视图刷新)
+# ================================================================
+
+
+def test_auction_view_registered(tmp_path, monkeypatch):
+    """写湖 → rebuild_views → SELECT * FROM kline_auction 返回该日行。"""
+    from app.config import settings
+    data_dir = tmp_path / "data"
+    monkeypatch.setattr(settings, "data_dir", data_dir)
+
+    from app.tickflow.repository import DataStore, KlineRepository
+    store = DataStore(data_dir)
+    try:
+        from app.services import auction_sync
+        from app.tickflow.capabilities import CapabilitySet
+
+        fake = FakeAuctionProvider(rows=_rows((16, 0), (20, 30)))
+        monkeypatch.setattr(auction_sync, "resolve_auction_probe", _available_verdict)
+        monkeypatch.setattr(auction_sync, "_first_auction_provider", lambda: fake)
+
+        repo = KlineRepository(store)
+        auction_sync.sync_and_persist_auction(
+            ["000001"], repo, CapabilitySet(), date(2026, 8, 4),
+        )
+
+        repo.rebuild_views()
+        rows = repo.db.execute(
+            "SELECT symbol, auction_volume, auction_amount FROM kline_auction ORDER BY symbol"
+        ).fetchall()
+        assert len(rows) == 2
+        assert rows[0][0] == "000001"
+        assert rows[0][1] == 100
+        assert repo.db.execute("SELECT count(*) FROM kline_auction").fetchone()[0] > 0
+    finally:
+        store.db.close()
+
+
+def test_auction_view_absent_without_lake(tmp_path, monkeypatch):
+    """空湖 DataStore → rebuild_views 不抛异常; 竞价湖读路径降级为 0 行。"""
+    from duckdb import CatalogException
+
+    from app.config import settings
+    data_dir = tmp_path / "data"
+    monkeypatch.setattr(settings, "data_dir", data_dir)
+
+    from app.tickflow.repository import DataStore, KlineRepository
+    store = DataStore(data_dir)
+    try:
+        repo = KlineRepository(store)
+        repo.rebuild_views()  # 空目录下各视图登记降级 (既有语义), 不抛异常
+        # 空湖 → kline_auction 视图未挂载; 读路径对缺失视图降级为 0 行
+        try:
+            count = repo.db.execute("SELECT count(*) FROM kline_auction").fetchone()[0]
+        except CatalogException:
+            count = 0
+        assert count == 0
+    finally:
+        store.db.close()
