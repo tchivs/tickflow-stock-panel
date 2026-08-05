@@ -5,16 +5,16 @@ milestone_name: 竞价深度与历史股池 — planning
 current_phase: 20
 current_phase_name: 竞价数据层 (Auction Data)
 status: executing
-stopped_at: v2.0 roadmap created (Phases 20-23); Phase 20 ready to plan
-last_updated: "2026-08-05T00:54:29.000Z"
+stopped_at: Completed 20-02-PLAN.md
+last_updated: "2026-08-05T00:58:01.000Z"
 last_activity: 2026-08-05
-last_activity_desc: Phase 20 plan 1 (DATA-05 auction lake) completed
+last_activity_desc: Phase 20 plan 2 (DATA-04/06 auction columns + unmatched proxy) completed
 progress:
   total_phases: 8
   completed_phases: 0
   total_plans: 2
-  completed_plans: 1
-  percent: 50
+  completed_plans: 2
+  percent: 100
 ---
 
 # Project State
@@ -28,12 +28,12 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 
 ## Current Position
 
-Phase: 20 (竞价数据层 (Auction Data)) — EXECUTING
-Plan: 2 of 2
-Status: Executing Phase 20
-Last activity: 2026-08-05 — Phase 20 plan 1 completed
+Phase: 20 (竞价数据层 (Auction Data)) — COMPLETE
+Plan: 2/2 complete
+Status: Phase 20 complete
+Last activity: 2026-08-05 — Phase 20 plan 2 completed
 
-Progress: [█████░░░░░] 50%
+Progress: [██████████] 100%
 
 
 ## v1.3 Phase Summary (shipped 2026-08-04)
@@ -49,7 +49,7 @@ Progress: [█████░░░░░] 50%
 
 | Phase | Requirements | Status |
 |-------|-------------|--------|
-| 20 竞价数据层 | DATA-04..06 | Not started |
+| 20 竞价数据层 | DATA-04..06 | Complete |
 | 21 竞价策略族 | STRAT-04..09 | Not started |
 | 22 股池日期导航 | POOL-04..06 | Not started |
 | 23 前端 | FRONT-01..02 | Not started |
@@ -87,13 +87,13 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-08-05T00:54:29.000Z
-Stopped at: Completed 20-01-PLAN.md
+Last session: 2026-08-05T00:58:01.000Z
+Stopped at: Completed 20-02-PLAN.md
 Resume file: None
 
 ## Operator Next Steps
 
-- Approve the v2.0 roadmap (Phases 20-23), then `/gsd-plan-phase 20` (needs `--research-phase` for DATA-04 probe).
+- Phase 20 (DATA-04..06) complete — proceed to `/gsd-plan-phase 21` (竞价策略族, STRAT-04..09).
 
 ## Decisions
 
@@ -110,6 +110,9 @@ Resume file: None
 - [Phase 19 / P1]: Guest masked cells are inert text (no title/aria-label/tooltip); rows keyed by strategy-scoped ordinal; 开盘涨幅 header+cells render only when mode==='vip'.
 - [Phase 20 / P1]: Auction lake write gate is the probe verdict (`resolve_auction_probe().status == available`), not a capability — `can_sync_auction` keeps the capset signature for alignment only; 09:30 continuous bar is structurally excluded by the shared 555..565 predicate (single source of truth with provider `_normalize_auction`).
 - [Phase 20 / P1]: `kline_auction` empty lake registers no view (existing empty-dir semantics) — read path degrades to 0 rows; `auction_sync_enabled` defaults False (explicit opt-in mirroring minute).
+- [Phase 20 / P2]: `auction_volume`/`auction_amount`/`auction_unmatched_amount` 注册进 `ENRICHED_COLUMNS` + `BY_CATEGORY["auction"]`, 绝不进 `ENRICHED_STORAGE_COLS`/`_ALL_INDICATOR_COLS` (窄表=可重算, 计算闭包=可重算不变量; 竞价列存在性是 probe 条件)。
+- [Phase 20 / P2]: 读路径按 probe×分区双闸门左联注入: `resolve_auction_probe().status==available` 且 `kline_auction/date={d}/part.parquet` 存在且有行; 任一不通过列缺席, fail-closed 到 `open_gap`; 左联前 symbol 级去重防 fan-out。
+- [Phase 20 / P2]: DATA-06 派生 `auction_unmatched_amount = 虚拟未匹配量 × 虚拟参考价` (估算, 非真实成交), 委托量输入可得才派生, 缺输入列缺席 → 策略回退量比+金额强度; 与真实竞价列分列永不相加。
 
 ## Performance Metrics
 
@@ -123,6 +126,7 @@ Resume file: None
 | Phase 19 P1 | 55 | 3 tasks | 6 files |
 | Phase 19 P2 | 25min | 3 tasks | 11 files |
 | Phase 20 P1 | 32 | 3 tasks | 5 files |
+| Phase 20 P2 | 41 | 3 tasks | 5 files |
 
 ---
-*Last updated: 2026-08-05 — Phase 20 plan 1 (DATA-05 auction lake) complete*
+*Last updated: 2026-08-05 — Phase 20 plan 2 (DATA-04/06 auction columns + unmatched proxy) complete; Phase 20 (DATA-04..06) complete*

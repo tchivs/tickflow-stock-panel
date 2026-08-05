@@ -56,7 +56,7 @@ Four phases add 集合竞价-driven quantitative stock selection to the shipped 
 - [x] **Phase 17: 竞价策略族 (Auction Strategy Family)** - Author ≥3 auction strategies (竞价多头/盘前强势量化/早盘之星) as builtin strategy files with factor-hit tagging — STRAT-01..03 (completed 2026-08-04)
 - [x] **Phase 18: 股池 Hub (Pool Hub)** - Strategy cards with pool counts, drill-down stock lists, concept filter, 交叉共振 multi-hit highlight — POOL-01..03 (completed 2026-08-04)
 - [x] **Phase 19: 游客/VIP 脱敏 + 前端 (Guest Access & Frontend)** - Server-authoritative guest masking, VIP plaintext, frontend pool page — GUEST-01..02 (completed 2026-08-04)
-- [ ] **Phase 20: 竞价数据层 (Auction Data)** - Probe 门控的真实集合竞价列（竞价量/金额）作为受管增强列 + `kline_auction/date=*/` 湖 + 派生未匹配金额 proxy — DATA-04..06
+- [x] **Phase 20: 竞价数据层 (Auction Data)** - Probe 门控的真实集合竞价列（竞价量/金额）作为受管增强列 + `kline_auction/date=*/` 湖 + 派生未匹配金额 proxy — DATA-04..06 (completed 2026-08-05)
 - [ ] **Phase 21: 竞价策略族 (Auction Strategy Family)** - 六个第一性原理竞价/尾盘策略（极速抢筹/竞价阿尔法/金色两点半/竞价全面/T+1闪电/盘中确认）作为 builtin 内置策略、诚实命名与时间窗 — STRAT-04..09
 - [ ] **Phase 22: 股池日期导航 (Pool Hub Date Navigation)** - 冻结式点快照按日股池 + 独立只读日期/as_of 端点 + 盘后 EOD 持久化 job — POOL-04..06
 - [ ] **Phase 23: 前端 (Frontend)** - DateNavigator 按交易日浏览 + 竞价列展示（真实 vs 派生）与诚实 probe/窗口状态 — FRONT-01..02
@@ -143,10 +143,10 @@ Plans:
   2. `auction_sync` 服务把真实 09:15–09:25 竞价窗口行按 `date=` hive 分区写入 `kline_auction/` 湖；湖内只存真实竞价窗口行，09:30 连续竞价 bar 被结构上排除（回归锁死）。
   3. 委托量输入可得时，研究者能查看派生的竞价未匹配金额（unmatched-order proxy）列；输入不可得时策略回退到量比 + 金额强度。
   4. probe 非 `available` 时，研究者无论在策略还是 UI 上都看不到竞价列，只能看到派生列与 `open_gap`；没有任何 UI 或策略把 09:30 bar 标为集合竞价数据。
-**Plans**: 2 plans
+**Plans**: 2/2 plans complete
 Plans:
 - [x] 20-01-PLAN.md — DATA-05: `auction_sync` 湖摄入 + `kline_auction/date={d}/` 分区湖 + Step 2.6 stage + 偏好旋钮 + `kline_auction` DuckDB 视图登记 (completed 2026-08-05)
-- [ ] 20-02-PLAN.md — DATA-04/06: 受管竞价列注册表 + 读路径左联 (probe×分区双闸门) + probe×列矩阵 + 派生未匹配金额 proxy + schema 面 (wave 1)
+- [x] 20-02-PLAN.md — DATA-04/06: 受管竞价列注册表 + 读路径左联 (probe×分区双闸门) + probe×列矩阵 + 派生未匹配金额 proxy + schema 面 (completed 2026-08-05)
 **Research flag**: 需要 `--research-phase` — DATA-04 数据源可用性探测与虚拟成交（`auction_virtual_fill`）字段语义是本期最大不确定项，规划前先做 probe 探测。
 
 ### Phase 21: 竞价策略族 (Auction Strategy Family)
@@ -204,10 +204,10 @@ Phases execute in numeric order: 16 → 17 → 18 → 19 → 20 → 21 → 22 �
 | 17. 竞价策略族 | STRAT-01..03 | Complete    |
 | 18. 股池 Hub | POOL-01..03 | Complete    |
 | 19. 游客/VIP 脱敏 + 前端 | GUEST-01..02 | Complete    |
-| 20. 竞价数据层 | DATA-04..06 | In progress |
+| 20. 竞价数据层 | DATA-04..06 | Complete |
 | 21. 竞价策略族 | STRAT-04..09 | Not started |
 | 22. 股池日期导航 | POOL-04..06 | Not started |
 | 23. 前端 | FRONT-01..02 | Not started |
 
 ---
-*Last updated: 2026-08-04 — v2.0 roadmap created (Phases 20-23), continuing from v1.3 Phase 19*
+*Last updated: 2026-08-05 — v2.0 Phase 20 (DATA-04..06) completed*
