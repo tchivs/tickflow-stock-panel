@@ -23,6 +23,10 @@
 
 扩展策略的三种方式见 [strategy.md → 扩展策略](./strategy.md#扩展策略的三种方式)。
 
+### 🗓️ 股池日期导航
+
+每次盘后 run_all 的结果以**冻结式点快照**落盘 `screener_results/date={as_of}/`(携带计算时刻与策略版本指纹),可经日期列表(`GET /api/pool/dates`)与按日取池(`GET /api/pool/history?as_of=`)浏览历史股池。快照由盘后 EOD job 自动预生成,无数据日显示诚实空态;概念板块为当前归属标注(`current_snapshot`),非当日快照归属。
+
 ---
 
 ## 📊 指标流水线(Indicators)
