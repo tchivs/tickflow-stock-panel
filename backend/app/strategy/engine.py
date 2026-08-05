@@ -10,7 +10,7 @@ import importlib.util
 import logging
 import time
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, time as dt_time
 from pathlib import Path
 from typing import Any, Callable
 
@@ -93,6 +93,24 @@ def _normalize_param_item(item: dict) -> dict:
     return norm
 
 
+def _parse_eval_time(value: Any) -> dt_time | None:
+    """解析 META["evaluation_time"] ("HH:MM") -> dt_time | None。
+
+    非法/None → None (截断禁用); 合法字符串用 time(hour, minute) 构造。
+    """
+    if not value:
+        return None
+    if isinstance(value, dt_time):
+        return value
+    if isinstance(value, str):
+        try:
+            hour, minute = value.strip().split(":")
+            return dt_time(int(hour), int(minute))
+        except (ValueError, TypeError):
+            return None
+    return None
+
+
 @dataclass
 class StrategyDef:
     """加载后的策略定义（只读数据 + filter 函数引用）"""
@@ -111,6 +129,9 @@ class StrategyDef:
     lookback_days: int
     source: str  # "builtin" | "custom" | "ai"
     file_path: Path | None = None
+    minute_confirm_fn: Callable[[pl.DataFrame, dict], pl.DataFrame] | None = None
+    evaluation_time: dt_time | None = None
+    minute_confirm_required: bool = False
 
 
 @dataclass
@@ -129,7 +150,8 @@ class StrategyEngine:
 
     def __init__(self, enriched_loader: Callable[[date], pl.DataFrame],
                  enriched_history_loader: Callable[[date, int], pl.DataFrame] | None = None,
-                 strategy_dirs: list[Path] | None = None):
+                 strategy_dirs: list[Path] | None = None,
+                 minute_loader: Callable[[list[str], date], pl.DataFrame] | None = None):
         """
         Args:
             enriched_loader: (date) -> pl.DataFrame, 加载指定日期的 enriched 数据
@@ -138,6 +160,7 @@ class StrategyEngine:
         self._loader = enriched_loader
         self._history_loader = enriched_history_loader
         self._strategies: dict[str, StrategyDef] = {}
+        self._minute_loader = minute_loader
         self._load_errors: list[dict] = []  # 加载失败的策略 [{file, error}]
         self._strategy_dirs = strategy_dirs or []
         self._load_all()
@@ -187,6 +210,17 @@ class StrategyEngine:
         meta.setdefault("order_by", "score")
         meta.setdefault("descending", True)
         meta.setdefault("limit", 100)
+        meta.setdefault("time_window", "intraday")
+        meta.setdefault("evaluation_time", None)
+        meta.setdefault("requires_auction_data", False)
+        meta.setdefault("minute_confirm_required", False)
+
+        # time_window 白名单校验: 非法值 → 加载失败可见 (load_errors), 前端可解释"为何加载失败"
+        if meta.get("time_window") not in ("pre_open", "intraday", "post_close"):
+            raise ValueError(
+                f"invalid time_window: {meta.get('time_window')!r} "
+                "(must be pre_open | intraday | post_close)"
+            )
 
         # 归一化 params 为标准 list[dict]: custom/AI 策略的 META["params"] 可能是
         # dict / list[str] 等非标准格式 (LLM 偶发漂移 / 用户手改), 不归一化的话会在
@@ -223,11 +257,13 @@ class StrategyEngine:
             alerts=getattr(mod, "ALERTS", []),
             filter_fn=getattr(mod, "filter", None),
             filter_history_fn=getattr(mod, "filter_history", None),
+            minute_confirm_fn=getattr(mod, "minute_confirm", None),
+            evaluation_time=_parse_eval_time(meta.get("evaluation_time")),
+            minute_confirm_required=bool(meta.get("minute_confirm_required", False)),
             lookback_days=int(getattr(mod, "LOOKBACK_DAYS", meta.get("lookback_days", 1)) or 1),
             source=source,
             file_path=path,
         )
-
     def reload(self) -> None:
         """热重载所有策略"""
         self._load_all()
@@ -306,6 +342,11 @@ class StrategyEngine:
             if df.is_empty():
                 return StrategyResult(as_of=as_of, strategy_id=strategy_id)
 
+        # requires_auction_data 短路 (fail-closed 双保险之一): 竞价列缺席 → 空 StrategyResult,
+        # 绝不 ColumnNotFoundError; 策略 filter 的 pl.lit(False) 守卫是第二层。
+        if s.meta.get("requires_auction_data") and "auction_volume" not in df.columns:
+            return StrategyResult(as_of=as_of, strategy_id=strategy_id)
+
         # 基础过滤: 策略默认 basic_filter 兜底, 用户 override 优先覆盖。
         # 这样策略文件里写的 exclude_st/price_min 等默认值即使前端没保存也能生效。
         bf = dict(s.basic_filter) if s.basic_filter else {}
@@ -326,6 +367,29 @@ class StrategyEngine:
             df = df.filter(expr)
 
         # Stage 3: 评分
+
+        # 分钟确认 seam (镜像 filter_history_fn 分支): 引擎单点截断 datetime.time() <= evaluation_time,
+        # 策略拿到的分钟帧物理上无 eval 后 bar (T-21-01 "确认时刻之后无输入")。
+        if s.minute_confirm_fn is not None and s.evaluation_time is not None and not df.is_empty():
+            candidates = df["symbol"].to_list()
+            if self._minute_loader is None or not candidates:
+                if s.minute_confirm_required:
+                    return StrategyResult(as_of=as_of, strategy_id=strategy_id)
+            else:
+                minute = self._minute_loader(candidates, as_of)
+                if minute.is_empty():
+                    # 分钟数据缺席: required → 空池 / 可选 (STRAT-06) → 跳过确认保留日线核心池
+                    if s.minute_confirm_required:
+                        return StrategyResult(as_of=as_of, strategy_id=strategy_id)
+                else:
+                    truncated = minute.filter(
+                        pl.col("datetime").dt.time() <= s.evaluation_time
+                    )
+                    confirmed = s.minute_confirm_fn(truncated, params)
+                    keep = confirmed["symbol"].unique().to_list()
+                    if not keep and s.minute_confirm_required:
+                        return StrategyResult(as_of=as_of, strategy_id=strategy_id)
+                    df = df.filter(pl.col("symbol").is_in(keep))
         scoring = s.meta.get("scoring", {})
         scoring_overrides = overrides.get("scoring")
         if scoring_overrides:
