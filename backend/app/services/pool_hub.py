@@ -4,9 +4,14 @@
 - 从 strategy_cache 读取单一 as_of 的策略结果 (其 ``results`` 形状即
   ``screener_results/`` 持久化形状), 卡片 ``total`` 与明细 ``rows`` 来自同一次
   读取, 永不漂移 (PITFALL #10, D-02)。
-- 每行投影出六列: code / 名称 (name) / 开盘涨幅 (open_gap) / 涨跌幅 (change_pct) /
-  概念板块 (concept_board) / 关联因子 (hit_factors), 外加服务端计算的
-  交叉共振 (cross_resonance = len(hit_factors) >= 2, D-03)。
+- 每行投影出十二列: code / 名称 (name) / 开盘涨幅 (open_gap) / 涨跌幅 (change_pct) /
+  概念板块 (concept_board) / 关联因子 (hit_factors) / 服务端计算的交叉共振
+  (cross_resonance = len(hit_factors) >= 2, D-03) / 竞价列透传
+  (auction_volume/auction_amount/auction_volume_ratio/auction_unmatched_amount,
+  OQ-2 诚实缺列: raw row 无键 → None, 非 0 填充)。
+- 顶层 ``auction_columns: {real, derived}`` 服务端列存在性声明 (OQ-2):
+  real 只在该快照/缓存 probe available 时非空 (attach_auction_columns 双闸门),
+  列存在性由服务端声明回答, 前端零推导 (PIT-3)。
 - 概念筛选是当前 as_of 池上的投影: 只收窄 rows, ``total`` 保持权威全量 (D-04)。
 - 本模块不 import 任何 broker/order/execution/trade/portfolio 模块, 也没有任何
   写路径 — POOL-03 零执行权限由 ``tests/test_pool_hub.py`` 的 AST 守卫锁定。
@@ -96,6 +101,29 @@ def _project_hub(
 
     needle = concept.strip().lower() if concept else ""
 
+    # Phase 23 (OQ-2): 收集全部策略 raw rows, 据此声明竞价列存在性 (PIT-3)。
+    # real 只在该快照/缓存 probe available 时非空 (attach_auction_columns 双闸门);
+    # 列存在性由服务端声明回答, 前端零推导。open_gap 因 enriched 恒在而通常总在 derived。
+    raw_rows: list[dict[str, Any]] = []
+    for result in results.values():
+        if not isinstance(result, dict):
+            continue
+        result_rows = result.get("rows", [])
+        if isinstance(result_rows, list):
+            raw_rows.extend(r for r in result_rows if isinstance(r, dict))
+    auction_columns = {
+        "real": [
+            col
+            for col in ("auction_volume", "auction_amount")
+            if any(col in row for row in raw_rows)
+        ],
+        "derived": [
+            col
+            for col in ("auction_volume_ratio", "auction_unmatched_amount", "open_gap")
+            if any(col in row for row in raw_rows)
+        ],
+    }
+
     strategies: list[dict[str, Any]] = []
     resonance_symbols: set[str] = set()
 
@@ -123,6 +151,15 @@ def _project_hub(
                 "hit_factors": hit_factors,
                 "cross_resonance": cross_resonance,
             }
+            # Phase 23 (OQ-2): 透传竞价列 — raw rows 已携带 (screener.py to_dicts +
+            # attach_auction 注入); 缺键 → _safe_num(None) → None (诚实缺列, 非 0 填充)
+            for col in (
+                "auction_volume",
+                "auction_amount",
+                "auction_volume_ratio",
+                "auction_unmatched_amount",
+            ):
+                projected[col] = _safe_num(row.get(col))
             # 概念筛选: 大小写不敏感子串匹配概念板块; 只收窄 rows (total 不变)
             if needle and not any(needle in c.lower() for c in projected["concept_board"]):
                 continue
@@ -143,6 +180,9 @@ def _project_hub(
         "strategies": strategies,
         "resonance_count": len(resonance_symbols),
         "concept_attribution": "current_snapshot",
+        # Phase 23 (OQ-2): 服务端冻结的竞价列存在性声明 — build_pool_hub 与
+        # build_pool_hub_snapshot 双路径经共享 _project_hub 同得 (PIT-3/PIT-6)。
+        "auction_columns": auction_columns,
     }
 
 

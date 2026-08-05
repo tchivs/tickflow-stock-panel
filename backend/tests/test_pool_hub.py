@@ -252,11 +252,20 @@ def test_build_pool_hub_single_as_of_counts_and_columns(tmp_path):
         "concept_board",
         "hit_factors",
         "cross_resonance",
+        # Phase 23 (OQ-2): 竞价列透传 — 行恒含 12 键; 缺列时为 None (诚实缺列)
+        "auction_volume",
+        "auction_amount",
+        "auction_volume_ratio",
+        "auction_unmatched_amount",
     }
     for strategy in strategies.values():
         for row in strategy["rows"]:
             assert set(row) == expected_keys
             assert row["code"] == row["symbol"].split(".", 1)[0]
+
+    # Phase 23 (OQ-2): 双路径共享 _project_hub — hub 视图同样携带顶层声明;
+    # 默认缓存 raw rows 无竞价列 → real == [] (诚实缺列), open_gap 恒在 derived。
+    assert hub["auction_columns"] == {"real": [], "derived": ["open_gap"]}
 
     # Y 在两个策略下都是 交叉共振 (hit_factors >= 2); X / W 是单因子
     for sid in ("auction_bullish", "auction_preopen_quant"):
@@ -478,6 +487,92 @@ def test_build_pool_hub_snapshot_has_concept_attribution(tmp_path):
     assert hub["updated_at"] == "2026-08-04T15:30:00"
     assert len(hub["strategies"]) == 3
     assert hub["resonance_count"] == 1
+
+
+def test_project_hub_passes_through_auction_columns(tmp_path):
+    """OQ-2 透传 round-trip: 快照 raw rows 带竞价数值 → 投影行 4 键 _safe_num 后相等 + 顶层声明精确。"""
+    from app.services.pool_hub import build_pool_hub_snapshot
+
+    _write_snapshot(
+        tmp_path,
+        results={
+            "auction_bullish": {
+                "total": 1,
+                "as_of": _AS_OF,
+                "rows": [
+                    {
+                        "symbol": _SYMBOLS["X"],
+                        "name": _NAMES["X"],
+                        "open_gap": 3.21,
+                        "change_pct": 5.1,
+                        "hit_factors": ["竞价多头"],
+                        "auction_volume": 1234567.0,
+                        "auction_amount": 89012345.0,
+                        "auction_volume_ratio": 1.25,
+                        "auction_unmatched_amount": 98765.0,
+                    },
+                ],
+            },
+        },
+    )
+    hub = build_pool_hub_snapshot(tmp_path, _AS_OF)
+    row = hub["strategies"][0]["rows"][0]
+    assert row["auction_volume"] == 1234567.0
+    assert row["auction_amount"] == 89012345.0
+    assert row["auction_volume_ratio"] == 1.25
+    assert row["auction_unmatched_amount"] == 98765.0
+    assert hub["auction_columns"] == {
+        "real": ["auction_volume", "auction_amount"],
+        "derived": ["auction_volume_ratio", "auction_unmatched_amount", "open_gap"],
+    }
+
+
+def test_project_hub_honest_absent_auction_columns(tmp_path):
+    """PIT-3 诚实缺列: raw rows 无竞价列 → 投影行 4 键全 None, real == [], derived 不含竞价派生键。"""
+    from app.services.pool_hub import build_pool_hub_snapshot
+
+    _write_snapshot(tmp_path)  # 默认夹具无竞价列 (但 open_gap 恒在)
+    hub = build_pool_hub_snapshot(tmp_path, _AS_OF)
+    for strategy in hub["strategies"]:
+        for row in strategy["rows"]:
+            assert row["auction_volume"] is None
+            assert row["auction_amount"] is None
+            assert row["auction_volume_ratio"] is None
+            assert row["auction_unmatched_amount"] is None
+    assert hub["auction_columns"]["real"] == []
+    assert "auction_volume_ratio" not in hub["auction_columns"]["derived"]
+    assert "auction_unmatched_amount" not in hub["auction_columns"]["derived"]
+
+
+def test_project_hub_auction_columns_match_projection_keys(tmp_path):
+    """PIT-3 防线: 极端夹具只带 auction_volume 键 → real == ["auction_volume"], 与投影键集一致。"""
+    from app.services.pool_hub import build_pool_hub_snapshot
+
+    _write_snapshot(
+        tmp_path,
+        results={
+            "auction_bullish": {
+                "total": 1,
+                "as_of": _AS_OF,
+                "rows": [
+                    {
+                        "symbol": _SYMBOLS["X"],
+                        "name": _NAMES["X"],
+                        "open_gap": 1.0,
+                        "change_pct": 1.0,
+                        "hit_factors": ["竞价多头"],
+                        "auction_volume": 100.0,
+                    },
+                ],
+            },
+        },
+    )
+    hub = build_pool_hub_snapshot(tmp_path, _AS_OF)
+    assert hub["auction_columns"]["real"] == ["auction_volume"]
+    assert "auction_amount" not in hub["auction_columns"]["real"]
+    row = hub["strategies"][0]["rows"][0]
+    assert row["auction_volume"] == 100.0
+    assert row["auction_amount"] is None
 
 
 # ================================================================
