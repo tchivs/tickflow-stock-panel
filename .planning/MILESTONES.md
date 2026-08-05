@@ -1,5 +1,22 @@
 # Milestones
 
+## v2.0 v2.0 (Shipped: 2026-08-05)
+
+**Phases completed:** 4 phases, 8 plans, 15 tasks
+
+**Key accomplishments:**
+
+- DATA-05 竞价湖摄入路径端到端成立：`auction_sync` 服务以 probe `available` 为唯一写湖准入闸门，将真实 09:15–09:25 集合竞价撮合行按 `date={d}` hive 分区原子写入 `data/kline_auction/date={d}/part.parquet`（canonical 四列），09:30 连续竞价 bar 经 555..565 窗口谓词结构性排除（回归锁死）；偏好旋钮（默认 False）与 daily_pipeline Step 2.6 双闸门接入盘后管道，`kline_auction` DuckDB 视图登记进 repository 权威重建与单视图刷新路径表。
+- DATA-04/06 读路径端到端成立：`auction_volume`/`auction_amount` 登记为受管增强列（`ENRICHED_COLUMNS` + 新分类 `"auction"`，绝不进存储窄表/计算闭包），由 `attach_auction_columns` 按 probe×分区双闸门从 `kline_auction` 湖左联注入日线帧——probe 非 `available` 或缺分区时列缺席、功能 fail-closed 到派生 `open_gap`，从不静默填充；`ScreenerService._load_enriched_for_date` 三处 return 经 `_attach_auction` 注入策略 as-of 帧，`kline_auction` 登记进 `_SCHEMA_VIEWS`/`_TABLE_FIELD_DESC`（单位中文描述）；DATA-06 派生 `auction_unmatched_amount`（估算, 非真实成交）在委托量输入可得时按 `虚拟未匹配量 × 虚拟参考价` 派生，缺输入即列缺席、与真实列分列永不相加。
+- 引擎 seam (time_window/evaluation_time/requires_auction_data META + requires_auction_data 短路空池 + minute_loader/confirm_minute 单点截断)、受管列 auction_volume_ratio (前 5 日均量分母, PIT-safe)、P1 三策略 auction_fast_grab / auction_alpha / golden_230 落地, test_auction_strategy_family.py 16 tests + 四项回归门禁全绿
+- 竞价全面 / T+1闪电 / 盘中确认 三个 P2 策略落地（pre_open 白名单 + fail-closed + 引擎单点截断分钟确认），文档计数对账到 27，strategy-guide.md 补时间窗/分钟确认契约字段
+- 22-pool-date-navigation · **Plan:** 22-01 · **Wave:** 1
+- 盘后定时 `pool_eod_persist` job 落地 (mon-fri, 管道+5min, 单飞): 经 `run_all_with_hits` 预生成冻结快照 + 刷新最新指针; 游客可读 /pool/dates + /pool/history (GET-only); features.md 股池日期导航小节, 策略计数 27 无漂移
+- 23-frontend · **Plan:** 23-01 · **Wave:** 1
+- 23-frontend · **Plan:** 23-02 · **Wave:** 2
+
+---
+
 ## v1.3 v1.3 (Shipped: 2026-08-04)
 
 **Phases completed:** 4 phases, 8 plans, 23 tasks

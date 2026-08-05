@@ -2,18 +2,18 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: 竞价深度与历史股池 — planning
-current_phase: 23
-status: completed
+status: Awaiting next milestone
 stopped_at: Completed 21-01-PLAN.md
-last_updated: "2026-08-05T16:54:53.531Z"
+last_updated: "2026-08-05T16:55:52.868Z"
 last_activity: 2026-08-05
-last_activity_desc: Phase 23 complete
+last_activity_desc: Milestone v2.0 completed and archived
 progress:
   total_phases: 8
   completed_phases: 4
   total_plans: 8
   completed_plans: 8
   percent: 50
+current_phase: 23
 current_phase_name: 前端 (Frontend)
 ---
 
@@ -28,12 +28,10 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 
 ## Current Position
 
-Phase: 23
-Plan: Not started
-Status: All phases complete
-Last activity: 2026-08-05 — Phase 23 complete
-
-Progress: [████████░░] 75%
+Phase: Milestone v2.0 complete
+Plan: —
+Status: Awaiting next milestone
+Last activity: 2026-08-05 — Milestone v2.0 completed and archived
 
 ## v1.3 Phase Summary (shipped 2026-08-04)
 
@@ -92,7 +90,7 @@ Resume file: None
 
 ## Operator Next Steps
 
-- Phase 20 (DATA-04..06) complete — proceed to `/gsd-plan-phase 21` (竞价策略族, STRAT-04..09).
+- Start the next milestone with /gsd-new-milestone
 
 ## Decisions
 
