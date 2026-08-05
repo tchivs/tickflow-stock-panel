@@ -200,7 +200,12 @@ Plans:
   3. 用户在股池钻取中能看到竞价列（竞价量/金额），真实集合竞价列与派生/虚拟成交列明确分开展示并标注单位（股/元）。
   4. probe 非 `available` 或盘前时，UI 诚实展示 probe/窗口状态（fail-closed 空态或派生标注），绝不暗示存在真实竞价数据。
 
-**Plans**: TBD
+**Plans**: 2 plans
+
+Plans:
+- [ ] 23-01-PLAN.md — 后端 _project_hub 透传竞价列 + auction_columns 声明 + 游客剥离 + 前端查询层 (api.poolDates/poolHistory)
+- [ ] 23-02-PLAN.md — DateNavigator 按交易日浏览 + 无快照诚实空态 + 竞价列分组钻取 + probe/盘前诚实状态
+
 **UI hint**: yes
 
 ## Progress
