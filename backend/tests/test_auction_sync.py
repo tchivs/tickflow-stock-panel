@@ -225,3 +225,94 @@ def test_atomic_write_leaves_no_tmp(tmp_path, monkeypatch):
         assert not list(part_dir.glob("*.tmp"))
     finally:
         store.db.close()
+
+# ================================================================
+# Task 2 — 偏好旋钮 + daily_pipeline Step 2.6 stage 闸门
+# ================================================================
+
+
+def test_auction_prefs_round_trip(tmp_path, monkeypatch):
+    from app.config import settings
+    data_dir = tmp_path / "data"
+    monkeypatch.setattr(settings, "data_dir", data_dir)
+
+    from app.services import preferences
+
+    # 默认关闭 (显式开启语义)
+    assert preferences.get_auction_sync_enabled() is False
+    # 默认空列表 = 全量
+    assert preferences.get_auction_sync_symbols() == []
+
+    # 杂乱输入规范化: 逗号/换行拆分、去空白、去空、保序去重
+    clean = preferences.set_auction_sync_symbols([" 000001.SZ , 600000.SH\n", "000001.SZ"])
+    assert clean == ["000001.SZ", "600000.SH"]
+    assert preferences.get_auction_sync_symbols() == clean
+
+    # 字符串形式直接存储, 读取时规范化
+    preferences.save({"auction_sync_symbols": " 000001.SZ , 600000.SH\n"})
+    assert preferences.get_auction_sync_symbols() == ["000001.SZ", "600000.SH"]
+
+    # 空/纯空白 → []
+    assert preferences.set_auction_sync_symbols([", \n", "  "]) == []
+    assert preferences.get_auction_sync_symbols() == []
+
+
+def test_run_auction_sync_gate(tmp_path, monkeypatch):
+    """双闸门: 未开启 → 0; 开启但 probe 不可用 → 0; 开启+available → 返回 N。"""
+    from app.config import settings
+    data_dir = tmp_path / "data"
+    monkeypatch.setattr(settings, "data_dir", data_dir)
+
+    from app.tickflow.repository import DataStore, KlineRepository
+    store = DataStore(data_dir)
+    try:
+        from app.jobs import daily_pipeline
+        from app.services import preferences
+        from app.tickflow.capabilities import CapabilitySet
+
+        repo = KlineRepository(store)
+        capset = CapabilitySet()
+
+        # (a) 未开启 → 0, 湖无分区
+        preferences.save({"auction_sync_enabled": False})
+        assert daily_pipeline._run_auction_sync(repo, capset, date(2026, 8, 4)) == 0
+        lake = data_dir / "kline_auction"
+        assert not lake.exists() or not list(lake.glob("date=*"))
+
+        # (b) 开启 + can_sync_auction False → 0
+        preferences.save({"auction_sync_enabled": True})
+        monkeypatch.setattr(daily_pipeline.auction_sync, "can_sync_auction", lambda capset: False)
+        assert daily_pipeline._run_auction_sync(repo, capset, date(2026, 8, 4)) == 0
+        assert not lake.exists() or not list(lake.glob("date=*"))
+
+        # (c) 开启 + can_sync_auction True + sync_and_persist_auction 返回 N → 返回 N
+        monkeypatch.setattr(daily_pipeline.auction_sync, "can_sync_auction", lambda capset: True)
+        monkeypatch.setattr(
+            daily_pipeline.auction_sync,
+            "sync_and_persist_auction",
+            lambda *a, **k: 42,
+        )
+        assert daily_pipeline._run_auction_sync(repo, capset, date(2026, 8, 4)) == 42
+    finally:
+        store.db.close()
+
+
+def test_resolve_auction_symbols_honors_scope(tmp_path, monkeypatch):
+    from app.config import settings
+    data_dir = tmp_path / "data"
+    monkeypatch.setattr(settings, "data_dir", data_dir)
+
+    from app.jobs import daily_pipeline
+    from app.services import preferences
+    from app.tickflow.capabilities import CapabilitySet
+
+    universe = ["000001.SZ", "600000.SH", "000002.SZ"]
+    monkeypatch.setattr(daily_pipeline, "_resolve_universe", lambda capset: list(universe))
+
+    # 空范围 → 全量
+    preferences.save({"auction_sync_symbols": []})
+    assert daily_pipeline._resolve_auction_symbols(CapabilitySet()) == universe
+
+    # 非空范围 → 限定列表
+    preferences.save({"auction_sync_symbols": ["600000.SH"]})
+    assert daily_pipeline._resolve_auction_symbols(CapabilitySet()) == ["600000.SH"]

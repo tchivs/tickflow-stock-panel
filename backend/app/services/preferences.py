@@ -126,6 +126,23 @@ def set_minute_sync_symbols(symbols: list[str]) -> list[str]:
     return clean
 
 
+def get_auction_sync_enabled() -> bool:
+    """竞价同步偏好开关 — 默认 False (显式开启, RESEARCH Assumption A3)。"""
+    return load().get("auction_sync_enabled", False)
+
+
+def get_auction_sync_symbols() -> list[str]:
+    """可选竞价同步标的范围; 空列表 = 全量标的池 (镜像 minute 语义)。"""
+    return _normalize_symbol_list(load().get("auction_sync_symbols", []))
+
+
+def set_auction_sync_symbols(symbols: list[str]) -> list[str]:
+    """保存竞价同步标的范围, 返回规范化后的列表; 空列表 = 全量。"""
+    clean = _normalize_symbol_list(symbols)
+    save({"auction_sync_symbols": clean})
+    return clean
+
+
 # ===== 数据源选择 =====
 #
 # 模型: 每个数据集 (daily/minute/realtime/adj_factor/financial) 一个「有序启用链」,

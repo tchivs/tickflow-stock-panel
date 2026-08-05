@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from datetime import date
 from pathlib import Path
 
 import polars as pl
@@ -21,7 +22,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 from app.indicators.pipeline import run_pipeline
 from app.config import settings
-from app.services import index_sync, instrument_sync, kline_sync, preferences as _prefs
+from app.services import auction_sync, index_sync, instrument_sync, kline_sync, preferences as _prefs
 from app.tickflow.capabilities import Cap, CapabilitySet
 from app.tickflow.pools import DEMO_SYMBOLS, get_pool
 from app.tickflow.repository import KlineRepository
@@ -587,6 +588,19 @@ def run_now(
         else:
             logger.info("sync_minute skipped: user disabled")
 
+    # Step 2.6: 竞价同步(可选) — 用户显式开启 + probe available 时写湖并刷新视图;
+    # 未开启或 probe 不可用时静默跳过 (计入 skipped, 不 emit、不写湖、从不静默填湖)。
+    written_auction = _run_auction_sync(repo, capset, today)
+    if written_auction > 0:
+        auction_dir = repo.store.data_dir / "kline_auction"
+        auction_cover_days = len(list(auction_dir.glob("date=*"))) if auction_dir.exists() else 0
+        emit("sync_auction", 94, f"竞价数据完成,覆盖 {auction_cover_days} 天")
+        logger.info("sync_auction: done, %d rows, %d days", written_auction, auction_cover_days)
+        _invalidate("auction")
+        _refresh_single_view(repo, "kline_auction")
+    else:
+        skipped.append("sync_auction")
+
     # Step 3: 刷新视图
     emit("refresh_views", 95, "刷新 DuckDB 视图…")
     _refresh_views(repo)
@@ -605,6 +619,7 @@ def run_now(
         "etf_daily_rows": written_etf_daily,
         "etf_adj_factor_symbols": etf_adj_symbols,
         "minute_rows": written_minute,
+        "auction_rows": written_auction,
         "lagging_symbols": len(lagging_symbols),
         "skipped_stages": skipped,
         "stage_errors": stage_errors,
@@ -663,6 +678,32 @@ def _resolve_minute_symbols(capset: CapabilitySet) -> list[str]:
     if scoped:
         return scoped
     return _resolve_universe(capset)
+
+
+def _resolve_auction_symbols(capset: CapabilitySet) -> list[str]:
+    """竞价同步标的 — 默认与日K共用同一标的池。
+
+    运算符可通过 auction_sync_symbols 偏好限定同步范围 (空列表 = 全量, 镜像 minute)。
+    """
+    scoped = _prefs.get_auction_sync_symbols()
+    if scoped:
+        return scoped
+    return _resolve_universe(capset)
+
+
+def _run_auction_sync(repo: KlineRepository, capset: CapabilitySet, trade_date: date) -> int:
+    """Step 2.6 竞价同步 stage 闸门 — 返回写入行数, 0 = 跳过。
+
+    双闸门: 偏好显式开启 (auction_sync_enabled, 默认 False) + probe available。
+    未开启或 probe 不可用时返回 0 (不 emit、不写湖、从不静默填湖)。
+    """
+    if not _prefs.get_auction_sync_enabled():
+        return 0
+    if not auction_sync.can_sync_auction(capset):
+        return 0
+    return auction_sync.sync_and_persist_auction(
+        _resolve_auction_symbols(capset), repo, capset, trade_date=trade_date,
+    )
 
 
 def _refresh_instruments_view(repo: KlineRepository) -> None:
