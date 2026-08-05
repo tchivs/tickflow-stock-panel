@@ -145,6 +145,86 @@ def _strategies_by_id(hub: dict) -> dict[str, dict]:
     return {s["id"]: s for s in hub["strategies"]}
 
 
+def _write_snapshot(
+    data_dir: Path,
+    as_of: str = _AS_OF,
+    results: dict | None = None,
+    computed_at: str = "2026-08-04T15:30:00",
+    strategy_version: str = "fp-test",
+) -> Path:
+    """直接写一个合法冻结式点快照 part.json (POOL-05 读路径 fixture)。
+
+    默认 results 与 ``_write_strategy_cache`` 同形状 (3 策略, Y 交叉共振),
+    保证 build_pool_hub 与 build_pool_hub_snapshot 投影语义可比。
+    """
+    if results is None:
+        results = {
+            "auction_bullish": {
+                "total": 2,
+                "as_of": as_of,
+                "rows": [
+                    {
+                        "symbol": _SYMBOLS["X"],
+                        "name": _NAMES["X"],
+                        "open_gap": 3.21,
+                        "change_pct": 5.1,
+                        "hit_factors": ["竞价多头"],
+                    },
+                    {
+                        "symbol": _SYMBOLS["Y"],
+                        "name": _NAMES["Y"],
+                        "open_gap": 1.5,
+                        "change_pct": 2.3,
+                        "hit_factors": ["盘前强势量化", "竞价多头"],
+                    },
+                ],
+            },
+            "auction_preopen_quant": {
+                "total": 2,
+                "as_of": as_of,
+                "rows": [
+                    {
+                        "symbol": _SYMBOLS["Y"],
+                        "name": _NAMES["Y"],
+                        "open_gap": 1.5,
+                        "hit_factors": ["盘前强势量化", "竞价多头"],
+                    },
+                    {
+                        "symbol": _SYMBOLS["Z"],
+                        "name": _NAMES["Z"],
+                        "open_gap": 0.5,
+                        "hit_factors": ["盘前强势量化"],
+                    },
+                ],
+            },
+            "auction_early_star": {
+                "total": 1,
+                "as_of": as_of,
+                "rows": [
+                    {
+                        "symbol": _SYMBOLS["W"],
+                        "name": _NAMES["W"],
+                        "open_gap": 0.1,
+                        "change_pct": 0.9,
+                        "hit_factors": ["早盘之星"],
+                    },
+                ],
+            },
+        }
+    payload = {
+        "as_of": as_of,
+        "computed_at": computed_at,
+        "strategy_version": strategy_version,
+        "snapshot_type": "point",
+        "schema_version": 1,
+        "results": results,
+    }
+    path = data_dir / "screener_results" / f"date={as_of}" / "part.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    return path
+
+
 # ================================================================
 # Task 1 — build_pool_hub 投影
 # ================================================================
@@ -338,6 +418,66 @@ def test_build_pool_hub_echoes_cache_as_of_on_mismatch(tmp_path):
     _write_strategy_cache(tmp_path)
     hub = build_pool_hub(tmp_path, as_of="2026-01-01")
     assert hub["as_of"] == _AS_OF
+
+
+# ================================================================
+# Task 2 (POOL-05) — build_pool_hub_snapshot 快照投影
+# ================================================================
+
+
+def test_build_pool_hub_snapshot_uses_snapshot_total(tmp_path):
+    """Divergence 1: 快照 total 权威 (display_limit 截断后 len(rows) < total)。"""
+    from app.services.pool_hub import build_pool_hub_snapshot
+
+    _write_snapshot(
+        tmp_path,
+        results={
+            "auction_bullish": {
+                "total": 2,
+                "as_of": _AS_OF,
+                "rows": [
+                    {
+                        "symbol": _SYMBOLS["X"],
+                        "name": _NAMES["X"],
+                        "open_gap": 3.21,
+                        "change_pct": 5.1,
+                        "hit_factors": ["竞价多头"],
+                    },
+                ],
+            },
+        },
+    )
+    hub = build_pool_hub_snapshot(tmp_path, _AS_OF)
+    assert hub["strategies"][0]["total"] == 2
+    assert len(hub["strategies"][0]["rows"]) == 1
+
+
+def test_build_pool_hub_snapshot_missing_available_false(tmp_path):
+    """快照缺失 → 诚实空态 (available: False, 非 404 语义)。"""
+    from app.services.pool_hub import build_pool_hub_snapshot
+
+    hub = build_pool_hub_snapshot(tmp_path, _AS_OF)
+    assert hub == {
+        "as_of": None,
+        "available": False,
+        "strategies": [],
+        "resonance_count": 0,
+        "updated_at": None,
+        "concept_attribution": "current_snapshot",
+    }
+
+
+def test_build_pool_hub_snapshot_has_concept_attribution(tmp_path):
+    """Divergence 2: 快照投影带 concept_attribution: current_snapshot (诚实标注)。"""
+    from app.services.pool_hub import build_pool_hub_snapshot
+
+    _write_snapshot(tmp_path)
+    hub = build_pool_hub_snapshot(tmp_path, _AS_OF)
+    assert hub["concept_attribution"] == "current_snapshot"
+    assert hub["as_of"] == _AS_OF
+    assert hub["updated_at"] == "2026-08-04T15:30:00"
+    assert len(hub["strategies"]) == 3
+    assert hub["resonance_count"] == 1
 
 
 # ================================================================
