@@ -1,7 +1,7 @@
 ---
 phase: 20-auction-data
 verified: 2026-08-05T00:00:00Z
-status: human_needed
+status: passed
 score: 18/18 must-have truths verified
 behavior_unverified: 0
 overrides_applied: 0
@@ -25,7 +25,7 @@ human_verification:
 
 **Phase Goal:** 研究者可以把真实 09:15–09:25 集合竞价撮合数据（竞价量/竞价金额）作为受管增强列持久化，经 `auction_sync` 落盘到 `kline_auction/date={d}/` 分区湖；整条生产路径以 auction probe 判定为前置——不可用时缺列并 fail-closed 回退到派生 `open_gap`，绝不静默填充，也绝不把 09:30 连续竞价 bar 标为集合竞价数据。
 **Verified:** 2026-08-05
-**Status:** human_needed
+**Status:** passed (human_signoff 2026-08-05, UI backstops → Phase 23)
 **Re-verification:** No — initial verification
 
 ## 目标达成 (Goal Achievement)

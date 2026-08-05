@@ -143,10 +143,13 @@ Plans:
   2. `auction_sync` 服务把真实 09:15–09:25 竞价窗口行按 `date=` hive 分区写入 `kline_auction/` 湖；湖内只存真实竞价窗口行，09:30 连续竞价 bar 被结构上排除（回归锁死）。
   3. 委托量输入可得时，研究者能查看派生的竞价未匹配金额（unmatched-order proxy）列；输入不可得时策略回退到量比 + 金额强度。
   4. probe 非 `available` 时，研究者无论在策略还是 UI 上都看不到竞价列，只能看到派生列与 `open_gap`；没有任何 UI 或策略把 09:30 bar 标为集合竞价数据。
+
 **Plans**: 2/2 plans complete
 Plans:
+
 - [x] 20-01-PLAN.md — DATA-05: `auction_sync` 湖摄入 + `kline_auction/date={d}/` 分区湖 + Step 2.6 stage + 偏好旋钮 + `kline_auction` DuckDB 视图登记 (completed 2026-08-05)
 - [x] 20-02-PLAN.md — DATA-04/06: 受管竞价列注册表 + 读路径左联 (probe×分区双闸门) + probe×列矩阵 + 派生未匹配金额 proxy + schema 面 (completed 2026-08-05)
+
 **Research flag**: 需要 `--research-phase` — DATA-04 数据源可用性探测与虚拟成交（`auction_virtual_fill`）字段语义是本期最大不确定项，规划前先做 probe 探测。
 
 ### Phase 21: 竞价策略族 (Auction Strategy Family)
@@ -161,6 +164,7 @@ Plans:
   3. 研究者可以运行金色两点半（STRAT-06），命名/描述诚实归类为尾盘/隔夜策略（T 日涨幅 3%–5% + 14:30 尾盘分钟确认、次日持有），从不混入竞价窗口。
   4. 研究者可以运行竞价全面策略（STRAT-07）、T+1闪电（STRAT-08，次日早盘分钟 K 卖出确认）与盘中确认（STRAT-09，09:30–10:00 分钟帧截断到 `evaluation_time`，绝不 lookahead）(P2)。
   5. 每个策略声明可计算时间窗（pre_open/intraday/post_close）且所需列缺席时返回空池（fail-closed）；策略仅经 `strategy/builtin/` 自动发现，无第三条注册轨道（STRAT-03 不变）。
+
 **Plans**: TBD
 **Research flag**: 中等 — 第一性原理因子阈值（量比/甜点区/金额强度）需按 A 股历史校准；STRAT-09 的 `eval_time` 截断与 `time_factor` 折算规约需要规划研究。
 
@@ -175,6 +179,7 @@ Plans:
   2. 用户能经 `GET /api/pool/dates` 列出可用股池日期，并经独立只读端点以 `as_of=YYYY-MM-DD` 取回当日股池；既有 `GET /api/pool/hub` 的 single-as_of 契约保持原样（回归锁死）。
   3. 每个交易日股池由盘后定时 `run_all` job 自动持久化，历史浏览自给自足——首个历史日请求不会被请求内重算阻塞。
   4. 全部 `/api/pool/*` 保持只读且零执行权（POOL-03 AST 守卫扩展），无任何端点/job 能把股池推向实盘。
+
 **Plans**: TBD
 **Research flag**: 需要 `--research-phase` — 历史回填策略（EOD 预生成 job vs 首日一次性后台回填）与概念板块 PIT 的历史 ext 分区缺口需要细化。
 **UI hint**: yes
@@ -190,6 +195,7 @@ Plans:
   2. 非交易日被禁用且不静默跳日；无快照的日期显示诚实的空态/状态文案，而非误导性的零池。
   3. 用户在股池钻取中能看到竞价列（竞价量/金额），真实集合竞价列与派生/虚拟成交列明确分开展示并标注单位（股/元）。
   4. probe 非 `available` 或盘前时，UI 诚实展示 probe/窗口状态（fail-closed 空态或派生标注），绝不暗示存在真实竞价数据。
+
 **Plans**: TBD
 **UI hint**: yes
 
@@ -204,7 +210,7 @@ Phases execute in numeric order: 16 → 17 → 18 → 19 → 20 → 21 → 22 �
 | 17. 竞价策略族 | STRAT-01..03 | Complete    |
 | 18. 股池 Hub | POOL-01..03 | Complete    |
 | 19. 游客/VIP 脱敏 + 前端 | GUEST-01..02 | Complete    |
-| 20. 竞价数据层 | DATA-04..06 | Complete |
+| 20. 竞价数据层 | DATA-04..06 | Complete    |
 | 21. 竞价策略族 | STRAT-04..09 | Not started |
 | 22. 股池日期导航 | POOL-04..06 | Not started |
 | 23. 前端 | FRONT-01..02 | Not started |

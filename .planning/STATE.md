@@ -2,19 +2,19 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: 竞价深度与历史股池 — planning
-current_phase: 20
-current_phase_name: 竞价数据层 (Auction Data)
-status: executing
+current_phase: 21
+current_phase_name: 竞价策略族 (Auction Strategy Family)
+status: planning
 stopped_at: Completed 20-02-PLAN.md
-last_updated: "2026-08-05T00:58:01.000Z"
+last_updated: "2026-08-05T05:18:43.648Z"
 last_activity: 2026-08-05
-last_activity_desc: Phase 20 plan 2 (DATA-04/06 auction columns + unmatched proxy) completed
+last_activity_desc: Phase 20 complete, transitioned to Phase 21
 progress:
   total_phases: 8
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 2
   completed_plans: 2
-  percent: 100
+  percent: 13
 ---
 
 # Project State
@@ -28,13 +28,12 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 
 ## Current Position
 
-Phase: 20 (竞价数据层 (Auction Data)) — COMPLETE
-Plan: 2/2 complete
-Status: Phase 20 complete
-Last activity: 2026-08-05 — Phase 20 plan 2 completed
+Phase: 21 — 竞价策略族 (Auction Strategy Family)
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-08-05 — Phase 20 complete, transitioned to Phase 21
 
 Progress: [██████████] 100%
-
 
 ## v1.3 Phase Summary (shipped 2026-08-04)
 
