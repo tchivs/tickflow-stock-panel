@@ -154,6 +154,10 @@ ENRICHED_COLUMNS: dict[str, dict[str, str]] = {
     "signal_limit_down":       "跌停",
     "signal_limit_down_recovery": "跌停翘板(跌停后回升)",
     "signal_broken_limit_up":  "炸板(最高触及涨停但收盘未封住)",
+    # ── 竞价列 (probe 门控, 读路径左联注入; 不进存储窄表/计算闭包) ───
+    "auction_volume":          "竞价量 (集合竞价撮合成交量, 单位: 股; 仅 probe available 时存在)",
+    "auction_amount":          "竞价金额 (集合竞价撮合成交额, 单位: 元; 仅 probe available 时存在)",
+    "auction_unmatched_amount": "派生未匹配金额 (估算, 非真实成交; 委托量输入可得时存在)",
     # ── JOIN 列 (由 repository 从 instruments 表补充) ───
     "name":                    "股票名称 (来自 instruments)",
     "total_shares":            "总股本 (来自 instruments)",
@@ -176,6 +180,7 @@ ENRICHED_COLUMNS_BY_CATEGORY: dict[str, list[str]] = {
     "rsi":      ["rsi_6", "rsi_14", "rsi_24"],
     "signals":  [k for k in ENRICHED_COLUMNS if k.startswith("signal_")],
     "join":     ["name", "total_shares", "float_shares"],
+    "auction":  ["auction_volume", "auction_amount", "auction_unmatched_amount"],
 }
 
 
@@ -305,6 +310,7 @@ _INDICATOR_DEPS: dict[str, set[str]] = {
 }
 
 # compute_indicators 可产出的全部指标/临时列 (needed=None 时即为此全集, 行为不变)
+# auction_* 列不由 compute_indicators 计算, 由读路径从 kline_auction 湖左联注入; 缺列即 probe 不可用。
 _ALL_INDICATOR_COLS: frozenset[str] = frozenset({
     "prev_close", "ma5", "ma10", "ma20", "ma30", "ma60",
     "ema5", "ema10", "ema20", "ema30", "ema60", "_ema12", "_ema26",
