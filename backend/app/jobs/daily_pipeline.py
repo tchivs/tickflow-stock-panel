@@ -954,11 +954,65 @@ def _register_review_job(scheduler, repo, hour: int, minute: int) -> None:
     )
 
 
+# ================================================================
+# 盘后股池 EOD 持久化 (POOL-06)
+# ================================================================
+
+# 盘后管道完成后偏移几分钟再跑股池持久化, 确保当日 enriched 已落盘。
+_POOL_EOD_JOB_ID = "pool_eod_persist"
+_POOL_EOD_OFFSET_MIN = 5
+
+
+def _pool_eod_persist(on_progress=None) -> dict:
+    """盘后 EOD job: 经 service 级共享核心预生成当日冻结快照 + 刷新最新指针。
+
+    每交易日盘后(管道完成后 +5min)直调 ``ScreenerService.run_all_with_hits``
+    跑全部策略, 先 ``strategy_cache.write_cache`` 刷新最新指针(顺带修复陈旧
+    as_of), 再 ``pool_snapshot.persist_point_snapshot`` 落冻结式点快照。
+
+    - 绝不 HTTP 自调 POST /api/screener/run_all (service 级共享核心, 单条代码路径)。
+    - 无数据日/无 app state → 诚实 skip, 不写任何文件 (首个历史日请求只读快照,
+      不触发请求内重算)。
+    - 与手动 run_all 的并发写防护由调用方 ``_run_tracked`` 单飞保证。
+    """
+    from datetime import datetime
+
+    from app.services import pool_snapshot, strategy_cache
+    from app.services.screener import ScreenerService
+
+    app_state = _get_app_state()
+    if app_state is None:
+        return {"as_of": None, "skipped": "no app state"}
+    repo = app_state.repo
+    svc = ScreenerService(repo)
+    as_of = svc.latest_date()
+    if as_of is None:
+        return {"as_of": None, "skipped": "no data date"}
+
+    emit = on_progress or _noop
+    emit("pool_eod_persist", 0, f"股池 EOD 持久化 {as_of}: 运行全部策略…")
+    data_dir = repo.store.data_dir
+    results = svc.run_all_with_hits(as_of, engine=getattr(app_state, "strategy_engine", None))
+    if results:
+        # 先刷新最新指针, 再落冻结快照 (与手动 run_all 调用点 1 顺序一致)。
+        strategy_cache.write_cache(data_dir, str(as_of), results)
+        pool_snapshot.persist_point_snapshot(
+            data_dir,
+            str(as_of),
+            results,
+            strategy_version=pool_snapshot.strategy_fingerprint(app_state.strategy_engine),
+            computed_at=datetime.now().isoformat(timespec="seconds"),
+        )
+    emit("done", 100, f"股池 EOD 持久化完成, {len(results)} 个策略")
+    return {"as_of": str(as_of), "strategies": len(results)}
+
+
 def start_scheduler(repo: KlineRepository, capset: CapabilitySet) -> AsyncIOScheduler:
     """启动调度器。
 
     工作日 09:10 — 同步个股维表
     工作日 HH:MM — 盘后管道（时间由用户偏好决定，默认 15:30）
+    工作日 HH:MM+5 — 盘后股池 EOD 持久化（管道完成后预生成冻结快照）
     """
     from app.services import preferences
     sched = preferences.get_pipeline_schedule()
@@ -1014,6 +1068,22 @@ def start_scheduler(repo: KlineRepository, capset: CapabilitySet) -> AsyncIOSche
                             hour=sched["hour"], minute=sched["minute"],
                             timezone="Asia/Shanghai"),
         id="daily_pipeline",
+        misfire_grace_time=3600,
+        replace_existing=True,
+    )
+
+    # 盘后: 股池 EOD 持久化 (管道完成 +5min, 每交易日预生成冻结快照)。
+    # 复用 _run_tracked 单飞, 与手动 run_all 并发写防护 (T-22-02-01)。
+    pool_minute = sched["minute"] + _POOL_EOD_OFFSET_MIN
+    pool_hour = sched["hour"] + (pool_minute // 60)
+    pool_minute %= 60
+
+    scheduler.add_job(
+        lambda: _run_tracked(_pool_eod_persist, "pool_eod_persist"),
+        trigger=CronTrigger(day_of_week="mon-fri",
+                            hour=pool_hour, minute=pool_minute,
+                            timezone="Asia/Shanghai"),
+        id=_POOL_EOD_JOB_ID,
         misfire_grace_time=3600,
         replace_existing=True,
     )
