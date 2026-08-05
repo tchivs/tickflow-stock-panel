@@ -84,6 +84,118 @@ const knownStrategies = [
   { id: 'auction_momentum', name: '动量增强', description: '开盘动量', source: 'builtin' },
 ]
 
+// ===== Phase 23 (FRONT-01/02): DateNavigator + 竞价列夹具 =====
+const DATES_PAYLOAD = {
+  dates: ['2026-08-04', '2026-08-01', '2026-07-31'],
+  count: 3,
+  latest: '2026-08-04',
+}
+
+/** 历史快照 (08-01): 与 hub (total 2) 不同的 total, 用于断言步进后卡片刷新 */
+const historyPayload0801 = {
+  as_of: '2026-08-01',
+  updated_at: '2026-08-01T09:25:00+08:00',
+  mode: 'vip',
+  strategies: [
+    { id: 'auction_bullish', name: '竞价多头', total: 5, rows: [doublyHitRow] },
+  ],
+  resonance_count: 0,
+}
+
+const historyPayload0731 = {
+  as_of: '2026-07-31',
+  updated_at: '2026-07-31T09:25:00+08:00',
+  mode: 'vip',
+  strategies: [
+    { id: 'auction_bullish', name: '竞价多头', total: 1, rows: [singleHitRow] },
+  ],
+  resonance_count: 0,
+}
+
+/** 无快照日诚实空态 (200 语义, PIT-2): 无 reason 键, available:false */
+const missingSnapshotPayload = {
+  as_of: null,
+  available: false,
+  strategies: [],
+  resonance_count: 0,
+  updated_at: null,
+  mode: 'vip',
+  concept_attribution: 'current_snapshot',
+}
+
+// 竞价列 (FRONT-02/OQ-2): 服务端冻结声明 + 行级竞价值
+const auctionRow = {
+  symbol: '300750.SZ', code: '300750', name: '宁德时代',
+  open_gap: 0.0234, change_pct: 0.0512,
+  concept_board: ['新能源'], hit_factors: ['竞价多头'], cross_resonance: false,
+  auction_volume: 1_234_567,
+  auction_amount: 234_567_890,
+  auction_volume_ratio: 2.35,
+  auction_unmatched_amount: 12_345_678,
+}
+/** 行级 null: 列存在但该标的在分区缺席 (PIT-3 服务端声明消歧) */
+const auctionNullRow = {
+  symbol: '600519.SH', code: '600519', name: '贵州茅台',
+  open_gap: 0.0105, change_pct: -0.0012,
+  concept_board: ['白酒'], hit_factors: ['竞价多头'], cross_resonance: false,
+  auction_volume: null,
+  auction_amount: null,
+  auction_volume_ratio: null,
+  auction_unmatched_amount: null,
+}
+const auctionColumnsFull = {
+  real: ['auction_volume', 'auction_amount'],
+  derived: ['auction_volume_ratio', 'auction_unmatched_amount', 'open_gap'],
+}
+const auctionColumnsDerivedOnly = {
+  real: [],
+  derived: ['auction_volume_ratio', 'auction_unmatched_amount', 'open_gap'],
+}
+const auctionHubPayload = {
+  as_of: HUB_AS_OF,
+  updated_at: HUB_UPDATED_AT,
+  mode: 'vip',
+  strategies: [
+    { id: 'auction_bullish', name: '竞价多头', total: 2, rows: [auctionRow, auctionNullRow] },
+  ],
+  resonance_count: 0,
+  auction_columns: auctionColumnsFull,
+}
+const auctionHubPayloadDerivedOnly = {
+  ...auctionHubPayload,
+  auction_columns: auctionColumnsDerivedOnly,
+}
+/** 历史快照 (08-01) 带真实竞价列 — 用于 H3 历史快照诚实断言 */
+const auctionHistoryPayload0801 = {
+  as_of: '2026-08-01',
+  updated_at: '2026-08-01T09:25:00+08:00',
+  mode: 'vip',
+  strategies: [
+    { id: 'auction_bullish', name: '竞价多头', total: 1, rows: [auctionRow] },
+  ],
+  resonance_count: 0,
+  auction_columns: auctionColumnsFull,
+}
+
+const probePayloadAvailable = {
+  status: 'available',
+  source: 'kline_auction',
+  probed_at: '2026-08-05T09:00:00+08:00',
+  window: '09:15-09:25',
+}
+const probePayloadFailClosed = {
+  status: 'fail_closed',
+  source: null,
+  probed_at: '2026-08-05T09:00:00+08:00',
+  window: '09:15-09:25',
+}
+
+/** 本地时区今天的 ISO 串 — 用于「查看今日」盘前断言 (与应用 isToday 同机同 TZ) */
+function localTodayISO() {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
 // ===== Task 3: 视觉证据 (UI-SPEC 5 个 backstop 标量) =====
 const VISUAL_LONG_NAME = '竞价高开强度叠加盘前量能与连板因子共振筛选策略（超长名称用于截断演示）'
 
@@ -170,6 +282,14 @@ async function installShell(page: Page) {
     instruments: null, financials: null, storage: {},
   }))
   await page.route('**/api/screener/strategies**', route => json(route, { presets: [] }))
+  // Phase 23 (FRONT-01/02): 日期白名单 + 历史 as_of 只读 + 竞价 probe — 各用例按需覆盖 (后注册优先)
+  await page.route('**/api/pool/dates**', route => json(route, DATES_PAYLOAD))
+  await page.route('**/api/pool/history**', route => {
+    const asOf = new URL(route.request().url()).searchParams.get('as_of') ?? ''
+    const body = asOf === '2026-07-31' ? historyPayload0731 : historyPayload0801
+    return json(route, body)
+  })
+  await page.route('**/api/data/auction-probe**', route => json(route, probePayloadFailClosed))
 }
 
 test.describe('Phase 18 pool hub', () => {
@@ -285,7 +405,7 @@ test.describe('Phase 18 pool hub', () => {
 
     await page.goto('/pool-hub')
 
-    await expect(page.getByRole('status')).toBeVisible()
+    await expect(page.getByRole('status').filter({ hasText: '股池加载中…' })).toBeVisible()
     await expect(page.getByText('股池加载中…')).toBeVisible()
     await expect(page.getByRole('button', { name: '刷新股池' })).toBeDisabled()
 
@@ -478,16 +598,17 @@ test.describe('Phase 18 pool hub', () => {
     await expect(page.getByRole('button', { name: /竞价多头/ })).toBeVisible()
 
     // 作用域限定在 main (布局侧边栏的「交易」导航不属于股池功能面)
+    // (?!交易日): DateNavigator 步进 aria-label 含「交易日」, 非执行动作 — 排除误报
     const main = page.getByRole('main')
-    const EXECUTION_RE = /买入|卖出|委托|下单|交易|buy|sell|order|trade|execute/i
+    const EXECUTION_RE = /买入|卖出|委托|下单|(?!交易日)交易|buy|sell|order|trade|execute/i
     await expect(main.getByRole('button', { name: EXECUTION_RE })).toHaveCount(0)
     await expect(main.getByRole('link', { name: EXECUTION_RE })).toHaveCount(0)
 
     // 研究参考声明
     await expect(page.getByText('本页面仅用于研究参考，不提供任何交易执行功能。')).toBeVisible()
 
-    // 白名单: 股池页唯一交互 = 刷新 / 卡片钻取 / 概念输入 / 清除筛选
-    const ALLOWED_RE = /刷新股池|当日池|当日无命中|数据不可用|清除筛选|清除概念筛选|重试|收起|\+\d+/
+    // 白名单: 股池页唯一交互 = 刷新 / 卡片钻取 / 概念输入 / 清除筛选 / DateNavigator 步进
+    const ALLOWED_RE = /刷新股池|当日池|当日无命中|数据不可用|清除筛选|清除概念筛选|重试|收起|\+\d+|上一个交易日|下一个交易日|最新/
     const btnCount = await main.getByRole('button').count()
     for (let i = 0; i < btnCount; i++) {
       const btn = main.getByRole('button').nth(i)
@@ -729,5 +850,231 @@ test.describe('Phase 18 pool hub', () => {
     await expect(page.getByText('300750', { exact: true })).toBeVisible()
     await page.waitForTimeout(300)
     await expect(page.getByRole('region', { name: /竞价多头 · 股池明细/ })).toHaveScreenshot('pool-vip-plaintext.png', { maxDiffPixelRatio: 0.02 })
+  })
+
+  test('SC1: DateNavigator 步进/下拉/最新复位 + 历史必走 /api/pool/history (PIT-1)', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
+    await installShell(page)
+    const historyDates: string[] = []
+    page.on('request', r => {
+      const url = new URL(r.url())
+      if (url.pathname === '/api/pool/history') historyDates.push(url.searchParams.get('as_of') ?? '')
+    })
+    await page.route('**/api/pool/hub**', route => json(route, hubPayload))
+
+    await page.goto('/pool-hub')
+
+    // 初始: 最新日 subtitle; › (更近) disabled, ‹ (更早) enabled
+    await expect(page.getByText('竞价策略 · 数据日期 2026-08-04 · 仅研究参考')).toBeVisible()
+    const prevBtn = page.getByRole('button', { name: '上一个交易日' })
+    const nextBtn = page.getByRole('button', { name: '下一个交易日' })
+    await expect(nextBtn).toBeDisabled()
+    await expect(prevBtn).toBeEnabled()
+
+    // ‹ → 2026-08-01: subtitle 更新 + history 请求 + 卡片计数刷新 (mock 不同 total)
+    await prevBtn.click()
+    await expect(page.getByText('竞价策略 · 数据日期 2026-08-01 · 仅研究参考')).toBeVisible()
+    await expect(page.getByRole('button', { name: /当日池 5 只/ })).toBeVisible()
+    await expect(page.getByText(/共 5 只/)).toBeVisible()
+    expect(historyDates).toContain('2026-08-01')
+    // PIT-1: 最新日 (2026-08-04) 绝不打 history 端点; 历史绝不用 /hub?as_of= 反漂移
+    expect(historyDates).not.toContain('2026-08-04')
+
+    // 下拉选 2026-07-31 → subtitle + history 请求
+    await page.getByRole('combobox', { name: '选择日期' }).selectOption('2026-07-31')
+    await expect(page.getByText('竞价策略 · 数据日期 2026-07-31 · 仅研究参考')).toBeVisible()
+    await expect(page.getByRole('button', { name: /当日池 1 只/ })).toBeVisible()
+    await expect(page.getByText(/共 1 只/)).toBeVisible()
+    expect(historyDates).toContain('2026-07-31')
+
+    // ‹ 到最旧 (idx = length-1) → disabled
+    await expect(prevBtn).toBeDisabled()
+
+    // 「最新」→ 回 /api/pool/hub, subtitle 最新, 按钮消失
+    await page.getByRole('button', { name: '最新' }).click()
+    await expect(page.getByText('竞价策略 · 数据日期 2026-08-04 · 仅研究参考')).toBeVisible()
+    await expect(page.getByRole('button', { name: '最新' })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: /当日池 2 只/ })).toBeVisible()
+    await expect(nextBtn).toBeDisabled()
+    await expect(prevBtn).toBeEnabled()
+  })
+
+  test('SC2: 白名单下拉 + available:false 空态先于零池短路 (PIT-2/PIT-5)', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
+    await installShell(page)
+    await page.route('**/api/pool/hub**', route => json(route, emptyHubPayload))
+    await page.route('**/api/pool/history**', route => {
+      const asOf = new URL(route.request().url()).searchParams.get('as_of') ?? ''
+      if (asOf === '2026-08-01') return json(route, missingSnapshotPayload)
+      return json(route, historyPayload0801)
+    })
+
+    await page.goto('/pool-hub')
+
+    // 零池日: 当日无股池结果 出现, 该日期无股池快照 不出现
+    await expect(page.getByRole('heading', { name: '当日无股池结果' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: '该日期无股池快照' })).toHaveCount(0)
+
+    // 下拉只含 dates 白名单日期 (无白名单外/周末节假日日期)
+    const select = page.getByRole('combobox', { name: '选择日期' })
+    const options = select.locator('option')
+    await expect(options).toHaveCount(3)
+    expect(await options.allTextContents()).toEqual(['2026-08-04', '2026-08-01', '2026-07-31'])
+
+    // ‹ → 08-01 (available:false) → 独立空态, 零池文案不出现, 无策略卡片/明细表
+    await page.getByRole('button', { name: '上一个交易日' }).click()
+    await expect(page.getByRole('heading', { name: '该日期无股池快照' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: '当日无股池结果' })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: /当日池/ })).toHaveCount(0)
+    await expect(page.getByRole('table')).toHaveCount(0)
+  })
+
+  test('SC2b: dates 为空 → 双按钮 disabled + 下拉 暂无历史日期', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
+    await installShell(page)
+    await page.route('**/api/pool/dates**', route => json(route, { dates: [], count: 0, latest: null }))
+    await page.route('**/api/pool/hub**', route => json(route, hubPayload))
+
+    await page.goto('/pool-hub')
+
+    await expect(page.getByRole('button', { name: '上一个交易日' })).toBeDisabled()
+    await expect(page.getByRole('button', { name: '下一个交易日' })).toBeDisabled()
+    const select = page.getByRole('combobox', { name: '选择日期' })
+    await expect(select).toBeDisabled()
+    await expect(select.locator('option')).toHaveText('暂无历史日期')
+    // 最新 hub 查询照常
+    await expect(page.getByRole('button', { name: /当日池 2 只/ })).toBeVisible()
+  })
+
+  test('SC3: 竞价列分组表头 + 单位 + tooltip + 行值 (真实 vs 派生)', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
+    await installShell(page)
+    await page.route('**/api/pool/hub**', route => json(route, auctionHubPayload))
+
+    await page.goto('/pool-hub')
+    await expect(page.getByRole('button', { name: /竞价多头/ })).toBeVisible()
+
+    const table = page.getByRole('table')
+    // 组带
+    await expect(table.getByRole('columnheader', { name: '真实集合竞价' })).toBeVisible()
+    await expect(table.getByRole('columnheader', { name: '派生 · 虚拟成交' })).toBeVisible()
+    // 成员列 (单位在列头)
+    for (const header of ['竞价量（股）', '竞价金额（元）', '竞价量比（×）', '虚拟未匹配金额（元·估算）']) {
+      await expect(table.getByRole('columnheader', { name: header })).toBeVisible()
+    }
+    // tooltip
+    await expect(table.getByRole('columnheader', { name: '真实集合竞价' })).toHaveAttribute('title', /集合竞价撮合成交/)
+    await expect(table.getByRole('columnheader', { name: '派生 · 虚拟成交' })).toHaveAttribute('title', /派生/)
+    await expect(table.getByRole('columnheader', { name: '竞价量（股）' })).toHaveAttribute('title', /单位：股/)
+    await expect(table.getByRole('columnheader', { name: '竞价量比（×）' })).toHaveAttribute('title', /前 5 日均量/)
+    // 行值: fmtBigNum (万/亿) + 量比 toFixed(2)+'×'; 无涨跌色 (由单元格 class 承载)
+    await expect(page.getByText('2.35×', { exact: true })).toBeVisible()
+    await expect(page.getByText('123万', { exact: true })).toBeVisible()
+    await expect(page.getByText('2.35亿', { exact: true })).toBeVisible()
+    await expect(page.getByText('1235万', { exact: true })).toBeVisible()
+    // 行级 null → — (列存在但该标的缺席)
+    const nullRow = page.getByRole('row').filter({ hasText: '600519' })
+    await expect(nullRow.getByText('—')).toHaveCount(4)
+  })
+
+  test('SC3b: real 空 → 真实组整组不渲染 + warning 徽标 + 派生组保留', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
+    await installShell(page)
+    await page.route('**/api/pool/hub**', route => json(route, auctionHubPayloadDerivedOnly))
+
+    await page.goto('/pool-hub')
+    await expect(page.getByRole('button', { name: /竞价多头/ })).toBeVisible()
+
+    const table = page.getByRole('table')
+    await expect(table.getByRole('columnheader', { name: '真实集合竞价' })).toHaveCount(0)
+    await expect(table.getByRole('columnheader', { name: '竞价量（股）' })).toHaveCount(0)
+    await expect(table.getByRole('columnheader', { name: '竞价金额（元）' })).toHaveCount(0)
+    // 派生组保留
+    await expect(table.getByRole('columnheader', { name: '派生 · 虚拟成交' })).toBeVisible()
+    await expect(table.getByRole('columnheader', { name: '竞价量比（×）' })).toBeVisible()
+    await expect(table.getByRole('columnheader', { name: '虚拟未匹配金额（元·估算）' })).toBeVisible()
+    // warning 徽标 (默认 probe fail_closed) — 诚实: 仅派生列
+    await expect(page.getByText('竞价数据未接入，仅展示派生列')).toBeVisible()
+  })
+
+  test('SC3c: guest 载荷 → 无竞价列/无分组表头/无徽标', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
+    await installShell(page)
+    await page.route('**/api/pool/hub**', route => json(route, hubPayloadGuest))
+
+    await page.goto('/pool-hub')
+    await expect(page.getByRole('button', { name: /竞价多头/ })).toBeVisible()
+
+    const table = page.getByRole('table')
+    await expect(table.getByRole('columnheader', { name: '真实集合竞价' })).toHaveCount(0)
+    await expect(table.getByRole('columnheader', { name: '竞价量（股）' })).toHaveCount(0)
+    await expect(table.getByRole('columnheader', { name: '派生 · 虚拟成交' })).toHaveCount(0)
+    await expect(page.getByText('竞价数据可用 · 窗口 09:15-09:25')).toHaveCount(0)
+    await expect(page.getByText('竞价数据未接入，仅展示派生列')).toHaveCount(0)
+    // 既有 5 列结构不变
+    for (const header of ['代码', '名称', '涨跌幅', '概念板块', '关联因子']) {
+      await expect(table.getByRole('columnheader', { name: header })).toBeVisible()
+    }
+  })
+
+  test('SC4a: probe available + real 非空 → info 徽标', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
+    await installShell(page)
+    await page.route('**/api/pool/hub**', route => json(route, auctionHubPayload))
+    await page.route('**/api/data/auction-probe**', route => json(route, probePayloadAvailable))
+
+    await page.goto('/pool-hub')
+    await expect(page.getByRole('button', { name: /竞价多头/ })).toBeVisible()
+    await expect(page.getByText('竞价数据可用 · 窗口 09:15-09:25')).toBeVisible()
+  })
+
+  test('SC4b: probe fail_closed + real 空 → warning 徽标', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
+    await installShell(page)
+    await page.route('**/api/pool/hub**', route => json(route, auctionHubPayloadDerivedOnly))
+    await page.route('**/api/data/auction-probe**', route => json(route, probePayloadFailClosed))
+
+    await page.goto('/pool-hub')
+    await expect(page.getByRole('button', { name: /竞价多头/ })).toBeVisible()
+    await expect(page.getByText('竞价数据未接入，仅展示派生列')).toBeVisible()
+  })
+
+  test('SC4c: 查看今日 + 非交易时段 → 盘前 secondary 行', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
+    await installShell(page)
+    await page.route('**/api/pool/hub**', route => json(route, { ...auctionHubPayload, as_of: localTodayISO() }))
+
+    await page.goto('/pool-hub')
+    await expect(page.getByRole('button', { name: /竞价多头/ })).toBeVisible()
+    await expect(page.getByText('盘前/休市 · 竞价窗口 09:15-09:25 未开始')).toBeVisible()
+    // info 徽标仍并列 (real 非空)
+    await expect(page.getByText('竞价数据可用 · 窗口 09:15-09:25')).toBeVisible()
+  })
+
+  test('SC4d: 历史快照诚实 (H3) — 今日 probe fail_closed 不抹掉历史真实竞价列', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
+    await installShell(page)
+    await page.route('**/api/pool/hub**', route => json(route, hubPayload))
+    await page.route('**/api/pool/history**', route => {
+      const asOf = new URL(route.request().url()).searchParams.get('as_of') ?? ''
+      if (asOf === '2026-08-01') return json(route, auctionHistoryPayload0801)
+      return json(route, historyPayload0801)
+    })
+    await page.route('**/api/data/auction-probe**', route => json(route, probePayloadFailClosed))
+
+    await page.goto('/pool-hub')
+    await expect(page.getByRole('button', { name: /竞价多头/ })).toBeVisible()
+
+    // 步进到历史日 (08-01, real 非空)
+    await page.getByRole('button', { name: '上一个交易日' }).click()
+    await expect(page.getByText('竞价策略 · 数据日期 2026-08-01 · 仅研究参考')).toBeVisible()
+
+    // 今日 probe fail_closed, 但历史快照 real 非空 → 真实竞价列仍渲染 (H3 双轨)
+    const table = page.getByRole('table')
+    await expect(table.getByRole('columnheader', { name: '真实集合竞价' })).toBeVisible()
+    await expect(table.getByRole('columnheader', { name: '竞价量（股）' })).toBeVisible()
+    await expect(page.getByText('2.35×', { exact: true })).toBeVisible()
+    // 徽标按 auction_columns.real 显示 info, 不被今日 probe 状态重写
+    await expect(page.getByText('竞价数据可用 · 窗口 09:15-09:25')).toBeVisible()
   })
 })

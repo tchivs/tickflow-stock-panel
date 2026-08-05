@@ -8,7 +8,7 @@ import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
 import { StrategyCardGrid } from '@/components/pool-hub/StrategyCardGrid'
 import { ConceptFilter } from '@/components/pool-hub/ConceptFilter'
-import { StockListTable } from '@/components/pool-hub/StockListTable'
+import { StockListTable, AuctionColumnStatusBadge } from '@/components/pool-hub/StockListTable'
 import { DateNavigator } from '@/components/pool-hub/DateNavigator'
 import { GuestModeBanner } from '@/components/pool-hub/GuestModeBanner'
 
@@ -156,8 +156,8 @@ export function PoolHubPage() {
           />
         )}
 
-        {/* 当日无股池结果 */}
-        {data && data.strategies.length === 0 && (
+        {/* 当日无股池结果 (零池语义, 保留) — available:false 时短路 (PIT-2: 无快照 ≠ 零池) */}
+        {data && data.available !== false && data.strategies.length === 0 && (
           <EmptyState
             icon={ScanSearch}
             title="当日无股池结果"
@@ -190,6 +190,10 @@ export function PoolHubPage() {
             {activeStrategy && (
               <section aria-label={`${activeStrategy.name} · 股池明细`} className="space-y-3">
                 <h2 className="text-sm font-semibold text-foreground">{activeStrategy.name} · 股池明细</h2>
+                {/* 竞价列诚实状态徽标 (UI-SPEC §3.3): 仅 VIP 且服务端透传 auction_columns 时渲染 (H3 双轨) */}
+                {data?.auction_columns && (
+                  <AuctionColumnStatusBadge auctionColumns={data.auction_columns} asOf={asOf} />
+                )}
                 <StockListTable
                   mode={mode}
                   strategy={activeStrategy}
@@ -201,6 +205,7 @@ export function PoolHubPage() {
                   onRetry={refresh}
                   onClearFilter={() => setFilterText('')}
                   resonanceCount={data.resonance_count}
+                  auctionColumns={data?.auction_columns ?? null}
                 />
               </section>
             )}
