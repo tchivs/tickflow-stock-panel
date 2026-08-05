@@ -138,13 +138,12 @@ Each task was committed atomically:
 2. **Task 2: auction 偏好旋钮 + daily_pipeline Step 2.6 竞价同步 stage（显式开启 + probe 双闸门）** - `1e930e2` (feat)
 3. **Task 3: kline_auction DuckDB 视图登记 — DataStore 子目录 + 权威视图重建 + 单视图刷新路径表** - `1b5bb97` (feat)
 
-**Plan metadata:** pending final docs commit
+**Plan metadata:** `3a8d66a` (docs: complete plan)
 
 ## Files Created/Modified
 
 - `backend/app/services/auction_sync.py` (new) - 湖摄入服务：`sync_and_persist_auction` / `can_sync_auction` / `_first_auction_provider` / `_atomic_write_parquet` / `CANONICAL_AUCTION_COLS` / `_WINDOW_START_MIN=555` / `_WINDOW_END_MIN=565`
 - `backend/tests/test_auction_sync.py` (new) - 12 项 hermetic 测试，复用 test_auction_probe 的 FakeAuctionProvider 模式
-- `backend/app/services/preferences.py` - `get_auction_sync_enabled` / `get_auction_sync_symbols` / `set_auction_sync_symbols`
 - `backend/app/jobs/daily_pipeline.py` - Step 2.6 `_run_auction_sync` / `_resolve_auction_symbols` / `_refresh_single_view` 路径表 / `run_now` 结果 `auction_rows`
 - `backend/app/tickflow/repository.py` - `DataStore` 子目录 + `_register_views` 语句 + `rebuild_views` 视图条目
 
