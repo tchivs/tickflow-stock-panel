@@ -48,6 +48,17 @@ META = {
     "limit": 100,                      # 最多返回条数
 }
 
+### 可计算时间窗 / 分钟确认契约字段（Phase 21 引擎读取）
+
+策略可在 `META` 中声明以下字段（AI/自定义策略生成时按需补写；缺省时引擎按默认值处理）：
+
+| 字段 | 类型 | 取值 / 默认 | 说明 |
+|------|------|-------------|------|
+| `time_window` | str | `"pre_open"` / `"intraday"` / `"post_close"`（默认 `"intraday"`） | 可计算时间窗声明；引擎校验白名单，非法值 → 加载失败可见 |
+| `evaluation_time` | str "HH:MM" | 如 `"09:45"` / `"15:00"`（默认 `None`） | 盘中/尾盘分钟确认的截断时刻 |
+| `requires_auction_data` | bool | `True` / `False`（默认 `False`） | 竞价列缺席 → 引擎短路返回空池（fail-closed） |
+| `minute_confirm_required` | bool | `True` / `False`（默认 `False`） | 分钟确认必需则 `True`（缺分钟数据 → 空池）；可选则 `False`（缺分钟数据 → 跳过确认，保留日线核心池） |
+
 # 买入信号 (回测 + 监控用, 根据策略逻辑选择合适的信号列)
 ENTRY_SIGNALS = []
 
@@ -143,6 +154,24 @@ def filter_history(df: pl.DataFrame, params: dict) -> pl.DataFrame:
 - 只有遇到表达式难以描述的复杂状态机时，才使用 `partition_by("symbol")` + `to_dicts()` 逐股票分析
 - **返回所有匹配行，不要过滤 `latest`**；选股引擎会自动取最新日，回测引擎需要全区间命中
 - 未声明 `filter_history()` 的策略走普通 `filter()` 路径，不受影响
+
+### 分钟确认策略（minute_confirm）
+
+盘中/尾盘策略可在 `META` 声明 `evaluation_time` 并定义
+`minute_confirm(df_minute, params) -> pl.DataFrame` 对分钟帧复评（如 STRAT-09 盘中确认 `09:45`、
+STRAT-06 尾盘 `15:00` 可选增强）：
+
+- **截断点只在引擎**：引擎按 `META["evaluation_time"]` 对分钟帧做单点截断
+  `datetime.time() <= evaluation_time`，策略拿到的帧物理上不含确认时刻之后的 bar
+  （"确认时刻之后无输入"硬验收；禁止在策略内自行判断墙钟）。
+- `minute_confirm(df_minute, params) -> pl.DataFrame`：返回确认后的分钟帧（必须含 `symbol` 列），
+  引擎只保留其中 symbol 进入评分。数据访问唯一路径是引擎注入的 `df_minute`，策略内不再读湖。
+- `time_factor` 折算：`elapsed = trading_minutes_elapsed_from_dt(evaluation_time)`
+  （`app.market_time`；eval=09:45 → elapsed=15），`time_factor = 240 / elapsed`
+  （eval=09:45 → tf=16.0）。盘中累计量 × time_factor 折算全天量级。
+- `minute_confirm` 内只消费分钟帧内统计，禁引用 EOD 日线列。
+- `minute_confirm_required=True`：分钟数据缺席 → 空池（fail-closed）；
+  `False`：分钟数据缺席 → 跳过确认、保留日线核心池。
 
 ## 3. 常用指标列（参考，可直接使用）
 
@@ -270,6 +299,7 @@ def filter_history(df: pl.DataFrame, params: dict) -> pl.DataFrame:
 7. 禁止使用 `open()`, `exec()`, `eval()`, `os`, `sys`, `subprocess`
 8. **贴合用户需求优先**：第3/4节的指标列和信号列仅供参考，能用则用；如果用户需求需要自定义计算（如"前高""上次涨停价""N日内某个事件后X天"），直接在 `filter_history()` 中自行设计和计算，不需要局限于已有列
 9. `filter_history()` 中优先用 Polars 向量化语法；仅在复杂状态机无法清晰表达时，才用 `partition_by("symbol")` 逐股票分析
+10. `pre_open` 时间窗策略的 `filter` 禁引用 EOD 列 `change_pct`/`vol_ratio_5d`/`amount`/`close` —— 它们只在收盘后可算，盘前引用即 lookahead（PITFALLS #7）
 
 ## 7. 策略示例
 
