@@ -19,17 +19,17 @@ created: 2026-08-05
 |----------|-------|
 | **Framework** | pytest >=8.0 (`--import-mode=importlib`, `asyncio_mode=auto`) |
 | **Config file** | `backend/pyproject.toml` `[tool.pytest.ini_options]` |
-| **Quick run command** | `uv run pytest tests/test_auction_probe.py tests/test_auction_sync.py -x` |
-| **Full suite command** | `uv run pytest -x` (from `backend/`; sampling per wave) |
+| **Quick run command** | `.venv/bin/python -m pytest tests/test_auction_probe.py tests/test_auction_sync.py -x` |
+| **Full suite command** | `.venv/bin/python -m pytest -x` (from `backend/`; sampling per wave) |
 | **Estimated runtime** | ~90 seconds (targeted) / ~10 min (full) |
 
 ---
 
 ## Sampling Rate
 
-- **After every task commit:** Run `uv run pytest tests/test_auction_sync.py tests/test_auction_columns.py -x`
-- **After every plan wave:** Run `uv run pytest tests/test_auction_probe.py tests/test_auction_sync.py tests/test_auction_columns.py tests/test_minute_sync_verify.py -x`
-- **Before `/gsd:verify-work`:** Full suite `uv run pytest -x` must be green (incl. `test_pool_hub.py` POOL-03 guard regressions)
+- **After every task commit:** Run `.venv/bin/python -m pytest tests/test_auction_sync.py tests/test_auction_columns.py -x`
+- **After every plan wave:** Run `.venv/bin/python -m pytest tests/test_auction_probe.py tests/test_auction_sync.py tests/test_auction_columns.py tests/test_minute_sync_verify.py -x`
+- **Before `/gsd:verify-work`:** Full suite `.venv/bin/python -m pytest -x` must be green (incl. `test_pool_hub.py` POOL-03 guard regressions)
 - **Max feedback latency:** ~90 seconds
 
 ---
