@@ -230,7 +230,7 @@ class ScreenerService:
                 inst_cols = [c for c in ["symbol", "name", "total_shares", "float_shares"] if c in df_i.columns]
                 if "name" not in df.columns:
                     df = df.join(df_i.select(inst_cols), on="symbol", how="left")
-            return df
+            return self._attach_auction(df, target_date)
 
         # 尝试从 repo 级预计算历史缓存中提取目标日期 (仅 stock: 该缓存为股票专用)
         if self.asset_type == "stock":
@@ -245,7 +245,7 @@ class ScreenerService:
                         inst_cols = [c for c in ["symbol", "name", "total_shares", "float_shares"] if c in df_i.columns]
                         if "name" not in df.columns:
                             df = df.join(df_i.select(inst_cols), on="symbol", how="left")
-                    return df
+                    return self._attach_auction(df, target_date)
 
         # 历史日期: 从 parquet 读取 14 列, 即时计算指标 (慢路径)
         enriched_dir = self.repo.store.data_dir / self._enriched_dirname
@@ -266,7 +266,24 @@ class ScreenerService:
 
         # 即时计算指标: 需要加载历史窗口作 warmup
         df_full = self._compute_enriched_full(df, target_date)
-        return df_full
+        return self._attach_auction(df_full, target_date)
+
+    def _attach_auction(self, df: pl.DataFrame, target_date: date) -> pl.DataFrame:
+        """把竞价列注入 as-of 日线帧 (probe×分区双闸门; 读路径异常也 fail-closed)。
+
+        probe 非 available 或缺分区 → 原样返回 (列缺席, 诚实缺列而非 500);
+        df 为空 → 原样返回。注入发生在 instruments JOIN 之后 (name 等列已就位)。
+        """
+        if df is None or df.is_empty():
+            return df
+        from app.services.auction_columns import attach_auction_columns
+        try:
+            attached = attach_auction_columns(df, target_date, self.repo)
+            logger.debug("_attach_auction: injected auction columns for %s", target_date)
+            return attached
+        except Exception as e:  # noqa: BLE001
+            logger.warning("_attach_auction failed for %s: %s (fail-closed: columns absent)", target_date, e)
+            return df
 
     def load_prior_consecutive(self, as_of: date, consec_col: str) -> pl.DataFrame:
         """窄读: 仅取前一交易日的 [symbol, consec_col] 两列 (谓词下推到单日 parquet)。

@@ -201,3 +201,97 @@ def test_partition_multi_row_dedup_no_fanout(repo_env, monkeypatch):
     assert out.height == 1
     assert out.select("auction_volume").item() == 8000
     assert out.select("auction_amount").item() == 42000.0
+
+
+# ================================================================
+# ScreenerService as-of 帧注入 (DATA-04 成功标准 1) + schema 面
+# ================================================================
+
+
+def _write_enriched_partition(data_dir, trade_date: date) -> None:
+    """写 enriched 单日分区 (存储窄表列), 供 ScreenerService._load_enriched_for_date 读取。"""
+    df = pl.DataFrame({
+        "symbol": ["000001", "600000"],
+        "date": [trade_date, trade_date],
+        "open": [10.0, 20.0],
+        "high": [10.8, 21.0],
+        "low": [9.9, 19.8],
+        "close": [10.5, 20.5],
+        "volume": [100000.0, 200000.0],
+        "amount": [1_050_000.0, 4_100_000.0],
+        "raw_close": [10.5, 20.5],
+        "raw_high": [10.8, 21.0],
+        "raw_low": [9.9, 19.8],
+        "turnover_rate": [0.02, 0.03],
+        "consecutive_limit_ups": [0, 0],
+        "consecutive_limit_downs": [0, 0],
+        "quote_ts": [0, 0],
+        "open_gap": [0.01, 0.02],
+    })
+    out = data_dir / "kline_daily_enriched" / f"date={trade_date.isoformat()}" / "part.parquet"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    df.write_parquet(out)
+
+
+def test_screener_frame_carries_auction_columns(repo_env, monkeypatch):
+    """probe available + 分区有行 → as-of 日线帧带真实竞价列 (注入发生在 instruments JOIN 后)。"""
+    repo, data_dir = repo_env
+    _patch_probe(monkeypatch, _available_verdict())
+    _write_enriched_partition(data_dir, date(2026, 8, 4))
+    _write_auction_partition(data_dir, date(2026, 8, 4), _auction_rows())
+
+    from app.services.screener import ScreenerService
+    out = ScreenerService(repo)._load_enriched_for_date(date(2026, 8, 4))
+
+    assert not out.is_empty()
+    assert "auction_volume" in out.columns
+    assert "auction_amount" in out.columns
+    assert "open_gap" in out.columns
+    assert out.filter(pl.col("symbol") == "000001").select("auction_volume").item() == 8000
+    assert out.filter(pl.col("symbol") == "000001").select("auction_amount").item() == 42000.0
+
+
+def test_screener_frame_absent_when_probe_not_available(repo_env, monkeypatch):
+    """probe 非 available → as-of 帧不带竞价列、open_gap 恒在 (诚实 fail-closed)。"""
+    from app.services.auction_probe import AuctionProbeStatus, AuctionProbeVerdict
+    repo, data_dir = repo_env
+    verdict = AuctionProbeVerdict(
+        status=AuctionProbeStatus.not_configured, source="fake", probed_at=None, detail="not configured",
+    )
+    _patch_probe(monkeypatch, verdict)
+    _write_enriched_partition(data_dir, date(2026, 8, 4))
+    _write_auction_partition(data_dir, date(2026, 8, 4), _auction_rows())
+
+    from app.services.screener import ScreenerService
+    out = ScreenerService(repo)._load_enriched_for_date(date(2026, 8, 4))
+
+    assert "auction_volume" not in out.columns
+    assert "auction_amount" not in out.columns
+    assert "open_gap" in out.columns
+
+
+def test_schema_surface_lists_kline_auction(tmp_path, monkeypatch):
+    """schema 面: auction → kline_auction; 列描述带单位; 派生列带估算标注。"""
+    from app.api import data as data_api
+    from app.indicators.pipeline import ENRICHED_COLUMNS
+
+    assert data_api._SCHEMA_VIEWS["auction"] == "kline_auction"
+    assert "股" in data_api._TABLE_FIELD_DESC["kline_auction"]["auction_volume"]
+    assert "元" in data_api._TABLE_FIELD_DESC["kline_auction"]["auction_amount"]
+    # kline_enriched schema = ENRICHED_COLUMNS (同一 dict 引用), 自动带出竞价列中文标签
+    assert "auction_volume" in data_api._TABLE_FIELD_DESC["kline_enriched"]
+    assert "估算" in ENRICHED_COLUMNS["auction_unmatched_amount"]
+
+    # (可选) FastAPI TestClient: GET /api/data/schema/enriched 静态回退含竞价列与单位描述
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    app = FastAPI()
+    app.include_router(data_api.router)
+    app.state.repo = None  # DESCRIBE 失败 → 路由回退到 _TABLE_FIELD_DESC 静态定义
+    resp = TestClient(app).get("/api/data/schema/enriched")
+    assert resp.status_code == 200
+    fields = {f["name"]: f["desc"] for f in resp.json()}
+    assert "auction_volume" in fields
+    assert "股" in fields["auction_volume"]
+    assert "auction_unmatched_amount" in fields
+    assert "估算" in fields["auction_unmatched_amount"]

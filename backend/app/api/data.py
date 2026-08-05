@@ -766,6 +766,12 @@ _TABLE_FIELD_DESC: dict[str, dict[str, str]] = {
         "volume": "成交量",
         "amount": "成交额",
     },
+    "kline_auction": {
+        "symbol": "股票代码",
+        "datetime": "竞价时间戳 (09:15-09:25)",
+        "auction_volume": "竞价量, 单位: 股",
+        "auction_amount": "竞价金额, 单位: 元",
+    },
     "adj_factor": {
         "symbol": "股票代码",
         "timestamp": "除权除息时间戳(ms)",
@@ -813,6 +819,7 @@ _SCHEMA_VIEWS: dict[str, str] = {
     "etf_enriched": "kline_etf_enriched",
     "etf_instruments": "instruments_etf",
     "minute": "kline_minute",
+    "auction": "kline_auction",
     "adj_factor": "adj_factor",
     "instruments": "instruments",
 }
