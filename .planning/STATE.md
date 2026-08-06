@@ -4,17 +4,17 @@ milestone: v2.2
 milestone_name: 决策闭环与历史纵深 — planning
 current_phase: 31
 current_phase_name: Auction Recap
-status: planning
-stopped_at: Completed 31-01-PLAN.md
-last_updated: "2026-08-06T15:04:25.752Z"
+status: executing
+stopped_at: Completed 31-02-PLAN.md
+last_updated: "2026-08-06T15:16:41.435Z"
 last_activity: 2026-08-06
-last_activity_desc: 31-01 complete (REV-01/02/03: auction_recap.py 三块装配 + data_completeness + render/slice 单源)
+last_activity_desc: "31-02 complete (REV-04: recap_market_stream 面板 delta 事件序 + 可选 AI 点评 + 调度默认 15:40)"
 progress:
   total_phases: 8
   completed_phases: 0
-  total_plans: 12
-  completed_plans: 10
-  percent: 83
+  total_plans: 16
+  completed_plans: 11
+  percent: 69
 ---
 
 # Project State
@@ -29,9 +29,9 @@ See: .planning/PROJECT.md (updated 2026-08-06)
 ## Current Position
 
 Phase: 31 — 竞价复盘 (Auction Recap)
-Plan: 1/3 (31-01 complete)
-Status: In Progress
-Last activity: 2026-08-06 — 31-01 complete (REV-01/02/03: auction_recap.py 三块装配 + data_completeness + render/slice 单源)
+Plan: 2 of 3
+Status: Ready to execute
+Last activity: 2026-08-06 — 31-02 complete (REV-04: recap_market_stream 面板 delta 事件序 + 可选 AI 点评 + 调度默认 15:40)
 
 ## v1.3 Phase Summary (shipped 2026-08-04)
 
@@ -84,8 +84,8 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-08-06T15:04:25.741Z
-Stopped at: Completed 31-01-PLAN.md
+Last session: 2026-08-06T15:16:41.426Z
+Stopped at: Completed 31-02-PLAN.md
 Resume file: None
 
 ## Operator Next Steps
@@ -151,6 +151,9 @@ Resume file: None
 - [Phase ?]: 30-03: e2e 断言命中条件行与前端渲染器字形一致 ('open_gap>=0.05' 非 '≥'; cnSignal 映射后字段名)
 - [Phase 31 / P1]: 31-01: pre_eod 判别用分钟算术 (now.hour*60+now.minute) vs 调度 (W-2); 懒 import from app.services.preferences.get_pipeline_schedule (W-1 守卫白名单形)
 - [Phase 31 / P1]: 31-01: 服务模块避免 import math/json (不在 31-03 _IMPORT_EXACT), NaN/Inf 用 v != v or v in (inf,-inf) — 守卫白名单纪律前置
+- [Phase ?]: recap_market_stream 面板 delta 事件序锁死 (meta → AI delta* → 面板 delta → done); 面板经 delta 机制三跳全收零改动; 全缺席退化纯 AI (验收 5 回归锁); AI 失败不发面板 (R8)
+- [Phase ?]: 可选 AI 点评默认 OFF: preferences recap_auction_commentary + PUT/GET 端点 + 护栏行局部 system 串 (_SYSTEM_PROMPT 不动) + 切片与面板同 dict 构造性单源
+- [Phase ?]: 调度默认 15:40 (竞价同步 15:30 + 股池持久化 15:35 后三块全亮); 已存偏好保留; 15:00 下限不动; Review.tsx:105 兜底字面量同步
 
 ### v1.3 Decisions (carried)
 
@@ -205,3 +208,4 @@ Resume file: None
 | Phase 30 P1 | 31 | 3 tasks | 4 files |
 | Phase 30 P2 | 24 | 3 tasks | 8 files |
 | Phase 30-premarket-monitor P3 | 36 | 2 tasks | 5 files |
+| Phase 31 P2 | 9 | 3 tasks | 5 files |

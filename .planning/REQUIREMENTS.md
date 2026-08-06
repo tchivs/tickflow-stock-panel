@@ -41,7 +41,7 @@ Requirements for the v2.2 milestone. Each maps to a roadmap phase. Research basi
 - [x] **REV-01**: A deterministic auction-recap assembly service (`auction_recap.py`) builds the recap blocks from frozen assets only — `load_premarket_snapshot` + `attach_auction_columns` + enriched `open_gap` — read-only, AST-guarded, never triggers `run_all_with_hits`; historical as_of uses partition-existence as the primary gate (probe dual-gate applies to today only).
 - [x] **REV-02**: Honest annotation/degradation — `data_completeness` enum `{full, no_auction_lake, no_premarket_preview, pre_eod, partial}`; missing blocks are omitted with explicit note; the 09:30+ continuous bar is never labeled auction data; the panel carries a "确定性数据，非 AI 生成" marker; pre-EOD runs (before the 15:30 auction sync) are labeled `pre_eod` and never imply auction data exists.
 - [x] **REV-03**: A premarket signal-quality block — per-strategy `{n, avg open_gap, avg change_pct, 开盘兑现率, 收盘兑现率, 收阳率}` driven by strategies that actually have rows in the premarket preview (never hardcoded strategy lists); joins preview against EOD enriched `change_pct` caliber.
-- [ ] **REV-04**: Recap integration — the deterministic panel is appended as a delta before the `done` event in `recap_market_stream` (same stream → SSE/archive/Feishu all receive it, zero frontend change); optional AI commentary defaults OFF and, when enabled, may only cite the panel's slice values with explicit gaps; `_build_user_prompt` stays backward compatible (optional param, default None); the default recap schedule moves to 15:40 (after 15:30 auction sync + 15:35 pool persist) so the full blocks light up.
+- [x] **REV-04**: Recap integration — the deterministic panel is appended as a delta before the `done` event in `recap_market_stream` (same stream → SSE/archive/Feishu all receive it, zero frontend change); optional AI commentary defaults OFF and, when enabled, may only cite the panel's slice values with explicit gaps; `_build_user_prompt` stays backward compatible (optional param, default None); the default recap schedule moves to 15:40 (after 15:30 auction sync + 15:35 pool persist) so the full blocks light up.
 - [ ] **REV-05** (P2): A standalone read-only `GET /api/market-recap/auction` endpoint for the deterministic panel (independent of the AI recap stream).
 
 ## Out of Scope (v2.2)
@@ -88,7 +88,7 @@ Populated during roadmap creation.
 | REV-01 | Phase 31 | Complete |
 | REV-02 | Phase 31 | Complete |
 | REV-03 | Phase 31 | Complete |
-| REV-04 | Phase 31 | Open |
+| REV-04 | Phase 31 | Complete |
 | REV-05 | Phase 31 | Open (P2) |
 
 **Coverage:**
