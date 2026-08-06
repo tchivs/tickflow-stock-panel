@@ -111,8 +111,56 @@ export function PoolHubPage() {
   })
   // WATCH-04 批量加自选 (useWatchlistBatchAdd 已封装双 key 失效): scope = 可见行 filteredRows (display_limit 内, 绝不按 total)
   const batchAdd = useWatchlistBatchAdd()
+  // WATCH-04 选择集 (LG-04): join 键 = 全后缀 symbol (与星标/只看自选同键)。
+  // Clear-on-change (诚实语义): 策略/筛选/只看自选/日期任一变化 → 清空, 无跨视图 stale selection (T-35-02-05)。
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const handleStrategySelect = (id: string) => {
+    setSelected(new Set())
+    setActiveId(id)
+  }
+  const handleFilterChange = (v: string) => {
+    setSelected(new Set())
+    setFilterText(v)
+  }
+  const handleClearFilter = () => {
+    setSelected(new Set())
+    setFilterText('')
+  }
+  const handleDateChange = (d: string | null) => {
+    setSelected(new Set())
+    setSelectedDate(d)
+  }
+  const handleWatchlistOnlyToggle = () => {
+    setSelected(new Set())
+    const v = !watchlistOnly
+    setWatchlistOnly(v)
+    storage.poolWatchlistOnly.set(v)
+  }
+  // 表头全选/全不选可见行: 全选态由 StockListTable 从 rows ∩ selection 派生后回调 toggle
+  const handleToggleSelectAll = () => {
+    setSelected(prev => {
+      const visible = filteredRows.map(r => r.symbol)
+      const all = visible.length > 0 && visible.every(s => prev.has(s))
+      const next = new Set(prev)
+      if (all) {
+        for (const s of visible) next.delete(s)
+      } else {
+        for (const s of visible) next.add(s)
+      }
+      return next
+    })
+  }
+  const handleToggleSelection = (symbol: string) => {
+    setSelected(prev => {
+      const next = new Set(prev)
+      if (next.has(symbol)) next.delete(symbol)
+      else next.add(symbol)
+      return next
+    })
+  }
   const handleBatchAdd = () => {
-    const symbols = filteredRows.map(r => r.symbol)
+    // WATCH-04 scope=选中行 (LG-04): 防御性 intersect 可见行 — 勾选行已不在当前可见集 → 剔除; 空选不发请求不 toast
+    const symbols = [...selected].filter(s => filteredRows.some(r => r.symbol === s))
     if (!symbols.length) return
     batchAdd.mutate(symbols, {
       onSuccess: (data) => {
@@ -180,7 +228,7 @@ export function PoolHubPage() {
           loading={datesQuery.isPending}
           error={datesQuery.isError ? errorText(datesQuery.error) : null}
           onRetry={() => void datesQuery.refetch()}
-          onChange={setSelectedDate}
+          onChange={handleDateChange}
         />
 
         {/* Hub 加载中: 文本 + 骨架占位, 预留布局高度 */}
@@ -269,14 +317,14 @@ export function PoolHubPage() {
           >
             <ConceptFilter
               value={filterText}
-              onChange={setFilterText}
-              onClear={() => setFilterText('')}
+              onChange={handleFilterChange}
+              onClear={handleClearFilter}
             />
             <StrategyCardGrid
               strategies={data.strategies}
               knownStrategies={knownStrategies}
               activeId={activeStrategy?.id ?? null}
-              onSelect={setActiveId}
+              onSelect={handleStrategySelect}
               asOf={asOf}
               counting={pending && !!data}
             />
@@ -296,22 +344,18 @@ export function PoolHubPage() {
                           aria-label="只看自选"
                           title={watchlist.isError ? '自选清单加载失败' : '只看自选'}
                           disabled={watchlist.isPending || watchlist.isError}
-                          onClick={() => {
-                            const v = !watchlistOnly
-                            setWatchlistOnly(v)
-                            storage.poolWatchlistOnly.set(v)
-                          }}
+                          onClick={handleWatchlistOnlyToggle}
                           className={`relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors duration-200 disabled:opacity-50 ${watchlistOnly ? 'bg-accent' : 'bg-border'}`}
                         >
                           <span className={'inline-block h-3 w-3 transform rounded-full bg-white shadow transition-transform duration-200 ' + (watchlistOnly ? 'translate-x-3.5' : 'translate-x-0.5')} />
                         </button>
                       </div>
-                      {/* 「批量加自选」(WATCH-04): scope = 可见行; watchlistOnly 开启时隐藏 (可见行全在自选, D6) */}
+                      {/* 「批量加自选」(WATCH-04, LG-04): scope = 选中行; 空选禁用; watchlistOnly 开启时隐藏 (可见行全在自选, D6) */}
                       {!watchlistOnly && (
                         <button
                           type="button"
                           onClick={handleBatchAdd}
-                          disabled={batchAdd.isPending}
+                          disabled={batchAdd.isPending || selected.size === 0}
                           aria-label="批量加自选"
                           title="批量加自选"
                           className="inline-flex items-center gap-1.5 h-9 px-3 rounded-btn border border-border bg-surface text-xs font-medium text-secondary hover:text-accent hover:border-accent/50 transition-colors cursor-pointer disabled:opacity-50 max-md:min-h-11 max-md:min-w-11"
@@ -355,6 +399,9 @@ export function PoolHubPage() {
                   onToggleWatchlist={(symbol, inList) => toggleWatchlist.mutate({ symbol, inList })}
                   watchlistPending={toggleWatchlist.isPending || watchlist.isPending || watchlist.isError}
                   watchlistOnly={watchlistOnly}
+                  selection={selected}
+                  onToggleSelection={handleToggleSelection}
+                  onToggleSelectAll={handleToggleSelectAll}
                 />
               </section>
             )}

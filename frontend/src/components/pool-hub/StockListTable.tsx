@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { AlertTriangle, CheckCircle2, Loader2, RotateCcw, Star } from 'lucide-react'
 import { cn } from '@/lib/cn'
 import type { AuctionColumnsDecl, PoolHubRow, PoolHubStrategy } from '@/lib/api'
@@ -48,6 +48,13 @@ interface StockListTableProps {
   watchlistPending: boolean
   /** 「只看自选」过滤激活 (WATCH-02) */
   watchlistOnly: boolean
+  // ===== WATCH-04 批量选择 (LG-04) — 复选框列 VIP-only, join 键 = 全后缀 symbol (与星标同键) =====
+  /** 选中 symbol 集合 (行 checkbox 态; 表头全选态由本组件从 rows ∩ selection 派生) */
+  selection: Set<string>
+  /** 单行勾选切换 (symbol) */
+  onToggleSelection: (symbol: string) => void
+  /** 表头 全选/全不选 可见行 */
+  onToggleSelectAll: () => void
 }
 
 /** 概念板块 chips — 首 3 个 + `+{N}` 展开/收起, 绝不截断标签中间 */
@@ -219,11 +226,39 @@ export function StockListTable({
   onToggleWatchlist,
   watchlistPending,
   watchlistOnly,
+  selection,
+  onToggleSelection,
+  onToggleSelectAll,
 }: StockListTableProps) {
   if (!strategy) return null
   const conceptActive = filterText.trim().length > 0
   const filterActive = conceptActive || watchlistOnly
   const columns = mode === 'guest' ? GUEST_COLUMNS : VIP_COLUMNS
+
+  // WATCH-04 表头全选三态 (LG-04): 以「可见行」(rows prop = 页面 filteredRows) 为界 —
+  // 勾选行已不在可见集不计入, 与 handleBatchAdd 防御性 intersect 同语义。
+  const visibleSymbols = rows.map(r => r.symbol)
+  const selectedVisibleCount = visibleSymbols.filter(s => selection.has(s)).length
+  const allSelected = rows.length > 0 && selectedVisibleCount === rows.length
+  const someSelected = selectedVisibleCount > 0 && !allSelected
+  // indeterminate 视觉经 DOM 属性 (React 无 indeterminate prop); aria-checked="mixed" 显式同步 (P1 可访问名)
+  const selectAllRef = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    if (selectAllRef.current) selectAllRef.current.indeterminate = someSelected && !allSelected
+  }, [someSelected, allSelected])
+  // WATCH-04 表头全选 checkbox (VIP-only 列): aria-checked 三态; 仅一个分支渲染 (grouped/单行 二选一)
+  const selectAllControl = (
+    <input
+      type="checkbox"
+      ref={selectAllRef}
+      aria-label="全选"
+      aria-checked={allSelected ? 'true' : someSelected ? 'mixed' : 'false'}
+      checked={allSelected}
+      onChange={onToggleSelectAll}
+      title="全选"
+      className="h-4 w-4 cursor-pointer"
+    />
+  )
 
   // 竞价列分组 (OQ-2/H1): 列存在性完全由服务端 auction_columns 声明驱动, 绝不从行值推导 (PIT-3)。
   // real 组整组同存同隐; open_gap 已留基础列「开盘涨幅」渲染, 不搬入派生组不重复渲染 (OQ-5)。
@@ -304,6 +339,11 @@ export function StockListTable({
                 /* 两行分组表头 (UI-SPEC §3.2): 基础列 rowSpan=2 + 真实集合竞价/派生·虚拟成交 colSpan=2 组带 */
                 <>
                   <tr className="text-left text-secondary">
+                    {mode === 'vip' && (
+                      <th key="__select_all__" rowSpan={2} scope="col" className="w-10 px-2 py-2.5 text-center">
+                        {selectAllControl}
+                      </th>
+                    )}
                     {columns.map(c => (
                       <th key={c} rowSpan={2} scope="col" className="px-3 py-2.5 font-medium whitespace-nowrap">{c}</th>
                     ))}
@@ -339,6 +379,11 @@ export function StockListTable({
                 </>
               ) : (
                 <tr className="text-left text-secondary">
+                  {mode === 'vip' && (
+                    <th key="__select_all__" scope="col" className="w-10 px-2 py-2.5 text-center">
+                      {selectAllControl}
+                    </th>
+                  )}
                   {columns.map(c => (
                     <th key={c} scope="col" className="px-3 py-2.5 font-medium whitespace-nowrap">{c}</th>
                   ))}
@@ -362,7 +407,21 @@ export function StockListTable({
                       cross && 'bg-accent/[0.06]',
                     )}
                   >
-                    <td className={cn('px-4 py-2 whitespace-nowrap', cross && 'border-l-2 border-accent/60')}>
+                    {!isGuest && (
+                      /* WATCH-04 行选择 checkbox (LG-04, VIP-only — 镜像星标 VIP-only 规则; guest 零控件) */
+                      <td className={cn('px-2 py-2 text-center', cross && 'border-l-2 border-accent/60')}>
+                        <input
+                          type="checkbox"
+                          aria-label={`选择${row.code}`}
+                          checked={selection.has(row.symbol)}
+                          onChange={() => onToggleSelection(row.symbol)}
+                          title={`选择${row.code}`}
+                          className="h-4 w-4 cursor-pointer"
+                        />
+                      </td>
+                    )}
+                    {/* 交叉共振左边框标记挂在行首 td (VIP = 复选框格, guest = 代码格) — 行左缘视觉位置稳定 */}
+                    <td className={cn('px-4 py-2 whitespace-nowrap', isGuest && cross && 'border-l-2 border-accent/60')}>
                       {isGuest ? (
                         /* 游客 代码: 服务端脱敏值原样渲染 (mono muted), 无板块标识 */
                         <span className="num tabular-nums text-muted">{row.code}</span>
