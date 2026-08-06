@@ -765,6 +765,20 @@ export interface PoolHubResponse {
   concept_attribution?: string
 }
 
+/** 盘前预览载荷 (PM-04) — 扩展 PoolHubResponse: 窗口标注 / provisional / degraded / probe 透传。
+ *  服务端空态 200 时 as_of=今日/available:false/strategies:[]/updated_at:null/probe:null 也兼容
+ *  (扩展字段全部可选)。与 /hub 同形状投影 — 前端复用既有 strategies/auction_columns/概念筛选/钻取渲染。 */
+export interface PremarketPoolResponse extends PoolHubResponse {
+  /** 服务端窗口声明 — 盘前预览恒为 'pre_open' (独立于 EOD 归档, 不冒充收盘定稿) */
+  window: 'pre_open'
+  /** 基于开盘/定盘价, 非收盘定稿 (provisional 语义) */
+  provisional?: boolean
+  /** 真实竞价列不可用 (probe 非 available) → 前端强制诚实警告分支 (绝不渲染「竞价数据可用」) */
+  degraded?: boolean
+  /** 服务端冻结的 probe 判定 (与 /api/data/auction-probe 同词汇) */
+  probe?: AuctionProbeVerdict | null
+}
+
 export interface OverviewDimensionRankItem {
   name: string
   count: number
@@ -2145,6 +2159,9 @@ export const api = {
   // 历史必走 /api/pool/history, 绝不用 /hub?as_of= (反漂移会静默返回最新日)
   poolHistory: (asOf: string) =>
     request<PoolHubResponse>(`/api/pool/history?as_of=${encodeURIComponent(asOf)}`),
+
+  // Phase 27 (PM-04): 盘前预览只读端点 — 固定今日, 无参数; 缺失 → 200 available:false 诚实空态 (非 404)
+  poolPremarket: () => request<PremarketPoolResponse>('/api/pool/premarket'),
 
   backtestStatus: () => request<{ available: boolean }>('/api/backtest/status'),
 

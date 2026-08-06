@@ -1,10 +1,12 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { motion, useReducedMotion } from 'framer-motion'
-import { CalendarX, Loader2, RefreshCw, ScanSearch, Star } from 'lucide-react'
-import { api } from '@/lib/api'
+import { AlertTriangle, CalendarX, Clock, Loader2, RefreshCw, ScanSearch, Star } from 'lucide-react'
+import { api, type PoolHubResponse } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
+import { fmtDate } from '@/lib/format'
 import { storage } from '@/lib/storage'
+import { usePremarketPool } from '@/lib/useSharedQueries'
 import { useWatchlistBatchAdd } from '@/lib/useSharedMutations'
 import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
@@ -39,6 +41,22 @@ export function PoolHubPage() {
     retry: 1,
     placeholderData: (prev) => prev,
   })
+
+  // PM-04 盘前预览 (Phase 27): 仅「最新」视图 (selectedDate == null) 启用。
+  // 判定: 今日盘前预览 available===true ∧ window==='pre_open' ∧ 今日 EOD 快照未生成 (today ∉ dates)
+  // → showPremarket 渲染预览池 (payload 为 hub 同形状, 复用既有渲染);
+  //   15:35 EOD 后 (today ∈ dates) → showPremarket false → 回退 /api/pool/hub 既有流。
+  const viewingToday = selectedDate == null
+  const premarketQuery = usePremarketPool({ enabled: viewingToday })
+  const todayStr = fmtDate(new Date())
+  const hasTodayEod = (datesQuery.data?.dates ?? []).includes(todayStr)
+  const showPremarket = viewingToday
+    && premarketQuery.data?.available === true
+    && premarketQuery.data.window === 'pre_open'
+    && !hasTodayEod
+  const showPremarketEmpty = viewingToday
+    && premarketQuery.data?.available === false
+    && !hasTodayEod
   // 已知策略全集 — 用于把「无持久化结果」的策略渲染成 数据不可用 卡片 (不参与计数/明细)。
   const strategiesQuery = useQuery({
     queryKey: QK.screenerStrategies('stock'),
@@ -47,7 +65,9 @@ export function PoolHubPage() {
     retry: 1,
   })
 
-  const data = poolQuery.data
+  // PM-04: 预览 payload 是 hub 同形状投影 (27-01 _project_hub) → 既有 asOf/mode/activeStrategy/
+  // StrategyCardGrid/ConceptFilter/StockListTable 渲染路径全部复用。
+  const data = showPremarket ? (premarketQuery.data as PoolHubResponse) : poolQuery.data
   // 诚实 as_of: 占位期 (key 切换未落地) 显示旧载荷真实 as_of, 绝不伪造目标日期的 as_of (PIT-2/H4)
   const asOf = data?.as_of ?? selectedDate ?? null
   // 服务端声明的展示模式 (GUEST-01): 只消费 server mode, 绝不从行值推导;
@@ -195,8 +215,33 @@ export function PoolHubPage() {
         {/* 游客模式横幅 — 会话策略状态: 加载/错误时 mode 未知, 不渲染 (无闪烁) */}
         {data && mode === 'guest' && <GuestModeBanner />}
 
+        {/* PM-04 盘前预览窗口标注 (诚实标注: 预览 ≠ 收盘定稿; degraded → 追加仅派生列警告) */}
+        {showPremarket && (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs" role="note">
+            <span className="inline-flex items-center gap-1.5 font-medium text-accent">
+              <Clock className="h-3.5 w-3.5 shrink-0" aria-hidden />
+              盘前预览 · 竞价窗口 09:15-09:25 · 非收盘定稿
+            </span>
+            {premarketQuery.data?.degraded === true && (
+              <span className="inline-flex items-center gap-1.5 font-medium text-warning">
+                <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                仅派生列 · 竞价数据源未配置
+              </span>
+            )}
+          </div>
+        )}
+
+        {/* PM-04 盘前预览诚实空态 (200 语义, 非 404, 非零池伪装): 今日预览尚未生成且今日 EOD 未落 */}
+        {showPremarketEmpty && (
+          <EmptyState
+            icon={CalendarX}
+            title="今日盘前预览尚未生成"
+            hint="09:26 盘前预览 job 尚未生成今日预览。可查看历史收盘快照或稍后刷新。"
+          />
+        )}
+
         {/* 无快照日 (200 语义, PIT-2): 先于零池分支短路 — 独立诚实空态, 绝不伪装零池 */}
-        {data && data.available === false && (
+        {data && data.available === false && !showPremarketEmpty && (
           <EmptyState
             icon={CalendarX}
             title="该日期无股池快照"
@@ -281,7 +326,11 @@ export function PoolHubPage() {
                 </div>
                 {/* 竞价列诚实状态徽标 (UI-SPEC §3.3): 仅 VIP 且服务端透传 auction_columns 时渲染 (H3 双轨) */}
                 {data?.auction_columns && (
-                  <AuctionColumnStatusBadge auctionColumns={data.auction_columns} asOf={asOf} />
+                  <AuctionColumnStatusBadge
+                    auctionColumns={data.auction_columns}
+                    asOf={asOf}
+                    degraded={showPremarket ? premarketQuery.data?.degraded : undefined}
+                  />
                 )}
                 <StockListTable
                   mode={mode}

@@ -100,6 +100,18 @@ export function useAuctionHistory(symbol: string, days = 30) {
   })
 }
 
+/** 盘前预览股池 (PM-04) — 定时快照非实时流: 30s staleTime 对齐服务端 probe 30s TTL;
+ *  enabled 控制 (仅「最新」视图启用); 不入 SSE 无效刷新 (行情 tick 不重拉预览)。 */
+export function usePremarketPool(opts?: { enabled?: boolean }) {
+  return useQuery({
+    queryKey: QK.poolPremarket,
+    queryFn: api.poolPremarket,
+    enabled: opts?.enabled ?? true,
+    staleTime: 30_000,
+    retry: 1,
+  })
+}
+
 /** 重新探测竞价数据 — 绕过缓存, 成功后立即用新判定刷新面板。 */
 export function useRedetectAuctionProbe() {
   const qc = useQueryClient()

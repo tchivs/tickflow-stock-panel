@@ -107,11 +107,15 @@ function RatioCell({ value }: { value: number | null | undefined }) {
 export function AuctionColumnStatusBadge({
   auctionColumns,
   asOf,
+  degraded,
 }: {
   /** 服务端冻结的竞价列存在性声明; null = 无竞价列契约 (guest/后端未透传) → 不渲染 */
   auctionColumns: AuctionColumnsDecl | null
   /** 当前载荷 as_of (用于「盘前」判定: 查看日 == 今日) */
   asOf: string | null
+  /** PM-04 盘前预览降级标志 — 服务端冻结 probe 非 available 时由页面透传, 强制诚实警告分支,
+   *  不依赖 live probe (预览 payload 的冻结判定驱动); 历史/收盘视图不传 → 行为不变 */
+  degraded?: boolean
 }) {
   const probe = useAuctionProbe()
   const quoteStatus = useQuoteStatus()
@@ -126,7 +130,12 @@ export function AuctionColumnStatusBadge({
 
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-      {hasReal ? (
+      {degraded ? (
+        <span className="inline-flex items-center gap-1.5 font-medium text-warning">
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden />
+          仅展示派生列 · 竞价数据源未配置
+        </span>
+      ) : hasReal ? (
         <span className="inline-flex items-center gap-1.5 font-medium text-accent">
           <CheckCircle2 className="h-3.5 w-3.5 shrink-0" aria-hidden />
           竞价数据可用 · 窗口 09:15-09:25

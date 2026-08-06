@@ -43,6 +43,9 @@ export const QK = {
   // (历史必走 /api/pool/history, PIT-1: /hub?as_of= 反漂移会静默返回最新日)。
   poolDates:          ['pool-dates'] as const,
   poolHistory:        (asOf: string) => ['pool-history', asOf] as const,
+  // Phase 27 (PM-04): 盘前预览 — 今日固定键; 不入 SSE_INVALIDATE_PREFIXES (定时快照,
+  // 行情 tick 不无效刷新; 盘前时段易变 → 中等 staleTime; 15:35 EOD 后由 hasTodayEod 判定失效)
+  poolPremarket:      ['pool-premarket'] as const,
 
   // Backtest
   backtestStatus:       ['backtest-status'] as const,
