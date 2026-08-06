@@ -516,6 +516,8 @@ def test_guest_cannot_read_authed_surfaces(tmp_path, monkeypatch):
     # 日期导航端点与游客 hub 读一致 (RQ5 E7); history 缺 as_of → 200 空态
     assert client.get("/api/pool/dates").status_code == 200
     assert client.get("/api/pool/history").status_code == 200
+    # 盘前预览对游客只读 (PM-04): 与 hub 同语义, 端点本身 200 空态/掩码
+    assert client.get("/api/pool/premarket").status_code == 200
 
 
 def test_guest_read_paths_are_get_only(tmp_path, monkeypatch):
@@ -524,7 +526,7 @@ def test_guest_read_paths_are_get_only(tmp_path, monkeypatch):
     client = _make_guest_client(tmp_path, monkeypatch)
 
     for path in ("/api/pool/hub", "/api/screener/strategies",
-                 "/api/pool/dates", "/api/pool/history"):
+                 "/api/pool/dates", "/api/pool/history", "/api/pool/premarket"):
         for method in ("post", "put", "delete", "patch"):
             resp = getattr(client, method)(path)
             assert resp.status_code != 200, f"游客 {method.upper()} {path} 不应成功"

@@ -439,3 +439,191 @@ def test_compute_enriched_today_open_gap_idempotent():
     )
 
     assert out["open_gap"].to_list()[0] == pytest.approx(0.123)  # 源已提供列 → 不覆盖
+
+
+# ================================================================
+# Task 3 — GET /api/pool/premarket 只读端点 (PM-03 透传 + PM-04 后端)
+# ================================================================
+
+
+def _make_premarket_client(tmp_path, monkeypatch, today=None):
+    """最小 FastAPI 应用 + stub 会话中间件 (镜像 test_guest_masking._make_guest_client 结构)。
+
+    cookie ``tf_session == "vip-token"`` → 设 reviewer_principal (VIP); 否则不设 (guest)。
+    """
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.api import pool as pool_api
+
+    today = today or date.today()
+    monkeypatch.setattr(pool_api, "cn_today", lambda: today)
+
+    app = FastAPI()
+    app.include_router(pool_api.router)
+    app.state.repo = SimpleNamespace(store=SimpleNamespace(data_dir=tmp_path))
+    app.state.strategy_engine = None
+
+    @app.middleware("http")
+    async def bind_session(request, call_next):
+        if request.cookies.get("tf_session") == "vip-token":
+            request.state.reviewer_principal = "reviewer_test"
+        return await call_next(request)
+
+    return TestClient(app)
+
+
+def _write_premarket_preview(tmp_path, today, payload):
+    from app.services.premarket_snapshot import persist_premarket_snapshot
+
+    persist_premarket_snapshot(tmp_path, today.isoformat(), payload)
+
+
+def _preview_payload(today):
+    """一份可持久化的盘前预览 payload (含 results + probe 判定)。"""
+    return {
+        "as_of": today.isoformat(),
+        "available": True,
+        "window": "pre_open",
+        "computed_at": "2026-08-06T09:26:00",
+        "provisional": True,
+        "degraded": True,
+        "probe": _fake_verdict("not_configured"),
+        "strategy_version": "fingerprint-abc",
+        "results": {
+            "auction_bullish": {
+                "total": 1,
+                "as_of": today.isoformat(),
+                "rows": [
+                    {
+                        "symbol": "600000.SH",
+                        "name": "浦发银行",
+                        "open_gap": 0.05,
+                        "change_pct": 0.03,
+                        "hit_factors": ["竞价多头"],
+                    }
+                ],
+            }
+        },
+    }
+
+
+def test_premarket_api_empty_state_200(tmp_path, monkeypatch):
+    """无预览快照 → GET /api/pool/premarket 200 诚实空态 (非 404/500, 绝不伪装零池)。"""
+    client = _make_premarket_client(tmp_path, monkeypatch)
+
+    resp = client.get("/api/pool/premarket")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["available"] is False
+    assert body["degraded"] is True
+    assert body["window"] == "pre_open"
+    assert body["strategies"] == []
+    assert body["resonance_count"] == 0
+    assert body["updated_at"] is None
+    assert body["probe"] is None
+    assert body["auction_columns"] == {"real": [], "derived": []}
+    assert body["mode"] == "guest"  # 无 cookie
+
+
+def test_premarket_api_returns_stored_preview(tmp_path, monkeypatch):
+    """持久化预览 → 200 available:true + window/provisional/degraded/probe 透传 + total 权威。"""
+    today = FIXED_DATE
+    _write_premarket_preview(tmp_path, today, _preview_payload(today))
+    client = _make_premarket_client(tmp_path, monkeypatch, today=today)
+
+    resp = client.get("/api/pool/premarket", cookies={"tf_session": "vip-token"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["available"] is True
+    assert body["window"] == "pre_open"
+    assert body["provisional"] is True
+    assert body["degraded"] is True
+    assert body["probe"]["status"] == "not_configured"
+    assert body["as_of"] == today.isoformat()
+    assert body["mode"] == "vip"
+    # strategies 投影 (total 权威, 名称服务端解析 engine=None → sid 兜底)
+    assert len(body["strategies"]) == 1
+    assert body["strategies"][0]["id"] == "auction_bullish"
+    assert body["strategies"][0]["total"] == 1
+    assert body["strategies"][0]["rows"][0]["code"] == "600000"
+    # auction_columns 声明: degraded 预览 → real==[] 诚实缺列; open_gap 在 derived
+    assert body["auction_columns"]["real"] == []
+    assert "open_gap" in body["auction_columns"]["derived"]
+
+
+def test_premarket_api_guest_mask(tmp_path, monkeypatch):
+    """guest 掩码: 无 cookie → mode:guest + 顶层无 auction_columns + 行脱敏 (无 open_gap); vip → 完整。"""
+    today = FIXED_DATE
+    _write_premarket_preview(tmp_path, today, _preview_payload(today))
+    client = _make_premarket_client(tmp_path, monkeypatch, today=today)
+
+    # guest
+    resp = client.get("/api/pool/premarket")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["mode"] == "guest"
+    assert "auction_columns" not in body, "mask_guest_hub 应剥离顶层 auction_columns"
+    row = body["strategies"][0]["rows"][0]
+    assert row["code"] == "******"
+    assert row["name"] == "******"
+    assert row["symbol"] == "******"
+    assert "open_gap" not in row, "游客不得见 open_gap (量/价敏感)"
+    assert row["change_pct"] == 0.03
+
+    # vip
+    resp = client.get("/api/pool/premarket", cookies={"tf_session": "vip-token"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["mode"] == "vip"
+    assert "auction_columns" in body
+    row = body["strategies"][0]["rows"][0]
+    assert row["code"] == "600000"
+    assert row["open_gap"] == 0.05
+
+
+def test_premarket_api_pool03_ast_guard():
+    """POOL-03 零执行守卫 (镜像 test_pool_hub.py:853-918): 路由全 GET / 无执行族 import / 无写路径 / 无 Query 参数。"""
+    import ast
+    import re as _re
+
+    backend = Path(__file__).resolve().parents[1]
+    api_src = (backend / "app" / "api" / "pool.py").read_text(encoding="utf-8")
+
+    # 路由方法 ⊆ {get}
+    methods = _re.findall(r"@router\.(get|post|put|delete|patch)\b", api_src)
+    assert methods and set(methods) == {"get"}, f"pool API 出现了非 GET 路由: {methods}"
+
+    # import 名不匹配执行族 token (E1)
+    _EXECUTION_TOKEN = _re.compile(
+        r"broker|order|execution|trade|portfolio|watchlist|position|account|transaction|下单|委托",
+        _re.IGNORECASE,
+    )
+    tree = ast.parse(api_src)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                assert not _EXECUTION_TOKEN.search(alias.name), f"pool.py 引入执行族: {alias.name}"
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            assert not _EXECUTION_TOKEN.search(node.module), f"pool.py 引入执行族: {node.module}"
+
+    # 无写路径 pattern (E5)
+    _WRITE_PATTERNS = (
+        _re.compile(r"open\s*\(\s*[^,)]*,\s*[\"']w"),
+        _re.compile(r"open\s*\(\s*[^,)]*,\s*[\"']wb"),
+        _re.compile(r"open\s*\(\s*[^,)]*,\s*[\"']a"),
+        _re.compile(r"write_parquet"),
+        _re.compile(r"os\.replace"),
+        _re.compile(r"unlink\s*\("),
+        _re.compile(r"mkdir\s*\("),
+    )
+    for pattern in _WRITE_PATTERNS:
+        assert not pattern.search(api_src), f"pool.py 出现写路径: {pattern.pattern}"
+
+    # 端点签名无 as_of/concept Query (固定今日, 无路径穿越面)
+    m = _re.search(r"def get_premarket_pool\(([^)]*)\)", api_src)
+    assert m is not None, "pool.py 缺少 get_premarket_pool 端点"
+    params = m.group(1)
+    assert "Query" not in params
+    assert "as_of" not in params
+    assert "concept" not in params

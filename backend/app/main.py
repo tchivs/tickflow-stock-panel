@@ -782,6 +782,7 @@ _GUEST_READ_GET_PATHS = frozenset({
     "/api/pool/dates",
     "/api/pool/history",
     "/api/kline/auction/history",
+    "/api/pool/premarket",  # PM-04: 盘前预览对游客只读 (与 hub 同语义, 掩码在前)
 })
 
 

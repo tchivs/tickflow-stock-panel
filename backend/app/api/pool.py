@@ -13,8 +13,10 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from app.api.screener import _strategy_display_name
-from app.services.pool_hub import build_pool_hub, build_pool_hub_snapshot
+from app.market_time import cn_today
+from app.services.pool_hub import _project_hub, build_pool_hub, build_pool_hub_snapshot
 from app.services.pool_snapshot import list_backfill_gaps, list_snapshot_dates
+from app.services.premarket_snapshot import load_premarket_snapshot
 from app.services.guest_masking import mask_guest_hub
 
 router = APIRouter(prefix="/api/pool", tags=["pool"])
@@ -107,6 +109,66 @@ def get_pool_history(
     hub = build_pool_hub_snapshot(data_dir, as_of, concept=concept, name_for=name_for)
 
     is_vip = getattr(request.state, "reviewer_principal", None) is not None
+    hub["mode"] = "vip" if is_vip else "guest"
+    if not is_vip:
+        hub = mask_guest_hub(hub)
+    return hub
+
+
+@router.get("/premarket")
+def get_premarket_pool(request: Request):
+    """盘前预览股池 (PM-01/03) — 只读, POOL-03 零执行。
+
+    - 读 ``premarket_results/date={today}/part.json`` (独立 root, 非 screener_results;
+      盘前 09:26 job 生成)。
+    - 预览缺失/非工作时段 → 200 ``{available:false, degraded:true}`` 诚实空态
+      (非 404, 绝不伪装零池 — 镜像 get_pool_history :78-113)。
+    - 有预览 → 与 /hub 同形状投影 (``_project_hub``, ``total`` 权威) +
+      window/pre_open + provisional + degraded + probe 判定透传 (D4; 端点零重探)。
+    - ``mode`` + guest 脱敏与 /hub 一致 (mask_guest_hub)。
+    - 无 as_of/concept Query 参数 (固定今日) → 无路径穿越面; 若未来扩展任何参数,
+      必须先过 _AS_OF_RE fullmatch + date.fromisoformat (镜像 get_pool_history :99-107)。
+    """
+    data_dir = request.app.state.repo.store.data_dir
+    today = cn_today()
+    snap = load_premarket_snapshot(data_dir, today.isoformat())
+    is_vip = getattr(request.state, "reviewer_principal", None) is not None
+
+    if snap is None or not snap.get("available"):
+        return {
+            "as_of": today.isoformat(),
+            "available": False,
+            "degraded": True,
+            "window": "pre_open",
+            "strategies": [],
+            "resonance_count": 0,
+            "updated_at": None,
+            "probe": None,
+            "auction_columns": {"real": [], "derived": []},
+            "mode": "vip" if is_vip else "guest",
+        }
+
+    engine = getattr(request.app.state, "strategy_engine", None)
+
+    def name_for(sid: str) -> str:
+        return _strategy_display_name(engine, sid)
+
+    hub = _project_hub(
+        snap.get("results", {}),
+        snap.get("as_of"),
+        snap.get("computed_at"),
+        None,
+        name_for,
+        data_dir,
+    )
+    # 盘前预览元数据透传: window/provisional/degraded/probe 服务端声明, 前端零推导
+    hub["window"] = snap.get("window", "pre_open")
+    hub["provisional"] = snap.get("provisional", True)
+    hub["degraded"] = snap.get("degraded", False)
+    hub["probe"] = snap.get("probe")
+    hub["available"] = True
+    hub["as_of"] = snap.get("as_of")
+
     hub["mode"] = "vip" if is_vip else "guest"
     if not is_vip:
         hub = mask_guest_hub(hub)
