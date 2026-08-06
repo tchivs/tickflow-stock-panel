@@ -5,15 +5,15 @@ milestone_name: 决策闭环与历史纵深 — planning
 current_phase: 28
 current_phase_name: concept-pit
 status: executing
-stopped_at: Completed 28-01-PLAN.md (CONCEPT-01/02/03/05/07 backend core)
-last_updated: "2026-08-06T11:19:55.751Z"
+stopped_at: Completed 28-02-PLAN.md (CONCEPT-04/07 frontend badge)
+last_updated: "2026-08-06T11:30:54.948Z"
 last_activity: 2026-08-06
 last_activity_desc: Phase 28 execution started
 progress:
   total_phases: 8
   completed_phases: 0
   total_plans: 4
-  completed_plans: 1
+  completed_plans: 3
   percent: 0
 ---
 
@@ -84,8 +84,8 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-08-06T11:19:55.743Z
-Stopped at: Completed 28-01-PLAN.md (CONCEPT-01/02/03/05/07 backend core)
+Last session: 2026-08-06T11:30:54.940Z
+Stopped at: Completed 28-02-PLAN.md (CONCEPT-04/07 frontend badge)
 Resume file: None
 
 ## Operator Next Steps
@@ -124,6 +124,8 @@ Resume file: None
 - [Phase ?]: Phase 28 P1 (CONCEPT-01..07 backend core): 归档源 = 当前 ext 快照行 (离线零网络, 与平台展示一致); capture_from_upstream 仅 OQ-3 探针独立测量上游
 - [Phase ?]: Phase 28 P1: concept_history 模块 docstring 用「运行时缓存」指代 strategy_cache, 避免字面量 (E3 子串守卫绿); EOD 钩子函数内局部 import, 测试 patch app.services.concept_history.capture 模块对象
 - [Phase ?]: Phase 28 P1: build_pool_hub (实时) 不传 as_of → 恒 current_snapshot; 仅 build_pool_hub_snapshot 透传 as_of (as_of_snapshot 时追加 concept_effective_date/captured_at)
+- [Phase ?]: 概念徽标按服务端冻结 concept_attribution 双态渲染, as_of_snapshot 显示概念数据生效日期, 前端零推断 (CONCEPT-04/07)
+- [Phase ?]: as_of e2e 用两步下拉导航保证 change 触发, 历史必走 /api/pool/history (PIT-1)
 
 ### v1.3 Decisions (carried)
 
@@ -168,3 +170,4 @@ Resume file: None
 | Phase 27-premarket-pool P1 | 11 | 3 tasks | 8 files |
 | Phase 27 P2 | 35 | 3 tasks | 6 files |
 | Phase 28 P1 | 41 | 3 tasks | 6 files |
+| Phase 28 P2 | 5 | 3 tasks | 5 files |
