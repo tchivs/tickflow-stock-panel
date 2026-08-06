@@ -194,3 +194,7 @@ None - no external service configuration required.
 - 提交 68a9c91 / ce54616 / ac59697 存在
 - 关键文件存在: pool-hub.spec.ts / docs/features.md / 重生成快照 4 张
 - 零 diff 断言集 git 校验 0 变更 (grid-populated/card-unavailable/guest-masked/guest-grid)
+
+## TDD Gate Compliance
+
+Task 2 携带 `tdd="true"` 但为**纯测试任务** (files 仅 `pool-hub.spec.ts`), 被测行为 (星标/开关/批量) 已由 25-01 源码交付 (f96766a/a18cb37/1e32126), 25-02 不新增任何实现文件。RED→GREEN 双提交不适用 — 单一 `test(25-02)` 提交 (ce54616) 即完整交付; 六用例首次运行即全绿 (针对既有实现断言), 无缺失 RED/GREEN gate 信号。
