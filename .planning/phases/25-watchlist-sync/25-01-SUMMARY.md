@@ -197,6 +197,13 @@ Each task committed atomically:
 - **POOL-03 守卫:** 源码 grep 守卫复核通过 (无 `<form` / 执行族 API 标识符 / 裸 fetch 写 / 掩码字面量与 `mask` 标识符); 新增控件可访问名均入 ALLOWED_RE 白名单 (25-02 更新)。
 - **后端:** 零改动, 无回归风险。
 
+## Self-Check: PASSED
+
+- SUMMARY 文件存在: `.planning/phases/25-watchlist-sync/25-01-SUMMARY.md` ✓
+- 任务提交存在: `f96766a` (Task 1) / `a18cb37` (Task 2) / `1e32126` (Task 3) ✓
+- 最终 docs 提交存在: `36a7a3b` ✓
+- 最终 git 状态: 仅 `frontend/src/pages/Watchlist.tsx` 未提交 (用户预存, 未触碰) ✓
+
 ---
 *Phase: 25-watchlist-sync*
 *Completed: 2026-08-06*
