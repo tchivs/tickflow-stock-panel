@@ -5,8 +5,8 @@ milestone_name: 决策闭环与历史纵深 — planning
 current_phase: 28
 current_phase_name: concept-pit
 status: executing
-stopped_at: Completed 28-02-PLAN.md (CONCEPT-04/07 frontend badge)
-last_updated: "2026-08-06T11:30:54.948Z"
+stopped_at: Completed 28-03-PLAN.md
+last_updated: "2026-08-06T11:31:51.204Z"
 last_activity: 2026-08-06
 last_activity_desc: Phase 28 execution started
 progress:
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-08-06)
 ## Current Position
 
 Phase: 28 (concept-pit) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 Status: Ready to execute
 Last activity: 2026-08-06 — Phase 28 execution started
 
@@ -84,8 +84,8 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-08-06T11:30:54.940Z
-Stopped at: Completed 28-02-PLAN.md (CONCEPT-04/07 frontend badge)
+Last session: 2026-08-06T11:31:51.197Z
+Stopped at: Completed 28-03-PLAN.md
 Resume file: None
 
 ## Operator Next Steps
@@ -126,6 +126,10 @@ Resume file: None
 - [Phase ?]: Phase 28 P1: build_pool_hub (实时) 不传 as_of → 恒 current_snapshot; 仅 build_pool_hub_snapshot 透传 as_of (as_of_snapshot 时追加 concept_effective_date/captured_at)
 - [Phase ?]: 概念徽标按服务端冻结 concept_attribution 双态渲染, as_of_snapshot 显示概念数据生效日期, 前端零推断 (CONCEPT-04/07)
 - [Phase ?]: as_of e2e 用两步下拉导航保证 change 触发, 历史必走 /api/pool/history (PIT-1)
+- [Phase ?]: _dimension_rank as_of 分支函数体内局部 import concept_history; as_of 参数兼容 str 与 date (build_market_overview/market_recap 传 date, read_partition 要 str → isoformat 归一)
+- [Phase ?]: build_rps_rotation 提取 _build_rotation_full 私有 helper 复用 join/agg/grouped 段, as_of 与 latest 两分支各一次
+- [Phase ?]: as_of 分支空 map → 返回空矩阵, 不 fallback 当前 ext (诚实标注来源)
+- [Phase ?]: RPS 矩阵各历史列仍共用单日 map; 逐日概念 map 各列独立属未来增强
 
 ### v1.3 Decisions (carried)
 
@@ -171,3 +175,4 @@ Resume file: None
 | Phase 27 P2 | 35 | 3 tasks | 6 files |
 | Phase 28 P1 | 41 | 3 tasks | 6 files |
 | Phase 28 P2 | 5 | 3 tasks | 5 files |
+| Phase 28-concept-pit P3 | 5 | 2 tasks | 4 files |
