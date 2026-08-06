@@ -503,3 +503,85 @@ def test_sync_without_optional_cols_stays_four_cols(tmp_path, monkeypatch):
         assert "auction_virtual_price" not in df.columns
     finally:
         store.db.close()
+
+
+# ================================================================
+# Task 2 (32-01 AQ-04) — write_auction_partitions 写缝 (单一写路径, 直接调用形状)
+# ================================================================
+
+
+def test_write_auction_partitions_preserves_suffix_key(tmp_path, monkeypatch):
+    """同日碰撞规则: 带后缀 000001.SZ 与裸 000001 在 upsert 键 [symbol, datetime] 下是不同行。"""
+    from app.config import settings
+    data_dir = tmp_path / "data"
+    monkeypatch.setattr(settings, "data_dir", data_dir)
+
+    from app.tickflow.repository import DataStore, KlineRepository
+    store = DataStore(data_dir)
+    try:
+        from app.services.auction_sync import write_auction_partitions
+
+        df = pl.DataFrame({
+            "symbol": ["000001.SZ", "000001", "000001.SZ"],
+            "datetime": [
+                datetime(2026, 8, 4, 9, 25),
+                datetime(2026, 8, 4, 9, 25),
+                datetime(2026, 8, 4, 9, 25),
+            ],
+            "auction_volume": [100, 200, 300],
+            "auction_amount": [1000, 2000, 3000],
+        })
+        repo = KlineRepository(store)
+        # 第一次写入: 纯搬移语义, 全新分区原样落 3 行 (无既有分区可合并)
+        assert write_auction_partitions(df, repo) == 3
+        # 第二次写入: merge-upsert unique([symbol, datetime], keep="last")
+        # → 后缀键与裸键互不合并各一行 (同日碰撞规则), 同键同刻保留末值
+        assert write_auction_partitions(df, repo) == 3
+
+        out = data_dir / "kline_auction" / "date=2026-08-04" / "part.parquet"
+        assert out.exists()
+        lake_df = pl.read_parquet(out)
+        assert lake_df.height == 2
+        suffixed = lake_df.filter(pl.col("symbol") == "000001.SZ")
+        assert suffixed.height == 1
+        assert suffixed["auction_volume"][0] == 300
+        bare = lake_df.filter(pl.col("symbol") == "000001")
+        assert bare.height == 1
+        assert bare["auction_volume"][0] == 200
+        assert not list((data_dir / "kline_auction").rglob("*.tmp"))
+    finally:
+        store.db.close()
+
+
+def test_write_auction_partitions_direct_shape(tmp_path, monkeypatch):
+    """直接调用 helper: 返回窗口过滤后行数; 空 df → 0 不建分区; 09:30+ → 0 行写。"""
+    from app.config import settings
+    data_dir = tmp_path / "data"
+    monkeypatch.setattr(settings, "data_dir", data_dir)
+
+    from app.tickflow.repository import DataStore, KlineRepository
+    store = DataStore(data_dir)
+    try:
+        from app.services.auction_sync import write_auction_partitions
+
+        repo = KlineRepository(store)
+
+        # 空 df → 0, 不建 date= 分区 (kline_auction 目录可能由 DataStore 预建)
+        assert write_auction_partitions(pl.DataFrame(), repo) == 0
+        lake = data_dir / "kline_auction"
+        assert not lake.exists() or not list(lake.glob("date=*"))
+
+        # 09:30+ 行 → 窗口谓词结构性排除, 0 行写
+        assert write_auction_partitions(_rows((30, 0), (31, 0)), repo) == 0
+        lake = data_dir / "kline_auction"
+        assert not lake.exists() or not list(lake.glob("date=*"))
+
+        # 窗口内行 → 返回过滤后行数且原子落盘
+        written = write_auction_partitions(_rows((16, 0), (20, 30), (25, 0)), repo)
+        assert written == 3
+        out = data_dir / "kline_auction" / "date=2026-08-04" / "part.parquet"
+        assert out.exists()
+        assert pl.read_parquet(out).height == 3
+        assert not list((data_dir / "kline_auction").rglob("*.tmp"))
+    finally:
+        store.db.close()
