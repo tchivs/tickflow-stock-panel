@@ -1053,15 +1053,31 @@ def _premarket_pool_preview(on_progress=None) -> dict:
         engine=getattr(app_state, "strategy_engine", None),
         as_of=today,
     )
-    # 只在 available 时落盘 (空帧/无 live 缓存 → available:false → 不写文件, 诚实 skip)
-    if payload.get("available"):
-        premarket_snapshot.persist_premarket_snapshot(data_dir, str(today), payload)
-    emit("done", 100, f"盘前预览完成, {len(payload.get('results', {}))} 个策略")
-    return {
+    result: dict = {
         "as_of": str(today),
         "strategies": len(payload.get("results", {})),
         "degraded": payload.get("degraded"),
     }
+    # 只在 available 时落盘 (空帧/无 live 缓存 → available:false → 不写文件, 诚实 skip)
+    if payload.get("available"):
+        premarket_snapshot.persist_premarket_snapshot(data_dir, str(today), payload)
+        # MON-03: 盘前告警评估尾段 — 与 persist 同一 _run_tracked 单飞内, 内存直取
+        # payload (免二次读盘); 失败不阻断预览持久化/成功返回 (镜像 _pool_eod_persist
+        # concept_history 非致命 try/except 风格)。payload.available:false 路径不评估
+        # 不告警 (既有 if 守卫天然覆盖), 也不追加 preopen_eval 键。
+        try:
+            qs = getattr(app_state, "quote_service", None)
+            if qs is not None and callable(getattr(qs, "evaluate_premarket_alerts", None)):
+                result_extra = qs.evaluate_premarket_alerts(payload) or {}
+            else:
+                logger.info("盘前告警评估跳过: quote_service 未装配")
+                result_extra = {"skipped": "quote_service not assembled"}
+        except Exception as e:  # noqa: BLE001
+            logger.warning("盘前告警评估失败 (不阻断预览持久化): %s", e)
+            result_extra = {"skipped": "evaluation error"}
+        result["preopen_eval"] = result_extra
+    emit("done", 100, f"盘前预览完成, {len(payload.get('results', {}))} 个策略")
+    return result
 
 
 def start_scheduler(repo: KlineRepository, capset: CapabilitySet) -> AsyncIOScheduler:

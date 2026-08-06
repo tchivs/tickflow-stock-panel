@@ -1317,6 +1317,95 @@ class QuoteService:
         except Exception as e:  # noqa: BLE001
             logger.warning("监控评估失败: %s", e)
 
+    # ================================================================
+    # 盘前告警评估 (MON-03) — 09:26 盘前预览 job 尾段的唯一触发点
+    # ================================================================
+
+    def evaluate_premarket_alerts(self, payload: dict) -> dict:
+        """盘前告警评估 + 持久化 + SSE + 飞书 (MON-03)。零盘中耦合。
+
+        仅由 09:26 盘前预览 job 尾段 (daily_pipeline._premarket_pool_preview)
+        触发 — 与盘中 _evaluate_monitors 互斥 (09:26 ∉ 连续竞价窗口): 无时间 gate
+        (不调 _is_continuous_trading), 评估窗口由调度器独占, 盘中轮询线程经
+        evaluate() 跳过集 {position, preopen} 天然隔离。
+
+        序列镜像 _evaluate_monitors 的持久化优先 (record_alert_event 落库成功才
+        广播/投递; 落库失败跳过广播 — 不可审计事件不出现在 SSE/投递面); operational
+        未初始化 → 降级 alert_store.append_many (jsonl 写路径) + 跳过投递。
+        """
+        engine = getattr(self._app_state, "monitor_engine", None)
+        if engine is None:
+            return {"skipped": "no monitor engine"}
+        if not payload or not payload.get("available"):
+            return {"skipped": "preview unavailable", "degraded": True}
+
+        events = engine.evaluate_premarket(payload)
+
+        # 持久化优先 (镜像 _evaluate_monitors): 落库成功才广播/投递
+        operational = getattr(self._app_state, "operational", None)
+        persisted: list[dict] = []
+        if operational is None:
+            logger.error("告警未持久化: operational repository 未初始化")
+            from app.services import alert_store
+            alert_store.append_many(self._app_state.repo.store.data_dir, events)
+            persisted = events  # 降级写路径 (jsonl): 仍广播, 跳过投递
+        else:
+            for ev in events:
+                try:
+                    persisted_ev = operational.record_alert_event(ev)
+                    ev["id"] = persisted_ev["id"]
+                    ev["occurred_at"] = persisted_ev["occurred_at"]
+                    persisted.append(ev)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("盘前告警持久化失败,跳过广播和投递: %s", e)
+
+        if persisted:
+            self._broadcast_alerts([self._preopen_sse_shape(ev) for ev in persisted])
+            self._maybe_send_webhook(persisted, engine)
+
+        return {
+            "rules": engine.rule_count,
+            "events": len(persisted),
+            "degraded": bool(payload.get("degraded")),
+            "probe_status": (payload.get("probe") or {}).get("status"),
+        }
+
+    @staticmethod
+    def _preopen_sse_shape(ev: dict) -> dict:
+        """盘前告警 SSE 形状: 既有 SSE 键集 + preopen 增量键 (纯增量, 旧客户端忽略未知键)。
+
+        与 _evaluate_monitors 的 SSE dict 组装键集逐键一致, 另追加 window/provisional/
+        degraded/probe/strategy_ids/preopen_metrics (MON-03/04) — 兼容旧客户端。
+        """
+        return {
+            "id": ev["id"],
+            "occurred_at": ev["occurred_at"],
+            "source": ev["source"],
+            "type": ev["type"],
+            "rule_id": ev.get("rule_id"),
+            "strategy_id": ev.get("rule_id") if ev["source"] == "strategy" else None,
+            "symbol": ev["symbol"],
+            "name": ev["name"],
+            "message": ev["message"],
+            "price": ev["price"],
+            "change_pct": ev["change_pct"],
+            "signals": ev["signals"],
+            "severity": ev.get("severity", "info"),
+            "conditions": ev.get("conditions") or [],
+            "logic": ev.get("logic") or "and",
+            "account_id": ev.get("account_id"),
+            "position_id": ev.get("position_id"),
+            "valuation_source": ev.get("valuation_source"),
+            "valuation_as_of": ev.get("valuation_as_of"),
+            # ── preopen 增量键 (MON-03/04): 旧客户端忽略未知键, 兼容 ──
+            "window": ev.get("window"),
+            "provisional": ev.get("provisional"),
+            "degraded": ev.get("degraded"),
+            "probe": ev.get("probe"),
+            "strategy_ids": ev.get("strategy_ids"),
+            "preopen_metrics": ev.get("preopen_metrics"),
+        }
+
     def _inject_sealed_vol(self, enriched_today: pl.DataFrame, enriched_date) -> pl.DataFrame:
         """从 depth_service 取封单量, 作为临时列 _sealed_vol 注入 enriched 副本。
 
