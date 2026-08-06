@@ -2,18 +2,18 @@
 gsd_state_version: 1.0
 milestone: v2.3
 milestone_name: 数据纵深解锁 — planning
-current_phase: 34
-current_phase_name: BT-07 Full Auction Backtest
+current_phase: 35
+current_phase_name: Legacy Completion & Deploy Verification
 status: planning
 stopped_at: Completed 31-03-PLAN.md
-last_updated: "2026-08-06T17:55:02.375Z"
+last_updated: "2026-08-06T18:43:50.872Z"
 last_activity: 2026-08-06
-last_activity_desc: Phase 33 complete, transitioned to Phase 34
+last_activity_desc: Phase 34 complete, transitioned to Phase 35
 progress:
   total_phases: 4
   completed_phases: 0
-  total_plans: 8
-  completed_plans: 6
+  total_plans: 12
+  completed_plans: 9
   percent: 0
 ---
 
@@ -28,10 +28,10 @@ See: .planning/PROJECT.md (updated 2026-08-06)
 
 ## Current Position
 
-Phase: 34 — 竞价回测解锁 (BT-07 Full Auction Backtest)
+Phase: 35 — 遗留补全与部署验证 (Legacy Completion & Deploy Verification)
 Plan: Not started
 Status: Ready to plan
-Last activity: 2026-08-06 — Phase 33 complete, transitioned to Phase 34
+Last activity: 2026-08-06 — Phase 34 complete, transitioned to Phase 35
 
 ## v1.3 Phase Summary (shipped 2026-08-04)
 

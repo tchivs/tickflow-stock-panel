@@ -54,10 +54,10 @@ Requirements for the v2.3 milestone. Each maps to a roadmap phase. Research basi
 | 33. 股池回填 OQ-1 | PB-02 | Complete |
 | 33. 股池回填 OQ-1 | PB-03 | Complete |
 | 33. 股池回填 OQ-1 | PB-04 | Complete |
-| 34. 竞价回测解锁 | BT-07 | Planned |
-| 34. 竞价回测解锁 | BT-08 | Planned |
-| 34. 竞价回测解锁 | BT-09 | Planned |
-| 34. 竞价回测解锁 | BT-10 | Planned |
+| 34. 竞价回测解锁 | BT-07 | Complete |
+| 34. 竞价回测解锁 | BT-08 | Complete |
+| 34. 竞价回测解锁 | BT-09 | Complete |
+| 34. 竞价回测解锁 | BT-10 | Complete |
 | 35. 遗留补全与部署验证 | LG-01 | Planned |
 | 35. 遗留补全与部署验证 | LG-02 | Planned |
 | 35. 遗留补全与部署验证 | LG-03 | Planned |
