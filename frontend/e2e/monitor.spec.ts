@@ -125,7 +125,7 @@ test.describe('Phase 30 preopen monitor (MON-07 frontend)', () => {
 
     // 点「阈值条件」→ 默认字段 open_gap, 字段下拉为 5 白名单 label (不含 EOD 字段)
     await page.getByRole('button', { name: '阈值条件' }).click()
-    const fieldSelect = page.locator('div.flex.items-center.gap-1.5 select').first()
+    const fieldSelect = page.locator('div.flex.items-center.gap-1\\.5 select').first()
     await expect(fieldSelect).toHaveValue('open_gap')
     expect(await fieldSelect.locator('option').allTextContents()).toEqual([
       '开盘涨幅', '竞价量', '竞价金额', '竞价量比', '派生未匹配金额',
@@ -152,7 +152,7 @@ test.describe('Phase 30 preopen monitor (MON-07 frontend)', () => {
     // preopen 仍可渲染 (零崩溃): 无 truth 按钮; 字段下拉回退空数组 (旧载荷无 preopen_threshold_fields)
     await expect(page.getByRole('button', { name: '信号条件' })).toHaveCount(0)
     await page.getByRole('button', { name: '阈值条件' }).click()
-    const fieldSelect = page.locator('div.flex.items-center.gap-1.5 select').first()
+    const fieldSelect = page.locator('div.flex.items-center.gap-1\\.5 select').first()
     await expect(fieldSelect.locator('option')).toHaveCount(0)
 
     // signal 类型回归: truth 信号点选仍可用 (非 preopen 路径零回归)

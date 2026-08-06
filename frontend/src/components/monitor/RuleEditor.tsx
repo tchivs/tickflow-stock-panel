@@ -20,6 +20,8 @@ interface Props {
 
 const TYPE_DEFAULT_NAME: Record<string, string> = {
   signal: '个股信号监控', price: '价格监控', market: '市场异动监控', strategy: '策略监控', position: '持仓监控',
+  // 盘前异动 (preopen): 类型下拉由 /options types 驱动自动出现, 此处只供空名默认
+  preopen: '盘前异动',
 }
 
 // 告警投递渠道白名单 — 与后端 monitor_rules.DELIVERY_CHANNELS 对齐。
@@ -150,8 +152,9 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
       ...d,
       conditions: [...d.conditions, op === 'truth'
         ? { field: 'signal_volume_surge', op: 'truth' }
-        // simple 模式(个股弹窗)默认现价; 完整模式默认 RSI 超卖
-        : { field: simple ? 'close' : 'rsi_14', op: '<', value: simple ? 0 : 30 }],
+        // simple 模式(个股弹窗)默认现价; 完整模式默认 RSI 超卖;
+        // preopen 默认 open_gap (竞价白名单字段 — 否则保存必被后端白名单拒绝)
+        : { field: draft.type === 'preopen' ? 'open_gap' : (simple ? 'close' : 'rsi_14'), op: '<', value: simple ? 0 : 30 }],
     }))
   const removeCond = (idx: number) =>
     setDraft(d => ({ ...d, conditions: d.conditions.filter((_, i) => i !== idx) }))
@@ -170,7 +173,11 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
       return { ...d, webhook_channels: cur.includes(ch) ? cur.filter(c => c !== ch) : [...cur, ch] }
     })
 
-  const thresholdFields = options.data?.threshold_fields ?? []
+  // preopen 只能用竞价白名单字段 (后端 PREOPEN_ALLOWED_FIELDS — 禁 EOD 列);
+  // 旧 /options 缺 preopen_threshold_fields 键 → 回退空数组零崩溃
+  const thresholdFields = draft.type === 'preopen'
+    ? (options.data?.preopen_threshold_fields ?? [])
+    : (options.data?.threshold_fields ?? [])
   const operators = options.data?.operators ?? ['>', '>=', '<', '<=', '==', '!=']
   const selectedSignals = draft.conditions.filter(c => c.op === 'truth').map(c => c.field)
   const thresholdConds = draft.conditions.filter(c => c.op !== 'truth')
@@ -361,16 +368,19 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
               <select value={draft.logic} onChange={e => setDraft(d => ({ ...d, logic: e.target.value as MonitorRule['logic'] }))} className="h-7 rounded border border-border bg-base px-1.5 text-[11px] text-foreground">
                 {(options.data?.logics ?? []).map(l => <option key={l.key} value={l.key}>{l.label}</option>)}
               </select>
-              <button onClick={() => addCond('truth')} className="inline-flex items-center gap-1 text-[11px] text-accent hover:text-accent/80 cursor-pointer">
-                <Plus className="h-3 w-3" />信号条件
-              </button>
+              {/* preopen 帧无布尔信号列 (op=truth 后端拒绝) — 隐藏信号点选入口 */}
+              {draft.type !== 'preopen' && (
+                <button onClick={() => addCond('truth')} className="inline-flex items-center gap-1 text-[11px] text-accent hover:text-accent/80 cursor-pointer">
+                  <Plus className="h-3 w-3" />信号条件
+                </button>
+              )}
               <button onClick={() => addCond('threshold')} className="inline-flex items-center gap-1 text-[11px] text-accent hover:text-accent/80 cursor-pointer">
                 <Plus className="h-3 w-3" />阈值条件
               </button>
             </div>
           </div>
 
-          {selectedSignals.length > 0 || (options.data?.builtin_signals ?? []).length > 0 ? (
+          {draft.type !== 'preopen' && (selectedSignals.length > 0 || (options.data?.builtin_signals ?? []).length > 0) ? (
             <div>
               <div className="mb-1.5 text-[10px] text-muted/70">信号条件 (点选)</div>
               <SignalPicker signals={selectedSignals} onChange={onSignalPickerChange} kind="entry" />
@@ -402,7 +412,7 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
 
           {draft.conditions.length === 0 && (
             <div className="rounded border border-dashed border-border px-3 py-4 text-center text-[11px] text-muted">
-              点击上方「信号条件」或「阈值条件」添加触发规则
+              {draft.type === 'preopen' ? '点击上方「阈值条件」添加触发规则' : '点击上方「信号条件」或「阈值条件」添加触发规则'}
             </div>
           )}
         </div>

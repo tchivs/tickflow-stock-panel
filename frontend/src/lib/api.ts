@@ -946,7 +946,8 @@ export interface MonitorRule {
   id: string
   name: string
   enabled: boolean
-  type: 'strategy' | 'signal' | 'price' | 'market' | 'position' | 'ladder'
+  // preopen: 09:26 盘前帧竞价白名单字段规则 (30-02 /options 契约)
+  type: 'strategy' | 'signal' | 'price' | 'market' | 'position' | 'ladder' | 'preopen'
   asset_type?: 'stock' | 'etf'
   scope: 'symbols' | 'all' | 'sector' | 'positions'
   symbols: string[]
@@ -980,6 +981,9 @@ export interface MonitorRuleOptions {
   logics: { key: string; label: string }[]
   severities: { key: string; label: string }[]
   directions: { key: string; label: string }[]
+  // 盘前竞价白名单字段 (30-02 /options 外露: PREOPEN_ALLOWED_FIELDS + ENRICHED_COLUMNS 中文标签);
+  // 旧后端缺键 → 前端回退空数组零崩溃。
+  preopen_threshold_fields?: { key: string; label: string }[]
 }
 
 export type DeliveryStatus = 'pending' | 'sent' | 'failed' | 'skipped'
@@ -1024,6 +1028,13 @@ export interface AlertEvent {
   valuation_source?: 'shared_quote' | 'governed_close' | 'unavailable' | null
   valuation_as_of?: string | null
   deliveries?: DeliveryOutcome[]
+  // 盘前告警增量键 (30-02 _preopen_sse_shape SSE dict): 与后端事件键集对齐;
+  // 全部可选 — 旧事件缺键时前端零渲染 (徽标不出现, 零崩溃)。
+  window?: string
+  provisional?: boolean
+  degraded?: boolean
+  strategy_ids?: string[]
+  preopen_metrics?: Record<string, number | null>
 }
 
 // ===== Portfolio =====
