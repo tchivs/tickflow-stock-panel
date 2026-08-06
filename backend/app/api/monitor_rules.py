@@ -67,11 +67,17 @@ def get_options(request: Request):
     """返回可选字段、信号列、运算符、枚举,供前端表单使用。"""
     from app.indicators.pipeline import ENRICHED_COLUMNS
     from app.strategy.custom_signals import ALLOWED_FIELDS, load_all as load_csg
+    from app.strategy.monitor_rules import PREOPEN_ALLOWED_FIELDS
 
     # 阈值字段 (带中文标签)
     threshold_fields = [
         {"key": f, "label": ENRICHED_COLUMNS.get(f, f)}
         for f in sorted(ALLOWED_FIELDS)
+    ]
+    # 盘前阈值字段白名单 (MON-07): 仅集合竞价可确认的数值列, 中文标签复用 ENRICHED_COLUMNS (零新表)
+    preopen_threshold_fields = [
+        {"key": f, "label": ENRICHED_COLUMNS.get(f, f)}
+        for f in sorted(PREOPEN_ALLOWED_FIELDS)
     ]
     # 内置信号列 (布尔, 用于 op=truth)
     builtin_signals = [
@@ -93,6 +99,7 @@ def get_options(request: Request):
 
     return {
         "threshold_fields": threshold_fields,
+        "preopen_threshold_fields": preopen_threshold_fields,
         "builtin_signals": builtin_signals,
         "custom_signals": custom_sigs,
         "operators": [">", ">=", "<", "<=", "==", "!="],
@@ -102,6 +109,7 @@ def get_options(request: Request):
             {"key": "market", "label": "市场异动"},
             {"key": "strategy", "label": "策略监控"},
             {"key": "position", "label": "持仓监控"},
+            {"key": "preopen", "label": "盘前异动"},
         ],
         "scopes": [
             {"key": "symbols", "label": "指定股票"},
