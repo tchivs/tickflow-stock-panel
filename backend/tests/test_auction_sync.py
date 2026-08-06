@@ -37,6 +37,18 @@ def _rows(*minutes_and_seconds: tuple[int, int]) -> pl.DataFrame:
     })
 
 
+def _rows_with_input_cols(*minutes_and_seconds: tuple[int, int]) -> pl.DataFrame:
+    """构造带可选委托量输入列的竞价帧 (CHART-03): 4 canonical + auction_unmatched_volume + auction_virtual_price。"""
+    return pl.DataFrame({
+        "symbol": ["000001"] * len(minutes_and_seconds),
+        "datetime": [datetime(2026, 8, 4, 9, m, s) for m, s in minutes_and_seconds],
+        "auction_volume": [100 * (i + 1) for i in range(len(minutes_and_seconds))],
+        "auction_amount": [1000 * (i + 1) for i in range(len(minutes_and_seconds))],
+        "auction_unmatched_volume": [50 * (i + 1) for i in range(len(minutes_and_seconds))],
+        "auction_virtual_price": [7.5] * len(minutes_and_seconds),
+    })
+
+
 def _available_verdict():
     """构造一个 available verdict (Task 1 各测试共用)。"""
     from app.services.auction_probe import AuctionProbeStatus, AuctionProbeVerdict
@@ -374,5 +386,120 @@ def test_auction_view_absent_without_lake(tmp_path, monkeypatch):
         except CatalogException:
             count = 0
         assert count == 0
+    finally:
+        store.db.close()
+
+
+# ================================================================
+# Task 3 (26-01 CHART-03) — 可选委托量输入列写湖: 6 列保留 / 缺列 4 列 / 旧分区+新列 merge
+# ================================================================
+
+
+def test_sync_writes_partition_with_optional_cols(tmp_path, monkeypatch):
+    """CHART-03: 带两可选列 → 分区列 == 4 canonical + 2 optional (6 列) 且末行值保留。"""
+    from app.config import settings
+    data_dir = tmp_path / "data"
+    monkeypatch.setattr(settings, "data_dir", data_dir)
+
+    from app.tickflow.repository import DataStore, KlineRepository
+    store = DataStore(data_dir)
+    try:
+        from app.services import auction_sync
+        from app.tickflow.capabilities import CapabilitySet
+
+        fake = FakeAuctionProvider(rows=_rows_with_input_cols((16, 0), (20, 30), (25, 0)))
+        monkeypatch.setattr(auction_sync, "resolve_auction_probe", _available_verdict)
+        monkeypatch.setattr(auction_sync, "_first_auction_provider", lambda: fake)
+
+        written = auction_sync.sync_and_persist_auction(
+            ["000001", "600000"], KlineRepository(store), CapabilitySet(), date(2026, 8, 4),
+        )
+        assert written > 0
+
+        out = data_dir / "kline_auction" / "date=2026-08-04" / "part.parquet"
+        assert out.exists()
+        df = pl.read_parquet(out)
+        assert df.columns == auction_sync.CANONICAL_AUCTION_COLS + auction_sync.OPTIONAL_AUCTION_COLS
+        # 末行 (09:25) 可选列值保留 (诚实: 源提供才写)
+        last = df.sort("datetime").tail(1)
+        assert last["auction_unmatched_volume"][0] == 150
+        assert last["auction_virtual_price"][0] == 7.5
+        assert not list((data_dir / "kline_auction").rglob("*.tmp"))
+    finally:
+        store.db.close()
+
+
+def test_sync_partition_merge_old_four_plus_new_six(tmp_path, monkeypatch):
+    """CHART-03 R1: 预写 4 列旧分区 + 再 sync 6 列新行同日 → 不抛 SchemaError, 合并列 = 并集。"""
+    from app.config import settings
+    data_dir = tmp_path / "data"
+    monkeypatch.setattr(settings, "data_dir", data_dir)
+
+    from app.tickflow.repository import DataStore, KlineRepository
+    store = DataStore(data_dir)
+    try:
+        from app.services import auction_sync
+        from app.tickflow.capabilities import CapabilitySet
+
+        # 预写 4 列旧分区 (旧行 09:16, 无可选列)
+        old_row = pl.DataFrame({
+            "symbol": ["000001"],
+            "datetime": [datetime(2026, 8, 4, 9, 16)],
+            "auction_volume": [100],
+            "auction_amount": [1000],
+        })
+        out = data_dir / "kline_auction" / "date=2026-08-04" / "part.parquet"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        old_row.write_parquet(out)
+
+        # 再 sync 6 列新行 (同日 09:25)
+        fake = FakeAuctionProvider(rows=_rows_with_input_cols((25, 0)))
+        monkeypatch.setattr(auction_sync, "resolve_auction_probe", _available_verdict)
+        monkeypatch.setattr(auction_sync, "_first_auction_provider", lambda: fake)
+
+        auction_sync.sync_and_persist_auction(
+            ["000001"], KlineRepository(store), CapabilitySet(), date(2026, 8, 4),
+        )
+
+        df = pl.read_parquet(out)
+        expected = auction_sync.CANONICAL_AUCTION_COLS + auction_sync.OPTIONAL_AUCTION_COLS
+        assert set(df.columns) == set(expected)
+        # 旧行可选列缺席 (诚实 null), 新行可选列有值
+        old = df.filter(pl.col("datetime") == datetime(2026, 8, 4, 9, 16))
+        assert old["auction_unmatched_volume"][0] is None
+        new = df.filter(pl.col("datetime") == datetime(2026, 8, 4, 9, 25))
+        assert new["auction_unmatched_volume"][0] == 50
+        assert df.height == 2
+        assert not list((data_dir / "kline_auction").rglob("*.tmp"))
+    finally:
+        store.db.close()
+
+
+def test_sync_without_optional_cols_stays_four_cols(tmp_path, monkeypatch):
+    """CHART-03 R5: 源不提供可选列 → 分区仍 == CANONICAL_AUCTION_COLS 4 列 (向后兼容)。"""
+    from app.config import settings
+    data_dir = tmp_path / "data"
+    monkeypatch.setattr(settings, "data_dir", data_dir)
+
+    from app.tickflow.repository import DataStore, KlineRepository
+    store = DataStore(data_dir)
+    try:
+        from app.services import auction_sync
+        from app.tickflow.capabilities import CapabilitySet
+
+        fake = FakeAuctionProvider(rows=_rows((16, 0)))
+        monkeypatch.setattr(auction_sync, "resolve_auction_probe", _available_verdict)
+        monkeypatch.setattr(auction_sync, "_first_auction_provider", lambda: fake)
+
+        auction_sync.sync_and_persist_auction(
+            ["000001"], KlineRepository(store), CapabilitySet(), date(2026, 8, 4),
+        )
+
+        out = data_dir / "kline_auction" / "date=2026-08-04" / "part.parquet"
+        assert out.exists()
+        df = pl.read_parquet(out)
+        assert df.columns == auction_sync.CANONICAL_AUCTION_COLS
+        assert "auction_unmatched_volume" not in df.columns
+        assert "auction_virtual_price" not in df.columns
     finally:
         store.db.close()

@@ -156,7 +156,12 @@ class GenericHTTPProvider:
                 df = df.with_columns(pl.col("datetime").cast(pl.Datetime("us"), strict=False))
             _mins = pl.col("datetime").dt.hour().cast(pl.Int32) * 60 + pl.col("datetime").dt.minute().cast(pl.Int32)
             df = df.filter((_mins >= 555) & (_mins <= 565))
-        keep = [c for c in ("symbol", "datetime", "auction_volume", "auction_amount") if c in df.columns]
+        # CHART-03: 4 必需 + 2 可选 (与 auction_sync.CANONICAL_AUCTION_COLS +
+        # OPTIONAL_AUCTION_COLS 逐字一致, 单一事实源); 源不提供 → 列缺席, 诚实缺列不 0 填。
+        keep = [c for c in (
+            "symbol", "datetime", "auction_volume", "auction_amount",
+            "auction_unmatched_volume", "auction_virtual_price",
+        ) if c in df.columns]
         return df.select(keep) if keep else pl.DataFrame()
 
     def get_financials(

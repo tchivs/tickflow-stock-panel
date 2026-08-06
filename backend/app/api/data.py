@@ -771,6 +771,9 @@ _TABLE_FIELD_DESC: dict[str, dict[str, str]] = {
         "datetime": "竞价时间戳 (09:15-09:25)",
         "auction_volume": "竞价量, 单位: 股",
         "auction_amount": "竞价金额, 单位: 元",
+        "auction_unmatched_volume": "虚拟未匹配量 (股, 源提供时存在; 估算输入列)",
+        "auction_virtual_price": "虚拟参考价 (元/股, 源提供时存在; 估算输入列)",
+        "auction_unmatched_amount": "派生未匹配金额 (估算, 非真实成交; 输入列可得时存在)",
     },
     "adj_factor": {
         "symbol": "股票代码",

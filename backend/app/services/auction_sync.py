@@ -34,6 +34,13 @@ CANONICAL_AUCTION_COLS = [
     "symbol", "datetime", "auction_volume", "auction_amount",
 ]
 
+# CHART-03 可选委托量输入列 —— 与 custom/provider.py _normalize_auction 裁剪集逐字一致
+# (单一事实源); 源提供才保留, 诚实缺列不 0 填; 派生 auction_unmatched_amount 由读路径
+# attach_auction_columns 在输入可得时计算 (估算, 非真实成交)。
+OPTIONAL_AUCTION_COLS = [
+    "auction_unmatched_volume", "auction_virtual_price",
+]
+
 
 def _atomic_write_parquet(df: pl.DataFrame, out) -> None:
     """先写临时文件再原子替换, 避免进程中断留下损坏的 parquet。
@@ -125,8 +132,9 @@ def sync_and_persist_auction(
         )
         df = df.filter((_mins >= _WINDOW_START_MIN) & (_mins <= _WINDOW_END_MIN))
 
-    # canonical 裁剪
-    keep = [c for c in CANONICAL_AUCTION_COLS if c in df.columns]
+    # canonical 裁剪: 4 必需 + 2 可选 (CHART-03) —— 存在性过滤天然向后兼容
+    # (源不提供可选列 → 仍只写 4 列; R5 不破坏 test_sync_writes_partition)
+    keep = [c for c in CANONICAL_AUCTION_COLS + OPTIONAL_AUCTION_COLS if c in df.columns]
     if not keep:
         return 0
     df = df.select(keep)
@@ -145,7 +153,9 @@ def sync_and_persist_auction(
         out.parent.mkdir(parents=True, exist_ok=True)
         if out.exists():
             existing = pl.read_parquet(out)
-            day_df = pl.concat([existing, day_df.drop("_trade_date")]).unique(
+            day_df = pl.concat(
+                [existing, day_df.drop("_trade_date")], how="diagonal_relaxed",
+            ).unique(
                 subset=["symbol", "datetime"], keep="last",
             )
         else:

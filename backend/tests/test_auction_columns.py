@@ -358,3 +358,57 @@ def test_unmatched_proxy_never_mixed_with_real():
     assert "估算" in desc
     assert "非真实成交" in desc
     assert desc != ENRICHED_COLUMNS["auction_amount"]
+
+
+# ================================================================
+# CHART-03 (26-01 Task 2) — 分区含输入列 → attach 派生激活 (端到端)
+# ================================================================
+
+
+def test_attach_derives_unmatched_amount_from_partition_inputs(repo_env, monkeypatch):
+    """分区含 4 真实 + 2 输入列 → attach 输出含 auction_unmatched_amount == 乘积 (估算), 真实列照常。
+
+    W1 修订: 不断言 auction_volume_ratio —— 该列需前 5 日均量历史缓存 (auction_columns.py:53-76
+    无历史即缺席), 本 fixture 未 seed 历史缓存。
+    """
+    repo, data_dir = repo_env
+    _patch_probe(monkeypatch, _available_verdict())
+    rows = pl.DataFrame({
+        "symbol": ["000001", "600000"],
+        "datetime": [datetime(2026, 8, 4, 9, 25), datetime(2026, 8, 4, 9, 25)],
+        "auction_volume": [8000, 9000],
+        "auction_amount": [42000.0, 48000.0],
+        "auction_unmatched_volume": [5000, 6000],
+        "auction_virtual_price": [8.4, 7.2],
+    })
+    _write_auction_partition(data_dir, date(2026, 8, 4), rows)
+
+    from app.services.auction_columns import attach_auction_columns
+    out = attach_auction_columns(_daily_frame(), date(2026, 8, 4), repo)
+
+    assert "auction_volume" in out.columns
+    assert "auction_amount" in out.columns
+    assert "open_gap" in out.columns
+    assert "auction_unmatched_amount" in out.columns
+    # 派生 == 虚拟未匹配量 × 虚拟参考价 (估算, 非真实成交)
+    assert out.filter(pl.col("symbol") == "000001").select("auction_unmatched_amount").item() == 5000 * 8.4
+    assert out.filter(pl.col("symbol") == "600000").select("auction_unmatched_amount").item() == 6000 * 7.2
+    # 真实列照常 (派生与真实列分列, 永不相加)
+    assert out.filter(pl.col("symbol") == "000001").select("auction_volume").item() == 8000
+    assert out.filter(pl.col("symbol") == "000001").select("auction_amount").item() == 42000.0
+
+
+def test_attach_no_unmatched_when_inputs_absent(repo_env, monkeypatch):
+    """分区无输入列 → attach 输出含真实列但无 auction_unmatched_amount (诚实缺列, 不 0 填)。"""
+    repo, data_dir = repo_env
+    _patch_probe(monkeypatch, _available_verdict())
+    _write_auction_partition(data_dir, date(2026, 8, 4), _auction_rows())
+
+    from app.services.auction_columns import attach_auction_columns
+    out = attach_auction_columns(_daily_frame(), date(2026, 8, 4), repo)
+
+    assert "auction_volume" in out.columns
+    assert "auction_amount" in out.columns
+    assert "auction_unmatched_amount" not in out.columns
+    assert "auction_unmatched_volume" not in out.columns
+    assert "auction_virtual_price" not in out.columns
