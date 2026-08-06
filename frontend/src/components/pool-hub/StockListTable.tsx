@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { AlertTriangle, CheckCircle2, Loader2, RotateCcw } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, Loader2, RotateCcw, Star } from 'lucide-react'
 import { cn } from '@/lib/cn'
 import type { AuctionColumnsDecl, PoolHubRow, PoolHubStrategy } from '@/lib/api'
 import { boardTag } from '@/components/stock-table/primitives'
@@ -169,6 +169,9 @@ export function StockListTable({
   onClearFilter,
   resonanceCount,
   auctionColumns = null,
+  watchlistSet,
+  onToggleWatchlist,
+  watchlistPending,
   watchlistOnly,
 }: StockListTableProps) {
   if (!strategy) return null
@@ -301,6 +304,8 @@ export function StockListTable({
                 const board = boardTag(row.symbol)
                 const cross = row.cross_resonance
                 const isGuest = mode === 'guest'
+                // WATCH-01 星标成员资格: join 键 = 全后缀 symbol 精确全等 (WATCH-03/H6), 无归一化/无 code 匹配
+                const inList = watchlistSet.has(row.symbol)
                 // 游客行 key = 策略作用域序号 — 绝不用脱敏 symbol (T-19-10 duplicate-key 防御)
                 const rowKey = isGuest ? `${strategy.id}-${index}` : row.symbol
                 return (
@@ -325,6 +330,21 @@ export function StockListTable({
                             <span className="shrink-0 w-[18px]" />
                           )}
                           <span className="num tabular-nums text-secondary">{row.code}</span>
+                          {/* WATCH-01 VIP 星标: 在自选实心 amber / 不在空心 muted; icon-only 必须可访问名 (P1) */}
+                          <button
+                            type="button"
+                            onClick={() => onToggleWatchlist(row.symbol, inList)}
+                            disabled={watchlistPending}
+                            aria-label={inList ? '移出自选' : '加入自选'}
+                            title={inList ? '移出自选' : '加入自选'}
+                            className="p-1 rounded-btn transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            <Star
+                              className={'h-3.5 w-3.5 ' + (inList ? 'text-[#FACC15]' : 'text-muted hover:text-foreground hover:bg-elevated')}
+                              fill={inList ? 'currentColor' : 'none'}
+                              aria-hidden
+                            />
+                          </button>
                         </div>
                       )}
                     </td>
