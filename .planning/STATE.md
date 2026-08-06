@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v2.2
 milestone_name: 决策闭环与历史纵深 — planning
-current_phase: 28
-current_phase_name: concept-pit
-status: executing
+current_phase: 29
+current_phase_name: Auction Strategy Validation
+status: planning
 stopped_at: Completed 28-03-PLAN.md
-last_updated: "2026-08-06T11:31:51.204Z"
+last_updated: "2026-08-06T11:42:21.340Z"
 last_activity: 2026-08-06
-last_activity_desc: Phase 28 execution started
+last_activity_desc: Phase 28 complete, transitioned to Phase 29
 progress:
   total_phases: 8
   completed_phases: 0
@@ -28,10 +28,10 @@ See: .planning/PROJECT.md (updated 2026-08-06)
 
 ## Current Position
 
-Phase: 28 (concept-pit) — EXECUTING
-Plan: 3 of 3
-Status: Ready to execute
-Last activity: 2026-08-06 — Phase 28 execution started
+Phase: 29 — 竞价策略历史验证 (Auction Strategy Validation)
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-08-06 — Phase 28 complete, transitioned to Phase 29
 
 ## v1.3 Phase Summary (shipped 2026-08-04)
 

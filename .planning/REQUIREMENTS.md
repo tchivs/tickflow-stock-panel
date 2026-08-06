@@ -65,13 +65,13 @@ Populated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| CONCEPT-01 | Phase 28 | Open |
-| CONCEPT-02 | Phase 28 | Open |
-| CONCEPT-03 | Phase 28 | Open |
-| CONCEPT-04 | Phase 28 | Open (P2) |
-| CONCEPT-05 | Phase 28 | Open |
-| CONCEPT-06 | Phase 28 | Open |
-| CONCEPT-07 | Phase 28 | Open (P2) |
+| CONCEPT-01 | Phase 28 | Complete |
+| CONCEPT-02 | Phase 28 | Complete |
+| CONCEPT-03 | Phase 28 | Complete |
+| CONCEPT-04 | Phase 28 | Complete (P2) |
+| CONCEPT-05 | Phase 28 | Complete |
+| CONCEPT-06 | Phase 28 | Complete |
+| CONCEPT-07 | Phase 28 | Complete (P2) |
 | BT-01 | Phase 29 | Open |
 | BT-02 | Phase 29 | Open |
 | BT-03 | Phase 29 | Open |
