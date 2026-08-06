@@ -35,6 +35,7 @@ from app.api import (
     pool,
     portfolio,
     research,
+    research_auction,
     rps,
     screener,
     signals,
@@ -854,6 +855,8 @@ app.include_router(pool.router)
 app.include_router(screener.router)
 app.include_router(backtest.router)
 app.include_router(research.router)
+# BT-03 竞价策略历史验证只读报告 (POOL-03 零执行)
+app.include_router(research_auction.router)
 app.include_router(intraday.router)
 app.include_router(indices.router)
 app.include_router(overview.router)
