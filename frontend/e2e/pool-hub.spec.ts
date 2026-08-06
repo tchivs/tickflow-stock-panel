@@ -625,12 +625,20 @@ test.describe('Phase 18 pool hub', () => {
 
     // 白名单: 股池页唯一交互 = 刷新 / 卡片钻取 / 概念输入 / 清除筛选 / DateNavigator 步进
     // WATCH-01/02/04 控件可访问名全部登记 (P1): 星标 移出自选/加入自选 + 开关 只看自选 + 批量加自选
-    const ALLOWED_RE = /刷新股池|当日池|当日无命中|数据不可用|清除筛选|清除概念筛选|重试|收起|\+\d+|上一个交易日|下一个交易日|最新|只看自选|批量加自选|加入自选|移出自选/
+    // WATCH-04 复选框列 (LG-04): checkbox 只允许 选择{6位code} / 全选
+    const ALLOWED_RE = /刷新股池|当日池|当日无命中|数据不可用|清除筛选|清除概念筛选|重试|收起|\+\d+|上一个交易日|下一个交易日|最新|只看自选|批量加自选|加入自选|移出自选|选择\d{6}|全选/
     const btnCount = await main.getByRole('button').count()
     for (let i = 0; i < btnCount; i++) {
       const btn = main.getByRole('button').nth(i)
       const name = (await btn.getAttribute('aria-label')) ?? (await btn.textContent()) ?? ''
       expect(name.trim(), `unexpected interactive control: ${name.trim()}`).toMatch(ALLOWED_RE)
+    }
+    // 并行 checkbox-name 循环: 新增可访问名必须登记 ALLOWED_RE, 守卫不弱化
+    const cbCount = await main.getByRole('checkbox').count()
+    for (let i = 0; i < cbCount; i++) {
+      const cb = main.getByRole('checkbox').nth(i)
+      const cbName = (await cb.getAttribute('aria-label')) ?? ''
+      expect(cbName.trim(), `unexpected checkbox: ${cbName.trim()}`).toMatch(ALLOWED_RE)
     }
   })
 
@@ -751,7 +759,8 @@ test.describe('Phase 18 pool hub', () => {
     const scrollContainer = page.getByRole('table').locator('..')
     const containerClass = await scrollContainer.getAttribute('class')
     expect(containerClass ?? '').toContain('overflow-x-auto')
-    const codeCell = page.getByRole('cell', { name: /688981/ }).first()
+    // WATCH-04 复选框列前置后按文本内容定位代码格 (checkbox 格可访问名含 code 但无文本内容)
+    const codeCell = page.getByRole('cell').filter({ hasText: '688981' })
     const codeCellClass = await codeCell.getAttribute('class')
     expect(codeCellClass ?? '').toContain('whitespace-nowrap')
     // Backstop 5: 长概念 chip truncate (展开后检查隐藏的长概念)
@@ -1164,6 +1173,8 @@ test.describe('Phase 18 pool hub', () => {
     await expect(main.getByTitle('加入自选')).toHaveCount(0)
     await expect(main.getByTitle('移出自选')).toHaveCount(0)
     await expect(main.getByRole('switch')).toHaveCount(0)
+    // WATCH-04 复选框列 VIP-only (LG-04): guest 表内零 checkbox (游客零控件契约, T-35-02-03)
+    await expect(page.getByRole('table').getByRole('checkbox')).toHaveCount(0)
   })
 
   test('WATCH-02: 只看自选收窄到自选行 + total 权威不变', async ({ page }, testInfo) => {
@@ -1248,12 +1259,98 @@ test.describe('Phase 18 pool hub', () => {
     await page.goto('/pool-hub')
     await expect(page.getByRole('button', { name: /竞价多头/ })).toBeVisible()
 
-    // 点「批量加自选」→ POST /api/watchlist/batch body.symbols = 可见行 (300750 + 600519)
+    // WATCH-04 scope=选中行 (LG-04): 先全选可见行 → 批量加自选 → POST /api/watchlist/batch body.symbols = 可见行 (300750 + 600519)
+    await page.getByRole('checkbox', { name: '全选' }).check()
     await page.getByRole('button', { name: '批量加自选' }).click()
     await expect.poll(() => batchBody !== null).toBe(true)
     // 顺序不敏感集合比较 (WATCH-04: body 恰为可见行 symbol 数组)
     expect(new Set(batchBody!.symbols)).toEqual(new Set(['300750.SZ', '600519.SH']))
     // 成功 toast (mock 返回 added:2)
     await expect(page.getByText(/已添加 2 只到自选/)).toBeVisible()
+
+    // watchlistOnly 开启 → 批量按钮隐藏 (D6: 可见行全在自选; 只断言按钮 — 行 checkbox 保留可见是允许的)
+    await page.getByRole('switch', { name: '只看自选' }).click()
+    await expect(page.getByRole('button', { name: '批量加自选' })).toHaveCount(0)
+  })
+
+  test('WATCH-04: 勾选单行批量加自选 — body=选中行 + toast', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
+    await installShell(page)
+    await page.route('**/api/pool/hub**', route => json(route, hubPayload))
+    await page.route('**/api/watchlist**', route => json(route, watchlistPayloadEmpty))
+    let batchBody: { symbols: string[] } | null = null
+    await page.route('**/api/watchlist/batch', route => {
+      batchBody = JSON.parse(route.request().postData() ?? '{}') as { symbols: string[] }
+      return json(route, { symbols: [], added: 1 })
+    })
+
+    await page.goto('/pool-hub')
+    await expect(page.getByRole('button', { name: /竞价多头/ })).toBeVisible()
+
+    // 勾选单行 300750 → 批量加自选 → body.symbols 恰为选中行 (单元素保序)
+    await page.getByRole('checkbox', { name: '选择300750' }).check()
+    await expect(page.getByRole('button', { name: '批量加自选' })).toBeEnabled()
+    await page.getByRole('button', { name: '批量加自选' }).click()
+    await expect.poll(() => batchBody !== null).toBe(true)
+    expect(batchBody!.symbols).toEqual(['300750.SZ'])
+    // 成功 toast (mock 返回 added:1)
+    await expect(page.getByText(/已添加 1 只到自选/)).toBeVisible()
+  })
+
+  test('WATCH-04: 全选可见行 + 空选禁用', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
+    await installShell(page)
+    await page.route('**/api/pool/hub**', route => json(route, hubPayload))
+    await page.route('**/api/watchlist**', route => json(route, watchlistPayloadEmpty))
+    let batchBody: { symbols: string[] } | null = null
+    await page.route('**/api/watchlist/batch', route => {
+      batchBody = JSON.parse(route.request().postData() ?? '{}') as { symbols: string[] }
+      return json(route, { symbols: [], added: 2 })
+    })
+
+    await page.goto('/pool-hub')
+    await expect(page.getByRole('button', { name: /竞价多头/ })).toBeVisible()
+
+    // 初始空选 → 批量按钮禁用
+    await expect(page.getByRole('button', { name: '批量加自选' })).toBeDisabled()
+
+    // 表头全选 → 两行均勾选 + aria-checked=true; 批量按钮启用 (click: 每次触发 change → toggle)
+    const selectAll = page.getByRole('checkbox', { name: '全选' })
+    await expect(selectAll).toHaveAttribute('aria-checked', 'false')
+    await selectAll.click()
+    await expect(selectAll).toHaveAttribute('aria-checked', 'true')
+    await expect(page.getByRole('checkbox', { name: '选择300750' })).toBeChecked()
+    await expect(page.getByRole('checkbox', { name: '选择600519' })).toBeChecked()
+    await expect(page.getByRole('button', { name: '批量加自选' })).toBeEnabled()
+
+    await page.getByRole('button', { name: '批量加自选' }).click()
+    await expect.poll(() => batchBody !== null).toBe(true)
+    // 顺序不敏感集合比较 (WATCH-04: body 恰为可见行 symbol 数组)
+    expect(new Set(batchBody!.symbols)).toEqual(new Set(['300750.SZ', '600519.SH']))
+
+    // 再点全选 → 全不选 + 按钮回到禁用
+    await selectAll.click()
+    await expect(selectAll).toHaveAttribute('aria-checked', 'false')
+    await expect(page.getByRole('checkbox', { name: '选择300750' })).not.toBeChecked()
+    await expect(page.getByRole('button', { name: '批量加自选' })).toBeDisabled()
+  })
+
+  test('WATCH-04: 切换策略清空选中 (无跨视图 stale selection)', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
+    await installShell(page)
+    await page.route('**/api/pool/hub**', route => json(route, hubPayload))
+    await page.route('**/api/watchlist**', route => json(route, watchlistPayloadEmpty))
+
+    await page.goto('/pool-hub')
+    await expect(page.getByRole('button', { name: /竞价多头/ })).toBeVisible()
+
+    // 勾选 300750 → 切策略 (盘前强势量化, 行 = 300750 交叉共振) → 选择被清空 (T-35-02-05)
+    await page.getByRole('checkbox', { name: '选择300750' }).check()
+    await expect(page.getByRole('checkbox', { name: '选择300750' })).toBeChecked()
+    await page.getByRole('button', { name: /盘前强势量化/ }).click()
+    await expect(page.getByText('盘前强势量化 · 股池明细')).toBeVisible()
+    await expect(page.getByRole('checkbox', { name: '选择300750' })).not.toBeChecked()
+    // 批量按钮回到空选禁用 — stale 选择不残留
+    await expect(page.getByRole('button', { name: '批量加自选' })).toBeDisabled()
   })
 })
