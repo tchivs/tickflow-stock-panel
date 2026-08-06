@@ -14,7 +14,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 
 from app.api.screener import _strategy_display_name
 from app.services.pool_hub import build_pool_hub, build_pool_hub_snapshot
-from app.services.pool_snapshot import list_snapshot_dates
+from app.services.pool_snapshot import list_backfill_gaps, list_snapshot_dates
 from app.services.guest_masking import mask_guest_hub
 
 router = APIRouter(prefix="/api/pool", tags=["pool"])
@@ -58,10 +58,21 @@ def get_pool_dates(request: Request):
 
     source of truth = ``screener_results/date=*`` 分区 glob (含 part.json 者)。
     GET-only 零写零执行 (POOL-05)。
+
+    HIST-03 缺口信号: ``backfill_needed`` = 回填缺口计数 (enriched 分区 − 快照
+    分区), ``backfill_examples`` = 升序前 5 个缺口日。数据源与回填共用
+    ``list_backfill_gaps`` 单点 (24-01), 纯读不触发计算 (E5 守卫)。
     """
     data_dir = request.app.state.repo.store.data_dir
     dates = list_snapshot_dates(data_dir)
-    return {"dates": dates, "count": len(dates), "latest": dates[0] if dates else None}
+    gaps = list_backfill_gaps(data_dir)
+    return {
+        "dates": dates,
+        "count": len(dates),
+        "latest": dates[0] if dates else None,
+        "backfill_needed": len(gaps),
+        "backfill_examples": gaps[:5],
+    }
 
 
 @router.get("/history")

@@ -709,11 +709,19 @@ def test_get_pool_hub_json_serializable_roundtrip(tmp_path):
 
 
 def test_pool_dates_api(tmp_path):
-    """GET /api/pool/dates → 排序日期列表 (ISO desc); 无快照目录排除; 空 → 空态。"""
+    """GET /api/pool/dates → 排序日期列表 (ISO desc) + HIST-03 缺口信号。
+
+    enriched 4 日 (07-29/08-01/08-02/08-04) − 快照 2 日 (08-01/08-04)
+    = 缺口 2 日 (07-29, 08-02), 升序示例。无快照目录 (date=2026-08-02)
+    不含 part.json → 不列为快照日期, 但仍是 enriched 缺口。
+    """
     client = _make_client(tmp_path)
     _write_snapshot(tmp_path, as_of="2026-08-04")
     _write_snapshot(tmp_path, as_of="2026-08-01")
     (tmp_path / "screener_results" / "date=2026-08-02").mkdir(parents=True)
+    # enriched 分区 (纯目录即可 — list_enriched_dates 只 glob date=* 目录)
+    for d in ("2026-07-29", "2026-08-01", "2026-08-02", "2026-08-04"):
+        (tmp_path / "kline_daily_enriched" / f"date={d}").mkdir(parents=True, exist_ok=True)
 
     resp = client.get("/api/pool/dates")
     assert resp.status_code == 200
@@ -721,13 +729,31 @@ def test_pool_dates_api(tmp_path):
         "dates": ["2026-08-04", "2026-08-01"],
         "count": 2,
         "latest": "2026-08-04",
+        "backfill_needed": 2,
+        "backfill_examples": ["2026-07-29", "2026-08-02"],
     }
 
-    # 无快照 → 空态
+    # 无快照 + 无 enriched → 空态
     client2 = _make_client(tmp_path / "empty")
     assert client2.get("/api/pool/dates").json() == {
         "dates": [], "count": 0, "latest": None,
+        "backfill_needed": 0, "backfill_examples": [],
     }
+
+
+def test_pool_dates_backfill_examples_truncated(tmp_path):
+    """HIST-03: 缺口 > 5 → backfill_examples 只列升序前 5 个示例日。"""
+    client = _make_client(tmp_path)
+    # 显式写 6 个升序 enriched 分区, 无任何快照 → 全为缺口
+    for d in ("2026-07-25", "2026-07-26", "2026-07-27", "2026-07-28", "2026-07-29", "2026-07-30"):
+        (tmp_path / "kline_daily_enriched" / f"date={d}").mkdir(parents=True, exist_ok=True)
+
+    resp = client.get("/api/pool/dates")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["backfill_needed"] == 6
+    assert body["backfill_examples"] == ["2026-07-25", "2026-07-26", "2026-07-27", "2026-07-28", "2026-07-29"]
+    assert len(body["backfill_examples"]) == 5
 
 
 def test_pool_history_snapshot(tmp_path):
