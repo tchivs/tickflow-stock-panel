@@ -51,7 +51,7 @@ def _latest_enriched_date(repo) -> date | None:
     return cache["date"].max()
 
 
-def _load_concept_map_df(repo) -> tuple[pl.DataFrame, int]:
+def _load_concept_map_df(repo, as_of: str | None = None) -> tuple[pl.DataFrame, int]:
     """构建并缓存 {symbol_upper → 概念} 的已展开 polars 映射表。
 
     复用 market_overview_builder 的概念识别 + 成分股读取逻辑(_dimension_field /
@@ -66,8 +66,15 @@ def _load_concept_map_df(repo) -> tuple[pl.DataFrame, int]:
     缓存: 概念成分股是 snapshot, 进程内不变, 缓存 600s。
     直接缓存 DataFrame 而非 Python dict —— 后续 join 时省掉每次 ~1s 的 dict→DataFrame
     重建开销(这是结果缓存失效后重算的主要瓶颈)。
+
+    CONCEPT-06: as_of 非空 → 读 D 日归档分区 (跳过 600s 模块级缓存, 历史日绝不拿
+    最新日 map — RESEARCH §7 风险); as_of 为空 → 既有 600s 缓存逻辑原样。
     """
     global _concept_map_cache, _concept_map_count, _concept_map_ts
+
+    if as_of is not None:
+        return _load_concept_map_from_partition(repo, as_of)
+
     now = time.time()
     if _concept_map_cache is not None and (now - _concept_map_ts) < 600:
         return _concept_map_cache, _concept_map_count
@@ -109,17 +116,73 @@ def _load_concept_map_df(repo) -> tuple[pl.DataFrame, int]:
     return _concept_map_cache, _concept_map_count
 
 
+def _load_concept_map_from_partition(repo, as_of: str | date) -> tuple[pl.DataFrame, int]:
+    """CONCEPT-06: 从 D 日归档分区展开 (symbol, concept) 映射表 (绕过 600s 缓存)。
+
+    分区行含 dimension_field (manifest 自描述) 与 symbol/股票代码 等 join 键,
+    _dimension_values / _symbol_keys 直接消费。分区缺失/rows 空 → 空 DataFrame + 0。
+    绝不写 _concept_map_cache (as_of 查询永不污染最新映射缓存 — T-28-03-02)。
+    """
+    from app.services import concept_history
+
+    data_dir = repo.store.data_dir
+    as_of_str = as_of if isinstance(as_of, str) else as_of.isoformat()
+    part = concept_history.read_partition(data_dir, "gn_ths", as_of_str)
+    if not part or not part.get("rows"):
+        logger.info("rps_rotation: no concept partition for as_of=%s", as_of_str)
+        return pl.DataFrame(schema={"_sym_up": pl.Utf8, "concept": pl.Utf8}), 0
+
+    dim_field = part["manifest"].get("dimension_field") or "所属概念"
+    config = ExtConfigStore(data_dir).get("ext_gn_ths")
+    pairs: list[tuple[str, str]] = []
+    concepts_seen: set[str] = set()
+    for row in part["rows"]:
+        concepts = _dimension_values(row.get(dim_field))
+        if not concepts:
+            continue
+        if config is not None:
+            keys = _symbol_keys(row, config)
+        else:
+            # config 缺失 (分区存在但表配置被删) → 退化用行内 symbol/code/股票代码 键
+            keys = []
+            for f in ("symbol", "code", "股票代码", "代码"):
+                raw = row.get(f)
+                if raw is None:
+                    continue
+                text = str(raw).strip().upper()
+                if not text:
+                    continue
+                keys.append(text)
+                if "." in text:
+                    keys.append(text.split(".", 1)[0])
+        for key in keys:
+            for c in concepts:
+                pairs.append((key, c))
+                concepts_seen.add(c)
+
+    if pairs:
+        return (
+            pl.DataFrame(
+                {"_sym_up": [p[0] for p in pairs], "concept": [p[1] for p in pairs]},
+                schema={"_sym_up": pl.Utf8, "concept": pl.Utf8},
+            ).unique(),
+            len(concepts_seen),
+        )
+    return pl.DataFrame(schema={"_sym_up": pl.Utf8, "concept": pl.Utf8}), 0
+
+
 _concept_map_cache: pl.DataFrame | None = None
 _concept_map_count: int = 0
 _concept_map_ts: float = 0.0
 
 
-def build_rps_rotation(repo, days: int = 12) -> dict:
+def build_rps_rotation(repo, days: int = 12, as_of: str | None = None) -> dict:
     """构建概念涨幅轮动矩阵。
 
     Args:
         repo: KlineRepository(含 _enriched_history_cache 内存历史)。
         days: 取最近 N 个交易日, 范围 [7, 30], 默认 12。
+        as_of: 概念映射取 D 日归档分区 (YYYY-MM-DD); 缺省最新 (既有 600s 缓存)。
 
     Returns:
         {
@@ -128,6 +191,8 @@ def build_rps_rotation(repo, days: int = 12) -> dict:
           "concept_count": 387,                   # 去重概念总数(0 表示无概念数据)
         }
         涨幅是小数(0.0522 = +5.22%)。无数据时返回空 columns。
+        语义备注 (RESEARCH §3.4): 矩阵各历史列仍共用该单日 map — as_of 指
+        「矩阵使用的概念映射取 D 日分区」, 逐日概念 map 各列独立属未来增强。
     """
     days = max(7, min(30, days))
 
@@ -135,6 +200,16 @@ def build_rps_rotation(repo, days: int = 12) -> dict:
     latest = _latest_enriched_date(repo)
     if latest is None:
         return {"dates": [], "columns": {}, "concept_count": 0}
+
+    # CONCEPT-06: as_of 非空 → 绕过结果缓存 (latest-key 缓存与历史 as_of 冲突,
+    # T-28-03-02); 概念 map 由 D 日分区展开。
+    if as_of is not None:
+        map_df, concept_count = _load_concept_map_df(repo, as_of=as_of)
+        if map_df.is_empty():
+            logger.info("rps_rotation: no concept data (partition %s missing)", as_of)
+            return {"dates": [], "columns": {}, "concept_count": 0}
+        full = _build_rotation_full(repo, latest, days, map_df, concept_count)
+        return _slice_cached(full, days)
 
     cache_key = latest.isoformat()
     now = time.time()
@@ -149,6 +224,20 @@ def build_rps_rotation(repo, days: int = 12) -> dict:
         logger.info("rps_rotation: no concept data (ext_gn_ths not fetched yet)")
         return {"dates": [], "columns": {}, "concept_count": 0}
 
+    full = _build_rotation_full(repo, latest, days, map_df, concept_count)
+
+    # 写缓存(存全量, 按需 slice)
+    _cache[cache_key] = full
+    _cache_ts[cache_key] = now
+
+    return _slice_cached(full, days)
+
+
+def _build_rotation_full(repo, latest: date, days: int, map_df: pl.DataFrame, concept_count: int) -> dict:
+    """从 (symbol→concept) map_df 装配全量轮动矩阵 (join/agg/grouped/columns 原样)。
+
+    无 as_of 语义: 只收 map_df + latest, 两分支 (最新 600s 缓存 / as_of 分区) 复用同一段。
+    """
     # 2. 取最近 N 交易日的个股 change_pct(命中内存缓存)
     start = latest - timedelta(days=days * 2 + 10)  # 日历天 ≈ 2/3 交易日, 多取余量
     df = repo.get_enriched_range(
@@ -188,17 +277,11 @@ def build_rps_rotation(repo, days: int = 12) -> dict:
         all_dates_sorted.append(d_str)
         columns[d_str] = list(zip(row["concept"], row["avg_pct"]))
 
-    full = {
+    return {
         "dates": [str(d) for d in all_dates_sorted],
         "columns": columns,
         "concept_count": concept_count,
     }
-
-    # 写缓存(存全量, 按需 slice)
-    _cache[cache_key] = full
-    _cache_ts[cache_key] = now
-
-    return _slice_cached(full, days)
 
 
 def _slice_cached(full: dict, days: int) -> dict:

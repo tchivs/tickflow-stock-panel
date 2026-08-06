@@ -5,7 +5,11 @@
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Query, Request
+import re
+from datetime import date as date_type
+from typing import Optional
+
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -14,11 +18,14 @@ from app.services.concept_rotation_analyzer import analyze_rotation_stream
 
 router = APIRouter(prefix="/api/rps", tags=["rps"])
 
+_AS_OF_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
 
 @router.get("/rotation")
 def get_rotation(
     request: Request,
     days: int = Query(12, ge=7, le=30, description="最近 N 个交易日(7-30)"),
+    as_of: Optional[str] = Query(None, description="概念映射取 D 日分区 (YYYY-MM-DD); 缺省最新"),
 ) -> dict:
     """概念涨幅轮动矩阵。
 
@@ -26,8 +33,18 @@ def get_rotation(
         dates: 日期字符串列表(最新在最前)
         columns: {日期: [[概念名, 涨幅小数], ...]} 每列各自降序
         concept_count: 去重概念总数
+
+    ``as_of`` 严格双重校验 (``^\\d{4}-\\d{2}-\\d{2}$`` + ``date.fromisoformat``,
+    防路径穿越 T-28-03-01, 镜像 api/pool.py): 非法 → 400。
     """
-    return rps_rotation.build_rps_rotation(request.app.state.repo, days)
+    if as_of is not None:
+        if not _AS_OF_RE.fullmatch(as_of):
+            raise HTTPException(status_code=400, detail="invalid as_of")
+        try:
+            date_type.fromisoformat(as_of)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="invalid as_of")
+    return rps_rotation.build_rps_rotation(request.app.state.repo, days, as_of=as_of)
 
 
 class AnalyzeRequest(BaseModel):

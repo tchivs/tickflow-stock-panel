@@ -21,12 +21,14 @@ _SYMBOLS = {
     "X": "600000.SH",
     "Y": "600001.SH",
     "Z": "600002.SH",
+    "W": "600003.SH",
 }
 
 _NAMES = {
     "X": "人工智能龙头",
     "Y": "宁德新能源",
     "Z": "新能科技",
+    "W": "早盘之星科技",
 }
 
 
@@ -199,6 +201,92 @@ class _FakeRpsRepo:
         return df.sort(["symbol", "date"])
 
 
+def _rps_hist_frame() -> pl.DataFrame:
+    """RPS 输入: 多交易日 change_pct 帧 (symbol/date/change_pct)。"""
+    rows = []
+    for d in (date(2026, 7, 30), date(2026, 7, 31), date(2026, 8, 3), date(2026, 8, 4)):
+        for sym, chg in ((_SYMBOLS["X"], 0.051), (_SYMBOLS["Y"], -0.02), (_SYMBOLS["Z"], 0.03)):
+            rows.append({"symbol": sym, "date": d, "change_pct": chg})
+    return pl.DataFrame(rows)
+
+
+def _write_strategy_cache(data_dir: Path) -> None:
+    """写入 hermetic 策略缓存 — 单一 as_of, 3 策略 (镜像 test_concept_history)。"""
+    payload = {
+        "as_of": _AS_OF,
+        "results": {
+            "auction_bullish": {
+                "total": 2,
+                "as_of": _AS_OF,
+                "rows": [
+                    {"symbol": _SYMBOLS["X"], "name": _NAMES["X"], "open_gap": 3.21, "change_pct": 5.1, "hit_factors": ["竞价多头"]},
+                    {"symbol": _SYMBOLS["Y"], "name": _NAMES["Y"], "open_gap": 1.5, "change_pct": 2.3, "hit_factors": ["盘前强势量化", "竞价多头"]},
+                ],
+            },
+            "auction_preopen_quant": {
+                "total": 2,
+                "as_of": _AS_OF,
+                "rows": [
+                    {"symbol": _SYMBOLS["Y"], "name": _NAMES["Y"], "open_gap": 1.5, "hit_factors": ["盘前强势量化", "竞价多头"]},
+                    {"symbol": _SYMBOLS["Z"], "name": _NAMES["Z"], "open_gap": 0.5, "hit_factors": ["盘前强势量化"]},
+                ],
+            },
+            "auction_early_star": {
+                "total": 1,
+                "as_of": _AS_OF,
+                "rows": [
+                    {"symbol": _SYMBOLS["W"], "name": "早盘之星科技", "open_gap": 0.1, "change_pct": 0.9, "hit_factors": ["早盘之星"]},
+                ],
+            },
+        },
+        "updated_at": 1722758400000,
+    }
+    path = data_dir / "user_data" / "strategy_cache.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+
+def _write_snapshot(data_dir: Path, as_of: str = _AS_OF) -> Path:
+    """写冻结式点快照 part.json (镜像 test_concept_history)。"""
+    payload = {
+        "as_of": as_of,
+        "computed_at": "2026-08-04T15:30:00",
+        "strategy_version": "fp-test",
+        "snapshot_type": "point",
+        "schema_version": 1,
+        "snapshot_origin": "eod",
+        "results": {
+            "auction_bullish": {
+                "total": 2,
+                "as_of": as_of,
+                "rows": [
+                    {"symbol": _SYMBOLS["X"], "name": _NAMES["X"], "open_gap": 3.21, "change_pct": 5.1, "hit_factors": ["竞价多头"]},
+                    {"symbol": _SYMBOLS["Y"], "name": _NAMES["Y"], "open_gap": 1.5, "change_pct": 2.3, "hit_factors": ["盘前强势量化", "竞价多头"]},
+                ],
+            },
+            "auction_preopen_quant": {
+                "total": 2,
+                "as_of": as_of,
+                "rows": [
+                    {"symbol": _SYMBOLS["Y"], "name": _NAMES["Y"], "open_gap": 1.5, "hit_factors": ["盘前强势量化", "竞价多头"]},
+                    {"symbol": _SYMBOLS["Z"], "name": _NAMES["Z"], "open_gap": 0.5, "hit_factors": ["盘前强势量化"]},
+                ],
+            },
+            "auction_early_star": {
+                "total": 1,
+                "as_of": as_of,
+                "rows": [
+                    {"symbol": _SYMBOLS["W"], "name": "早盘之星科技", "open_gap": 0.1, "change_pct": 0.9, "hit_factors": ["早盘之星"]},
+                ],
+            },
+        },
+    }
+    path = data_dir / "screener_results" / f"date={as_of}" / "part.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    return path
+
+
 def _reset_rps_caches() -> None:
     """清空 RPS 模块级缓存 (600s 概念映射 + 120s 结果缓存), 防跨测试污染。"""
     from app.services import rps_rotation
@@ -328,3 +416,138 @@ def test_overview_api_as_of_partition(tmp_path):
     resp2 = client.get("/api/overview/market")
     assert resp2.status_code == 200
     assert resp2.json()["concept_rank"]["leading"][0]["name"] == "人工智能"
+
+
+# ---------------------------------------------------------------------------
+# Task 2 — CONCEPT-06 RPS seam: _load_concept_map_df as_of + build_rps_rotation 透传 + API
+# ---------------------------------------------------------------------------
+
+def test_load_concept_map_df_as_of_branch(tmp_path):
+    """CONCEPT-06: _load_concept_map_df(repo, as_of=D) 返回 D 日分区 map; 600s 缓存零污染。"""
+    from app.services.rps_rotation import _load_concept_map_df
+
+    _reset_rps_caches()
+    _write_concept_ext(tmp_path, kind="gn_ths")  # 当前 ext: X→人工智能, Y→人工智能;新能源, Z→新能源
+    _write_partition_fixture(tmp_path, "gn_ths", _AS_OF, "所属概念", [
+        {"symbol": _SYMBOLS["X"], "所属概念": "新能源"},
+        {"symbol": _SYMBOLS["Y"], "所属概念": "新能源"},
+        {"symbol": _SYMBOLS["Z"], "所属概念": "半导体"},
+    ])
+    repo = SimpleNamespace(store=SimpleNamespace(data_dir=tmp_path))
+
+    map_as_of, count_as_of = _load_concept_map_df(repo, as_of=_AS_OF)
+    assert count_as_of == 2  # 新能源 + 半导体
+    assert set(map_as_of["concept"].to_list()) == {"新能源", "半导体"}
+
+    # 缓存零污染: 无 as_of 调用仍走当前 ext (人工智能/新能源), 不返回分区内容
+    map_latest, count_latest = _load_concept_map_df(repo)
+    assert set(map_latest["concept"].to_list()) == {"人工智能", "新能源"}
+    assert count_latest == 2
+
+
+def test_build_rps_rotation_as_of_passthrough(tmp_path):
+    """CONCEPT-06: build_rps_rotation(repo, days, as_of=D) 由 D 日分区 join; 无 as_of 用当前 ext。"""
+    from app.services.rps_rotation import build_rps_rotation
+
+    _reset_rps_caches()
+    _write_concept_ext(tmp_path, kind="gn_ths")
+    _write_partition_fixture(tmp_path, "gn_ths", _AS_OF, "所属概念", [
+        {"symbol": _SYMBOLS["X"], "所属概念": "新能源"},
+        {"symbol": _SYMBOLS["Y"], "所属概念": "新能源"},
+        {"symbol": _SYMBOLS["Z"], "所属概念": "半导体"},
+    ])
+    repo = _FakeRpsRepo(tmp_path, _rps_hist_frame())
+
+    rotation_as_of = build_rps_rotation(repo, days=7, as_of=_AS_OF)
+    assert rotation_as_of["concept_count"] == 2
+    as_of_concepts = {name for col in rotation_as_of["columns"].values() for name, _ in col}
+    assert "半导体" in as_of_concepts
+    assert "人工智能" not in as_of_concepts
+
+    rotation_latest = build_rps_rotation(repo, days=7)
+    assert rotation_latest["concept_count"] == 2
+    latest_concepts = {name for col in rotation_latest["columns"].values() for name, _ in col}
+    assert "人工智能" in latest_concepts
+    assert "半导体" not in latest_concepts
+
+
+def test_rps_api_as_of_query(tmp_path):
+    """CONCEPT-06 API: GET /api/rps/rotation?as_of=D → 200 分区 columns; 非法 as_of → 400; 无 as_of → 200。"""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.api import rps as rps_api
+
+    _reset_rps_caches()
+    _write_concept_ext(tmp_path, kind="gn_ths")
+    _write_partition_fixture(tmp_path, "gn_ths", _AS_OF, "所属概念", [
+        {"symbol": _SYMBOLS["X"], "所属概念": "新能源"},
+        {"symbol": _SYMBOLS["Y"], "所属概念": "新能源"},
+        {"symbol": _SYMBOLS["Z"], "所属概念": "半导体"},
+    ])
+    app = FastAPI()
+    app.include_router(rps_api.router)
+    app.state.repo = _FakeRpsRepo(tmp_path, _rps_hist_frame())
+
+    client = TestClient(app)
+
+    resp = client.get("/api/rps/rotation", params={"as_of": _AS_OF})
+    assert resp.status_code == 200
+    body = resp.json()
+    as_of_concepts = {name for col in body["columns"].values() for name, _ in col}
+    assert "半导体" in as_of_concepts
+    assert "人工智能" not in as_of_concepts
+
+    for bad in ("2026-8-4", "../../x"):
+        bad_resp = client.get("/api/rps/rotation", params={"as_of": bad})
+        assert bad_resp.status_code == 400, f"as_of={bad} 应 400"
+
+    latest = client.get("/api/rps/rotation")
+    assert latest.status_code == 200
+    latest_concepts = {name for col in latest.json()["columns"].values() for name, _ in col}
+    assert "人工智能" in latest_concepts
+
+
+def test_concept07_history_passthrough_verify(tmp_path):
+    """CONCEPT-07 复验: /api/pool/history?as_of=D 载荷含 effective/captured_at (28-01 不回退); overview as_of 冒烟。"""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.api import overview as overview_api
+    from app.api import pool as pool_api
+
+    _reset_rps_caches()
+    _write_strategy_cache(tmp_path)
+    _write_concept_ext(tmp_path, kind="gn_ths")
+    _write_snapshot(tmp_path, as_of=_AS_OF)
+    _write_partition_fixture(tmp_path, "gn_ths", _AS_OF, "所属概念", [
+        {"symbol": _SYMBOLS["X"], "所属概念": "新能源"},
+        {"symbol": _SYMBOLS["Y"], "所属概念": "新能源"},
+        {"symbol": _SYMBOLS["Z"], "所属概念": "半导体"},
+    ])
+
+    app = FastAPI()
+    app.include_router(pool_api.router)
+    app.include_router(overview_api.router)
+    app.state.repo = _FakeOverviewRepo(tmp_path, _enriched_hist_frame())
+    app.state.strategy_engine = None
+
+    @app.middleware("http")
+    async def bind_vip(request, call_next):
+        request.state.reviewer_principal = "reviewer_test"
+        return await call_next(request)
+
+    client = TestClient(app)
+
+    resp = client.get("/api/pool/history", params={"as_of": _AS_OF})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["concept_attribution"] == "as_of_snapshot"
+    assert body["concept_effective_date"] == _AS_OF
+    assert body["concept_captured_at"] == "2026-08-04T10:00:00"
+
+    overview_api.invalidate_overview_cache()
+    resp2 = client.get("/api/overview/market", params={"as_of": _AS_OF})
+    assert resp2.status_code == 200
+    assert resp2.json()["concept_rank"]["leading"][0]["name"] == "半导体"
+
