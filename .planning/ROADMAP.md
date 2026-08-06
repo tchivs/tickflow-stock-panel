@@ -35,7 +35,7 @@ Four phases (20-23) delivered probe-gated real auction columns + `kline_auction/
 - [x] **Phase 24: 逐日全量存档 (Historical Archive)** - User-triggered batch backfill + snapshot_origin provenance + backfill_needed gap signal + cache-pointer pollution fix — HIST-01..04 (completed 2026-08-06)
 - [x] **Phase 25: 自选股联动 (Watchlist Sync)** - Pool drill-down watch stars + 只看自选 filter + shared cache consistency — WATCH-01..04 (completed 2026-08-06)
 - [x] **Phase 26: 历史竞价图 + 派生列复活 (Auction History Chart)** - Read-only auction history API + ECharts chart + lake ingestion preserves delegation-volume columns — CHART-01..03 (completed 2026-08-06)
-- [ ] **Phase 27: 盘前股池 (Premarket Pool)** - Scheduled premarket preview job (independent store) + open_gap completion + probe-honest degraded semantics + frontend premarket view — PM-01..04
+- [x] **Phase 27: 盘前股池 (Premarket Pool)** - Scheduled premarket preview job (independent store) + open_gap completion + probe-honest degraded semantics + frontend premarket view — PM-01..04 (completed 2026-08-06)
 
 ## Phase Details
 
@@ -126,7 +126,7 @@ Phases execute in numeric order: 24 → 25 → 26 → 27
 | 24. 逐日全量存档 | HIST-01..04 | Complete    |
 | 25. 自选股联动 | WATCH-01..04 | Complete    |
 | 26. 历史竞价图 + 派生列复活 | CHART-01..03 | Complete    |
-| 27. 盘前股池 | PM-01..04 | In progress |
+| 27. 盘前股池 | PM-01..04 | Complete    |
 
 ---
 *Last updated: 2026-08-05 — v2.1 milestone started; roadmap created (Phases 24-27)*

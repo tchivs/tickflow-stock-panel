@@ -3,18 +3,18 @@ gsd_state_version: 1.0
 milestone: v2.1
 milestone_name: 历史深度与自选联动 — planning
 current_phase: 27
-current_phase_name: Premarket Pool
-status: planning
+status: completed
 stopped_at: Completed 27-02-PLAN.md (frontend PM-04 premarket view)
-last_updated: "2026-08-06T08:27:24.058Z"
+last_updated: "2026-08-06T08:54:09.403Z"
 last_activity: 2026-08-06
-last_activity_desc: 27-01 + 27-02 complete (backend PM-01/02/03 + frontend PM-04 premarket view)
+last_activity_desc: Phase 27 complete
 progress:
   total_phases: 4
   completed_phases: 4
   total_plans: 8
   completed_plans: 8
   percent: 100
+current_phase_name: Premarket Pool
 ---
 
 # Project State
@@ -28,10 +28,10 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 
 ## Current Position
 
-Phase: 27 — 盘前股池 (Premarket Pool)
-Plan: 2/2 complete
-Status: In progress (awaiting phase verification)
-Last activity: 2026-08-06 — 27-01 + 27-02 complete (backend PM-01/02/03 + frontend PM-04 premarket view)
+Phase: 27
+Plan: Not started
+Status: All phases complete
+Last activity: 2026-08-06 — Phase 27 complete
 
 ## v1.3 Phase Summary (shipped 2026-08-04)
 
