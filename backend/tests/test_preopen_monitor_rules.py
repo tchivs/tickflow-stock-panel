@@ -339,3 +339,141 @@ def test_preopen_absent_symbol_not_hit():
 
     frame, _ = build_preopen_frame(payload)
     assert "auction_volume" not in extract_preopen_metrics(frame, "B.SZ")
+
+
+# ── T2 负例全量 (MON-01): 白名单外 EOD 字段 / truth / 非法 op / 非数字 value ──
+def test_preopen_validate_negative_cases():
+    from app.strategy import monitor_rules
+
+    # EOD 列 (白名单外) → ValueError 含「白名单」
+    for field in ("change_pct", "close", "vol_ratio_5d", "amount"):
+        with pytest.raises(ValueError, match="白名单"):
+            monitor_rules.validate(_preopen_rule(f"r_eod_{field}", field, ">=", 0.05))
+
+    # op=truth 显式拒绝 (D2)
+    with pytest.raises(ValueError, match="truth"):
+        monitor_rules.validate(_preopen_rule("r_truth", "open_gap", "truth", None))
+
+    # 白名单外字段 + 数值 op (如盘中指标 rsi_14) → 拒绝
+    with pytest.raises(ValueError, match="白名单"):
+        monitor_rules.validate(_preopen_rule("r_offwl", "rsi_14", ">=", 0.05))
+
+    # value 非数字
+    with pytest.raises(ValueError, match="数字"):
+        monitor_rules.validate(_preopen_rule("r_str_val", "open_gap", ">=", "0.05"))
+
+    # conditions 空 / 超过 8 条
+    empty = _preopen_rule("r_empty", "open_gap", ">=", 0.05)
+    empty["conditions"] = []
+    with pytest.raises(ValueError, match="conditions"):
+        monitor_rules.validate(empty)
+    many = _preopen_rule("r_many", "open_gap", ">=", 0.05)
+    many["conditions"] = [{"field": "open_gap", "op": ">=", "value": 0.01}] * 9
+    with pytest.raises(ValueError, match="conditions"):
+        monitor_rules.validate(many)
+
+    # scope 仅 symbols/all (D3)
+    for scope in ("sector", "positions"):
+        with pytest.raises(ValueError, match="symbols/all"):
+            monitor_rules.validate(_preopen_rule("r_scope", "open_gap", ">=", 0.05, scope=scope))
+
+    # 白名单字段 + 非法 op
+    with pytest.raises(ValueError, match="op"):
+        monitor_rules.validate(_preopen_rule("r_badop", "open_gap", "between", 0.05))
+
+
+# ── T9 降级 fail-closed (MON-04): 缺列不 0 填、不派生兜底 ──
+def test_preopen_degraded_fail_closed():
+    eng = _engine()
+    vol_rule = _preopen_rule("r_vol", "auction_volume", ">=", 1000)
+    gap_rule = _preopen_rule("r_gap", "open_gap", ">=", 0.05)
+    eng.set_rules([vol_rule, gap_rule])
+
+    probe = {"status": "fallback", "source": "prev_close", "probed_at": "09:25:01"}
+    # degraded + 无 auction_* 列 → auction 规则 fail-closed 0 命中;
+    # open_gap 规则仍可命中且事件带 degraded=True + probe 透传
+    payload = _preopen_payload(
+        [{"symbol": "000001.SZ", "name": "A银行", "open_gap": 0.06}],
+        degraded=True, probe=probe,
+    )
+    events = eng.evaluate_premarket(payload)
+    assert len(events) == 1
+    ev = events[0]
+    assert ev["rule_id"] == "r_gap"
+    assert ev["degraded"] is True
+    assert ev["probe"] == probe
+
+    # available:false → [] 且不产生任何事件
+    eng2 = _engine()
+    eng2.set_rules([gap_rule])
+    assert eng2.evaluate_premarket({
+        "available": False, "degraded": True,
+        "results": {"a": {"rows": [{"symbol": "000001.SZ", "open_gap": 0.06}]}},
+    }) == []
+
+
+# ── message (MON-04): 盘前前缀, price/pct 恒 None 不加尾缀 ──
+def test_preopen_event_message():
+    eng = _engine()
+    rule = _preopen_rule("mr_preopen_gap5", "open_gap", ">=", 0.05)
+    eng.set_rules([rule])
+    payload = _preopen_payload([{"symbol": "000001.SZ", "name": "A银行", "open_gap": 0.06}])
+
+    events = eng.evaluate_premarket(payload)
+    assert len(events) == 1
+    ev = events[0]
+
+    cond_text = eng._format_conditions_text(rule, rule["conditions"])
+    assert cond_text
+    assert ev["message"] == f"盘前 {cond_text}"
+    assert ev["message"].startswith("盘前")
+    assert "现价" not in ev["message"]  # price 恒 None, 诚实不加价
+    assert "open_gap" in ev["message"] and "0.05" in ev["message"]
+
+
+# ── helper 等价 (MON-01): 抽取后既有 signal/price/market 校验行为不变 ──
+def test_validate_helpers_keep_existing_behavior():
+    from app.strategy import monitor_rules
+
+    # 合法 signal 规则 (truth + 阈值) 仍通过
+    monitor_rules.validate({
+        "id": "r_sig_ok", "name": "s", "type": "signal", "scope": "all",
+        "conditions": [
+            {"field": "signal_ma_golden_5_20", "op": "truth"},
+            {"field": "rsi_14", "op": "<", "value": 40},
+        ],
+        "logic": "and",
+    })
+    # 合法 price/market 规则仍通过
+    monitor_rules.validate({
+        "id": "r_price_ok", "name": "p", "type": "price", "scope": "all",
+        "conditions": [{"field": "change_pct", "op": ">=", "value": 0.05}],
+    })
+    # 负例同款 ValueError (消息不变)
+    with pytest.raises(ValueError, match="conditions 不能为空"):
+        monitor_rules.validate({"id": "r1", "name": "x", "type": "signal", "scope": "all", "conditions": []})
+    with pytest.raises(ValueError, match="conditions 最多 8 条"):
+        monitor_rules.validate({
+            "id": "r2", "name": "x", "type": "signal", "scope": "all",
+            "conditions": [{"field": "rsi_14", "op": "<", "value": 1}] * 9,
+        })
+    with pytest.raises(ValueError, match="logic"):
+        monitor_rules.validate({
+            "id": "r3", "name": "x", "type": "price", "scope": "all", "logic": "xor",
+            "conditions": [{"field": "close", "op": ">", "value": 1}],
+        })
+    with pytest.raises(ValueError, match="信号列"):
+        monitor_rules.validate({
+            "id": "r4", "name": "x", "type": "signal", "scope": "all",
+            "conditions": [{"field": "close", "op": "truth"}],
+        })
+    with pytest.raises(ValueError, match="白名单"):
+        monitor_rules.validate({
+            "id": "r5", "name": "x", "type": "price", "scope": "all",
+            "conditions": [{"field": "open_gap", "op": ">", "value": 0.05}],
+        })
+    with pytest.raises(ValueError, match="op"):
+        monitor_rules.validate({
+            "id": "r6", "name": "x", "type": "market", "scope": "all",
+            "conditions": [{"field": "close", "op": "between", "value": 1}],
+        })
