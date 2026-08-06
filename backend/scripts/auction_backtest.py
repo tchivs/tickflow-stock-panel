@@ -9,6 +9,9 @@
 - 只写 ``backtest_results/`` (E2 根隔离): 所有落盘由 run_full_backtest 原子持久化
   到 ``data/backtest_results/run_id={确定性哈希}/`` (part.parquet + manifest.json);
   同参数重跑幂等 (fingerprint 相同 → reused, 不重写)。
+- 全量窗口装载: 启动先装载 kline_daily_enriched 全分区历史 (含指标) 到 repo 缓存
+  (仓库默认只缓存最近 300 自然日, 覆盖不了 ``--range 248``) —— 回测覆盖边界 =
+  全量 enriched 交易日。
 - 186 天 guard 不适用 (D-06): 本回测是单面板向量化扫描, 覆盖由 enriched 缓存
   边界决定, 窗口回夹 + requested/effective 双字段回显。
 - 分钟限制注解 (BT-10): kline_minute 历史 CLOSED, 逐行 minute_confirm="not_applied",
@@ -115,6 +118,34 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _preload_full_enriched(repo) -> None:
+    """装载全量 enriched 历史到 repo 内存缓存 (kline_daily_enriched 全分区, 含指标)。
+
+    run_full_backtest 的覆盖边界 = repo 内存缓存 (34-01 契约: 窗口回夹到缓存覆盖);
+    仓库默认 ``_refresh_enriched`` 只读最近 300 自然日 (~205 交易日), 覆盖不了
+    ``--range 248`` 全量窗口。本 CLI 镜像 repository._refresh_enriched 的装配形
+    (scan_enriched_parquet → compute_indicators → compute_signals →
+    compute_limit_signals), 窗口 = 全分区 → 回测窗口可解析到全量 enriched 交易日。
+    """
+    from app.indicators.pipeline import compute_indicators, compute_limit_signals, compute_signals
+    from app.parquet import scan_enriched_parquet
+
+    lf = scan_enriched_parquet(repo._enriched_glob).sort(["symbol", "date"])
+    read_cols = [c for c in ["symbol", "date", "open", "high", "low", "close",
+                             "volume", "amount", "raw_close", "raw_high", "raw_low"]
+                 if c in lf.collect_schema().names()]
+    df_hist = lf.select(read_cols).collect()
+    if df_hist.is_empty():
+        return
+    df_full = compute_indicators(df_hist)
+    df_full = compute_signals(df_full)
+    instruments = repo.get_instruments_asset("stock")
+    if instruments is not None and not instruments.is_empty():
+        df_full = compute_limit_signals(df_full, instruments)
+    repo._enriched_history_cache = df_full
+    repo._enriched_history_start = df_full["date"].min()
+
+
 def _print_summary(result: dict, elapsed: float) -> None:
     """终态摘要 (人类可读, 诚实覆盖): run_id/wrote|reused/窗口/每策略行/
     coverage.symbols/落盘路径/耗时/BT-10 注。"""
@@ -177,6 +208,10 @@ def main(argv: list[str] | None = None) -> int:
                 data_dir / "strategies" / "ai",
             ],
         )
+
+        # 全量 enriched 缓存装载 (248 交易日, 含指标) — run_full_backtest 覆盖边界
+        print("[progress] preload: full enriched history", flush=True)
+        _preload_full_enriched(repo)
 
         start, end = _parse_range(args.range, _enriched_dates(data_dir))
         strategy_ids = _split_csv(args.strategies)
