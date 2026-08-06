@@ -756,6 +756,22 @@ def test_pool_dates_backfill_examples_truncated(tmp_path):
     assert len(body["backfill_examples"]) == 5
 
 
+def test_pool_dates_backfill_needed_zero_when_all_covered(tmp_path):
+    """集成 (依赖 24-01): enriched 全部已快照 → 缺口归零, 示例空 (回填完成态)。"""
+    client = _make_client(tmp_path)
+    for d in ("2026-08-01", "2026-08-02", "2026-08-03"):
+        (tmp_path / "kline_daily_enriched" / f"date={d}").mkdir(parents=True, exist_ok=True)
+        _write_snapshot(tmp_path, as_of=d)
+
+    resp = client.get("/api/pool/dates")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["backfill_needed"] == 0
+    assert body["backfill_examples"] == []
+    assert body["dates"] == ["2026-08-03", "2026-08-02", "2026-08-01"]
+    assert body["count"] == 3
+
+
 def test_pool_history_snapshot(tmp_path):
     """GET /api/pool/history?as_of= 有快照 → 与 hub 同形状, total 权威, 含 mode。"""
     _write_snapshot(
