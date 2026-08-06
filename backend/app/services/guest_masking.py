@@ -19,6 +19,14 @@ MASKED_IDENTITY = "******"
 #: 游客可见字段白名单: 涨跌幅 / 概念板块 / 关联因子 (策略标签, 非 PII) / 交叉共振标记。
 _GUEST_VISIBLE = frozenset({"change_pct", "concept_board", "hit_factors", "cross_resonance"})
 
+#: 盘前告警游客可见白名单 — 盘前文案/状态标注非 PII (MON-06)。
+#: 身份 (symbol/name/code) 固定掩码, 竞价值 (open_gap/auction_*/preopen_metrics) 与
+#: 探测快照 (probe) 绝不带出; 所有者通道 (飞书/Telegram) 不受本掩码约束。
+_GUEST_ALERT_VISIBLE = frozenset({
+    "message", "severity", "window", "provisional", "degraded", "rule_name",
+    "conditions", "occurred_at", "rule_id", "source", "type",
+})
+
 
 def mask_guest_hub(hub: dict) -> dict:
     """返回一份脱敏后的 Hub 新 dict (输入 ``hub`` 不被修改, GUEST-02)。
@@ -51,4 +59,25 @@ def mask_guest_hub(hub: dict) -> dict:
         strategies.append({**strategy, "rows": rows})
     masked = {**hub, "strategies": strategies}
     masked.pop("auction_columns", None)
+    return masked
+
+
+def mask_guest_alert(event: dict) -> dict:
+    """返回脱敏后的告警事件副本 (MON-06, 防御性 DTO 守卫; 输入 ``event`` 不被修改)。
+
+    - ``symbol`` / ``name`` / ``code`` → ``MASKED_IDENTITY`` (******);
+    - 剥离 ``open_gap`` / ``auction_*`` / ``preopen_metrics`` / ``probe`` (竞价值与
+      探测快照绝不带出);
+    - 保留 ``message`` / ``severity`` / ``window`` / ``provisional`` / ``degraded`` /
+      ``rule_name`` / ``conditions`` / ``occurred_at`` / ``rule_id`` / ``source`` /
+      ``type`` (盘前文案与状态标注非 PII, 白名单重建镜像 mask_guest_hub 语义)。
+
+    调用点现状: 当前 /api/alerts 为登录面 (无 guest 路径) — 本函数是**防御性守卫**:
+    未来任何游客可见 alerts 渲染必须经此函数 (GUEST-01/02 DTO 边界原则)。
+    飞书/Telegram 为所有者通道, 不受掩码约束 (诚实边界, MONITOR-PREOPEN 原文)。
+    """
+    masked: dict[str, Any] = {key: event[key] for key in _GUEST_ALERT_VISIBLE if key in event}
+    masked["symbol"] = MASKED_IDENTITY
+    masked["name"] = MASKED_IDENTITY
+    masked["code"] = MASKED_IDENTITY
     return masked
