@@ -78,6 +78,37 @@
 - **AQ-06 注记（P2，doc-only）**：分钟历史回填已**正式关闭（CLOSED）** —— xyz 1m ≈ 21 交易日覆盖（实测）、ifzq/sina 仅尾随窗口、TickFlow 分钟档位 gated at pro+；`kline_minute` 保持增量 ≤30 日同步（`sync_and_persist_minute` 零改动）；证据：`research/v2.3-data-depth/AUCTION-BACKFILL.md` §4/§6。
 - **R3 注记（probe 缓存）**：`capabilities.auction=True` 后 `resolve_auction_probe()` 每次调用一次实时 HTTP（1.6s 名义 / 8s 超时）——影响 `GET /api/kline/auction/history` 与 EOD 闸门延迟；短 TTL probe 缓存是**后续可选守卫**，不在 Phase 32 内实现。
 
+### 🗄️ 股池回填 (Pool Backfill)
+
+运营触发端点 `POST /api/pipeline/backfill`，把 `screener_results` 湖的历史缺口（有 enriched 数据但缺冻结快照的交易日，`GET /api/pool/dates` 的 `backfill_needed` 计数）逐日补齐。body：`{"start"/"end": "YYYY-MM-DD" | null, "max_days": 1..500 | null}`；立即返回 `{"status": "started"|"reused", "job_id"}`（单飞：已有同类任务在跑 → `reused`）；与 EOD / 手动 run_all / 竞价回填共用一个**重任务执行槽**（并发 → 失败记录 `已有数据任务在运行`）。**全量 248 缺口一次调用即可覆盖**：`max_days` 上限 500 ≥ 248（248 个交易日 2025-07-29..2026-08-05），**无需分块**。
+
+- **触发示例**：
+
+  ```bash
+  # 全量回填（覆盖全部缺口日, 248 个交易日）
+  curl -X POST http://localhost:3018/api/pipeline/backfill -H 'Content-Type: application/json' -d '{}'
+  # 可选显式日期界（幂等差集 — 已快照日自动跳过, 绝不重算）
+  curl -X POST http://localhost:3018/api/pipeline/backfill -H 'Content-Type: application/json' \
+       -d '{"start":"2025-07-29","end":"2026-08-05"}'
+  # 响应: {"status": "started", "job_id": "..."} → GET /api/pipeline/jobs/{id} 轮询终态;
+  # 取消: POST /api/pipeline/jobs/{id}/cancel (合作式, 当前日完成后停)
+  ```
+- **轮询/取消**：`GET /api/pipeline/jobs/{id}` → status/progress/stage；终态 6 键 `{requested, backfilled, failed, failed_dates, origin: "backfill"}`；`POST /api/pipeline/jobs/{id}/cancel` 合作式取消（每日期检查 job 状态，当前日完成后停）。
+- **失败处理**：终态 `failed_dates` 列表即剩余缺口 → 直接重跑同端点（幂等只补缺口差集）。
+- **跑后验证（步骤 7）**：
+
+  ```bash
+  ls data/screener_results | wc -l                                 # == 248 (分区数 = 缺口全清)
+  jq -r '.snapshot_origin' data/screener_results/date=2026-08-05/part.json   # == backfill
+  curl -s localhost:3018/api/pool/dates | jq '{count, backfill_needed}'      # count==248, backfill_needed==0
+  curl -s "localhost:3018/api/pool/history?as_of=2025-07-29"                 # 渲染: snapshot_origin=="backfill", strategies 非空
+  ```
+  **provenance 在分区 payload 内**：`snapshot_origin` 键（`eod`=盘后归档 / `backfill`=事后回填重算 / `manual`）+ `strategy_version` 策略集指纹随快照 JSON 落盘（**无独立 manifest、无文件系统元数据**）；历史视图经 `GET /api/pool/history` 透传。旧快照缺该字段按 `eod` 读。
+- **前置检查**：`df -h data/`（余量 ≥ 1 GiB）；`ls data/kline_daily_enriched | wc -l` == 248（enriched 全量就位）；`ls data/screener_results 2>/dev/null | wc -l` == 当前缺口（记下基线，完成后应归零）；确认网络（probe 每日常量 1 次 live HTTP，8s 超时）。
+- **预期（实测锚点, Phase 33 沙箱子集）**：8 个交易日真实回填耗时 **13 秒（~1.6s/日）** → 全量 248 ≈ **6-7 分钟**（`_refresh_enriched` 启动全历史预计算摊销了 150 日 warmup；早期 20-120 分钟 [INFERENCE] 估算已为实测取代）；存储实测 **21 MiB/8 日 ≈ 2.6 MiB/日** → 全量 248 ≈ **650 MiB**（早期 79-693 MiB [INFERENCE] 估算区间，实测落其上沿；磁盘余量实测 1012 GiB 非阻塞）；`strategy_version` = 回填时刻策略集指纹 —— **后续改策略需重跑**（诚实重算语义）。
+- **premarket_results 诚实缺口（PB-04）**：`premarket_results/` 的唯一创建方是工作日 09:26 盘前预览 job（`premarket_pool_preview`，见上「盘前预览」），**双重门禁** —— ① 部署门禁：scheduler 仅非 `fixture_mode` 启动（沙箱从不跑 cron）；② 数据门禁：需实时 09:15-09:25 集合竞价 feed，盘前无 live 缓存 → 诚实 `available:false` 空帧不落盘。**沙箱无任何路径产生该目录（实测不存在）**；股池回填 / 手动 run_all 只写 `screener_results/`，绝不触碰 premarket root（结构门测试锁定，见 `test_pool_backfill_never_creates_premarket_root`）。部署后由真实 09:26 job 按日产生；前端空态已诚实（`GET /api/pool/premarket` → 200 `available:false`）。**无沙箱路径，绝不伪造产物**。
+- **Probe 网络注记（Phase 32 联动）**：竞价能力解锁后每次 `_attach_auction` 触发一次 live probe HTTP（PROBE_SYMBOL `000001` → 最新 kline_daily 分区，8s 超时）——回填**逐日一次**；源挂时全量 248 最坏 **+~33 分钟纯超时**。诚实双峰期望（行数网络相关，Phase 33 实测）: probe fail-closed → `requires_auction_data` 策略 total=0（引擎短路，竞价列缺席），`auction_alpha` 走派生分支；probe available → 竞价列注入，真列族最多命中稀疏湖 2 个标的（实测 0 行，000001/000002 未过阈值），派生族（竞价多头 / 早盘之星 / 盘前强势量化）全市场正常（实测 50/50/43，display_limit 封顶）——**绝不产生全市场规模结果**；total=0 策略保留在快照（如实记录）。
+
 ---
 
 ## 📊 指标流水线(Indicators)

@@ -627,3 +627,63 @@ def test_premarket_api_pool03_ast_guard():
     assert "Query" not in params
     assert "as_of" not in params
     assert "concept" not in params
+
+
+# ================================================================
+# Phase 33 (PB-04) — 结构门: 回填绝不创建 premarket_results root
+# ================================================================
+
+
+def test_pool_backfill_never_creates_premarket_root(tmp_path, monkeypatch):
+    """PB-04 结构门: 回填子集后 premarket_results/ 目录不存在 (root 隔离锁)。
+
+    回填路径只写 screener_results/ (pool_snapshot._SNAPSHOT_ROOT), 绝不越界创建
+    盘前根 (premarket_results 唯一创建方 = 09:26 盘前预览 job)。
+    镜像 test_pool_backfill._make_env 形 (本文件局部构造, 不跨文件 import);
+    patch ScreenerService.run_all_with_hits → run_pool_backfill 服务级直调。
+    """
+    from app.services import pool_snapshot
+    from app.services.pool_backfill import run_pool_backfill
+    from app.services.screener import ScreenerService
+
+    enriched_dates = ["2026-08-01", "2026-08-02", "2026-08-03"]
+    for d in enriched_dates:
+        (tmp_path / "kline_daily_enriched" / f"date={d}").mkdir(parents=True, exist_ok=True)
+    repo = _FakeRepo(tmp_path, pl.DataFrame(), date(2026, 8, 4))
+
+    def _canned(as_of: str) -> dict:
+        return {
+            "strat_a": {
+                "total": 2,
+                "as_of": as_of,
+                "rows": [
+                    {"symbol": "000001", "name": "平安银行", "close": 10.0,
+                     "change_pct": 0.05, "hit_factors": ["策略Alpha"]},
+                    {"symbol": "600000", "name": "浦发银行", "close": 11.0,
+                     "change_pct": 0.03, "hit_factors": ["策略Alpha"]},
+                ],
+            },
+        }
+
+    monkeypatch.setattr(
+        ScreenerService, "run_all_with_hits",
+        lambda self, as_of, strategy_ids=None, engine=None: _canned(as_of.isoformat()),
+    )
+
+    result = run_pool_backfill(repo, max_days=2)
+
+    # 快照侧正常 (隔离锁不误伤): 恰 2 个缺口日升序回填, origin=backfill
+    assert result == {
+        "requested": 2, "backfilled": 2, "failed": 0,
+        "failed_dates": [], "origin": "backfill",
+    }
+    for d in enriched_dates[:2]:
+        snap = pool_snapshot.load_point_snapshot(tmp_path, d)
+        assert snap is not None
+        assert snap["snapshot_origin"] == "backfill"
+    assert not (tmp_path / "screener_results" / f"date={enriched_dates[2]}").exists(), \
+        "max_days=2 只回填前 2 个缺口日"
+
+    # PB-04 root 隔离锁: 回填路径绝不创建盘前根
+    assert not (tmp_path / "premarket_results").exists(), \
+        "回填绝不越界创建 premarket_results root (唯一创建方 = 09:26 盘前预览 job)"
