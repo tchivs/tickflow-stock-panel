@@ -18,15 +18,19 @@ Four phases (20-23) delivered probe-gated real auction columns + `kline_auction/
 
 四个领域深化已落地的历史股池与自选能力：逐日全量存档（批量回填 + 诚实 provenance）、自选股与股池联动（纯前端）、历史竞价图 + 派生列复活（条件式）、盘前股池第一档（独立预览 + 诚实降级）——全部零新增运行时依赖，沿 POOL-03 零执行权边界，strategy_cache single-as_of 完整性为跨领域护栏。Archived: `.planning/milestones/v2.1-phases/`, `v2.1-REQUIREMENTS.md`, `v2.1-ROADMAP.md`, `v2.1-MILESTONE-AUDIT.md`.
 
-### v2.2 决策闭环与历史纵深 — planning
+### v2.2 决策闭环与历史纵深 — shipped 2026-08-06
 
-四领域研究确认（`research/v2.2-decision-loop/SUMMARY.md`）：概念板块 PIT 前向按日归档（消除 current_snapshot 标注）、竞价策略只读信号质量报告、盘前预览接入监控告警（新 preopen 规则类型）、确定性竞价复盘面板——全部零新增运行时依赖，延续诚实 provenance（data_gate/pre_eod/as_of_snapshot 三态）与 POOL-03 零执行权。
+四领域交付：概念板块 PIT（前向按日归档 + as_of 三态归属 + 总览/RPS 共享 seam）、竞价策略只读信号质量报告（data_gate 诚实空态）、盘前监控告警（preopen 规则类型 + 09:26 尾段接线）、确定性竞价复盘面板（15:40 调度 + 可选 AI 点评默认关）——后端全量 1686 passed + 2 skipped，零新增运行时依赖。Archived: `.planning/milestones/v2.2-phases/`, `v2.2-REQUIREMENTS.md`, `v2.2-ROADMAP.md`, `v2.2-MILESTONE-AUDIT.md`.
+
+### v2.3 数据纵深解锁 — planning
+
+三域研究确认（`research/v2.3-data-depth/SUMMARY.md`）：竞价历史回填 **OPEN**（xyz MCP `stockdb_get_call_auction` 实测 248 交易日真实集合竞价，与日 K open 交叉验证）→ kline_auction 湖从 0 对齐 248 日 + BT-07 全量回测解锁；股池回填 OQ-1（既有 backfill 机械沙箱子集验证 + 部署全量 runbook）；遗留补全（R13 回归测试、CHART-04 立场、8 项部署验证清单）+ 分钟历史回填 **CLOSED** 正式 defer——全部零新增运行时依赖，延续诚实 provenance 与 POOL-03 零执行权。
 
 ## Phases
 
 **Phase Numbering:**
 
-- v2.1 ended at Phase 27; v2.2 continues at Phase 28 (`phase_naming: sequential`)
+- v2.2 ended at Phase 31; v2.3 continues at Phase 32 (`phase_naming: sequential`)
 
 - [x] **Phase 16: 竞价数据层 (Auction Data)** - Minute-K sync, governed open-gap factor, auction probe — DATA-01..03 (completed 2026-08-04)
 - [x] **Phase 17: 竞价策略族 (Auction Strategy Family)** - 竞价多头/盘前强势量化/早盘之星 builtin strategies — STRAT-01..03 (completed 2026-08-04)
@@ -44,113 +48,104 @@ Four phases (20-23) delivered probe-gated real auction columns + `kline_auction/
 - [x] **Phase 29: 竞价策略历史验证 (Auction Strategy Validation)** - Read-only signal-quality report + vectorized auction-column injector — BT-01..06 (completed 2026-08-06)
 - [x] **Phase 30: 盘前监控告警 (Premarket Monitoring)** - New preopen rule type + evaluate_premarket + 09:26 job-tail wiring — MON-01..07 (completed 2026-08-06)
 - [x] **Phase 31: 竞价复盘 (Auction Recap)** - Deterministic auction recap panel in the post-close recap + optional AI commentary — REV-01..05 (completed 2026-08-06)
+- [ ] **Phase 32: 竞价历史回填 (Auction History Backfill)** - xyz auction capability + backfill job + honest gates + idempotent atomic writes — AQ-01..06 (planned)
+- [ ] **Phase 33: 股池回填 OQ-1 (Pool Backfill)** - Sandbox subset backfill verification + full-248 operator runbook + PIT interplay — PB-01..04 (planned)
+- [ ] **Phase 34: 竞价回测解锁 (BT-07 Full Auction Backtest)** - Real-branch activation + 248-day full backtest + backtest_results persistence — BT-07..10 (planned)
+- [ ] **Phase 35: 遗留补全与部署验证 (Legacy Completion & Deploy Verification)** - R13 regression + CHART-04 stance + deploy checklist + P2 extensions — LG-01..05 (planned)
 
 ## Phase Details
 
+### Phase 32: 竞价历史回填 (Auction History Backfill)
 
-### Phase 28: 概念板块 PIT (Concept PIT)
-
-**Goal**: Historical pool concept labels become as-of accurate — a forward daily concept archive (`data/ext_history/gn_ths/date={as_of}/`) captured at EOD, read-side as-of resolution in `_build_concept_map`, and a three-state `concept_attribution` (`as_of_snapshot`/`current_snapshot`/`unavailable`), eliminating the today's `current_snapshot`-only labeling; shared seam extends to overview/RPS.
-**Depends on**: v2.1 completion (Phase 27); `ext_gn_ths` snapshot + `_pool_eod_persist` hook + `_read_ext_rows` hive-partition read
-**Requirements**: CONCEPT-01..07
+**Goal**: The `kline_auction` lake transitions from 0 partitions to daily-aligned real auction data — the xyz provider declares auction capability (auto-discovering into `auction_probe`, unblocking the live EOD path), and a new `auction_backfill` job pulls the full 248-day history (single-symbol requests, rate-limited, cancelable) writing through the existing `auction_sync` atomic seam with honest gates (kline_daily-aligned dates only, per-symbol failure recorded, source-down fail-closed).
+**Depends on**: v2.2 completion (Phase 31); `auction_sync` write seam + `auction_probe._default_sources` + xyz MCP endpoint (verified 2026-08-06)
+**Requirements**: AQ-01..06 (AQ-06 P2)
 **Success Criteria** (what must be TRUE):
 
-  1. EOD hook captures concept snapshot to `ext_history/gn_ths/date={as_of}/part.parquet` (atomic, strict date, never blocks pool snapshot); `ext_gn_ths` current file untouched (manual-refresh design kept).
-  2. Historical pool view resolves concept membership at `as_of`; missing partition falls back to current ext with `current_snapshot` attribution (honest, never fabricated).
-  3. Attribution is three-state and never mixed per-row; write path AST-guarded (only `ext_history/`).
-  4. Frontend shows a badge/tooltip when not `as_of_snapshot`; market overview + RPS use the same as-of seam; `Watchlist.tsx` untouched.
+  1. `xyz_provider.get_auction` maps `stockdb_get_call_auction` rows to canonical columns (`.SZ/.SH` suffix); probe resolves `available`; EOD `sync_and_persist_auction` path unblocks.
+  2. `POST /api/kline/auction/backfill` runs single-flight with job_store progress + cooperative cancel; subset ranges supported.
+  3. Only dates with existing `kline_daily` partitions are written; per-symbol failures recorded and skipped; source unreachable → 0 writes + fail-closed record.
+  4. Writes are idempotent (merge-upsert) and atomic (.tmp rename); `auction_unmatched_volume` honestly absent; cross-check: sampled `auction_virtual_price` == `kline_daily.open` on ≥3 dates.
 
-**Research flag**: 需要 `--research-phase` — 上游 `concepts.json` 更新节奏（OQ-3 一周逐日抓取 diff 探针）、EOD 归档是否自动刷新当前 ext（OQ-1，决策：否，保持手动）、行业归档范围（OQ-2，决策：概念+行业一起建）.
+**Research flag**: 需要 `--research-phase`（中） — xyz 速率上限未压力测试（~1.6s/请求、单 symbol 已实证）、2010 至今完整覆盖（2024 抽验过）、symbol 全集来源与 `.SZ/.SH` 后缀映射、job 存储进度格式。
 
-**Plans**: 3/3 plans executed
+**Plans**: 0/3 plans executed
 
 Plans:
 
-- [x] 28-01-PLAN.md — 后端核心: `concept_history.py` (capture/read_partition/manifest/list/sha256 + OQ-3 probe 脚本) + `_pool_eod_persist` EOD 钩子 + `_build_concept_map` as_of 三态归属状态机 + CONCEPT-05 AST 守卫 + 回归锁
-- [x] 28-02-PLAN.md — 前端: CONCEPT-04 概念归属徽标/工具提示 (`current_snapshot`/`unavailable` vs `as_of_snapshot` + 生效日期) + e2e 三态 + docs (Watchlist.tsx 零触碰)
-- [x] 28-03-PLAN.md — CONCEPT-06 共享 seam: `_dimension_rank`/`_load_concept_map_df` as_of 接线 (总览/RPS) + `/api/rps/rotation?as_of=` + CONCEPT-07 API 外露复验
+- (planned 32-01/02/03)
 
-### Phase 29: 竞价策略历史验证 (Auction Strategy Validation)
+### Phase 33: 股池回填 OQ-1 (Pool Backfill)
 
-**Goal**: The 9 auction/pre-open strategies gain a historical signal-quality validation — a read-only `GET /api/research/auction/validation` report over `kline_auction`-enabled dates (honest `data_gate` when the lake is empty), built on a new vectorized `attach_auction_columns_range` primitive; derived/EOD-proxy branches validated on enriched history with mutually-exclusive branch labels; zero execution, zero new deps.
-**Depends on**: v2.1 completion (Phase 27); `attach_auction_columns` dual-gate + `kline_auction` lake + enriched history
-**Requirements**: BT-01..06 (BT-07 full auction backtest explicitly deferred to v2.3+)
+**Goal**: The never-executed backfill machinery (`POST /api/pipeline/backfill` → `run_pool_backfill` → `persist_point_snapshot(origin='backfill')`) is exercised and verified — a sandbox subset (5-10 gap days) proves provenance/idempotency/cache-integrity/rendering end to end, and a full-248 operator runbook makes the deploy-side complete run deterministic; PIT as_of attribution rides along honestly.
+**Depends on**: v2.1 completion (Phase 24 machinery); enriched history (248 days); Phase 28 read-side as_of
+**Requirements**: PB-01..04 (PB-03 P2)
 **Success Criteria** (what must be TRUE):
 
-  1. Empty lake / probe unavailable → 200 `{data_gate:"empty", coverage:0}` (never 404/500); enabled dates = `kline_auction` partitions ∩ enriched.
-  2. `attach_auction_columns_range` is vectorized, PIT-safe denominator, no null-as-present, never touches the governed frozen-panel seam.
-  3. Per-strategy `{branch, n_dates, n_hits, coverage, forward_stats, per_date, data_gate}`; real-column strategies report `n_dates==0` honestly when lake empty (never downgraded); derived/EOD branches validated with explicit labels.
-  4. Forward-outcome semantics locked (BT-04: T-open entry, next-day open/close rets, open_gap_outcome); missing outcomes counted in `n_missing_outcomes`, never filled.
+  1. Subset backfill produces `snapshot_origin='backfill'` partitions; `strategy_cache` byte-identical (D2); re-run skips already-done dates (idempotent).
+  2. `/pool/history` renders backfilled dates; concept attribution resolves with honest `current_snapshot` fallback where `ext_history` partitions are missing.
+  3. Operator runbook covers full-248 execution (limits, progress, cancel, expected runtime/storage, failure handling).
+  4. `premarket_results` honest gap documented (deploy + live-data gated), never fabricated.
 
-**Research flag**: 需要 `--research-phase`（中） — `attach_auction_columns_range` 向量化与 enabled-dates 语义、`BACKTEST_MAX_SERVER_DAYS=186` 与 248 天 enriched 区间冲突、历史竞价数据源可行性（超出代码范围）.
+**Research flag**: 需要 `--research-phase`（低） — 运行时实测（20-120min 估计）、磁盘余量、子集天数选择。
 
-**Plans**: 3/3 plans executed
+**Plans**: 0/3 plans executed
 
 Plans:
 
-- [x] 29-01-PLAN.md — BT-02 区间竞价列注入原语: `attach_auction_columns_range` (分区存在性主闸门 + PIT-safe 向量化 ratio + enabled-dates) + 等价性属性测试 + 边界
-- [x] 29-02-PLAN.md — BT-03/04/05 报告装配服务: `AuctionValidationService.build_report` (窗口回夹双字段回显、9 策略枚举 + 互斥 branch、候选掩码镜像、BT-04 前瞻统计、per_date)
-- [x] 29-03-PLAN.md — BT-01/06 API 面: `GET /api/research/auction/validation` + main.py 注册 + POOL-03 AST 守卫 + 端点集成测试 + docs
+- (planned 33-01/02/03)
 
-### Phase 30: 盘前监控告警 (Premarket Monitoring)
+### Phase 34: 竞价回测解锁 (BT-07 Full Auction Backtest)
 
-**Goal**: v2.1 premarket preview enters the unified alert chain — a new `preopen` monitor rule type (whitelisted pre-open fields, EOD columns banned), `evaluate_premarket()` isolated from the intraday `_strategy_pools` baseline, wired to the 09:26 preview job tail, with honest provisional/degraded/probe annotation and guest masking.
-**Depends on**: v2.1 completion (Phase 27); premarket preview + `MonitorRuleEngine` + operational alert chain
-**Requirements**: MON-01..07
+**Goal**: With the auction lake aligned (Phase 32), the v2.2-deferred full backtest unlocks — the validation report's real branch activates (`data_gate:"available"`), and the 9 auction/pre-market strategies run the 248-day real-column panel with mutually-exclusive real/derived/eod branches, BT-04 forward semantics, honest coverage, and results persisted to `backtest_results` with a read-only query surface.
+**Depends on**: Phase 32 (lake aligned); Phase 29 (`attach_auction_columns_range` + validation service); Phase 28 (concept as_of)
+**Requirements**: BT-07..10 (BT-10 P2)
 **Success Criteria** (what must be TRUE):
 
-  1. `preopen` rule type validates against the whitelist (`open_gap`/auction cols, numeric ops only — `op=truth` explicitly rejected); EOD-only fields banned; `change_pct` set to `None` in the eval frame (honest).
-  2. `evaluate_premarket` runs in isolation — zero pollution of `_strategy_pools`/`_latest_strategy_results` (no spurious 09:30 dropped/new_entry).
-  3. Wired to 09:26 job tail (same single-flight, after persist); reuses operational → SSE → webhook.
-  4. `provisional/degraded/probe` annotated on events; degraded + auction-dependent rules fail closed (0 alerts, never silent-0-fill); guest-visible surfaces masked.
+  1. `GET /api/research/auction/validation` reports `data_gate:"available"` with real-column rows for auction strategies (never derived-downgraded).
+  2. Full backtest covers the aligned 248-day panel; branch labels mutually exclusive; forward outcomes per BT-04 (T-open entry, next-day open/close, open_gap_outcome, `n_missing_outcomes` counted never filled).
+  3. Results persist to `backtest_results` (origin/params/per-date); query surface read-only; AST guard (E3) maintained.
+  4. Minute-limited confirm dimensions honestly annotated (BT-10).
 
-**Plans**: 3/3 plans executed
+**Research flag**: 需要 `--research-phase`（中） — `BACKTEST_MAX_SERVER_DAYS=186` 与 248 天区间冲突的处理（窗口分段 or 上限复核）、全量 9 策略 × 248 日运行时、backtest_results 落盘 schema（现状 0 分区）。
+
+**Plans**: 0/3 plans executed
 
 Plans:
 
-- [x] 30-01-PLAN.md — 后端核心 (MON-01/02/04): preopen 规则类型 + PREOPEN_ALLOWED_FIELDS 白名单 + validate 专属分支 + `preopen_eval.py` 独立只读模块 + `evaluate_premarket` 隔离评估 + evaluate() 盘中跳过 (D-03) + T1-T10
-- [x] 30-02-PLAN.md — 后端接线 (MON-03/04/05/06/07 后端): 09:26 job 尾段 + `evaluate_premarket_alerts` 持久化优先链 + `mask_guest_alert` + /options preopen 外露 + T11-T20 (含 AST 守卫)
-- [x] 30-03-PLAN.md — 前端 P2 (MON-07): api.ts 类型 + RuleEditor preopen 编辑 + Monitor.tsx provisional/degraded 徽标 + e2e + docs (Watchlist.tsx 零触碰)
+- (planned 34-01/02/03)
 
-**Research flag**: 需要 `--research-phase`（高） — R1 `change_pct` 盘前帧口径核实（`compute_enriched_today` + quote_service preopen flush）、调度（尾段 vs 独立 09:27）、`scope=sector` 支持.
+### Phase 35: 遗留补全与部署验证 (Legacy Completion & Deploy Verification)
 
-### Phase 31: 竞价复盘 (Auction Recap)
-
-**Goal**: The post-close recap gains a deterministic auction dimension — a read-only `auction_recap.py` assembles real auction activity / `open_gap` snapshot / premarket signal-quality blocks from frozen assets, appended as a delta before the `done` event (SSE/archive/Feishu all receive it); honest `data_completeness` enum + `pre_eod` degradation; optional AI commentary defaults OFF; default recap schedule moves to 15:40.
-**Depends on**: v2.1 completion (Phase 27); `premarket_results` + `kline_auction` + enriched + `recap_market_stream`
-**Requirements**: REV-01..05 (REV-05 P2 standalone endpoint)
+**Goal**: v2.1/v2.2 遗留项收口与部署验证成册 — R13 缓存语义从「已修复代码」升级为「回归测试锁死」、CHART-04 估算立场文档定案、8 项部署验证清单成为运维手册；P2 扩展（WATCH-04 批量自选、OQ-3 探针 smoke）随带。
+**Depends on**: v2.2 completion; daily_pipeline 15:30 refresh_cache-in-finally (already fixed, ce5c705)
+**Requirements**: LG-01..05 (LG-04/05 P2)
 **Success Criteria** (what must be TRUE):
 
-  1. Deterministic blocks assembled read-only from frozen assets (never triggers `run_all_with_hits`); historical as_of uses partition-existence gate.
-  2. `data_completeness` enum + missing-block omission with note; 09:30+ bar never labeled auction; `pre_eod` when run before 15:30 sync; 「确定性数据，非 AI 生成」 marker.
-  3. Premarket signal-quality block driven by strategies with actual preview rows; joins EOD `change_pct` caliber.
-  4. Panel delta appended before `done`; optional AI commentary (default off) may only cite slice values; `_build_user_prompt` backward compatible; default schedule 15:40.
+  1. R13 regression test passes deterministically (15:30/run-now → repo latest-day asset EOD close; 15:40 recap change_pct from EOD; pre-EOD rule honored).
+  2. CHART-04 stance doc published (估算 labels standing; tier-2 re-eval gate recorded).
+  3. DEPLOY-CHECKLIST covers 8 items with verify-where/pass-criteria/owner/sequencing.
+  4. WATCH-04 batch-add e2e green (pure frontend); OQ-3 probe smoke produces drift.jsonl once (offline path); `Watchlist.tsx` untouched.
 
-**Research flag**: 需要 `--research-phase`（高） — 复盘默认调度决策（15:40 定案）、历史 as_of probe 语义（分区存在性主闸门）、AI 失败时面板兜底（R8，不纳入）、REV-05 纳入.
+**Research flag**: 需要 `--research-phase`（低） — R13 测试所需 fixtures（run_now + refresh_cache 模拟）、WATCH-04 勾选交互选型（table 内 checkbox vs 行选择条）。
 
-**Plans**: 3/3 plans executed
+**Plans**: 0/3 plans executed
 
 Plans:
 
-- [x] 31-01-PLAN.md — 后端服务: `auction_recap.py` (build_auction_recap 三块 + data_completeness 枚举 + render/slice 纯函数, REV-01/02/03) + test_auction_recap.py
-- [x] 31-02-PLAN.md — 后端集成: recap_market_stream 面板 delta + `_build_user_prompt` 可选参 + 点评开关 (preferences + settings PUT) + 调度默认 15:40 + Review.tsx:105 字面量 (REV-04) + test_market_recap_delta.py
-- [x] 31-03-PLAN.md — REV-05 端点 + 守卫: `GET /api/market-recap/auction` + main.py 注册 + test_auction_recap_guard.py (6 项 POOL-03) + test_auction_recap_endpoint.py + docs/features.md
+- (planned 35-01/02/03)
 
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 28 → 29 → 30 → 31
+Phases execute in numeric order: 32 → 33 → 34 → 35
 
 | Phase | Requirements | Status |
 |-------|-------------|--------|
-| 24. 逐日全量存档 | HIST-01..04 | Complete |
-| 25. 自选股联动 | WATCH-01..04 | Complete |
-| 26. 历史竞价图 + 派生列复活 | CHART-01..03 | Complete |
-| 27. 盘前股池 | PM-01..04 | Complete |
-| 28. 概念板块 PIT | CONCEPT-01..07 | Complete |
-| 29. 竞价策略历史验证 | BT-01..06 | Complete |
-| 30. 盘前监控告警 | MON-01..07 | Complete |
-| 31. 竞价复盘 | REV-01..05 | Complete |
+| 32. 竞价历史回填 | AQ-01..06 | Planned |
+| 33. 股池回填 OQ-1 | PB-01..04 | Planned |
+| 34. 竞价回测解锁 | BT-07..10 | Planned |
+| 35. 遗留补全与部署验证 | LG-01..05 | Planned |
 
 ---
-*Last updated: 2026-08-06 — v2.2 milestone started; research synthesized (4 domains → 4 phases); requirements defined*
+*Last updated: 2026-08-06 — v2.3 milestone started; research synthesized (3 domains → 4 phases); requirements defined*

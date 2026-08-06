@@ -1,102 +1,52 @@
-# Requirements: AthenaQuant v2.2 决策闭环与历史纵深
+# Requirements: AthenaQuant v2.3 数据纵深解锁
 
 **Defined:** 2026-08-06
 **Core Value:** An investor can turn reliable market data and their own holdings into an auditable, actionable research and monitoring workflow without operating multiple disconnected tools.
 
-## v2.2 Requirements
+## v2.3 Requirements
 
-Requirements for the v2.2 milestone. Each maps to a roadmap phase. Research basis: `.planning/research/v2.2-decision-loop/SUMMARY.md` (data-first ordering; zero new runtime deps; honest provenance + POOL-03 zero-execution + strategy_cache single-as_of integrity as cross-cutting guards).
+Requirements for the v2.3 milestone. Each maps to a roadmap phase. Research basis: `.planning/research/v2.3-data-depth/SUMMARY.md` (auction backfill OPEN via xyz MCP — 实测 248 交易日真实集合竞价;minute backfill CLOSED;OQ-1 backfill machinery exists;R13 already fixed in code). Cross-cutting guards: zero new runtime deps, honest provenance (`origin=backfill`/`data_gate`/column-absence-never-filled), POOL-03 zero-execution AST guard, user `Watchlist.tsx` zero-touch.
 
-### 概念板块 PIT 历史映射 (Concept PIT) — Phase 28
+### 竞价历史回填 (Auction History Backfill) — Phase 32
 
-- [x] **CONCEPT-01**: A forward daily concept archive — the EOD hook (`_pool_eod_persist` tail) captures the current `ext_gn_ths` concept snapshot into a platform-owned root `data/ext_history/gn_ths/date={as_of}/part.parquet` (atomic write, strict date validation, mirrors `screener_results`/`premarket_results` precedent); capture failure never blocks the pool snapshot; existing ~247 pre-launch historical dates are **not** backfilled (upstream has no historical endpoint — forward-only archive, honest `current_snapshot` fallback, never fabricated).
-- [x] **CONCEPT-02**: The concept join in the historical pool view is upgraded to as-of read-side resolution — `_build_concept_map` gains an `as_of` parameter, prefers the `date==as_of` partition, and falls back to the current ext snapshot with the `current_snapshot` attribution when the partition is missing.
-- [x] **CONCEPT-03**: Concept attribution is a three-state machine — `as_of_snapshot` (date partition present) / `current_snapshot` (fallback) / `unavailable` (no concept data at all); rows are never mixed by attribution within a response, partitions are never merged/stitched, and backfill forgery is structurally impossible.
-- [x] **CONCEPT-04** (P2): The frontend renders the attribution state visibly — a badge/tooltip when `current_snapshot`/`unavailable` (never when `as_of_snapshot`), showing the mapping effective date; no changes to the user-pending `Watchlist.tsx`.
-- [x] **CONCEPT-05**: The new write path is guarded — POOL-03-style AST guard scoped per module: `concept_history` may only write `data/ext_history/` (never `strategy_cache`/`screener_results`/`premarket_results`/`ext_data`), mirroring the `test_pool_hub` E-guard pattern.
-- [x] **CONCEPT-06**: The same as-of resolution seam is extended to the other consumers — market overview `_dimension_rank` (historical recap concept board) and `rps_rotation._load_concept_map_df` (RPS matrix) — eliminating the today-unlabeled drift; industry archive (`ext_hy_ths`) is archived alongside concept.
-- [x] **CONCEPT-07** (P2): Each archived partition carries a provenance manifest (`source_url`/`captured_at`/`fetched_at`) and the API/UI exposes the mapping effective date.
+- [ ] **AQ-01**: The xyz provider declares auction capability — `ProviderCapabilities.auction = True` on `xyz_provider` plus a `get_auction(symbols, start_date, end_date)` method mapping `stockdb_get_call_auction` rows to canonical columns (`code→symbol` with `.SZ/.SH` suffix per `kline_daily` convention, `time→datetime`, `volume→auction_volume`, `money→auction_amount`, `current→auction_virtual_price`); `auction_probe._default_sources` auto-discovers it so `resolve_auction_probe() == available`, and the existing EOD `sync_and_persist_auction` live path unblocks without new wiring.
+- [ ] **AQ-02**: A backfill job service `auction_backfill.py` mirrors the `pool_backfill`/`extend_history` shape — single-flight, job_store tracking, progress emit, cooperative cancel — with trigger `POST /api/kline/auction/backfill` (operator surface, not scheduled).
+- [ ] **AQ-03**: Honest gates — (a) source reachable and returns in-window rows for the requested range, else 0 writes + fail-closed record; (b) only writes dates where a `kline_daily` partition exists (auction columns are the supplement face of daily K — never phantom dates); (c) per-symbol failure recorded and skipped, terminal state reflects partial failure honestly.
+- [ ] **AQ-04**: Idempotent atomic writes reusing the `auction_sync` write seam (555..565 window predicate, canonical 4+2 columns, partition merge-upsert `unique(["symbol","datetime"], keep="last")`, `.tmp` atomic rename); `auction_unmatched_volume` is absent from upstream → the column stays absent, never 0-filled, derived `auction_unmatched_amount` remains unavailable under the real source (honest column absence).
+- [ ] **AQ-05**: Rate limiting and cancel — upstream enforces 1 symbol/request; the job serializes symbols with pacing (reuse `tickflow/rate_limits` chunked/sleep patterns), progress + cooperative cancel via job_store; full-universe ~5500 symbols is a multi-hour operator run, subset-scoped runs supported.
+- [ ] **AQ-06** (P2): Minute-history backfill is formally deferred with the closed evidence recorded (xyz 1m ≈ 21 trading days, ifzq/sina trailing windows, TickFlow minute gated at pro+) — `kline_minute` keeps incremental ≤30-day sync (`sync_and_persist_minute` unchanged); deferral documented in docs/features.md.
 
-### 竞价策略历史验证 (Auction Strategy Validation) — Phase 29
+### 股池历史回填 (OQ-1 Pool Backfill) — Phase 33
 
-- [x] **BT-01**: A read-only `GET /api/research/auction/validation` signal-quality report with an honest data gate — `kline_auction` empty or probe unavailable returns 200 `{data_gate: "empty", coverage: 0, strategies: [], probe}` (never 404/500); `data_gate: "available"` when enabled dates exist.
-- [x] **BT-02**: A vectorized `attach_auction_columns_range` injection primitive (multi-date) mirroring `attach_auction_columns` probe×partition dual gate with PIT-safe denominators (`volume.shift(1).rolling_mean(5).over("symbol")`); dates without partitions are never null-as-present; does not touch the governed backtest panel seam.
-- [x] **BT-03**: Per-strategy report rows `{branch: real|derived|eod, n_dates, n_hits, coverage, forward_stats, per_date, data_gate}` — auction strategies that require real columns report honestly when the lake is empty (`n_dates == 0`, never downgraded to derived); the 5 derived/EOD-proxy strategies still get validated on the enriched history with explicit branch labeling.
-- [x] **BT-04**: Forward-outcome semantics are locked — entry = T open; `next_day_open_ret = open_{T+1}/open_T − 1`; `next_day_close_ret = close_{T+1}/open_T − 1`; `open_gap_outcome = open_{T+1}/close_T − 1`; missing outcome days are counted in `n_missing_outcomes`, never 0-filled or forward-filled (no lookahead, no silent fill).
-- [x] **BT-05**: Branch labels are mutually exclusive — real/derived/eod never mixed within a strategy's stats; each branch computed and labeled independently.
-- [x] **BT-06**: The validation surface is zero-execution + zero-dependency — GET-only, AST-guarded (mirror `test_pool_hub` E3), never writes `strategy_cache`/`screener_results`, never touches the frozen-panel scope/checksum.
+- [ ] **PB-01**: Sandbox subset backfill verified end to end — existing `POST /api/pipeline/backfill` runs 5-10 gap days on the enriched history: `snapshot_origin='backfill'` provenance on partitions, `strategy_cache` byte-identical (D2), `/pool/history` renders the backfilled dates, re-run is idempotent (gap set = partition diff, already-run dates skipped).
+- [ ] **PB-02**: Full-248-day operator runbook (deploy-gated) — documented procedure + progress/cancel/limits (`max_days` 1..500, single-flight, ~20-120min / 79-693MiB storage estimate), verified mechanics on the sandbox subset.
+- [ ] **PB-03** (P2): PIT interplay — `/pool/history` on backfilled dates resolves concept attribution via `_build_concept_map` as_of with honest `current_snapshot` fallback (ext_history is still EOD-forward-only; no forgery).
+- [ ] **PB-04**: `premarket_results` honest gap documented — directory creation is deploy-gated (09:26 job, non-fixture scheduler) and data-gated (live 09:15-09:25 feed); no sandbox path exists; recorded in docs, not fabricated.
 
-### 盘前监控告警 (Premarket Monitoring) — Phase 30
+### 竞价策略全量回测 (BT-07 Full Auction Backtest) — Phase 34
 
-- [x] **MON-01**: A new `preopen` monitor rule type with a validated field whitelist (`open_gap`/`auction_volume`/`auction_amount`/`auction_volume_ratio`/`auction_unmatched_amount`, `op=truth` explicitly rejected (no boolean signal columns pre-open); numeric ops only; EOD-only fields `change_pct`/`close`/`vol_ratio_5d`/`amount` banned); pre-open frame semantics verified at implementation (`compute_enriched_today` + quote_service preopen flush) before shipping alerts.
-- [x] **MON-02**: `evaluate_premarket(payload)` evaluates the premarket preview payload in isolation — reconstructs the DataFrame from `payload["results"]` rows with `change_pct` set to `None` (honest missing column), never touching `_strategy_pools`/`_latest_strategy_results` (no pool-baseline pollution of the 09:30 intraday first round).
-- [x] **MON-03**: Evaluation is wired to the tail of the 09:26 `_premarket_pool_preview` job (same `_run_tracked` single-flight, after persist) — no new job race; reuses the existing operational → SSE → webhook delivery sequence.
-- [x] **MON-04**: Honest provisional/degraded/probe annotation — events carry `provisional: true`/`degraded`/`probe`; when `degraded` or probe non-available, auction-dependent rules fail closed (0 alerts, never 0-fill silence — the degraded state is surfaced in the alert record/UI); preview `available: false` → no evaluation, no alerts.
-- [x] **MON-05**: Zero-execution + store isolation — the preopen evaluate module is AST-guarded (execution-family token absent; read-only on `premarket_results`), never writes `strategy_cache`/`screener_results`.
-- [x] **MON-06**: Guest surfaces stay masked — preopen alert records rendered through the existing guest masking path (`mask_guest_hub` semantics); guests see no auction values.
-- [x] **MON-07** (P2): `/api/monitor-rules/options` exposes the `preopen` type + field whitelist; the frontend rule editor/alerts page renders the new type (no changes to `Watchlist.tsx`).
+- [ ] **BT-07**: Full auction backtest unlocks (v2.2-deferred; gate = `kline_auction` aligned with `kline_daily` per AQ-03) — the 9 auction/pre-market strategies run over the 248-day real-column panel (auction cols + daily K + concept PIT as_of), branches real/derived/eod mutually exclusive per BT-05, honest coverage and `n_missing` counting per BT-04 forward semantics.
+- [ ] **BT-08**: The validation report real branch activates — `GET /api/research/auction/validation` transitions from `data_gate:"empty"` to `"available"` when backfilled partitions exist; real-column strategies report real rows (never derived-downgraded), derived/EOD branches stay labeled.
+- [ ] **BT-09**: Backtest results persist to the `backtest_results` lake (origin, params, per-date rows) with a read-only query surface; zero-execution AST guard maintained (mirror `test_pool_hub` E3 — GET-only, never writes `strategy_cache`/`screener_results`).
+- [ ] **BT-10** (P2): Minute-dependent confirm dimensions documented as honestly limited (`kline_minute` historical CLOSED) — backtest output notes the limitation where a strategy's confirmation window would use minute bars.
 
-### 竞价复盘 (Auction Recap) — Phase 31
+### 遗留补全与部署验证 (Legacy Completion & Deploy Verification) — Phase 35
 
-- [x] **REV-01**: A deterministic auction-recap assembly service (`auction_recap.py`) builds the recap blocks from frozen assets only — `load_premarket_snapshot` + `attach_auction_columns` + enriched `open_gap` — read-only, AST-guarded, never triggers `run_all_with_hits`; historical as_of uses partition-existence as the primary gate (probe dual-gate applies to today only).
-- [x] **REV-02**: Honest annotation/degradation — `data_completeness` enum `{full, no_auction_lake, no_premarket_preview, pre_eod, partial}`; missing blocks are omitted with explicit note; the 09:30+ continuous bar is never labeled auction data; the panel carries a "确定性数据，非 AI 生成" marker; pre-EOD runs (before the 15:30 auction sync) are labeled `pre_eod` and never imply auction data exists.
-- [x] **REV-03**: A premarket signal-quality block — per-strategy `{n, avg open_gap, avg change_pct, 开盘兑现率, 收盘兑现率, 收阳率}` driven by strategies that actually have rows in the premarket preview (never hardcoded strategy lists); joins preview against EOD enriched `change_pct` caliber.
-- [x] **REV-04**: Recap integration — the deterministic panel is appended as a delta before the `done` event in `recap_market_stream` (same stream → SSE/archive/Feishu all receive it, zero frontend change); optional AI commentary defaults OFF and, when enabled, may only cite the panel's slice values with explicit gaps; `_build_user_prompt` stays backward compatible (optional param, default None); the default recap schedule moves to 15:40 (after 15:30 auction sync + 15:35 pool persist) so the full blocks light up.
-- [x] **REV-05** (P2): A standalone read-only `GET /api/market-recap/auction` endpoint for the deterministic panel (independent of the AI recap stream).
+- [ ] **LG-01**: R13 deterministic regression test — locks the EOD cache-refresh semantics already fixed in code (`daily_pipeline` refresh_cache-in-finally): after the 15:30/run-now pipeline, the repo latest-day enriched asset holds EOD close values, and the 15:40 recap's `change_pct` block computes from EOD (pre-EOD rule still honored when run early).
+- [ ] **LG-02**: CHART-04 stance documented — the honest `估算` (derived estimate) labeling already shipped is confirmed as the standing stance; re-evaluation gate recorded (external source providing `auction_unmatched_volume`/`auction_virtual_price` → tier-2 gate re-open).
+- [ ] **LG-03**: Consolidated deploy-verification checklist (8 items: D1 09:26 premarket cron+isolation, D2 15:30 EOD+cache+15:35 persist, D3 tier-2 real auction cols+lake+BT-07, D4 09:26 monitor payload/close semantics, D5 15:40 recap+LLM live-model, D6 R13 EOD-cache, D7 OQ-3 weekly concept-drift probe, D8 stance) with verify-where/pass-criteria/owner/sequencing — becomes the deployment operator's operating manual.
+- [ ] **LG-04** (P2): WATCH-04 batch-add extension — pool table row checkboxes + selection set + batch add to watchlist (pure frontend + e2e, reuses existing idempotent watchlist batch endpoint; `Watchlist.tsx` untouched).
+- [ ] **LG-05** (P2): OQ-3 concept-drift probe smoke — `backend/scripts/probe_concept_drift.py` offline path run once on the current ext snapshot (weekly multi-day report remains deploy-gated).
 
-## Out of Scope (v2.2)
-
-| Feature | Reason |
-|---------|--------|
-| BT-07 全量竞价回测（frozen-panel 竞价列 + minute_confirm_fn 接入） | Explicitly deferred to v2.3+ — needs `kline_auction` lake with sufficient historical partitions (currently 0) |
-| 真实竞价活跃度 / 真列验证（BT real branch, REV real_auction_activity） | Gated on `kline_auction` partitions + probe `available`; empty lake → BT `data_gate:"empty"`, REV block honestly omitted — conditional delivery |
-| CONCEPT 历史回填（~247 pre-launch dates） | Upstream `concepts.json` has no historical endpoint [INFERENCE]; forward-only archive; pre-launch dates fall back to `current_snapshot` (never fabricated) |
-| 盘前预览基线 vs 实际开盘对比、盘前异动告警直喂复盘 | Cross-domain optional links — v2.2 later or v2.3 |
-| 复用 type=strategy 指向盘前行（MON option B） | Rejected — `_strategy_pools` baseline pollution causes spurious 09:30 dropped/new_entry alerts |
-| 独立归档层 / 查询时回放（CONCEPT/BT） | Double source of truth / reverse of POOL-06; rejected |
-| 自动刷新 `ext_gn_ths` 当前快照（CONCEPT OQ-1 选项 a） | Keeps existing manual-refresh ext design; concept archive writes only platform-owned `ext_history/` |
-| Automated live broker execution | Platform-wide boundary since v1.0; all new endpoints stay GET-only / read-only (POOL-03) |
-| External database or message queue | Architecture constraint since v1.0 |
-| New npm/pip runtime dependencies | Zero new deps: all reuse existing stack (ext_presets, write_ext_parquet, Polars partitions, monitor rule engine, recap stream) |
+---
 
 ## Traceability
 
-Populated during roadmap creation.
+| Phase | Requirements | Status |
+|-------|-------------|--------|
+| 32. 竞价历史回填 | AQ-01..06 | Planned |
+| 33. 股池回填 OQ-1 | PB-01..04 | Planned |
+| 34. 竞价回测解锁 | BT-07..10 | Planned |
+| 35. 遗留补全与部署验证 | LG-01..05 | Planned |
 
-| Requirement | Phase | Status |
-|-------------|-------|--------|
-| CONCEPT-01 | Phase 28 | Complete |
-| CONCEPT-02 | Phase 28 | Complete |
-| CONCEPT-03 | Phase 28 | Complete |
-| CONCEPT-04 | Phase 28 | Complete (P2) |
-| CONCEPT-05 | Phase 28 | Complete |
-| CONCEPT-06 | Phase 28 | Complete |
-| CONCEPT-07 | Phase 28 | Complete (P2) |
-| BT-01 | Phase 29 | Complete |
-| BT-02 | Phase 29 | Complete |
-| BT-03 | Phase 29 | Complete |
-| BT-04 | Phase 29 | Complete |
-| BT-05 | Phase 29 | Complete |
-| BT-06 | Phase 29 | Complete |
-| MON-01 | Phase 30 | Complete |
-| MON-02 | Phase 30 | Complete |
-| MON-03 | Phase 30 | Complete |
-| MON-04 | Phase 30 | Complete |
-| MON-05 | Phase 30 | Complete |
-| MON-06 | Phase 30 | Complete |
-| MON-07 | Phase 30 | Complete (P2) |
-| REV-01 | Phase 31 | Complete |
-| REV-02 | Phase 31 | Complete |
-| REV-03 | Phase 31 | Complete |
-| REV-04 | Phase 31 | Complete |
-| REV-05 | Phase 31 | Complete |
-
-**Coverage:**
-
-- v2.2 requirements: 25 total (21 P1, 4 P2)
-- Mapped to phases: 25 (roadmap created — Phases 28-31)
-- Unmapped: 0
-
----
-*Requirements defined: 2026-08-06*
-*Last updated: 2026-08-06 — v2.2 milestone started; research synthesized (4 domains → 4 phases)*
+**Cross-cutting guards (apply to every phase):** zero new runtime dependencies · honest provenance (`origin=backfill`, `data_gate`, column absence never 0-filled) · POOL-03 zero-execution AST guard · `strategy_cache` single-as_of integrity · user `frontend/src/pages/Watchlist.tsx` never touched · no backfill forgery (upstream-limited items documented, not fabricated).
