@@ -87,6 +87,13 @@ _SYSTEM_PROMPT = """你是一位拥有 15 年 A 股一线实战经验的资深�
 
 现在请基于下方数据进行复盘。"""
 
+# 可选 AI 点评护栏行 (REV-04 R3): 只在点评开启时追加到局部 system 串末尾。
+# _SYSTEM_PROMPT 常量本身不可变 (向后兼容)。
+_AUCTION_GUARDRAIL = (
+    "竞价数据只引用下方切片中给出的数值;数据缺失时明说「今日无竞价数据」,禁止编造;"
+    "与确定性面板冲突时以面板为准。"
+)
+
 
 # ================================================================
 # 用户消息构建(精简切片,控制 token)
@@ -174,8 +181,15 @@ def _build_emotion_block(overview: dict) -> str:
     return "\n".join(lines)
 
 
-def _build_user_prompt(overview: dict, news: list[dict], focus: str) -> str:
-    """构建用户消息:复盘日期 + 市场数据精简切片 + 新闻 + 关注点。"""
+def _build_user_prompt(
+    overview: dict, news: list[dict], focus: str, auction_slice: str | None = None,
+) -> str:
+    """构建用户消息:复盘日期 + 市场数据精简切片 + 新闻 + 关注点 + 可选竞价切片。
+
+    auction_slice (REV-04 R9): 可选确定性竞价切片 (build_auction_slice(panel) 输出,
+    与面板同 dict 单源)。默认 None → 输出与既有版本逐位一致, 现有调用零改动;
+    非 None 时在 focus 节之后追加 ``## 竞价复盘数据(确定性切片)`` 节。
+    """
     as_of = overview.get("as_of") or "今日"
 
     parts: list[str] = [
@@ -217,6 +231,9 @@ def _build_user_prompt(overview: dict, news: list[dict], focus: str) -> str:
 
     if focus.strip():
         parts.extend(["", f"本次复盘请特别关注: {focus.strip()}"])
+
+    if auction_slice:
+        parts.extend(["", "## 竞价复盘数据(确定性切片)", auction_slice])
 
     return "\n".join(parts)
 
@@ -318,11 +335,23 @@ async def recap_market_stream(
     # 3+4. 构建 prompt + 流式调用 LLM(整体 try-except,任何异常 yield error,避免前端卡死)
     try:
         from app.services.ai_provider import stream_ai_text
+        from app.services import preferences as _prefs
 
-        user_prompt = _build_user_prompt(overview, news or [], focus)
+        # 可选 AI 点评 (REV-04, 默认关): 开启时切片 = build_auction_slice(panel) —
+        # 与面板同一 dict (构造性单源, 数值绝不双源漂移); 护栏行追加到局部 system
+        # 串, _SYSTEM_PROMPT 常量本身不动 (向后兼容)。
+        auction_slice = None
+        if _prefs.get_recap_auction_commentary() and panel is not None:
+            from app.services.auction_recap import build_auction_slice
+            auction_slice = build_auction_slice(panel)
+        system_content = _SYSTEM_PROMPT
+        if auction_slice:
+            system_content = _SYSTEM_PROMPT + "\n" + _AUCTION_GUARDRAIL
+
+        user_prompt = _build_user_prompt(overview, news or [], focus, auction_slice=auction_slice)
         async for delta in stream_ai_text(
             [
-                {"role": "system", "content": _SYSTEM_PROMPT},
+                {"role": "system", "content": system_content},
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0.5,

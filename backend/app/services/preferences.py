@@ -492,6 +492,22 @@ def set_review_push_channels(channels: list[str]) -> list[str]:
     return cleaned
 
 
+def get_recap_auction_commentary() -> bool:
+    """可选 AI 点评开关 (REV-04, 默认关)。
+
+    开启时复盘 AI 可引用确定性竞价切片数值 (build_auction_slice(panel), 与面板同
+    dict 单源), 且 system 内容追加护栏行: 只引用切片数值 / 缺失明说「今日无竞价
+    数据」/ 与面板冲突以面板为准。默认 False (API-first, 前端开关为 P2)。
+    """
+    return bool(load().get("recap_auction_commentary", False))
+
+
+def set_recap_auction_commentary(enabled: bool) -> bool:
+    """保存可选 AI 点评开关, 返回保存后的值 (bool 强制)。纯偏好, 不触碰调度器。"""
+    save({"recap_auction_commentary": bool(enabled)})
+    return bool(enabled)
+
+
 
 # ===== 实时监控 =====
 

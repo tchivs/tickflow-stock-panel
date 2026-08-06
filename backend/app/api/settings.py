@@ -419,6 +419,7 @@ def get_preferences() -> dict:
         "depth_finalize_time": preferences.get_depth_finalize_time(),
         "review_schedule": preferences.get_review_schedule(),
         "review_push_channels": preferences.get_review_push_channels(),
+        "recap_auction_commentary": preferences.get_recap_auction_commentary(),
     }
 
 
@@ -1476,4 +1477,20 @@ def update_review_push(req: ReviewPushIn) -> dict:
     from app.services import preferences
     saved = preferences.set_review_push_channels(req.channels)
     return {"review_push_channels": saved}
+
+
+class RecapAuctionCommentaryIn(BaseModel):
+    enabled: bool
+
+
+@router.put("/preferences/recap-auction-commentary")
+def update_recap_auction_commentary(req: RecapAuctionCommentaryIn) -> dict:
+    """可选 AI 点评开关 (REV-04) — 开启时复盘 AI 可引用确定性竞价切片数值。
+
+    纯偏好, 与定时复盘 / 实时行情完全独立 (no-job 变体, 不触碰调度器);
+    默认 False, 前端开关为 P2 (API-first, GET /preferences 透传后端默认)。
+    """
+    from app.services import preferences
+    saved = preferences.set_recap_auction_commentary(req.enabled)
+    return {"recap_auction_commentary": saved}
 
