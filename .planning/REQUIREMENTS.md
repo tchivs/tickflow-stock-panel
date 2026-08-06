@@ -52,14 +52,14 @@ Populated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| HIST-01 | Phase 24 | Open |
+| HIST-01 | Phase 24 | Complete |
 | HIST-02 | Phase 24 | Complete |
 | HIST-03 | Phase 24 | Complete |
 | HIST-04 | Phase 24 | Complete |
-| WATCH-01 | Phase 25 | Open |
-| WATCH-02 | Phase 25 | Open |
-| WATCH-03 | Phase 25 | Open |
-| WATCH-04 | Phase 25 | Open (P2) |
+| WATCH-01 | Phase 25 | Complete |
+| WATCH-02 | Phase 25 | Complete |
+| WATCH-03 | Phase 25 | Complete |
+| WATCH-04 | Phase 25 | Complete (P2) |
 | CHART-01 | Phase 26 | Open |
 | CHART-02 | Phase 26 | Open |
 | CHART-03 | Phase 26 | Open |
