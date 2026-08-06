@@ -35,6 +35,14 @@ interface StockListTableProps {
   resonanceCount: number
   /** 服务端冻结的竞价列存在性声明 (OQ-2/H1); null/guest → 不渲染竞价列, 表结构既有不变 */
   auctionColumns?: AuctionColumnsDecl | null
+  /** 自选集合 (服务端 watchlist 投影, join 键 = row.symbol 全等, WATCH-03/H6) */
+  watchlistSet: Set<string>
+  /** 单行星标切换回调 (symbol, inList) → 上层 mutation */
+  onToggleWatchlist: (symbol: string, inList: boolean) => void
+  /** 自选加载/切换 pending 或 error — 星标与开关禁用 (H9 fail-closed) */
+  watchlistPending: boolean
+  /** 「只看自选」过滤激活 (WATCH-02) */
+  watchlistOnly: boolean
 }
 
 /** 概念板块 chips — 首 3 个 + `+{N}` 展开/收起, 绝不截断标签中间 */
@@ -161,9 +169,11 @@ export function StockListTable({
   onClearFilter,
   resonanceCount,
   auctionColumns = null,
+  watchlistOnly,
 }: StockListTableProps) {
   if (!strategy) return null
-  const filterActive = filterText.trim().length > 0
+  const conceptActive = filterText.trim().length > 0
+  const filterActive = conceptActive || watchlistOnly
   const columns = mode === 'guest' ? GUEST_COLUMNS : VIP_COLUMNS
 
   // 竞价列分组 (OQ-2/H1): 列存在性完全由服务端 auction_columns 声明驱动, 绝不从行值推导 (PIT-3)。
@@ -204,8 +214,16 @@ export function StockListTable({
         </div>
       )}
 
+      {/* 空态: 只看自选无匹配 (WATCH-02, UI-SPEC §3.3 顺序 1 — 优先于概念空态, P4 防线: 不插值 filterText) */}
+      {!loading && !error && watchlistOnly && rows.length === 0 && (
+        <div className="flex flex-col items-center gap-1 py-10 text-center">
+          <p className="text-sm font-medium text-foreground">自选清单中无该策略个股</p>
+          <p className="text-xs text-secondary">试试关闭「只看自选」或切换策略。</p>
+        </div>
+      )}
+
       {/* 空态: 概念筛选无匹配 */}
-      {!loading && !error && filterActive && rows.length === 0 && (
+      {!loading && !error && conceptActive && rows.length === 0 && (
         <div className="flex flex-col items-center gap-1 py-10 text-center">
           <p className="text-sm font-medium text-foreground">无符合「{filterText.trim()}」的个股</p>
           <p className="text-xs text-secondary">试试切换其他概念或清除筛选。</p>
@@ -222,7 +240,7 @@ export function StockListTable({
       )}
 
       {/* 空态: 策略当日无命中 */}
-      {!loading && !error && !filterActive && rows.length === 0 && (
+      {!loading && !error && !conceptActive && !watchlistOnly && rows.length === 0 && (
         <div className="flex flex-col items-center gap-1 py-10 text-center">
           <p className="text-xs text-secondary">该策略当日无命中个股。</p>
         </div>

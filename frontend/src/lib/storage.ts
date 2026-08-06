@@ -42,6 +42,9 @@ export const storage = {
   /** 自选列表日K蜡烛图显示状态 */
   watchlistCandle:      kv<boolean>('watchlist_showCandle'),
 
+  /** 股池「只看自选」过滤开关 (WATCH-02) — UI 偏好, 不落后端, 绝不存 symbol 清单 (WATCH-03 单一事实来源) */
+  poolWatchlistOnly: kv<boolean>('pool-watchlist-only'),
+
   /** 自选列表分时图显示状态 */
   watchlistIntraday:    kv<boolean>('watchlist_showIntraday'),
 

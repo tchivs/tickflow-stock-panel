@@ -1,9 +1,10 @@
 import { useMemo, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { motion, useReducedMotion } from 'framer-motion'
 import { CalendarX, Loader2, RefreshCw, ScanSearch } from 'lucide-react'
 import { api } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
+import { storage } from '@/lib/storage'
 import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
 import { StrategyCardGrid } from '@/components/pool-hub/StrategyCardGrid'
@@ -62,14 +63,43 @@ export function PoolHubPage() {
     return Array.from(map, ([id, name]) => ({ id, name }))
   }, [strategiesQuery.data, data])
 
+  // WATCH-03 自选体系 (纯复用): 单一事实来源 = 服务端 watchlist.parquet + 共享 QK.watchlist 缓存。
+  // 查询双门控 (RESEARCH D4/P2): mode 由 data?.mode 派生 (未加载回退 vip), 故必须 !!data 且 mode === 'vip'
+  // 双条件, 否则 guest 首屏误发 /api/watchlist → 401 → main.tsx 全局跳登录 (最高危)。
+  const qc = useQueryClient()
+  const [watchlistOnly] = useState(() => storage.poolWatchlistOnly.get(false))
+  const watchlist = useQuery({
+    queryKey: QK.watchlist,
+    queryFn: api.watchlistList,
+    enabled: !!data && mode === 'vip',
+  })
+  // join 键 = 全后缀 symbol 精确全等 (WATCH-03/H6), 无归一化/无 code 匹配
+  const watchlistSet = useMemo(
+    () => new Set((watchlist.data?.symbols ?? []).map((s: any) => s.symbol)),
+    [watchlist.data],
+  )
+  // 单只星标 toggle (Screener.tsx:440-447 逐字先例) — 成功失效双 key, 跨页一致 (WATCH-03)
+  const toggleWatchlist = useMutation({
+    mutationFn: ({ symbol, inList }: { symbol: string; inList: boolean }) =>
+      inList ? api.watchlistRemove(symbol) : api.watchlistAdd(symbol),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: QK.watchlist })
+      qc.invalidateQueries({ queryKey: QK.watchlistEnriched() })
+    },
+  })
+
   const filteredRows = useMemo(() => {
     if (!activeStrategy) return []
     const q = filterText.trim().toLowerCase()
-    if (!q) return activeStrategy.rows
-    return activeStrategy.rows.filter(r =>
-      r.concept_board.some(c => c.toLowerCase().includes(q)),
-    )
-  }, [activeStrategy, filterText])
+    // 概念子串投影 (既有) + 「只看自选」AND 组合 (WATCH-02) — 结果新数组引用, 绝不原地改 activeStrategy.rows
+    let base = q
+      ? activeStrategy.rows.filter(r =>
+          r.concept_board.some(c => c.toLowerCase().includes(q)),
+        )
+      : activeStrategy.rows
+    if (watchlistOnly) base = base.filter(r => watchlistSet.has(r.symbol))
+    return base
+  }, [activeStrategy, filterText, watchlistOnly, watchlistSet])
 
   const pending = poolQuery.isFetching
   const refresh = () => {
@@ -206,6 +236,10 @@ export function PoolHubPage() {
                   onClearFilter={() => setFilterText('')}
                   resonanceCount={data.resonance_count}
                   auctionColumns={data?.auction_columns ?? null}
+                  watchlistSet={watchlistSet}
+                  onToggleWatchlist={(symbol, inList) => toggleWatchlist.mutate({ symbol, inList })}
+                  watchlistPending={toggleWatchlist.isPending || watchlist.isPending || watchlist.isError}
+                  watchlistOnly={watchlistOnly}
                 />
               </section>
             )}
