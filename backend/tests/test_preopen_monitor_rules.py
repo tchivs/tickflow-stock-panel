@@ -214,3 +214,128 @@ def test_evaluate_premarket_empty_states():
     assert eng.evaluate_premarket({"available": False, "degraded": True, "results": {"a": {"rows": []}}}) == []
     assert eng.evaluate_premarket({"available": True, "results": {}}) == []
     assert eng.evaluate_premarket({"available": True, "results": {"a": {"rows": []}}}) == []
+
+
+# ── T4 边界 (MON-02): 帧构建健壮性 ──
+def test_build_preopen_frame_edge_rows():
+    from app.strategy.preopen_eval import build_preopen_frame
+
+    eng = _engine()
+    eng.set_rules([_preopen_rule("r1", "open_gap", ">=", 0.05)])
+
+    # (a) 非 dict 行 / 无 symbol 行 → 静默跳过, 不崩
+    junk_payload = _preopen_payload(results={
+        "s1": {"rows": ["junk", None, {"symbol": None, "open_gap": 0.9}, {"no_symbol": 1}]},
+    })
+    assert build_preopen_frame(junk_payload) is None
+    assert eng.evaluate_premarket(junk_payload) == []
+
+    # (b) 多策略同 symbol → frame 单行 keep=first (首个策略的行值)
+    row_first = {"symbol": "000001.SZ", "name": "A银行", "open_gap": 0.06, "hit_factors": ["first"]}
+    row_second = {"symbol": "000001.SZ", "name": "A银行", "open_gap": 0.09, "hit_factors": ["second"]}
+    payload2 = _preopen_payload(results={
+        "s1": {"rows": [row_first]},
+        "s2": {"rows": [row_second]},
+    })
+    frame2, _ = build_preopen_frame(payload2)
+    assert frame2.height == 1
+    row2 = frame2.to_dicts()[0]
+    assert row2["hit_factors"] == ["first"]
+    assert row2["open_gap"] == 0.06
+    assert row2["source_strategies"] == ["s1", "s2"]
+
+    # (c) 行内残留 change_pct/close/code → frame 无 close/code 列且 change_pct 全 None
+    payload3 = _preopen_payload(results={
+        "s1": {"rows": [{"symbol": "000001.SZ", "open_gap": 0.05, "change_pct": 0.03, "close": 10.0, "code": "000001"}]},
+    })
+    frame3, _ = build_preopen_frame(payload3)
+    assert "close" not in frame3.columns
+    assert "code" not in frame3.columns
+    assert all(v is None for v in frame3["change_pct"].to_list())
+
+    # (d) 无 results 键 / 空 results / available:false → evaluate_premarket []
+    assert eng.evaluate_premarket({"available": True}) == []
+    assert eng.evaluate_premarket({"available": True, "results": {}}) == []
+    assert eng.evaluate_premarket({"available": False, "results": {"a": {"rows": [row_first]}}}) == []
+
+
+# ── T7 隔离断言 (MON-02 核心验收): 策略池三属性零变化 ──
+def test_evaluate_premarket_isolation_from_strategy_pools():
+    eng = _engine()
+    pre = _preopen_rule("mr_preopen_gap5", "open_gap", ">=", 0.05)
+    strat_rule = {
+        "id": "mr_strategy_x", "name": "s", "type": "strategy",
+        "strategy_id": "does_not_exist", "scope": "all",
+        "cooldown_seconds": 0, "enabled": True,
+    }
+    eng.set_rules([pre, strat_rule])
+
+    payload = _preopen_payload([{"symbol": "000001.SZ", "name": "A银行", "open_gap": 0.06}])
+
+    before_pools = dict(eng._strategy_pools)
+    before_latest = dict(eng.latest_strategy_results())
+    before_building = dict(eng._building_strategy_results)
+
+    events = eng.evaluate_premarket(payload)
+
+    assert events, "preopen 规则应命中"
+    assert all(e["rule_id"] != "mr_strategy_x" for e in events)  # 策略规则不参与
+    assert eng._strategy_pools == before_pools
+    assert eng.latest_strategy_results() == before_latest
+    assert eng._building_strategy_results == before_building
+
+
+# ── T8 cooldown (MON-02): 复用 _last_fire 冷却域 ──
+def test_evaluate_premarket_cooldown():
+    eng = _engine()
+    rule_cd = _preopen_rule("r_cd", "open_gap", ">=", 0.05, cooldown=3600)
+    # 异 rule_id + 自身 cooldown=0: 不受 r_cd 冷却影响, 仍独立触发
+    rule_cd2 = _preopen_rule("r_cd2", "open_gap", ">=", 0.05, cooldown=0)
+    rule_0 = _preopen_rule("r_cd0", "open_gap", ">=", 0.05, cooldown=0)
+    eng.set_rules([rule_cd, rule_cd2, rule_0])
+
+    payload = _preopen_payload([{"symbol": "000001.SZ", "name": "A银行", "open_gap": 0.06}])
+
+    events1 = eng.evaluate_premarket(payload)
+    assert len(events1) == 3
+    # 同 (rule_id, symbol) 冷却期内不重复触发 (r_cd 被自己冷却);
+    # 异 rule_id 同 symbol 的规则不受影响 (r_cd2/r_cd0 仍触发)
+    events2 = eng.evaluate_premarket(payload)
+    assert len(events2) == 2
+    ids2 = {e["rule_id"] for e in events2}
+    assert "r_cd" not in ids2
+    assert "r_cd2" in ids2
+    assert "r_cd0" in ids2
+
+    # 严格版: 单条 cooldown=3600 规则 → 第一次命中 1 事件, 立即第二次 0 事件
+    eng1 = _engine()
+    eng1.set_rules([_preopen_rule("r_cd_solo", "open_gap", ">=", 0.05, cooldown=3600)])
+    assert len(eng1.evaluate_premarket(payload)) == 1
+    assert eng1.evaluate_premarket(payload) == []
+
+    # cooldown=0: 重复调用均触发
+    eng3 = _engine()
+    eng3.set_rules([_preopen_rule("r0", "open_gap", ">=", 0.05, cooldown=0)])
+    assert len(eng3.evaluate_premarket(payload)) == 1
+    assert len(eng3.evaluate_premarket(payload)) == 1
+
+
+# ── T10 按标的缺席诚实 (MON-04): null-as-absent, 非 null-as-present ──
+def test_preopen_absent_symbol_not_hit():
+    from app.strategy.preopen_eval import build_preopen_frame, extract_preopen_metrics
+
+    eng = _engine()
+    eng.set_rules([_preopen_rule("r_vol", "auction_volume", ">=", 1000)])
+    payload = _preopen_payload(results={
+        "s1": {"rows": [
+            {"symbol": "A.SZ", "name": "A", "auction_volume": 1500},
+            {"symbol": "B.SZ", "name": "B", "auction_volume": None},
+        ]},
+    })
+
+    events = eng.evaluate_premarket(payload)
+    assert {e["symbol"] for e in events} == {"A.SZ"}  # B 缺席不命中
+    assert events[0]["preopen_metrics"]["auction_volume"] == 1500
+
+    frame, _ = build_preopen_frame(payload)
+    assert "auction_volume" not in extract_preopen_metrics(frame, "B.SZ")
