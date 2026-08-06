@@ -293,6 +293,185 @@ def _build_ratio_subblock(repo, as_of: date, top_n: list[dict]) -> dict:
 
 
 # ================================================================
+# Block 3 — 盘前信号质量 (条件式: 预览在才亮)
+# ================================================================
+
+
+def _mean(values: list[float]) -> float | None:
+    """均值 (无有效值 → None, 诚实 null 绝不 0 填, 镜像 auction_validation._null_metric)。"""
+    if not values:
+        return None
+    return sum(values) / len(values)
+
+
+def _build_preopen_signal_quality(
+    repo,
+    as_of: date,
+    engine,
+    now: datetime,
+    preview,
+    enriched_df,
+) -> dict:
+    """Block 3 装配 (REV-03): 族∩预览策略集 + EOD 口径 join + n_missing + resonance。
+
+    - 策略集 = ``_AUCTION_FAMILY_IDS`` (单一事实源) ∩ 预览 results keys,
+      只含预览里实际有行的竞价族策略。
+    - EOD 口径 join (R6 铁律): 收盘兑现率/收阳率一律按 symbol 左联 EOD enriched
+      帧的 change_pct/close/open; 预览行有而 EOD 帧缺行 → n_missing 计数,
+      该行不进率统计 (绝不 0 填/前向填充)。
+    - 前 EOD 时刻 (as_of==today ∧ now < 管道调度): change_pct 系统计省略 +
+      注记, open_gap 系统计照常 (open 已定盘)。
+    """
+    if preview is None:
+        return {"present": False, "note": _SIGNAL_NOTE_PREVIEW_ABSENT, "source": _SOURCE_PREVIEW}
+    results = preview.get("results") or {}
+    if not results:
+        return {"present": False, "note": _SIGNAL_NOTE_PREVIEW_ABSENT, "source": _SOURCE_PREVIEW}
+    if enriched_df is None or enriched_df.is_empty():
+        return {"present": False, "note": "EOD 口径不可得", "source": _SOURCE_PREVIEW_EOD}
+
+    # EOD 口径帧 (与 Block 2 同帧复用, 单次装载)
+    eod_cols = [c for c in ("symbol", "change_pct", "close", "open") if c in enriched_df.columns]
+    eod_map: dict[str, dict] = {}
+    for row in enriched_df.select(eod_cols).iter_rows(named=True):
+        eod_map[row["symbol"]] = row
+
+    # 前 EOD 时刻判别: as_of==today ∧ now < 管道调度 (change_pct 非终值)
+    today = now.date()
+    pre_eod_time = False
+    if as_of == today:
+        from app.services.preferences import get_pipeline_schedule
+
+        sched = get_pipeline_schedule()
+        pre_eod_time = (now.hour * 60 + now.minute) < (sched["hour"] * 60 + sched["minute"])
+
+    family = _AUCTION_FAMILY_IDS
+    strategies: dict[str, dict] = {}
+    n_missing_total = 0
+
+    for sid, item in results.items():
+        if sid not in family:
+            continue
+        rows = (item or {}).get("rows") or []
+        if not rows:
+            continue
+        total = (item or {}).get("total", len(rows))
+        display_limited = total > len(rows)
+
+        gaps: list[float] = []
+        fulf: list[bool] = []
+        chgs: list[float] = []
+        close_fulf: list[bool] = []
+        ups: list[bool] = []
+        missing = 0
+        for row in rows:
+            gap = row.get("open_gap")
+            if isinstance(gap, (int, float)):
+                gaps.append(float(gap))
+                fulf.append(gap >= 0.02)
+            eod = eod_map.get(row["symbol"])
+            if eod is None:
+                missing += 1
+                continue
+            c = eod.get("change_pct")
+            if isinstance(c, (int, float)):
+                chgs.append(float(c))
+                close_fulf.append(c >= 0.02)
+            if isinstance(eod.get("close"), (int, float)) and isinstance(eod.get("open"), (int, float)):
+                ups.append(eod["close"] > eod["open"])
+        n_missing_total += missing
+
+        st: dict[str, Any] = {
+            "display_name": _strategy_display_name(engine, sid),
+            "n": len(rows),
+            "avg_open_gap": _mean(gaps),
+            "open_gap_fulfill_rate": (sum(fulf) / len(fulf)) if fulf else None,
+            "n_missing": missing,
+        }
+        if display_limited:
+            st["note"] = _SIGNAL_NOTE_DISPLAY_LIMIT
+        if not pre_eod_time:
+            st["avg_change_pct"] = _mean(chgs)
+            st["close_fulfill_rate"] = (sum(close_fulf) / len(close_fulf)) if close_fulf else None
+            st["up_rate"] = (sum(ups) / len(ups)) if ups else None
+        strategies[sid] = st
+
+    block_notes: list[str] = []
+    if pre_eod_time:
+        block_notes.append(_SIGNAL_NOTE_EOD_PENDING)
+    degraded = bool(preview.get("degraded"))
+    if degraded:
+        block_notes.append(_SIGNAL_NOTE_DEGRADED)
+
+    blk: dict[str, Any] = {
+        "present": True,
+        "source": _SOURCE_PREVIEW_EOD,
+        "note": "基于盘前预览·非收盘定稿",
+        "provisional": bool(preview.get("provisional", True)),
+        "degraded": degraded,
+        "n_missing": n_missing_total,
+        "notes": block_notes,
+        "strategies": strategies,
+    }
+
+    # 交叉共振子块: 预览全行 hit_factors >= 2 的标的聚合同一组兑现率
+    resonance = _build_resonance(results, eod_map, pre_eod_time)
+    if resonance is not None:
+        blk["resonance"] = resonance
+    return blk
+
+
+def _build_resonance(results: dict, eod_map: dict, pre_eod_time: bool) -> dict | None:
+    """交叉共振子块 (只读复用预览行自带 hit_factors; 无共振标的 → 省略)。"""
+    seen: dict[str, dict] = {}
+    resonance_syms: list[str] = []
+    for item in results.values():
+        for row in (item or {}).get("rows") or []:
+            sym = row.get("symbol")
+            if not sym or sym in seen:
+                continue
+            seen[sym] = row
+            if isinstance(row.get("hit_factors"), list) and len(row["hit_factors"]) >= 2:
+                resonance_syms.append(sym)
+    if not resonance_syms:
+        return None
+
+    gaps: list[float] = []
+    fulf: list[bool] = []
+    chgs: list[float] = []
+    close_fulf: list[bool] = []
+    ups: list[bool] = []
+    for sym in resonance_syms:
+        row = seen[sym]
+        gap = row.get("open_gap")
+        if isinstance(gap, (int, float)):
+            gaps.append(float(gap))
+            fulf.append(gap >= 0.02)
+        eod = eod_map.get(sym)
+        if eod is None:
+            continue
+        c = eod.get("change_pct")
+        if isinstance(c, (int, float)):
+            chgs.append(float(c))
+            close_fulf.append(c >= 0.02)
+        if isinstance(eod.get("close"), (int, float)) and isinstance(eod.get("open"), (int, float)):
+            ups.append(eod["close"] > eod["open"])
+
+    sub: dict[str, Any] = {
+        "present": True,
+        "note": "hit_factors≥2 的交叉共振标的",
+        "n_symbols": len(resonance_syms),
+        "avg_open_gap": _mean(gaps),
+        "open_gap_fulfill_rate": (sum(fulf) / len(fulf)) if fulf else None,
+    }
+    if not pre_eod_time:
+        sub["avg_change_pct"] = _mean(chgs)
+        sub["close_fulfill_rate"] = (sum(close_fulf) / len(close_fulf)) if close_fulf else None
+        sub["up_rate"] = (sum(ups) / len(ups)) if ups else None
+    return sub
+
+
+# ================================================================
 # 装配主入口
 # ================================================================
 
@@ -362,7 +541,10 @@ def build_auction_recap(
         repo, as_of, verdict, now, pre_eod,
     )
 
-    # Block 3 (preopen_signal_quality): 由 Task 3 装配; 头标签已诚实反映其缺席。
+    # Block 3: 盘前信号质量 (族∩预览 + EOD 口径 join; 预览缺失 → 块省略)
+    blocks["preopen_signal_quality"] = _build_preopen_signal_quality(
+        repo, as_of, engine, now, preview, enriched_df,
+    )
 
     # 头标签判别 (RESEARCH §4: pre_eod > no_auction_lake > no_premarket_preview > partial > full)
     lake_ok = _is_present(blocks["real_auction_activity"])

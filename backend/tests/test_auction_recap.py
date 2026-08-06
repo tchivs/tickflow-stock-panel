@@ -679,3 +679,23 @@ def test_signal_quality_resonance_and_slice_single_source(repo_env):
     assert "auction_bullish" in md
     # 同一 panel dict → 切片与渲染的数值一致 (构造性单源)
     assert "100.0%" in slice_txt and "100.0%" in md
+
+
+def test_data_completeness_full_three_blocks(repo_env):
+    """REV-02: 分区+预览+enriched 三块齐 → data_completeness == 'full'。"""
+    from app.services.auction_probe import AuctionProbeStatus, AuctionProbeVerdict
+    from app.services.auction_recap import build_auction_recap
+
+    _repo, data_dir = repo_env
+    _write_auction_partition(data_dir, FIXED_DATE, _auction_rows(FIXED_DATE, {"000001": (300.0, 500.0)}))
+    _write_premarket_preview(data_dir, FIXED_DATE, _preview_payload(FIXED_DATE))
+    repo = _FakeRepo(data_dir, enriched=_eod_frame(), latest=FIXED_DATE)
+    now = datetime(FIXED_DATE.year, FIXED_DATE.month, FIXED_DATE.day, 16, 0)
+    verdict = AuctionProbeVerdict(
+        status=AuctionProbeStatus.available, source="hermetic", probed_at="t", detail="d",
+    )
+
+    result = build_auction_recap(repo, FIXED_DATE, now=now, probe_resolver=lambda: verdict)
+    assert result["data_completeness"] == "full"
+    for blk in result["blocks"].values():
+        assert blk["present"] is True
