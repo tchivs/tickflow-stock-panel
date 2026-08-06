@@ -58,6 +58,29 @@
 - **前瞻口径（BT-04）**：信号日 T 以开盘价入场；`next_day_open_ret = open_{T+1}/open_T − 1`、`next_day_close_ret = close_{T+1}/open_T − 1`、`open_gap_outcome = open_{T+1}/close_T − 1`；结果日 = 全市场交易日历的下一交易日（绝不按标的行内 shift）；结果日缺行计入 `n_missing_outcomes`，统计排除，**绝不 0 填/前向填充**。
 - **诚实边界**：真实竞价列验证以待 `kline_auction` 历史分区就位（当前 0 分区 —— 湖空时真列分支诚实空，不伪造真值）；本报告为纯 API 研究报告，无前端消费（D-05）。
 
+### 🧪 竞价回测 (Auction Backtest)
+
+竞价族 9 策略在 enriched 历史窗口上的**信号质量回测**（BT-07）：单面板向量化扫描 → 候选掩码 → BT-04 前瞻（结果日 = 全市场交易日历下一交易日）→ 长格式命中行 + provenance manifest → 原子落盘 `backtest_results/run_id={确定性哈希}/`（`part.parquet` + `manifest.json`）。回测区间**不受回测 186 天 guard 限制**（D-06：单面板向量化扫描，覆盖由 enriched 缓存边界决定，窗口回夹 + `requested_*/effective_*` 双字段回显；guard 仍只守卫 legacy vectorbt 组合回测面）。
+
+- **触发面（O1，operator CLI，manual-only）**：零 API POST —— 写触发独立于研究查询面，研究端点恒 GET-only（AST 守卫锁死）。参数恒 META 默认（O2：不接受策略参数覆盖，策略定义变化由 `strategy_version` 指纹记入 manifest，跨日可比性由 META 默认保证）。同参数重跑幂等（fingerprint 相同 → `reused`，不重写）。
+
+  ```bash
+  cd backend
+  # 全量: 9 竞价族 × 最近 248 个 enriched 交易日 × 全市场
+  .venv/bin/python scripts/auction_backtest.py
+  # 子集策略 + 显式窗口 + 标的裁剪
+  .venv/bin/python scripts/auction_backtest.py --strategies golden_230,auction_bullish \
+      --range 2026-01-01,2026-08-05 --symbols 000001.SZ,000002.SZ
+  # DATA_DIR 覆盖 (镜像 probe_concept_drift)
+  DATA_DIR=/path/to/data .venv/bin/python scripts/auction_backtest.py
+  ```
+  终态摘要：`run_id` / `wrote|reused` / requested+effective 窗口 / 每策略 `{id} branch= dates= hits= sym_covered= sym_hit= missing=` / `coverage.symbols` 诚实覆盖 / 落盘路径 / 耗时。`--rpm` 为保留参数（当前无操作 —— 本地向量化单面板回测无需限速，诚实不假装生效）。
+- **只读查询（BT-09）**：`GET /api/research/backtest` 列运行（扫 `backtest_results/run_id=*` 目录读 manifest，返回 `{runs, count}` 按 `created_at` 降序；`?strategy=` / `?branch=` 按 manifest.strategies 过滤；空湖 → 200 `{runs:[], count:0}` 诚实空）与 `GET /api/research/backtest/{run_id}` 详情（manifest 全文 + `part.parquet` 行统计 + 采样 ≤20 行；`?strategy=&branch=&as_of=&symbol=` 谓词下推；坏格式 run_id → 400，不存在 → 404 `RESEARCH_BACKTEST`）。查询面 **GET-only 零执行**：不写任何湖/文件、不 import 执行族或竞价同步/快照/回填/选股触发面模块（`tests/test_research_backtest_guard.py` AST 守卫 7 项：GET-only/零写/E3 字面量/import 白名单 + 服务面 E2 根隔离）。
+- **湖面共存诚实**：`backtest_results/` 同时存在目录形 research 运行（含 `manifest.json`）与 legacy vectorbt 平面文件（`run_id={id}.parquet`，`services/backtest.py`）—— 列运行端点**只把含 manifest 的目录计入**，平面文件诚实跳过（不报错不误读）；run_id 空间天然不冲突（sha1[:12] vs vectorbt id）。
+- **诚实覆盖（BT-08，34-02 报告字段同源）**：`coverage.symbols` = `{auction_symbol_count, enriched_symbol_count, symbol_coverage_ratio, auction_rows_present, auction_rows_expected}` + 每策略 `n_symbols_covered` / `n_symbols_hit`（字段名与验证报告一致）。今日真列宇宙 = **2 symbol（000001.SZ / 000002.SZ）**—— 4 个真列策略（极速抢筹/竞价全面/T+1闪电/盘中确认）恒 `branch:"real"`，竞价阿尔法按湖有无取 `real|derived`，4 个 EOD 代理恒 `branch:"eod"`（分支互斥 BT-05，逐行落盘）；全量竞价回填（运营 3-5.5h，见下节）解锁全宇宙真列分支。沙箱实测（34-03）：Run A（4 EOD × 248 日 × 全市场）329,087 命中行、`auction_symbols=2`、`enriched_symbols=5537`、`ratio=0.04%`，耗时 **≈4s**（34-01 的 ~1-3min [INFERENCE] 估算已被实测取代）；Run B（真列 4 策略 × 248 日 × 2 symbol）诚实 `auction_symbol_count==2`、12 命中行，幂等重跑 `reused`。
+- **前瞻口径（BT-04）**：与验证报告逐字一致（`next_day_open_ret = open_{T+1}/open_T − 1` 等三公式 + 全局日历结果日 + `outcome_missing` 计数，绝不 0 填/前向填充）；34-03 沙箱抽查 3 日 × 2 symbol 手核 `kline_daily` 通过。
+- **BT-10 分钟限制（确认维度诚实受限）**：`kline_minute` 历史 **CLOSED**（0 分区；xyz 1m ≈ 21 交易日、ifzq/sina 仅尾随窗口、TickFlow 分钟档位 gated at pro+）；`_minute_loader` 未接线 → `auction_intraday_confirm` 恒空（engine.py:376-390 短路）；回测行/报告恒 `minute_confirm:"not_applied"`，manifest `minute_note` 承载说明。**全量分钟 248 日回填 CLOSED**（BT-10 P2 验收 = 注解诚实，非实现分钟）。
+
 ### 📥 竞价历史回填（Auction History Backfill）
 
 运营触发端点 `POST /api/kline/auction/backfill`，把 `kline_auction` 湖从 0 分区回填到与 `kline_daily` 对齐（竞价列是日 K 的补充面）。body：`{"symbols": ["000001.SZ", ...] | null(全量), "start"/"end": "YYYY-MM-DD" | null, "rpm": 1..60 | 30}`；立即返回 `{"status": "started"|"reused", "job_id"}`（单飞：已有同类任务在跑 → `reused`）。进度/终态/取消复用既有 `GET /api/pipeline/jobs/{id}`（轮询）与 `POST /api/pipeline/jobs/{id}/cancel`（合作式，每 symbol 检查）；与 pool backfill / EOD 重任务槽互斥（`已有数据任务在运行` 失败记录）。
