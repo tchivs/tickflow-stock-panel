@@ -29,6 +29,7 @@ from app.api import (
     intraday,
     kline,
     market_recap,
+    market_recap_auction,
     monitor_rules,
     overview,
     pipeline,
@@ -869,6 +870,8 @@ app.include_router(ext_data.router)
 app.include_router(financials.router)
 app.include_router(stock_analysis.router)
 app.include_router(market_recap.router)
+# REV-05 竞价复盘只读面板端点 (POOL-03 零执行)
+app.include_router(market_recap_auction.router)
 app.include_router(settings_api.router)
 app.include_router(strategy.router)
 app.include_router(signals.router)
