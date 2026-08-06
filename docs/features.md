@@ -96,7 +96,7 @@
 
 ## 📡 监控中心(Monitor)
 
-统一规则引擎,一个页面管理**四类监控**:
+统一规则引擎,一个页面管理**五类监控**:
 
 | 类型 | 场景 |
 | :--- | :--- |
@@ -104,6 +104,7 @@
 | 个股信号监控 | 特定个股的指标条件(如 `RSI > 80`) |
 | 价格涨跌监控 | 涨跌幅 / 价格突破阈值 |
 | 全市场异动 | 全市场异动(如快速拉升/跌停) |
+| 盘前监控 | 09:26 盘前预览帧上的竞价白名单字段条件 (`open_gap` / `auction_*`), 事件带「盘前·非最终」标注 |
 
 **ETF 支持**:规则可选资产类型 `股票 / ETF`。监控引擎按规则 `asset_type` 分轮评估——ETF 规则用 ETF enriched 快照评估(`engine.evaluate(..., asset_type="etf")`),策略型规则走 ETF 历史加载器(读 `kline_etf_enriched`)。盘中触发需开启 ETF 实时行情(`realtime_pull_etf`),使 ETF 报价进入 enriched 快照。
 
@@ -113,6 +114,9 @@
 - 多入口配置:监控中心新建 / 个股详情页「加监控」/ 策略卡片一键开启
 - 命中后右下角弹窗(可配声效)+ 持久化到 `alerts.jsonl`,菜单未读徽标
 - **触发记录详情**:每条记录展示命中的具体条件(如 `RSI>80`)与当前价位,一眼看清为何触发
+- **盘前监控 (preopen)**:规则字段仅限竞价白名单 (`open_gap` / `auction_volume` / `auction_amount` / `auction_volume_ratio` / `auction_unmatched_amount`),配置期即拒绝 EOD 列 (`change_pct` / `close` 等)——杜绝建出必失败的规则
+- 盘前告警带「盘前·非最终」(provisional)标注;竞价数据源降级时竞价列规则 fail-closed 0 告警(绝不 0 填),并加「数据降级」(degraded)徽标
+- 盘前评估挂在 09:26 预览 job 尾段,与盘中连续竞价告警互斥(盘中 `evaluate` 显式跳过 preopen 规则)
 
 ### 飞书 Webhook 推送
 

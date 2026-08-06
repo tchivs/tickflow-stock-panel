@@ -50,6 +50,56 @@ function legacyMonitorOptions() {
   return o
 }
 
+// ── 告警渲染载荷 (30-02 SSE dict 增量键: window/provisional/degraded/strategy_ids/preopen_metrics) ──
+const preopenAlertPayload = {
+  id: 'ev_preopen_1',
+  ts: 1754316000000,
+  occurred_at: '2026-08-06T09:26:05+08:00',
+  rule_id: 'mr_preopen_gap5',
+  rule_name: '盘前高开预警',
+  source: 'preopen',
+  type: 'preopen',
+  symbol: '300750.SZ',
+  name: '宁德时代',
+  message: '盘前 open_gap>=0.05',
+  price: null,
+  change_pct: null,
+  severity: 'warn',
+  provisional: true,
+  degraded: true,
+  window: 'pre_open',
+  strategy_ids: ['auction_allround'],
+  preopen_metrics: { open_gap: 0.051, auction_volume_ratio: 3.2 },
+  conditions: [{ field: 'open_gap', op: '>=', value: 0.05 }],
+  logic: 'and',
+}
+
+/** 非降级盘前事件 (degraded=false — provisional 恒真) */
+const preopenAlertNotDegraded = {
+  ...preopenAlertPayload,
+  id: 'ev_preopen_2',
+  degraded: false,
+}
+
+/** 盘中 signal 事件 (无增量键 — 兼容用例: 旧载荷零回归) */
+const signalAlertPayload = {
+  id: 'ev_signal_1',
+  ts: 1754312400000,
+  occurred_at: '2026-08-06T14:02:00+08:00',
+  rule_id: 'mr_signal_1',
+  rule_name: '个股信号监控 · 300750.SZ',
+  source: 'signal',
+  type: 'signal',
+  symbol: '300750.SZ',
+  name: '宁德时代',
+  message: '现价低于 RSI',
+  price: 189.5,
+  change_pct: 0.012,
+  severity: 'info',
+  signals: ['signal_volume_surge'],
+  conditions: [{ field: 'rsi_14', op: '<', value: 30 }],
+}
+
 const json = (route: Route, body: unknown, status = 200) =>
   route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
 
@@ -158,5 +208,54 @@ test.describe('Phase 30 preopen monitor (MON-07 frontend)', () => {
     // signal 类型回归: truth 信号点选仍可用 (非 preopen 路径零回归)
     await page.getByLabel('监控类型').selectOption('signal')
     await expect(page.getByRole('button', { name: '信号条件' })).toBeVisible()
+  })
+
+  test('MON-07: preopen 告警渲染 — provisional/degraded 徽标 + 无价格/涨跌幅 chip', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
+    await installShell(page)
+    await page.route('**/api/alerts**', route => json(route, { alerts: [preopenAlertPayload], total: 1 }))
+
+    await page.goto('/monitor')
+
+    // 源徽标: rule_name 优先 (「盘前高开预警」; TYPE_LABEL 回退 '盘前')
+    await expect(page.getByText('盘前高开预警')).toBeVisible()
+    // provisional + degraded 徽标
+    await expect(page.getByText('盘前·非最终')).toBeVisible()
+    await expect(page.getByText('数据降级')).toBeVisible()
+    // 命中条件行 (渲染器字形: '>=' 非 '≥')
+    await expect(page.getByText('open_gap>=0.05')).toBeVisible()
+    // price/change_pct 恒 null → 无价格/涨跌幅 chip (fmtPrice/fmtPct 输出不出现)
+    await expect(page.getByText('189.50')).toHaveCount(0)
+    await expect(page.getByText('+1.20%')).toHaveCount(0)
+  })
+
+  test('MON-07: preopen 非降级事件 — 「数据降级」不出现, provisional 恒标注', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
+    await installShell(page)
+    await page.route('**/api/alerts**', route => json(route, { alerts: [preopenAlertNotDegraded], total: 1 }))
+
+    await page.goto('/monitor')
+
+    await expect(page.getByText('盘前·非最终')).toBeVisible()
+    await expect(page.getByText('数据降级')).toHaveCount(0)
+  })
+
+  test('MON-07: 兼容 — signal 事件 (无增量键) 渲染零回归', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
+    await installShell(page)
+    await page.route('**/api/alerts**', route => json(route, { alerts: [signalAlertPayload], total: 1 }))
+
+    await page.goto('/monitor')
+
+    // 无盘前徽标
+    await expect(page.getByText('盘前·非最终')).toHaveCount(0)
+    await expect(page.getByText('数据降级')).toHaveCount(0)
+    // 源徽标 (rule_name 切片) + 价格/涨跌幅 chip 正常渲染 (旧载荷零回归)
+    await expect(page.getByText('300750.SZ').first()).toBeVisible()
+    // 价格同时出现在头部 price chip 与详情行「现价」 — 任一可见即渲染正常
+    await expect(page.getByText('189.50').first()).toBeVisible()
+    await expect(page.getByText('+1.20%')).toBeVisible()
+    // 命中条件行 (cnSignal: rsi_14 → RSI14)
+    await expect(page.getByText('RSI14<30')).toBeVisible()
   })
 })

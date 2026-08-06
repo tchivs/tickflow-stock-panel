@@ -19,6 +19,8 @@ import { StockPreviewDialog } from '@/components/StockPreviewDialog'
 
 const TYPE_LABEL: Record<string, string> = {
   position: '持仓', signal: '信号', price: '价格', market: '市场', strategy: '策略',
+  // 盘前告警源标签 (09:26 预览帧评估; 事件 rule_name 优先于 TYPE_LABEL 回退)
+  preopen: '盘前',
 }
 
 /** 严重级别 → 左侧色条 + 图标 */
@@ -33,6 +35,8 @@ const SOURCE_BADGE_STYLE: Record<string, string> = {
   signal:   'bg-accent/10 text-accent border-accent/20',
   price:    'bg-emerald-400/10 text-emerald-400 border-emerald-400/20',
   market:   'bg-purple-500/10 text-purple-400 border-purple-500/20',
+  // 盘前告警视觉区分 (cyan 色系, 与盘中色系区隔)
+  preopen:  'bg-cyan-400/10 text-cyan-400 border-cyan-400/20',
 }
 
 const DELIVERY_LABEL: Record<DeliveryStatus, { label: string; icon: typeof Check; className: string }> = {
@@ -397,6 +401,17 @@ function AlertsList({ alertsQuery, confirmClear, setConfirmClear, total, enterTs
                             return dotIdx >= 0 ? rn.slice(dotIdx + 3) : (rn || (TYPE_LABEL[ev.source] ?? ev.source))
                           })()}
                         </span>
+                        {/* 盘前状态徽标: provisional「盘前·非最终」(恒真) + degraded「数据降级」(30-02 事件增量键; 旧事件缺键零渲染) */}
+                        {ev.source === 'preopen' && (
+                          <>
+                            {ev.provisional && (
+                              <span className="rounded border px-1.5 py-0.5 text-[9px] font-medium bg-accent/8 text-accent border-accent/20">盘前·非最终</span>
+                            )}
+                            {ev.degraded && (
+                              <span className="rounded border px-1.5 py-0.5 text-[9px] font-medium bg-warning/10 text-warning border-warning/20">数据降级</span>
+                            )}
+                          </>
+                        )}
                       </div>
                       {/* 详情行: 命中条件 (signal/price/market) + 当前价 / 或默认消息 */}
                       {(ev.conditions && ev.conditions.length > 0) ? (
