@@ -199,3 +199,72 @@ def test_redetect_bypasses_cache(probe_client: TestClient, monkeypatch):
     fresh = probe_client.post("/api/data/auction-probe/redetect").json()
     assert fresh["status"] == "available"
     assert fresh["source"] == "fake_auction"
+
+
+# ================================================================
+# 32-01 AQ-01 验收 — capability 自动发现 + probe available 翻转
+# ================================================================
+
+
+def test_default_sources_discovers_auction_capability(monkeypatch):
+    """capabilities.auction=True 的 builtin 源被 _default_sources 自动发现 (能力过滤)。"""
+    from app.data_providers import chain as provider_chain
+    from app.data_providers.base import ProviderCapabilities
+    from app.data_providers.xyz_provider import XYZProvider
+    from app.services.auction_probe import _default_sources
+
+    # 声明 auction 能力的源 (xyz) → 被发现
+    monkeypatch.setattr(provider_chain, "_BUILTIN_CHAIN", {"xyz": ["xyz"]})
+    monkeypatch.setattr(provider_chain, "_get_provider", lambda name: XYZProvider())
+    sources = _default_sources()
+    names = {getattr(p, "name", "?") for p in sources}
+    assert "xyz" in names
+    xyz = next(p for p in sources if getattr(p, "name", "") == "xyz")
+    assert xyz.capabilities.auction is True
+
+    # 无 auction 能力的源 → 发现机制按能力过滤, 不入选
+    class NoAuction:
+        name = "no_auction"
+        capabilities = ProviderCapabilities(auction=False)
+
+    monkeypatch.setattr(provider_chain, "_get_provider", lambda name: NoAuction())
+    assert _default_sources() == []
+
+
+def test_resolve_auction_probe_available_with_auction_capable_source():
+    """AQ-01 验收翻转: 能力声明 + 窗口内行 → available; 能力本身不授予可用性。"""
+    from app.data_providers.base import ProviderCapabilities
+
+    class CapableProvider(FakeAuctionProvider):
+        capabilities = ProviderCapabilities(auction=True)
+
+    # 窗口内行 (09:16/09:20) → available
+    verdict = _probe(CapableProvider(rows=_rows((16, 0), (20, 0))))
+    assert verdict["status"] == "available"
+    assert verdict["source"] == "fake_auction"
+
+    # 仅 09:30+ 行 → 恒 fail_closed (T-16-01 铁律不因新能力松动)
+    assert _probe(CapableProvider(rows=_rows((30, 0))))["status"] == "fail_closed"
+
+    # 空 → fail_closed
+    assert _probe(CapableProvider(rows=pl.DataFrame()))["status"] == "fail_closed"
+
+
+def test_xyz_capability_declared():
+    """xyz 单例声明 auction=True (base.py 字段已存在, 零改动)。"""
+    from app.data_providers.xyz_provider import XYZProvider
+
+    assert XYZProvider().capabilities.auction is True
+
+
+def test_probe_available_on_real_mcp():
+    """网络门冒烟: 真实链一次 probe (R3) → 诚实分类, available 时 source == xyz。"""
+    import os
+
+    if os.environ.get("RUN_NETWORK_TESTS") != "1":
+        pytest.skip("network-gated")
+
+    verdict = resolve_auction_probe().to_dict()
+    assert verdict["status"] in {"available", "fail_closed", "error"}
+    if verdict["status"] == "available":
+        assert verdict["source"] == "xyz"
