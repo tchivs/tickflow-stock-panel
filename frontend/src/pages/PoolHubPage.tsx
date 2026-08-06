@@ -1,10 +1,11 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { motion, useReducedMotion } from 'framer-motion'
-import { CalendarX, Loader2, RefreshCw, ScanSearch } from 'lucide-react'
+import { CalendarX, Loader2, RefreshCw, ScanSearch, Star } from 'lucide-react'
 import { api } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { storage } from '@/lib/storage'
+import { useWatchlistBatchAdd } from '@/lib/useSharedMutations'
 import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
 import { StrategyCardGrid } from '@/components/pool-hub/StrategyCardGrid'
@@ -67,7 +68,8 @@ export function PoolHubPage() {
   // 查询双门控 (RESEARCH D4/P2): mode 由 data?.mode 派生 (未加载回退 vip), 故必须 !!data 且 mode === 'vip'
   // 双条件, 否则 guest 首屏误发 /api/watchlist → 401 → main.tsx 全局跳登录 (最高危)。
   const qc = useQueryClient()
-  const [watchlistOnly] = useState(() => storage.poolWatchlistOnly.get(false))
+  const [watchlistOnly, setWatchlistOnly] = useState(() => storage.poolWatchlistOnly.get(false))
+  const [batchMsg, setBatchMsg] = useState('')
   const watchlist = useQuery({
     queryKey: QK.watchlist,
     queryFn: api.watchlistList,
@@ -87,6 +89,22 @@ export function PoolHubPage() {
       qc.invalidateQueries({ queryKey: QK.watchlistEnriched() })
     },
   })
+  // WATCH-04 批量加自选 (useWatchlistBatchAdd 已封装双 key 失效): scope = 可见行 filteredRows (display_limit 内, 绝不按 total)
+  const batchAdd = useWatchlistBatchAdd()
+  const handleBatchAdd = () => {
+    const symbols = filteredRows.map(r => r.symbol)
+    if (!symbols.length) return
+    batchAdd.mutate(symbols, {
+      onSuccess: (data) => {
+        setBatchMsg(`已添加 ${data.added} 只到自选`)
+        setTimeout(() => setBatchMsg(''), 3000)
+      },
+      onError: () => {
+        setBatchMsg('批量添加失败')
+        setTimeout(() => setBatchMsg(''), 3000)
+      },
+    })
+  }
 
   const filteredRows = useMemo(() => {
     if (!activeStrategy) return []
@@ -219,7 +237,48 @@ export function PoolHubPage() {
             />
             {activeStrategy && (
               <section aria-label={`${activeStrategy.name} · 股池明细`} className="space-y-3">
-                <h2 className="text-sm font-semibold text-foreground">{activeStrategy.name} · 股池明细</h2>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <h2 className="text-sm font-semibold text-foreground">{activeStrategy.name} · 股池明细</h2>
+                  {/* WATCH-02/04 钻取区 header 控件 — 仅 VIP 渲染 (guest 零新控件, H3) */}
+                  {mode === 'vip' && (
+                    <div className="flex items-center gap-2">
+                      {/* 「只看自选」switch (WATCH-02): 双态 + aria + H9 fail-closed 禁用 + storage 持久化; 移动端 44px 触控目标 */}
+                      <div className="inline-flex max-md:h-11 max-md:w-11 max-md:items-center max-md:justify-center">
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={watchlistOnly}
+                          aria-label="只看自选"
+                          title={watchlist.isError ? '自选清单加载失败' : '只看自选'}
+                          disabled={watchlist.isPending || watchlist.isError}
+                          onClick={() => {
+                            const v = !watchlistOnly
+                            setWatchlistOnly(v)
+                            storage.poolWatchlistOnly.set(v)
+                          }}
+                          className={`relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors duration-200 disabled:opacity-50 ${watchlistOnly ? 'bg-accent' : 'bg-border'}`}
+                        >
+                          <span className={'inline-block h-3 w-3 transform rounded-full bg-white shadow transition-transform duration-200 ' + (watchlistOnly ? 'translate-x-3.5' : 'translate-x-0.5')} />
+                        </button>
+                      </div>
+                      {/* 「批量加自选」(WATCH-04): scope = 可见行; watchlistOnly 开启时隐藏 (可见行全在自选, D6) */}
+                      {!watchlistOnly && (
+                        <button
+                          type="button"
+                          onClick={handleBatchAdd}
+                          disabled={batchAdd.isPending}
+                          aria-label="批量加自选"
+                          title="批量加自选"
+                          className="inline-flex items-center gap-1.5 h-9 px-3 rounded-btn border border-border bg-surface text-xs font-medium text-secondary hover:text-accent hover:border-accent/50 transition-colors cursor-pointer disabled:opacity-50 max-md:min-h-11 max-md:min-w-11"
+                        >
+                          <Star className="h-3.5 w-3.5" aria-hidden />
+                          {batchAdd.isPending ? '添加中…' : '批量加自选'}
+                        </button>
+                      )}
+                      {batchMsg && <span role="status" className="text-xs text-accent">{batchMsg}</span>}
+                    </div>
+                  )}
+                </div>
                 {/* 竞价列诚实状态徽标 (UI-SPEC §3.3): 仅 VIP 且服务端透传 auction_columns 时渲染 (H3 双轨) */}
                 {data?.auction_columns && (
                   <AuctionColumnStatusBadge auctionColumns={data.auction_columns} asOf={asOf} />
