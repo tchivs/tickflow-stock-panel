@@ -462,3 +462,211 @@ def test_auction_backfill_unmatched_col_absent(env, monkeypatch):
     assert "auction_volume" in cols and "auction_amount" in cols
     assert "auction_virtual_price" in cols  # 600000.SH 提供 → 透传 (诚实缺列不 0 填)
     assert df.height == 2
+
+
+# ================================================================
+# Task 3 — POST /api/kline/auction/backfill 端点 (AQ-02 触发面)
+# ================================================================
+
+
+def _terminal_result():
+    return {
+        "requested": 1, "backfilled_symbols": 1, "rows": 1, "dates": 1,
+        "failed": 0, "failed_symbols": [], "origin": "backfill", "rpm": 30,
+    }
+
+
+def _make_auction_app(tmp_path):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.api import auction_backfill as auction_backfill_api
+
+    app = FastAPI()
+    app.include_router(auction_backfill_api.router)
+    app.state.repo = SimpleNamespace(store=SimpleNamespace(data_dir=tmp_path))
+    return app, TestClient(app)
+
+
+def _wait_job_terminal(job_id, timeout=5.0):
+    import time as _time
+
+    from app.services.pipeline_jobs import job_store
+
+    deadline = _time.time() + timeout
+    while _time.time() < deadline:
+        j = job_store.get(job_id)
+        if j is None or j["status"] in ("succeeded", "failed"):
+            return j
+        _time.sleep(0.02)
+    return job_store.get(job_id)
+
+
+def _wait_slot_free(timeout=5.0):
+    import time as _time
+
+    from app.services.pipeline_jobs import release_run_slot, try_acquire_run_slot
+
+    deadline = _time.time() + timeout
+    while _time.time() < deadline:
+        if try_acquire_run_slot():
+            release_run_slot()
+            return True
+        _time.sleep(0.02)
+    return False
+
+
+def test_auction_backfill_endpoint_singleflight_and_reuse(tmp_path, monkeypatch):
+    """AQ-02: 首次 started, 二次复用活跃 job (单飞, 镜像 pool_backfill 端点)。"""
+    from app.services import auction_backfill as auction_backfill_mod
+
+    app, client = _make_auction_app(tmp_path)
+    release = threading.Event()
+    started = threading.Event()
+
+    def fake_run(repo, **kwargs):
+        started.set()
+        release.wait(timeout=5)
+        return _terminal_result()
+
+    monkeypatch.setattr(auction_backfill_mod, "run_auction_backfill", fake_run)
+
+    with client:
+        r1 = client.post(
+            "/api/kline/auction/backfill", json={"symbols": ["000001.SZ"], "rpm": 30},
+        )
+        assert r1.status_code == 200
+        body1 = r1.json()
+        assert body1["status"] == "started"
+        job_id = body1["job_id"]
+        assert started.wait(timeout=5), "后台任务应已启动"
+
+        r2 = client.post(
+            "/api/kline/auction/backfill", json={"symbols": ["000001.SZ"], "rpm": 30},
+        )
+        assert r2.status_code == 200
+        assert r2.json() == {"status": "reused", "job_id": job_id}
+
+        release.set()
+        j = _wait_job_terminal(job_id)
+        assert j is not None and j["status"] == "succeeded"
+        assert j["result"]["origin"] == "backfill"
+        assert _wait_slot_free(), "重任务执行槽应已释放"
+
+
+def test_auction_backfill_endpoint_parameter_validation(tmp_path, monkeypatch):
+    """AQ-02 (Pitfall 4): 非法/无界参数一律 400 (防路径穿越与失控长任务)。"""
+    from app.services import auction_backfill as auction_backfill_mod
+
+    monkeypatch.setattr(
+        auction_backfill_mod, "run_auction_backfill", lambda repo, **kwargs: _terminal_result(),
+    )
+    app, client = _make_auction_app(tmp_path)
+
+    with client:
+        for body in (
+            {"start": "2026-8-4"},                          # 非 YYYY-MM-DD
+            {"start": "../../x"},                           # 路径穿越形
+            {"start": "2026-13-01"},                        # 日历非法 (regex 过, ISO 不过)
+            {"start": "2026-08-04", "end": "2026-08-01"},   # start > end
+            {"rpm": 0},
+            {"rpm": -1},
+            {"rpm": 61},
+            {"rpm": "30"},                                  # 非 int
+            {"rpm": True},                                  # bool 不算 int
+            {"symbols": ["000001"]},                        # 无后缀
+            {"symbols": ["000001.XX"]},                     # 非法后缀
+            {"symbols": ["../../x"]},                       # 路径穿越形
+            {"symbols": ["000001.SZ"] * 6001},              # 超上限
+        ):
+            resp = client.post("/api/kline/auction/backfill", json=body)
+            assert resp.status_code == 400, (
+                f"body 应 400, got {resp.status_code}"
+            )
+
+        # 合法请求 → 200 started, 后台跑完释放槽
+        resp = client.post(
+            "/api/kline/auction/backfill", json={"symbols": ["000001.SZ"], "rpm": 30},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "started"
+        j = _wait_job_terminal(resp.json()["job_id"])
+        assert j is not None and j["status"] == "succeeded"
+        assert _wait_slot_free()
+
+
+def test_auction_backfill_endpoint_runs_in_executor_and_succeeds(tmp_path, monkeypatch):
+    """AQ-02: 后台 executor 线程执行 (请求内零阻塞), job_store.succeed 被调。"""
+    from app.services import auction_backfill as auction_backfill_mod
+
+    app, client = _make_auction_app(tmp_path)
+    thread = {"id": threading.main_thread().ident}
+    started = threading.Event()
+    release = threading.Event()
+
+    def fake_run(repo, **kwargs):
+        thread["id"] = threading.get_ident()
+        started.set()
+        release.wait(timeout=5)
+        return _terminal_result()
+
+    monkeypatch.setattr(auction_backfill_mod, "run_auction_backfill", fake_run)
+
+    with client:
+        resp = client.post("/api/kline/auction/backfill", json={"symbols": ["000001.SZ"]})
+        assert resp.status_code == 200
+        job_id = resp.json()["job_id"]
+        assert started.wait(timeout=5)
+        release.set()
+        j = _wait_job_terminal(job_id)
+        assert j is not None and j["status"] == "succeeded"
+        assert j["result"]["origin"] == "backfill"
+        assert thread["id"] != threading.main_thread().ident, "回填应在线程池线程执行"
+        assert _wait_slot_free()
+
+
+def _main_src() -> str:
+    backend = Path(__file__).resolve().parents[1]
+    return (backend / "app" / "main.py").read_text(encoding="utf-8")
+
+
+def test_auction_backfill_router_registered_in_main():
+    """main.py 结构门: import 面 + include_router (auction_history 之后)。"""
+    src = _main_src()
+    assert "    auction_backfill,\n" in src
+    assert "app.include_router(auction_backfill.router)" in src
+    assert src.index("app.include_router(auction_backfill.router)") > src.index(
+        "app.include_router(auction_history.router)"
+    )
+
+
+def test_auction_backfill_guest_whitelist_untouched():
+    """guest 白名单零改动: 不放行 auction backfill (POST 非 guest 可读)。"""
+    src = _main_src()
+    block = src.split("_GUEST_READ_GET_PATHS = frozenset({", 1)[1].split("})", 1)[0]
+    assert "backfill" not in block
+
+
+def test_auction_backfill_endpoint_heavy_slot_fail_fast(tmp_path, monkeypatch):
+    """R7: 预占重任务槽 → POST → job fail 记录 '已有数据任务在运行' (Test 6 子串断言)。"""
+    from app.services import auction_backfill as auction_backfill_mod
+    from app.services.pipeline_jobs import release_run_slot, try_acquire_run_slot
+
+    monkeypatch.setattr(
+        auction_backfill_mod, "run_auction_backfill", lambda repo, **kwargs: _terminal_result(),
+    )
+    app, client = _make_auction_app(tmp_path)
+
+    assert try_acquire_run_slot(), "预占重任务执行槽"
+    try:
+        with client:
+            resp = client.post(
+                "/api/kline/auction/backfill", json={"symbols": ["000001.SZ"]},
+            )
+            assert resp.status_code == 200
+            job_id = resp.json()["job_id"]
+            j = _wait_job_terminal(job_id)
+            assert j is not None and j["status"] == "failed"
+            assert "已有数据任务在运行" in j["error"]
+    finally:
+        release_run_slot()
