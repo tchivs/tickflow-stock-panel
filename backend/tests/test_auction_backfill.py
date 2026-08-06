@@ -136,7 +136,7 @@ def test_auction_backfill_source_down_zero_writes(tmp_path, monkeypatch, env, st
         "failed": 0, "failed_symbols": [], "reason": "source_unavailable",
         "origin": "backfill", "rpm": 30,
     }
-    assert not (tmp / "kline_auction").exists()
+    assert not list((tmp / "kline_auction").glob("date=*")), "fail-closed 不得写任何分区"
 
 
 def test_auction_backfill_preflight_exception_zero_writes(env, monkeypatch):
@@ -155,7 +155,7 @@ def test_auction_backfill_preflight_exception_zero_writes(env, monkeypatch):
     assert result["reason"] == "boom preflight"
     assert result["backfilled_symbols"] == 0
     assert result["failed"] == 0
-    assert not (tmp / "kline_auction").exists()
+    assert not list((tmp / "kline_auction").glob("date=*")), "fail-closed 不得写任何分区"
 
 
 def test_auction_backfill_preflight_empty_zero_writes(env, monkeypatch):
@@ -171,7 +171,7 @@ def test_auction_backfill_preflight_empty_zero_writes(env, monkeypatch):
     assert result["requested"] == 0
     assert result["reason"] == "preflight_empty"
     assert result["backfilled_symbols"] == 0
-    assert not (tmp / "kline_auction").exists()
+    assert not list((tmp / "kline_auction").glob("date=*")), "fail-closed 不得写任何分区"
 
 
 def test_auction_backfill_only_writes_kline_daily_aligned_dates(env, monkeypatch):
@@ -318,3 +318,147 @@ def test_auction_backfill_one_symbol_per_request(env, monkeypatch):
     assert provider.calls, "应有请求"
     assert all(len(c) == 1 for c in provider.calls)
     assert len(provider.calls) == 3  # 预检 + 每 symbol 各 1 次
+
+
+# ================================================================
+# Task 2 — 限速 / 合作取消 / 写缝不变式经 job 回归 (AQ-04/05)
+# ================================================================
+
+
+def test_auction_backfill_rate_limit_pacing(env, monkeypatch, _neutralize_pacing):
+    """AQ-05: sleep_between_batches 每 symbol 调用且 (i, rpm) 参数透传 (W-3 模块级补丁)。"""
+    from app.services import auction_backfill
+
+    tmp, repo = env
+    calls = _neutralize_pacing
+    rows = {
+        s: _auction_rows(s, [datetime(2026, 8, 4, 9, 25)])
+        for s in ("000001.SZ", "600000.SH", "920146.BJ")
+    }
+    provider = FakeAuctionProvider(rows_by_symbol=rows)
+    _patch_live(monkeypatch, provider)
+
+    result = auction_backfill.run_auction_backfill(
+        repo, symbols=["000001.SZ", "600000.SH", "920146.BJ"], rpm=30,
+    )
+    assert calls == [(0, 30), (1, 30), (2, 30)]
+    assert result["rpm"] == 30
+
+    # 非默认 rpm 透传 (服务层信任参数; 1..60 由端点校验)
+    calls.clear()
+    auction_backfill.run_auction_backfill(repo, symbols=["000001.SZ"], rpm=10)
+    assert calls == [(0, 10)]
+
+
+def test_auction_backfill_cooperative_cancel(env, monkeypatch):
+    """AQ-05: job failed → 剩余 symbol 不请求 (预置 failed 立即停 + 循环中翻转镜像 pool_backfill)。"""
+    from app.services import auction_backfill
+    from app.services.pipeline_jobs import job_store
+
+    tmp, repo = env
+    rows = {
+        s: _auction_rows(s, [datetime(2026, 8, 4, 9, 25)])
+        for s in ("000001.SZ", "600000.SH", "920146.BJ")
+    }
+    provider = FakeAuctionProvider(rows_by_symbol=rows)
+    _patch_live(monkeypatch, provider)
+
+    # (a) 预置 failed job → 循环首迭代即停 (仅预检 1 次请求), 终态形状完整 (W-5 成功 8 键)
+    job_id, _ = job_store.create()
+    job_store.fail(job_id, "用户手动取消")
+    result = auction_backfill.run_auction_backfill(
+        repo, symbols=["000001.SZ", "600000.SH", "920146.BJ"], job_id=job_id,
+    )
+    assert result["requested"] == 3
+    assert result["failed"] == 0
+    assert result["backfilled_symbols"] == 0
+    assert len(provider.calls) < 3  # 只到预检
+    assert set(result) == {
+        "requested", "backfilled_symbols", "rows", "dates", "failed",
+        "failed_symbols", "origin", "rpm",
+    }
+
+    # (b) 循环中 job 翻转 failed → 首 symbol 后即停 (镜像 test_pool_backfill_cooperative_cancel)
+    provider2 = FakeAuctionProvider(rows_by_symbol=rows)
+    _patch_live(monkeypatch, provider2)
+    n = {"calls": 0}
+
+    def fake_get(job_id2):
+        n["calls"] += 1
+        if n["calls"] <= 1:
+            return {"status": "running"}
+        return {"status": "failed"}
+
+    monkeypatch.setattr(job_store, "get", fake_get)
+
+    result2 = auction_backfill.run_auction_backfill(
+        repo, symbols=["000001.SZ", "600000.SH", "920146.BJ"], job_id="job-test",
+    )
+    assert result2["requested"] == 3
+    assert result2["failed"] == 0
+    assert result2["backfilled_symbols"] == 1
+    assert len(provider2.calls) == 2  # 预检 + 首 symbol; 剩余 2 个不被请求
+
+
+def test_auction_backfill_atomic_no_tmp_left(env, monkeypatch):
+    """AQ-04: 写多 symbol 后 kline_auction 下无 *.tmp 残留 (镜像 test_atomic_write_leaves_no_tmp)。"""
+    from app.services import auction_backfill
+
+    tmp, repo = env
+    rows = {
+        s: _auction_rows(s, [datetime(2026, 8, 4, 9, 25)])
+        for s in ("000001.SZ", "600000.SH")
+    }
+    provider = FakeAuctionProvider(rows_by_symbol=rows)
+    _patch_live(monkeypatch, provider)
+
+    auction_backfill.run_auction_backfill(repo)
+
+    assert not list((tmp / "kline_auction").rglob("*.tmp"))
+    for part in (tmp / "kline_auction").glob("date=*/part.parquet"):
+        assert not part.with_name(part.name + ".tmp").exists()
+
+
+def test_auction_backfill_0930_excluded(env, monkeypatch):
+    """09:30+ 连续竞价 bar 不写 (写缝 555..565 谓词经 job 复验, 镜像 test_0930_excluded)。"""
+    from app.services import auction_backfill
+
+    tmp, repo = env
+    rows = _auction_rows("000001.SZ", [
+        datetime(2026, 8, 4, 9, 30),
+        datetime(2026, 8, 4, 9, 31),
+    ])
+    provider = FakeAuctionProvider(rows_by_symbol={"000001.SZ": rows})
+    _patch_live(monkeypatch, provider)
+
+    result = auction_backfill.run_auction_backfill(repo, symbols=["000001.SZ"])
+
+    assert result["rows"] == 0
+    assert result["backfilled_symbols"] == 1  # symbol 已处理, 窗口过滤 0 行 (诚实)
+    lake = tmp / "kline_auction"
+    if lake.exists():
+        assert not list(lake.glob("date=*"))
+
+
+def test_auction_backfill_unmatched_col_absent(env, monkeypatch):
+    """AQ-04: 上游无 unmatched 列 → 分区无 auction_unmatched_volume/amount, 绝无 0 填列。"""
+    from app.services import auction_backfill
+
+    tmp, repo = env
+    provider = FakeAuctionProvider(rows_by_symbol={
+        "000001.SZ": _auction_rows("000001.SZ", [datetime(2026, 8, 4, 9, 25)]),
+        "600000.SH": _auction_rows(
+            "600000.SH", [datetime(2026, 8, 4, 9, 25)], virtual_price=7.5,
+        ),
+    })
+    _patch_live(monkeypatch, provider)
+
+    auction_backfill.run_auction_backfill(repo, symbols=["000001.SZ", "600000.SH"])
+
+    df = pl.read_parquet(tmp / "kline_auction" / "date=2026-08-04" / "part.parquet")
+    cols = set(df.columns)
+    assert "auction_unmatched_volume" not in cols
+    assert "auction_unmatched_amount" not in cols
+    assert "auction_volume" in cols and "auction_amount" in cols
+    assert "auction_virtual_price" in cols  # 600000.SH 提供 → 透传 (诚实缺列不 0 填)
+    assert df.height == 2
