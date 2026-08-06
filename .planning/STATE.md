@@ -13,8 +13,8 @@ progress:
   total_plans: 0
   completed_plans: 0
   percent: 0
-current_phase: 
-current_phase_name: 
+current_phase: 24
+current_phase_name: 逐日全量存档 (Historical Archive)
 ---
 
 # Project State
