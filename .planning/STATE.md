@@ -5,16 +5,16 @@ milestone_name: 决策闭环与历史纵深 — planning
 current_phase: 31
 current_phase_name: Auction Recap
 status: executing
-stopped_at: Completed 31-02-PLAN.md
-last_updated: "2026-08-06T15:16:41.435Z"
+stopped_at: Completed 31-03-PLAN.md
+last_updated: "2026-08-06T15:34:36.492Z"
 last_activity: 2026-08-06
 last_activity_desc: "31-02 complete (REV-04: recap_market_stream 面板 delta 事件序 + 可选 AI 点评 + 调度默认 15:40)"
 progress:
   total_phases: 8
   completed_phases: 0
   total_plans: 16
-  completed_plans: 11
-  percent: 69
+  completed_plans: 12
+  percent: 0
 ---
 
 # Project State
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-08-06)
 ## Current Position
 
 Phase: 31 — 竞价复盘 (Auction Recap)
-Plan: 2 of 3
+Plan: 3 of 3
 Status: Ready to execute
 Last activity: 2026-08-06 — 31-02 complete (REV-04: recap_market_stream 面板 delta 事件序 + 可选 AI 点评 + 调度默认 15:40)
 
@@ -84,8 +84,8 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-08-06T15:16:41.426Z
-Stopped at: Completed 31-02-PLAN.md
+Last session: 2026-08-06T15:34:27.037Z
+Stopped at: Completed 31-03-PLAN.md
 Resume file: None
 
 ## Operator Next Steps
@@ -154,6 +154,8 @@ Resume file: None
 - [Phase ?]: recap_market_stream 面板 delta 事件序锁死 (meta → AI delta* → 面板 delta → done); 面板经 delta 机制三跳全收零改动; 全缺席退化纯 AI (验收 5 回归锁); AI 失败不发面板 (R8)
 - [Phase ?]: 可选 AI 点评默认 OFF: preferences recap_auction_commentary + PUT/GET 端点 + 护栏行局部 system 串 (_SYSTEM_PROMPT 不动) + 切片与面板同 dict 构造性单源
 - [Phase ?]: 调度默认 15:40 (竞价同步 15:30 + 股池持久化 15:35 后三块全亮); 已存偏好保留; 15:00 下限不动; Review.tsx:105 兜底字面量同步
+- [Phase ?]: REV-05 guest DTO 锁死: 身份键 (symbol/name/code) MASKED_IDENTITY + 敏感值键 (auction_*/open_gap/量比) 剥离, 聚合统计与状态标注保留, probe 剥离, guest 视图无 markdown; 空态与 vip 同形 (available:false + blocks:{})
+- [Phase ?]: 31-03 守卫白名单以实际 shipped imports 为准: 服务 import app.market_time + app.services.preferences (懒 import get_pipeline_schedule) + auction_columns/probe/validation/premarket_snapshot/screener — 全部落入 REV 白名单; 禁 import token 收窄 auction_sync|pool_snapshot|pool_backfill, 禁调用扩展 save_report
 
 ### v1.3 Decisions (carried)
 
@@ -209,3 +211,4 @@ Resume file: None
 | Phase 30 P2 | 24 | 3 tasks | 8 files |
 | Phase 30-premarket-monitor P3 | 36 | 2 tasks | 5 files |
 | Phase 31 P2 | 9 | 3 tasks | 5 files |
+| Phase 31 P3 | 20 | 3 tasks | 5 files |
