@@ -240,7 +240,7 @@ def _symbol_keys(row: dict, config: ExtConfig) -> list[str]:
     return keys
 
 
-def _dimension_rank(rows: list[dict], repo, kind: str, limit: int = 5, level: int | None = None) -> dict:
+def _dimension_rank(rows: list[dict], repo, kind: str, limit: int = 5, level: int | None = None, as_of: str | None = None) -> dict:
     if not rows:
         return {"leading": [], "lagging": []}
 
@@ -258,7 +258,20 @@ def _dimension_rank(rows: list[dict], repo, kind: str, limit: int = 5, level: in
         field = _dimension_field(config, kind)
         if not field:
             continue
-        for ext_row in _read_ext_rows(repo.store.data_dir, config, field):
+        ext_rows = _read_ext_rows(repo.store.data_dir, config, field)
+        # CONCEPT-06: as_of 非空 → 该维度改读 D 日归档分区 (kind==concept→gn_ths,
+        # industry→hy_ths)。分区缺失/rows 空 → 诚实降级为空, 绝不混用当前 ext。
+        # 局部 import 防循环依赖 (concept_history 模块级 import 了本模块 _dimension_field)。
+        if as_of is not None:
+            from app.services import concept_history
+            as_of_str = as_of if isinstance(as_of, str) else as_of.isoformat()
+            hist_kind = "gn_ths" if kind == "concept" else "hy_ths"
+            part = concept_history.read_partition(repo.store.data_dir, hist_kind, as_of_str)
+            if part and part.get("rows"):
+                ext_rows = part["rows"]
+            else:
+                ext_rows = []
+        for ext_row in ext_rows:
             quote = None
             for key in _symbol_keys(ext_row, config):
                 quote = quote_map.get(key)
@@ -500,8 +513,10 @@ def build_market_overview(
     avg_vol_ratio = sum(vol_ratios) / len(vol_ratios) if vol_ratios else 1
     high_vol_ratio = sum(1 for v in vol_ratios if v >= 1.5)
 
-    concept_rank = _dimension_rank(rows, repo, "concept")
-    industry_rank = _dimension_rank(rows, repo, "industry", level=2)
+    # CONCEPT-06: 显式 as_of (历史复盘) 时把 as_of 传给 _dimension_rank → D 日分区聚合;
+    # as_of=None (最新视图) 时参数为 None → 行为与现状逐位一致。
+    concept_rank = _dimension_rank(rows, repo, "concept", as_of=as_of if explicit_as_of else None)
+    industry_rank = _dimension_rank(rows, repo, "industry", level=2, as_of=as_of if explicit_as_of else None)
 
     strong_diff_pct = (strong_up - strong_down) / total * 100 if total else 0
     high_vol_pct = high_vol_ratio / total * 100 if total else 0
