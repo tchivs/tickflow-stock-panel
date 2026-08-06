@@ -450,3 +450,179 @@ def test_range_no_warmup_leading_null_honest(repo_env):
     assert ranged_df.filter(pl.col("date") == date(2026, 7, 31)).select(
         pl.col("auction_volume_ratio").null_count()
     ).item() == 2
+
+
+# ================================================================
+# Task 3 — 边界健壮性: 空分区 / 坏目录名 / fan-out 去重 / 按标的缺席 / 派生列
+# ================================================================
+
+
+def test_range_bad_dir_and_empty_partition_skipped(repo_env):
+    """date=bad 目录 + 空分区 (0 行) → 跳过, 不进 enabled_dates, 其余分区正常注入。"""
+    from app.services.auction_columns import attach_auction_columns_range
+
+    repo, data_dir = repo_env
+    panel = _multi_day_panel(start=date(2026, 7, 29), days=3)
+
+    # 坏目录名: date=bad (解析失败跳过, T-29-01-01)
+    bad = data_dir / "kline_auction" / "date=bad"
+    bad.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame({"symbol": ["X"]}).write_parquet(bad / "part.parquet")
+
+    # 空分区: date=2026-07-29 (0 行, 镜像单日版 :119-121 跳过)
+    empty = data_dir / "kline_auction" / "date=2026-07-29"
+    empty.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame(schema={
+        "symbol": pl.Utf8, "datetime": pl.Datetime, "auction_volume": pl.Float64,
+        "auction_amount": pl.Float64,
+    }).write_parquet(empty / "part.parquet")
+
+    # 正常分区: date=2026-07-30
+    _write_auction_partition(
+        data_dir, date(2026, 7, 30),
+        _auction_rows(date(2026, 7, 30), {"000001": (8100.0, 42500.0), "600000": (9100.0, 48500.0)}),
+    )
+
+    injected, enabled_dates = attach_auction_columns_range(
+        panel, start=date(2026, 7, 29), end=date(2026, 7, 31), repo=repo,
+    )
+
+    assert enabled_dates == [date(2026, 7, 30)]  # bad + empty 均不在 enabled_dates
+    assert injected.height == panel.height
+    d0730 = injected.filter(pl.col("date") == date(2026, 7, 30))
+    assert d0730.select("auction_volume").null_count().item() == 0  # 正常分区照常注入
+
+
+def test_range_fanout_dedup_keeps_last_row(repo_env):
+    """单日分区 3 行同 symbol 不同窗口 (09:16/09:20/09:25) → 注入后单行, 值 = 末行 (09:25)。"""
+    from app.services.auction_columns import attach_auction_columns_range
+
+    repo, data_dir = repo_env
+    panel = _multi_day_panel(start=date(2026, 7, 29), days=3)
+
+    # 每窗口行带不同值 → 可断言 keep="last" 取 09:25 (T-29-01-04)
+    rows = pl.DataFrame({
+        "symbol": ["000001", "000001", "000001", "600000"],
+        "datetime": [
+            datetime(2026, 7, 30, 9, 16),
+            datetime(2026, 7, 30, 9, 20),
+            datetime(2026, 7, 30, 9, 25),
+            datetime(2026, 7, 30, 9, 25),
+        ],
+        "auction_volume": [100.0, 200.0, 300.0, 400.0],
+        "auction_amount": [1000.0, 2000.0, 3000.0, 4000.0],
+    })
+    _write_auction_partition(data_dir, date(2026, 7, 30), rows)
+
+    injected, enabled_dates = attach_auction_columns_range(
+        panel, start=date(2026, 7, 29), end=date(2026, 7, 31), repo=repo,
+    )
+
+    assert enabled_dates == [date(2026, 7, 30)]
+    assert injected.height == panel.height  # 行基数不变
+    d0730 = injected.filter(pl.col("date") == date(2026, 7, 30))
+    assert d0730.height == 2  # 每 symbol 仅 1 行
+    a = d0730.filter(pl.col("symbol") == "000001")
+    assert a.height == 1
+    assert a.select("auction_volume").item() == 300.0   # 09:25 最终撮合
+    assert a.select("auction_amount").item() == 3000.0
+    b = d0730.filter(pl.col("symbol") == "600000")
+    assert b.select("auction_volume").item() == 400.0
+
+
+def test_range_per_symbol_absence_honest_null(repo_env):
+    """分区含 A 无 B → B 行 auction_volume/amount/ratio 全 null (诚实按标的缺席)。"""
+    from app.services.auction_columns import attach_auction_columns_range
+
+    repo, data_dir = repo_env
+    panel = _multi_day_panel(start=date(2026, 7, 29), days=3)
+
+    _write_auction_partition(
+        data_dir, date(2026, 7, 30),
+        _auction_rows(date(2026, 7, 30), {"000001": (8100.0, 42500.0)}),  # 仅 A
+    )
+
+    injected, enabled_dates = attach_auction_columns_range(
+        panel, start=date(2026, 7, 29), end=date(2026, 7, 31), repo=repo,
+    )
+
+    assert enabled_dates == [date(2026, 7, 30)]
+    d0730 = injected.filter(pl.col("date") == date(2026, 7, 30))
+    b = d0730.filter(pl.col("symbol") == "600000")
+    assert b.height == 1
+    for col in ("auction_volume", "auction_amount", "auction_volume_ratio"):
+        assert b.select(pl.col(col).null_count()).item() == 1  # B 缺席 → null
+    a = d0730.filter(pl.col("symbol") == "000001")
+    assert a.select("auction_volume").item() == 8100.0  # A 正常注入 (非整日 null-as-present)
+
+
+def test_range_derived_unmatched_amount_injected_when_inputs_present(repo_env):
+    """分区含委托量输入列 → 注入 auction_unmatched_amount == 量×价; 无输入列 → 不注入。"""
+    from app.services.auction_columns import attach_auction_columns_range
+
+    repo, data_dir = repo_env
+    panel = _multi_day_panel(start=date(2026, 7, 29), days=3)
+
+    # 6 列新分区 (4 真实 + 2 委托量输入): 5000 股 × 12.5 元 = 62500 元
+    rows = pl.DataFrame({
+        "symbol": ["000001", "600000"],
+        "datetime": [datetime(2026, 7, 30, 9, 25), datetime(2026, 7, 30, 9, 25)],
+        "auction_volume": [8100.0, 9100.0],
+        "auction_amount": [42500.0, 48500.0],
+        "auction_unmatched_volume": [5000.0, 6000.0],
+        "auction_virtual_price": [12.5, 13.0],
+    })
+    _write_auction_partition(data_dir, date(2026, 7, 30), rows)
+
+    injected, _ = attach_auction_columns_range(
+        panel, start=date(2026, 7, 29), end=date(2026, 7, 31), repo=repo,
+    )
+    assert "auction_unmatched_amount" in injected.columns
+    a = injected.filter(
+        (pl.col("symbol") == "000001") & (pl.col("date") == date(2026, 7, 30))
+    )
+    assert a.select("auction_unmatched_amount").item() == pytest.approx(5000.0 * 12.5, rel=1e-9)
+
+    # 4 列旧分区 (无输入列) → 不注入派生列 (诚实缺列, 绝不 0 填)
+    _write_auction_partition(
+        data_dir, date(2026, 7, 31),
+        _auction_rows(date(2026, 7, 31), {"000001": (8200.0, 43000.0), "600000": (9200.0, 49000.0)}),
+    )
+    injected2, _ = attach_auction_columns_range(
+        panel, start=date(2026, 7, 29), end=date(2026, 7, 31), repo=repo,
+    )
+    assert "auction_unmatched_amount" in injected2.columns  # 07-30 有输入列分区, 列仍在
+    # 07-31 该行派生列为 null (诚实按日无输入), 而非 0 填
+    b0731 = injected2.filter(
+        (pl.col("symbol") == "000001") & (pl.col("date") == date(2026, 7, 31))
+    )
+    assert b0731.select(pl.col("auction_unmatched_amount").null_count()).item() == 1
+
+
+def test_range_no_warmup_no_crash(repo_env):
+    """df 从 start 起 (无前导行) → 前导日 ratio null, 无异常 (RESEARCH §2.1.4 降级)。"""
+    from app.services.auction_columns import attach_auction_columns_range
+
+    repo, data_dir = repo_env
+    panel = _multi_day_panel(start=date(2026, 7, 29), days=3)  # 07-29 无前导
+    _write_auction_partition(
+        data_dir, date(2026, 7, 29),
+        _auction_rows(date(2026, 7, 29), {"000001": (8000.0, 42000.0), "600000": (9000.0, 48000.0)}),
+    )
+    _write_auction_partition(
+        data_dir, date(2026, 7, 30),
+        _auction_rows(date(2026, 7, 30), {"000001": (8100.0, 42500.0), "600000": (9100.0, 48500.0)}),
+    )
+
+    injected, enabled_dates = attach_auction_columns_range(
+        panel, start=date(2026, 7, 29), end=date(2026, 7, 31), repo=repo,
+    )
+
+    assert enabled_dates == [date(2026, 7, 29), date(2026, 7, 30)]
+    d0729 = injected.filter(pl.col("date") == date(2026, 7, 29))
+    assert d0729.select(pl.col("auction_volume_ratio").null_count()).item() == 2  # 组内首行 null
+    d0730 = injected.filter(pl.col("date") == date(2026, 7, 30))
+    # 07-30: 1 前导 (07-29) → 有真实比率 (hand-computed); 07-31 无分区 → ratio null
+    assert d0730.select(pl.col("auction_volume_ratio").null_count()).item() == 0
+    a0730 = d0730.filter(pl.col("symbol") == "000001")
+    assert a0730.select("auction_volume_ratio").item() == pytest.approx(8100.0 / 100000.0, rel=1e-9)
