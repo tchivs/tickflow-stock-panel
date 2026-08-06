@@ -2,19 +2,19 @@
 gsd_state_version: 1.0
 milestone: v2.2
 milestone_name: 决策闭环与历史纵深 — planning
-status: planning
-stopped_at: Milestone v2.2 research synthesized; REQUIREMENTS + ROADMAP defined
-last_updated: "2026-08-06T09:20:00.000Z"
+current_phase: 28
+current_phase_name: concept-pit
+status: executing
+stopped_at: Completed 28-01-PLAN.md (CONCEPT-01/02/03/05/07 backend core)
+last_updated: "2026-08-06T11:19:55.751Z"
 last_activity: 2026-08-06
-last_activity_desc: Milestone v2.2 requirements defined (25 reqs, Phases 28-31)
+last_activity_desc: Phase 28 execution started
 progress:
-  total_phases: 0
+  total_phases: 8
   completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
+  total_plans: 4
+  completed_plans: 1
   percent: 0
-current_phase: null
-current_phase_name: null
 ---
 
 # Project State
@@ -24,14 +24,14 @@ current_phase_name: null
 See: .planning/PROJECT.md (updated 2026-08-06)
 
 **Core value:** An investor can turn reliable market data and their own holdings into an auditable, actionable research and monitoring workflow without operating multiple disconnected tools.
-**Current focus:** Milestone v2.2 — 决策闭环与历史纵深
+**Current focus:** Phase 28 — concept-pit
 
 ## Current Position
 
-Phase: Milestone v2.2 planning (requirements + roadmap defined)
-Plan: —
-Status: Planning — research complete, awaiting Phase 28 research/plans
-Last activity: 2026-08-06 — Milestone v2.2 requirements defined (25 reqs: 21 P1 + 4 P2, Phases 28-31)
+Phase: 28 (concept-pit) — EXECUTING
+Plan: 2 of 3
+Status: Ready to execute
+Last activity: 2026-08-06 — Phase 28 execution started
 
 ## v1.3 Phase Summary (shipped 2026-08-04)
 
@@ -84,8 +84,8 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-08-06T08:27:24.050Z
-Stopped at: Completed 27-02-PLAN.md (frontend PM-04 premarket view)
+Last session: 2026-08-06T11:19:55.743Z
+Stopped at: Completed 28-01-PLAN.md (CONCEPT-01/02/03/05/07 backend core)
 Resume file: None
 
 ## Operator Next Steps
@@ -121,6 +121,9 @@ Resume file: None
 - [Phase ?]: Phase 27 / P2 (27-02): QK.poolPremarket 不入 SSE_INVALIDATE_PREFIXES (定时快照非实时流) + staleTime 30s 对齐服务端 probe 30s TTL
 - [Phase ?]: Phase 27 / P2 (27-02): AuctionColumnStatusBadge degraded prop 置于 hasReal 之前 — 服务端冻结 probe 判定驱动诚实警告分支, 绝不渲染「竞价数据可用」
 - [Phase ?]: Phase 27 / P2 (27-02): showPremarketEmpty 时零池/策略网格短路 (盘前空态优先, 不混排昨日 hub 流) — Rule 3 修正
+- [Phase ?]: Phase 28 P1 (CONCEPT-01..07 backend core): 归档源 = 当前 ext 快照行 (离线零网络, 与平台展示一致); capture_from_upstream 仅 OQ-3 探针独立测量上游
+- [Phase ?]: Phase 28 P1: concept_history 模块 docstring 用「运行时缓存」指代 strategy_cache, 避免字面量 (E3 子串守卫绿); EOD 钩子函数内局部 import, 测试 patch app.services.concept_history.capture 模块对象
+- [Phase ?]: Phase 28 P1: build_pool_hub (实时) 不传 as_of → 恒 current_snapshot; 仅 build_pool_hub_snapshot 透传 as_of (as_of_snapshot 时追加 concept_effective_date/captured_at)
 
 ### v1.3 Decisions (carried)
 
@@ -164,3 +167,4 @@ Resume file: None
 | Phase 26 P2 | 38 | 2 tasks | 7 files |
 | Phase 27-premarket-pool P1 | 11 | 3 tasks | 8 files |
 | Phase 27 P2 | 35 | 3 tasks | 6 files |
+| Phase 28 P1 | 41 | 3 tasks | 6 files |

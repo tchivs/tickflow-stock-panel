@@ -138,11 +138,11 @@ Plans:
 
 **Research flag**: 需要 `--research-phase` — 上游 `concepts.json` 更新节奏（OQ-3 一周逐日抓取 diff 探针）、EOD 归档是否自动刷新当前 ext（OQ-1，决策：否，保持手动）、行业归档范围（OQ-2，决策：概念+行业一起建）.
 
-**Plans**: 3 plans
+**Plans**: 1/3 plans executed
 
 Plans:
 
-- [ ] 28-01-PLAN.md — 后端核心: `concept_history.py` (capture/read_partition/manifest/list/sha256 + OQ-3 probe 脚本) + `_pool_eod_persist` EOD 钩子 + `_build_concept_map` as_of 三态归属状态机 + CONCEPT-05 AST 守卫 + 回归锁
+- [x] 28-01-PLAN.md — 后端核心: `concept_history.py` (capture/read_partition/manifest/list/sha256 + OQ-3 probe 脚本) + `_pool_eod_persist` EOD 钩子 + `_build_concept_map` as_of 三态归属状态机 + CONCEPT-05 AST 守卫 + 回归锁
 - [ ] 28-02-PLAN.md — 前端: CONCEPT-04 概念归属徽标/工具提示 (`current_snapshot`/`unavailable` vs `as_of_snapshot` + 生效日期) + e2e 三态 + docs (Watchlist.tsx 零触碰)
 - [ ] 28-03-PLAN.md — CONCEPT-06 共享 seam: `_dimension_rank`/`_load_concept_map_df` as_of 接线 (总览/RPS) + `/api/rps/rotation?as_of=` + CONCEPT-07 API 外露复验
 
@@ -202,4 +202,3 @@ Phases execute in numeric order: 28 → 29 → 30 → 31
 
 ---
 *Last updated: 2026-08-06 — v2.2 milestone started; research synthesized (4 domains → 4 phases); requirements defined*
-
