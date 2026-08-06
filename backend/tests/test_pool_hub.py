@@ -948,6 +948,28 @@ def test_pool_api_no_compute_trigger():
         assert token not in api_src, f"pool.py 出现了计算触发调用: {token}"
 
 
+def test_screener_run_all_cache_write_is_latest_gated():
+    """D6 回归锁 (HIST-04): run_all 段内 strategy_cache.write_cache 受 latest-date 闸门约束。
+
+    手动 run_all 对历史 as_of 写 cache 会把 single-as_of 最新指针改成过去日期,
+    /api/pool/hub 回显陈旧日 (ARCHIVE R1) — D6 修复用 ``if is_latest:`` 包住
+    write_cache, 快照无条件落盘且 origin 按 eod/backfill 区分。
+    作用域限定 ``def run_all`` 函数段 (W-1), 避开 ``_update_single_strategy_cache``
+    内 (run_all 之外) 的另一个 ``strategy_cache.write_cache`` 调用点。
+    """
+    backend = Path(__file__).resolve().parents[1]
+    src = (backend / "app" / "api" / "screener.py").read_text(encoding="utf-8")
+    run_all_src = src[src.index("def run_all"):]
+    assert "if is_latest:" in run_all_src, "run_all 缺少 is_latest 闸门 (D6 修复回退?)"
+    # write_cache 必须被 latest_date/is_latest 闸门先约束 (作用域限定 run_all 段)
+    assert run_all_src.index("is_latest") < run_all_src.index("strategy_cache.write_cache"), (
+        "run_all 的 write_cache 未被 is_latest 闸门包住 (D6 回退)"
+    )
+    assert run_all_src.index("latest_date") < run_all_src.index("strategy_cache.write_cache"), (
+        "run_all 的 write_cache 未先计算 latest_date (D6 回退)"
+    )
+
+
 def _all_keys(obj):
     if isinstance(obj, dict):
         for k, v in obj.items():

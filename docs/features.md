@@ -27,6 +27,8 @@
 
 每次盘后 run_all 的结果以**冻结式点快照**落盘 `screener_results/date={as_of}/`(携带计算时刻与策略版本指纹),可经日期列表(`GET /api/pool/dates`)与按日取池(`GET /api/pool/history?as_of=`)浏览历史股池。快照由盘后 EOD job 自动预生成,无数据日显示诚实空态;概念板块为当前归属标注(`current_snapshot`),非当日快照归属。
 
+历史缺口(有 enriched 数据但缺快照的交易日)可由运营经 `POST /api/pipeline/backfill` **一键批量回填**——后台 job 逐日重算并落快照,进度经 `/api/pipeline/jobs/{id}` 可见;`GET /api/pool/dates` 同时返回 `backfill_needed` 缺口计数与 `backfill_examples` 示例日,回填完成后缺口归零。每份快照带 **`snapshot_origin`** 来源标注(`eod`=盘后归档 / `backfill`=事后回填重算),历史视图经 `GET /api/pool/history` 透传;旧快照缺该字段按 `eod` 读,provenance 诚实不伪造。
+
 ---
 
 ## 📊 指标流水线(Indicators)
