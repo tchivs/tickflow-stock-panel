@@ -1,49 +1,50 @@
-# Requirements: AthenaQuant v2.0 竞价深度与历史股池
+# Requirements: AthenaQuant v2.1 历史深度与自选联动
 
-**Defined:** 2026-08-04
+**Defined:** 2026-08-05
 **Core Value:** An investor can turn reliable market data and their own holdings into an auditable, actionable research and monitoring workflow without operating multiple disconnected tools.
 
-## v2 Requirements
+## v2.1 Requirements
 
-Requirements for the v2.0 milestone. Each maps to a roadmap phase. Research basis: `.planning/research/SUMMARY.md` (data-first ordering; zero new runtime deps; honest-label + frozen point-snapshot boundaries).
+Requirements for the v2.1 milestone. Each maps to a roadmap phase. Research basis: `.planning/research/v2.1-depth/SUMMARY.md` (data-first ordering; zero new runtime deps; honest provenance + POOL-03 zero-execution + strategy_cache single-as_of integrity as cross-cutting guards).
 
-### 竞价数据层 (Auction Data)
+### 逐日全量存档 (Historical Archive) — Phase 24
 
-- [x] **DATA-04**: Researcher can persist true 集合竞价 match-data columns — 竞价量 (`auction_volume`) and 竞价金额 (`auction_amount`), the real 09:15–09:25 call-auction fill — as governed enriched columns behind the auction probe gate; when probe is not `available`, columns are absent and the feature fails closed to derived `open_gap` (never a silent fill). (completed 2026-08-05)
-- [x] **DATA-05**: Auction match data lands in a `kline_auction/date={d}/` hive-partitioned Parquet lake via an `auction_sync` service, gated by the probe verdict; the lake stores only real auction-window rows and the 09:30 continuous bar is structurally excluded. (completed 2026-08-05)
-- [x] **DATA-06**: Researcher can view a derived 竞价未匹配金额 (unmatched-order proxy) column when delegation volume input is available; when unavailable, the strategy falls back to volume-ratio + amount strength (P2). (completed 2026-08-05)
+- [ ] **HIST-01**: Operator can backfill missing historical pool snapshots with a user-triggered batch job that replays `run_all_with_hits` per historical as_of into `screener_results/date={as_of}/` and **never** writes `strategy_cache.json` (the single-as_of pointer must not be polluted by backfill); the job is cancelable, bounded (recent-N or date range), and amortizes warmup in ascending date order.
+- [ ] **HIST-02**: Every snapshot records honest provenance — a `snapshot_origin` field distinguishing `eod` (scheduled post-close) from `backfill` (recomputed later); existing snapshots without the field read as `eod` (backward compatible).
+- [ ] **HIST-03**: Archive completeness is visible — a `backfill_needed` gap signal surfaces dates with no snapshot for the selected trading-day range (API + DateNavigator empty-state), and backfill progress is observable (not silent).
+- [ ] **HIST-04**: Backfill adheres to platform guards — POOL-03 zero execution authority (GET-only surface), no first-request blocking replay, no silent disk writes outside the job's explicit scope; the manual `run_all` historical-as_of cache-pointer pollution (`api/screener.py` writing `strategy_cache` for historical dates) is also fixed.
 
-### 竞价策略族 (Auction Strategy Family)
+### 自选股联动 (Watchlist Sync) — Phase 25
 
-- [x] **STRAT-04**: Researcher can run 极速抢筹 (rapid-bid capture) — first-principles factors: auction volume ratio + auction amount + pre-open gain sweet-spot (2.8%–3.5%, >7% risk band) — as a builtin strategy in `strategy/builtin/` with honest naming. (completed 2026-08-05)
-- [x] **STRAT-05**: Researcher can run 竞价阿尔法 (auction alpha) — composite of `open_gap` + auction volume/amount strength — as a builtin strategy, probe-gated to real auction columns when available, else failing closed to derived factors. (completed 2026-08-05)
-- [x] **STRAT-06**: Researcher can run 金色两点半 (14:30 tail-window) — honestly classified as a 尾盘/隔夜 strategy (T-day gain 3%–5% + tail-window minute confirmation, next-day hold), never mixed into the auction window. (completed 2026-08-05)
-- [x] **STRAT-07**: Researcher can run 竞价全面策略 (auction all-factor composite) combining the full factor set (P2).
-- [x] **STRAT-08**: Researcher can run T+1闪电 — auction-buy signal with next-morning minute-K sell confirmation (P2).
-- [x] **STRAT-09**: Researcher can run 盘中确认 (intraday confirmation) — strategies re-evaluate during 09:30–10:00 on minute-K frames truncated to `evaluation_time`, never lookahead (P2).
+- [ ] **WATCH-01**: In the pool drill-down (VIP mode), each stock row shows a watchlist star that toggles membership via the existing `/api/watchlist` CRUD; guest rendering is pixel-identical to v2.0 (no watch controls, no watchlist queries issued for guests).
+- [ ] **WATCH-02**: A "只看自选" filter switch narrows the pool to watchlisted rows (VIP); the strategy-card `total` remains authoritative (filtering never alters totals), applies identically to latest and historical as_of views, and shows an honest empty state when no watchlisted stocks match.
+- [ ] **WATCH-03**: Watchlist membership is consistent across pages via the shared `QK.watchlist` cache; the join key is the fully-suffixed `symbol` (e.g. `603221.SH`) exact match.
+- [ ] **WATCH-04** (P2): Operator can batch-add all visible rows to the watchlist (scope = rows within the current display limit), reusing the existing batch-add endpoint.
 
-### 股池 Hub 日期导航 (Pool Hub Date Navigation)
+### 历史竞价图 + 派生列复活 (Auction History Chart) — Phase 26
 
-- [x] **POOL-04**: User can browse historical pools per trading day via 冻结式点快照 (frozen point snapshot) — `as_of` + `computed_at` + strategy-version fingerprint persisted to `screener_results/date={as_of}/`, never the `today_ever_rows` union, never backfilled/appended.
-- [x] **POOL-05**: User can list available pool dates (`GET /api/pool/dates`) and fetch a pool at `as_of=YYYY-MM-DD` through an independent read-only endpoint; the existing single-as_of contract of `GET /api/pool/hub` is preserved and unmodified.
-- [x] **POOL-06**: Platform persists pools end-of-day via a scheduled post-close `run_all` job so historical browsing is self-sufficient (no first-request blocking replay).
+- [ ] **CHART-01**: Researcher can query per-symbol historical auction aggregates via a read-only `GET /api/kline/auction/history?symbol=&days=` endpoint — last-row (09:25 final call) semantics per trading day; empty lake returns honest 200 `available: false` (never 404); POOL-03-style GET-only, zero execution.
+- [ ] **CHART-02**: User can view the auction history chart in the stock drill-down popup — ECharts dual-axis (柱=竞价量, 线=竞价金额), honest empty state + 09:15–09:25 window annotation, zero new npm dependencies, no changes to the user-pending `Watchlist.tsx`.
+- [ ] **CHART-03**: The auction lake ingestion path preserves the delegation-volume input columns (canonical schema widened from 4 required to 4 required + 2 optional `auction_unmatched_volume`/`auction_virtual_price`), activating the existing derived `auction_unmatched_amount` branch so the Phase 23 "派生·虚拟成交" UI group becomes live data rather than absent columns; schema/UI maintain the "估算" annotation and stay backward compatible.
 
-### 前端 (Frontend)
+### 盘前股池 (Premarket Pool) — Phase 27
 
-- [x] **FRONT-01**: User can navigate pools by trading day with a DateNavigator (‹ › stepping + date list), as_of re-query, non-trading-day disabled state, and honest empty/status display for days without snapshots.
-- [x] **FRONT-02**: User can view auction columns (竞价量/金额, real vs derived 虚拟成交 separated) in the pool drill-down; pre-open/empty states show probe/window status honestly (P2).
+- [ ] **PM-01**: A scheduled premarket job (09:26, after the 09:25 call-auction fix) generates a same-day premarket pool preview via `run_all_with_hits(as_of=T)` into an independent store (`premarket_results/date={T}/`) — it never writes `strategy_cache`/`screener_results` (EOD semantics untouched).
+- [ ] **PM-02**: The premarket data frame is complete for strategy evaluation — `open_gap` is computed for the today frame (single implementation, no drift from the EOD Pass 4 source); absent real auction columns fail closed to derived factors; ex-dividend-day `open_gap` caliber (raw prev-close vs adjusted) is covered by fixtures.
+- [ ] **PM-03**: Premarket auction-column semantics are probe-honest — when today's probe is `available`, real auction columns are injected at read time; otherwise they are absent and the UI shows a `degraded`/window status (never implying real auction data exists premarket).
+- [ ] **PM-04**: The frontend presents the premarket view distinctly from EOD — window annotation (pre-open preview vs post-close archive), honest empty state, and DateNavigator continues to list EOD snapshot dates (premarket preview never masquerades as an archived day).
 
-## Out of Scope
+## Out of Scope (v2.1)
 
 | Feature | Reason |
 |---------|--------|
-| Automated live broker execution | Platform-wide boundary since v1.0; pool feature carries zero execution authority (POOL-03) |
-| Replicating proprietary strategy recipes verbatim (陈星量化 etc.) | No public spec; strategies are first-principles and honestly named |
-| Client-side guest masking | Bypassable; masking is server-authoritative at the DTO boundary (GUEST-01) |
-| Adding a third strategy registration track | Causes drift; builtin dir + preset dedup only (STRAT-03) |
+| 虚拟成交实时列 (CHART-04) — intraday/premarket live refresh | Blocked on external real-time auction source; [INFERENCE] unverifiable in this environment. Formal defer; gate = custom auction source probe returning in-window virtual unmatched/reference price rows |
+| 历史撮合价格曲线 (intraday auction price curve) | Lake stores no price column (`kline_auction` canonical = 4 cols); requires upstream price rows |
+| 盘前真实竞价列注入 (PM tier-2) | Gated on today-probe `available` with a real-time source; tier-1 (derived open_gap preview) is the deliverable |
+| 历史自选快照 (historical watchlist membership) | Watchlist is not a time series; stars/filter annotate current membership only |
+| Automated live broker execution | Platform-wide boundary since v1.0; all `/api/pool/*` + new endpoints stay GET-only zero execution (POOL-03) |
 | External database or message queue | Architecture constraint since v1.0 |
-| Storing full intraday tick data | Minute-K buckets suffice; full-tick is a different cost class |
-| akshare/tushare whole-SDK integration | Provider chain + `get_auction` seam is the existing integration point |
+| New npm/pip runtime dependencies | Zero new deps: ECharts already in-tree; all backend uses existing seams (`run_all_with_hits`, `pool_snapshot`, `attach_auction_columns`, `/api/watchlist`) |
 
 ## Traceability
 
@@ -51,27 +52,28 @@ Populated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| DATA-04 | Phase 20 | Complete |
-| DATA-05 | Phase 20 | Complete |
-| DATA-06 | Phase 20 | Complete |
-| STRAT-04 | Phase 21 | Complete |
-| STRAT-05 | Phase 21 | Complete |
-| STRAT-06 | Phase 21 | Complete |
-| STRAT-07 | Phase 21 | Complete |
-| STRAT-08 | Phase 21 | Complete |
-| STRAT-09 | Phase 21 | Complete |
-| POOL-04 | Phase 22 | Complete |
-| POOL-05 | Phase 22 | Complete |
-| POOL-06 | Phase 22 | Complete |
-| FRONT-01 | Phase 23 | Complete |
-| FRONT-02 | Phase 23 | Complete |
+| HIST-01 | Phase 24 | Open |
+| HIST-02 | Phase 24 | Open |
+| HIST-03 | Phase 24 | Open |
+| HIST-04 | Phase 24 | Open |
+| WATCH-01 | Phase 25 | Open |
+| WATCH-02 | Phase 25 | Open |
+| WATCH-03 | Phase 25 | Open |
+| WATCH-04 | Phase 25 | Open (P2) |
+| CHART-01 | Phase 26 | Open |
+| CHART-02 | Phase 26 | Open |
+| CHART-03 | Phase 26 | Open |
+| PM-01 | Phase 27 | Open |
+| PM-02 | Phase 27 | Open |
+| PM-03 | Phase 27 | Open |
+| PM-04 | Phase 27 | Open |
 
 **Coverage:**
 
-- v2 requirements: 14 total (9 P1, 5 P2)
-- Mapped to phases: 14 (roadmap created — Phases 20-23)
+- v2.1 requirements: 15 total (11 P1, 4 P2)
+- Mapped to phases: 15 (roadmap created — Phases 24-27)
 - Unmapped: 0
 
 ---
-*Requirements defined: 2026-08-04*
-*Last updated: 2026-08-04 — v2.0 milestone started; traceability populated (Phases 20-23)*
+*Requirements defined: 2026-08-05*
+*Last updated: 2026-08-05 — v2.1 milestone started; research synthesized (4 domains → 4 phases)*
