@@ -49,6 +49,15 @@
 - 只读端点 `GET /api/pool/premarket` 返回今日预览（缺失 → 200 `available:false` 诚实空态，非 404）；股池页「最新」视图在盘前预览存在且今日 EOD 快照未生成时展示预览池并标注「盘前预览 · 竞价窗口 09:15-09:25 · 非收盘定稿」，15:35 EOD 后自动回退收盘池。
 - **诚实边界**：真实竞价列仅在今日 probe `available` 且实时源返回今日窗口行时可用（第二档，依赖外部实时竞价源）；未配置时仅展示派生列（`degraded`），**绝不**把盘前预览标为收盘定稿、不把 09:30 bar 标为集合竞价数据；日期导航只列 EOD 快照日，盘前预览不进入归档日期。
 
+### 🧪 竞价策略历史验证 (Auction Strategy Validation)
+
+只读端点 `GET /api/research/auction/validation` 输出 9 个竞价/盘前策略（极速抢筹、竞价全面、T+1闪电、盘中确认、竞价阿尔法、金色两点半、竞价多头、盘前强势量化、早盘之星）在 enriched 历史窗口上的**信号质量报告**（POOL-03 零执行：GET-only，不写任何湖/缓存，不触发计算/同步/回填；报告区间不受回测 186 天 guard 限制，覆盖由 enriched 缓存边界决定，窗口超覆盖自动回夹并双字段回显 `window.requested_*/effective_*`）。
+
+- **诚实数据门**：`data_gate: available|empty` —— `kline_auction` 湖空 → 200 `{data_gate:"empty", coverage:0}`（**绝不 404/500**），`empty_reason: no_auction_partitions|enriched_unavailable|no_dates_in_window`；`enabled` 日期 = `kline_auction` 分区 ∩ enriched 交易日；`probe` 为服务端权威状态透传（不参与历史闸门）。
+- **分支标注（互斥）**：4 个真列策略（极速抢筹/竞价全面/T+1闪电/盘中确认）恒 `branch:"real"` —— 湖空时 `n_dates==0` 诚实报告，**绝不降级为派生**；竞价阿尔法按湖有无取 `real|derived`；4 个 EOD 代理（金色两点半/竞价多头/盘前强势量化/早盘之星）恒 `branch:"eod"`；`minute_confirm:"not_applied"` 显式（分钟确认层不在报告范围）。
+- **前瞻口径（BT-04）**：信号日 T 以开盘价入场；`next_day_open_ret = open_{T+1}/open_T − 1`、`next_day_close_ret = close_{T+1}/open_T − 1`、`open_gap_outcome = open_{T+1}/close_T − 1`；结果日 = 全市场交易日历的下一交易日（绝不按标的行内 shift）；结果日缺行计入 `n_missing_outcomes`，统计排除，**绝不 0 填/前向填充**。
+- **诚实边界**：真实竞价列验证以待 `kline_auction` 历史分区就位（当前 0 分区 —— 湖空时真列分支诚实空，不伪造真值）；本报告为纯 API 研究报告，无前端消费（D-05）。
+
 ---
 
 ## 📊 指标流水线(Indicators)
