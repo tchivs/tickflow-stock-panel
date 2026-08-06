@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v2.1
 milestone_name: 历史深度与自选联动 — planning
-current_phase: 25
-current_phase_name: 自选股联动 (Watchlist Sync)
-status: verifying
+current_phase: 26
+current_phase_name: 历史竞价图 + 派生列复活 (Auction History Chart)
+status: planning
 stopped_at: Completed 25-02-PLAN.md
-last_updated: "2026-08-06T06:20:55.996Z"
+last_updated: "2026-08-06T06:31:52.662Z"
 last_activity: 2026-08-06
-last_activity_desc: Phase 25 plan 2 (WATCH e2e + snapshots + docs) complete
+last_activity_desc: Phase 25 complete, transitioned to Phase 26
 progress:
   total_phases: 4
   completed_phases: 2
@@ -28,10 +28,10 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 
 ## Current Position
 
-Phase: 25 — 自选股联动 (Watchlist Sync)
-Plan: 2 of 2
-Status: Phase complete — ready for verification
-Last activity: 2026-08-06 — Phase 25 plan 2 (WATCH e2e + snapshots + docs) complete
+Phase: 26 — 历史竞价图 + 派生列复活 (Auction History Chart)
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-08-06 — Phase 25 complete, transitioned to Phase 26
 
 ## v1.3 Phase Summary (shipped 2026-08-04)
 
