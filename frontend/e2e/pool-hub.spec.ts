@@ -190,6 +190,18 @@ const probePayloadFailClosed = {
   window: '09:15-09:25',
 }
 
+// ===== Phase 25 (WATCH-01..04): 自选清单夹具 (WatchlistEntry 对齐: symbol 全后缀 / added_at / note) =====
+const watchlistEntry = (symbol: string) => ({ symbol, added_at: '2026-08-01T00:00:00', note: '' })
+/** 自选含 300750.SZ (hub 双行中第一行) — VIP 星标/toggle/只看自选主夹具 */
+const watchlistPayloadSingle = { symbols: [watchlistEntry('300750.SZ')] }
+/** toggle 后缓存失效重取的集合 (含 600519.SH) */
+const watchlistPayloadBoth = {
+  symbols: [watchlistEntry('300750.SZ'), watchlistEntry('600519.SH')],
+}
+const watchlistPayloadEmpty = { symbols: [] }
+/** 自选不含任何策略行 — 只看自选诚实空态 (P4 防线: 绝不渲染「无符合『』的个股」) */
+const watchlistPayloadNoMatch = { symbols: [watchlistEntry('000001.SZ')] }
+
 /** 本地时区今天的 ISO 串 — 用于「查看今日」盘前断言 (与应用 isToday 同机同 TZ) */
 function localTodayISO() {
   const d = new Date()
@@ -1086,5 +1098,162 @@ test.describe('Phase 18 pool hub', () => {
     await expect(page.getByText('2.35×', { exact: true })).toBeVisible()
     // 徽标按 auction_columns.real 显示 info, 不被今日 probe 状态重写
     await expect(page.getByText('竞价数据可用 · 窗口 09:15-09:25')).toBeVisible()
+  })
+
+  // ===== Phase 25 (WATCH-01..04): 自选联动 =====
+
+  test('WATCH-01: VIP 星标渲染 + toggle 调 POST /api/watchlist + 共享缓存失效重取', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
+    await installShell(page)
+    await page.route('**/api/pool/hub**', route => json(route, hubPayload))
+    let watchlistGetCount = 0
+    const addBodies: { symbol: string }[] = []
+    await page.route('**/api/watchlist**', route => {
+      const req = route.request()
+      const url = new URL(req.url())
+      if (req.method() === 'GET' && url.pathname === '/api/watchlist') {
+        watchlistGetCount += 1
+        // 第一次返回 仅 300750.SZ; 缓存失效后的重取返回 both → 600519 星标翻转 (WATCH-03)
+        return json(route, watchlistGetCount === 1 ? watchlistPayloadSingle : watchlistPayloadBoth)
+      }
+      if (req.method() === 'POST' && url.pathname === '/api/watchlist') {
+        addBodies.push(JSON.parse(req.postData() ?? '{}') as { symbol: string })
+        return json(route, watchlistPayloadBoth)
+      }
+      return unhandled(route)
+    })
+
+    await page.goto('/pool-hub')
+    await expect(page.getByRole('button', { name: /竞价多头/ })).toBeVisible()
+
+    // 星标渲染: 300750 行在自选 (移出自选), 600519 行不在 (加入自选)
+    const row300 = page.getByRole('row').filter({ hasText: '300750' })
+    const row600 = page.getByRole('row').filter({ hasText: '600519' })
+    await expect(row300.getByTitle('移出自选')).toBeVisible()
+    await expect(row600.getByTitle('加入自选')).toBeVisible()
+
+    // 点 600519 星标 → POST /api/watchlist body.symbol=600519.SH
+    const getsBefore = watchlistGetCount
+    await row600.getByTitle('加入自选').click()
+    await expect.poll(() => addBodies.length).toBe(1)
+    expect(addBodies[0].symbol).toBe('600519.SH')
+
+    // 星标翻转 + 出现第二次 GET /api/watchlist (WATCH-03 共享 key 失效重取, I1 计数式避免 exact-count 脆弱)
+    await expect.poll(() => watchlistGetCount).toBeGreaterThan(getsBefore)
+    await expect(row600.getByTitle('移出自选')).toBeVisible()
+  })
+
+  test('WATCH-01 guest: 零 watchlist 查询 + 零自选控件/switch', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
+    await installShell(page)
+    const captured: string[] = []
+    page.on('request', r => {
+      const url = new URL(r.url())
+      if (url.pathname.startsWith('/api/')) captured.push(`${r.method()} ${url.pathname}`)
+    })
+    await page.route('**/api/pool/hub**', route => json(route, hubPayloadGuest))
+
+    await page.goto('/pool-hub')
+    await expect(page.getByRole('button', { name: /竞价多头/ })).toBeVisible()
+
+    // guest 零 /api/watchlist 查询 (若误发则 401 全局跳登录, 页面早失败 — WATCH-01 guest 语义锁死)
+    expect(captured.filter(c => c.includes('/api/watchlist'))).toEqual([])
+
+    // main 内零自选控件 + 零 switch (guest 逐像素不变的面)
+    const main = page.getByRole('main')
+    await expect(main.getByTitle('加入自选')).toHaveCount(0)
+    await expect(main.getByTitle('移出自选')).toHaveCount(0)
+    await expect(main.getByRole('switch')).toHaveCount(0)
+  })
+
+  test('WATCH-02: 只看自选收窄到自选行 + total 权威不变', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
+    await installShell(page)
+    await page.route('**/api/pool/hub**', route => json(route, hubPayload))
+    await page.route('**/api/watchlist**', route => json(route, watchlistPayloadSingle))
+
+    await page.goto('/pool-hub')
+    await expect(page.getByRole('button', { name: /竞价多头/ })).toBeVisible()
+    const table = page.getByRole('table')
+    await expect(table.getByRole('row')).toHaveCount(3) // header + 2 行
+    await expect(page.getByText(/共 2 只/)).toBeVisible()
+
+    // 开「只看自选」→ 仅剩 300750 行
+    await page.getByRole('switch', { name: '只看自选' }).click()
+    await expect(table.getByRole('row')).toHaveCount(2) // header + 1 行
+    await expect(page.getByText('300750', { exact: true })).toBeVisible()
+    await expect(page.getByText('600519', { exact: true })).toHaveCount(0)
+    await expect(page.getByText(/筛选后 1 只 \/ 共 2 只/)).toBeVisible()
+
+    // 关开关 → 2 行恢复
+    await page.getByRole('switch', { name: '只看自选' }).click()
+    await expect(table.getByRole('row')).toHaveCount(3)
+    await expect(page.getByText(/共 2 只/)).toBeVisible()
+  })
+
+  test('WATCH-02: 诚实空态 — 自选不含策略行时显示专属文案 (P4)', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
+    await installShell(page)
+    await page.route('**/api/pool/hub**', route => json(route, hubPayload))
+    await page.route('**/api/watchlist**', route => json(route, watchlistPayloadNoMatch))
+
+    await page.goto('/pool-hub')
+    await expect(page.getByRole('button', { name: /竞价多头/ })).toBeVisible()
+    await expect(page.getByText(/共 2 只/)).toBeVisible()
+
+    // 开开关 → 诚实空态 (绝不渲染「无符合『』的个股」— filterText 空时文案荒谬, P4 防线)
+    await page.getByRole('switch', { name: '只看自选' }).click()
+    await expect(page.getByText('自选清单中无该策略个股')).toBeVisible()
+    await expect(page.getByText('试试关闭「只看自选」或切换策略。')).toBeVisible()
+    await expect(page.getByText(/无符合/)).toHaveCount(0)
+
+    // 关开关 → 行恢复
+    await page.getByRole('switch', { name: '只看自选' }).click()
+    await expect(page.getByText('自选清单中无该策略个股')).toHaveCount(0)
+    await expect(page.getByText(/共 2 只/)).toBeVisible()
+  })
+
+  test('WATCH-02: 历史同构 — 开关跨日期保持生效, footer 按历史 total 权威', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
+    await installShell(page)
+    await page.route('**/api/pool/hub**', route => json(route, hubPayload))
+    await page.route('**/api/watchlist**', route => json(route, watchlistPayloadSingle))
+
+    await page.goto('/pool-hub')
+    await expect(page.getByRole('button', { name: /竞价多头/ })).toBeVisible()
+
+    // 先开开关 (hub 2 行, 自选含 300750 → 筛选后 1 只 / 共 2 只)
+    await page.getByRole('switch', { name: '只看自选' }).click()
+    await expect(page.getByText(/筛选后 1 只 \/ 共 2 只/)).toBeVisible()
+
+    // 切历史 2026-08-01 (historyPayload0801: 竞价多头 total 5, rows [300750])
+    await page.getByRole('button', { name: '上一个交易日' }).click()
+    await expect(page.getByText('竞价策略 · 数据日期 2026-08-01 · 仅研究参考')).toBeVisible()
+    // 开关保持生效 + footer 按历史 total 权威 (H1/H7: 最新/历史天然同构)
+    await expect(page.getByRole('switch', { name: '只看自选' })).toHaveAttribute('aria-checked', 'true')
+    await expect(page.getByText(/筛选后 1 只 \/ 共 5 只/)).toBeVisible()
+  })
+
+  test('WATCH-04: 批量加自选 body = 可见行 symbols + 成功 toast', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
+    await installShell(page)
+    await page.route('**/api/pool/hub**', route => json(route, hubPayload))
+    await page.route('**/api/watchlist**', route => json(route, watchlistPayloadEmpty))
+    let batchBody: { symbols: string[] } | null = null
+    await page.route('**/api/watchlist/batch', route => {
+      batchBody = JSON.parse(route.request().postData() ?? '{}') as { symbols: string[] }
+      return json(route, { symbols: [], added: 2 })
+    })
+
+    await page.goto('/pool-hub')
+    await expect(page.getByRole('button', { name: /竞价多头/ })).toBeVisible()
+
+    // 点「批量加自选」→ POST /api/watchlist/batch body.symbols = 可见行 (300750 + 600519)
+    await page.getByRole('button', { name: '批量加自选' }).click()
+    await expect.poll(() => batchBody !== null).toBe(true)
+    // 顺序不敏感集合比较 (WATCH-04: body 恰为可见行 symbol 数组)
+    expect(new Set(batchBody!.symbols)).toEqual(new Set(['300750.SZ', '600519.SH']))
+    // 成功 toast (mock 返回 added:2)
+    await expect(page.getByText(/已添加 2 只到自选/)).toBeVisible()
   })
 })
