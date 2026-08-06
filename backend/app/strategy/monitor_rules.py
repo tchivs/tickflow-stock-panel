@@ -107,6 +107,62 @@ def _is_signal_field(field: str) -> bool:
     return any(field.startswith(p) for p in _SIGNAL_PREFIXES)
 
 
+def _validate_conditions_shape(rule: dict) -> list:
+    """校验 conditions 形状 (非空 list、≤8、每项 dict、logic ∈ LOGICS)。
+
+    signal/price/market 与 preopen 三类型共用; 字段/op 约束由
+    _validate_condition_field 按类型分派。非法抛中文 ValueError (消息与
+    抽取前逐字节一致, 保证既有调用方断言不破)。
+    """
+    conds = rule.get("conditions")
+    if not isinstance(conds, list) or len(conds) == 0:
+        raise ValueError("conditions 不能为空")
+    if len(conds) > 8:
+        raise ValueError("conditions 最多 8 条")
+    if rule.get("logic", "and") not in LOGICS:
+        raise ValueError(f"logic 必须是 {LOGICS} 之一")
+    for i, c in enumerate(conds):
+        if not isinstance(c, dict):
+            raise ValueError(f"第 {i+1} 个条件格式错误")
+    return conds
+
+
+def _validate_condition_field(rule_type: str, i: int, cond: dict) -> None:
+    """按规则类型校验单个条件的 field/op/value 约束。
+
+    - preopen: 仅数值比较 OPS + PREOPEN_ALLOWED_FIELDS 白名单 + 数字 value,
+      op=truth 显式拒绝 (盘前帧无布尔信号列, D2)。
+    - 其余 (signal/price/market): truth 信号列 / ALLOWED_FIELDS 阈值比较。
+    """
+    field = cond.get("field", "")
+    op = cond.get("op", "")
+    if rule_type == "preopen":
+        if op == "truth":
+            raise ValueError(f"第 {i+1} 个条件: preopen 规则不支持 op=truth (无布尔信号列)")
+        if op not in OPS:
+            raise ValueError(f"第 {i+1} 个条件: op {op!r} 非法 (preopen 仅 {OPS})")
+        if field not in PREOPEN_ALLOWED_FIELDS:
+            raise ValueError(
+                f"第 {i+1} 个条件: preopen 阈值字段 {field!r} 不在盘前白名单 "
+                f"{sorted(PREOPEN_ALLOWED_FIELDS)} (EOD 列如 change_pct/close/vol_ratio_5d 禁用)"
+            )
+        if not isinstance(cond.get("value"), (int, float)):
+            raise ValueError(f"第 {i+1} 个条件: value 必须是数字")
+        return
+    if op == "truth":
+        # 布尔信号: field 必须是 signal_/csg_ 前缀
+        if not _is_signal_field(field):
+            raise ValueError(f"第 {i+1} 个条件: op=truth 时 field 必须是信号列 (signal_/csg_ 前缀): {field!r}")
+    elif op in OPS:
+        # 阈值比较: field 必须在白名单, 需要 value
+        if field not in ALLOWED_FIELDS:
+            raise ValueError(f"第 {i+1} 个条件: 阈值字段 {field!r} 不在白名单")
+        if not isinstance(cond.get("value"), (int, float)):
+            raise ValueError(f"第 {i+1} 个条件: value 必须是数字")
+    else:
+        raise ValueError(f"第 {i+1} 个条件: op {op!r} 非法 (应为 truth 或 {OPS})")
+
+
 def validate(rule: dict) -> None:
     """校验一条监控规则,非法则抛 ValueError (含中文信息)。"""
     rid = rule.get("id", "")
@@ -138,53 +194,14 @@ def validate(rule: dict) -> None:
         # 拒绝 (D2)。scope 仅 symbols/all (sector/positions 与盘前语义无关, D3)。
         if rule.get("scope", "symbols") not in {"symbols", "all"}:
             raise ValueError("preopen 规则 scope 仅支持 symbols/all")
-        conds = rule.get("conditions")
-        if not isinstance(conds, list) or len(conds) == 0:
-            raise ValueError("conditions 不能为空")
-        if len(conds) > 8:
-            raise ValueError("conditions 最多 8 条")
-        if rule.get("logic", "and") not in LOGICS:
-            raise ValueError(f"logic 必须是 {LOGICS} 之一")
+        conds = _validate_conditions_shape(rule)
         for i, c in enumerate(conds):
-            if not isinstance(c, dict):
-                raise ValueError(f"第 {i+1} 个条件格式错误")
-            if c.get("op") == "truth":
-                raise ValueError(f"第 {i+1} 个条件: preopen 规则不支持 op=truth (无布尔信号列)")
-            if c.get("op") not in OPS:
-                raise ValueError(f"第 {i+1} 个条件: op {c.get('op')!r} 非法 (preopen 仅 {OPS})")
-            if c.get("field") not in PREOPEN_ALLOWED_FIELDS:
-                raise ValueError(
-                    f"第 {i+1} 个条件: preopen 阈值字段 {c.get('field')!r} 不在盘前白名单 "
-                    f"{sorted(PREOPEN_ALLOWED_FIELDS)} (EOD 列如 change_pct/close/vol_ratio_5d 禁用)"
-                )
-            if not isinstance(c.get("value"), (int, float)):
-                raise ValueError(f"第 {i+1} 个条件: value 必须是数字")
+            _validate_condition_field("preopen", i, c)
     else:
-        # 信号/价格/市场类型: 需要 conditions
-        conds = rule.get("conditions")
-        if not isinstance(conds, list) or len(conds) == 0:
-            raise ValueError("conditions 不能为空")
-        if len(conds) > 8:
-            raise ValueError("conditions 最多 8 条")
-        if rule.get("logic", "and") not in LOGICS:
-            raise ValueError(f"logic 必须是 {LOGICS} 之一")
+        # 信号/价格/市场类型: 需要 conditions (形状校验公共 helper + 按类型字段约束)
+        conds = _validate_conditions_shape(rule)
         for i, c in enumerate(conds):
-            if not isinstance(c, dict):
-                raise ValueError(f"第 {i+1} 个条件格式错误")
-            field = c.get("field", "")
-            op = c.get("op", "")
-            if op == "truth":
-                # 布尔信号: field 必须是 signal_/csg_ 前缀
-                if not _is_signal_field(field):
-                    raise ValueError(f"第 {i+1} 个条件: op=truth 时 field 必须是信号列 (signal_/csg_ 前缀): {field!r}")
-            elif op in OPS:
-                # 阈值比较: field 必须在白名单, 需要 value
-                if field not in ALLOWED_FIELDS:
-                    raise ValueError(f"第 {i+1} 个条件: 阈值字段 {field!r} 不在白名单")
-                if not isinstance(c.get("value"), (int, float)):
-                    raise ValueError(f"第 {i+1} 个条件: value 必须是数字")
-            else:
-                raise ValueError(f"第 {i+1} 个条件: op {op!r} 非法 (应为 truth 或 {OPS})")
+            _validate_condition_field(rule.get("type"), i, c)
 
     # scope 校验
     scope = rule.get("scope", "symbols")

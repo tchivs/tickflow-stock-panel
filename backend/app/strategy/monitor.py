@@ -1104,6 +1104,13 @@ class MonitorRuleEngine:
                 return f"策略「{sname}」移出 {name}{pct_text}"
             return f"策略「{sname}」变更"
 
+        if rtype == "preopen":
+            # 盘前事件: price/pct 恒 None (盘前帧 EOD 语义无意义, R1), 诚实不加
+            # 现价/涨跌幅尾缀 — 具体数值由 preopen_metrics 结构化携带 (message
+            # 保持稳定可断言)。
+            cond_text = self._format_conditions_text(rule, conditions)
+            return f"盘前 {cond_text}" if cond_text else "盘前监控触发"
+
         # signal / price / market: 条件摘要 + 现价 + 涨跌幅
         # 条件摘要: 把 conditions (truth/比较) 拼成可读串, 如 "MA20金叉 且 量比>2"
         cond_text = self._format_conditions_text(rule, conditions)
