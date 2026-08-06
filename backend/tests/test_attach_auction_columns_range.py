@@ -175,7 +175,8 @@ def test_range_empty_lake_returns_df_and_empty_dates(repo_env):
     assert enabled_dates == []
     assert "auction_volume" not in injected.columns
     assert injected.height == panel.height
-    assert injected["symbol"].to_list() == panel["symbol"].to_list()
+    # 函数防御性 sort(["symbol","date"]) → 顺序与输入可能不同; 集合语义相等即可
+    assert sorted(injected["symbol"].to_list()) == sorted(panel["symbol"].to_list())
 
 
 def test_range_no_partitions_returns_df_and_empty_dates(repo_env):
