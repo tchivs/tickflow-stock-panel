@@ -550,6 +550,47 @@ def run_full_backtest(
         "symbols": _coverage_symbols(data_dir, eff_start, eff_end, verification_panel, enriched_dates),
     }
 
+    # ⑧ 持久化 (BT-09 写侧): 确定性 run_id → 原子 part.parquet + manifest → 幂等跳过
+    per_date = _merge_per_date(strategy_results)
+    fingerprint = json.dumps(
+        {
+            "strategy_ids": sorted(ids),
+            "start": eff_start.isoformat(),
+            "end": eff_end.isoformat(),
+            "params": params_snapshot,
+            "strategy_version": strategy_version,
+            "symbols": sorted(symbols or []),
+        },
+        sort_keys=True,
+        ensure_ascii=False,
+        default=str,
+    )
+    manifest = _build_manifest(
+        run_id=run_id,
+        strategy_version=strategy_version,
+        created_at=created_at,
+        window=window,
+        strategy_summaries=[
+            {
+                "id": r["stats"]["id"],
+                "branch": r["stats"]["branch"],
+                "n_dates": r["stats"]["n_dates"],
+                "n_hits": r["stats"]["n_hits"],
+                "n_symbols_covered": r["stats"]["n_symbols_covered"],
+                "n_symbols_hit": r["stats"]["n_symbols_hit"],
+                "n_missing_outcomes": r["stats"]["n_missing_outcomes"],
+                "forward_stats": r["stats"]["forward_stats"],
+            }
+            for r in strategy_results
+        ],
+        params_snapshot=params_snapshot,
+        coverage=coverage,
+        per_date=per_date,
+        fingerprint=fingerprint,
+    )
+    run_dir, wrote, reused = _persist_run(data_dir, run_id, rows_df, manifest)
+    _progress(f"persist: run_id={run_id} wrote={wrote} reused={reused}")
+
     return {
         "run_id": run_id,
         "origin": _ORIGIN,
@@ -560,6 +601,10 @@ def run_full_backtest(
         "coverage": coverage,
         "skipped_ids": skipped_ids,
         "rows": rows_df,
+        "wrote": wrote,
+        "reused": reused,
+        "path": str(run_dir),
+        "status": "ok" if wrote else "reused",
     }
 
 
@@ -591,3 +636,107 @@ def _compute_run_id(
         + "|" + "|".join(sorted(symbols or []))
     )
     return hashlib.sha1(blob.encode("utf-8")).hexdigest()[:12]
+
+
+# ── 持久化 (BT-09 写侧) ────────────────────────────────────────────────────
+
+
+def _merge_per_date(strategy_results: list[dict]) -> list[dict]:
+    """运行级 per_date 汇总: 按日期合并各策略 per_date 条目 (按日期升序)。
+
+    n_screened = 该日所有策略评估行数之和, n_hits = 该日命中数之和 (跨 branch
+    面板的如实计数; 语义在 manifest 由本函数 docstring 锚定)。"""
+    merged: dict[date, list[int]] = {}
+    for res in strategy_results:
+        for entry in res["stats"]["per_date"]:
+            d = date.fromisoformat(entry["date"])
+            acc = merged.setdefault(d, [0, 0])
+            acc[0] += entry["n_screened"]
+            acc[1] += entry["n_hits"]
+    return [
+        {"date": d.isoformat(), "n_screened": acc[0], "n_hits": acc[1]}
+        for d, acc in sorted(merged.items())
+    ]
+
+
+def _atomic_write_parquet(df: pl.DataFrame, out: Path) -> None:
+    """先写临时文件再原子替换 — 逐字镜像 auction_sync.py:45-55 语义: .tmp 后缀不匹配
+    *.parquet glob 不会被扫描误读; 同目录 rename 在 POSIX/NTFS 上均为原子操作。"""
+    tmp = out.with_name(out.name + ".tmp")
+    df.write_parquet(tmp)
+    tmp.replace(out)
+
+
+def _atomic_write_json(payload: dict, out: Path) -> None:
+    """temp + os.replace 原子写 JSON — 镜像 pool_snapshot.py:103-106 语义。"""
+    tmp = out.with_name(out.name + ".tmp")
+    tmp.write_text(
+        json.dumps(payload, ensure_ascii=False, default=str),
+        encoding="utf-8",
+    )
+    os.replace(tmp, out)
+
+
+def _build_manifest(
+    *,
+    run_id: str,
+    strategy_version: str,
+    created_at: str,
+    window: dict,
+    strategy_summaries: list[dict],
+    params_snapshot: dict,
+    coverage: dict,
+    per_date: list[dict],
+    fingerprint: str,
+) -> dict:
+    """manifest payload (镜像 RESEARCH §6 + pool_snapshot.py:91-101 惯例)。
+
+    origin 固定 'research' (与 {eod,backfill,manual} 池词汇区分); minute_note 承载
+    BT-10 分钟确认维度诚实受限说明; fingerprint = run 身份输入的确定性 json
+    (与 _compute_run_id 输入同构, 幂等跳过判据)。"""
+    return {
+        "run_id": run_id,
+        "origin": _ORIGIN,
+        "strategy_version": strategy_version,
+        "created_at": created_at,
+        "window": window,
+        "strategies": strategy_summaries,
+        "params": params_snapshot,
+        "coverage": coverage,
+        "per_date": per_date,
+        "minute_note": _MINUTE_NOTE,
+        "fingerprint": fingerprint,
+    }
+
+
+def _persist_run(
+    data_dir: Path,
+    run_id: str,
+    rows_df: pl.DataFrame,
+    manifest: dict,
+) -> tuple[Path, bool, bool]:
+    """原子持久化回测运行到 ``backtest_results/run_id={id}/`` (E2 写根隔离)。
+
+    - 先 part.parquet 原子写, 再 manifest.json 原子写 (manifest 最后落 —
+      存在 manifest 即视为运行完整);
+    - 幂等: manifest 已存在且 fingerprint 与本次相同 → 跳过重写
+      (wrote=False, reused=True, 原子无操作, 镜像 pool_backfill 分区差集语义);
+    - 返回 (run_dir, wrote, reused)。"""
+    run_dir = data_dir / _BACKTEST_ROOT / f"run_id={run_id}"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    part_path = run_dir / "part.parquet"
+    manifest_path = run_dir / "manifest.json"
+
+    if manifest_path.exists():
+        try:
+            existing = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001 — 损坏 manifest fail-open 重写 (诚实恢复)
+            existing = {}
+        if existing.get("fingerprint") == manifest["fingerprint"]:
+            logger.info("backtest run %s reused (identical fingerprint)", run_id)
+            return run_dir, False, True
+
+    _atomic_write_parquet(rows_df, part_path)
+    _atomic_write_json(manifest, manifest_path)
+    logger.info("backtest run %s written (%d rows)", run_id, rows_df.height)
+    return run_dir, True, False
