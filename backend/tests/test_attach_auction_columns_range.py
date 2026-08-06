@@ -1,8 +1,14 @@
-"""区间竞价列注入原语 ``attach_auction_columns_range`` (BT-02) — 端到端注入 / 空态 / date 键。
+"""区间竞价列注入原语 ``attach_auction_columns_range`` (BT-02) — 端到端注入 / 空态 /
+date 键 / PIT-safe 等价性属性 / warmup / 边界。
 
 Hermetic: 所有生产 import 放测试函数内 (仓库约定: 模块级不触发 DuckDB 单例);
-``kline_auction`` 分区由测试手工写盘; 区间原语**不消费 probe** (历史闸门 = 分区存在性,
-D-03 / REV-01), 因此本文件不 monkeypatch probe —— 单日版等价性比较 (Task 2) 才需要。
+``kline_auction`` 分区由测试手工写盘; 等价性比较时用 monkeypatch 固定 probe verdict
+(仅单日版路径消费 probe); 区间原语**不消费 probe** (历史闸门 = 分区存在性, D-03 / REV-01)。
+
+等价性证明前提 (RESEARCH §2.1.3): 面板 volume 与 ``repo._enriched_history_cache``
+同源 —— 测试直接 seed 缓存并以其为面板; 生产侧由服务层 ``get_enriched_range``
+快路径装载保证 (29-02 契约)。等价性断言只用于 ≥5 前导行的全面板输入 (W2);
+1-4 日前导短历史用 hand-computed 均值断言, 不做 <1e-9 面板裁剪比较。
 """
 from __future__ import annotations
 
@@ -245,3 +251,202 @@ def test_range_date_key_join_no_fanout(repo_env):
     )
     assert a0730.height == 1
     assert a0730.select("auction_amount").item() == 42500.0
+
+
+# ================================================================
+# Task 2 — 等价性属性测试 (BT-02 核心验收): 向量化分母与单日版逐值一致
+# ================================================================
+
+
+def _available_verdict():
+    from app.services.auction_probe import AuctionProbeStatus, AuctionProbeVerdict
+    return AuctionProbeVerdict(
+        status=AuctionProbeStatus.available, source="fake", probed_at=None, detail="available",
+    )
+
+
+def _patch_probe(monkeypatch, verdict) -> None:
+    from app.services import auction_columns
+    monkeypatch.setattr(auction_columns, "resolve_auction_probe", lambda: verdict)
+
+
+def _seed_enriched_cache(repo, symbols=("000001", "600000"), days: int = 139,
+                         start: date | None = None) -> pl.DataFrame:
+    """直接 seed ``repo._enriched_history_cache`` (与 get_enriched_range 快路径同源, RESEARCH §2.1.3)。
+
+    默认 2026-03-20..2026-08-05 (139 连续自然日) —— 覆盖 ``get_enriched_history``
+    的 132 自然日 warmup-start 校验 ((6+60)×2, repository.py:945-948): 07-30 − 132 自然日
+    = 03-20 = cache_min (边界恰好通过)。volume 确定性: 100000 × (1 + (day_index % 7) × 0.1)
+    → 前导均量可手算。
+    """
+    from datetime import timedelta
+    start = start or date(2026, 3, 20)
+    rows = []
+    for i in range(days):
+        d = start + timedelta(days=i)
+        vol = 100000.0 * (1 + (i % 7) * 0.1)
+        for sym in symbols:
+            rows.append({
+                "symbol": sym,
+                "date": d,
+                "open": 10.0 if sym == "000001" else 20.0,
+                "close": 10.5 if sym == "000001" else 20.5,
+                "high": 10.6 if sym == "000001" else 20.6,
+                "low": 9.9 if sym == "000001" else 19.9,
+                "volume": vol,
+                "amount": vol * 10.0,
+                "open_gap": 0.01,
+                "change_pct": 0.02,
+                "vol_ratio_5d": 1.0,
+            })
+    repo._enriched_history_cache = pl.DataFrame(rows)
+    return repo._enriched_history_cache
+
+
+def _five_day_partitions(data_dir, start: date = date(2026, 7, 30)) -> list[date]:
+    """07-30..08-03 五日分区, 双 symbol, 逐日递增竞价量 (确定性)。"""
+    dates = [start + timedelta(days=i) for i in range(5)]
+    for i, d in enumerate(dates):
+        _write_auction_partition(
+            data_dir, d,
+            _auction_rows(d, {
+                "000001": (8000.0 + 100.0 * i, 42000.0 + 500.0 * i),
+                "600000": (9000.0 + 100.0 * i, 48000.0 + 500.0 * i),
+            }),
+        )
+    return dates
+
+
+def test_range_ratio_equivalent_to_single_day(repo_env, monkeypatch):
+    """每个 enabled 日 (≥5 前导行, 全面板输入, W2) 向量化 ratio 与单日版逐值一致 <1e-9。"""
+    from app.services.auction_columns import attach_auction_columns, attach_auction_columns_range
+
+    repo, data_dir = repo_env
+    _patch_probe(monkeypatch, _available_verdict())  # 仅单日路径消费 probe
+
+    full_panel = _seed_enriched_cache(repo)  # 140 日 2026-03-20..2026-08-05
+    dates = _five_day_partitions(data_dir)   # 07-30..08-03 全量分区
+    start, end = dates[0], dates[-1]
+
+    ranged_df, enabled_dates = attach_auction_columns_range(
+        full_panel, start=start, end=end, repo=repo,
+    )
+    assert enabled_dates == dates  # 全 5 日 enabled
+
+    for d in enabled_dates:
+        # 单日分母契约 (repository.py:951-957): get_enriched_history 以**整缓存**
+        # trading_dates[-(lookback+1)] 为切片锚点, 只有 T ∈ {cache_max−1, cache_max}
+        # 时切片才等于「T 前 6 个交易日」→ tail(5) = T 前 5 行。逐日把缓存裁剪到 ≤ d
+        # (缓存与面板同源同前导行 —— W2 前提), 则每个 enabled 日均可逐值比较。
+        repo._enriched_history_cache = full_panel.filter(pl.col("date") <= d)
+        panel_d = full_panel.filter(pl.col("date") == d)
+        single = attach_auction_columns(panel_d, d, repo)
+        assert "auction_volume_ratio" in single.columns  # 缓存覆盖 → 单日有 ratio
+
+        ranged_d = ranged_df.filter(pl.col("date") == d)
+        assert ranged_d.height == panel_d.height == 2
+        merged = single.join(
+            ranged_d.select(["symbol", "date", "auction_volume_ratio"]),
+            on=["symbol", "date"], how="inner", suffix="_ranged",
+        )
+        assert merged.height == 2
+        for row in merged.to_dicts():
+            assert abs(row["auction_volume_ratio"] - row["auction_volume_ratio_ranged"]) < 1e-9, (
+                f"ratio mismatch on {d} {row['symbol']}: "
+                f"single={row['auction_volume_ratio']} ranged={row['auction_volume_ratio_ranged']}"
+            )
+
+
+def test_range_leading_no_history_honest_null(repo_env, monkeypatch):
+    """面板首日 (组内无前导行): 单日路径 prior 空 → ratio 列缺席; 向量化路径 ratio
+    列存在但值为 null —— 二者均不产生真实比率值且不崩 (诚实 null ≈ 诚实缺列,
+    该行真实分支 filter 不命中)。有意差异注释见 RESEARCH §2.1.3。"""
+    from app.services.auction_columns import attach_auction_columns, attach_auction_columns_range
+
+    repo, data_dir = repo_env
+    _patch_probe(monkeypatch, _available_verdict())
+
+    # 短缓存自 07-30 起: get_enriched_history 132 日 warmup 闸门不满足 → 单日 prior 空
+    panel = _seed_enriched_cache(repo, days=5, start=date(2026, 7, 30))
+    _write_auction_partition(
+        data_dir, date(2026, 7, 30),
+        _auction_rows(date(2026, 7, 30), {"000001": (8000.0, 42000.0), "600000": (9000.0, 48000.0)}),
+    )
+    _write_auction_partition(
+        data_dir, date(2026, 7, 31),
+        _auction_rows(date(2026, 7, 31), {"000001": (8100.0, 42500.0), "600000": (9100.0, 48500.0)}),
+    )
+
+    # 向量化路径: ratio 列存在; 组内首日 (07-30) null; 07-31 (1 前导) 有真实比率 (手算)
+    ranged_df, enabled = attach_auction_columns_range(
+        panel, start=date(2026, 7, 30), end=date(2026, 7, 31), repo=repo,
+    )
+    assert enabled == [date(2026, 7, 30), date(2026, 7, 31)]
+    assert "auction_volume_ratio" in ranged_df.columns
+    d0730 = ranged_df.filter(pl.col("date") == date(2026, 7, 30))
+    assert d0730.select(pl.col("auction_volume_ratio").null_count()).item() == 2
+    d0731 = ranged_df.filter(pl.col("date") == date(2026, 7, 31))
+    assert d0731.select(pl.col("auction_volume_ratio").null_count()).item() == 0
+    # 07-31 前导 = 07-30 volume = 100000 (day_index 0) → 8100/100000
+    assert (
+        d0731.filter(pl.col("symbol") == "000001").select("auction_volume_ratio").item()
+        == pytest.approx(8100.0 / 100000.0, rel=1e-9)
+    )
+
+    # 单日路径: prior 空 (get_enriched_history None) → ratio 列缺席, 不崩
+    single = attach_auction_columns(
+        panel.filter(pl.col("date") == date(2026, 7, 30)), date(2026, 7, 30), repo,
+    )
+    assert "auction_volume_ratio" not in single.columns
+
+
+def test_range_warmup_contract_full_denominator(repo_env):
+    """面板含 start 前 5 个交易日行 → 首个 enabled 日 ratio = 竞价量 ÷ 手算前 5 日均量。"""
+    from app.services.auction_columns import attach_auction_columns_range
+
+    repo, data_dir = repo_env
+    full_panel = _seed_enriched_cache(repo)  # 07-30 前有 127 前导日 (≥5)
+    start = date(2026, 7, 30)
+    _write_auction_partition(
+        data_dir, start,
+        _auction_rows(start, {"000001": (8000.0, 42000.0), "600000": (9000.0, 48000.0)}),
+    )
+
+    ranged_df, enabled = attach_auction_columns_range(
+        full_panel, start=start, end=start, repo=repo,
+    )
+    assert enabled == [start]
+
+    for sym, av in (("000001", 8000.0), ("600000", 9000.0)):
+        prior_vols = full_panel.filter(
+            (pl.col("symbol") == sym) & (pl.col("date") < start)
+        ).tail(5)["volume"].to_list()
+        assert len(prior_vols) == 5
+        expected = av / (sum(prior_vols) / 5.0)
+        row = ranged_df.filter((pl.col("symbol") == sym) & (pl.col("date") == start))
+        assert row.select("auction_volume_ratio").item() == pytest.approx(expected, rel=1e-9)
+
+
+def test_range_no_warmup_leading_null_honest(repo_env):
+    """面板裁剪掉 warmup (df 从 start 起) → 前导日 ratio null, 不崩 (RESEARCH §2.1.4 降级)。"""
+    from app.services.auction_columns import attach_auction_columns_range
+
+    repo, data_dir = repo_env
+    full_panel = _seed_enriched_cache(repo)
+    panel_no_warmup = full_panel.filter(pl.col("date") >= date(2026, 7, 30))
+    start = date(2026, 7, 30)
+    _write_auction_partition(
+        data_dir, start,
+        _auction_rows(start, {"000001": (8000.0, 42000.0), "600000": (9000.0, 48000.0)}),
+    )
+
+    ranged_df, enabled = attach_auction_columns_range(
+        panel_no_warmup, start=start, end=date(2026, 7, 31), repo=repo,
+    )
+    assert enabled == [start]
+    d0730 = ranged_df.filter(pl.col("date") == start)
+    assert d0730.select(pl.col("auction_volume_ratio").null_count()).item() == 2
+    # 07-31 无分区 → auction_volume null → ratio null (诚实), 不崩
+    assert ranged_df.filter(pl.col("date") == date(2026, 7, 31)).select(
+        pl.col("auction_volume_ratio").null_count()
+    ).item() == 2
