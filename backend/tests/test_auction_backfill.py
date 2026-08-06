@@ -320,6 +320,32 @@ def test_auction_backfill_one_symbol_per_request(env, monkeypatch):
     assert len(provider.calls) == 3  # 预检 + 每 symbol 各 1 次
 
 
+def test_auction_backfill_passes_date_objects_to_provider(env, monkeypatch):
+    """provider.get_auction 收到 date 对象 (非 ISO 字符串) — xyz 契约 ``start_date.strftime``。"""
+    from datetime import date
+
+    from app.services import auction_backfill
+
+    tmp, repo = env
+    seen: list = []
+
+    class DateRecorder(FakeAuctionProvider):
+        def get_auction(self, symbols, start_date=None, end_date=None):
+            seen.append((list(symbols), start_date, end_date))
+            return _auction_rows(symbols[0], [datetime(2026, 8, 4, 9, 25)])
+
+    _patch_live(monkeypatch, DateRecorder())
+
+    result = auction_backfill.run_auction_backfill(repo, symbols=["000001.SZ"])
+
+    assert seen, "应有请求"
+    assert result["backfilled_symbols"] == 1
+    for _, start_d, end_d in seen:
+        assert isinstance(start_d, date) and isinstance(end_d, date), (
+            f"provider 需要 date 对象, 收到 {type(start_d).__name__}"
+        )
+
+
 # ================================================================
 # Task 2 — 限速 / 合作取消 / 写缝不变式经 job 回归 (AQ-04/05)
 # ================================================================
@@ -493,13 +519,17 @@ def _wait_job_terminal(job_id, timeout=5.0):
 
     from app.services.pipeline_jobs import job_store
 
+    # 轮询整个窗口: job_store.fail/succeed 是「pop 后写盘」, 并发 get 可能短暂
+    # 既不在内存也不在盘 (fail-closed 任务无 await, 该窗口真实存在) —— 首个 poll
+    # 不得因瞬时缺失直接返回 None。
     deadline = _time.time() + timeout
+    j = None
     while _time.time() < deadline:
         j = job_store.get(job_id)
-        if j is None or j["status"] in ("succeeded", "failed"):
+        if j is not None and j["status"] in ("succeeded", "failed"):
             return j
         _time.sleep(0.02)
-    return job_store.get(job_id)
+    return j
 
 
 def _wait_slot_free(timeout=5.0):
