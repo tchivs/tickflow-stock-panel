@@ -1,3 +1,13 @@
+---
+phase: 32-auction-backfill
+verified: 2026-08-06T17:05:00Z
+status: passed
+score: 6/6 AQ requirements verified (AQ-01..06)
+behavior_unverified: 0
+overrides_applied: 0
+human_verification: 4 deploy-verified items (full-universe operator run, live MCP stability over multi-hour run, EOD unlock preference-gated, R3 probe latency) — sandbox cannot assert; labeled deploy-verified per standing policy
+---
+
 # Phase 32 Verification — 竞价历史回填 (AQ-01..06)
 
 **Verifier:** VerifierP32 · **Date:** 2026-08-06 · **Scope:** `.planning/REQUIREMENTS.md` AQ-01..06 (Phase 32)

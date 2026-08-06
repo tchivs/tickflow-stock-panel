@@ -48,7 +48,7 @@ Four phases (20-23) delivered probe-gated real auction columns + `kline_auction/
 - [x] **Phase 29: 竞价策略历史验证 (Auction Strategy Validation)** - Read-only signal-quality report + vectorized auction-column injector — BT-01..06 (completed 2026-08-06)
 - [x] **Phase 30: 盘前监控告警 (Premarket Monitoring)** - New preopen rule type + evaluate_premarket + 09:26 job-tail wiring — MON-01..07 (completed 2026-08-06)
 - [x] **Phase 31: 竞价复盘 (Auction Recap)** - Deterministic auction recap panel in the post-close recap + optional AI commentary — REV-01..05 (completed 2026-08-06)
-- [ ] **Phase 32: 竞价历史回填 (Auction History Backfill)** - xyz auction capability + backfill job + honest gates + idempotent atomic writes — AQ-01..06 (planned)
+- [x] **Phase 32: 竞价历史回填 (Auction History Backfill)** - xyz auction capability + backfill job + honest gates + idempotent atomic writes — AQ-01..06 (planned) (completed 2026-08-06)
 - [ ] **Phase 33: 股池回填 OQ-1 (Pool Backfill)** - Sandbox subset backfill verification + full-248 operator runbook + PIT interplay — PB-01..04 (planned)
 - [ ] **Phase 34: 竞价回测解锁 (BT-07 Full Auction Backtest)** - Real-branch activation + 248-day full backtest + backtest_results persistence — BT-07..10 (planned)
 - [ ] **Phase 35: 遗留补全与部署验证 (Legacy Completion & Deploy Verification)** - R13 regression + CHART-04 stance + deploy checklist + P2 extensions — LG-01..05 (planned)
@@ -142,7 +142,7 @@ Phases execute in numeric order: 32 → 33 → 34 → 35
 
 | Phase | Requirements | Status |
 |-------|-------------|--------|
-| 32. 竞价历史回填 | AQ-01..06 | Planned |
+| 32. 竞价历史回填 | AQ-01..06 | Complete    |
 | 33. 股池回填 OQ-1 | PB-01..04 | Planned |
 | 34. 竞价回测解锁 | BT-07..10 | Planned |
 | 35. 遗留补全与部署验证 | LG-01..05 | Planned |
