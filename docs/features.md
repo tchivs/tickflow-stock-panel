@@ -58,6 +58,16 @@
 - **前瞻口径（BT-04）**：信号日 T 以开盘价入场；`next_day_open_ret = open_{T+1}/open_T − 1`、`next_day_close_ret = close_{T+1}/open_T − 1`、`open_gap_outcome = open_{T+1}/close_T − 1`；结果日 = 全市场交易日历的下一交易日（绝不按标的行内 shift）；结果日缺行计入 `n_missing_outcomes`，统计排除，**绝不 0 填/前向填充**。
 - **诚实边界**：真实竞价列验证以待 `kline_auction` 历史分区就位（当前 0 分区 —— 湖空时真列分支诚实空，不伪造真值）；本报告为纯 API 研究报告，无前端消费（D-05）。
 
+### 📥 竞价历史回填（Auction History Backfill）
+
+运营触发端点 `POST /api/kline/auction/backfill`，把 `kline_auction` 湖从 0 分区回填到与 `kline_daily` 对齐（竞价列是日 K 的补充面）。body：`{"symbols": ["000001.SZ", ...] | null(全量), "start"/"end": "YYYY-MM-DD" | null, "rpm": 1..60 | 30}`；立即返回 `{"status": "started"|"reused", "job_id"}`（单飞：已有同类任务在跑 → `reused`）。进度/终态/取消复用既有 `GET /api/pipeline/jobs/{id}`（轮询）与 `POST /api/pipeline/jobs/{id}/cancel`（合作式，每 symbol 检查）；与 pool backfill / EOD 重任务槽互斥（`已有数据任务在运行` 失败记录）。
+
+- **诚实闸门（AQ-03）**：探针 `available` + 预检可达才写 —— 源不可达 → 0 写 fail-closed（`reason: "source_unavailable"`）；**只写 kline_daily 已对齐日期**（范围 = kline_daily 分区 ∩ [start,end]，写边界再过滤一次），绝不 phantom-write 日 K 没有的日期；per-symbol 失败台账 `failed_symbols: [{"symbol", "reason"}]`，`reason` 二选一 —— `"empty_response"`（上游空但有 kline_daily 覆盖，如 BJ 标的 R8）或截断异常消息（≤200 字），终态如实反映部分失败，**绝不伪造成功/0 填缺失**。
+- **诚实 provenance（AQ-04）**：`origin="backfill"` 只存在于 job 终态 dict —— 湖无 provenance 列（回填与实时 EOD 同分区写，provenance 即分区存在性，per-分区 provenance 是 seam 变更，不在 Phase 32 范围）；`auction_unmatched_volume`/`auction_unmatched_amount` 上游无此字段 → 列缺席**永不 0 填**，派生 `auction_unmatched_amount` 仅当输入列可得时由读路径计算。
+- **操作指引（AQ-05）**：rpm 1..60，默认 30（≈2s/码）；全 5537 码全量 ≈ 3-5.5h（rpm≈37 自然节流 ≈ 3h）；建议按子集 `symbols` 分批运行；重跑幂等（分区 merge-upsert 只填缺口）；出现 429 → 降 rpm 重跑；BJ 标的若上游无覆盖 → 诚实 `empty_response` 记录，不预填。
+- **AQ-06 注记（P2，doc-only）**：分钟历史回填已**正式关闭（CLOSED）** —— xyz 1m ≈ 21 交易日覆盖（实测）、ifzq/sina 仅尾随窗口、TickFlow 分钟档位 gated at pro+；`kline_minute` 保持增量 ≤30 日同步（`sync_and_persist_minute` 零改动）；证据：`research/v2.3-data-depth/AUCTION-BACKFILL.md` §4/§6。
+- **R3 注记（probe 缓存）**：`capabilities.auction=True` 后 `resolve_auction_probe()` 每次调用一次实时 HTTP（1.6s 名义 / 8s 超时）——影响 `GET /api/kline/auction/history` 与 EOD 闸门延迟；短 TTL probe 缓存是**后续可选守卫**，不在 Phase 32 内实现。
+
 ---
 
 ## 📊 指标流水线(Indicators)
