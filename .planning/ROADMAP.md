@@ -204,11 +204,11 @@ Plans:
 
 **Research flag**: 需要 `--research-phase`（高） — 复盘默认调度决策（15:40 定案）、历史 as_of probe 语义（分区存在性主闸门）、AI 失败时面板兜底（R8，不纳入）、REV-05 纳入.
 
-**Plans**: 3/3 plans planned
+**Plans**: 1/3 plans executed
 
 Plans:
 
-- [ ] 31-01-PLAN.md — 后端服务: `auction_recap.py` (build_auction_recap 三块 + data_completeness 枚举 + render/slice 纯函数, REV-01/02/03) + test_auction_recap.py
+- [x] 31-01-PLAN.md — 后端服务: `auction_recap.py` (build_auction_recap 三块 + data_completeness 枚举 + render/slice 纯函数, REV-01/02/03) + test_auction_recap.py
 - [ ] 31-02-PLAN.md — 后端集成: recap_market_stream 面板 delta + `_build_user_prompt` 可选参 + 点评开关 (preferences + settings PUT) + 调度默认 15:40 + Review.tsx:105 字面量 (REV-04) + test_market_recap_delta.py
 - [ ] 31-03-PLAN.md — REV-05 端点 + 守卫: `GET /api/market-recap/auction` + main.py 注册 + test_auction_recap_guard.py (6 项 POOL-03) + test_auction_recap_endpoint.py + docs/features.md
 
@@ -222,7 +222,7 @@ Phases execute in numeric order: 28 → 29 → 30 → 31
 | 28. 概念板块 PIT | CONCEPT-01..07 | Complete    |
 | 29. 竞价策略历史验证 | BT-01..06 | Complete    |
 | 30. 盘前监控告警 | MON-01..07 | Complete    |
-| 31. 竞价复盘 | REV-01..05 | Planned |
+| 31. 竞价复盘 | REV-01..05 | In Progress|
 
 ---
 *Last updated: 2026-08-06 — v2.2 milestone started; research synthesized (4 domains → 4 phases); requirements defined*

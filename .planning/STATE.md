@@ -5,16 +5,16 @@ milestone_name: 决策闭环与历史纵深 — planning
 current_phase: 31
 current_phase_name: Auction Recap
 status: planning
-stopped_at: Completed 30-03-PLAN.md
-last_updated: "2026-08-06T14:13:54.383Z"
+stopped_at: Completed 31-01-PLAN.md
+last_updated: "2026-08-06T15:04:25.752Z"
 last_activity: 2026-08-06
-last_activity_desc: Phase 30 complete, transitioned to Phase 31
+last_activity_desc: 31-01 complete (REV-01/02/03: auction_recap.py 三块装配 + data_completeness + render/slice 单源)
 progress:
   total_phases: 8
   completed_phases: 0
   total_plans: 12
-  completed_plans: 9
-  percent: 0
+  completed_plans: 10
+  percent: 83
 ---
 
 # Project State
@@ -29,9 +29,9 @@ See: .planning/PROJECT.md (updated 2026-08-06)
 ## Current Position
 
 Phase: 31 — 竞价复盘 (Auction Recap)
-Plan: Not started
-Status: Ready to plan
-Last activity: 2026-08-06 — Phase 30 complete, transitioned to Phase 31
+Plan: 1/3 (31-01 complete)
+Status: In Progress
+Last activity: 2026-08-06 — 31-01 complete (REV-01/02/03: auction_recap.py 三块装配 + data_completeness + render/slice 单源)
 
 ## v1.3 Phase Summary (shipped 2026-08-04)
 
@@ -84,8 +84,8 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-08-06T14:08:28.802Z
-Stopped at: Completed 30-03-PLAN.md
+Last session: 2026-08-06T15:04:25.741Z
+Stopped at: Completed 31-01-PLAN.md
 Resume file: None
 
 ## Operator Next Steps
@@ -149,6 +149,8 @@ Resume file: None
 - [Phase ?]: 30-03: preopen 隐藏 truth 信号点选仅为 UX (后端 validate 白名单为最终防线 — 双保险)
 - [Phase ?]: 30-03: 徽标区整体以 ev.source === 'preopen' 包裹, provisional/degraded 为可选字段 — 旧事件零渲染零崩溃
 - [Phase ?]: 30-03: e2e 断言命中条件行与前端渲染器字形一致 ('open_gap>=0.05' 非 '≥'; cnSignal 映射后字段名)
+- [Phase 31 / P1]: 31-01: pre_eod 判别用分钟算术 (now.hour*60+now.minute) vs 调度 (W-2); 懒 import from app.services.preferences.get_pipeline_schedule (W-1 守卫白名单形)
+- [Phase 31 / P1]: 31-01: 服务模块避免 import math/json (不在 31-03 _IMPORT_EXACT), NaN/Inf 用 v != v or v in (inf,-inf) — 守卫白名单纪律前置
 
 ### v1.3 Decisions (carried)
 
@@ -184,6 +186,7 @@ Resume file: None
 | Phase 24 P1 | — | 3 tasks | 6 files |
 | Phase 24 P2 | 22 | 3 tasks | 5 files |
 | Phase 25-watchlist-sync P1 | 10 | 3 tasks | 3 files |
+| Phase 31 P1 | 7min | 3 tasks | 2 files |
 
 ---
 *Last updated: 2026-08-05 — Phase 21 plan 1 (STRAT-04/05/06 engine seam + managed column + P1 strategies) complete; Phase 21 in progress (plan 2 parallel)*
