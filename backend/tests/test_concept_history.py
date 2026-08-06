@@ -5,6 +5,7 @@ Hermetic: 全部走 tmp_path, 不触碰真实 data/ 目录; 不 import 其他测
 """
 from __future__ import annotations
 
+import ast
 import json
 import re
 from pathlib import Path
@@ -548,3 +549,107 @@ def test_pool_history_api_passthrough_as_of_snapshot(tmp_path):
     assert body["concept_attribution"] == "as_of_snapshot"
     assert body["concept_effective_date"] == _AS_OF
     assert body["concept_captured_at"] == "2026-08-04T10:00:00"
+
+
+# ---------------------------------------------------------------------------
+# Task 3 — CONCEPT-05 AST 守卫 (按模块拆分) + OQ-3 探针脚本
+# ---------------------------------------------------------------------------
+
+# 执行族 token: 出现在 import / 引用中即失败 (镜像 test_pool_hub._EXECUTION_TOKEN)
+_EXECUTION_TOKEN = re.compile(
+    r"broker|order|execution|trade|portfolio|watchlist|position|account|transaction|下单|委托",
+    re.IGNORECASE,
+)
+
+_WRITE_PATTERNS = (
+    re.compile(r"open\s*\(\s*[^,)]*,\s*[\"']w"),
+    re.compile(r"open\s*\(\s*[^,)]*,\s*[\"']wb"),
+    re.compile(r"open\s*\(\s*[^,)]*,\s*[\"']a"),
+    re.compile(r"write_parquet"),
+    re.compile(r"os\.replace"),
+    re.compile(r"unlink\s*\("),
+    re.compile(r"mkdir\s*\("),
+)
+
+
+def _imported_module_names(source: str) -> list[str]:
+    """ast 遍历提取所有 import 模块名 (镜像 test_pool_hub)。"""
+    tree = ast.parse(source)
+    names: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names.extend(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            names.append(node.module)
+    return names
+
+
+def test_concept_history_ast_guard_writes_only_ext_history():
+    """CONCEPT-05 E2 形: concept_history 只写 ext_history, 所有含写路径函数引用 _HISTORY_ROOT。"""
+    backend = Path(__file__).resolve().parents[1]
+    src = (backend / "app" / "services" / "concept_history.py").read_text(encoding="utf-8")
+
+    m = re.search(r'_HISTORY_ROOT\s*=\s*"([^"]+)"', src)
+    assert m is not None, "concept_history.py 缺少 _HISTORY_ROOT 常量"
+    assert m.group(1) == "ext_history"
+
+    tree = ast.parse(src)
+    write_funcs = {"replace", "mkdir"}
+
+    def _has_write(node) -> bool:
+        for c in ast.walk(node):
+            if isinstance(c, ast.Call):
+                f = c.func
+                if isinstance(f, ast.Attribute) and f.attr in write_funcs:
+                    return True
+                if isinstance(f, ast.Attribute) and f.attr == "write_parquet":
+                    return True
+                if isinstance(f, ast.Name) and f.id == "open":
+                    return True
+        return False
+
+    checked = 0
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and _has_write(node):
+            func_src = ast.get_source_segment(src, node) or ""
+            assert "_HISTORY_ROOT" in func_src, (
+                f"{node.name} 含写路径但未引用 _HISTORY_ROOT (只写 ext_history)"
+            )
+            checked += 1
+    assert checked >= 1, "concept_history.py 未发现任何含写路径函数 (守卫形同虚设)"
+
+
+def test_concept_history_no_execution_imports_no_strategy_cache():
+    """CONCEPT-05 E1/E3 形: 无执行族 import; 无运行时缓存 (strategy_cache) 引用。"""
+    backend = Path(__file__).resolve().parents[1]
+    src = (backend / "app" / "services" / "concept_history.py").read_text(encoding="utf-8")
+
+    for module in _imported_module_names(src):
+        assert not _EXECUTION_TOKEN.search(module), (
+            f"concept_history.py 引入了执行族模块: {module}"
+        )
+    assert "strategy_cache" not in src, "concept_history.py 引用了运行时缓存 (strategy_cache)"
+    assert "write_cache" not in src, "concept_history.py 引用了 write_cache"
+
+
+def test_pool_hub_remains_zero_write():
+    """CONCEPT-05 拆分复核: pool_hub.py 仍零写路径 (POOL-03 既有守卫的独立复核)。"""
+    backend = Path(__file__).resolve().parents[1]
+    src = (backend / "app" / "services" / "pool_hub.py").read_text(encoding="utf-8")
+    for pattern in _WRITE_PATTERNS:
+        assert not pattern.search(src), f"pool_hub.py 出现写路径: {pattern.pattern}"
+
+
+def test_probe_concept_drift_script_compiles_and_references():
+    """OQ-3 探针: probe_concept_drift.py 存在, 引用 capture/partition_sha256/drift.jsonl/ext_history。"""
+    import py_compile
+
+    backend = Path(__file__).resolve().parents[1]
+    script = backend / "scripts" / "probe_concept_drift.py"
+    assert script.exists(), "probe_concept_drift.py 缺失"
+    py_compile.compile(str(script), doraise=True)
+    text = script.read_text(encoding="utf-8")
+    assert "capture" in text
+    assert "partition_sha256" in text
+    assert "drift.jsonl" in text
+    assert "ext_history" in text
