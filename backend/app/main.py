@@ -38,6 +38,7 @@ from app.api import (
     portfolio,
     research,
     research_auction,
+    research_backtest,
     rps,
     screener,
     signals,
@@ -861,6 +862,8 @@ app.include_router(backtest.router)
 app.include_router(research.router)
 # BT-03 竞价策略历史验证只读报告 (POOL-03 零执行)
 app.include_router(research_auction.router)
+# BT-09 竞价回测结果只读查询 (POOL-03 零执行)
+app.include_router(research_backtest.router)
 app.include_router(intraday.router)
 app.include_router(indices.router)
 app.include_router(overview.router)
