@@ -5,15 +5,15 @@ milestone_name: 决策闭环与历史纵深 — planning
 current_phase: 29
 current_phase_name: Auction Strategy Validation
 status: planning
-stopped_at: Completed 28-03-PLAN.md
-last_updated: "2026-08-06T11:42:21.340Z"
+stopped_at: Completed 29-01-PLAN.md (BT-02)
+last_updated: "2026-08-06T12:29:20.785Z"
 last_activity: 2026-08-06
 last_activity_desc: Phase 28 complete, transitioned to Phase 29
 progress:
   total_phases: 8
   completed_phases: 0
-  total_plans: 4
-  completed_plans: 3
+  total_plans: 8
+  completed_plans: 4
   percent: 0
 ---
 
@@ -29,9 +29,9 @@ See: .planning/PROJECT.md (updated 2026-08-06)
 ## Current Position
 
 Phase: 29 — 竞价策略历史验证 (Auction Strategy Validation)
-Plan: Not started
-Status: Ready to plan
-Last activity: 2026-08-06 — Phase 28 complete, transitioned to Phase 29
+Plan: 1/3 complete (29-01 BT-02), next 29-02 (BT-03/04/05 report service)
+Status: Executing
+Last activity: 2026-08-06 — 29-01 complete: attach_auction_columns_range landed (14 new + 14 regression tests green)
 
 ## v1.3 Phase Summary (shipped 2026-08-04)
 
@@ -84,8 +84,8 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-08-06T11:31:51.197Z
-Stopped at: Completed 28-03-PLAN.md
+Last session: 2026-08-06T12:28:59.838Z
+Stopped at: Completed 29-01-PLAN.md (BT-02)
 Resume file: None
 
 ## Operator Next Steps
@@ -130,6 +130,9 @@ Resume file: None
 - [Phase ?]: build_rps_rotation 提取 _build_rotation_full 私有 helper 复用 join/agg/grouped 段, as_of 与 latest 两分支各一次
 - [Phase ?]: as_of 分支空 map → 返回空矩阵, 不 fallback 当前 ext (诚实标注来源)
 - [Phase ?]: RPS 矩阵各历史列仍共用单日 map; 逐日概念 map 各列独立属未来增强
+- [Phase ?]: 29-01 (BT-02): 等价性测试逐日裁剪缓存 — get_enriched_history 以整缓存 trading_dates[-(lookback+1)] 为切片锚点 (repository.py:951-957), 单日分母只有 T ∈ {cache_max-1, cache_max} 才等于「T 前 5 行」; 逐日 seed 缓存 = 面板 ≤ d 行, 缓存与面板同源同前导 (W2 前提), 逐值 <1e-9 成立
+- [Phase ?]: 29-01 (BT-02): 向量化分母用 min_samples=1 (polars 1.40.1 现行 kwarg, 与 factor_dsl.py:575 一致), 不用已弃用 min_periods= (N1)
+- [Phase ?]: 29-01 (BT-02): 等价性断言只用于 ≥5 前导行的全面板输入 (W2); 1-4 日前导短历史用手算均值断言 (边界/warmup 测试)
 
 ### v1.3 Decisions (carried)
 
@@ -176,3 +179,4 @@ Resume file: None
 | Phase 28 P1 | 41 | 3 tasks | 6 files |
 | Phase 28 P2 | 5 | 3 tasks | 5 files |
 | Phase 28-concept-pit P3 | 5 | 2 tasks | 4 files |
+| Phase 29 P1 | 40 | 3 tasks | 2 files |
