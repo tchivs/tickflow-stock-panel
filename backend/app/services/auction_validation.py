@@ -397,8 +397,13 @@ class AuctionValidationService:
             return {m: _null_metric() for m in _FORWARD_METRICS}, 0
 
         dates = list(enriched_dates)
-        calendar = pl.DataFrame({"date": dates, "outcome_date": dates[1:] + [None]})
+        calendar = pl.DataFrame({"date": dates, "outcome_date": dates[1:] + [None]}).with_columns(
+            pl.col("outcome_date").cast(pl.Date)
+        )
         hits = hits.join(calendar, on="date", how="left")
+        # 结果日全部为 null 时 (窗口末日命中) polars 会把 outcome_date 降级为 Null 型,
+        # 显式回cast到 Date 再与结果面板 join (strict=False 容忍全 null)
+        hits = hits.with_columns(pl.col("outcome_date").cast(pl.Date, strict=False))
 
         outcomes = verification_panel.select(["symbol", "date", "open", "close"]).rename(
             {"date": "outcome_date", "open": "next_open", "close": "next_close"}

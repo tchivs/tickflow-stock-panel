@@ -259,3 +259,177 @@ def test_probe_passthrough_not_gate(repo_env):
     assert report["data_gate"] == "empty"
     assert report["empty_reason"] == "no_auction_partitions"
     assert len(report["strategies"]) == 9
+
+
+# ================================================================
+# Task 2 — BT-04 前瞻口径锁死 (全局日历 next-date + 三公式 + n_missing_outcomes)
+# ================================================================
+
+
+def test_forward_formula_next_day_returns(repo_env):
+    """BT-04 三公式手算断言 (auction_early_star, eod 分支, 确定性命中):
+
+    T=2026-08-04 (open 10.0/20.0, close 10.5/20.5), T+1=2026-08-05 (open 10.8/21.0,
+    close 11.0/21.5); 结果日 = 全局日历 next-date → 每 hit:
+      next_day_open_ret  = 10.8/10.0−1 = 0.08; 21.0/20.0−1 = 0.05
+      next_day_close_ret = 11.0/10.0−1 = 0.10; 21.5/20.0−1 = 0.075
+      open_gap_outcome   = 10.8/10.5−1; 21.0/20.5−1
+    T+1 行 open_gap/change_pct 置低 → 不产生额外命中 (n_hits==2, n_missing==0)。"""
+    from app.services.auction_validation import AuctionValidationService
+
+    repo, data_dir = repo_env
+    t, t1 = date(2026, 8, 4), date(2026, 8, 5)
+    _seed_enriched_cache(
+        repo, days=2, start=t,
+        overrides={
+            ("600000", t): {"close": 20.5},
+            ("000001", t1): {"open": 10.8, "close": 11.0, "open_gap": 0.0, "change_pct": 0.01},
+            ("600000", t1): {"open": 21.0, "close": 21.5, "open_gap": 0.0, "change_pct": 0.01},
+        },
+    )
+    engine = _make_engine()
+    svc = AuctionValidationService(repo, engine, probe_resolver=lambda: _available_verdict())
+
+    report = svc.build_report(start=t, end=t1)
+
+    s = {st["id"]: st for st in report["strategies"]}["auction_early_star"]
+    assert s["n_hits"] == 2
+    assert s["n_missing_outcomes"] == 0
+    fs = s["forward_stats"]
+    assert fs["next_day_open_ret"] == {
+        "mean": pytest.approx(0.065), "median": pytest.approx(0.065),
+        "win_rate": pytest.approx(1.0), "n": 2,
+    }
+    assert fs["next_day_close_ret"] == {
+        "mean": pytest.approx(0.0875), "median": pytest.approx(0.0875),
+        "win_rate": pytest.approx(1.0), "n": 2,
+    }
+    assert fs["open_gap_outcome"]["n"] == 2
+    assert fs["open_gap_outcome"]["mean"] == pytest.approx(
+        (10.8 / 10.5 - 1.0 + 21.0 / 20.5 - 1.0) / 2.0
+    )
+
+
+def test_outcome_missing_halted_symbol_no_zero_fill(repo_env):
+    """BT-04: 停牌 symbol 结果日缺行 → n_missing_outcomes>0, 统计排除, 绝不 0 填/
+    前向填充; 全部缺失 → mean/median/win_rate 全 null 而非 0。
+
+    600000 有 T 行 (命中) 但 T+1 无行 (停牌) → 其 T 命中计入 n_missing_outcomes,
+    三指标均值只含 000001 的有效行 (若 0 填, mean 会是 0.04 且 n=2)。"""
+    from app.services.auction_validation import AuctionValidationService
+
+    repo, data_dir = repo_env
+    t, t1 = date(2026, 8, 4), date(2026, 8, 5)
+    panel = _seed_enriched_cache(
+        repo, days=2, start=t,
+        overrides={
+            ("000001", t1): {"open": 10.8, "close": 11.0, "open_gap": 0.0, "change_pct": 0.01},
+        },
+    )
+    # 600000 在 T+1 停牌: 无 T+1 行
+    panel = panel.filter(~((pl.col("symbol") == "600000") & (pl.col("date") == t1)))
+    repo._enriched_history_cache = panel
+
+    engine = _make_engine()
+    svc = AuctionValidationService(repo, engine, probe_resolver=lambda: _available_verdict())
+
+    report = svc.build_report(start=t, end=t1)
+
+    s = {st["id"]: st for st in report["strategies"]}["auction_early_star"]
+    assert s["n_hits"] == 2
+    assert s["n_missing_outcomes"] == 1
+    fs = s["forward_stats"]
+    # 统计只含 000001 的有效行 (600000 的命中被排除, 绝不 0 填)
+    assert fs["next_day_open_ret"]["n"] == 1
+    assert fs["next_day_open_ret"]["mean"] == pytest.approx(10.8 / 10.0 - 1.0)
+    assert fs["next_day_open_ret"]["win_rate"] == pytest.approx(1.0)
+    assert fs["next_day_close_ret"]["n"] == 1
+    assert fs["next_day_close_ret"]["mean"] == pytest.approx(11.0 / 10.0 - 1.0)
+    assert fs["open_gap_outcome"]["n"] == 1
+    assert fs["open_gap_outcome"]["mean"] == pytest.approx(10.8 / 10.5 - 1.0)
+
+    # 全部缺失变体: 单日窗口 → 结果日不存在 → 三指标全 null (诚实, 非 0)
+    _seed_enriched_cache(repo, days=1, start=t)
+    report2 = svc.build_report(start=t, end=t)
+    s2 = {st["id"]: st for st in report2["strategies"]}["auction_early_star"]
+    assert s2["n_hits"] == 2
+    assert s2["n_missing_outcomes"] == 2
+    for m in _FORWARD_METRICS:
+        assert s2["forward_stats"][m] == {"mean": None, "median": None, "win_rate": None, "n": 0}
+
+
+def test_outcome_global_calendar_next_date_not_shift(repo_env):
+    """BT-04: 结果日 = 全局交易日历 next-date, 绝不 per-symbol shift(-1)。
+
+    600000 在 T 命中但 T+1 停牌 (T+2 恢复有行): 其结果日必须按全局日历取 T+1
+    (缺席 → missing), 绝不能按行内 shift(-1) 错配到 T+2 —— 若错配,
+    next_day_open_ret 会把 30.0/20.0−1=0.50 算进统计 (mean 0.29), 而正确值只含
+    000001 的 10.8/10.0−1=0.08。"""
+    from app.services.auction_validation import AuctionValidationService
+
+    repo, data_dir = repo_env
+    t, t1, t2 = date(2026, 8, 4), date(2026, 8, 5), date(2026, 8, 6)
+    panel = _seed_enriched_cache(
+        repo, days=3, start=t,
+        overrides={
+            ("000001", t1): {"open": 10.8, "close": 11.0, "open_gap": 0.0, "change_pct": 0.01},
+            ("600000", t1): {"open_gap": 0.0, "change_pct": 0.01},
+            ("000001", t2): {"open": 15.0, "close": 15.5, "open_gap": 0.0, "change_pct": 0.01},
+            ("600000", t2): {"open": 30.0, "close": 31.5, "open_gap": 0.0, "change_pct": 0.01},
+        },
+    )
+    # 600000 在 T+1 停牌: 全局交易日历仍有 T+1 (000001 有行)
+    panel = panel.filter(~((pl.col("symbol") == "600000") & (pl.col("date") == t1)))
+    repo._enriched_history_cache = panel
+
+    engine = _make_engine()
+    svc = AuctionValidationService(repo, engine, probe_resolver=lambda: _available_verdict())
+
+    report = svc.build_report(start=t, end=t2)
+
+    s = {st["id"]: st for st in report["strategies"]}["auction_early_star"]
+    assert s["n_hits"] == 2
+    assert s["n_missing_outcomes"] == 1  # 600000 的 T 命中 (全局日历 T+1 缺行)
+    fs = s["forward_stats"]
+    assert fs["next_day_open_ret"]["n"] == 1
+    assert fs["next_day_open_ret"]["mean"] == pytest.approx(10.8 / 10.0 - 1.0)
+    assert fs["next_day_close_ret"]["n"] == 1
+    assert fs["next_day_close_ret"]["mean"] == pytest.approx(11.0 / 10.0 - 1.0)
+    assert fs["open_gap_outcome"]["n"] == 1
+    assert fs["open_gap_outcome"]["mean"] == pytest.approx(10.8 / 10.5 - 1.0)
+
+
+def test_forward_close_t_boundary_independent_n(repo_env):
+    """BT-04: close_T 为 null/≤0 → open_gap_outcome 该单点剔除, 其余两指标保留
+    (每指标独立 n)。
+
+    600000 的 T close=null (但 open_T=20 > 0, T+1 行存在): next_day_open_ret/
+    next_day_close_ret 仍含该 hit (n=2), open_gap_outcome 只含 000001 (n=1)。"""
+    from app.services.auction_validation import AuctionValidationService
+
+    repo, data_dir = repo_env
+    t, t1 = date(2026, 8, 4), date(2026, 8, 5)
+    _seed_enriched_cache(
+        repo, days=2, start=t,
+        overrides={
+            ("600000", t): {"close": None},
+            ("000001", t1): {"open": 10.8, "close": 11.0, "open_gap": 0.0, "change_pct": 0.01},
+            ("600000", t1): {"open": 21.0, "close": 21.5, "open_gap": 0.0, "change_pct": 0.01},
+        },
+    )
+    engine = _make_engine()
+    svc = AuctionValidationService(repo, engine, probe_resolver=lambda: _available_verdict())
+
+    report = svc.build_report(start=t, end=t1)
+
+    s = {st["id"]: st for st in report["strategies"]}["auction_early_star"]
+    assert s["n_hits"] == 2
+    assert s["n_missing_outcomes"] == 0
+    fs = s["forward_stats"]
+    assert fs["next_day_open_ret"]["n"] == 2
+    assert fs["next_day_open_ret"]["mean"] == pytest.approx((10.8 / 10.0 - 1.0 + 21.0 / 20.0 - 1.0) / 2.0)
+    assert fs["next_day_close_ret"]["n"] == 2
+    assert fs["next_day_close_ret"]["mean"] == pytest.approx((11.0 / 10.0 - 1.0 + 21.5 / 20.0 - 1.0) / 2.0)
+    assert fs["open_gap_outcome"]["n"] == 1
+    assert fs["open_gap_outcome"]["mean"] == pytest.approx(10.8 / 10.5 - 1.0)
+
