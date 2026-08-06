@@ -213,7 +213,7 @@ Phases execute in numeric order: 28 → 29 → 30 → 31
 |-------|-------------|--------|
 | 28. 概念板块 PIT | CONCEPT-01..07 | Complete    |
 | 29. 竞价策略历史验证 | BT-01..06 | Complete    |
-| 30. 盘前监控告警 | MON-01..07 | Complete |
+| 30. 盘前监控告警 | MON-01..07 | Complete    |
 | 31. 竞价复盘 | REV-01..05 | Planned |
 
 ---

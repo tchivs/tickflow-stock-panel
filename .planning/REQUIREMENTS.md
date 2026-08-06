@@ -80,11 +80,11 @@ Populated during roadmap creation.
 | BT-06 | Phase 29 | Complete |
 | MON-01 | Phase 30 | Complete |
 | MON-02 | Phase 30 | Complete |
-| MON-03 | Phase 30 | Open |
+| MON-03 | Phase 30 | Complete |
 | MON-04 | Phase 30 | Complete |
-| MON-05 | Phase 30 | Open |
-| MON-06 | Phase 30 | Open |
-| MON-07 | Phase 30 | Open (P2) |
+| MON-05 | Phase 30 | Complete |
+| MON-06 | Phase 30 | Complete |
+| MON-07 | Phase 30 | Complete (P2) |
 | REV-01 | Phase 31 | Open |
 | REV-02 | Phase 31 | Open |
 | REV-03 | Phase 31 | Open |

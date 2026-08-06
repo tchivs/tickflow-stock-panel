@@ -2,19 +2,19 @@
 gsd_state_version: 1.0
 milestone: v2.2
 milestone_name: 决策闭环与历史纵深 — planning
-current_phase: 30
-current_phase_name: Premarket Monitoring
+current_phase: 31
+current_phase_name: Auction Recap
 status: planning
 stopped_at: Completed 30-03-PLAN.md
-last_updated: "2026-08-06T14:08:42.338Z"
+last_updated: "2026-08-06T14:13:54.383Z"
 last_activity: 2026-08-06
-last_activity_desc: "30-03 complete (MON-07 前端: preopen 类型契约 + 规则编辑 + 告警渲染 + e2e + docs)"
+last_activity_desc: Phase 30 complete, transitioned to Phase 31
 progress:
   total_phases: 8
   completed_phases: 0
   total_plans: 12
   completed_plans: 9
-  percent: 75
+  percent: 0
 ---
 
 # Project State
@@ -28,10 +28,10 @@ See: .planning/PROJECT.md (updated 2026-08-06)
 
 ## Current Position
 
-Phase: 30 — 盘前监控告警 (Premarket Monitoring)
-Plan: 3/3 (30-03 complete)
-Status: Complete
-Last activity: 2026-08-06 — 30-03 complete (MON-07 前端: preopen 类型契约 + 规则编辑 + 告警渲染 + e2e + docs)
+Phase: 31 — 竞价复盘 (Auction Recap)
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-08-06 — Phase 30 complete, transitioned to Phase 31
 
 ## v1.3 Phase Summary (shipped 2026-08-04)
 
