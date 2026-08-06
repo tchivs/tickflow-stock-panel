@@ -1,6 +1,6 @@
 # 功能手册
 
-各功能模块的详细说明。配置见 [configuration.md](./configuration.md),部署见 [deployment.md](./deployment.md),策略相关见 [strategy.md](./strategy.md)。
+各功能模块的详细说明。配置见 [configuration.md](./configuration.md),部署见 [deployment.md](./deployment.md),部署验证见 [deploy-verification.md](./deploy-verification.md),策略相关见 [strategy.md](./strategy.md)。
 
 > 首次使用建议顺序:**设置 → 凭据与能力**(重新检测) → **立即跑盘后管道**(拉日 K + 算指标) → **自选页**加标的 → **选股页**扫描 → **回测页**验证 → **监控中心**配规则。
 
@@ -242,6 +242,15 @@
   剥离,聚合统计与状态标注保留);与复盘流内嵌面板同源。
 - 零新增依赖;端点/服务受 POOL-03 AST 守卫锁定(GET-only、零写路径、零执行族 import、
   import 白名单)。
+- 派生列口径（估算标注常态 / 诚实缺列 / tier-2 重开 gate）见下文「竞价列与派生列」节。
+
+### 🧮 竞价列与派生列（Auction Columns & Derived Estimates）
+
+竞价相关列分**真实竞价列**（集合竞价撮合成交，外部源接入后存在）与**派生列**（虚拟成交估算，委托量输入可得时存在）两类，CHART-04 立场如下：
+
+- **估算标注为常态（Standing stance）**：派生列（虚拟成交）以「估算」标注已双处固定 —— UI 分组表头 title「由竞价量与历史均量、委托量输入派生的估算值，非真实成交。」（`StockListTable.tsx:319`）、组头「派生 · 虚拟成交」（`:321`）、「虚拟未匹配金额（元·估算）」列 title「虚拟未匹配量 × 虚拟参考价的估算值，非真实成交金额。」（`:335`）；API 类型注释 `PoolHubRow.auction_unmatched_amount`「元·估算, 派生」（`api.ts:741-742`）。**任何新 UI 混排派生列必须沿用此标注纪律**（服务端先例：`indicators/pipeline.py:160` 与 `api/data.py:776` 的列注册描述「派生未匹配金额 (估算, 非真实成交…)」，`auction_columns.py:43`「派生估算列, 非真实成交; 只与真实竞价列分列共存, 永不求和/混排」）；湖空（0 分区）→ 列**永不出现**（诚实缺列而非 0 填/null-as-present，`attach_auction_columns` probe×分区双闸门 `auction_columns.py:110-118` + keep-list 裁剪「缺列即不注入」`:134-139`）。
+- **CHART-04 defer**：「实时虚拟成交列」正式 defer —— 连续竞价实时行情无竞价字段，盘中实时虚拟成交列需 live 竞价流；湖实数据 248 日已由 Phase 32 回填，但**派生列仍为估算**，与真实竞价列严格区分（BT-05 分支互斥：真列策略恒 `branch:"real"`，湖空时 `n_dates==0` 诚实报告，绝不降级为派生）。
+- **Re-eval gate（tier-2 重开条件）**：外部实时竞价源提供 `auction_unmatched_volume` + `auction_virtual_price` 两输入列 → tier-2 盘前真实竞价列 gate 重开（部署清单 **D3**，见 [deploy-verification.md](./deploy-verification.md)）；判定条件 = 源返回窗口内行且含两列（`auction_probe` available，`kline_auction` 分区 6 列）；未提供 → 维持现状，不伪造、不 0 填。
 
 ---
 

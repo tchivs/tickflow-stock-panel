@@ -1,6 +1,6 @@
 # AthenaQuant 部署指南
 
-本项目的几种运行方式，按推荐程度排序。配置项详解见 [configuration.md](./configuration.md)。
+本项目的几种运行方式，按推荐程度排序。配置项详解见 [configuration.md](./configuration.md)。部署验证清单（真实交易日确认项 D1..D8）见 [deploy-verification.md](./deploy-verification.md)。
 
 > 📌 前置依赖:Python ≥ 3.11 · Node ≥ 20 · [`uv`](https://docs.astral.sh/uv/) · `pnpm`（`npm i -g pnpm`）
 
