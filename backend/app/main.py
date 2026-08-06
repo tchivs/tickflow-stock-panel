@@ -19,6 +19,7 @@ from app.advanced import api as advanced_api
 from app.analysis import api as analysis_api
 from app.api import (
     alerts,
+    auction_history,
     backtest,
     data,
     decision,
@@ -780,6 +781,7 @@ _GUEST_READ_GET_PATHS = frozenset({
     "/api/screener/strategies",
     "/api/pool/dates",
     "/api/pool/history",
+    "/api/kline/auction/history",
 })
 
 
@@ -844,6 +846,8 @@ async def auth_middleware(request: Request, call_next):
 app.include_router(core_router)
 app.include_router(auth_api.router)
 app.include_router(kline.router)
+# CHART-01 只读竞价历史聚合 (GET /api/kline/auction/history, POOL-03 零执行)
+app.include_router(auction_history.router)
 app.include_router(watchlist.router)
 app.include_router(pool.router)
 app.include_router(screener.router)
