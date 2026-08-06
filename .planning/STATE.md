@@ -5,16 +5,16 @@ milestone_name: 决策闭环与历史纵深 — planning
 current_phase: 30
 current_phase_name: Premarket Monitoring
 status: planning
-stopped_at: Completed 30-01-PLAN.md
-last_updated: "2026-08-06T13:42:25.759Z"
+stopped_at: Completed 30-02-PLAN.md
+last_updated: "2026-08-06T13:55:26.029Z"
 last_activity: 2026-08-06
-last_activity_desc: 30-01 complete (preopen backend core)
+last_activity_desc: "30-02 complete (backend wiring: 尾段接线 + 持久化优先链 + guest 掩码 + options + AST 守卫)"
 progress:
   total_phases: 8
   completed_phases: 0
   total_plans: 12
-  completed_plans: 7
-  percent: 58
+  completed_plans: 8
+  percent: 0
 ---
 
 # Project State
@@ -29,9 +29,9 @@ See: .planning/PROJECT.md (updated 2026-08-06)
 ## Current Position
 
 Phase: 30 — 盘前监控告警 (Premarket Monitoring)
-Plan: 1/3 (30-01 complete)
+Plan: 2/3 (30-02 complete)
 Status: In Progress
-Last activity: 2026-08-06 — 30-01 complete (preopen backend core: 类型/白名单/隔离评估/盘中跳过)
+Last activity: 2026-08-06 — 30-02 complete (backend wiring: 尾段接线 + 持久化优先链 + guest 掩码 + options + AST 守卫)
 
 ## v1.3 Phase Summary (shipped 2026-08-04)
 
@@ -84,8 +84,8 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-08-06T13:42:25.751Z
-Stopped at: Completed 30-01-PLAN.md
+Last session: 2026-08-06T13:55:25.237Z
+Stopped at: Completed 30-02-PLAN.md
 Resume file: None
 
 ## Operator Next Steps
@@ -140,6 +140,11 @@ Resume file: None
 - [Phase ?]: Test 6 白名单补 collections.abc (29-02 服务既有 stdlib import 面, 计划 parenthetical 遗漏) — 不改已交付服务, 守卫仍为封闭白名单
 - [Phase ?]: preopen 规则 op=truth 配置期显式拒绝 (盘前帧无布尔信号列)
 - [Phase ?]: evaluate_premarket 帧重建 change_pct 恒 None + 白名单禁 EOD 列双保险
+- [Phase ?]: 尾段接线保持调度注册零改动 (T11 锁死): 不新增 job、不碰常量, 与 persist 同一 _run_tracked 单飞内完成评估
+- [Phase ?]: evaluate_premarket_alerts 与 _evaluate_monitors 并列: 无时间 gate 是刻意差异 (仅 09:26 job 触发), 持久化/广播/投递三件套逐字节复用
+- [Phase ?]: degraded 事件带冻结 probe 快照落库 (round-trip 保真), 不新增「未触发日志」表 (OQ-3 保持 v2.2 范围)
+- [Phase ?]: mask_guest_alert 白名单含 message/conditions (盘前文案非 PII), 飞书/Telegram 所有者通道不受掩码约束
+- [Phase ?]: T19 守卫扫描 docstring 剥离后的源码 (docstring 为禁令声明文本, 非调用面)
 
 ### v1.3 Decisions (carried)
 
@@ -191,3 +196,4 @@ Resume file: None
 | Phase 29 P2 | 55 | 3 tasks | 2 files |
 | Phase 29 P3 | 7min | 3 tasks | 5 files |
 | Phase 30 P1 | 31 | 3 tasks | 4 files |
+| Phase 30 P2 | 24 | 3 tasks | 8 files |

@@ -30,11 +30,11 @@ Requirements for the v2.2 milestone. Each maps to a roadmap phase. Research basi
 
 - [x] **MON-01**: A new `preopen` monitor rule type with a validated field whitelist (`open_gap`/`auction_volume`/`auction_amount`/`auction_volume_ratio`/`auction_unmatched_amount`, `op=truth` explicitly rejected (no boolean signal columns pre-open); numeric ops only; EOD-only fields `change_pct`/`close`/`vol_ratio_5d`/`amount` banned); pre-open frame semantics verified at implementation (`compute_enriched_today` + quote_service preopen flush) before shipping alerts.
 - [x] **MON-02**: `evaluate_premarket(payload)` evaluates the premarket preview payload in isolation — reconstructs the DataFrame from `payload["results"]` rows with `change_pct` set to `None` (honest missing column), never touching `_strategy_pools`/`_latest_strategy_results` (no pool-baseline pollution of the 09:30 intraday first round).
-- [ ] **MON-03**: Evaluation is wired to the tail of the 09:26 `_premarket_pool_preview` job (same `_run_tracked` single-flight, after persist) — no new job race; reuses the existing operational → SSE → webhook delivery sequence.
+- [x] **MON-03**: Evaluation is wired to the tail of the 09:26 `_premarket_pool_preview` job (same `_run_tracked` single-flight, after persist) — no new job race; reuses the existing operational → SSE → webhook delivery sequence.
 - [x] **MON-04**: Honest provisional/degraded/probe annotation — events carry `provisional: true`/`degraded`/`probe`; when `degraded` or probe non-available, auction-dependent rules fail closed (0 alerts, never 0-fill silence — the degraded state is surfaced in the alert record/UI); preview `available: false` → no evaluation, no alerts.
-- [ ] **MON-05**: Zero-execution + store isolation — the preopen evaluate module is AST-guarded (execution-family token absent; read-only on `premarket_results`), never writes `strategy_cache`/`screener_results`.
-- [ ] **MON-06**: Guest surfaces stay masked — preopen alert records rendered through the existing guest masking path (`mask_guest_hub` semantics); guests see no auction values.
-- [ ] **MON-07** (P2): `/api/monitor-rules/options` exposes the `preopen` type + field whitelist; the frontend rule editor/alerts page renders the new type (no changes to `Watchlist.tsx`).
+- [x] **MON-05**: Zero-execution + store isolation — the preopen evaluate module is AST-guarded (execution-family token absent; read-only on `premarket_results`), never writes `strategy_cache`/`screener_results`.
+- [x] **MON-06**: Guest surfaces stay masked — preopen alert records rendered through the existing guest masking path (`mask_guest_hub` semantics); guests see no auction values.
+- [x] **MON-07** (P2): `/api/monitor-rules/options` exposes the `preopen` type + field whitelist; the frontend rule editor/alerts page renders the new type (no changes to `Watchlist.tsx`).
 
 ### 竞价复盘 (Auction Recap) — Phase 31
 
