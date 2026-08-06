@@ -25,6 +25,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import polars as pl
+import pytest
 
 FIXED_DATE = date(2026, 8, 6)
 
@@ -335,3 +336,106 @@ def test_build_premarket_preview_probe_three_states(tmp_path, monkeypatch):
     assert p4["window"] == "pre_open"
     assert p4["probe"]["status"] == "available"
     assert p4["results"] == {}
+
+
+# ================================================================
+# Task 2 — compute_enriched_today 补算 open_gap (PM-02, 单一实现零漂移)
+# ================================================================
+
+# live_agg 递推状态/窗口聚合占位值 (本组测试只断言 open_gap; 其余列值不影响结果)。
+_LIVE_AGG_STATIC = {
+    "ema5": 1.0, "ema10": 1.0, "ema20": 1.0, "ema30": 1.0, "ema60": 1.0,
+    "_ema12": 1.0, "_ema26": 1.0, "macd_dea": 0.0,
+    "_ma5_partial_sum": 0.0, "_ma10_partial_sum": 0.0,
+    "_ma20_partial_sum": 0.0, "_ma30_partial_sum": 0.0, "_ma60_partial_sum": 0.0,
+    "_boll_partial_sum": 0.0, "_boll_partial_sq_sum": 0.0,
+    "_kdj_8d_low": 0.0, "_kdj_8d_high": 1.0, "kdj_k": 50.0, "kdj_d": 50.0,
+    "atr_14": 0.1,
+    "_rsi_avg_gain_6": 0.0, "_rsi_avg_loss_6": 0.0,
+    "_rsi_avg_gain_14": 0.0, "_rsi_avg_loss_14": 0.0,
+    "_rsi_avg_gain_24": 0.0, "_rsi_avg_loss_24": 0.0,
+    "_vol_ma5_partial_sum": 0.0, "_vol_ma10_partial_sum": 0.0,
+    "_vol_ma5_prev_sum": 1000.0,  # 非 0, 避免 vol_ratio_5d 除零
+    "_high_59d": 0.0, "_low_59d": 0.0,
+    "_close_5d_ago": 1.0, "_close_10d_ago": 1.0,
+    "_close_20d_ago": 1.0, "_close_30d_ago": 1.0, "_close_60d_ago": 1.0,
+    "_vol_19d_pct_sum": 0.0, "_vol_19d_pct_sq_sum": 0.0,
+}
+
+
+def _premarket_today_frames(symbols, opens, prev_closes, adj_factors, extra_today=None):
+    """构造 compute_enriched_today 的最小 live_agg + today_ohlcv (本组测试只断言 open_gap)。"""
+    live_agg = pl.DataFrame(
+        [
+            {"symbol": sym, "prev_close": pc, "_adj_factor": af, **_LIVE_AGG_STATIC}
+            for sym, pc, af in zip(symbols, prev_closes, adj_factors)
+        ]
+    )
+    ohlcv = {
+        "symbol": symbols,
+        "date": [FIXED_DATE] * len(symbols),
+        "open": opens,
+        "high": opens,
+        "low": [0.0] * len(symbols),
+        "close": opens,
+        "volume": [1000000.0] * len(symbols),
+        "amount": [1e8] * len(symbols),
+    }
+    if extra_today:
+        ohlcv.update(extra_today)
+    return live_agg, pl.DataFrame(ohlcv)
+
+
+def test_compute_enriched_today_open_gap_normal_day():
+    """正常日: open_gap == open/prev_close − 1 逐行数值断言; prev_close<=0 → None (guard)。"""
+    from app.indicators.pipeline import compute_enriched_today
+
+    live_agg, today_ohlcv = _premarket_today_frames(
+        ["000001", "600000", "000002"],
+        [10.0, 11.0, 12.0],
+        [9.5, 11.0, 0.0],  # 第三行 prev_close<=0 → guard → None
+        [1.0, 1.0, 1.0],
+    )
+    out = compute_enriched_today(
+        live_agg, pl.DataFrame(), today_ohlcv, instruments=None, elapsed_minutes=240.0
+    )
+
+    assert "open_gap" in out.columns
+    gaps = out["open_gap"].to_list()
+    assert gaps[0] == pytest.approx(10.0 / 9.5 - 1)
+    assert gaps[1] == pytest.approx(11.0 / 11.0 - 1)
+    assert gaps[2] is None
+
+
+def test_compute_enriched_today_open_gap_exdiv_caliber():
+    """除权日: 采用对齐后 prev_close 口径 (open/prev_close 均乘 _adj_factor), 与 EOD Pass 4 一致。
+
+    _adj_factor=0.9, API 原始 prev_close=10.0 → 对齐后 prev_close=9.0;
+    open 原始 9.6 → 对齐后 8.64 → open_gap = 8.64/9.0 − 1 == −0.04。
+    """
+    from app.indicators.pipeline import compute_enriched_today
+
+    live_agg, today_ohlcv = _premarket_today_frames(["000001"], [9.6], [10.0], [0.9])
+    out = compute_enriched_today(
+        live_agg, pl.DataFrame(), today_ohlcv, instruments=None, elapsed_minutes=240.0
+    )
+
+    gap = out["open_gap"].to_list()[0]
+    # 对齐后口径: (9.6×0.9) / (10.0×0.9) − 1 == 8.64/9.0 − 1 == −0.04
+    assert gap == pytest.approx((9.6 * 0.9) / (10.0 * 0.9) - 1)
+    assert gap == pytest.approx(8.64 / 9.0 - 1)
+    assert gap == pytest.approx(-0.04)
+
+
+def test_compute_enriched_today_open_gap_idempotent():
+    """输入帧已含 open_gap 列 → 补算不覆盖 (guard 幂等)。"""
+    from app.indicators.pipeline import compute_enriched_today
+
+    live_agg, today_ohlcv = _premarket_today_frames(
+        ["000001"], [10.0], [9.5], [1.0], extra_today={"open_gap": 0.123}
+    )
+    out = compute_enriched_today(
+        live_agg, pl.DataFrame(), today_ohlcv, instruments=None, elapsed_minutes=240.0
+    )
+
+    assert out["open_gap"].to_list()[0] == pytest.approx(0.123)  # 源已提供列 → 不覆盖

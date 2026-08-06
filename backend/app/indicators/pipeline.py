@@ -1322,6 +1322,17 @@ def compute_enriched_today(
               .alias("amplitude"),
         )
 
+    # open_gap = 同天 open / prev_close − 1 (prev_close 已乘 _adj_factor 对齐复权);
+    # 与 Pass 4 (compute_enriched L499-507) 逐字一致, 单一实现零漂移 (D2)。
+    # 绝不 shift open —— 那会跨天并引入 lookahead。
+    if "open_gap" not in df.columns:
+        df = df.with_columns(
+            pl.when(pl.col("prev_close") > 0)
+              .then(pl.col("open") / pl.col("prev_close") - 1)
+              .otherwise(None)
+              .alias("open_gap"),
+        )
+
     # ---- EMA (递推) ----
     df = df.with_columns([
         (alpha(5)  * pl.col("close") + (1 - alpha(5))  * pl.col("ema5")).alias("ema5"),
