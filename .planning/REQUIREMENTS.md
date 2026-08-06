@@ -16,10 +16,10 @@ Requirements for the v2.1 milestone. Each maps to a roadmap phase. Research basi
 
 ### 自选股联动 (Watchlist Sync) — Phase 25
 
-- [ ] **WATCH-01**: In the pool drill-down (VIP mode), each stock row shows a watchlist star that toggles membership via the existing `/api/watchlist` CRUD; guest rendering is pixel-identical to v2.0 (no watch controls, no watchlist queries issued for guests).
-- [ ] **WATCH-02**: A "只看自选" filter switch narrows the pool to watchlisted rows (VIP); the strategy-card `total` remains authoritative (filtering never alters totals), applies identically to latest and historical as_of views, and shows an honest empty state when no watchlisted stocks match.
-- [ ] **WATCH-03**: Watchlist membership is consistent across pages via the shared `QK.watchlist` cache; the join key is the fully-suffixed `symbol` (e.g. `603221.SH`) exact match.
-- [ ] **WATCH-04** (P2): Operator can batch-add all visible rows to the watchlist (scope = rows within the current display limit), reusing the existing batch-add endpoint.
+- [x] **WATCH-01**: In the pool drill-down (VIP mode), each stock row shows a watchlist star that toggles membership via the existing `/api/watchlist` CRUD; guest rendering is pixel-identical to v2.0 (no watch controls, no watchlist queries issued for guests).
+- [x] **WATCH-02**: A "只看自选" filter switch narrows the pool to watchlisted rows (VIP); the strategy-card `total` remains authoritative (filtering never alters totals), applies identically to latest and historical as_of views, and shows an honest empty state when no watchlisted stocks match.
+- [x] **WATCH-03**: Watchlist membership is consistent across pages via the shared `QK.watchlist` cache; the join key is the fully-suffixed `symbol` (e.g. `603221.SH`) exact match.
+- [x] **WATCH-04** (P2): Operator can batch-add all visible rows to the watchlist (scope = rows within the current display limit), reusing the existing batch-add endpoint.
 
 ### 历史竞价图 + 派生列复活 (Auction History Chart) — Phase 26
 

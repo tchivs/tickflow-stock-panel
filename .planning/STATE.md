@@ -4,17 +4,17 @@ milestone: v2.1
 milestone_name: 历史深度与自选联动 — planning
 current_phase: 25
 current_phase_name: 自选股联动 (Watchlist Sync)
-status: planning
-stopped_at: Completed 25-01-PLAN.md
-last_updated: "2026-08-06T06:05:01.951Z"
+status: verifying
+stopped_at: Completed 25-02-PLAN.md
+last_updated: "2026-08-06T06:20:55.996Z"
 last_activity: 2026-08-06
-last_activity_desc: Phase 24 complete, transitioned to Phase 25
+last_activity_desc: Phase 25 plan 2 (WATCH e2e + snapshots + docs) complete
 progress:
   total_phases: 4
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 4
-  completed_plans: 3
-  percent: 25
+  completed_plans: 4
+  percent: 50
 ---
 
 # Project State
@@ -29,9 +29,9 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 ## Current Position
 
 Phase: 25 — 自选股联动 (Watchlist Sync)
-Plan: Not started
-Status: Ready to plan
-Last activity: 2026-08-06 — Phase 24 complete, transitioned to Phase 25
+Plan: 2 of 2
+Status: Phase complete — ready for verification
+Last activity: 2026-08-06 — Phase 25 plan 2 (WATCH e2e + snapshots + docs) complete
 
 ## v1.3 Phase Summary (shipped 2026-08-04)
 
@@ -84,8 +84,8 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-08-06T06:05:01.939Z
-Stopped at: Completed 25-01-PLAN.md
+Last session: 2026-08-06T06:20:55.619Z
+Stopped at: Completed 25-02-PLAN.md
 Resume file: None
 
 ## Operator Next Steps
@@ -106,6 +106,8 @@ Resume file: None
 - [Phase ?]: watchlist 查询 enabled: !!data && mode === 'vip' 双门控 (D4/P2) — mode 由 data 派生回退 vip, data 未落地不误发
 - [Phase ?]: 批量 scope = filteredRows 可见行 (display_limit 内), 绝不按 activeStrategy.total (D6/H8); watchlistOnly 开启时隐藏批量按钮
 - [Phase ?]: watchlistPending = toggle.isPending || watchlist.isPending || watchlist.isError (H9 fail-closed); 星标/开关/批量按钮均带非空可访问名 (P1 白名单前提)
+- [Phase ?]: Phase 25 / P2 (B1): 快照重生成范围修正为表格区 4 张 (resonance/filter-active/empty-zero-hit/vip-plaintext), 零 diff 断言集 = grid-populated/card-unavailable/guest-masked/guest-grid — 原计划误标 VIP 快照为 guest, verify 门必失败
+- [Phase ?]: Phase 25 / P2: WATCH-01 二次 GET 断言用计数式而非精确次数 (StrictMode 双挂载免疫); no-mutating 守卫拆分 watchlist 写族与其余 non-GET 分别断言
 
 ### v1.3 Decisions (carried)
 
@@ -144,3 +146,4 @@ Resume file: None
 
 ---
 *Last updated: 2026-08-05 — Phase 21 plan 1 (STRAT-04/05/06 engine seam + managed column + P1 strategies) complete; Phase 21 in progress (plan 2 parallel)*
+| Phase 25-watchlist-sync PP2 | 14 | 3 tasks | 6 files |

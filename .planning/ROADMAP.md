@@ -70,10 +70,10 @@ Four phases (20-23) delivered probe-gated real auction columns + `kline_auction/
   3. Membership is consistent across pages via shared cache; join key = fully-suffixed `symbol` exact match.
   4. (P2) Batch-add visible rows reuses the existing batch-add endpoint.
 
-**Plans**: 1/2 plans executed
+**Plans**: 2/2 plans executed
 
 - [x] 25-01-PLAN.md
-- [ ] 25-02-PLAN.md
+- [x] 25-02-PLAN.md
 
 **Research flag**: standard patterns — 纯前端, 抄 Screener.tsx 先例; 执行前确认用户预存 `Watchlist.tsx` 未改 `QK.watchlist` 契约.
 
