@@ -64,7 +64,17 @@
 
 - **诚实闸门（AQ-03）**：探针 `available` + 预检可达才写 —— 源不可达 → 0 写 fail-closed（`reason: "source_unavailable"`）；**只写 kline_daily 已对齐日期**（范围 = kline_daily 分区 ∩ [start,end]，写边界再过滤一次），绝不 phantom-write 日 K 没有的日期；per-symbol 失败台账 `failed_symbols: [{"symbol", "reason"}]`，`reason` 二选一 —— `"empty_response"`（上游空但有 kline_daily 覆盖，如 BJ 标的 R8）或截断异常消息（≤200 字），终态如实反映部分失败，**绝不伪造成功/0 填缺失**。
 - **诚实 provenance（AQ-04）**：`origin="backfill"` 只存在于 job 终态 dict —— 湖无 provenance 列（回填与实时 EOD 同分区写，provenance 即分区存在性，per-分区 provenance 是 seam 变更，不在 Phase 32 范围）；`auction_unmatched_volume`/`auction_unmatched_amount` 上游无此字段 → 列缺席**永不 0 填**，派生 `auction_unmatched_amount` 仅当输入列可得时由读路径计算。
-- **操作指引（AQ-05）**：rpm 1..60，默认 30（≈2s/码）；全 5537 码全量 ≈ 3-5.5h（rpm≈37 自然节流 ≈ 3h）；建议按子集 `symbols` 分批运行；重跑幂等（分区 merge-upsert 只填缺口）；出现 429 → 降 rpm 重跑；BJ 标的若上游无覆盖 → 诚实 `empty_response` 记录，不预填。
+- **操作指引（AQ-05）**：rpm 1..60，默认 30（≈2s/码）；全 5537 码全量 ≈ 3-5.5h（rpm≈37 自然节流 ≈ 3h）；建议按子集 `symbols` 分批运行；重跑幂等（分区 merge-upsert 只填缺口）；出现 429 → 降 rpm 重跑；BJ 标的若上游无覆盖 → 诚实 `empty_response` 记录，不预填。触发示例：
+
+  ```bash
+  # 全量回填（默认 rpm=30）
+  curl -X POST http://localhost:8000/api/kline/auction/backfill -H 'Content-Type: application/json' -d '{}'
+  # 子集 + 日期范围 + 慢速（限流友好）
+  curl -X POST http://localhost:8000/api/kline/auction/backfill -H 'Content-Type: application/json' \
+       -d '{"symbols": ["000001.SZ", "600519.SH"], "start": "2026-07-01", "end": "2026-08-05", "rpm": 10}'
+  # 响应: {"status": "started", "job_id": "..."} → GET /api/pipeline/jobs/{id} 轮询终态;
+  # 取消: POST /api/pipeline/jobs/{id}/cancel (合作式)
+  ```
 - **AQ-06 注记（P2，doc-only）**：分钟历史回填已**正式关闭（CLOSED）** —— xyz 1m ≈ 21 交易日覆盖（实测）、ifzq/sina 仅尾随窗口、TickFlow 分钟档位 gated at pro+；`kline_minute` 保持增量 ≤30 日同步（`sync_and_persist_minute` 零改动）；证据：`research/v2.3-data-depth/AUCTION-BACKFILL.md` §4/§6。
 - **R3 注记（probe 缓存）**：`capabilities.auction=True` 后 `resolve_auction_probe()` 每次调用一次实时 HTTP（1.6s 名义 / 8s 超时）——影响 `GET /api/kline/auction/history` 与 EOD 闸门延迟；短 TTL probe 缓存是**后续可选守卫**，不在 Phase 32 内实现。
 
