@@ -8,16 +8,16 @@ AthenaQuant is a shipped, self-hosted quantitative research platform for individ
 
 An investor can turn reliable market data and their own holdings into an auditable, actionable research and monitoring workflow without operating multiple disconnected tools.
 
-## Current Milestone: v2.1 历史深度与自选联动
+## Current Milestone: v2.2 决策闭环与历史纵深
 
-**Goal:** 在 v2.0 历史股池基础上深化:逐日全量存档模式突破单日回放、自选股与股池联动、以及依赖实时竞价数据源的盘前股池/历史竞价图候选(probe-gated 哲学延续)。
+**Goal:** 在 v2.1 盘前预览/历史存档/自选联动基础上,把竞价资产（历史股池快照、盘前预览、kline_auction 湖、竞价策略族）接入决策闭环：历史概念归属按日解析（消除 current_snapshot 标注）、竞价/盘前策略获得历史验证路径、盘前预览进入监控告警、竞价信号进入盘后复盘——全部零新增运行时依赖，延续诚实 provenance 与 POOL-03 零执行权。
 
-**Target features:**
-- 逐日全量存档模式(非回放):历史股池逐日完整重建与查询,零存储漂移(HIST-01)
-- POOL-05 自选股联动:自选股与股池交叉高亮/过滤,自选清单本地持有一致(WATCH-01)
-- 盘前股池(09:30 前可用):依赖实时竞价数据源,probe 不可用时 fail-closed 诚实降级(候选,研究确认)
-- 历史竞价图 / 虚拟成交实时列:依赖实时/历史竞价数据源(候选,研究确认)
-- 沿平台边界:选股/股池结果始终为零执行权研究建议,无自动下单
+**Target features（研究驱动，可行性以研究确认）：**
+- 概念板块 PIT 历史映射：历史 ext 概念分区缺失（STATE Blockers 遗留）→ 历史股池概念标签按 as_of 解析（CONCEPT-xx）
+- 竞价策略历史验证：回测引擎基于日 K，9 个竞价/盘前策略（STRAT-04..09）无历史验证路径（BT-xx）
+- 盘前/竞价监控：v2.1 盘前预览 + 竞价列接入规则引擎（MON-xx）
+- 竞价复盘：盘后复盘（market_recap）扩展竞价维度（REV-xx）
+- 沿平台边界：选股/股池结果始终为零执行权研究建议，无自动下单
 
 ## Success Metric
 

@@ -1,37 +1,37 @@
 ---
 gsd_state_version: 1.0
-milestone: v2.1
-milestone_name: 历史深度与自选联动 — planning
-status: Awaiting next milestone
-stopped_at: Completed 27-02-PLAN.md (frontend PM-04 premarket view)
-last_updated: "2026-08-06T08:54:23.080Z"
+milestone: v2.2
+milestone_name: 决策闭环与历史纵深 — planning
+status: planning
+stopped_at: Milestone v2.2 started
+last_updated: "2026-08-06T09:05:00.000Z"
 last_activity: 2026-08-06
-last_activity_desc: Milestone v2.1 completed and archived
+last_activity_desc: Milestone v2.2 started (4 candidate domains)
 progress:
-  total_phases: 4
-  completed_phases: 4
-  total_plans: 8
-  completed_plans: 8
-  percent: 100
-current_phase: 27
-current_phase_name: Premarket Pool
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
+current_phase: null
+current_phase_name: null
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-08-04)
+See: .planning/PROJECT.md (updated 2026-08-06)
 
 **Core value:** An investor can turn reliable market data and their own holdings into an auditable, actionable research and monitoring workflow without operating multiple disconnected tools.
-**Current focus:** Phase 20 — 竞价数据层 (Auction Data)
+**Current focus:** Milestone v2.2 — 决策闭环与历史纵深
 
 ## Current Position
 
-Phase: Milestone v2.1 complete
+Phase: Milestone v2.2 planning (defining requirements)
 Plan: —
-Status: Awaiting next milestone
-Last activity: 2026-08-06 — Milestone v2.1 completed and archived
+Status: Planning
+Last activity: 2026-08-06 — Milestone v2.2 started (4 candidate domains: 概念 PIT / 竞价验证 / 盘前监控 / 竞价复盘)
 
 ## v1.3 Phase Summary (shipped 2026-08-04)
 
@@ -77,10 +77,10 @@ None.
 
 | Category | Item | Status |
 |----------|------|--------|
-| Feature | 虚拟成交实时列 / 历史竞价图 | Deferred to v2.1+ (needs real-time auction source) |
-| Feature | DATA-05 盘前股池 (09:30 前可用) | Deferred to v2.1+ (needs real-time source) |
-| Feature | 逐日全量存档模式（非回放） | Deferred to v2.1+ (replay-first, zero storage) |
-| Feature | POOL-05 自选股联动 | Deferred to v2.1+ |
+| Feature | 概念板块 PIT 历史映射（历史股池概念标签按 as_of 解析，消除 current_snapshot 标注） | Deferred to v2.2 (research: data source history availability) |
+| Feature | 竞价/盘前策略历史验证（回测引擎基于日 K，竞价策略族无验证路径） | Deferred to v2.2 (research) |
+| Feature | 盘前/竞价监控告警（v2.1 盘前预览 + 竞价列接入规则引擎） | Deferred to v2.2 (research) |
+| Feature | 竞价复盘（盘后复盘扩展竞价维度） | Deferred to v2.2 (research) |
 
 ## Session Continuity
 
@@ -90,7 +90,7 @@ Resume file: None
 
 ## Operator Next Steps
 
-- Start the next milestone with /gsd-new-milestone
+- Milestone v2.2 research in progress — 4 domain researchers (concept-PIT / auction-backtest / preopen-monitor / auction-recap) → synthesize SUMMARY → REQUIREMENTS → ROADMAP (Phase 28+)
 
 ## Decisions
 
