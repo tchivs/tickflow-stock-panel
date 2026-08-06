@@ -175,7 +175,7 @@ Plans:
 **Requirements**: MON-01..07
 **Success Criteria** (what must be TRUE):
 
-  1. `preopen` rule type validates against the whitelist (`open_gap`/auction cols, `op=truth`); EOD-only fields banned; `change_pct` set to `None` in the eval frame (honest).
+  1. `preopen` rule type validates against the whitelist (`open_gap`/auction cols, numeric ops only — `op=truth` explicitly rejected); EOD-only fields banned; `change_pct` set to `None` in the eval frame (honest).
   2. `evaluate_premarket` runs in isolation — zero pollution of `_strategy_pools`/`_latest_strategy_results` (no spurious 09:30 dropped/new_entry).
   3. Wired to 09:26 job tail (same single-flight, after persist); reuses operational → SSE → webhook.
   4. `provisional/degraded/probe` annotated on events; degraded + auction-dependent rules fail closed (0 alerts, never silent-0-fill); guest-visible surfaces masked.
