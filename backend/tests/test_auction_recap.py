@@ -340,3 +340,182 @@ def test_probe_does_not_affect_history_gate(repo_env):
     r_not = build_auction_recap(repo, hist, now=now, probe_resolver=lambda: _fake_verdict("not_configured"))
     assert r_avail["data_completeness"] == r_not["data_completeness"] == "no_auction_lake"
     assert r_avail["blocks"]["open_gap_snapshot"] == r_not["blocks"]["open_gap_snapshot"]
+
+
+# ================================================================
+# Task 2 — Block 1 real_auction_activity: 湖分区读 + 窗口谓词回归锁 + 双闸门 + 量比
+# ================================================================
+
+
+def test_history_partition_block_present(repo_env):
+    """REV-01: 历史分区 → 块 present; keep='last' 手算 (总额 = 09:25 行之和, 非全窗口)。"""
+    from app.services.auction_recap import build_auction_recap
+
+    _repo, data_dir = repo_env
+    hist = FIXED_DATE - timedelta(days=1)
+    enriched = _make_enriched(["000001", "600000"], [0.01, 0.02], as_of=hist)
+    instruments = pl.DataFrame({
+        "symbol": ["000001", "600000"],
+        "name": ["平安银行", "浦发银行"],
+    })
+    repo = _FakeRepo(data_dir, enriched=enriched, latest=hist, instruments=instruments)
+    _write_auction_partition(
+        data_dir, hist,
+        _auction_rows(hist, {"000001": (8000.0, 42000.0), "600000": (9000.0, 48000.0)}, n_rows=3),
+    )
+    now = datetime(FIXED_DATE.year, FIXED_DATE.month, FIXED_DATE.day, 16, 0)
+
+    result = build_auction_recap(repo, hist, now=now)
+    blk = result["blocks"]["real_auction_activity"]
+    assert blk["present"] is True
+    assert blk["n_symbols"] == 2
+    # keep='last' 语义: 两 symbol 09:25 行金额之和 (非 6 窗口行之和)
+    assert blk["total_amount"] == pytest.approx(42000.0 + 48000.0)
+    assert blk["top_n"][0]["symbol"] == "600000"
+    assert blk["top_n"][0]["name"] == "浦发银行"
+    assert blk["source"] == "kline_auction"
+
+
+def test_window_predicate_excludes_0931_continuous_bar(repo_env):
+    """REV-02 验收 2: 09:31 连续竞价 bar 永不进竞价列 (读侧窗口谓词回归锁)。"""
+    from app.services.auction_recap import build_auction_recap
+
+    _repo, data_dir = repo_env
+    hist = FIXED_DATE - timedelta(days=1)
+    enriched = _make_enriched(["000001", "600000"], [0.01, 0.02], as_of=hist)
+    instruments = pl.DataFrame({
+        "symbol": ["000001", "600000"],
+        "name": ["平安银行", "浦发银行"],
+    })
+    repo = _FakeRepo(data_dir, enriched=enriched, latest=hist, instruments=instruments)
+    now = datetime(FIXED_DATE.year, FIXED_DATE.month, FIXED_DATE.day, 16, 0)
+
+    # A: 09:16/09:25 窗口行; B: 09:31 连续竞价 bar → A 入块 (取 09:25 值), B 缺席
+    rows = pl.DataFrame({
+        "symbol": ["000001", "000001", "600000"],
+        "datetime": [
+            datetime(hist.year, hist.month, hist.day, 9, 16),
+            datetime(hist.year, hist.month, hist.day, 9, 25),
+            datetime(hist.year, hist.month, hist.day, 9, 31),
+        ],
+        "auction_volume": [100.0, 200.0, 50.0],
+        "auction_amount": [100.0, 200.0, 999.0],
+    })
+    _write_auction_partition(data_dir, hist, rows)
+    blk = build_auction_recap(repo, hist, now=now)["blocks"]["real_auction_activity"]
+    assert blk["present"] is True
+    assert blk["n_symbols"] == 1
+    assert blk["top_n"][0]["symbol"] == "000001"
+    assert blk["top_n"][0]["auction_amount"] == pytest.approx(200.0)
+
+    # 仅含 09:31 行的分区变体 → 窗口内零行 → 块诚实空 (present:false)
+    rows_0931 = pl.DataFrame({
+        "symbol": ["600000"],
+        "datetime": [datetime(hist.year, hist.month, hist.day, 9, 31)],
+        "auction_volume": [50.0],
+        "auction_amount": [999.0],
+    })
+    _write_auction_partition(data_dir, hist, rows_0931)
+    blk2 = build_auction_recap(repo, hist, now=now)["blocks"]["real_auction_activity"]
+    assert blk2["present"] is False
+    assert blk2["note"]
+
+
+def test_today_double_gate_probe_x_partition(repo_env):
+    """REV-01: 今日 as_of → probe×分区双闸门三态。"""
+    from app.services.auction_recap import build_auction_recap
+
+    _repo, data_dir = repo_env
+    enriched = _make_enriched(["000001"], [0.01])
+    repo = _FakeRepo(data_dir, enriched=enriched, latest=FIXED_DATE)
+    now = datetime(FIXED_DATE.year, FIXED_DATE.month, FIXED_DATE.day, 16, 0)
+
+    # (a) probe available + 分区存在 → present
+    _write_auction_partition(data_dir, FIXED_DATE, _auction_rows(FIXED_DATE, {"000001": (300.0, 500.0)}))
+    blk_a = build_auction_recap(
+        repo, FIXED_DATE, now=now, probe_resolver=lambda: _fake_verdict("available"),
+    )["blocks"]["real_auction_activity"]
+    assert blk_a["present"] is True
+    assert "probe" in blk_a  # 今日透传 provenance
+
+    # (b) probe 非 available + 分区存在 → present:false (镜像 attach_auction_columns :105-108)
+    blk_b = build_auction_recap(
+        repo, FIXED_DATE, now=now, probe_resolver=lambda: _fake_verdict("not_configured"),
+    )["blocks"]["real_auction_activity"]
+    assert blk_b["present"] is False
+
+    # (c) probe available + 分区缺失 → present:false + 头标签 no_auction_lake
+    fresh_dir = data_dir.parent / "fresh"
+    fresh_dir.mkdir(parents=True, exist_ok=True)
+    repo_c = _FakeRepo(fresh_dir, enriched=enriched, latest=FIXED_DATE)
+    result_c = build_auction_recap(
+        repo_c, FIXED_DATE, now=now, probe_resolver=lambda: _fake_verdict("available"),
+    )
+    assert result_c["blocks"]["real_auction_activity"]["present"] is False
+    assert result_c["data_completeness"] == "no_auction_lake"
+
+
+def test_ratio_subblock_reuses_attach_columns_range(repo_env):
+    """R11 优先路径: 量比分母复用 attach_auction_columns_range (手算 300/120000)。"""
+    from app.services.auction_recap import build_auction_recap
+
+    _repo, data_dir = repo_env
+    enriched = _make_enriched(["000001", "600000"], [0.01, 0.02])
+    instruments = pl.DataFrame({
+        "symbol": ["000001", "600000"],
+        "name": ["平安银行", "浦发银行"],
+    })
+    range_panel = _multi_day_panel(FIXED_DATE - timedelta(days=5), days=6)
+    repo = _FakeRepo(
+        data_dir, enriched=enriched, latest=FIXED_DATE,
+        instruments=instruments, range_panel=range_panel,
+    )
+    _write_auction_partition(
+        data_dir, FIXED_DATE,
+        _auction_rows(FIXED_DATE, {"000001": (300.0, 150000.0), "600000": (200.0, 100000.0)}, n_rows=3),
+    )
+    now = datetime(FIXED_DATE.year, FIXED_DATE.month, FIXED_DATE.day, 16, 0)
+
+    blk = build_auction_recap(
+        repo, FIXED_DATE, now=now, probe_resolver=lambda: _fake_verdict("available"),
+    )["blocks"]["real_auction_activity"]
+    ratio = blk["ratio_subblock"]
+    assert ratio["present"] is True
+    assert ratio["values"]
+    # 前 5 日均量: (100000+110000+120000+130000+140000)/5 = 120000 → 300/120000
+    assert blk["top_n"][0]["auction_volume_ratio"] == pytest.approx(300.0 / 120000.0)
+
+    # 分母不可得 (get_enriched_range None) → 子块省略 + 注记, 绝不 0 填
+    repo_no_range = _FakeRepo(data_dir, enriched=enriched, latest=FIXED_DATE, instruments=instruments)
+    blk2 = build_auction_recap(
+        repo_no_range, FIXED_DATE, now=now, probe_resolver=lambda: _fake_verdict("available"),
+    )["blocks"]["real_auction_activity"]
+    assert blk2["ratio_subblock"]["present"] is False
+    assert "分母" in blk2["ratio_subblock"]["note"]
+
+
+def test_json_safe_nan_auction_amount(repo_env):
+    """JSON 安全: 分区含 NaN auction_amount → json.dumps 不抛且序列化为 null。"""
+    import json
+
+    from app.services.auction_recap import build_auction_recap
+
+    _repo, data_dir = repo_env
+    hist = FIXED_DATE - timedelta(days=1)
+    enriched = _make_enriched(["000001"], [0.01], as_of=hist)
+    repo = _FakeRepo(data_dir, enriched=enriched, latest=hist)
+    rows = pl.DataFrame({
+        "symbol": ["000001"],
+        "datetime": [datetime(hist.year, hist.month, hist.day, 9, 25)],
+        "auction_volume": [300.0],
+        "auction_amount": [float("nan")],
+    })
+    _write_auction_partition(data_dir, hist, rows)
+    now = datetime(FIXED_DATE.year, FIXED_DATE.month, FIXED_DATE.day, 16, 0)
+
+    result = build_auction_recap(repo, hist, now=now)
+    blk = result["blocks"]["real_auction_activity"]
+    assert blk["present"] is True
+    assert blk["total_amount"] is None
+    assert blk["top_n"][0]["auction_amount"] is None
+    json.dumps(result)  # 不抛
