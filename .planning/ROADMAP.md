@@ -180,6 +180,13 @@ Plans:
   3. Wired to 09:26 job tail (same single-flight, after persist); reuses operational → SSE → webhook.
   4. `provisional/degraded/probe` annotated on events; degraded + auction-dependent rules fail closed (0 alerts, never silent-0-fill); guest-visible surfaces masked.
 
+**Plans**: 3 plans
+
+Plans:
+- [ ] 30-01-PLAN.md — 后端核心 (MON-01/02/04): preopen 规则类型 + PREOPEN_ALLOWED_FIELDS 白名单 + validate 专属分支 + `preopen_eval.py` 独立只读模块 + `evaluate_premarket` 隔离评估 + evaluate() 盘中跳过 (D-03) + T1-T10
+- [ ] 30-02-PLAN.md — 后端接线 (MON-03/04/05/06/07 后端): 09:26 job 尾段 + `evaluate_premarket_alerts` 持久化优先链 + `mask_guest_alert` + /options preopen 外露 + T11-T20 (含 AST 守卫)
+- [ ] 30-03-PLAN.md — 前端 P2 (MON-07): api.ts 类型 + RuleEditor preopen 编辑 + Monitor.tsx provisional/degraded 徽标 + e2e + docs (Watchlist.tsx 零触碰)
+
 **Research flag**: 需要 `--research-phase`（高） — R1 `change_pct` 盘前帧口径核实（`compute_enriched_today` + quote_service preopen flush）、调度（尾段 vs 独立 09:27）、`scope=sector` 支持.
 
 ### Phase 31: 竞价复盘 (Auction Recap)
