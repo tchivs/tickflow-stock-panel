@@ -5,15 +5,15 @@ milestone_name: 历史深度与自选联动 — planning
 current_phase: 26
 current_phase_name: 历史竞价图 + 派生列复活 (Auction History Chart)
 status: planning
-stopped_at: Completed 25-02-PLAN.md
-last_updated: "2026-08-06T06:31:52.662Z"
+stopped_at: Completed 26-01-PLAN.md (backend CHART-01/03)
+last_updated: "2026-08-06T07:06:53.865Z"
 last_activity: 2026-08-06
 last_activity_desc: Phase 25 complete, transitioned to Phase 26
 progress:
   total_phases: 4
   completed_phases: 2
-  total_plans: 4
-  completed_plans: 4
+  total_plans: 6
+  completed_plans: 5
   percent: 50
 ---
 
@@ -84,8 +84,8 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-08-06T06:20:55.619Z
-Stopped at: Completed 25-02-PLAN.md
+Last session: 2026-08-06T07:06:53.855Z
+Stopped at: Completed 26-01-PLAN.md (backend CHART-01/03)
 Resume file: None
 
 ## Operator Next Steps
@@ -108,6 +108,8 @@ Resume file: None
 - [Phase ?]: watchlistPending = toggle.isPending || watchlist.isPending || watchlist.isError (H9 fail-closed); 星标/开关/批量按钮均带非空可访问名 (P1 白名单前提)
 - [Phase ?]: Phase 25 / P2 (B1): 快照重生成范围修正为表格区 4 张 (resonance/filter-active/empty-zero-hit/vip-plaintext), 零 diff 断言集 = grid-populated/card-unavailable/guest-masked/guest-grid — 原计划误标 VIP 快照为 guest, verify 门必失败
 - [Phase ?]: Phase 25 / P2: WATCH-01 二次 GET 断言用计数式而非精确次数 (StrictMode 双挂载免疫); no-mutating 守卫拆分 watchlist 写族与其余 non-GET 分别断言
+- [Phase ?]: CHART-01: per-trading-day last-row (09:25) aggregation endpoint GET /api/kline/auction/history with row_count/min/max labels, honest 200 available:false, explicit 400, guest masking, probe passthrough
+- [Phase ?]: CHART-03: CANONICAL_AUCTION_COLS stays 4 (R5); OPTIONAL_AUCTION_COLS = [auction_unmatched_volume, auction_virtual_price] kept by existence; merge-upsert how=diagonal_relaxed for old-4+new-6 schema union
 
 ### v1.3 Decisions (carried)
 
@@ -147,3 +149,4 @@ Resume file: None
 ---
 *Last updated: 2026-08-05 — Phase 21 plan 1 (STRAT-04/05/06 engine seam + managed column + P1 strategies) complete; Phase 21 in progress (plan 2 parallel)*
 | Phase 25-watchlist-sync PP2 | 14 | 3 tasks | 6 files |
+| Phase 26-auction-history-chart P1 | 24 | 2 tasks | 8 files |

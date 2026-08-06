@@ -88,10 +88,11 @@ Four phases (20-23) delivered probe-gated real auction columns + `kline_auction/
   2. Frontend renders the chart in the stock popup with dual-axis 柱/线, empty state + 09:15–09:25 window annotation, zero new npm deps, `Watchlist.tsx` untouched.
   3. Auction lake canonical schema widens to 4 required + 2 optional delegation-volume columns (backward compatible); the derived `auction_unmatched_amount` branch activates with "估算" annotation intact.
 
-**Plans**: 2 plans
+**Plans**: 1/2 plans executed
 
 Plans:
-- [ ] 26-01-PLAN.md — 后端: CHART-01 只读竞价历史聚合端点 (POOL-03 GET-only + 诚实空态 + guest 掩码) + CHART-03 湖摄入 canonical 扩为 4 必需 + 2 可选委托量输入列 (diagonal_relaxed)
+
+- [x] 26-01-PLAN.md — 后端: CHART-01 只读竞价历史聚合端点 (POOL-03 GET-only + 诚实空态 + guest 掩码) + CHART-03 湖摄入 canonical 扩为 4 必需 + 2 可选委托量输入列 (diagonal_relaxed)
 - [ ] 26-02-PLAN.md — 前端: CHART-02 竞价历史双轴柱线图 (StockPreviewDialog toggle + StockPanel prop + AuctionHistoryChart) + e2e mock 三态
 
 **Research flag**: medium — 窗口内行粒度语义（末行 vs 逐分钟累计快照 vs 求和）需在接入真实源前钉死并写进验收.
