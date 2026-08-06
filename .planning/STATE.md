@@ -1,20 +1,20 @@
 ---
 gsd_state_version: 1.0
-milestone: v2.2
-milestone_name: 决策闭环与历史纵深 — planning
-status: Awaiting next milestone
-stopped_at: Completed 31-03-PLAN.md
-last_updated: "2026-08-06T15:42:50.941Z"
+milestone: v2.3
+milestone_name: 数据纵深解锁 — planning
+status: planning
+stopped_at: Milestone v2.3 started
+last_updated: "2026-08-06T15:50:00.000Z"
 last_activity: 2026-08-06
-last_activity_desc: Milestone v2.2 completed and archived
+last_activity_desc: Milestone v2.3 started (3 candidate research domains)
 progress:
-  total_phases: 4
+  total_phases: 0
   completed_phases: 0
-  total_plans: 16
-  completed_plans: 12
+  total_plans: 0
+  completed_plans: 0
   percent: 0
-current_phase: 31
-current_phase_name: Auction Recap
+current_phase: null
+current_phase_name: null
 ---
 
 # Project State
@@ -24,14 +24,14 @@ current_phase_name: Auction Recap
 See: .planning/PROJECT.md (updated 2026-08-06)
 
 **Core value:** An investor can turn reliable market data and their own holdings into an auditable, actionable research and monitoring workflow without operating multiple disconnected tools.
-**Current focus:** Milestone v2.2 complete — awaiting next milestone
+**Current focus:** Milestone v2.3 — 数据纵深解锁
 
 ## Current Position
 
-Phase: Milestone v2.2 complete
+Phase: Milestone v2.3 planning (defining requirements)
 Plan: —
-Status: Awaiting next milestone
-Last activity: 2026-08-06 — Milestone v2.2 completed and archived
+Status: Planning
+Last activity: 2026-08-06 — Milestone v2.3 started (3 candidate domains)
 
 ## v1.3 Phase Summary (shipped 2026-08-04)
 
