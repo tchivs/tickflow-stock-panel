@@ -2,18 +2,18 @@
 gsd_state_version: 1.0
 milestone: v2.1
 milestone_name: 历史深度与自选联动 — planning
-current_phase: 27
-status: completed
+status: Awaiting next milestone
 stopped_at: Completed 27-02-PLAN.md (frontend PM-04 premarket view)
-last_updated: "2026-08-06T08:54:09.403Z"
+last_updated: "2026-08-06T08:54:23.080Z"
 last_activity: 2026-08-06
-last_activity_desc: Phase 27 complete
+last_activity_desc: Milestone v2.1 completed and archived
 progress:
   total_phases: 4
   completed_phases: 4
   total_plans: 8
   completed_plans: 8
   percent: 100
+current_phase: 27
 current_phase_name: Premarket Pool
 ---
 
@@ -28,10 +28,10 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 
 ## Current Position
 
-Phase: 27
-Plan: Not started
-Status: All phases complete
-Last activity: 2026-08-06 — Phase 27 complete
+Phase: Milestone v2.1 complete
+Plan: —
+Status: Awaiting next milestone
+Last activity: 2026-08-06 — Milestone v2.1 completed and archived
 
 ## v1.3 Phase Summary (shipped 2026-08-04)
 
@@ -90,8 +90,7 @@ Resume file: None
 
 ## Operator Next Steps
 
-- Phase 24 complete (2/2 plans); v2.1 继续 Phase 25 自选股联动 (WATCH-01..04)
-- 前端 PoolHubPage 缺口横幅/回填触发按钮可消费 `GET /api/pool/dates` 新字段 (backfill_needed/backfill_examples) — 后续增强
+- Start the next milestone with /gsd-new-milestone
 
 ## Decisions
 

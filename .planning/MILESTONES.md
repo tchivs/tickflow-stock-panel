@@ -1,5 +1,22 @@
 # Milestones
 
+## v2.1 v2.1 (Shipped: 2026-08-06)
+
+**Phases completed:** 4 phases, 8 plans, 22 tasks
+
+**Key accomplishments:**
+
+- snapshot_origin provenance (eod/backfill/manual) + 缺口 helper + `run_pool_backfill` 逐日回填服务 + `POST /api/pipeline/backfill` 触发端点 + `api/screener.run_all` D6 latest-only cache 指针修复
+- GET /api/pool/dates 增 backfill_needed 缺口信号, 读侧 snapshot_origin 透传 (旧快照缺省 eod), EOD origin 断言 + D6 source guard 回归锁, docs 对账
+- 股池钻取面接入既有服务端自选体系 (WATCH-01..04): VIP 星标 (实心/空心 + aria + fail-closed)、「只看自选」AND 过滤 (total 权威 + 诚实空态)、共享 QK.watchlist 复用 (guest 双门控零查询)、批量加可见行 — 纯前端, 零后端改动/零新增依赖
+- POOL-03 e2e 三条守卫随 25-01 新控件同步 (installShell 默认 /api/watchlist mock + affordances 白名单扩增 + no-mutating 放宽为「非 watchlist 写仍为零」), 新增 WATCH-01..04 六条 Playwright 用例锁死星标/开关/批量行为, VIP 表格区 4 张 backstop 快照重生成 (零 diff 断言集 4 张 git 校验), docs/features.md 补自选联动小节
+- CHART-01 read-only `GET /api/kline/auction/history` last-row aggregation endpoint (POOL-03 GET-only zero-exec, honest empty states, guest masking) + CHART-03 write-path widening to preserve optional auction input columns and revive the `auction_unmatched_amount` derive branch.
+- 个股弹窗第三开关「竞价历史」— ECharts 双轴柱线图 (柱=竞价量/股, 线=竞价金额/元) + 09:15-09:25 窗口标注 + 诚实空态 (probe 非 available / available:false / rows 空 / guest → EmptyState, 绝不零值柱冒充), 全站挂 StockPreviewDialog 的页面一改全生效, Watchlist.tsx 零触碰。
+- 09:26 盘前预览 job (premarket_pool_preview) 经 run_all_with_hits 生成今日股池到独立 premarket_results/date={T}/part.json (绝不污染 strategy_cache/screener_results) + compute_enriched_today 补算 open_gap (与 EOD Pass 4 单一公式) + probe 诚实降级语义 + 只读 GET /api/pool/premarket (空态 200, guest 白名单+掩码, POOL-03 AST 守卫)
+- 盘前预览垂直切片 — PoolHubPage「最新」视图在 09:26-15:35 展示 pre_open 预览池 (独立 `GET /api/pool/premarket` 端点, 窗口标注「盘前预览 · 竞价窗口 09:15-09:25 · 非收盘定稿」+ 诚实空态 + degraded 徽标), 15:35 EOD 后自动回退既有 `/api/pool/hub` 流; DateNavigator 保持 EOD-only (PIT-5)
+
+---
+
 ## v2.0 v2.0 (Shipped: 2026-08-05)
 
 **Phases completed:** 4 phases, 8 plans, 15 tasks
