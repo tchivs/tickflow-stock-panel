@@ -433,3 +433,203 @@ def test_forward_close_t_boundary_independent_n(repo_env):
     assert fs["open_gap_outcome"]["n"] == 1
     assert fs["open_gap_outcome"]["mean"] == pytest.approx(10.8 / 10.5 - 1.0)
 
+
+# ================================================================
+# Task 3 — 窗口回夹回显 / skipped_ids / 空列表 / branch 翻转 / coverage / minute_confirm
+# ================================================================
+
+
+def test_window_clamp_requested_effective_echo(repo_env):
+    """D-06 窗口回夹 + 双字段回显: 请求超缓存覆盖 → effective 回夹到缓存边界,
+    requested 保留原始值 (双字段可区分); 窗口在覆盖内 → effective == requested;
+    缺省调用 → requested = 默认 (end=cache_max, start=end−120 自然日)。
+
+    同时锁 PLAN-CHECK W-1: 近缓存边界的超覆盖请求必须产出回夹报告 (而非因 warmup
+    低于 cache_min 误报 enriched_unavailable)。"""
+    from app.services.auction_validation import AuctionValidationService
+
+    repo, data_dir = repo_env
+    panel = _seed_enriched_cache(repo)  # 2026-03-20..2026-08-05
+    cache_min, cache_max = panel["date"].min(), panel["date"].max()
+    engine = _make_engine()
+    svc = AuctionValidationService(repo, engine, probe_resolver=lambda: _available_verdict())
+
+    # 超覆盖请求 (start 早于 cache_min / end 晚于 cache_max) → 回夹 + 双字段回显
+    report = svc.build_report(start=date(2026, 1, 1), end=date(2026, 9, 1))
+    w = report["window"]
+    assert w["requested_start"] == "2026-01-01"
+    assert w["requested_end"] == "2026-09-01"
+    assert w["effective_start"] == cache_min.isoformat()
+    assert w["effective_end"] == cache_max.isoformat()
+    # W1: 回夹后 warmup_start 夹到 cache_min → 报告照常装配 (诚实 no_auction_partitions, 非 enriched_unavailable)
+    assert report["data_gate"] == "empty"
+    assert report["empty_reason"] == "no_auction_partitions"
+    assert len(report["strategies"]) == 9
+
+    # 窗口在覆盖内 → effective == requested
+    report2 = svc.build_report(start=date(2026, 4, 1), end=date(2026, 6, 1))
+    w2 = report2["window"]
+    assert w2["effective_start"] == w2["requested_start"] == "2026-04-01"
+    assert w2["effective_end"] == w2["requested_end"] == "2026-06-01"
+
+    # 缺省调用 → requested = 默认 (end=cache_max, start=end−120 自然日), effective 一致
+    report3 = svc.build_report()
+    w3 = report3["window"]
+    assert w3["requested_end"] == cache_max.isoformat()
+    assert w3["requested_start"] == (cache_max - timedelta(days=120)).isoformat()
+    assert w3["effective_start"] == w3["requested_start"]
+    assert w3["effective_end"] == w3["requested_end"]
+
+
+def test_auction_alpha_branch_flip_mutual_exclusion(repo_env):
+    """BT-05: auction_alpha 按 enabled 非空取 real (enabled 子面板) / derived (全验证窗口) 其一;
+    同一响应内每策略只含单 branch 统计; 4 个真列策略恒 real (湖空 n_dates==0 绝不落 derived)。"""
+    import shutil
+
+    from app.services.auction_validation import AuctionValidationService
+
+    repo, data_dir = repo_env
+    _seed_enriched_cache(repo, days=10, start=date(2026, 7, 27), volume=100_000.0)
+    start, end = date(2026, 7, 30), date(2026, 8, 3)
+    for i in range(5):
+        d = start + timedelta(days=i)
+        _write_auction_partition(
+            data_dir, d,
+            _auction_rows(d, {"000001": (180_000.0, 3_000_000.0), "600000": (180_000.0, 3_000_000.0)}),
+        )
+    engine = _make_engine()
+    svc = AuctionValidationService(repo, engine, probe_resolver=lambda: _available_verdict())
+
+    # 有 enabled 日 → real, 评估于 enabled 子面板
+    report = svc.build_report(start=start, end=end)
+    assert report["data_gate"] == "available"
+    by_id = {st["id"]: st for st in report["strategies"]}
+    alpha = by_id["auction_alpha"]
+    assert alpha["branch"] == "real"
+    assert alpha["n_dates"] == 5
+    assert alpha["n_hits"] > 0
+    # 互斥: 每策略单 branch 标注, 同 id 只出现一次
+    assert len(report["strategies"]) == 9
+    assert len({st["id"] for st in report["strategies"]}) == 9
+    for st in report["strategies"]:
+        assert st["branch"] in {"real", "derived", "eod"}
+
+    # 删除分区 → 翻转 derived (全验证窗口), 4 real 恒 real 诚实空
+    shutil.rmtree(data_dir / "kline_auction")
+    report2 = svc.build_report(start=start, end=end)
+    assert report2["data_gate"] == "empty"
+    assert report2["empty_reason"] == "no_auction_partitions"
+    by_id2 = {st["id"]: st for st in report2["strategies"]}
+    assert by_id2["auction_alpha"]["branch"] == "derived"
+    assert by_id2["auction_alpha"]["n_dates"] > 0
+    for sid in _REAL_IDS:
+        assert by_id2[sid]["branch"] == "real"
+        assert by_id2[sid]["n_dates"] == 0
+
+
+def test_skipped_ids_and_empty_list(repo_env):
+    """BT-03: 未知 id → skipped_ids 记录 (200 形, 不 500), 已知竞价族仍正常报告;
+    请求含未知 + 已知族 → 未知记 skipped、已知族被报告; 显式空列表 → strategies: []
+    且 coverage/probe/window 仍在。"""
+    from app.services.auction_validation import AuctionValidationService
+
+    repo, data_dir = repo_env
+    _seed_enriched_cache(repo)
+    engine = _make_engine()
+    svc = AuctionValidationService(repo, engine, probe_resolver=lambda: _available_verdict())
+
+    # 纯未知请求 → 200 形 + skipped_ids 记录 + 已知竞价族仍正常报告
+    report = svc.build_report(strategy_ids=["no_such_strategy"])
+    assert report["skipped_ids"] == ["no_such_strategy"]
+    assert len(report["strategies"]) == 9
+    assert report["data_gate"] == "empty"
+    assert report["empty_reason"] == "no_auction_partitions"
+
+    # 未知 + 已知族混搭 → 未知记 skipped, 已知族被报告
+    report2 = svc.build_report(strategy_ids=["no_such_strategy", "auction_alpha"])
+    assert report2["skipped_ids"] == ["no_such_strategy"]
+    assert {st["id"] for st in report2["strategies"]} == {"auction_alpha"}
+
+    # 显式空列表 → strategies: [] (coverage/probe/window 仍返回)
+    report3 = svc.build_report(strategy_ids=[])
+    assert report3["strategies"] == []
+    assert report3["skipped_ids"] == []
+    assert report3["coverage"]["enriched_count"] > 0
+    assert report3["probe"] is not None
+    assert report3["window"]["requested_start"]
+
+
+def test_per_strategy_coverage_and_minute_confirm(repo_env):
+    """per-strategy coverage + per_date (n_screened/n_hits) + minute_confirm (BT-03/BT-05)。
+
+    5 个 enabled 日 (07-30..08-03 全分区, 竞价量 180k → ratio 1.8, 金额 3M);
+    open_gap 在 08-01 为 2% (< auction_fast_grab sweet_low 2.8%) → 4 日命中
+    (2 symbol × 4 = 8 hits), coverage = 4/5 = 0.8; per_date 5 行, 08-01 行
+    n_hits==0 且 n_screened==2; 全 9 策略 minute_confirm=="not_applied" (含
+    auction_intraday_confirm)。"""
+    from app.services.auction_validation import AuctionValidationService
+
+    repo, data_dir = repo_env
+    low_gap_day = date(2026, 8, 1)
+    _seed_enriched_cache(
+        repo, days=10, start=date(2026, 7, 27), volume=100_000.0,
+        overrides={
+            ("000001", low_gap_day): {"open_gap": 0.02},
+            ("600000", low_gap_day): {"open_gap": 0.02},
+        },
+    )
+    start, end = date(2026, 7, 30), date(2026, 8, 3)
+    for i in range(5):
+        d = start + timedelta(days=i)
+        _write_auction_partition(
+            data_dir, d,
+            _auction_rows(d, {"000001": (180_000.0, 3_000_000.0), "600000": (180_000.0, 3_000_000.0)}),
+        )
+    engine = _make_engine()
+    svc = AuctionValidationService(repo, engine, probe_resolver=lambda: _available_verdict())
+
+    report = svc.build_report(start=start, end=end)
+    by_id = {st["id"]: st for st in report["strategies"]}
+
+    fg = by_id["auction_fast_grab"]
+    assert fg["branch"] == "real"
+    assert fg["n_dates"] == 5
+    assert fg["n_hits"] == 8
+    assert fg["coverage"] == pytest.approx(0.8)
+    per = {row["date"]: row for row in fg["per_date"]}
+    assert len(per) == 5
+    assert per["2026-07-30"] == {"date": "2026-07-30", "n_screened": 2, "n_hits": 2}
+    assert per["2026-08-01"] == {"date": "2026-08-01", "n_screened": 2, "n_hits": 0}
+
+    # minute_confirm 全 9 策略显式 not_applied (含 auction_intraday_confirm)
+    for st in report["strategies"]:
+        assert st["minute_confirm"] == "not_applied"
+    assert by_id["auction_intraday_confirm"]["minute_confirm"] == "not_applied"
+
+
+def test_symbols_filter_limits_evaluation(repo_env):
+    """symbols 裁剪: 报告只评估请求 symbol 的行 (n_screened/n_hits 受限)。"""
+    from app.services.auction_validation import AuctionValidationService
+
+    repo, data_dir = repo_env
+    _seed_enriched_cache(repo, days=10, start=date(2026, 7, 27), volume=100_000.0)
+    start, end = date(2026, 7, 30), date(2026, 8, 3)
+    for i in range(5):
+        d = start + timedelta(days=i)
+        _write_auction_partition(
+            data_dir, d,
+            _auction_rows(d, {"000001": (180_000.0, 3_000_000.0), "600000": (180_000.0, 3_000_000.0)}),
+        )
+    engine = _make_engine()
+    svc = AuctionValidationService(repo, engine, probe_resolver=lambda: _available_verdict())
+
+    report_all = svc.build_report(start=start, end=end)
+    report_one = svc.build_report(start=start, end=end, symbols=["000001"])
+
+    fg_all = {st["id"]: st for st in report_all["strategies"]}["auction_fast_grab"]
+    fg_one = {st["id"]: st for st in report_one["strategies"]}["auction_fast_grab"]
+    assert fg_all["n_hits"] == 10  # 5 日 × 2 symbol
+    assert fg_one["n_hits"] == 5   # 5 日 × 1 symbol
+    assert all(row["n_screened"] == 2 for row in fg_all["per_date"])
+    assert all(row["n_screened"] == 1 for row in fg_one["per_date"])
+
