@@ -290,6 +290,10 @@ async function installShell(page: Page) {
     return json(route, body)
   })
   await page.route('**/api/data/auction-probe**', route => json(route, probePayloadFailClosed))
+  // Phase 25 (WATCH-01..04): 默认 watchlist 空集 mock (P5) — VIP 用例自动发 GET /api/watchlist 时不落
+  // `**/api/**` unhandled 500; 具体用例在 installShell 之后以更精确 route (`**/api/watchlist/batch` 等)
+  // 后注册覆盖 (Playwright 后注册优先)。
+  await page.route('**/api/watchlist**', route => json(route, { symbols: [] }))
 }
 
 test.describe('Phase 18 pool hub', () => {
@@ -608,7 +612,8 @@ test.describe('Phase 18 pool hub', () => {
     await expect(page.getByText('本页面仅用于研究参考，不提供任何交易执行功能。')).toBeVisible()
 
     // 白名单: 股池页唯一交互 = 刷新 / 卡片钻取 / 概念输入 / 清除筛选 / DateNavigator 步进
-    const ALLOWED_RE = /刷新股池|当日池|当日无命中|数据不可用|清除筛选|清除概念筛选|重试|收起|\+\d+|上一个交易日|下一个交易日|最新/
+    // WATCH-01/02/04 控件可访问名全部登记 (P1): 星标 移出自选/加入自选 + 开关 只看自选 + 批量加自选
+    const ALLOWED_RE = /刷新股池|当日池|当日无命中|数据不可用|清除筛选|清除概念筛选|重试|收起|\+\d+|上一个交易日|下一个交易日|最新|只看自选|批量加自选|加入自选|移出自选/
     const btnCount = await main.getByRole('button').count()
     for (let i = 0; i < btnCount; i++) {
       const btn = main.getByRole('button').nth(i)
@@ -637,7 +642,12 @@ test.describe('Phase 18 pool hub', () => {
     await page.getByRole('button', { name: /盘前强势量化/ }).click()
 
     const nonGet = captured.filter(c => !/^GET /.test(c))
-    expect(nonGet, `non-GET requests: ${nonGet.join(', ')}`).toEqual([])
+    // POOL-03 语义放宽 (25-02): VIP 放行 watchlist 写族 (POST /api/watchlist[/batch], DELETE /api/watchlist/{symbol});
+    // 但本用例不点击星标/批量 → watchlist 写也应为空; 其余 non-GET 仍必须为零 (guest 面由 WATCH-01 guest 用例锁死)。
+    const watchlistWrites = nonGet.filter(c => /^POST \/api\/watchlist|^DELETE \/api\/watchlist/.test(c))
+    const otherWrites = nonGet.filter(c => !/^POST \/api\/watchlist|^DELETE \/api\/watchlist/.test(c))
+    expect(otherWrites, `non-watchlist non-GET requests: ${otherWrites.join(', ')}`).toEqual([])
+    expect(watchlistWrites, `unexpected watchlist writes without star/batch click: ${watchlistWrites.join(', ')}`).toEqual([])
     const execPaths = captured.filter(c => /order|trade|broker|portfolio|execution|deals/.test(c))
     expect(execPaths, `execution-family endpoints hit: ${execPaths.join(', ')}`).toEqual([])
   })
