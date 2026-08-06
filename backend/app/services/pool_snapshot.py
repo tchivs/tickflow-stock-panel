@@ -29,6 +29,8 @@ logger = logging.getLogger(__name__)
 
 # 快照湖根目录 (相对 data_dir) — 与 repository.py 建目录占位的 hive 分区布局一致
 _SNAPSHOT_ROOT = "screener_results"
+# enriched 分区根目录 (相对 data_dir) — 与 daily_pipeline/data.py 的 date=* 枚举一致
+_ENRICHED_ROOT = "kline_daily_enriched"
 # as_of 严格校验: ^\d{4}-\d{2}-\d{2}$ (防路径穿越; 拼路径前必须 fullmatch)
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _SCHEMA_VERSION = 1
@@ -53,11 +55,14 @@ def persist_point_snapshot(
     results: dict,
     strategy_version: str,
     computed_at: str,
+    origin: str = "eod",
 ) -> Path:
     """原子写冻结式点快照到 ``screener_results/date={as_of}/part.json``。
 
     - 非法 as_of (不匹配 ``^\\d{4}-\\d{2}-\\d{2}$``) → 抛 ValueError (防路径穿越)。
-    - payload 只含当次 ``results`` 与元数据, 结构上无 union 键 (T-22-02)。
+    - 非法 origin (不在 {eod, backfill, manual}) → 抛 ValueError (诚实 provenance, D3)。
+    - payload 只含当次 ``results`` 与元数据, 结构上无 union 键 (T-22-02);
+      ``snapshot_origin`` 区分快照来源 (EOD 前向累积 / 历史回填 / 手动 run_all)。
     - temp + ``os.replace`` 原子替换; 异常吞掉记 warning (非致命语义, 不阻塞请求)。
 
     Args:
@@ -66,12 +71,15 @@ def persist_point_snapshot(
         results: 当次 run_all 行集 ``{sid: {total, as_of, rows}}``。
         strategy_version: 策略集指纹 (strategy_fingerprint 输出)。
         computed_at: 计算完成时刻 (ISO8601 字符串)。
+        origin: 快照来源, 取值 {eod, backfill, manual} (默认 eod, 向后兼容)。
 
     Returns:
         写入的 part.json 路径。
     """
     if not isinstance(as_of, str) or not _DATE_RE.fullmatch(as_of):
         raise ValueError(f"invalid as_of: {as_of!r}")
+    if origin not in ("eod", "backfill", "manual"):
+        raise ValueError(f"invalid snapshot_origin: {origin!r}")
 
     part_dir = data_dir / _SNAPSHOT_ROOT / f"date={as_of}"
     part_dir.mkdir(parents=True, exist_ok=True)
@@ -83,6 +91,7 @@ def persist_point_snapshot(
         "strategy_version": strategy_version,
         "snapshot_type": "point",
         "schema_version": _SCHEMA_VERSION,
+        "snapshot_origin": origin,
         "results": results,
     }
     try:
@@ -130,6 +139,28 @@ def list_snapshot_dates(data_dir: Path) -> list[str]:
         (d.name[5:] for d in root.glob("date=*") if (d / "part.json").exists()),
         reverse=True,
     )
+
+
+def list_enriched_dates(data_dir: Path) -> list[str]:
+    """列出 enriched 分区日期, ISO 升序 (纯读 helper, HIST-02)。
+
+    source of truth = ``kline_daily_enriched/date=*`` 分区 glob (镜像
+    daily_pipeline.py:387 / data.py:172-179); root 不存在返回 ``[]``。
+    纯读: 无写调用, 不触发 POOL-03 E2 守卫。
+    """
+    enriched_dir = data_dir / _ENRICHED_ROOT
+    if not enriched_dir.exists():
+        return []
+    return sorted(d.name[5:] for d in enriched_dir.glob("date=*") if d.is_dir())
+
+
+def list_backfill_gaps(data_dir: Path) -> list[str]:
+    """回填缺口日期集 = enriched 分区 − 含 part.json 的快照分区, ISO 升序。
+
+    缺口单点 (24-01 回填服务 + 24-02 backfill_needed 消费); 升序摊销 150 日
+    warmup (D5)。
+    """
+    return sorted(set(list_enriched_dates(data_dir)) - set(list_snapshot_dates(data_dir)))
 
 
 def strategy_fingerprint(engine) -> str:

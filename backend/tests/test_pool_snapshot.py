@@ -136,6 +136,9 @@ class _FakeRepo:
     def get_enriched_history(self, target_date, lookback_days):
         return None
 
+    def enriched_latest_date(self):
+        return self._latest
+
 
 # ================================================================
 # Task 1 — 点快照服务 (POOL-04)
@@ -156,7 +159,7 @@ def test_snapshot_roundtrip_no_ever_rows(tmp_path):
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert set(payload) == {
         "as_of", "computed_at", "strategy_version",
-        "snapshot_type", "schema_version", "results",
+        "snapshot_type", "schema_version", "snapshot_origin", "results",
     }
     assert "today_ever_rows" not in payload
     assert "today_ever_matched" not in payload
@@ -165,6 +168,7 @@ def test_snapshot_roundtrip_no_ever_rows(tmp_path):
     assert payload["strategy_version"] == "fp123"
     assert payload["snapshot_type"] == "point"
     assert payload["schema_version"] == 1
+    assert payload["snapshot_origin"] == "eod"  # 缺省 origin → eod (HIST-02)
 
     loaded = load_point_snapshot(tmp_path, _AS_OF)
     assert loaded is not None
@@ -277,6 +281,72 @@ def test_persist_rejects_invalid_as_of(tmp_path):
     # API 层 date.fromisoformat; load 在文件不存在时返回 None。
     assert load_point_snapshot(tmp_path, "2026-13-01") is None
     assert load_point_snapshot(tmp_path, None) is None  # type: ignore[arg-type]
+
+
+def test_snapshot_origin_explicit_and_default(tmp_path):
+    """HIST-02: origin 参数 round-trip — 显式 backfill 写入, 缺省 eod, 非法拒绝。"""
+    from app.services.pool_snapshot import load_point_snapshot, persist_point_snapshot
+
+    results = _canned_results()
+    path = persist_point_snapshot(
+        tmp_path, _AS_OF, results, strategy_version="fp1",
+        computed_at="2026-08-04T15:30:00", origin="backfill",
+    )
+    loaded = load_point_snapshot(tmp_path, _AS_OF)
+    assert loaded is not None
+    assert loaded["snapshot_origin"] == "backfill"
+    assert loaded["schema_version"] == 1
+    assert loaded["results"] == results
+
+    # 缺省 → "eod"
+    other = "2026-08-03"
+    persist_point_snapshot(
+        tmp_path, other, results, strategy_version="fp1",
+        computed_at="2026-08-04T15:30:00",
+    )
+    assert load_point_snapshot(tmp_path, other)["snapshot_origin"] == "eod"
+
+    # 非法 origin → ValueError (D3 校验)
+    for bad in ("invalid", "", "EOD"):
+        with pytest.raises(ValueError):
+            persist_point_snapshot(
+                tmp_path, "2026-08-02", results, strategy_version="fp1",
+                computed_at="2026-08-04T15:30:00", origin=bad,
+            )
+
+
+def test_snapshot_origin_tolerance_old_payload(tmp_path):
+    """HIST-02 向后兼容: 无 snapshot_origin 键的旧 payload 原样返回不崩溃, 读侧缺省 eod。"""
+    from app.services.pool_snapshot import load_point_snapshot
+
+    path = _write_snapshot_payload(tmp_path, as_of=_AS_OF)
+    assert "snapshot_origin" not in json.loads(path.read_text(encoding="utf-8"))
+
+    loaded = load_point_snapshot(tmp_path, _AS_OF)
+    assert loaded is not None
+    assert loaded.get("snapshot_origin", "eod") == "eod"
+    assert "results" in loaded
+
+
+def test_list_enriched_dates_and_backfill_gaps(tmp_path):
+    """HIST-02 缺口 helper: enriched 枚举升序; 缺口 = enriched − 已快照; root 缺失 → []。"""
+    from app.services.pool_snapshot import list_backfill_gaps, list_enriched_dates
+
+    # 写 enriched 分区 08-01/02/03 + 快照 08-01 (part.json) + 08-02 (无 part.json)
+    for d in ("2026-08-01", "2026-08-02", "2026-08-03"):
+        (tmp_path / "kline_daily_enriched" / f"date={d}").mkdir(parents=True)
+    _write_snapshot_payload(tmp_path, as_of="2026-08-01")
+    (tmp_path / _SNAPSHOT_ROOT / "date=2026-08-02").mkdir(parents=True)
+
+    assert list_enriched_dates(tmp_path) == ["2026-08-01", "2026-08-02", "2026-08-03"]
+    # 08-01 有 part.json (非缺口); 08-02 目录无 part.json (缺口); 08-03 缺口
+    assert list_backfill_gaps(tmp_path) == ["2026-08-02", "2026-08-03"]
+
+    # root 不存在 → []
+    import shutil
+    shutil.rmtree(tmp_path / "kline_daily_enriched")
+    assert list_enriched_dates(tmp_path) == []
+    assert list_backfill_gaps(tmp_path) == []
 
 
 # ================================================================
