@@ -303,3 +303,178 @@ async def test_panel_build_exception_stream_survives(monkeypatch):
 
     content, meta = await recap_market_once(_stub_repo(), as_of=FIXED_DATE)
     assert content == "AI-1"
+
+
+# ================================================================
+# Task 2 — 可选 AI 点评: pref 默认 False + PUT/GET + _build_user_prompt 可选参
+#           + 护栏行 + 切片单源 (REV-04 验收 6 / R9 / R3)
+# ================================================================
+
+
+def _prefs_app(tmp_path, monkeypatch):
+    """最小 FastAPI 应用 + settings.router + tmp data_dir 偏好隔离。"""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.api import settings as settings_api
+    from app.config import settings as app_settings
+
+    monkeypatch.setattr(app_settings, "data_dir", tmp_path / "data")
+    app = FastAPI()
+    app.include_router(settings_api.router)
+    return TestClient(app)
+
+
+def test_commentary_pref_default_false_roundtrip(tmp_path, monkeypatch):
+    """pref 默认 False; set True → get True; set False → False (bool 强制)。"""
+    from app.config import settings as app_settings
+
+    monkeypatch.setattr(app_settings, "data_dir", tmp_path / "data")
+
+    from app.services import preferences
+
+    assert preferences.get_recap_auction_commentary() is False
+    assert preferences.set_recap_auction_commentary(True) is True
+    assert preferences.get_recap_auction_commentary() is True
+    assert preferences.set_recap_auction_commentary(False) is False
+    assert preferences.get_recap_auction_commentary() is False
+
+
+def test_settings_put_get_commentary(tmp_path, monkeypatch):
+    """PUT /preferences/recap-auction-commentary 返回 saved; GET 透传键 (默认 False)。"""
+    client = _prefs_app(tmp_path, monkeypatch)
+
+    body = client.get("/api/settings/preferences").json()
+    assert body["recap_auction_commentary"] is False
+
+    resp = client.put(
+        "/api/settings/preferences/recap-auction-commentary", json={"enabled": True},
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {"recap_auction_commentary": True}
+
+    body2 = client.get("/api/settings/preferences").json()
+    assert body2["recap_auction_commentary"] is True
+
+
+def test_build_user_prompt_backward_compat_and_slice(monkeypatch, tmp_path):
+    """R9: 现有 3 参调用输出逐位一致 (无切片节); auction_slice 非 None → 追加切片节在 focus 后。"""
+    from app.services.market_recap import _build_user_prompt
+
+    overview = _fake_overview()
+    news = [
+        {"title": "焦点A", "snippet": "焦点A详情", "source": "hhxg",
+         "published_date": "2026-08-02T07:00:00"},
+    ]
+    # 3 参调用 (镜像 test_hhxg_market.py:158-180) — 无「竞价复盘数据」节
+    baseline = _build_user_prompt(overview, news, "")
+    assert "## 竞价复盘数据(确定性切片)" not in baseline
+    assert "## 近期市场新闻" in baseline
+    assert "焦点A" in baseline
+
+    # 带 auction_slice → 切片节存在, 且位于 focus 节之后
+    focused = _build_user_prompt(
+        overview, news, "关注新能源", auction_slice="SLICE-TEXT",
+    )
+    assert "## 竞价复盘数据(确定性切片)" in focused
+    assert "SLICE-TEXT" in focused
+    assert focused.index("本次复盘请特别关注") < focused.index("SLICE-TEXT")
+
+
+async def test_stream_guardrail_only_when_commentary_on(monkeypatch, tmp_path):
+    """R3: 点评开启 → system 末尾追加护栏行 (局部串), user 含切片节; 关闭 → system 原样。"""
+    from app.config import settings as app_settings
+
+    monkeypatch.setattr(app_settings, "data_dir", tmp_path / "data")
+
+    from app.services import preferences
+    from app.services.market_recap import _SYSTEM_PROMPT, recap_market_stream
+
+    captured: dict = {}
+    _capture_stream_ai(monkeypatch, captured)
+    _patch_overview(monkeypatch)
+    _patch_panel(monkeypatch, _fake_panel(["open_gap_snapshot"]))
+    _patch_news(monkeypatch)
+
+    # 默认关: system == _SYSTEM_PROMPT 原样, user 无切片节
+    await _collect(recap_market_stream(_stub_repo(), as_of=FIXED_DATE))
+    sys0 = captured["messages"][0]["content"]
+    user0 = captured["messages"][1]["content"]
+    assert sys0 == _SYSTEM_PROMPT
+    assert "竞价复盘数据(确定性切片)" not in user0
+
+    # 开启: system 末尾追加护栏行, user 含切片节 (面板 present 块 → 切片有值)
+    preferences.set_recap_auction_commentary(True)
+    await _collect(recap_market_stream(_stub_repo(), as_of=FIXED_DATE))
+    sys1 = captured["messages"][0]["content"]
+    user1 = captured["messages"][1]["content"]
+    assert sys1.startswith(_SYSTEM_PROMPT)
+    assert sys1.endswith(
+        "竞价数据只引用下方切片中给出的数值;数据缺失时明说「今日无竞价数据」,禁止编造;与确定性面板冲突时以面板为准。"
+    )
+    assert "## 竞价复盘数据(确定性切片)" in user1
+    preferences.set_recap_auction_commentary(False)
+
+
+async def test_slice_and_panel_single_dict_source(monkeypatch, tmp_path):
+    """REV-04 验收 6: build_auction_slice 收到的 panel 与 build_auction_recap 返回同一 dict 对象。"""
+    from app.config import settings as app_settings
+
+    monkeypatch.setattr(app_settings, "data_dir", tmp_path / "data")
+
+    from app.services import auction_recap, preferences
+    from app.services.market_recap import recap_market_stream
+
+    preferences.set_recap_auction_commentary(True)
+    panel = _fake_panel(["open_gap_snapshot", "real_auction_activity", "preopen_signal_quality"])
+    received: dict = {}
+    slice_inputs: list = []
+
+    def _spy_panel(*a, **k):
+        received["panel"] = panel
+        return panel
+
+    def _spy_slice(p):
+        slice_inputs.append(p)
+        return "SLICE"
+
+    monkeypatch.setattr(auction_recap, "build_auction_recap", _spy_panel)
+    monkeypatch.setattr(auction_recap, "build_auction_slice", _spy_slice)
+    _patch_overview(monkeypatch)
+    _patch_stream_ai(monkeypatch, ["AI-1"])
+    _patch_news(monkeypatch)
+
+    events = await _collect(recap_market_stream(_stub_repo(), as_of=FIXED_DATE))
+    # 面板 delta 照常发 (有 present 块)
+    assert any(e["type"] == "delta" and "竞价复盘" in e["content"] for e in events)
+    # 构造性单源: 切片与渲染共用同一 panel dict 对象
+    assert slice_inputs and slice_inputs[0] is received["panel"]
+    preferences.set_recap_auction_commentary(False)
+
+
+async def test_slice_honest_when_panel_all_absent(monkeypatch, tmp_path):
+    """全缺席 + 点评开启 → 切片仍构建并显式声明「今日无竞价数据」; user 仍收切片。"""
+    from app.config import settings as app_settings
+
+    monkeypatch.setattr(app_settings, "data_dir", tmp_path / "data")
+
+    from app.services import preferences
+    from app.services.market_recap import recap_market_stream
+
+    preferences.set_recap_auction_commentary(True)
+    captured: dict = {}
+    _capture_stream_ai(monkeypatch, captured)
+    _patch_overview(monkeypatch)
+    _patch_panel(monkeypatch, _fake_panel([]))  # 全缺席
+    _patch_news(monkeypatch)
+
+    events = await _collect(recap_market_stream(_stub_repo(), as_of=FIXED_DATE))
+    types = [e["type"] for e in events]
+    assert types == ["meta", "delta", "done"]  # 无面板 delta
+
+    user = captured["messages"][1]["content"]
+    assert "## 竞价复盘数据(确定性切片)" in user
+    assert "今日无竞价数据" in user  # 诚实声明 (护栏语义)
+    sys = captured["messages"][0]["content"]
+    assert "禁止编造" in sys  # 护栏行已追加
+    preferences.set_recap_auction_commentary(False)
