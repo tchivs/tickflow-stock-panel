@@ -150,6 +150,149 @@ def _build_open_gap_snapshot(repo, as_of: date, enriched_df) -> dict:
 
 
 # ================================================================
+# Block 1 — 真实竞价活跃度 (条件式: 湖有数据才亮)
+# ================================================================
+
+
+def _name_map(repo, symbols: list[str]) -> dict:
+    """symbol → name (instruments 表; 缺则退 symbol, 诚实)。"""
+    try:
+        inst = repo.get_instruments_asset("stock")
+    except Exception:  # noqa: BLE001 — fail-closed, 退 symbol
+        inst = pl.DataFrame()
+    names: dict[str, str] = {}
+    if not inst.is_empty() and "symbol" in inst.columns and "name" in inst.columns:
+        for row in inst.select(["symbol", "name"]).iter_rows(named=True):
+            names[row["symbol"]] = row["name"]
+    return names
+
+
+def _build_real_auction_activity(repo, as_of: date, probe_verdict: dict, now, pre_eod: bool) -> dict:
+    """Block 1 装配 (REV-01): 湖分区读 + 窗口谓词回归锁 + keep='last' 去重。
+
+    闸门 (按 as_of 分治): 今日 → probe×分区双闸门 (镜像 attach_auction_columns
+    :95-121); 历史 → 分区存在性主闸门 (probe 不参与, 镜像
+    attach_auction_columns_range :178-182)。读盘异常/空分区/缺列 → fail-closed
+    空块 (绝不冒泡 500, T-31-01-04)。
+    """
+    today = now.date()
+    probe_status = probe_verdict.get("status") if isinstance(probe_verdict, dict) else "unknown"
+    part = repo.store.data_dir / "kline_auction" / f"date={as_of.isoformat()}" / "part.parquet"
+
+    def _empty(note: str) -> dict:
+        blk = {"present": False, "note": note, "source": _SOURCE_KLINE_AUCTION}
+        if as_of == today:
+            blk["probe"] = probe_verdict
+        return blk
+
+    if pre_eod:
+        return _empty(_SIGNAL_NOTE_PRE_EOD)
+    if not part.exists():
+        return _empty(_SIGNAL_NOTE_NO_LAKE)
+    if as_of == today and probe_status != "available":
+        return _empty(_SIGNAL_NOTE_NO_LAKE)
+
+    try:
+        df = pl.read_parquet(part)
+    except Exception as e:  # noqa: BLE001 — fail-closed
+        logger.warning("real_auction_activity: unreadable partition %s: %s", part, e)
+        return _empty(_SIGNAL_NOTE_NO_LAKE)
+
+    if df.is_empty() or "symbol" not in df.columns:
+        return _empty(_SIGNAL_NOTE_NO_LAKE)
+
+    # 读侧窗口谓词 (REV-02 回归锁, 防御纵深): [09:15:00, 09:25:59] 分钟粒度
+    # (镜像 auction_probe._has_in_window_rows; 缺 datetime 列 → 整帧按窗口外处理)
+    if "datetime" not in df.columns:
+        return _empty(_SIGNAL_NOTE_NO_LAKE)
+    try:
+        dt = pl.col("datetime").cast(pl.Datetime("us"), strict=False)
+        minutes = dt.dt.hour().cast(pl.Int32) * 60 + dt.dt.minute().cast(pl.Int32)
+        df = df.filter(
+            (minutes >= _AUCTION_WINDOW_START_MIN) & (minutes <= _AUCTION_WINDOW_END_MIN)
+        )
+    except Exception as e:  # noqa: BLE001 — fail-closed
+        logger.warning("real_auction_activity: window predicate failed for %s: %s", as_of, e)
+        return _empty(_SIGNAL_NOTE_NO_LAKE)
+
+    if df.is_empty():
+        return _empty(_SIGNAL_NOTE_NO_LAKE)
+
+    # 09:25 最终撮合: 每 symbol 单行 (镜像 auction_columns.py:146)
+    df = df.unique(subset=["symbol"], keep="last")
+
+    n_symbols = df.height
+    total_amount = None
+    if "auction_amount" in df.columns:
+        total_amount = float(df["auction_amount"].sum())
+        if total_amount != total_amount or total_amount in (float("inf"), float("-inf")):
+            total_amount = None
+
+    name_map = _name_map(repo, df["symbol"].to_list())
+
+    top_n: list[dict] = []
+    if "auction_amount" in df.columns:
+        for row in df.sort("auction_amount", descending=True).head(10).iter_rows(named=True):
+            entry = {
+                "symbol": row["symbol"],
+                "name": name_map.get(row["symbol"], row["symbol"]),
+                "auction_amount": float(row["auction_amount"]),
+            }
+            top_n.append(entry)
+    # 委托量派生列计入行 (有列才计, 不求和)
+    if "auction_unmatched_amount" in df.columns and top_n:
+        by_sym = dict(zip(df["symbol"].to_list(), df["auction_unmatched_amount"].to_list()))
+        for t in top_n:
+            v = by_sym.get(t["symbol"])
+            if v is not None:
+                t["auction_unmatched_amount"] = float(v)
+
+    blk = {
+        "present": True,
+        "source": _SOURCE_KLINE_AUCTION,
+        "note": "真实竞价列(09:15-09:25 窗口末行)",
+        "n_symbols": n_symbols,
+        "total_amount": total_amount,
+        "top_n": top_n,
+        "ratio_subblock": _build_ratio_subblock(repo, as_of, top_n),
+    }
+    if as_of == today:
+        blk["probe"] = probe_verdict
+    return blk
+
+
+def _build_ratio_subblock(repo, as_of: date, top_n: list[dict]) -> dict:
+    """竞价量比子块 (R11 优先路径: 复用 attach_auction_columns_range, 零新 ratio 代码)。
+
+    分母 = as_of 前 5 个交易日 volume 均值 (PIT-safe, 不含当日); 分母不可得 →
+    子块省略 + 注记, 绝不 0 填。
+    """
+    try:
+        window_start = as_of - timedelta(days=9)  # ≥6 交易日
+        panel = repo.get_enriched_range(window_start, as_of)
+        if panel is None or panel.is_empty():
+            return {"present": False, "note": _SIGNAL_NOTE_RATIO_UNAVAILABLE, "values": {}}
+        injected, _enabled = attach_auction_columns_range(panel, as_of, as_of, repo)
+        if "auction_volume_ratio" not in injected.columns:
+            return {"present": False, "note": _SIGNAL_NOTE_RATIO_UNAVAILABLE, "values": {}}
+        ratio_by_symbol: dict[str, float | None] = {}
+        for row in injected.filter(pl.col("date") == as_of).iter_rows(named=True):
+            v = row.get("auction_volume_ratio")
+            if v is not None:
+                ratio_by_symbol[row["symbol"]] = float(v)
+        # 并入 top_n 行 (缺失 symbol → 该行无 ratio 键, 诚实)
+        for t in top_n:
+            if t["symbol"] in ratio_by_symbol:
+                t["auction_volume_ratio"] = ratio_by_symbol[t["symbol"]]
+        if not ratio_by_symbol:
+            return {"present": False, "note": _SIGNAL_NOTE_RATIO_UNAVAILABLE, "values": {}}
+        return {"present": True, "note": "竞价量 ÷ 前 5 日均量 (PIT-safe)", "values": ratio_by_symbol}
+    except Exception as e:  # noqa: BLE001 — per-block fail-closed (T-31-01-04)
+        logger.warning("ratio_subblock failed for %s: %s", as_of, e)
+        return {"present": False, "note": _SIGNAL_NOTE_RATIO_UNAVAILABLE, "values": {}}
+
+
+# ================================================================
 # 装配主入口
 # ================================================================
 
@@ -186,7 +329,6 @@ def build_auction_recap(
     # probe 解析一次, 仅透传 provenance (今日闸门参与; 历史闸门不参与)
     probe = probe_resolver()
     verdict = probe.to_dict() if hasattr(probe, "to_dict") else probe
-    probe_status = verdict.get("status") if isinstance(verdict, dict) else "unknown"
 
     # 湖分区存在性 (主闸门, 镜像 auction_columns.py:107)
     part = repo.store.data_dir / "kline_auction" / f"date={as_of.isoformat()}" / "part.parquet"
@@ -207,27 +349,34 @@ def build_auction_recap(
     except Exception as e:  # noqa: BLE001 — per-block fail-closed (T-31-01-04)
         logger.warning("enriched load failed for %s: %s", as_of, e)
 
+    # 盘前预览单次装载 (头标签判别 + Block 3 装配共用, 只读)
+    preview = load_premarket_snapshot(repo.store.data_dir, as_of.isoformat())
+
     blocks: dict[str, Any] = {}
 
     # Block 2: 恒在块 (enriched 可得时)
     blocks["open_gap_snapshot"] = _build_open_gap_snapshot(repo, as_of, enriched_df)
 
-    # Block 1 (real_auction_activity) / Block 3 (preopen_signal_quality):
-    # 由后续任务装配 (Task 2/3); 头标签已诚实反映其缺席。
+    # Block 1: 真实竞价活跃度 (今日 probe×分区双闸门 / 历史分区存在性主闸门)
+    blocks["real_auction_activity"] = _build_real_auction_activity(
+        repo, as_of, verdict, now, pre_eod,
+    )
+
+    # Block 3 (preopen_signal_quality): 由 Task 3 装配; 头标签已诚实反映其缺席。
 
     # 头标签判别 (RESEARCH §4: pre_eod > no_auction_lake > no_premarket_preview > partial > full)
+    lake_ok = _is_present(blocks["real_auction_activity"])
     label = "partial"
     if pre_eod:
         label = "pre_eod"
-    elif not partition_exists or (as_of == today and probe_status != "available"):
+    elif not lake_ok:
+        # 分区缺失 / 今日 probe 非 available / 窗口内零行 → 湖无真值, 诚实降级
         label = "no_auction_lake"
+    elif preview is None:
+        label = "no_premarket_preview"
     else:
-        preview = load_premarket_snapshot(repo.store.data_dir, as_of.isoformat())
-        if preview is None:
-            label = "no_premarket_preview"
-        else:
-            all_present = all(_is_present(b) for b in blocks.values())
-            label = "full" if all_present else "partial"
+        all_present = all(_is_present(b) for b in blocks.values())
+        label = "full" if all_present else "partial"
 
     return _json_safe({
         "as_of": as_of.isoformat(),

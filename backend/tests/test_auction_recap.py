@@ -240,7 +240,10 @@ def test_no_auction_partition_omits_block(repo_env):
     result = build_auction_recap(repo, FIXED_DATE, now=now)
     assert result["as_of"] == FIXED_DATE.isoformat()
     assert result["data_completeness"] == "no_auction_lake"
-    assert "real_auction_activity" not in result["blocks"]
+    # 无湖 → real 块 present:false + 中文 note 含「湖」 (诚实省略, 非缺键伪造)
+    blk = result["blocks"]["real_auction_activity"]
+    assert blk["present"] is False
+    assert "湖" in blk["note"]
     assert result["blocks"]["open_gap_snapshot"]["present"] is True
     json.dumps(result)  # 不抛 = 全 JSON 可序列化
 
