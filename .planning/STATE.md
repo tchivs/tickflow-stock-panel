@@ -2,19 +2,19 @@
 gsd_state_version: 1.0
 milestone: v2.1
 milestone_name: 历史深度与自选联动 — planning
-current_phase: 26
-current_phase_name: 历史竞价图 + 派生列复活 (Auction History Chart)
-status: complete
-stopped_at: Completed 26-02-PLAN.md (frontend CHART-02) — Phase 26 2/2 plans done
-last_updated: "2026-08-06T07:48:00Z"
+current_phase: 27
+current_phase_name: Premarket Pool
+status: planning
+stopped_at: Completed 26-02-PLAN.md (frontend CHART-02) — Phase 26 both plans done
+last_updated: "2026-08-06T07:33:13.305Z"
 last_activity: 2026-08-06
-last_activity_desc: Phase 26 complete (CHART-01..03)
+last_activity_desc: Phase 26 complete, transitioned to Phase 27
 progress:
   total_phases: 4
   completed_phases: 3
   total_plans: 6
   completed_plans: 6
-  percent: 100
+  percent: 75
 ---
 
 # Project State
@@ -28,10 +28,10 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 
 ## Current Position
 
-Phase: 26 — 历史竞价图 + 派生列复活 (Auction History Chart)
-Plan: Complete (2/2)
-Status: Complete
-Last activity: 2026-08-06 — Phase 26 complete (CHART-01 read-only endpoint + CHART-02 frontend chart + CHART-03 write-path widening)
+Phase: 27 — 盘前股池 (Premarket Pool)
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-08-06 — Phase 26 complete, transitioned to Phase 27
 
 ## v1.3 Phase Summary (shipped 2026-08-04)
 

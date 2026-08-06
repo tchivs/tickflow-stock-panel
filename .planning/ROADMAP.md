@@ -121,7 +121,7 @@ Phases execute in numeric order: 24 → 25 → 26 → 27
 |-------|-------------|--------|
 | 24. 逐日全量存档 | HIST-01..04 | Complete    |
 | 25. 自选股联动 | WATCH-01..04 | Complete    |
-| 26. 历史竞价图 + 派生列复活 | CHART-01..03 | Complete |
+| 26. 历史竞价图 + 派生列复活 | CHART-01..03 | Complete    |
 | 27. 盘前股池 | PM-01..04 | Not started |
 
 ---
