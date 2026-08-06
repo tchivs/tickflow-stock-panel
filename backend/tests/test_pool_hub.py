@@ -838,6 +838,62 @@ def test_pool_history_missing_available_false(tmp_path):
     assert body["snapshot_origin"] is None
 
 
+def test_pool_history_renders_backfilled_snapshot(tmp_path):
+    """PB-03: 回填快照 (origin=backfill) 渲染 — origin 透传 / 3 策略渲染 / updated_at==computed_at / 概念诚实回退。
+
+    - W-1 (PLAN-CHECK): present-state 响应无 ``available`` 键 (空态专属) — 以
+      ``snapshot_origin=="backfill"`` + ``len(strategies)==3`` 区分存在态。
+    - W-2 (PLAN-CHECK): ``snapshot_type``/``schema_version`` 属分区 payload
+      (pool_snapshot.py:87-88), 不经 /pool/history 投影 — 断言落在
+      ``load_point_snapshot`` 返回的分区载荷上, 响应键集不含二者。
+    - CONCEPT-05: 无 ext_history 分区 → ``current_snapshot`` 诚实回退 (非伪造
+      as_of_snapshot), 响应不携带 effective/captured_at 时间键。
+    """
+    from app.services import pool_snapshot
+
+    _write_snapshot(tmp_path, origin="backfill")
+    client = _make_client(tmp_path, engine=_FakeEngine())
+    resp = client.get("/api/pool/history", params={"as_of": _AS_OF})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["as_of"] == _AS_OF
+    assert body["mode"] == "vip"
+
+    # W-1: present-state 无 available 键; origin 透传 (非 eod 缺省)
+    assert "available" not in body
+    assert body["snapshot_origin"] == "backfill"
+
+    # strategies 渲染: 3 项各含 id/name/rows/total; 引擎注入 → 中文显示名
+    strategies = body["strategies"]
+    assert len(strategies) == 3
+    for s in strategies:
+        assert {"id", "name", "rows", "total"} <= set(s)
+    by_id = {s["id"]: s["name"] for s in strategies}
+    assert by_id == {
+        "auction_bullish": "竞价多头",
+        "auction_preopen_quant": "盘前强势量化",
+        "auction_early_star": "早盘之星",
+    }
+    # total 权威一致: 3 策略持久化 total 2+2+1
+    assert sum(s["total"] for s in strategies) == 5
+
+    # updated_at == 快照 computed_at (诚实区分计算时刻, pool.py 投影语义)
+    assert body["updated_at"] == "2026-08-04T15:30:00"
+
+    # CONCEPT-05 诚实回退: 无 ext_history 分区 → current_snapshot, 不追加时间键
+    assert body["concept_attribution"] == "current_snapshot"
+    assert "concept_effective_date" not in body
+    assert "concept_captured_at" not in body
+
+    # W-2: snapshot_type/schema_version 属分区 payload, 不在 /pool/history 投影
+    assert "snapshot_type" not in body
+    assert "schema_version" not in body
+    snap = pool_snapshot.load_point_snapshot(tmp_path, _AS_OF)
+    assert snap is not None
+    assert snap["snapshot_type"] == "point"
+    assert snap["schema_version"] == 1
+
+
 def test_pool_history_rejects_bad_as_of(tmp_path):
     """非法 as_of → 400 (防路径穿越); 缺失 as_of → 200 空态。"""
     client = _make_client(tmp_path)

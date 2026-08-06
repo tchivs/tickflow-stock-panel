@@ -653,3 +653,51 @@ def test_probe_concept_drift_script_compiles_and_references():
     assert "partition_sha256" in text
     assert "drift.jsonl" in text
     assert "ext_history" in text
+
+
+def _write_snapshot_with_origin(data_dir: Path, as_of: str, origin: str) -> Path:
+    """写指定 ``snapshot_origin`` 的点快照 (镜像 _write_snapshot 形状, 重写 provenance 键)。"""
+    path = _write_snapshot(data_dir, as_of=as_of)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["snapshot_origin"] = origin
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    return path
+
+
+def test_pool_history_backfilled_date_concept_fallback(tmp_path):
+    """PB-03/CONCEPT-05: 回填日概念归属诚实回退 — 无 ext_history 分区 → current_snapshot 且不伪造时间键。
+
+    键集锁: 回退态载荷顶层绝不追加 ``concept_effective_date``/``concept_captured_at``
+    (当前概念快照不冒充历史日, CONCEPT-05)。正向对照证明锁非空转: 同 data_dir 建
+    ``ext_history/gn_ths/date=D`` 分区 → 同一 as_of 翻转为 as_of_snapshot + 两键出现
+    (读侧机制真实, 回退是分区缺失的诚实结果而非功能缺失)。origin 无关性: 回退判定
+    只由 ext_history 分区决定, 与快照 snapshot_origin 正交 (backfill/eod 同布置均
+    current_snapshot — 回填不特殊化概念语义)。
+    """
+    from app.services.pool_hub import build_pool_hub_snapshot
+
+    d = "2026-07-27"  # 镜像 33-01 真实回填首日 (端到端同源)
+
+    # 布置 1: 回填快照 (origin=backfill) + 当前 ext config 就位 + 无 ext_history 分区
+    # (沙箱状态镜像: ext_data 存在, ext_history 缺失 → 全部回填日 current_snapshot)
+    _write_concept_ext(tmp_path, kind="gn_ths")
+    _write_snapshot_with_origin(tmp_path, as_of=d, origin="backfill")
+    hub = build_pool_hub_snapshot(tmp_path, d)
+    assert hub["concept_attribution"] == "current_snapshot"
+    assert "concept_effective_date" not in hub  # 键集锁: 回退绝不携带 PIT 时间戳
+    assert "concept_captured_at" not in hub
+
+    # 布置 2 (origin 无关性): 换 eod 快照 → 仍 current_snapshot (归属不因回填特殊化)
+    _write_snapshot_with_origin(tmp_path, as_of=d, origin="eod")
+    hub_eod = build_pool_hub_snapshot(tmp_path, d)
+    assert hub_eod["concept_attribution"] == "current_snapshot"
+    assert "concept_effective_date" not in hub_eod
+    assert "concept_captured_at" not in hub_eod
+
+    # 布置 3 (正向对照): 建 ext_history/gn_ths/date=D 分区 → 同一 as_of 翻转为
+    # as_of_snapshot + effective/captured_at 两键出现 (证明键集锁非空转)
+    _write_partition_fixture(tmp_path, d, "所属概念", {_SYMBOLS["X"]: ["新能源"]})
+    hub_with_partition = build_pool_hub_snapshot(tmp_path, d)
+    assert hub_with_partition["concept_attribution"] == "as_of_snapshot"
+    assert hub_with_partition["concept_effective_date"] == d
+    assert hub_with_partition["concept_captured_at"] == "2026-08-04T10:00:00"
