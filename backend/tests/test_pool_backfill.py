@@ -251,3 +251,150 @@ def test_pool_backfill_failed_days_continue(tmp_path, monkeypatch):
     assert (tmp_path / "screener_results" / "date=2026-08-01" / "part.json").exists()
     assert not (tmp_path / "screener_results" / "date=2026-08-02" / "part.json").exists()
     assert (tmp_path / "screener_results" / "date=2026-08-03" / "part.json").exists()
+
+
+# ================================================================
+# Task 3 — POST /api/pipeline/backfill 端点 (D1/D5)
+# ================================================================
+
+
+def _make_backfill_app(tmp_path):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.api import pipeline as pipeline_api
+
+    app = FastAPI()
+    app.include_router(pipeline_api.router)
+    app.state.repo = _FakeRepo(tmp_path, pl.DataFrame(), date(2026, 8, 4))
+    app.state.strategy_engine = None
+    return app, TestClient(app)
+
+
+def _wait_job_terminal(job_id, timeout=5.0):
+    import time
+
+    from app.services.pipeline_jobs import job_store
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        j = job_store.get(job_id)
+        if j is None or j["status"] in ("succeeded", "failed"):
+            return j
+        time.sleep(0.02)
+    return job_store.get(job_id)
+
+
+def _wait_slot_free(timeout=5.0):
+    import time
+
+    from app.services.pipeline_jobs import release_run_slot, try_acquire_run_slot
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if try_acquire_run_slot():
+            release_run_slot()
+            return True
+        time.sleep(0.02)
+    return False
+
+
+def test_backfill_endpoint_singleflight_and_reuse(tmp_path, monkeypatch):
+    """Test 1 (D1/D5): 首次触发 started, 二次触发复用活跃 job (单飞)。"""
+    import threading
+
+    from app.services import pool_backfill as pool_backfill_mod
+
+    app, client = _make_backfill_app(tmp_path)
+
+    release = threading.Event()
+    started = threading.Event()
+
+    def fake_run(repo, engine=None, **kwargs):
+        started.set()
+        release.wait(timeout=5)
+        return {"requested": 0, "backfilled": 0, "failed": 0, "failed_dates": [],
+                "origin": "backfill"}
+
+    monkeypatch.setattr(pool_backfill_mod, "run_pool_backfill", fake_run)
+
+    with client:
+        r1 = client.post("/api/pipeline/backfill", json={"max_days": 2})
+        assert r1.status_code == 200
+        body1 = r1.json()
+        assert body1["status"] == "started"
+        job_id = body1["job_id"]
+        assert started.wait(timeout=5), "后台任务应已启动"
+
+        r2 = client.post("/api/pipeline/backfill", json={"max_days": 2})
+        assert r2.status_code == 200
+        assert r2.json() == {"status": "reused", "job_id": job_id}
+
+        release.set()
+        j = _wait_job_terminal(job_id)
+        assert j is not None and j["status"] == "succeeded"
+        assert _wait_slot_free(), "重任务执行槽应已释放"
+
+
+def test_backfill_endpoint_parameter_validation(tmp_path, monkeypatch):
+    """Test 2 (D5/Pitfall 4): 非法/无界参数一律 400 (防路径穿越与失控长任务)。"""
+    from app.services import pool_backfill as pool_backfill_mod
+
+    monkeypatch.setattr(
+        pool_backfill_mod, "run_pool_backfill",
+        lambda repo, engine=None, **kwargs: {"requested": 0, "backfilled": 0,
+                                             "failed": 0, "failed_dates": [],
+                                             "origin": "backfill"},
+    )
+    app, client = _make_backfill_app(tmp_path)
+
+    with client:
+        for body in (
+            {"start": "2026-8-1"},                       # 非 YYYY-MM-DD
+            {"end": "08/01/2026"},                      # 非 ISO
+            {"start": "2026-08-04", "end": "2026-08-01"},  # start > end
+            {"start": "2026-13-01"},                    # 日历非法 (regex 过, ISO 不过)
+            {"max_days": 0},
+            {"max_days": -1},
+            {"max_days": 501},
+            {"max_days": "2"},                          # 非 int
+            {"max_days": True},                          # bool 不算 int
+        ):
+            resp = client.post("/api/pipeline/backfill", json=body)
+            assert resp.status_code == 400, f"body={body} 应 400, got {resp.status_code}"
+
+
+def test_backfill_endpoint_runs_in_executor_and_succeeds(tmp_path, monkeypatch):
+    """Test 3 (D5): 后台 executor 线程执行 (请求内零阻塞), job_store.succeed 被调。"""
+    import threading
+
+    from app.services import pool_backfill as pool_backfill_mod
+
+    app, client = _make_backfill_app(tmp_path)
+
+    thread = {"id": threading.main_thread().ident}
+    started = threading.Event()
+    release = threading.Event()
+
+    def fake_run(repo, engine=None, **kwargs):
+        thread["id"] = threading.get_ident()
+        started.set()
+        release.wait(timeout=5)
+        return {"requested": 1, "backfilled": 1, "failed": 0, "failed_dates": [],
+                "origin": "backfill"}
+
+    monkeypatch.setattr(pool_backfill_mod, "run_pool_backfill", fake_run)
+
+    with client:
+        resp = client.post("/api/pipeline/backfill", json={})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "started"
+        job_id = body["job_id"]
+        assert started.wait(timeout=5)
+        release.set()
+        j = _wait_job_terminal(job_id)
+        assert j is not None and j["status"] == "succeeded"
+        assert j["result"]["backfilled"] == 1
+        assert thread["id"] != threading.main_thread().ident, "回填应在线程池线程执行"
+        assert _wait_slot_free()

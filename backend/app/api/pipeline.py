@@ -4,6 +4,8 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures as _cf
 import logging
+import re
+from datetime import date as date_type
 
 from fastapi import APIRouter, HTTPException, Request
 
@@ -82,6 +84,86 @@ async def run_now(request: Request) -> dict:
 
     asyncio.create_task(task())
     return {"job_id": job_id, "reused": False}
+
+
+@router.post("/backfill")
+async def pool_backfill(request: Request) -> dict:
+    """批量回填历史股池缺口 — 用户触发, 后台 job, 立即返回 job_id。
+
+    body: ``{ "max_days": int|None, "start": "YYYY-MM-DD"|None, "end": "YYYY-MM-DD"|None }``
+
+    - 运营操作 (写研究快照), **绝不放 /api/pool/*** (POOL-03 E4 GET-only 守卫)。
+    - 单飞 (``job_store.create`` pending∨running 去重) + 重任务执行槽互斥
+      (``try_acquire_run_slot``, 与 EOD/手动 run_all 并发防护) + 后台 executor
+      (``_long_task_executor``, 请求内零阻塞)。
+    - 进度经既有 ``GET /api/pipeline/jobs/{id}`` 轮询; 取消经既有
+      ``POST /api/pipeline/jobs/{id}/cancel`` (合作式, 每日期查 job 状态)。
+    """
+    body = await request.json()
+    start = body.get("start")
+    end = body.get("end")
+    max_days = body.get("max_days")
+
+    # 参数校验 (Pitfall 4 / T-24-01-01/02): 防路径穿越与无界长任务
+    for name, v in (("start", start), ("end", end)):
+        if v is not None:
+            if not isinstance(v, str) or not re.fullmatch(r"^\d{4}-\d{2}-\d{2}$", v):
+                raise HTTPException(status_code=400, detail=f"{name} 必须为 YYYY-MM-DD")
+            try:
+                date_type.fromisoformat(v)
+            except ValueError:
+                raise HTTPException(status_code=400, detail=f"{name} 不是合法日期") from None
+    if start and end and str(start) > str(end):
+        raise HTTPException(status_code=400, detail="start 不能晚于 end")
+    if max_days is not None:
+        if (
+            not isinstance(max_days, int)
+            or isinstance(max_days, bool)
+            or not (0 < max_days <= 500)
+        ):
+            raise HTTPException(status_code=400, detail="max_days 必须为 1~500 的整数")
+
+    repo = request.app.state.repo
+    engine = getattr(request.app.state, "strategy_engine", None)
+
+    from app.services.pool_backfill import run_pool_backfill
+    from app.services.pipeline_jobs import job_store, release_run_slot, try_acquire_run_slot
+
+    job_store.reap_stale()
+    # 单飞: 复用任何活跃 (pending∨running) 任务, is_new=False 时不再调度新任务
+    job_id, is_new = job_store.create()
+    if not is_new:
+        return {"status": "reused", "job_id": job_id}
+
+    async def task() -> None:
+        # 重任务执行槽: 与 EOD/手动 run_all 并发写同一 date={d} 分区防护
+        if not try_acquire_run_slot():
+            job_store.fail(job_id, "已有数据任务在运行(或上一次任务卡死未结束),请稍后再试")
+            return
+        loop = asyncio.get_event_loop()
+
+        def progress(stage: str, pct: int, msg: str, stage_pct: int | None = None,
+                     skip_log: bool = False) -> None:
+            job_store.progress(job_id, stage, pct, msg, stage_pct=stage_pct, skip_log=skip_log)
+
+        try:
+            job_store.start(job_id)
+            result = await loop.run_in_executor(
+                _long_task_executor,
+                lambda: run_pool_backfill(
+                    repo, engine, start=start, end=end, max_days=max_days,
+                    on_progress=progress, job_id=job_id,
+                ),
+            )
+            job_store.succeed(job_id, result)
+        except Exception as e:  # noqa: BLE001
+            logger.exception("pool backfill failed: job_id=%s", job_id)
+            job_store.fail(job_id, str(e))
+        finally:
+            release_run_slot()
+
+    asyncio.create_task(task())
+    return {"status": "started", "job_id": job_id}
 
 
 @router.get("/jobs/{job_id}")

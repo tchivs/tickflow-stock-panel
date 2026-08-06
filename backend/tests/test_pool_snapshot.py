@@ -436,3 +436,47 @@ def test_run_all_with_hits_shared_core_shape(tmp_path):
     assert results["strat_a"]["as_of"] == "2026-08-04"
     for r in results["strat_a"]["rows"]:
         assert "hit_factors" in r
+
+
+def test_run_all_historical_asof_skips_cache_write(tmp_path, monkeypatch):
+    """D6 (HIST-04): 手动 run_all 历史 as_of 不写 cache (latest-only), 快照仍落盘 origin=backfill;
+    最新 as_of 写 cache + 快照 origin=eod。"""
+    import json
+
+    from app.services import pool_snapshot
+    from app.services.screener import ScreenerService
+
+    client, resp, _engine = _run_all_app(tmp_path, ["strat_a"], as_of=date(2026, 8, 4))
+    assert resp.status_code == 200
+
+    cache_path = tmp_path / "user_data" / "strategy_cache.json"
+    assert cache_path.exists(), "最新日 run_all 应写 cache (D6 最新日行为不变)"
+    cache_before = cache_path.read_bytes()
+    assert json.loads(cache_before)["as_of"] == "2026-08-04"
+
+    # 历史 as_of (repo.latest = 2026-08-04) → 不写 cache, 快照 origin=backfill
+    monkeypatch.setattr(
+        ScreenerService, "run_all_with_hits",
+        lambda self, as_of, strategy_ids=None, engine=None: _canned_results(str(as_of)),
+    )
+    resp = client.post(
+        "/api/screener/run_all",
+        json={"as_of": "2026-08-01", "strategy_ids": ["strat_a"]},
+    )
+    assert resp.status_code == 200
+    assert cache_path.read_bytes() == cache_before, "历史 as_of 不得改写 strategy_cache (D6)"
+    snap = pool_snapshot.load_point_snapshot(tmp_path, "2026-08-01")
+    assert snap is not None
+    assert snap["snapshot_origin"] == "backfill"
+
+    # 最新 as_of → cache 写入 + 快照 origin=eod
+    resp = client.post(
+        "/api/screener/run_all",
+        json={"as_of": "2026-08-04", "strategy_ids": ["strat_a"]},
+    )
+    assert resp.status_code == 200
+    cache = json.loads(cache_path.read_bytes())
+    assert cache["as_of"] == "2026-08-04"
+    snap = pool_snapshot.load_point_snapshot(tmp_path, "2026-08-04")
+    assert snap is not None
+    assert snap["snapshot_origin"] == "eod"

@@ -439,13 +439,20 @@ def run_all(request: Request, body: Optional[dict] = None):
     elapsed = (time.perf_counter() - t_total) * 1000
     logger.info("run_all: total took %.1fms (%d strategies)", elapsed, len(results))
 
-    # 写入策略缓存 (供页面秒加载)
+    # 写入策略缓存 (供页面秒加载) — 仅最新日写, 历史 as_of 写会污染 single-as_of 指针 (D6/HIST-04)。
     if results:
         try:
-            strategy_cache.write_cache(data_dir, str(as_of), results)
+            latest = svc.latest_date()
+            is_latest = latest is not None and str(latest) == str(as_of)
         except Exception:  # noqa: BLE001
-            pass
-        # POOL-04 调用点 1: write_cache 之后落冻结式点快照 (只落当次 results, 无 union 键)
+            is_latest = False
+        if is_latest:
+            try:
+                strategy_cache.write_cache(data_dir, str(as_of), results)
+            except Exception:  # noqa: BLE001
+                pass
+        # POOL-04 调用点 1: 快照**总是**落盘 (历史 as_of 手动补缺口行为保留, D6),
+        # 只落当次 results, 无 union 键; origin 按最新/历史区分。
         try:
             pool_snapshot.persist_point_snapshot(
                 data_dir,
@@ -453,6 +460,7 @@ def run_all(request: Request, body: Optional[dict] = None):
                 results,
                 strategy_version=pool_snapshot.strategy_fingerprint(engine),
                 computed_at=datetime.now().isoformat(timespec="seconds"),
+                origin="eod" if is_latest else "backfill",
             )
         except Exception:  # noqa: BLE001
             pass
