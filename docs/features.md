@@ -29,6 +29,10 @@
 
 历史缺口(有 enriched 数据但缺快照的交易日)可由运营经 `POST /api/pipeline/backfill` **一键批量回填**——后台 job 逐日重算并落快照,进度经 `/api/pipeline/jobs/{id}` 可见;`GET /api/pool/dates` 同时返回 `backfill_needed` 缺口计数与 `backfill_examples` 示例日,回填完成后缺口归零。每份快照带 **`snapshot_origin`** 来源标注(`eod`=盘后归档 / `backfill`=事后回填重算),历史视图经 `GET /api/pool/history` 透传;旧快照缺该字段按 `eod` 读,provenance 诚实不伪造。
 
+### ⭐ 自选股联动（Watchlist Sync）
+
+已登录研究员可在股池钻取明细表每行代码旁用自选星标一键加入/移出自选（在自选为实心高亮，不在为空心）；用钻取区 header 的「只看自选」开关把表格收窄到当前策略在自选清单中的行，或点「批量加自选」把当前可见行一次性加入自选。自选集合经共享 `QK.watchlist` 缓存与自选页/策略页/个股弹窗即时一致，匹配键为全后缀 `symbol` 精确匹配（无归一化/无 code 匹配）。游客会话不渲染任何自选控件、也不发起自选查询（仅服务端已脱敏的只读面）。
+
 ---
 
 ## 📊 指标流水线(Indicators)
