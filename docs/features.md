@@ -25,9 +25,17 @@
 
 ### 🗓️ 股池日期导航
 
-每次盘后 run_all 的结果以**冻结式点快照**落盘 `screener_results/date={as_of}/`(携带计算时刻与策略版本指纹),可经日期列表(`GET /api/pool/dates`)与按日取池(`GET /api/pool/history?as_of=`)浏览历史股池。快照由盘后 EOD job 自动预生成,无数据日显示诚实空态;概念板块为当前归属标注(`current_snapshot`),非当日快照归属。
+每次盘后 run_all 的结果以**冻结式点快照**落盘 `screener_results/date={as_of}/`(携带计算时刻与策略版本指纹),可经日期列表(`GET /api/pool/dates`)与按日取池(`GET /api/pool/history?as_of=`)浏览历史股池。快照由盘后 EOD job 自动预生成,无数据日显示诚实空态;概念板块默认为当前归属标注(`current_snapshot`),非当日快照归属(历史日若已有 as_of 归档则按当日快照归属,详见下文「概念板块 PIT」)。
 
 历史缺口(有 enriched 数据但缺快照的交易日)可由运营经 `POST /api/pipeline/backfill` **一键批量回填**——后台 job 逐日重算并落快照,进度经 `/api/pipeline/jobs/{id}` 可见;`GET /api/pool/dates` 同时返回 `backfill_needed` 缺口计数与 `backfill_examples` 示例日,回填完成后缺口归零。每份快照带 **`snapshot_origin`** 来源标注(`eod`=盘后归档 / `backfill`=事后回填重算),历史视图经 `GET /api/pool/history` 透传;旧快照缺该字段按 `eod` 读,provenance 诚实不伪造。
+
+### 🧭 概念板块 PIT（历史映射）
+
+盘后 EOD job 将当日同花顺概念（`ext_gn_ths`）与行业（`ext_hy_ths`）快照**前向归档**到平台自有根 `data/ext_history/{gn_ths|hy_ths}/date={as_of}/part.parquet`，每分区旁带 provenance `manifest.json`（`source_url` / `fetched_at` / `captured_at` / `rows` / `schema_version` / `sha256` / `dimension_field`）。
+
+- 历史股池视图（`GET /api/pool/history?as_of=`）概念归属按 **as_of 分区解析**：分区存在 → `as_of_snapshot`（该日存档归属，前端显示「概念按当日快照」+ 概念数据生效日期）；分区缺失 → 回退当前快照并标注 `current_snapshot` / `unavailable`（诚实，绝不伪造历史）；存量上线前 ~247 个历史日不回填，恒为当前归属标注。
+- 前端股池页在明细区渲染概念归属徽标：非 `as_of_snapshot` → 「概念归属为当前快照，非该日数据」；`as_of_snapshot` → 「概念按当日快照 · 概念数据生效日期 {date}」。
+- 诚实边界：归档仅前向（EOD 起），内容来自平台可见的当前 ext 快照（离线确定性），与实时 hub 的 `current_snapshot` 标注区分；概念归属单状态不混用。
 
 ### ⭐ 自选股联动（Watchlist Sync）
 
