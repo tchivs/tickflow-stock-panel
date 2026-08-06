@@ -42,7 +42,7 @@ Four phases (20-23) delivered probe-gated real auction columns + `kline_auction/
 - [x] **Phase 27: 盘前股池 (Premarket Pool)** - Scheduled premarket preview job (independent store) + open_gap completion + probe-honest degraded semantics + frontend premarket view — PM-01..04 (completed 2026-08-06)
 - [x] **Phase 28: 概念板块 PIT (Concept PIT)** - Forward daily concept archive + as_of read-side resolution + three-state attribution — CONCEPT-01..07 (completed 2026-08-06)
 - [x] **Phase 29: 竞价策略历史验证 (Auction Strategy Validation)** - Read-only signal-quality report + vectorized auction-column injector — BT-01..06 (completed 2026-08-06)
-- [ ] **Phase 30: 盘前监控告警 (Premarket Monitoring)** - New preopen rule type + evaluate_premarket + 09:26 job-tail wiring — MON-01..07
+- [x] **Phase 30: 盘前监控告警 (Premarket Monitoring)** - New preopen rule type + evaluate_premarket + 09:26 job-tail wiring — MON-01..07 (completed 2026-08-06)
 - [ ] **Phase 31: 竞价复盘 (Auction Recap)** - Deterministic auction recap panel in the post-close recap + optional AI commentary — REV-01..05
 
 ## Phase Details
@@ -180,13 +180,13 @@ Plans:
   3. Wired to 09:26 job tail (same single-flight, after persist); reuses operational → SSE → webhook.
   4. `provisional/degraded/probe` annotated on events; degraded + auction-dependent rules fail closed (0 alerts, never silent-0-fill); guest-visible surfaces masked.
 
-**Plans**: 2/3 plans executed
+**Plans**: 3/3 plans executed
 
 Plans:
 
 - [x] 30-01-PLAN.md — 后端核心 (MON-01/02/04): preopen 规则类型 + PREOPEN_ALLOWED_FIELDS 白名单 + validate 专属分支 + `preopen_eval.py` 独立只读模块 + `evaluate_premarket` 隔离评估 + evaluate() 盘中跳过 (D-03) + T1-T10
 - [x] 30-02-PLAN.md — 后端接线 (MON-03/04/05/06/07 后端): 09:26 job 尾段 + `evaluate_premarket_alerts` 持久化优先链 + `mask_guest_alert` + /options preopen 外露 + T11-T20 (含 AST 守卫)
-- [ ] 30-03-PLAN.md — 前端 P2 (MON-07): api.ts 类型 + RuleEditor preopen 编辑 + Monitor.tsx provisional/degraded 徽标 + e2e + docs (Watchlist.tsx 零触碰)
+- [x] 30-03-PLAN.md — 前端 P2 (MON-07): api.ts 类型 + RuleEditor preopen 编辑 + Monitor.tsx provisional/degraded 徽标 + e2e + docs (Watchlist.tsx 零触碰)
 
 **Research flag**: 需要 `--research-phase`（高） — R1 `change_pct` 盘前帧口径核实（`compute_enriched_today` + quote_service preopen flush）、调度（尾段 vs 独立 09:27）、`scope=sector` 支持.
 
@@ -213,7 +213,7 @@ Phases execute in numeric order: 28 → 29 → 30 → 31
 |-------|-------------|--------|
 | 28. 概念板块 PIT | CONCEPT-01..07 | Complete    |
 | 29. 竞价策略历史验证 | BT-01..06 | Complete    |
-| 30. 盘前监控告警 | MON-01..07 | Planned |
+| 30. 盘前监控告警 | MON-01..07 | Complete |
 | 31. 竞价复盘 | REV-01..05 | Planned |
 
 ---

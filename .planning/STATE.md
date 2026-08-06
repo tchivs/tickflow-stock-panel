@@ -5,16 +5,16 @@ milestone_name: 决策闭环与历史纵深 — planning
 current_phase: 30
 current_phase_name: Premarket Monitoring
 status: planning
-stopped_at: Completed 30-02-PLAN.md
-last_updated: "2026-08-06T13:55:26.029Z"
+stopped_at: Completed 30-03-PLAN.md
+last_updated: "2026-08-06T14:08:42.338Z"
 last_activity: 2026-08-06
-last_activity_desc: "30-02 complete (backend wiring: 尾段接线 + 持久化优先链 + guest 掩码 + options + AST 守卫)"
+last_activity_desc: "30-03 complete (MON-07 前端: preopen 类型契约 + 规则编辑 + 告警渲染 + e2e + docs)"
 progress:
   total_phases: 8
   completed_phases: 0
   total_plans: 12
-  completed_plans: 8
-  percent: 0
+  completed_plans: 9
+  percent: 75
 ---
 
 # Project State
@@ -29,9 +29,9 @@ See: .planning/PROJECT.md (updated 2026-08-06)
 ## Current Position
 
 Phase: 30 — 盘前监控告警 (Premarket Monitoring)
-Plan: 2/3 (30-02 complete)
-Status: In Progress
-Last activity: 2026-08-06 — 30-02 complete (backend wiring: 尾段接线 + 持久化优先链 + guest 掩码 + options + AST 守卫)
+Plan: 3/3 (30-03 complete)
+Status: Complete
+Last activity: 2026-08-06 — 30-03 complete (MON-07 前端: preopen 类型契约 + 规则编辑 + 告警渲染 + e2e + docs)
 
 ## v1.3 Phase Summary (shipped 2026-08-04)
 
@@ -84,8 +84,8 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-08-06T13:55:25.237Z
-Stopped at: Completed 30-02-PLAN.md
+Last session: 2026-08-06T14:08:28.802Z
+Stopped at: Completed 30-03-PLAN.md
 Resume file: None
 
 ## Operator Next Steps
@@ -145,6 +145,10 @@ Resume file: None
 - [Phase ?]: degraded 事件带冻结 probe 快照落库 (round-trip 保真), 不新增「未触发日志」表 (OQ-3 保持 v2.2 范围)
 - [Phase ?]: mask_guest_alert 白名单含 message/conditions (盘前文案非 PII), 飞书/Telegram 所有者通道不受掩码约束
 - [Phase ?]: T19 守卫扫描 docstring 剥离后的源码 (docstring 为禁令声明文本, 非调用面)
+- [Phase ?]: 30-03: thresholdFields 按类型切换 (preopen → preopen_threshold_fields ?? []) 而非合并两份字段表 — 配置期白名单隔离, 杜绝建出必失败的规则
+- [Phase ?]: 30-03: preopen 隐藏 truth 信号点选仅为 UX (后端 validate 白名单为最终防线 — 双保险)
+- [Phase ?]: 30-03: 徽标区整体以 ev.source === 'preopen' 包裹, provisional/degraded 为可选字段 — 旧事件零渲染零崩溃
+- [Phase ?]: 30-03: e2e 断言命中条件行与前端渲染器字形一致 ('open_gap>=0.05' 非 '≥'; cnSignal 映射后字段名)
 
 ### v1.3 Decisions (carried)
 
@@ -197,3 +201,4 @@ Resume file: None
 | Phase 29 P3 | 7min | 3 tasks | 5 files |
 | Phase 30 P1 | 31 | 3 tasks | 4 files |
 | Phase 30 P2 | 24 | 3 tasks | 8 files |
+| Phase 30-premarket-monitor P3 | 36 | 2 tasks | 5 files |
