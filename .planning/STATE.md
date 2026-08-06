@@ -2,19 +2,19 @@
 gsd_state_version: 1.0
 milestone: v2.1
 milestone_name: 历史深度与自选联动 — planning
-current_phase_name: 逐日全量存档 (Historical Archive)
-status: executing
-stopped_at: Completed 24-02-PLAN.md
-last_updated: "2026-08-06T09:30:00.000Z"
+current_phase: 25
+current_phase_name: 自选股联动 (Watchlist Sync)
+status: planning
+stopped_at: Completed 25-01-PLAN.md
+last_updated: "2026-08-06T06:05:01.951Z"
 last_activity: 2026-08-06
-last_activity_desc: Phase 24 executed (2/2 plans) — backfill core + gap signal + read-side provenance
+last_activity_desc: Phase 24 complete, transitioned to Phase 25
 progress:
   total_phases: 4
   completed_phases: 1
-  total_plans: 2
-  completed_plans: 2
+  total_plans: 4
+  completed_plans: 3
   percent: 25
-current_phase: 24
 ---
 
 # Project State
@@ -28,10 +28,10 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 
 ## Current Position
 
-Phase: 24 — 逐日全量存档 (Historical Archive) — Complete (2/2 plans)
-Plan: —
-Status: Phase 24 delivered; v2.1 continues to Phase 25 (自选股联动)
-Last activity: 2026-08-06 — Phase 24 both plans executed (24-01 backfill core + D6 fix; 24-02 gap signal + read-side provenance + source guard)
+Phase: 25 — 自选股联动 (Watchlist Sync)
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-08-06 — Phase 24 complete, transitioned to Phase 25
 
 ## v1.3 Phase Summary (shipped 2026-08-04)
 
@@ -84,8 +84,8 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-08-06T09:30:00.000Z
-Stopped at: Completed 24-02-PLAN.md
+Last session: 2026-08-06T06:05:01.939Z
+Stopped at: Completed 25-01-PLAN.md
 Resume file: None
 
 ## Operator Next Steps
@@ -103,6 +103,9 @@ Resume file: None
 - [Phase 21 / P1]: StrategyDef 新字段 (minute_confirm_fn/evaluation_time/minute_confirm_required) 置于 file_path 之后 (dataclass 默认值字段必须尾随非默认字段)
 - [Phase 21 / P1]: auction_volume_ratio 受管列 = 竞价量/前5日均量(不含当日, PIT-safe), 注册进 ENRICHED_COLUMNS + BY_CATEGORY['auction'], 绝不进存储窄表/计算闭包; 无历史即列缺席
 - [Phase 21 / P1]: 引擎 requires_auction_data 短路空池 (缺 auction_volume → 空 StrategyResult) + 策略 filter pl.lit(False) 守卫双保险; 分钟确认 seam 单点 datetime.time() <= evaluation_time 截断, minute_confirm_required 决定缺分钟数据空池/跳过
+- [Phase ?]: watchlist 查询 enabled: !!data && mode === 'vip' 双门控 (D4/P2) — mode 由 data 派生回退 vip, data 未落地不误发
+- [Phase ?]: 批量 scope = filteredRows 可见行 (display_limit 内), 绝不按 activeStrategy.total (D6/H8); watchlistOnly 开启时隐藏批量按钮
+- [Phase ?]: watchlistPending = toggle.isPending || watchlist.isPending || watchlist.isError (H9 fail-closed); 星标/开关/批量按钮均带非空可访问名 (P1 白名单前提)
 
 ### v1.3 Decisions (carried)
 
@@ -137,6 +140,7 @@ Resume file: None
 | Phase 21 P1 | 36 | 3 tasks | 7 files |
 | Phase 24 P1 | — | 3 tasks | 6 files |
 | Phase 24 P2 | 22 | 3 tasks | 5 files |
+| Phase 25-watchlist-sync P1 | 10 | 3 tasks | 3 files |
 
 ---
 *Last updated: 2026-08-05 — Phase 21 plan 1 (STRAT-04/05/06 engine seam + managed column + P1 strategies) complete; Phase 21 in progress (plan 2 parallel)*

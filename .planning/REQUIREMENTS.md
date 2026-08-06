@@ -9,7 +9,7 @@ Requirements for the v2.1 milestone. Each maps to a roadmap phase. Research basi
 
 ### 逐日全量存档 (Historical Archive) — Phase 24
 
-- [ ] **HIST-01**: Operator can backfill missing historical pool snapshots with a user-triggered batch job that replays `run_all_with_hits` per historical as_of into `screener_results/date={as_of}/` and **never** writes `strategy_cache.json` (the single-as_of pointer must not be polluted by backfill); the job is cancelable, bounded (recent-N or date range), and amortizes warmup in ascending date order.
+- [x] **HIST-01**: Operator can backfill missing historical pool snapshots with a user-triggered batch job that replays `run_all_with_hits` per historical as_of into `screener_results/date={as_of}/` and **never** writes `strategy_cache.json` (the single-as_of pointer must not be polluted by backfill); the job is cancelable, bounded (recent-N or date range), and amortizes warmup in ascending date order.
 - [x] **HIST-02**: Every snapshot records honest provenance — a `snapshot_origin` field distinguishing `eod` (scheduled post-close) from `backfill` (recomputed later); existing snapshots without the field read as `eod` (backward compatible).
 - [x] **HIST-03**: Archive completeness is visible — a `backfill_needed` gap signal surfaces dates with no snapshot for the selected trading-day range (API + DateNavigator empty-state), and backfill progress is observable (not silent).
 - [x] **HIST-04**: Backfill adheres to platform guards — POOL-03 zero execution authority (GET-only surface), no first-request blocking replay, no silent disk writes outside the job's explicit scope; the manual `run_all` historical-as_of cache-pointer pollution (`api/screener.py` writing `strategy_cache` for historical dates) is also fixed.
