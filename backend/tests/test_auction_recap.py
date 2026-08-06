@@ -522,3 +522,160 @@ def test_json_safe_nan_auction_amount(repo_env):
     assert blk["total_amount"] is None
     assert blk["top_n"][0]["auction_amount"] is None
     json.dumps(result)  # 不抛
+
+
+# ================================================================
+# Task 3 — Block 3 preopen_signal_quality + build_auction_slice 单源 (REV-03)
+# ================================================================
+
+
+def test_signal_quality_family_intersection(repo_env):
+    """REV-03 验收 1: 策略集 = 族∩预览 (custom_a 不入); 逐策略手算一致。"""
+    from app.services.auction_recap import build_auction_recap
+
+    _repo, data_dir = repo_env
+    _write_premarket_preview(data_dir, FIXED_DATE, _preview_payload(FIXED_DATE))
+    repo = _FakeRepo(data_dir, enriched=_eod_frame(), latest=FIXED_DATE)
+    now = datetime(FIXED_DATE.year, FIXED_DATE.month, FIXED_DATE.day, 16, 0)
+
+    blk = build_auction_recap(repo, FIXED_DATE, now=now)["blocks"]["preopen_signal_quality"]
+    assert blk["present"] is True
+    assert set(blk["strategies"].keys()) == {"auction_bullish", "golden_230"}  # custom_a 不入
+
+    ab = blk["strategies"]["auction_bullish"]
+    assert ab["n"] == 2
+    assert ab["avg_open_gap"] == pytest.approx((0.05 + 0.02) / 2)
+    # EOD 口径 (R6 铁律): change_pct 来自 EOD 帧 (0.06/0.01), 绝非预览行 (0.051/0.021)
+    assert ab["avg_change_pct"] == pytest.approx((0.06 + 0.01) / 2)
+    assert ab["open_gap_fulfill_rate"] == pytest.approx(1.0)
+    assert ab["close_fulfill_rate"] == pytest.approx(0.5)
+    assert ab["up_rate"] == pytest.approx(1.0)
+
+    g = blk["strategies"]["golden_230"]
+    assert g["n"] == 1
+    assert g["avg_open_gap"] == pytest.approx(0.01)
+    assert g["open_gap_fulfill_rate"] == pytest.approx(0.0)
+    assert g["close_fulfill_rate"] == pytest.approx(0.0)
+    assert g["up_rate"] == pytest.approx(0.0)
+
+
+def test_signal_quality_eod_join_n_missing(repo_env):
+    """R6 铁律: 预览 change_pct 绝不作收盘兑现率; EOD 缺行 → n_missing 不填充。"""
+    from app.services.auction_recap import build_auction_recap
+
+    _repo, data_dir = repo_env
+    payload = _preview_payload(FIXED_DATE)
+    # 追加 EOD 帧缺失的标的 (停牌/退市): 预览有行, EOD 无行
+    payload["results"]["auction_bullish"]["rows"].append({
+        "symbol": "999999", "name": "停牌票", "open_gap": 0.03, "change_pct": 0.031,
+        "hit_factors": ["竞价多头"],
+    })
+    payload["results"]["auction_bullish"]["total"] = 3
+    _write_premarket_preview(data_dir, FIXED_DATE, payload)
+    repo = _FakeRepo(data_dir, enriched=_eod_frame(), latest=FIXED_DATE)
+    now = datetime(FIXED_DATE.year, FIXED_DATE.month, FIXED_DATE.day, 16, 0)
+
+    blk = build_auction_recap(repo, FIXED_DATE, now=now)["blocks"]["preopen_signal_quality"]
+    ab = blk["strategies"]["auction_bullish"]
+    assert ab["n"] == 3
+    assert ab["n_missing"] == 1
+    assert blk["n_missing"] == 1
+    # 999999 不进率统计 (不 0 填/不前向填充): EOD 统计基于 2 个已联行
+    assert ab["avg_open_gap"] == pytest.approx((0.05 + 0.02 + 0.03) / 3)
+    assert ab["avg_change_pct"] == pytest.approx((0.06 + 0.01) / 2)
+    assert ab["close_fulfill_rate"] == pytest.approx(0.5)
+    assert ab["up_rate"] == pytest.approx(1.0)
+
+
+def test_signal_quality_preview_missing_no_premarket_preview(repo_env):
+    """REV-01/03: 无预览 → 块省略 + 头标签 no_premarket_preview (分区存在时)。"""
+    from app.services.auction_recap import build_auction_recap
+
+    _repo, data_dir = repo_env
+    hist = FIXED_DATE - timedelta(days=1)
+    _write_auction_partition(data_dir, hist, _auction_rows(hist, {"000001": (300.0, 500.0)}))
+    repo = _FakeRepo(
+        data_dir, enriched=_make_enriched(["000001"], [0.01], as_of=hist), latest=hist,
+    )
+    now = datetime(FIXED_DATE.year, FIXED_DATE.month, FIXED_DATE.day, 16, 0)
+
+    result = build_auction_recap(repo, hist, now=now)
+    assert result["data_completeness"] == "no_premarket_preview"
+    blk = result["blocks"]["preopen_signal_quality"]
+    assert blk["present"] is False
+    assert "预览" in blk["note"]
+
+
+def test_signal_quality_display_limit_note(repo_env):
+    """display_limit 截断 → n 带「基于展示行」注记; 未截断 → 无注记。"""
+    from app.services.auction_recap import build_auction_recap
+
+    _repo, data_dir = repo_env
+    payload = _preview_payload(FIXED_DATE)
+    payload["results"]["auction_bullish"]["total"] = 5  # 截断: total > len(rows)=2
+    _write_premarket_preview(data_dir, FIXED_DATE, payload)
+    repo = _FakeRepo(data_dir, enriched=_eod_frame(), latest=FIXED_DATE)
+    now = datetime(FIXED_DATE.year, FIXED_DATE.month, FIXED_DATE.day, 16, 0)
+
+    blk = build_auction_recap(repo, FIXED_DATE, now=now)["blocks"]["preopen_signal_quality"]
+    assert "基于展示行" in blk["strategies"]["auction_bullish"]["note"]
+    g = blk["strategies"]["golden_230"]  # total == len(rows) → 无注记
+    assert not g.get("note")
+
+
+def test_signal_quality_pre_eod_honest(repo_env):
+    """REV-02/03: 今日早于管道调度 → change_pct 系统计省略 + 注记; degraded 注记。"""
+    from app.services.auction_recap import build_auction_recap
+
+    _repo, data_dir = repo_env
+    _write_premarket_preview(data_dir, FIXED_DATE, _preview_payload(FIXED_DATE))
+    repo = _FakeRepo(data_dir, enriched=_eod_frame(), latest=FIXED_DATE)
+    now_pre = datetime(FIXED_DATE.year, FIXED_DATE.month, FIXED_DATE.day, 15, 0)
+
+    result = build_auction_recap(repo, FIXED_DATE, now=now_pre)
+    assert result["data_completeness"] == "pre_eod"
+    blk = result["blocks"]["preopen_signal_quality"]
+    ab = blk["strategies"]["auction_bullish"]
+    assert ab["avg_open_gap"] == pytest.approx(0.035)  # open_gap 照常 (open 已定盘)
+    assert "close_fulfill_rate" not in ab
+    assert "up_rate" not in ab
+    assert "avg_change_pct" not in ab
+    assert any("EOD 收盘兑现率待盘后管道完成后更新" in n for n in blk["notes"])
+
+    # degraded:true payload → 块级注记
+    payload = _preview_payload(FIXED_DATE)
+    payload["degraded"] = True
+    payload["probe"] = _fake_verdict("not_configured")
+    _write_premarket_preview(data_dir, FIXED_DATE, payload)
+    blk2 = build_auction_recap(repo, FIXED_DATE, now=now_pre)["blocks"]["preopen_signal_quality"]
+    assert blk2["degraded"] is True
+    assert any("盘前信号基于派生因子(非真实竞价数据)" in n for n in blk2["notes"])
+
+
+def test_signal_quality_resonance_and_slice_single_source(repo_env):
+    """REV-03/REV-04 验收 6: resonance 聚合 + slice 与 render 同 dict 构造性单源。"""
+    from app.services.auction_recap import (
+        build_auction_recap,
+        build_auction_slice,
+        render_auction_recap_markdown,
+    )
+
+    _repo, data_dir = repo_env
+    _write_premarket_preview(data_dir, FIXED_DATE, _preview_payload(FIXED_DATE))
+    repo = _FakeRepo(data_dir, enriched=_eod_frame(), latest=FIXED_DATE)
+    now = datetime(FIXED_DATE.year, FIXED_DATE.month, FIXED_DATE.day, 16, 0)
+
+    panel = build_auction_recap(repo, FIXED_DATE, now=now)
+    blk = panel["blocks"]["preopen_signal_quality"]
+    resonance = blk["resonance"]
+    assert resonance["present"] is True
+    assert resonance["n_symbols"] == 1  # 仅 000001 (hit_factors >= 2)
+    assert resonance["close_fulfill_rate"] == pytest.approx(1.0)
+
+    slice_txt = build_auction_slice(panel)
+    assert slice_txt.startswith("## 竞价复盘数据(确定性切片)")
+    assert "auction_bullish" in slice_txt
+    md = render_auction_recap_markdown(panel)
+    assert "auction_bullish" in md
+    # 同一 panel dict → 切片与渲染的数值一致 (构造性单源)
+    assert "100.0%" in slice_txt and "100.0%" in md
