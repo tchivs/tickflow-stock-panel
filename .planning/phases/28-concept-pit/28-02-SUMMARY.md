@@ -166,3 +166,12 @@ None - no external service configuration required.
 ---
 *Phase: 28-concept-pit*
 *Completed: 2026-08-06*
+
+## Self-Check: PASSED
+- `28-02-SUMMARY.md` — FOUND at `.planning/phases/28-concept-pit/28-02-SUMMARY.md`
+- Commits: `652e0b6` (feat) / `5da597d` (test) / `1785681` (docs) / `651d5e7` (docs, plan metadata) — all FOUND
+- `Watchlist.tsx` — absent from all 4 commits' file lists (only referenced in commit-message body as "不触碰")
+- Frontend build: `npm run build` green (tsc + vite)
+- `concept-pit.spec.ts`: 3 passed (desktop) / 6 skipped (mobile/phase4)
+- `pool-hub.spec.ts` regression: 40 passed / 80 skipped, zero snapshot changes
+- Backend smoke: `test_pool_hub` + `test_concept_history` 50 passed (zero backend changes)
