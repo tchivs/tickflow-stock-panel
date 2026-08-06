@@ -3,10 +3,10 @@ gsd_state_version: 1.0
 milestone: v2.2
 milestone_name: 决策闭环与历史纵深 — planning
 status: planning
-stopped_at: Milestone v2.2 started
-last_updated: "2026-08-06T09:05:00.000Z"
+stopped_at: Milestone v2.2 research synthesized; REQUIREMENTS + ROADMAP defined
+last_updated: "2026-08-06T09:20:00.000Z"
 last_activity: 2026-08-06
-last_activity_desc: Milestone v2.2 started (4 candidate domains)
+last_activity_desc: Milestone v2.2 requirements defined (25 reqs, Phases 28-31)
 progress:
   total_phases: 0
   completed_phases: 0
@@ -28,10 +28,10 @@ See: .planning/PROJECT.md (updated 2026-08-06)
 
 ## Current Position
 
-Phase: Milestone v2.2 planning (defining requirements)
+Phase: Milestone v2.2 planning (requirements + roadmap defined)
 Plan: —
-Status: Planning
-Last activity: 2026-08-06 — Milestone v2.2 started (4 candidate domains: 概念 PIT / 竞价验证 / 盘前监控 / 竞价复盘)
+Status: Planning — research complete, awaiting Phase 28 research/plans
+Last activity: 2026-08-06 — Milestone v2.2 requirements defined (25 reqs: 21 P1 + 4 P2, Phases 28-31)
 
 ## v1.3 Phase Summary (shipped 2026-08-04)
 

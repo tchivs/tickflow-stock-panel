@@ -1,50 +1,63 @@
-# Requirements: AthenaQuant v2.1 历史深度与自选联动
+# Requirements: AthenaQuant v2.2 决策闭环与历史纵深
 
-**Defined:** 2026-08-05
+**Defined:** 2026-08-06
 **Core Value:** An investor can turn reliable market data and their own holdings into an auditable, actionable research and monitoring workflow without operating multiple disconnected tools.
 
-## v2.1 Requirements
+## v2.2 Requirements
 
-Requirements for the v2.1 milestone. Each maps to a roadmap phase. Research basis: `.planning/research/v2.1-depth/SUMMARY.md` (data-first ordering; zero new runtime deps; honest provenance + POOL-03 zero-execution + strategy_cache single-as_of integrity as cross-cutting guards).
+Requirements for the v2.2 milestone. Each maps to a roadmap phase. Research basis: `.planning/research/v2.2-decision-loop/SUMMARY.md` (data-first ordering; zero new runtime deps; honest provenance + POOL-03 zero-execution + strategy_cache single-as_of integrity as cross-cutting guards).
 
-### 逐日全量存档 (Historical Archive) — Phase 24
+### 概念板块 PIT 历史映射 (Concept PIT) — Phase 28
 
-- [x] **HIST-01**: Operator can backfill missing historical pool snapshots with a user-triggered batch job that replays `run_all_with_hits` per historical as_of into `screener_results/date={as_of}/` and **never** writes `strategy_cache.json` (the single-as_of pointer must not be polluted by backfill); the job is cancelable, bounded (recent-N or date range), and amortizes warmup in ascending date order.
-- [x] **HIST-02**: Every snapshot records honest provenance — a `snapshot_origin` field distinguishing `eod` (scheduled post-close) from `backfill` (recomputed later); existing snapshots without the field read as `eod` (backward compatible).
-- [x] **HIST-03**: Archive completeness is visible — a `backfill_needed` gap signal surfaces dates with no snapshot for the selected trading-day range (API + DateNavigator empty-state), and backfill progress is observable (not silent).
-- [x] **HIST-04**: Backfill adheres to platform guards — POOL-03 zero execution authority (GET-only surface), no first-request blocking replay, no silent disk writes outside the job's explicit scope; the manual `run_all` historical-as_of cache-pointer pollution (`api/screener.py` writing `strategy_cache` for historical dates) is also fixed.
+- [ ] **CONCEPT-01**: A forward daily concept archive — the EOD hook (`_pool_eod_persist` tail) captures the current `ext_gn_ths` concept snapshot into a platform-owned root `data/ext_history/gn_ths/date={as_of}/part.parquet` (atomic write, strict date validation, mirrors `screener_results`/`premarket_results` precedent); capture failure never blocks the pool snapshot; existing ~247 pre-launch historical dates are **not** backfilled (upstream has no historical endpoint — forward-only archive, honest `current_snapshot` fallback, never fabricated).
+- [ ] **CONCEPT-02**: The concept join in the historical pool view is upgraded to as-of read-side resolution — `_build_concept_map` gains an `as_of` parameter, prefers the `date==as_of` partition, and falls back to the current ext snapshot with the `current_snapshot` attribution when the partition is missing.
+- [ ] **CONCEPT-03**: Concept attribution is a three-state machine — `as_of_snapshot` (date partition present) / `current_snapshot` (fallback) / `unavailable` (no concept data at all); rows are never mixed by attribution within a response, partitions are never merged/stitched, and backfill forgery is structurally impossible.
+- [ ] **CONCEPT-04** (P2): The frontend renders the attribution state visibly — a badge/tooltip when `current_snapshot`/`unavailable` (never when `as_of_snapshot`), showing the mapping effective date; no changes to the user-pending `Watchlist.tsx`.
+- [ ] **CONCEPT-05**: The new write path is guarded — POOL-03-style AST guard scoped per module: `concept_history` may only write `data/ext_history/` (never `strategy_cache`/`screener_results`/`premarket_results`/`ext_data`), mirroring the `test_pool_hub` E-guard pattern.
+- [ ] **CONCEPT-06**: The same as-of resolution seam is extended to the other consumers — market overview `_dimension_rank` (historical recap concept board) and `rps_rotation._load_concept_map_df` (RPS matrix) — eliminating the today-unlabeled drift; industry archive (`ext_hy_ths`) is archived alongside concept.
+- [ ] **CONCEPT-07** (P2): Each archived partition carries a provenance manifest (`source_url`/`captured_at`/`fetched_at`) and the API/UI exposes the mapping effective date.
 
-### 自选股联动 (Watchlist Sync) — Phase 25
+### 竞价策略历史验证 (Auction Strategy Validation) — Phase 29
 
-- [x] **WATCH-01**: In the pool drill-down (VIP mode), each stock row shows a watchlist star that toggles membership via the existing `/api/watchlist` CRUD; guest rendering is pixel-identical to v2.0 (no watch controls, no watchlist queries issued for guests).
-- [x] **WATCH-02**: A "只看自选" filter switch narrows the pool to watchlisted rows (VIP); the strategy-card `total` remains authoritative (filtering never alters totals), applies identically to latest and historical as_of views, and shows an honest empty state when no watchlisted stocks match.
-- [x] **WATCH-03**: Watchlist membership is consistent across pages via the shared `QK.watchlist` cache; the join key is the fully-suffixed `symbol` (e.g. `603221.SH`) exact match.
-- [x] **WATCH-04** (P2): Operator can batch-add all visible rows to the watchlist (scope = rows within the current display limit), reusing the existing batch-add endpoint.
+- [ ] **BT-01**: A read-only `GET /api/research/auction/validation` signal-quality report with an honest data gate — `kline_auction` empty or probe unavailable returns 200 `{data_gate: "empty", coverage: 0, strategies: [], probe}` (never 404/500); `data_gate: "available"` when enabled dates exist.
+- [ ] **BT-02**: A vectorized `attach_auction_columns_range` injection primitive (multi-date) mirroring `attach_auction_columns` probe×partition dual gate with PIT-safe denominators (`volume.shift(1).rolling_mean(5).over("symbol")`); dates without partitions are never null-as-present; does not touch the governed backtest panel seam.
+- [ ] **BT-03**: Per-strategy report rows `{branch: real|derived|eod, n_dates, n_hits, coverage, forward_stats, per_date, data_gate}` — auction strategies that require real columns report honestly when the lake is empty (`n_dates == 0`, never downgraded to derived); the 5 derived/EOD-proxy strategies still get validated on the enriched history with explicit branch labeling.
+- [ ] **BT-04**: Forward-outcome semantics are locked — entry = T open; `next_day_open_ret = open_{T+1}/open_T − 1`; `next_day_close_ret = close_{T+1}/open_T − 1`; `open_gap_outcome = open_{T+1}/close_T − 1`; missing outcome days are counted in `n_missing_outcomes`, never 0-filled or forward-filled (no lookahead, no silent fill).
+- [ ] **BT-05**: Branch labels are mutually exclusive — real/derived/eod never mixed within a strategy's stats; each branch computed and labeled independently.
+- [ ] **BT-06**: The validation surface is zero-execution + zero-dependency — GET-only, AST-guarded (mirror `test_pool_hub` E3), never writes `strategy_cache`/`screener_results`, never touches the frozen-panel scope/checksum.
 
-### 历史竞价图 + 派生列复活 (Auction History Chart) — Phase 26
+### 盘前监控告警 (Premarket Monitoring) — Phase 30
 
-- [x] **CHART-01**: Researcher can query per-symbol historical auction aggregates via a read-only `GET /api/kline/auction/history?symbol=&days=` endpoint — last-row (09:25 final call) semantics per trading day; empty lake returns honest 200 `available: false` (never 404); POOL-03-style GET-only, zero execution.
-- [x] **CHART-02**: User can view the auction history chart in the stock drill-down popup — ECharts dual-axis (柱=竞价量, 线=竞价金额), honest empty state + 09:15–09:25 window annotation, zero new npm dependencies, no changes to the user-pending `Watchlist.tsx`.
-- [x] **CHART-03**: The auction lake ingestion path preserves the delegation-volume input columns (canonical schema widened from 4 required to 4 required + 2 optional `auction_unmatched_volume`/`auction_virtual_price`), activating the existing derived `auction_unmatched_amount` branch so the Phase 23 "派生·虚拟成交" UI group becomes live data rather than absent columns; schema/UI maintain the "估算" annotation and stay backward compatible.
+- [ ] **MON-01**: A new `preopen` monitor rule type with a validated field whitelist (`open_gap`/`auction_volume`/`auction_amount`/`auction_volume_ratio`/`auction_unmatched_amount`, `op=truth` supported; EOD-only fields `change_pct`/`close`/`vol_ratio_5d`/`amount` banned); pre-open frame semantics verified at implementation (`compute_enriched_today` + quote_service preopen flush) before shipping alerts.
+- [ ] **MON-02**: `evaluate_premarket(payload)` evaluates the premarket preview payload in isolation — reconstructs the DataFrame from `payload["results"]` rows with `change_pct` set to `None` (honest missing column), never touching `_strategy_pools`/`_latest_strategy_results` (no pool-baseline pollution of the 09:30 intraday first round).
+- [ ] **MON-03**: Evaluation is wired to the tail of the 09:26 `_premarket_pool_preview` job (same `_run_tracked` single-flight, after persist) — no new job race; reuses the existing operational → SSE → webhook delivery sequence.
+- [ ] **MON-04**: Honest provisional/degraded/probe annotation — events carry `provisional: true`/`degraded`/`probe`; when `degraded` or probe non-available, auction-dependent rules fail closed (0 alerts, never 0-fill silence — the degraded state is surfaced in the alert record/UI); preview `available: false` → no evaluation, no alerts.
+- [ ] **MON-05**: Zero-execution + store isolation — the preopen evaluate module is AST-guarded (execution-family token absent; read-only on `premarket_results`), never writes `strategy_cache`/`screener_results`.
+- [ ] **MON-06**: Guest surfaces stay masked — preopen alert records rendered through the existing guest masking path (`mask_guest_hub` semantics); guests see no auction values.
+- [ ] **MON-07** (P2): `/api/monitor-rules/options` exposes the `preopen` type + field whitelist; the frontend rule editor/alerts page renders the new type (no changes to `Watchlist.tsx`).
 
-### 盘前股池 (Premarket Pool) — Phase 27
+### 竞价复盘 (Auction Recap) — Phase 31
 
-- [x] **PM-01**: A scheduled premarket job (09:26, after the 09:25 call-auction fix) generates a same-day premarket pool preview via `run_all_with_hits(as_of=T)` into an independent store (`premarket_results/date={T}/`) — it never writes `strategy_cache`/`screener_results` (EOD semantics untouched).
-- [x] **PM-02**: The premarket data frame is complete for strategy evaluation — `open_gap` is computed for the today frame (single implementation, no drift from the EOD Pass 4 source); absent real auction columns fail closed to derived factors; ex-dividend-day `open_gap` caliber (raw prev-close vs adjusted) is covered by fixtures.
-- [x] **PM-03**: Premarket auction-column semantics are probe-honest — when today's probe is `available`, real auction columns are injected at read time; otherwise they are absent and the UI shows a `degraded`/window status (never implying real auction data exists premarket).
-- [x] **PM-04**: The frontend presents the premarket view distinctly from EOD — window annotation (pre-open preview vs post-close archive), honest empty state, and DateNavigator continues to list EOD snapshot dates (premarket preview never masquerades as an archived day).
+- [ ] **REV-01**: A deterministic auction-recap assembly service (`auction_recap.py`) builds the recap blocks from frozen assets only — `load_premarket_snapshot` + `attach_auction_columns` + enriched `open_gap` — read-only, AST-guarded, never triggers `run_all_with_hits`; historical as_of uses partition-existence as the primary gate (probe dual-gate applies to today only).
+- [ ] **REV-02**: Honest annotation/degradation — `data_completeness` enum `{full, no_auction_lake, no_premarket_preview, pre_eod, partial}`; missing blocks are omitted with explicit note; the 09:30+ continuous bar is never labeled auction data; the panel carries a "确定性数据，非 AI 生成" marker; pre-EOD runs (before the 15:30 auction sync) are labeled `pre_eod` and never imply auction data exists.
+- [ ] **REV-03**: A premarket signal-quality block — per-strategy `{n, avg open_gap, avg change_pct, 开盘兑现率, 收盘兑现率, 收阳率}` driven by strategies that actually have rows in the premarket preview (never hardcoded strategy lists); joins preview against EOD enriched `change_pct` caliber.
+- [ ] **REV-04**: Recap integration — the deterministic panel is appended as a delta before the `done` event in `recap_market_stream` (same stream → SSE/archive/Feishu all receive it, zero frontend change); optional AI commentary defaults OFF and, when enabled, may only cite the panel's slice values with explicit gaps; `_build_user_prompt` stays backward compatible (optional param, default None); the default recap schedule moves to 15:40 (after 15:30 auction sync + 15:35 pool persist) so the full blocks light up.
+- [ ] **REV-05** (P2): A standalone read-only `GET /api/market-recap/auction` endpoint for the deterministic panel (independent of the AI recap stream).
 
-## Out of Scope (v2.1)
+## Out of Scope (v2.2)
 
 | Feature | Reason |
 |---------|--------|
-| 虚拟成交实时列 (CHART-04) — intraday/premarket live refresh | Blocked on external real-time auction source; [INFERENCE] unverifiable in this environment. Formal defer; gate = custom auction source probe returning in-window virtual unmatched/reference price rows |
-| 历史撮合价格曲线 (intraday auction price curve) | Lake stores no price column (`kline_auction` canonical = 4 cols); requires upstream price rows |
-| 盘前真实竞价列注入 (PM tier-2) | Gated on today-probe `available` with a real-time source; tier-1 (derived open_gap preview) is the deliverable |
-| 历史自选快照 (historical watchlist membership) | Watchlist is not a time series; stars/filter annotate current membership only |
-| Automated live broker execution | Platform-wide boundary since v1.0; all `/api/pool/*` + new endpoints stay GET-only zero execution (POOL-03) |
+| BT-07 全量竞价回测（frozen-panel 竞价列 + minute_confirm_fn 接入） | Explicitly deferred to v2.3+ — needs `kline_auction` lake with sufficient historical partitions (currently 0) |
+| 真实竞价活跃度 / 真列验证（BT real branch, REV real_auction_activity） | Gated on `kline_auction` partitions + probe `available`; empty lake → BT `data_gate:"empty"`, REV block honestly omitted — conditional delivery |
+| CONCEPT 历史回填（~247 pre-launch dates） | Upstream `concepts.json` has no historical endpoint [INFERENCE]; forward-only archive; pre-launch dates fall back to `current_snapshot` (never fabricated) |
+| 盘前预览基线 vs 实际开盘对比、盘前异动告警直喂复盘 | Cross-domain optional links — v2.2 later or v2.3 |
+| 复用 type=strategy 指向盘前行（MON option B） | Rejected — `_strategy_pools` baseline pollution causes spurious 09:30 dropped/new_entry alerts |
+| 独立归档层 / 查询时回放（CONCEPT/BT） | Double source of truth / reverse of POOL-06; rejected |
+| 自动刷新 `ext_gn_ths` 当前快照（CONCEPT OQ-1 选项 a） | Keeps existing manual-refresh ext design; concept archive writes only platform-owned `ext_history/` |
+| Automated live broker execution | Platform-wide boundary since v1.0; all new endpoints stay GET-only / read-only (POOL-03) |
 | External database or message queue | Architecture constraint since v1.0 |
-| New npm/pip runtime dependencies | Zero new deps: ECharts already in-tree; all backend uses existing seams (`run_all_with_hits`, `pool_snapshot`, `attach_auction_columns`, `/api/watchlist`) |
+| New npm/pip runtime dependencies | Zero new deps: all reuse existing stack (ext_presets, write_ext_parquet, Polars partitions, monitor rule engine, recap stream) |
 
 ## Traceability
 
@@ -52,28 +65,38 @@ Populated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| HIST-01 | Phase 24 | Complete |
-| HIST-02 | Phase 24 | Complete |
-| HIST-03 | Phase 24 | Complete |
-| HIST-04 | Phase 24 | Complete |
-| WATCH-01 | Phase 25 | Complete |
-| WATCH-02 | Phase 25 | Complete |
-| WATCH-03 | Phase 25 | Complete |
-| WATCH-04 | Phase 25 | Complete (P2) |
-| CHART-01 | Phase 26 | Complete |
-| CHART-02 | Phase 26 | Complete |
-| CHART-03 | Phase 26 | Complete |
-| PM-01 | Phase 27 | Complete |
-| PM-02 | Phase 27 | Complete |
-| PM-03 | Phase 27 | Complete |
-| PM-04 | Phase 27 | Complete |
+| CONCEPT-01 | Phase 28 | Open |
+| CONCEPT-02 | Phase 28 | Open |
+| CONCEPT-03 | Phase 28 | Open |
+| CONCEPT-04 | Phase 28 | Open (P2) |
+| CONCEPT-05 | Phase 28 | Open |
+| CONCEPT-06 | Phase 28 | Open |
+| CONCEPT-07 | Phase 28 | Open (P2) |
+| BT-01 | Phase 29 | Open |
+| BT-02 | Phase 29 | Open |
+| BT-03 | Phase 29 | Open |
+| BT-04 | Phase 29 | Open |
+| BT-05 | Phase 29 | Open |
+| BT-06 | Phase 29 | Open |
+| MON-01 | Phase 30 | Open |
+| MON-02 | Phase 30 | Open |
+| MON-03 | Phase 30 | Open |
+| MON-04 | Phase 30 | Open |
+| MON-05 | Phase 30 | Open |
+| MON-06 | Phase 30 | Open |
+| MON-07 | Phase 30 | Open (P2) |
+| REV-01 | Phase 31 | Open |
+| REV-02 | Phase 31 | Open |
+| REV-03 | Phase 31 | Open |
+| REV-04 | Phase 31 | Open |
+| REV-05 | Phase 31 | Open (P2) |
 
 **Coverage:**
 
-- v2.1 requirements: 15 total (11 P1, 4 P2)
-- Mapped to phases: 15 (roadmap created — Phases 24-27)
+- v2.2 requirements: 25 total (21 P1, 4 P2)
+- Mapped to phases: 25 (roadmap created — Phases 28-31)
 - Unmapped: 0
 
 ---
-*Requirements defined: 2026-08-05*
-*Last updated: 2026-08-05 — v2.1 milestone started; research synthesized (4 domains → 4 phases)*
+*Requirements defined: 2026-08-06*
+*Last updated: 2026-08-06 — v2.2 milestone started; research synthesized (4 domains → 4 phases)*
