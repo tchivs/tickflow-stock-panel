@@ -24,7 +24,7 @@ current_phase_name: Auction Recap
 See: .planning/PROJECT.md (updated 2026-08-06)
 
 **Core value:** An investor can turn reliable market data and their own holdings into an auditable, actionable research and monitoring workflow without operating multiple disconnected tools.
-**Current focus:** Phase 28 — concept-pit
+**Current focus:** Milestone v2.2 complete — awaiting next milestone
 
 ## Current Position
 
