@@ -249,8 +249,8 @@ export function PoolHubPage() {
           />
         )}
 
-        {/* 当日无股池结果 (零池语义, 保留) — available:false 时短路 (PIT-2: 无快照 ≠ 零池) */}
-        {data && data.available !== false && data.strategies.length === 0 && (
+        {/* 当日无股池结果 (零池语义, 保留) — available:false 时短路 (PIT-2: 无快照 ≠ 零池); PM-04: 盘前空态优先 */}
+        {data && data.available !== false && data.strategies.length === 0 && !showPremarketEmpty && (
           <EmptyState
             icon={ScanSearch}
             title="当日无股池结果"
@@ -258,8 +258,8 @@ export function PoolHubPage() {
           />
         )}
 
-        {/* 有结果: 概念筛选 → 策略卡片 → 钻取明细 */}
-        {data && data.strategies.length > 0 && (
+        {/* 有结果: 概念筛选 → 策略卡片 → 钻取明细 (PM-04: 盘前空态优先, 盘前预览缺失时不混排 hub 流) */}
+        {data && data.strategies.length > 0 && !showPremarketEmpty && (
           <motion.div
             key={data.as_of ?? 'pool-hub'}
             initial={{ opacity: 0, y: reduceMotion ? 0 : 8 }}
