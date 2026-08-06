@@ -90,6 +90,16 @@ export function useAuctionProbe() {
   })
 }
 
+/** 竞价历史聚合 (CHART-02) — 历史不可变, 大幅 stale; 不入 SSE 无效刷新。 */
+export function useAuctionHistory(symbol: string, days = 30) {
+  return useQuery({
+    queryKey: QK.auctionHistory(symbol, days),
+    queryFn: () => api.auctionHistory(symbol, days),
+    enabled: !!symbol,
+    staleTime: 5 * 60_000,
+  })
+}
+
 /** 重新探测竞价数据 — 绕过缓存, 成功后立即用新判定刷新面板。 */
 export function useRedetectAuctionProbe() {
   const qc = useQueryClient()

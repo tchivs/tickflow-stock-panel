@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, RefreshCw, Clock } from 'lucide-react'
+import { X, RefreshCw, Clock, Gavel } from 'lucide-react'
 import { api } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { cnSignal } from '@/lib/signals'
@@ -40,6 +40,8 @@ function boardTag(symbol: string): { label: string; color: string } | null {
 
 export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props) {
   const [showIntraday, setShowIntraday] = useState(false)
+  // Phase 26 CHART-02 竞价历史图开关 (与分时独立)
+  const [showAuction, setShowAuction] = useState(false)
   const [dateRange, setDateRange] = useState(getDefaultRange)
   const [showMonitorEditor, setShowMonitorEditor] = useState(false)
   const qc = useQueryClient()
@@ -170,6 +172,22 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props
 
                 <span className="text-muted/20 mx-0.5">|</span>
 
+                {/* 竞价历史开关 (CHART-02) */}
+                <button
+                  onClick={() => setShowAuction((v) => !v)}
+                  aria-pressed={showAuction}
+                  className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs transition-colors ${
+                    showAuction
+                      ? 'bg-accent/15 text-accent border border-accent/30'
+                      : 'bg-elevated text-secondary border border-border hover:border-accent/30'
+                  }`}
+                >
+                  <Gavel className="h-3 w-3" />
+                  竞价历史
+                </button>
+
+                <span className="text-muted/20 mx-0.5">|</span>
+
                 {/* 刷新 */}
                 <button
                   onClick={handleRefresh}
@@ -236,6 +254,7 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props
                 symbol={symbol}
                 height={420}
                 showIntraday={showIntraday}
+                showAuction={showAuction}
                 onSelectDate={() => { if (!showIntraday) setShowIntraday(true) }}
                 dateRange={dateRange}
                 onMonitor={() => setShowMonitorEditor(true)}

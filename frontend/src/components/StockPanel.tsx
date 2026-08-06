@@ -3,6 +3,7 @@ import { type KlineRow, type FinancialMetricRecord } from '@/lib/api'
 import { StockInfoBar } from '@/components/StockInfoBar'
 import { StockDailyKChart, getDefaultRange, type StockDailyKChartResult } from '@/components/StockDailyKChart'
 import { StockIntradayChart } from '@/components/StockIntradayChart'
+import { AuctionHistoryChart } from '@/components/AuctionHistoryChart'
 import { useFinancialMetrics } from '@/lib/useFinancials'
 import { useCapabilities } from '@/lib/useSharedQueries'
 import type { ChartMarker, ChartPriceLine, ChartRange } from '@/components/EChartsCandlestick'
@@ -17,6 +18,8 @@ interface Props {
   symbol: string
   height?: number
   showIntraday?: boolean
+  /** Phase 26 CHART-02 竞价历史图开关 (与分时独立, 可同时渲染)。 */
+  showAuction?: boolean
   className?: string
   /** 当用户点击蜡烛选中日期时回调（用于外部自动开启分时图）。 */
   onSelectDate?: (date: string) => void
@@ -40,6 +43,7 @@ export function StockPanel({
   symbol,
   height = 520,
   showIntraday = true,
+  showAuction = false,
   className,
   onSelectDate,
   dateRange: externalDateRange,
@@ -159,6 +163,10 @@ export function StockPanel({
             onPriceHover={setLinkedPrice}
             className="flex-1 min-w-0 border-l border-border pl-3"
           />
+        )}
+
+        {showAuction && (
+          <AuctionHistoryChart symbol={symbol} height={height} className="flex-1 min-w-0 border-l border-border pl-3" />
         )}
       </div>
     </div>

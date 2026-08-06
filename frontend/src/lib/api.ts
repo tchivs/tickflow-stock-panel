@@ -73,6 +73,35 @@ export interface AuctionProbeVerdict {
   detail: string
 }
 
+// ===== 竞价历史聚合 (CHART-01/02) =====
+/** 单日竞价窗口末行 (09:25 最终撮合, 服务端 D1 聚合)。 */
+export interface AuctionHistoryRow {
+  date: string
+  datetime?: string | null
+  auction_volume: number | null
+  auction_amount: number | null
+  /** 可选委托输入列 (CHART-03 源提供才透传; 派生估算, 本图绝不混排) */
+  auction_unmatched_volume?: number | null
+  auction_virtual_price?: number | null
+  /** 窗口内行数 / 首末时间戳 —— 粒度标注 */
+  row_count: number
+  min_datetime?: string | null
+  max_datetime?: string | null
+}
+
+export interface AuctionHistoryResponse {
+  symbol: string
+  name?: string | null
+  /** 诚实空态: 湖空 / probe 非 available / guest 掩码 → false (200 非 404) */
+  available: boolean
+  probe: AuctionProbeVerdict
+  mode?: 'vip' | 'guest'
+  coverage: number
+  window: string
+  rows: AuctionHistoryRow[]
+  unit?: { auction_volume: string; auction_amount: string }
+}
+
 // ===== Financials =====
 export interface FinancialStatus {
   available: boolean
@@ -1928,6 +1957,9 @@ export const api = {
         : `/api/kline/daily?symbol=${encodeURIComponent(symbol)}&days=${days}`)
       + (extColumns ? `&ext_columns=${encodeURIComponent(extColumns)}` : ''),
     ),
+  /** 竞价历史聚合 (CHART-02): 多日竞价量/额趋势, 只读 GET。 */
+  auctionHistory: (symbol: string, days = 30) =>
+    request<AuctionHistoryResponse>('/api/kline/auction/history?symbol=' + encodeURIComponent(symbol) + '&days=' + days),
   klineDailyBatch: (symbols: string[], days = 12) =>
     request<{ data: Record<string, KlineRow[]> }>('/api/kline/daily-batch', {
       method: 'POST',
