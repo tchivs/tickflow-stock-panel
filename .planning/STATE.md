@@ -3,18 +3,18 @@ gsd_state_version: 1.0
 milestone: v2.2
 milestone_name: 决策闭环与历史纵深 — planning
 current_phase: 31
-current_phase_name: Auction Recap
-status: executing
+status: completed
 stopped_at: Completed 31-03-PLAN.md
-last_updated: "2026-08-06T15:34:36.492Z"
+last_updated: "2026-08-06T15:40:22.732Z"
 last_activity: 2026-08-06
-last_activity_desc: "31-02 complete (REV-04: recap_market_stream 面板 delta 事件序 + 可选 AI 点评 + 调度默认 15:40)"
+last_activity_desc: Phase 31 complete
 progress:
   total_phases: 8
   completed_phases: 0
   total_plans: 16
   completed_plans: 12
   percent: 0
+current_phase_name: Auction Recap
 ---
 
 # Project State
@@ -28,10 +28,10 @@ See: .planning/PROJECT.md (updated 2026-08-06)
 
 ## Current Position
 
-Phase: 31 — 竞价复盘 (Auction Recap)
-Plan: 3 of 3
-Status: Ready to execute
-Last activity: 2026-08-06 — 31-02 complete (REV-04: recap_market_stream 面板 delta 事件序 + 可选 AI 点评 + 调度默认 15:40)
+Phase: 31
+Plan: Not started
+Status: All phases complete
+Last activity: 2026-08-06 — Phase 31 complete
 
 ## v1.3 Phase Summary (shipped 2026-08-04)
 

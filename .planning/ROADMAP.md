@@ -43,7 +43,7 @@ Four phases (20-23) delivered probe-gated real auction columns + `kline_auction/
 - [x] **Phase 28: 概念板块 PIT (Concept PIT)** - Forward daily concept archive + as_of read-side resolution + three-state attribution — CONCEPT-01..07 (completed 2026-08-06)
 - [x] **Phase 29: 竞价策略历史验证 (Auction Strategy Validation)** - Read-only signal-quality report + vectorized auction-column injector — BT-01..06 (completed 2026-08-06)
 - [x] **Phase 30: 盘前监控告警 (Premarket Monitoring)** - New preopen rule type + evaluate_premarket + 09:26 job-tail wiring — MON-01..07 (completed 2026-08-06)
-- [ ] **Phase 31: 竞价复盘 (Auction Recap)** - Deterministic auction recap panel in the post-close recap + optional AI commentary — REV-01..05
+- [x] **Phase 31: 竞价复盘 (Auction Recap)** - Deterministic auction recap panel in the post-close recap + optional AI commentary — REV-01..05 (completed 2026-08-06)
 
 ## Phase Details
 
@@ -222,7 +222,7 @@ Phases execute in numeric order: 28 → 29 → 30 → 31
 | 28. 概念板块 PIT | CONCEPT-01..07 | Complete    |
 | 29. 竞价策略历史验证 | BT-01..06 | Complete    |
 | 30. 盘前监控告警 | MON-01..07 | Complete    |
-| 31. 竞价复盘 | REV-01..05 | In Progress|
+| 31. 竞价复盘 | REV-01..05 | Complete    |
 
 ---
 *Last updated: 2026-08-06 — v2.2 milestone started; research synthesized (4 domains → 4 phases); requirements defined*
