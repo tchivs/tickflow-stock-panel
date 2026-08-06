@@ -181,3 +181,49 @@ def test_pool_eod_job_registered_in_scheduler():
     assert "_run_tracked(_pool_eod_persist" in text
     assert 'CronTrigger(day_of_week="mon-fri"' in text
     assert 'timezone="Asia/Shanghai"' in text
+
+
+# ================================================================
+# CONCEPT-01 — EOD 钩子 (概念/行业历史归档, 同步非致命)
+# ================================================================
+
+def test_pool_eod_persist_calls_concept_capture(tmp_path, monkeypatch):
+    """CONCEPT-01 EOD 钩子: 调用 capture(data_dir, str(as_of)); 结果不被钩子改变。"""
+    from app.jobs import daily_pipeline
+    from app.services import concept_history
+
+    app_state = _make_app_state(tmp_path, latest=date(2026, 8, 4))
+    monkeypatch.setattr(daily_pipeline, "_get_app_state", lambda: app_state)
+
+    calls: list[tuple[Path, str]] = []
+
+    def _fake_capture(data_dir, as_of):
+        calls.append((data_dir, as_of))
+        return {"as_of": as_of}
+
+    monkeypatch.setattr(concept_history, "capture", _fake_capture)
+
+    result = daily_pipeline._pool_eod_persist()
+
+    assert result == {"as_of": "2026-08-04", "strategies": 2}
+    assert calls == [(app_state.repo.store.data_dir, "2026-08-04")]
+
+
+def test_pool_eod_persist_capture_failure_does_not_block(tmp_path, monkeypatch):
+    """CONCEPT-01 非阻断: capture 抛异常 → 仍返回成功 dict, 快照/cache 照常写。"""
+    from app.jobs import daily_pipeline
+    from app.services import concept_history
+
+    app_state = _make_app_state(tmp_path, latest=date(2026, 8, 4))
+    monkeypatch.setattr(daily_pipeline, "_get_app_state", lambda: app_state)
+
+    def _boom(data_dir, as_of):
+        raise RuntimeError("capture boom")
+
+    monkeypatch.setattr(concept_history, "capture", _boom)
+
+    result = daily_pipeline._pool_eod_persist()
+
+    assert result == {"as_of": "2026-08-04", "strategies": 2}
+    assert (tmp_path / "screener_results" / "date=2026-08-04" / "part.json").exists()
+    assert (tmp_path / "user_data" / "strategy_cache.json").exists()
