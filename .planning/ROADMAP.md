@@ -41,7 +41,7 @@ Four phases (20-23) delivered probe-gated real auction columns + `kline_auction/
 - [x] **Phase 26: 历史竞价图 + 派生列复活 (Auction History Chart)** - Read-only auction history API + ECharts chart + lake ingestion preserves delegation-volume columns — CHART-01..03 (completed 2026-08-06)
 - [x] **Phase 27: 盘前股池 (Premarket Pool)** - Scheduled premarket preview job (independent store) + open_gap completion + probe-honest degraded semantics + frontend premarket view — PM-01..04 (completed 2026-08-06)
 - [x] **Phase 28: 概念板块 PIT (Concept PIT)** - Forward daily concept archive + as_of read-side resolution + three-state attribution — CONCEPT-01..07 (completed 2026-08-06)
-- [ ] **Phase 29: 竞价策略历史验证 (Auction Strategy Validation)** - Read-only signal-quality report + vectorized auction-column injector — BT-01..06
+- [x] **Phase 29: 竞价策略历史验证 (Auction Strategy Validation)** - Read-only signal-quality report + vectorized auction-column injector — BT-01..06 (completed 2026-08-06)
 - [ ] **Phase 30: 盘前监控告警 (Premarket Monitoring)** - New preopen rule type + evaluate_premarket + 09:26 job-tail wiring — MON-01..07
 - [ ] **Phase 31: 竞价复盘 (Auction Recap)** - Deterministic auction recap panel in the post-close recap + optional AI commentary — REV-01..05
 
@@ -204,7 +204,7 @@ Phases execute in numeric order: 28 → 29 → 30 → 31
 | Phase | Requirements | Status |
 |-------|-------------|--------|
 | 28. 概念板块 PIT | CONCEPT-01..07 | Complete    |
-| 29. 竞价策略历史验证 | BT-01..06 | Planned |
+| 29. 竞价策略历史验证 | BT-01..06 | Complete    |
 | 30. 盘前监控告警 | MON-01..07 | Planned |
 | 31. 竞价复盘 | REV-01..05 | Planned |
 
