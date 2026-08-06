@@ -151,11 +151,13 @@ def _write_snapshot(
     results: dict | None = None,
     computed_at: str = "2026-08-04T15:30:00",
     strategy_version: str = "fp-test",
+    origin: str = "eod",
 ) -> Path:
     """直接写一个合法冻结式点快照 part.json (POOL-05 读路径 fixture)。
 
     默认 results 与 ``_write_strategy_cache`` 同形状 (3 策略, Y 交叉共振),
     保证 build_pool_hub 与 build_pool_hub_snapshot 投影语义可比。
+    ``origin`` 默认 eod; 旧快照兼容用例可用 ``origin=None`` 跳过该键。
     """
     if results is None:
         results = {
@@ -219,6 +221,9 @@ def _write_snapshot(
         "schema_version": 1,
         "results": results,
     }
+    # 诚实 provenance: 快照可带 snapshot_origin (HIST-02); 旧快照兼容用例传 None 跳过键
+    if origin is not None:
+        payload["snapshot_origin"] = origin
     path = data_dir / "screener_results" / f"date={as_of}" / "part.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
@@ -473,6 +478,8 @@ def test_build_pool_hub_snapshot_missing_available_false(tmp_path):
         "resonance_count": 0,
         "updated_at": None,
         "concept_attribution": "current_snapshot",
+        # HIST-02 空态: 无快照 → snapshot_origin 诚实 None (非伪造 eod)
+        "snapshot_origin": None,
     }
 
 
@@ -757,6 +764,24 @@ def test_pool_history_snapshot(tmp_path):
     } <= set(body)
 
 
+def test_pool_history_snapshot_origin_passthrough(tmp_path):
+    """HIST-02 读侧: 快照含 snapshot_origin=backfill → history 投影响应透传 backfill。"""
+    _write_snapshot(tmp_path, origin="backfill")
+    client = _make_client(tmp_path, engine=_FakeEngine())
+    resp = client.get("/api/pool/history", params={"as_of": _AS_OF})
+    assert resp.status_code == 200
+    assert resp.json()["snapshot_origin"] == "backfill"
+
+
+def test_pool_history_snapshot_origin_default_eod(tmp_path):
+    """Pitfall 5 兼容锁: 旧快照 (无 snapshot_origin 键) → 读侧缺省 eod, 绝不 KeyError。"""
+    _write_snapshot(tmp_path, origin=None)  # 旧 payload: 无 origin 键
+    client = _make_client(tmp_path, engine=_FakeEngine())
+    resp = client.get("/api/pool/history", params={"as_of": _AS_OF})
+    assert resp.status_code == 200
+    assert resp.json()["snapshot_origin"] == "eod"
+
+
 def test_pool_history_missing_available_false(tmp_path):
     """快照缺失 → 200 + available False 空态 (非 404)。"""
     client = _make_client(tmp_path)
@@ -767,6 +792,8 @@ def test_pool_history_missing_available_false(tmp_path):
     assert body["as_of"] is None
     assert body["strategies"] == []
     assert body["updated_at"] is None
+    # HIST-02 空态: 无快照 → snapshot_origin 诚实 None (非伪造 eod)
+    assert body["snapshot_origin"] is None
 
 
 def test_pool_history_rejects_bad_as_of(tmp_path):

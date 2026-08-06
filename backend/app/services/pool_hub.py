@@ -249,8 +249,10 @@ def build_pool_hub_snapshot(
             "resonance_count": 0,
             "updated_at": None,
             "concept_attribution": "current_snapshot",
+            # 诚实 provenance (HIST-02 读侧): 无快照 → 空态 origin 为 None
+            "snapshot_origin": None,
         }
-    return _project_hub(
+    hub = _project_hub(
         snap["results"],
         snap["as_of"],
         snap["computed_at"],
@@ -258,3 +260,7 @@ def build_pool_hub_snapshot(
         name_for,
         data_dir,
     )
+    # 诚实 provenance (HIST-02 读侧): 透传快照 origin; 旧快照缺字段 → 缺省 eod
+    # (Pitfall 5 — 绝不 snap["snapshot_origin"] 直取, 否则旧 payload KeyError)
+    hub["snapshot_origin"] = snap.get("snapshot_origin", "eod")
+    return hub

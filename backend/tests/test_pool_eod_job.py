@@ -132,6 +132,8 @@ def test_pool_eod_persist_writes_snapshot_and_cache(tmp_path, monkeypatch):
     assert snap["strategy_version"]  # 策略版本指纹非空
     assert snap["computed_at"]  # 计算时刻 ISO 秒
     assert "results" in snap
+    # HIST-02 写侧 provenance: EOD job 缺省路径落快照 origin == "eod" (盘后归档)
+    assert snap["snapshot_origin"] == "eod"
     # POOL-04 铁律: 快照绝不落 today_ever_rows union
     assert "today_ever_rows" not in snap
     assert "today_ever_matched" not in snap
