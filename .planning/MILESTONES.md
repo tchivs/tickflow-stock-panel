@@ -1,5 +1,25 @@
 # Milestones
 
+## v2.3 v2.3 (Shipped: 2026-08-06)
+
+**Phases completed:** 4 phases, 12 plans, 4 tasks
+
+**Key accomplishments:**
+
+- ExecutorP3201 · **Date:** 2026-08-06 · **Plan:** `.planning/phases/32-auction-backfill/32-01-PLAN.md` · **Wave:** 1
+- `.planning/phases/32-auction-backfill/32-02-PLAN.md`
+- ExecutorP3203 · **Date:** 2026-08-06 · **Plan:** `.planning/phases/32-auction-backfill/32-03-PLAN.md`
+- `.planning/phases/33-pool-backfill/33-01-PLAN.md` · **执行日期:** 2026-08-06 · **执行者:** ExecutorP3301
+- `.planning/phases/33-pool-backfill/33-02-PLAN.md` · **执行日期:** 2026-08-06 · **执行者:** ExecutorP3302
+- `.planning/phases/33-pool-backfill/33-03-PLAN.md` · **执行日期:** 2026-08-06 · **执行者:** ExecutorP3303
+- 34-auction-backtest · **Plan:** 34-01 · **Executor:** ExecutorP3401 · **Date:** 2026-08-06
+- 34-auction-backtest · **Plan:** 34-02 · **Executor:** ExecutorP3402 · **Date:** 2026-08-06
+- 34-auction-backtest · **Plan:** 34-03 · **Executor:** ExecutorP3403 · **Date:** 2026-08-06
+- 35-legacy-completion · **Plan:** 35-01 · **Executor:** ExecutorP3501 · **Date:** 2026-08-06
+- `.planning/phases/35-legacy-completion/35-03-PLAN.md` (Task 1 tracer + Task 2 + Task 3)
+
+---
+
 ## v2.2 v2.2 (Shipped: 2026-08-06)
 
 **Phases completed:** 4 phases, 12 plans, 34 tasks
