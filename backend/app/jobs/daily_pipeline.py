@@ -1010,6 +1010,13 @@ def _pool_eod_persist(on_progress=None) -> dict:
             strategy_version=pool_snapshot.strategy_fingerprint(app_state.strategy_engine),
             computed_at=datetime.now().isoformat(timespec="seconds"),
         )
+        # CONCEPT-01: 概念/行业历史归档 (读本地快照零网络, 同步; 失败不阻断股池持久化)。
+        from app.services import concept_history
+
+        try:
+            concept_history.capture(data_dir, str(as_of))  # as_of 是 date 对象, str()=ISO
+        except Exception as e:  # noqa: BLE001
+            logger.warning("概念历史归档失败（不阻断股池持久化）: %s", e)
     emit("done", 100, f"股池 EOD 持久化完成, {len(results)} 个策略")
     return {"as_of": str(as_of), "strategies": len(results)}
 

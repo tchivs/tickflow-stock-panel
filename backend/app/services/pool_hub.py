@@ -22,8 +22,9 @@
   bit-identical。
 - ``total`` 权威 = ``result.get("total", len(rows))`` (display_limit 截断后
   len(rows) ≤ total, Divergence 1)。
-- 概念归属只实时 join 当前 ext (历史 ext 分区不存在), 响应显式标注
-  ``concept_attribution: "current_snapshot"``, 不冻结今日标签到历史日 (Divergence 2)。
+- 概念归属现支持 as_of 分区解析 (``as_of_snapshot``) + 回退 (``current_snapshot`` /
+  ``unavailable``); ``_build_concept_map`` 返回四元组 (concept_map, attribution,
+  effective_date, captured_at) (CONCEPT-02/03)。
 """
 from __future__ import annotations
 
@@ -57,27 +58,87 @@ def _safe_num(value: Any) -> float | None:
     return value
 
 
-def _build_concept_map(data_dir: Path) -> dict[str, list[str]]:
+def _build_concept_map(
+    data_dir: Path, as_of: str | None = None
+) -> tuple[dict[str, list[str]], str, str | None, str | None]:
     """从 ext concept seam 构建 ``{SYMBOL_UPPER: sorted[概念]}`` 映射 (D-04)。
+
+    返回 ``(concept_map, attribution, effective_date, captured_at)``。
+
+    - as_of 非空且 ``ext_history/gn_ths`` 分区命中 rows 非空 → 用分区行建 map,
+      attribution="as_of_snapshot", effective_date=as_of, captured_at=manifest。
+    - 否则回退当前 ext 既有逻辑原样: 有概念 config 且 rows 非空 →
+      "current_snapshot"; 有 config 但 rows 空 → "unavailable"; 无概念 config →
+      "current_snapshot" (向后兼容默认)。
 
     复用 overview/ConceptAnalysis 的读取 seam — 无新概念数据源:
     ``_dimension_field`` / ``_read_ext_rows`` / ``_dimension_values`` / ``_symbol_keys``。
     没有 concept 维度配置或数据缺失时返回空 dict — 概念板块渲染为 ``[]`` / ``—``,
     绝不崩溃 (T-18-05)。
     """
+    if as_of:
+        from app.services import concept_history
+
+        part = concept_history.read_partition(data_dir, "gn_ths", as_of)
+        if part is not None and part["rows"]:
+            manifest = part["manifest"]
+            dim_field = manifest.get("dimension_field")
+            config = next(
+                (
+                    c
+                    for c in ExtConfigStore(data_dir).load_all()
+                    if _dimension_field(c, _CONCEPT_DIMENSION)
+                ),
+                None,
+            )
+            concept_map: dict[str, set[str]] = {}
+            for row in part["rows"]:
+                if not isinstance(row, dict):
+                    continue
+                concepts = _dimension_values(row.get(dim_field)) if dim_field else []
+                if not concepts:
+                    continue
+                keys = (
+                    _symbol_keys(row, config)
+                    if config is not None
+                    else [row.get("symbol"), row.get("code")]
+                )
+                for key in keys:
+                    if key is None:
+                        continue
+                    concept_map.setdefault(str(key).upper(), set()).update(concepts)
+            return (
+                {symbol: sorted(names) for symbol, names in concept_map.items()},
+                "as_of_snapshot",
+                as_of,
+                manifest.get("captured_at"),
+            )
+
+    # 回退: 当前 ext 既有逻辑原样 + 归属判定
     concept_map: dict[str, set[str]] = {}
+    has_concept_config = False
+    has_rows = False
     for config in ExtConfigStore(data_dir).load_all():
         field = _dimension_field(config, _CONCEPT_DIMENSION)
         if field is None:
             continue
+        has_concept_config = True
         rows = _read_ext_rows(data_dir, config, field)
+        if rows:
+            has_rows = True
         for row in rows:
             concepts = _dimension_values(row.get(field))
             if not concepts:
                 continue
             for key in _symbol_keys(row, config):
                 concept_map.setdefault(key, set()).update(concepts)
-    return {symbol: sorted(names) for symbol, names in concept_map.items()}
+    attribution = "current_snapshot" if (not has_concept_config or has_rows) else "unavailable"
+    return (
+        {symbol: sorted(names) for symbol, names in concept_map.items()},
+        attribution,
+        None,
+        None,
+    )
 
 
 def _project_hub(
@@ -87,16 +148,18 @@ def _project_hub(
     concept: str | None,
     name_for: Callable[[str], str] | None,
     data_dir: Path,
+    as_of: str | None = None,
 ) -> dict:
     """共享投影核心: results 行集 → Hub 形状 (六列 + 交叉共振 + 概念筛选)。
 
     - ``total`` 权威 = ``result.get("total", len(rows))`` (display_limit 截断后
       len(rows) ≤ total, 快照/缓存均显式存 total)。
     - 概念筛选 (needle 大小写不敏感子串) 只收窄 rows, ``total`` 不变 (D-04)。
-    - 返回 dict 带 ``concept_attribution: "current_snapshot"`` (实时 join 当前 ext,
-      不冻结历史标签, T-22-06)。
+    - 概念归属按 ``_build_concept_map(data_dir, as_of)`` 四元组落地:
+      as_of_snapshot (分区命中) 追加 concept_effective_date / concept_captured_at;
+      回退态 (current_snapshot / unavailable) 不追加, 键集与现状一致 (T-22-06)。
     """
-    concept_map = _build_concept_map(data_dir)
+    concept_map, attribution, effective_date, captured_at = _build_concept_map(data_dir, as_of)
     resolver = name_for if name_for is not None else (lambda sid: sid)
 
     needle = concept.strip().lower() if concept else ""
@@ -174,16 +237,21 @@ def _project_hub(
             }
         )
 
-    return {
+    out = {
         "as_of": str(resolved_as_of),
         "updated_at": updated_at,
         "strategies": strategies,
         "resonance_count": len(resonance_symbols),
-        "concept_attribution": "current_snapshot",
+        "concept_attribution": attribution,
         # Phase 23 (OQ-2): 服务端冻结的竞价列存在性声明 — build_pool_hub 与
         # build_pool_hub_snapshot 双路径经共享 _project_hub 同得 (PIT-3/PIT-6)。
         "auction_columns": auction_columns,
     }
+    # CONCEPT-07: as_of_snapshot 时追加映射生效日期/捕获时刻 (回退态不追加, 键集不变)。
+    if attribution == "as_of_snapshot":
+        out["concept_effective_date"] = effective_date
+        out["concept_captured_at"] = captured_at
+    return out
 
 
 def build_pool_hub(
@@ -259,6 +327,7 @@ def build_pool_hub_snapshot(
         concept,
         name_for,
         data_dir,
+        as_of=snap["as_of"],
     )
     # 诚实 provenance (HIST-02 读侧): 透传快照 origin; 旧快照缺字段 → 缺省 eod
     # (Pitfall 5 — 绝不 snap["snapshot_origin"] 直取, 否则旧 payload KeyError)
