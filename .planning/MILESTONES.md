@@ -1,5 +1,25 @@
 # Milestones
 
+## v2.2 v2.2 (Shipped: 2026-08-06)
+
+**Phases completed:** 4 phases, 12 plans, 34 tasks
+
+**Key accomplishments:**
+
+- 前向逐日概念/行业历史归档模块 (concept_history.capture + read_partition + manifest) + pool_hub as_of 三态归属状态机 + EOD 非致命钩子 + CONCEPT-05 按模块 AST 守卫
+- CONCEPT-04/07 前端交付: 股池页 detail header 概念归属诚实徽标 (服务端冻结 concept_attribution 驱动, as_of_snapshot 按日文案 + 概念数据生效日期) + 三态 Playwright e2e + features 文档
+- 把 28-01 的 `read_partition` as_of 原语扩展到总览 (_dimension_rank) 与 RPS 矩阵 (_load_concept_map_df), 消除「历史复盘/历史 RPS 仍用当前 ext join → 未标注 drift」缺口; 并为 GET /api/rps/rotation 增加可选 as_of 双校验参数
+- BT-02 vectorized range injector `attach_auction_columns_range(df, start, end, repo) -> (df, enabled_dates)` in auction_columns.py: partition-existence history gate (no probe), per-partition symbol dedup, PIT-safe `volume.shift(1).rolling_mean(5, min_samples=1).over("symbol")` ratio proven per-value identical to the single-day path, warmup contract, honest empty states — 14 new tests + 14 regression tests green, single-day code zero-change.
+- 只读竞价策略历史验证报告服务 `AuctionValidationService.build_report` 落地: 窗口解析/回夹双字段回显 (D-06, W1 夹 warmup) → warmup 面板装载 → attach_auction_columns_range 注入 → 9 策略枚举 + 互斥 branch (BT-05) → 候选掩码镜像 (backtest/strategy.py:522-570, 绝不 import) → 前瞻统计 (BT-04 全局日历 next-date + 三公式 + n_missing_outcomes) → per_date → 诚实 gate 报告 — 12 服务级测试 + 14 原语回归全绿, 零新依赖、零写、docstring 无禁 token (BT-06 守卫就绪).
+- 只读竞价策略历史验证端点落地: `backend/app/api/research_auction.py` (GET `/api/research/auction/validation`, 镜像 auction_history.py 只读范本 + research.py `_bad_request`) + main.py 一行注册 + 独立 POOL-03 AST 守卫文件 (`tests/test_auction_validation.py`, BT-06 6 项) + 端点集成测试 4 项 (空湖 200 全形状 / available 闸门 / 参数矩阵 400/422/空列表/skipped/窗口回夹 / BT-04 经 API 复验) + docs 小节 — 全量回归 248 绿, 零新增依赖, 零写面, frontend/backtest seam 零触碰 (D-05/D-08).
+- preopen 规则类型 + 独立只读评估模块 (preopen_eval.py) + 隔离的 evaluate_premarket 入口 + D-03 盘中跳过回归锁, 配套 T1-T10 测试全绿
+- 09:26 盘前 job 尾段接入统一告警链 (evaluate_premarket_alerts 持久化优先 → SSE → webhook) + mask_guest_alert 防御性脱敏 + /options preopen 白名单外露 + AST 守卫回归锁, 配套 T11-T20 测试全绿
+- api.ts preopen 类型契约 + RuleEditor「盘前异动」规则编辑路径 (5 字段白名单下拉 / truth 隐藏 / open_gap 默认) + Monitor.tsx provisional「盘前·非最终」/ degraded「数据降级」徽标, 配套 5 用例 Playwright e2e + docs; 零新依赖, Watchlist.tsx 零触碰
+- 只读竞价复盘装配服务 auction_recap.py — build_auction_recap 三块 (real_auction_activity / open_gap_snapshot / preopen_signal_quality) + data_completeness 枚举 + pre_eod 分钟算术判别 + render/slice 同 dict 纯函数单源, 18 项验收测试全绿
+- GET /api/market-recap/auction 独立只读端点落地 — as_of 严格双重校验 (400) + 诚实空态 (200 available:false) + guest 掩码 (R12 DTO) + 与 REV-04 面板同源 (同一 build_auction_recap/render); 6 项 POOL-03 AST 守卫 (REV 白名单重订, 含 save_report 禁调用); main.py 注册 + docs/features.md 竞价复盘节; 全量后端 1686 项回归绿
+
+---
+
 ## v2.1 v2.1 (Shipped: 2026-08-06)
 
 **Phases completed:** 4 phases, 8 plans, 22 tasks

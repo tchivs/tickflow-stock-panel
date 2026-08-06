@@ -2,18 +2,18 @@
 gsd_state_version: 1.0
 milestone: v2.2
 milestone_name: 决策闭环与历史纵深 — planning
-current_phase: 31
-status: completed
+status: Awaiting next milestone
 stopped_at: Completed 31-03-PLAN.md
-last_updated: "2026-08-06T15:40:22.732Z"
+last_updated: "2026-08-06T15:42:50.941Z"
 last_activity: 2026-08-06
-last_activity_desc: Phase 31 complete
+last_activity_desc: Milestone v2.2 completed and archived
 progress:
-  total_phases: 8
+  total_phases: 4
   completed_phases: 0
   total_plans: 16
   completed_plans: 12
   percent: 0
+current_phase: 31
 current_phase_name: Auction Recap
 ---
 
@@ -28,10 +28,10 @@ See: .planning/PROJECT.md (updated 2026-08-06)
 
 ## Current Position
 
-Phase: 31
-Plan: Not started
-Status: All phases complete
-Last activity: 2026-08-06 — Phase 31 complete
+Phase: Milestone v2.2 complete
+Plan: —
+Status: Awaiting next milestone
+Last activity: 2026-08-06 — Milestone v2.2 completed and archived
 
 ## v1.3 Phase Summary (shipped 2026-08-04)
 
@@ -90,7 +90,7 @@ Resume file: None
 
 ## Operator Next Steps
 
-- Milestone v2.2 research in progress — 4 domain researchers (concept-PIT / auction-backtest / preopen-monitor / auction-recap) → synthesize SUMMARY → REQUIREMENTS → ROADMAP (Phase 28+)
+- Start the next milestone with /gsd-new-milestone
 
 ## Decisions
 
