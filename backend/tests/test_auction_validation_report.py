@@ -835,3 +835,241 @@ def test_endpoint_forward_stats_branch_minute_confirm(repo_env, monkeypatch):
         assert st["minute_confirm"] == "not_applied"
     assert by_id["auction_intraday_confirm"]["minute_confirm"] == "not_applied"
 
+
+# ================================================================
+# BT-08 — 248 分区激活 + symbol 级诚实覆盖
+# ================================================================
+
+
+# 5-symbol enriched 宇宙 (含 2 个竞价分区 symbol — 稀疏湖小宇宙如实)
+_ENRICHED_SYMBOLS_5 = ("000001.SZ", "000002.SZ", "600519.SH", "300750.SZ", "601318.SH")
+
+
+def _seed_auction_partitions(
+    data_dir,
+    start: date,
+    days: int,
+    symbol_volume: dict[str, tuple[float, float]],
+) -> None:
+    """循环 _write_auction_partition 生成 days 个连续日 kline_auction 分区
+    (hermetic, 无网络 — 服务 range 闸门无 probe)。"""
+    for i in range(days):
+        d = start + timedelta(days=i)
+        _write_auction_partition(data_dir, d, _auction_rows(d, symbol_volume))
+
+
+def _seed_auction_partitions_248(
+    data_dir,
+    start: date,
+    symbols: tuple[str, ...] = ("000001.SZ", "000002.SZ"),
+) -> None:
+    """248 日全分区 fixture (BT-08 激活证明): 2 symbols × 每分区 1 行, 竞价量
+    180k/3M (与既有 sparse fixture 同值 — ratio 1.8 / amount 3M 过 fast_grab
+    META 默认阈值, open_gap 0.03 在甜点区)。"""
+    _seed_auction_partitions(
+        data_dir, start, 248,
+        {sym: (180_000.0, 3_000_000.0) for sym in symbols},
+    )
+
+
+def test_validation_available_248_partitions_real_rows(repo_env):
+    """BT-08 核心验收: 248 个 auction 分区 ∩ 248 个 enriched 日 → data_gate 自动
+    翻转为 "available" (闸门零改动, 行为性激活 — 分区存在性闸门全通过), 真列分支
+    报告真实行 (2-symbol 小宇宙, n_dates==248 恒 real 绝不落 derived); 其余 3
+    symbol 竞价列 null 恒假 → 单 symbol 评估 0 命中; coverage.symbols 诚实稀疏。"""
+    from app.services.auction_validation import AuctionValidationService
+
+    repo, data_dir = repo_env
+    start = date(2025, 12, 1)
+    end = start + timedelta(days=247)  # 2026-08-05
+    _seed_enriched_cache(repo, days=248, start=start, symbols=_ENRICHED_SYMBOLS_5)
+    _seed_auction_partitions_248(data_dir, start)
+    engine = _make_engine()
+    svc = AuctionValidationService(repo, engine, probe_resolver=lambda: _available_verdict())
+
+    report = svc.build_report(start=start, end=end)
+
+    # 激活: data_gate 自动翻转 (闸门 :184-191 零改动, 248∩248 → available)
+    assert report["data_gate"] == "available"
+    assert report["empty_reason"] is None
+    assert report["skipped_ids"] == []
+    assert report["coverage"]["auction_enabled_count"] == 248
+    assert report["coverage"]["enriched_count"] == 248
+    assert report["coverage"]["coverage_ratio"] == pytest.approx(1.0)
+    # coverage.symbols 诚实稀疏: 湖 2 symbol / 宇宙 5 symbol
+    sym = report["coverage"]["symbols"]
+    assert sym["auction_symbol_count"] == 2
+    assert sym["enriched_symbol_count"] == 5
+    assert sym["symbol_coverage_ratio"] == pytest.approx(0.4)
+    assert sym["auction_rows_present"] == 496  # 248 分区 × 2 symbol
+    assert sym["auction_rows_expected"] == 1240  # 5 symbol × 248 日
+
+    by_id = {st["id"]: st for st in report["strategies"]}
+    # 4 个真列策略: 恒 real + 全窗口 n_dates==248 (绝不 derived-downgrade, D-02)
+    for sid in _REAL_IDS:
+        s = by_id[sid]
+        assert s["branch"] == "real", sid
+        assert s["n_dates"] == 248, sid
+        assert s["n_symbols_covered"] == 2, sid  # 竞价列非 null 的 symbol 数
+        assert s["minute_confirm"] == "not_applied", sid
+    # 竞价列依赖过滤的真列策略: hits ⊆ {000001.SZ, 000002.SZ} (其余 3 symbol
+    # 竞价列 null 恒假 — ratio/amount 条件不满足); fast_grab/allround 过阈值
+    # (ratio 1.8), t1_flash 阈值 2.0 未达 → 诚实 0 命中
+    for sid in ("auction_fast_grab", "auction_allround", "t1_flash"):
+        assert by_id[sid]["n_symbols_hit"] <= 2, sid
+    assert by_id["auction_fast_grab"]["n_symbols_hit"] == 2
+    assert by_id["auction_allround"]["n_symbols_hit"] == 2
+    assert by_id["t1_flash"]["n_symbols_hit"] == 0
+    # auction_intraday_confirm: filter 仅 open_gap (分钟确认层未接, BT-10
+    # minute_confirm 注解诚实受限) → 全 symbol 命中如实 (5×248), 不参与竞价列子集
+    aic = by_id["auction_intraday_confirm"]
+    assert aic["n_symbols_hit"] == 5
+    assert aic["n_hits"] == 1240
+    # auction_alpha: enabled 非空 → real 翻转 (绝不落 derived)
+    alpha = by_id["auction_alpha"]
+    assert alpha["branch"] == "real"
+    assert alpha["n_dates"] == 248
+    # derived/eod 策略: 全窗口评估
+    for sid in _EOD_IDS:
+        assert by_id[sid]["n_dates"] == 248, sid
+
+    # 稀疏诚实 (其余 3 symbol 竞价列 null 恒假): 单 symbol 评估 → 真列 0 命中
+    report_non = svc.build_report(start=start, end=end, symbols=["600519.SH"])
+    fg_non = {st["id"]: st for st in report_non["strategies"]}["auction_fast_grab"]
+    assert fg_non["branch"] == "real"
+    assert fg_non["n_hits"] == 0
+    assert fg_non["n_symbols_covered"] == 0
+    assert fg_non["n_symbols_hit"] == 0
+
+
+def test_coverage_symbols_block_honest_sparse(repo_env):
+    """BT-08 coverage.symbols 子块: 稀疏 fixture (5-symbol enriched × 2 日,
+    2-symbol auction 分区) → 实况 {2, 5, 0.4, 4, 10}; 删分区 → data_gate 诚实
+    empty 且同键如实 (auction 侧 0, enriched 侧非 0); 全空 (enriched 缓存空) →
+    _empty_report 同键全 0 形状 (空态与实态同形状, D-02)。"""
+    from app.services.auction_validation import AuctionValidationService
+
+    repo, data_dir = repo_env
+    start = date(2026, 8, 4)
+    _seed_enriched_cache(repo, days=2, start=start, symbols=_ENRICHED_SYMBOLS_5)
+    _seed_auction_partitions(
+        data_dir, start, 2,
+        {"000001.SZ": (180_000.0, 3_000_000.0), "000002.SZ": (180_000.0, 3_000_000.0)},
+    )
+    engine = _make_engine()
+    svc = AuctionValidationService(repo, engine, probe_resolver=lambda: _available_verdict())
+
+    report = svc.build_report(start=start, end=start + timedelta(days=1))
+
+    assert report["data_gate"] == "available"
+    assert report["coverage"]["auction_enabled_count"] == 2
+    assert report["coverage"]["symbols"] == {
+        "auction_symbol_count": 2,
+        "enriched_symbol_count": 5,
+        "symbol_coverage_ratio": pytest.approx(0.4),
+        "auction_rows_present": 4,   # 2 分区 × 2 symbol
+        "auction_rows_expected": 10,  # 5 symbol × 2 日
+    }
+
+    # 删分区 → 诚实 empty, 同键如实 (enriched 侧不归零 — 绝不 0 填)
+    import shutil
+    shutil.rmtree(data_dir / "kline_auction")
+    report2 = svc.build_report(start=start, end=start + timedelta(days=1))
+    assert report2["data_gate"] == "empty"
+    assert report2["empty_reason"] == "no_auction_partitions"
+    assert report2["coverage"]["symbols"] == {
+        "auction_symbol_count": 0,
+        "enriched_symbol_count": 5,
+        "symbol_coverage_ratio": pytest.approx(0.0),
+        "auction_rows_present": 0,
+        "auction_rows_expected": 10,
+    }
+
+    # 全空 (enriched 缓存空 + 无分区) → _empty_report 同键全 0 (空态与实态同形状)
+    repo._enriched_history_cache = pl.DataFrame()
+    report3 = svc.build_report()
+    assert report3["data_gate"] == "empty"
+    assert report3["empty_reason"] == "enriched_unavailable"
+    assert report3["coverage"]["symbols"] == {
+        "auction_symbol_count": 0,
+        "enriched_symbol_count": 0,
+        "symbol_coverage_ratio": pytest.approx(0.0),
+        "auction_rows_present": 0,
+        "auction_rows_expected": 0,
+    }
+
+
+def test_per_strategy_symbol_coverage(repo_env):
+    """BT-08 per-strategy symbol 覆盖: 稀疏 fixture 造确定性 1 命中 → 真列策略
+    n_symbols_covered==2 (竞价列非 null) + n_symbols_hit==1 (仅 000001.SZ 过
+    fast_grab 阈值; 000002.SZ 量比 1.0 < 1.5); derived/eod 策略 n_symbols_covered==5
+    (全评估宇宙); 湖空 → n_symbols_covered==0 且 n_dates==0 仍 branch=="real"。"""
+    from app.services.auction_validation import AuctionValidationService
+
+    repo, data_dir = repo_env
+    start = date(2026, 8, 4)
+    _seed_enriched_cache(repo, days=2, start=start, symbols=_ENRICHED_SYMBOLS_5)
+    # 000001.SZ 竞价量 180k (ratio 1.8 → 命中), 000002.SZ 竞价量 100k (ratio 1.0 → 不命中)
+    _seed_auction_partitions(
+        data_dir, start, 2,
+        {"000001.SZ": (180_000.0, 3_000_000.0), "000002.SZ": (100_000.0, 1_000_000.0)},
+    )
+    engine = _make_engine()
+    svc = AuctionValidationService(repo, engine, probe_resolver=lambda: _available_verdict())
+
+    report = svc.build_report(start=start, end=start + timedelta(days=1))
+    by_id = {st["id"]: st for st in report["strategies"]}
+
+    # 真列策略: 竞价列非 null symbol 数 = 2 (两 symbol 都在分区), 命中 symbol 数 = 1
+    fg = by_id["auction_fast_grab"]
+    assert fg["branch"] == "real"
+    assert fg["n_symbols_covered"] == 2
+    assert fg["n_symbols_hit"] == 1  # 确定性 1 命中 (000001.SZ, 仅第 2 日 ratio 可算)
+    assert fg["n_hits"] == 1
+    for sid in _REAL_IDS:
+        assert by_id[sid]["n_symbols_covered"] == 2, sid
+
+    # derived/eod 分支: 评估宇宙 = 全面板 symbol 集 (5)
+    for sid in _EOD_IDS:
+        assert by_id[sid]["n_symbols_covered"] == 5, sid
+    assert by_id["auction_alpha"]["n_symbols_covered"] == 2  # real 分支 (enabled 非空)
+
+    # 湖空 → 真列 n_symbols_covered==0 且 n_dates==0 仍 branch real (D-02)
+    import shutil
+    shutil.rmtree(data_dir / "kline_auction")
+    report2 = svc.build_report(start=start, end=start + timedelta(days=1))
+    by_id2 = {st["id"]: st for st in report2["strategies"]}
+    for sid in _REAL_IDS:
+        s2 = by_id2[sid]
+        assert s2["branch"] == "real", sid
+        assert s2["n_dates"] == 0, sid
+        assert s2["n_symbols_covered"] == 0, sid
+        assert s2["n_symbols_hit"] == 0, sid
+    # alpha derived: 全验证窗口宇宙
+    assert by_id2["auction_alpha"]["branch"] == "derived"
+    assert by_id2["auction_alpha"]["n_dates"] == 2
+    assert by_id2["auction_alpha"]["n_symbols_covered"] == 5
+
+
+def test_minute_confirm_regression_after_coverage(repo_env):
+    """BT-10 回归: coverage 扩展 (symbols 子块 + per-strategy n_symbols_*) 后
+    minute_confirm:"not_applied" 注解不破 — 248 分区 fixture 全 9 策略逐项断言。"""
+    from app.services.auction_validation import AuctionValidationService
+
+    repo, data_dir = repo_env
+    start = date(2025, 12, 1)
+    end = start + timedelta(days=247)  # 2026-08-05
+    _seed_enriched_cache(repo, days=248, start=start, symbols=_ENRICHED_SYMBOLS_5)
+    _seed_auction_partitions_248(data_dir, start)
+    engine = _make_engine()
+    svc = AuctionValidationService(repo, engine, probe_resolver=lambda: _available_verdict())
+
+    report = svc.build_report(start=start, end=end)
+
+    assert report["data_gate"] == "available"
+    by_id = {st["id"]: st for st in report["strategies"]}
+    assert set(by_id) == _AUCTION_FAMILY_IDS
+    # 全 9 策略逐项断言 (BT-10: kline_minute 历史 CLOSED — 确认维度诚实受限)
+    for st in report["strategies"]:
+        assert st["minute_confirm"] == "not_applied", st["id"]
+    assert by_id["auction_intraday_confirm"]["minute_confirm"] == "not_applied"

@@ -18,6 +18,12 @@ attach_auction_columns_range 注入 (29-01 契约) → 策略枚举 + 互斥 bra
 - 本报告区间不受回测 186 天 guard 限制 (D-06): 回测 guard 保护组合回测/因子评估
   内存 (api/backtest.py:29-32, 默认关闭 config.py:103); 本报告是单面板向量化扫描,
   覆盖由 enriched 缓存边界决定, 窗口回夹 + requested/effective 双字段回显。
+- BT-08 诚实覆盖 (34-02): coverage.symbols 子块 {auction_symbol_count,
+  enriched_symbol_count, symbol_coverage_ratio, auction_rows_present,
+  auction_rows_expected} + per-strategy n_symbols_covered/n_symbols_hit —
+  稀疏湖小宇宙如实标注 (今日 2/5293 ≈ 0.04%), 绝不声称全市场规模, 绝不
+  derived-downgrade (D-02); 与 34-01 回测 manifest 同类字段口径一致 (报告与
+  回测对同一湖给出同一数字)。
 
 只读数据锚点:
 - repo._enriched_history_cache: 单 as_of 运行期缓存指针 (enriched 历史缓存),
@@ -35,7 +41,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import polars as pl
 
-from app.services.auction_columns import attach_auction_columns_range
+from app.services.auction_columns import _dir_date, attach_auction_columns_range
 from app.services.auction_probe import resolve_auction_probe
 from app.strategy.engine import StrategyEngine
 from app.tickflow.repository import KlineRepository
@@ -149,6 +155,9 @@ class AuctionValidationService:
         7. 前瞻统计 (BT-04): 结果日 = 全局交易日历 next-date (next_map 从 enriched_dates
            构建, 绝不 per-symbol shift(-1)); 三公式; 结果日缺行 → n_missing_outcomes
            统计排除, 绝不 0 填/前向填充; 每指标独立 n。
+        8. BT-08 诚实覆盖: coverage.symbols = 窗口 kline_auction 分区 symbol/行级
+           覆盖 (只读分区扫) × verification_panel symbol 宇宙; per-strategy
+           n_symbols_covered/n_symbols_hit — 稀疏湖小宇宙如实, 绝不声称全市场规模。
         """
         probe = self._probe_resolver()
         probe_dict = probe.to_dict() if hasattr(probe, "to_dict") else probe
@@ -218,6 +227,7 @@ class AuctionValidationService:
                 "coverage_ratio": (
                     len(auction_enabled_dates) / len(enriched_dates) if enriched_dates else 0.0
                 ),
+                "symbols": self._coverage_symbols(start, end, verification_panel, enriched_dates),
             },
             "skipped_ids": skipped_ids,
             "strategies": strategies,
@@ -247,6 +257,59 @@ class AuctionValidationService:
             return None, None
         return min(dates), max(dates)
 
+    def _coverage_symbols(
+        self,
+        start: date,
+        end: date,
+        verification_panel: pl.DataFrame,
+        enriched_dates: list[date],
+    ) -> dict:
+        """BT-08 symbol 级诚实覆盖统计 (只读, 零写 token — 守卫兼容)。
+
+        扫 ``kline_auction/date=*`` 窗口内分区 (严格 date 解析 + fail-closed 跳过
+        坏目录/空分区/缺 symbol 列 — 镜像 attach_auction_columns_range 分区扫语义,
+        T-29-01-01/T-29-01-05): auction_symbol_count = 窗口分区行 symbol 去重数;
+        auction_rows_present = 窗口分区总行数 (每分区 symbol 级去重后, 防 fan-out
+        镜像注入路径); enriched_symbol_count = verification_panel symbol n_unique;
+        auction_rows_expected = enriched_symbol_count × len(enriched_dates)
+        (湖级期望行数, 诚实基准); symbol_coverage_ratio = auction_symbol_count /
+        enriched_symbol_count (enriched_symbol_count==0 → 0.0)。
+
+        诚实空态: 无分区 → auction_symbol_count/auction_rows_present 为 0 但
+        enriched_symbol_count/auction_rows_expected 如实非 0 (与 _empty_report
+        全 0 形状同键, D-02 — 空态与实态同形状)。
+        """
+        base = self._repo.store.data_dir / "kline_auction"
+        auction_symbols: set[str] = set()
+        auction_rows_present = 0
+        if base.exists():
+            for part in sorted(base.glob("date=*/part.parquet")):
+                d = _dir_date(part)
+                if d is None or not (start <= d <= end):
+                    continue
+                try:
+                    f = pl.read_parquet(part)
+                except Exception:  # noqa: BLE001 — fail-closed, 镜像分区扫 (T-29-01-05)
+                    logger.debug("_coverage_symbols: skip unreadable partition %s", part)
+                    continue
+                if f.is_empty() or "symbol" not in f.columns:
+                    logger.debug("_coverage_symbols: skip empty/symbol-less partition %s", part)
+                    continue
+                # 防 fan-out: 每分区 symbol 级去重 (镜像注入路径 keep="last")
+                f = f.unique(subset=["symbol"], keep="last")
+                auction_symbols.update(f["symbol"].to_list())
+                auction_rows_present += f.height
+        enriched_symbol_count = int(verification_panel["symbol"].n_unique())
+        return {
+            "auction_symbol_count": len(auction_symbols),
+            "enriched_symbol_count": enriched_symbol_count,
+            "symbol_coverage_ratio": (
+                len(auction_symbols) / enriched_symbol_count if enriched_symbol_count else 0.0
+            ),
+            "auction_rows_present": auction_rows_present,
+            "auction_rows_expected": enriched_symbol_count * len(enriched_dates),
+        }
+
     def _empty_report(self, reason: str, *, window=None, probe_dict=None) -> dict:
         """诚实空态 200 形 dict (绝不 404/500/0 填, 镜像 premarket_pool 空态)。"""
         return {
@@ -261,6 +324,13 @@ class AuctionValidationService:
                 "enriched_dates": [],
                 "enriched_count": 0,
                 "coverage_ratio": 0.0,
+                "symbols": {
+                    "auction_symbol_count": 0,
+                    "enriched_symbol_count": 0,
+                    "symbol_coverage_ratio": 0.0,
+                    "auction_rows_present": 0,
+                    "auction_rows_expected": 0,
+                },
             },
             "skipped_ids": [],
             "strategies": [],
@@ -333,6 +403,8 @@ class AuctionValidationService:
             per_date: list[dict] = []
             n_missing = 0
             forward_stats = {m: _null_metric() for m in _FORWARD_METRICS}
+            n_symbols_covered = 0
+            n_symbols_hit = 0
         else:
             n_dates = len(eval_panel["date"].unique())
             mask = _build_candidate_mask(eval_panel, s, params)
@@ -341,6 +413,18 @@ class AuctionValidationService:
             coverage = (len(hits["date"].unique()) / n_dates) if n_dates else 0.0
             per_date = self._build_per_date(eval_panel, hits)
             forward_stats, n_missing = self._forward_stats(hits, verification_panel, enriched_dates)
+            # BT-08 symbol 级诚实覆盖: real 分支 = 竞价列非 null 的 symbol 数
+            # (稀疏湖小宇宙如实, 绝不声称全市场规模); derived/eod 分支 = 该分支
+            # 评估宇宙 (全面板 symbol 集, 不依赖竞价列)
+            if branch == "real":
+                n_symbols_covered = (
+                    int(eval_panel.filter(pl.col("auction_volume").is_not_null())["symbol"].n_unique())
+                    if "auction_volume" in eval_panel.columns
+                    else 0
+                )
+            else:
+                n_symbols_covered = int(eval_panel["symbol"].n_unique())
+            n_symbols_hit = int(hits["symbol"].n_unique()) if not hits.is_empty() else 0
 
         return {
             "id": sid,
@@ -351,6 +435,8 @@ class AuctionValidationService:
             "params": params,
             "n_dates": n_dates,
             "n_hits": n_hits,
+            "n_symbols_covered": n_symbols_covered,
+            "n_symbols_hit": n_symbols_hit,
             "coverage": coverage,
             "n_missing_outcomes": n_missing,
             "forward_stats": forward_stats,
