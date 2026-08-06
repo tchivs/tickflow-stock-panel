@@ -5,15 +5,15 @@ milestone_name: 决策闭环与历史纵深 — planning
 current_phase: 29
 current_phase_name: Auction Strategy Validation
 status: executing
-stopped_at: Completed 29-02-PLAN.md (BT-03/04/05 report service)
-last_updated: "2026-08-06T12:48:15.831Z"
+stopped_at: Completed 29-03-PLAN.md
+last_updated: "2026-08-06T12:56:40.168Z"
 last_activity: 2026-08-06
 last_activity_desc: "29-01 complete: attach_auction_columns_range landed (14 new + 14 regression tests green)"
 progress:
   total_phases: 8
   completed_phases: 0
   total_plans: 8
-  completed_plans: 5
+  completed_plans: 6
   percent: 0
 ---
 
@@ -29,9 +29,9 @@ See: .planning/PROJECT.md (updated 2026-08-06)
 ## Current Position
 
 Phase: 29 — 竞价策略历史验证 (Auction Strategy Validation)
-Plan: 2 of 3 (29-01 BT-02 complete), next 29-02 (BT-03/04/05 report service)
-Status: Ready to execute
-Last activity: 2026-08-06 — 29-01 complete: attach_auction_columns_range landed (14 new + 14 regression tests green)
+Plan: 3 of 3 — 29-03 (BT-01/06) complete; Phase 29 all 3 plans executed (BT-01..06)
+Status: Complete — 248 backend regression green; endpoint + AST guards + docs landed
+Last activity: 2026-08-06 — 29-03 complete: GET /api/research/auction/validation + POOL-03 AST guards (BT-01/BT-06)
 
 ## v1.3 Phase Summary (shipped 2026-08-04)
 
@@ -84,8 +84,8 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-08-06T12:48:15.823Z
-Stopped at: Completed 29-02-PLAN.md (BT-03/04/05 report service)
+Last session: 2026-08-06T12:56:32.785Z
+Stopped at: Completed 29-03-PLAN.md
 Resume file: None
 
 ## Operator Next Steps
@@ -136,6 +136,8 @@ Resume file: None
 - [Phase ?]: 29-02 (BT-03/04/05): skipped_ids 语义 — 非空请求集不含任何可解析竞价族策略 → 回落默认族范围 (未知 id 记 skipped, 已知竞价族仍正常报告); 显式 [] → strategies: []; None → 9 族 ∩ engine
 - [Phase ?]: 29-02 (BT-04): 全局日历 next-date 用 calendar 帧 join (polars 1.40.1 无 map_dict); 结果日全 null 时 outcome_date 显式 cast(pl.Date, strict=False) 修复 join schema
 - [Phase ?]: 29-02: probe 在 build_report 顶部解析一次, 所有路径 (含 enriched_unavailable) 均携带 probe 字段 — 200 形全形状一致
+- [Phase ?]: probe 透传由服务层承担: handler 直接构造 AuctionValidationService(repo, engine), 服务层 probe_resolver 顶部解析一次, 所有路径响应均带 probe 字段 (D-03)
+- [Phase ?]: Test 6 白名单补 collections.abc (29-02 服务既有 stdlib import 面, 计划 parenthetical 遗漏) — 不改已交付服务, 守卫仍为封闭白名单
 
 ### v1.3 Decisions (carried)
 
@@ -185,3 +187,4 @@ Resume file: None
 | Phase 29 P1 | 40 | 3 tasks | 2 files |
 | Phase 29 P2 | 55 | 3 tasks | 2 files |
 | Phase 29 P2 | 55 | 3 tasks | 2 files |
+| Phase 29 P3 | 7min | 3 tasks | 5 files |
