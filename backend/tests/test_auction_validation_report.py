@@ -1,0 +1,261 @@
+"""竞价策略历史验证报告服务 ``AuctionValidationService.build_report`` (BT-03/BT-04/BT-05) —
+服务级测试: 空湖诚实报告 / enriched 空态 / probe 透传 / BT-04 前瞻公式与缺失 / 全局日历 /
+窗口回夹 / branch 互斥 / skipped_ids / coverage / minute_confirm / symbols 裁剪。
+
+Hermetic (镜像 test_attach_auction_columns_range.py / test_auction_columns.py):
+- 生产 import 全放测试函数内 (仓库约定: 模块级不触发 DuckDB 单例);
+- repo 用 ``repo_env`` fixture (tmp data_dir + DataStore + KlineRepository);
+- enriched 缓存直接 seed ``repo._enriched_history_cache`` (get_enriched_range 快路径同源);
+- ``kline_auction`` 分区手工写盘; probe 一律注入固定 verdict (服务层 probe_resolver
+  注入点, D-03), 测试不依赖真实竞价数据源。
+"""
+from __future__ import annotations
+
+from datetime import date, datetime, timedelta
+
+import polars as pl
+import pytest
+
+# 竞价族 9 策略 (与服务模块硬编码集一致 — 独立复述, 防漂移)
+_AUCTION_FAMILY_IDS = {
+    "auction_fast_grab", "auction_allround", "t1_flash", "auction_intraday_confirm",
+    "auction_alpha", "golden_230", "auction_bullish", "auction_preopen_quant",
+    "auction_early_star",
+}
+# 4 个 requires_auction_data 真列策略 / 4 个 EOD 代理
+_REAL_IDS = {"auction_fast_grab", "auction_allround", "t1_flash", "auction_intraday_confirm"}
+_EOD_IDS = {"golden_230", "auction_bullish", "auction_preopen_quant", "auction_early_star"}
+_FORWARD_METRICS = ("next_day_open_ret", "next_day_close_ret", "open_gap_outcome")
+
+
+# ================================================================
+# hermetic helpers (镜像 test_attach_auction_columns_range.py)
+# ================================================================
+
+
+@pytest.fixture
+def repo_env(tmp_path, monkeypatch):
+    """隔离的 data_dir + DataStore + KlineRepository (镜像 test_auction_columns.py:20-32)。"""
+    from app.config import settings
+    data_dir = tmp_path / "data"
+    monkeypatch.setattr(settings, "data_dir", data_dir)
+
+    from app.tickflow.repository import DataStore, KlineRepository
+    store = DataStore(data_dir)
+    repo = KlineRepository(store)
+    try:
+        yield repo, data_dir
+    finally:
+        store.db.close()
+
+
+def _write_auction_partition(data_dir, trade_date: date, rows: pl.DataFrame) -> None:
+    """手工写盘 kline_auction/date=YYYY-MM-DD/part.parquet (镜像 test_attach_auction_columns_range)。"""
+    out = data_dir / "kline_auction" / f"date={trade_date.isoformat()}" / "part.parquet"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    rows.write_parquet(out)
+
+
+def _auction_rows(
+    trade_date: date,
+    symbol_volume: dict[str, tuple[float, float]],
+    n_rows: int = 1,
+) -> pl.DataFrame:
+    """canonical 四列 (symbol, datetime, auction_volume, auction_amount)。"""
+    _WINDOW_MINUTES = (16, 20, 25)
+    rows = []
+    for sym, (av, aa) in symbol_volume.items():
+        for k in range(n_rows):
+            rows.append({
+                "symbol": sym,
+                "datetime": datetime(trade_date.year, trade_date.month, trade_date.day, 9, _WINDOW_MINUTES[k]),
+                "auction_volume": av,
+                "auction_amount": aa,
+            })
+    return pl.DataFrame(rows)
+
+
+def _available_verdict():
+    from app.services.auction_probe import AuctionProbeStatus, AuctionProbeVerdict
+    return AuctionProbeVerdict(
+        status=AuctionProbeStatus.available, source="fake", probed_at=None, detail="available",
+    )
+
+
+def _make_engine():
+    """真 StrategyEngine (builtin 策略目录) — 报告不调 engine.run, loader 用 dummy。
+
+    构造形镜像 main.py:555-563; loader 返回 None (报告只消费 engine 定义面)。
+    """
+    from pathlib import Path
+
+    from app.strategy.engine import StrategyEngine
+    backend = Path(__file__).resolve().parents[1]
+    return StrategyEngine(
+        enriched_loader=lambda as_of: None,
+        enriched_history_loader=lambda as_of, lookback: None,
+        strategy_dirs=[backend / "app" / "strategy" / "builtin"],
+    )
+
+
+def _seed_enriched_cache(
+    repo,
+    symbols: tuple[str, ...] = ("000001", "600000"),
+    days: int = 139,
+    start: date | None = None,
+    *,
+    open_gap: float = 0.03,
+    change_pct: float = 0.035,
+    vol_ratio_5d: float = 1.6,
+    volume: float = 100_000.0,
+    close_ratio: float = 1.05,
+    overrides: dict[tuple[str, date], dict[str, object]] | None = None,
+) -> pl.DataFrame:
+    """seed ``repo._enriched_history_cache`` (get_enriched_range 快路径同源)。
+
+    确定性取值 (derived/eod 分支默认全命中, 可手算):
+    - 恒定 volume → 前 5 日均量 = volume, auction_volume_ratio 精确可手算;
+    - open 按 symbol (000001→10.0 / 600000→20.0), close = open × close_ratio (收阳);
+    - open_gap 3% / change_pct 3.5% / vol_ratio_5d 1.6 / amount = volume×10 = 1M
+      → 满足 auction_alpha 派生 (2%/1.2/1M)、auction_bullish (2%/2%)、
+      auction_preopen_quant (3%/1.5)、auction_early_star (1.5% OR 3%)、
+      golden_230 (change ∈ [3%,5%] 且收阳) 的 META 默认阈值。
+
+    overrides: {(symbol, date): {column: value}} — 逐行覆盖 (停牌缺行/坏 close 等边界)。
+    """
+    start = start or date(2026, 3, 20)
+    overrides = overrides or {}
+    rows = []
+    for i in range(days):
+        d = start + timedelta(days=i)
+        for sym in symbols:
+            o = 10.0 if sym == "000001" else 20.0
+            row = {
+                "symbol": sym,
+                "date": d,
+                "open": o,
+                "close": o * close_ratio,
+                "high": o * 1.06,
+                "low": o * 0.99,
+                "volume": volume,
+                "amount": volume * 10.0,
+                "open_gap": open_gap,
+                "change_pct": change_pct,
+                "vol_ratio_5d": vol_ratio_5d,
+            }
+            row.update(overrides.get((sym, d), {}))
+            rows.append(row)
+    repo._enriched_history_cache = pl.DataFrame(rows)
+    return repo._enriched_history_cache
+
+
+# ================================================================
+# Task 1 — Test 1: 空湖诚实报告 (BT-01/BT-05, tracer 垂直切片核心)
+# ================================================================
+
+
+def test_empty_lake_honest_report_all_9_strategies(repo_env):
+    """湖空 (无 kline_auction 分区) → 200 形诚实报告 (绝不 404/500/0 填):
+    data_gate=="empty" + no_auction_partitions; 4 个 real 策略 n_dates==0 branch=="real"
+    (绝不落 derived); auction_alpha branch=="derived" 且 derived/eod 在 enriched 窗口
+    给出真实统计; probe 透传; window/coverage 齐全; minute_confirm 显式 not_applied。"""
+    from app.services.auction_validation import AuctionValidationService
+
+    repo, data_dir = repo_env
+    _seed_enriched_cache(repo)  # 139 日 2026-03-20..2026-08-05, 默认缺省窗口内 derived/eod 全命中
+    engine = _make_engine()
+    verdict = _available_verdict()
+    svc = AuctionValidationService(repo, engine, probe_resolver=lambda: verdict)
+
+    report = svc.build_report()
+
+    # 诚实 gate + 窗口/coverage/probe 全形状
+    assert report["data_gate"] == "empty"
+    assert report["empty_reason"] == "no_auction_partitions"
+    for key in ("requested_start", "requested_end", "effective_start", "effective_end"):
+        assert report["window"][key], key
+    assert report["coverage"]["auction_enabled_count"] == 0
+    assert report["coverage"]["coverage_ratio"] == 0.0
+    assert report["coverage"]["enriched_count"] > 0
+    assert report["probe"] == verdict.to_dict()
+    assert report["skipped_ids"] == []
+
+    # 9 策略齐全
+    ids = {s["id"] for s in report["strategies"]}
+    assert ids == _AUCTION_FAMILY_IDS
+    by_id = {s["id"]: s for s in report["strategies"]}
+
+    # 4 个真列策略: 恒 real + n_dates==0 诚实空 (绝不落 derived, D-02)
+    for sid in _REAL_IDS:
+        s = by_id[sid]
+        assert s["branch"] == "real", sid
+        assert s["n_dates"] == 0
+        assert s["n_hits"] == 0
+        assert s["coverage"] == 0.0
+        assert s["per_date"] == []
+        assert s["n_missing_outcomes"] == 0
+        assert s["minute_confirm"] == "not_applied"
+        for m in _FORWARD_METRICS:
+            assert s["forward_stats"][m]["n"] == 0
+            assert s["forward_stats"][m]["mean"] is None
+            assert s["forward_stats"][m]["median"] is None
+            assert s["forward_stats"][m]["win_rate"] is None
+
+    # auction_alpha: enabled 空 → derived, 在 enriched 窗口有真实统计
+    alpha = by_id["auction_alpha"]
+    assert alpha["branch"] == "derived"
+    assert alpha["n_dates"] > 0
+    assert alpha["n_hits"] > 0
+    assert alpha["coverage"] > 0.0
+
+    # 4 个 EOD 代理: 恒 eod + enriched 窗口真实统计
+    for sid in _EOD_IDS:
+        s = by_id[sid]
+        assert s["branch"] == "eod", sid
+        assert s["n_dates"] > 0
+        assert s["n_hits"] > 0
+
+    # BT-05 互斥: 每策略单 branch 标注 + 显式 minute_confirm
+    for s in report["strategies"]:
+        assert s["branch"] in {"real", "derived", "eod"}
+        assert s["minute_confirm"] == "not_applied"
+
+
+def test_enriched_unavailable_empty_cache(repo_env):
+    """无 enriched 缓存 + 无分区 → 诚实 enriched_unavailable + strategies==[] (绝不 404/500)。"""
+    from app.services.auction_validation import AuctionValidationService
+
+    repo, data_dir = repo_env
+    engine = _make_engine()
+    svc = AuctionValidationService(repo, engine, probe_resolver=lambda: _available_verdict())
+
+    report = svc.build_report()
+
+    assert report["data_gate"] == "empty"
+    assert report["empty_reason"] == "enriched_unavailable"
+    assert report["strategies"] == []
+
+
+def test_probe_passthrough_not_gate(repo_env):
+    """D-03: probe_resolver 注入点 — probe 判定透传报告 (to_dict), 不参与历史闸门;
+    即便 probe 非 available, 报告照常装配。"""
+    from app.services.auction_probe import AuctionProbeStatus, AuctionProbeVerdict
+    from app.services.auction_validation import AuctionValidationService
+
+    repo, data_dir = repo_env
+    _seed_enriched_cache(repo)
+    engine = _make_engine()
+    verdict = AuctionProbeVerdict(
+        status=AuctionProbeStatus.not_configured, source=None, probed_at=None,
+        detail="not configured",
+    )
+    svc = AuctionValidationService(repo, engine, probe_resolver=lambda: verdict)
+
+    report = svc.build_report()
+
+    assert report["probe"] == verdict.to_dict()
+    assert report["probe"]["status"] == "not_configured"
+    # 报告照常装配 (probe 不 gate 历史报告)
+    assert report["data_gate"] == "empty"
+    assert report["empty_reason"] == "no_auction_partitions"
+    assert len(report["strategies"]) == 9
