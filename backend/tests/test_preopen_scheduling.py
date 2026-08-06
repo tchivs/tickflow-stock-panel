@@ -228,6 +228,54 @@ def test_premarket_tail_hook_failure_is_non_fatal(tmp_path, monkeypatch):
 
 
 # ================================================================
+# T11 — 注册形锁死 (grep 门禁, 镜像 test_premarket_pool) — MON-03
+# ================================================================
+
+
+def test_premarket_job_registration_shape_locked():
+    """T11 注册形: 常量/单飞/mon-fri cron 存在, 且尾段接线未新增第二个 premarket job。"""
+    from pathlib import Path
+
+    src = Path(__file__).resolve().parents[1] / "app" / "jobs" / "daily_pipeline.py"
+    text = src.read_text(encoding="utf-8")
+
+    assert '_PREMARKET_JOB_ID = "premarket_pool_preview"' in text
+    assert "_PREMARKET_HOUR, _PREMARKET_MINUTE = 9, 26" in text
+    assert "_run_tracked(_premarket_pool_preview" in text
+    assert "hour=_PREMARKET_HOUR, minute=_PREMARKET_MINUTE" in text
+    assert 'timezone="Asia/Shanghai"' in text
+    assert "id=_PREMARKET_JOB_ID" in text
+    # 尾段接线不改注册: 仍只有 1 个盘前 job (单飞包装 + 注册各出现恰一次)
+    assert text.count("id=_PREMARKET_JOB_ID") == 1
+    assert text.count("_run_tracked(_premarket_pool_preview") == 1
+
+
+# ================================================================
+# T15 — 时间无重叠: 09:26 ∉ 连续竞价窗口; 与 EOD 默认不同域 — MON-03
+# ================================================================
+
+
+def test_premarket_time_no_overlap_with_intraday_and_eod():
+    """T15 09:26 不在连续竞价 [9:30,11:30]∪[13:00,15:00], 与 EOD 默认 (15,30) 不同域。"""
+    from datetime import time as dt_time
+
+    from app.jobs.daily_pipeline import (
+        _PREMARKET_HOUR,
+        _PREMARKET_JOB_ID,
+        _PREMARKET_MINUTE,
+    )
+
+    morning = (dt_time(9, 30), dt_time(11, 30))
+    afternoon = (dt_time(13, 0), dt_time(15, 0))
+    t = dt_time(_PREMARKET_HOUR, _PREMARKET_MINUTE)
+    assert not (morning[0] <= t <= morning[1])
+    assert not (afternoon[0] <= t <= afternoon[1])
+    # EOD 偏好默认 15:30 (偏移域不同): 常量存在且不等于 (15, 30)
+    assert (_PREMARKET_HOUR, _PREMARKET_MINUTE) != (15, 30)
+    assert _PREMARKET_JOB_ID == "premarket_pool_preview"
+
+
+# ================================================================
 # T16 — QuoteService.evaluate_premarket_alerts 集成: 落库 → SSE → 投递
 # ================================================================
 
