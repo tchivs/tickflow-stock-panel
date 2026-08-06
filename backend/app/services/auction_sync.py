@@ -54,6 +54,63 @@ def _atomic_write_parquet(df: pl.DataFrame, out) -> None:
     tmp.replace(out)  # 同目录 rename, POSIX/NTFS 均为原子操作
 
 
+def write_auction_partitions(df: pl.DataFrame, repo: KlineRepository) -> int:
+    """把 canonical auction 行按日分区原子合并写入 kline_auction 湖 (AQ-04 单一写路径)。
+
+    - 555..565 窗口谓词结构性排除 09:30+ 连续竞价 bar (与 custom/provider 同源);
+    - 存在性 crop (4 必需 + 2 可选, CHART-03): 源不提供可选列 → 诚实缺列不 0 填;
+    - 逐 date= 分区 merge-upsert `unique(subset=["symbol","datetime"], keep="last")` 幂等;
+    - .tmp 同目录 rename 原子写 (进程中断不损坏 parquet)。
+    返回窗口过滤后的行数; 0 = 无行可写。
+    """
+    # 写湖过滤器 —— 与 provider._normalize_auction (custom/provider.py:149-160)
+    # 同一 555..565 谓词 (单一事实源, PATTERNS Shared Patterns)。09:30 连续竞价
+    # bar 在此被结构性排除。
+    if "datetime" in df.columns:
+        if df.schema["datetime"] != pl.Datetime("us"):
+            df = df.with_columns(
+                pl.col("datetime").cast(pl.Datetime("us"), strict=False),
+            )
+        _mins = (
+            pl.col("datetime").dt.hour().cast(pl.Int32) * 60
+            + pl.col("datetime").dt.minute().cast(pl.Int32)
+        )
+        df = df.filter((_mins >= _WINDOW_START_MIN) & (_mins <= _WINDOW_END_MIN))
+
+    # canonical 裁剪: 4 必需 + 2 可选 (CHART-03) —— 存在性过滤天然向后兼容
+    # (源不提供可选列 → 仍只写 4 列; R5 不破坏 test_sync_writes_partition)
+    keep = [c for c in CANONICAL_AUCTION_COLS + OPTIONAL_AUCTION_COLS if c in df.columns]
+    if not keep:
+        return 0
+    df = df.select(keep)
+
+    # 按日分区合并写 (镜像 sync_and_persist_minute 的 kline_sync.py:892-912):
+    # data/kline_auction/date={YYYY-MM-DD}/part.parquet, merge-upsert 幂等。
+    df = df.with_columns(pl.col("datetime").dt.date().alias("_trade_date"))
+    for day_df in df.partition_by("_trade_date"):
+        trade_date_part = day_df["_trade_date"][0]
+        out = (
+            repo.store.data_dir
+            / "kline_auction"
+            / f"date={trade_date_part}"
+            / "part.parquet"
+        )
+        out.parent.mkdir(parents=True, exist_ok=True)
+        if out.exists():
+            existing = pl.read_parquet(out)
+            day_df = pl.concat(
+                [existing, day_df.drop("_trade_date")], how="diagonal_relaxed",
+            ).unique(
+                subset=["symbol", "datetime"], keep="last",
+            )
+        else:
+            day_df = day_df.drop("_trade_date")
+        day_df = day_df.sort("symbol", "datetime")
+        _atomic_write_parquet(day_df, out)
+
+    return df.height
+
+
 def _first_auction_provider() -> Any | None:
     """枚举竞价数据候选源, 返回第一个或 None。
 
@@ -103,7 +160,8 @@ def sync_and_persist_auction(
     """同步集合竞价匹配数据并按日分区原子写入 kline_auction 湖。
 
     返回窗口过滤后的总行数; 0 = 跳过/无数据。probe 非 available 时 fail-closed
-    不写湖; 09:30+ 连续竞价 bar 由 555..565 窗口谓词结构性排除。
+    不写湖; 09:30+ 连续竞价 bar 由 555..565 窗口谓词结构性排除。写湖路径已提取
+    为 ``write_auction_partitions`` (单一事实源, EOD 与 backfill job 共用)。
     """
     del capset  # 签名对齐 can_sync_minute; 写湖闸门是 probe
     verdict = resolve_auction_probe()
@@ -118,53 +176,12 @@ def sync_and_persist_auction(
     if df.is_empty():
         return 0
 
-    # 写湖过滤器 —— 与 provider._normalize_auction (custom/provider.py:149-160)
-    # 同一 555..565 谓词 (单一事实源, PATTERNS Shared Patterns)。09:30 连续竞价
-    # bar 在此被结构性排除。
-    if "datetime" in df.columns:
-        if df.schema["datetime"] != pl.Datetime("us"):
-            df = df.with_columns(
-                pl.col("datetime").cast(pl.Datetime("us"), strict=False),
-            )
-        _mins = (
-            pl.col("datetime").dt.hour().cast(pl.Int32) * 60
-            + pl.col("datetime").dt.minute().cast(pl.Int32)
-        )
-        df = df.filter((_mins >= _WINDOW_START_MIN) & (_mins <= _WINDOW_END_MIN))
-
-    # canonical 裁剪: 4 必需 + 2 可选 (CHART-03) —— 存在性过滤天然向后兼容
-    # (源不提供可选列 → 仍只写 4 列; R5 不破坏 test_sync_writes_partition)
-    keep = [c for c in CANONICAL_AUCTION_COLS + OPTIONAL_AUCTION_COLS if c in df.columns]
-    if not keep:
-        return 0
-    df = df.select(keep)
-
-    # 按日分区合并写 (镜像 sync_and_persist_minute 的 kline_sync.py:892-912):
-    # data/kline_auction/date={YYYY-MM-DD}/part.parquet, merge-upsert 幂等。
-    df = df.with_columns(pl.col("datetime").dt.date().alias("_trade_date"))
-    for day_df in df.partition_by("_trade_date"):
-        trade_date_part = day_df["_trade_date"][0]
-        out = (
-            repo.store.data_dir
-            / "kline_auction"
-            / f"date={trade_date_part}"
-            / "part.parquet"
-        )
-        out.parent.mkdir(parents=True, exist_ok=True)
-        if out.exists():
-            existing = pl.read_parquet(out)
-            day_df = pl.concat(
-                [existing, day_df.drop("_trade_date")], how="diagonal_relaxed",
-            ).unique(
-                subset=["symbol", "datetime"], keep="last",
-            )
-        else:
-            day_df = day_df.drop("_trade_date")
-        day_df = day_df.sort("symbol", "datetime")
-        _atomic_write_parquet(day_df, out)
+    # 写湖路径已提取为 write_auction_partitions (单一事实源, AQ-04) —— EOD 与
+    # backfill job 共用同一 window→crop→merge-upsert→原子 rename 写缝。
+    written = write_auction_partitions(df, repo)
 
     logger.info(
         "auction synced: %d rows, %d symbols",
-        df.height, len(symbols),
+        written, len(symbols),
     )
-    return df.height
+    return written
