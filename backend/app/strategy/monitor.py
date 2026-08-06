@@ -24,6 +24,7 @@ import polars as pl
 from app.market_time import cn_today
 from app.strategy.custom_signals import _OP_BUILDERS  # type: ignore  # 复用运算符构造器
 from app.strategy import config as _strategy_config
+from app.strategy.preopen_eval import build_preopen_frame, extract_preopen_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -525,7 +526,10 @@ class MonitorRuleEngine:
         # list() 快照: 本方法跑在行情轮询线程, API 线程同时 add/remove 规则
         # 会触发 "dictionary changed size during iteration", 整轮告警丢失
         for rule_id, rule in list(self._rules.items()):
-            if rule.get("type") == "position" or rule.get("asset_type", "stock") != asset_type:
+            # preopen 规则仅由 evaluate_premarket 在盘前 (09:26) 评估 — 盘中绝不
+            # 求值 (D-03 回归锁): 盘中 enriched 帧含 open_gap 列, 若走通用条件
+            # 匹配会在连续竞价重复触发, 且 change_pct 为盘中值 (误导)。
+            if rule.get("type") in {"position", "preopen"} or rule.get("asset_type", "stock") != asset_type:
                 continue
             try:
                 events.extend(self._evaluate_rule(df, rule, now))
@@ -535,6 +539,62 @@ class MonitorRuleEngine:
         # 一次性提交本轮结果 (原子替换): /cached 读方要么拿到上一轮完整结果,
         # 要么拿到本轮完整结果, 不会读到空中间态。
         self._latest_strategy_results = self._building_strategy_results
+
+        return events
+
+    def evaluate_premarket(self, payload: dict) -> list[dict]:
+        """盘前评估: 消费 v2.1 预览 payload (JSON), 产出 preopen 告警事件。
+
+        - 只评估 enabled 且 type=preopen 的规则 (与盘中 evaluate 互斥);
+        - 帧重建经 preopen_eval 独立只读模块 (build_preopen_frame): 从
+          payload["results"] 全部策略 rows 抽 symbol 去重建 Polars DataFrame,
+          change_pct 一律置 None (诚实缺列, R1), close/code 不进帧;
+        - 复用 _apply_scope / _build_condition_mask / _match_conditions /
+          _last_fire cooldown / _default_message (single event-building path);
+        - 事件标注纯增量键: source/type=preopen, window=pre_open, provisional,
+          degraded/probe 透传, strategy_ids, preopen_metrics。
+
+        隔离保证 (MON-02): 本方法绝不触碰 _strategy_pools / _latest_strategy_results /
+        _building_strategy_results; 绝不调 _match_strategy (池基线污染点); 不 import
+        执行族 / strategy_cache (MON-05)。
+        """
+        if not self._rules:
+            return []
+        # list() 快照: API 线程可能并发增删规则, 直接迭代 dict 会抛 RuntimeError
+        rules = [
+            r for r in list(self._rules.values())
+            if r.get("enabled") is not False and r.get("type") == "preopen"
+        ]
+        if not rules:
+            return []
+
+        built = build_preopen_frame(payload)
+        if built is None:
+            return []  # 诚实空态: 无 results / available:false / 无有效行
+
+        frame, source_map = built
+        now = time.time()
+        events: list[dict] = []
+        # 逐规则隔离评估 (镜像 evaluate 循环风格): 单条规则异常不丢弃整轮
+        for rule in rules:
+            try:
+                events.extend(self._evaluate_rule(frame, rule, now))
+            except Exception as e:
+                logger.warning("盘前规则评估失败 %s: %s", rule.get("id"), e)
+
+        degraded = bool(payload.get("degraded"))
+        probe = payload.get("probe")
+        for ev in events:
+            ev["source"] = "preopen"
+            ev["type"] = "preopen"
+            ev["window"] = "pre_open"
+            ev["provisional"] = True
+            ev["degraded"] = degraded
+            ev["probe"] = probe
+            ev["strategy_ids"] = sorted(source_map.get(str(ev.get("symbol")), set()))
+            ev["change_pct"] = None  # R1 双保险兜底: 盘前帧 EOD 涨跌幅无意义
+            ev["price"] = None
+            ev["preopen_metrics"] = extract_preopen_metrics(frame, str(ev.get("symbol")))
 
         return events
 
@@ -737,6 +797,11 @@ class MonitorRuleEngine:
         self, df: pl.DataFrame, rule: dict,
     ) -> list[tuple[str, str, Any, Any, Any, list[str]]]:
         """策略类型评估: 跑策略选股 → 对比上期选股池 → 产出变更事件。
+
+        ⚠ 隔离铁律 (MON-02): preopen 规则绝不得走此路径 — 本方法写
+        _strategy_pools / _building_strategy_results (池基线, 09:30 盘中首轮
+        diff 依赖其不被盘前评估污染)。evaluate_premarket 经 preopen_eval
+        独立只读模块重建帧, 全程不触碰本方法。
 
         返回 [(event_type, symbol, name, price, pct, signals)]
         event_type: "new_entry" (新入选) | "dropped" (已移出)

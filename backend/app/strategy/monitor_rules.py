@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 # ── 常量 ────────────────────────────────────────────────
 ID_RE = re.compile(r"^[a-z0-9_]{1,40}$")
-RULE_TYPES = {"strategy", "signal", "price", "market", "ladder", "position"}
+RULE_TYPES = {"strategy", "signal", "price", "market", "ladder", "position", "preopen"}
 SCOPES = {"symbols", "all", "sector", "positions"}
 LOGICS = {"and", "or"}
 DIRECTIONS = {"entry", "exit", "both"}
@@ -42,6 +42,15 @@ LADDER_DIRECTIONS = {"up", "down"}
 
 # 布尔信号列前缀 (op=truth 时 field 取这些)
 _SIGNAL_PREFIXES = ("signal_", "csg_")
+
+# 盘前监控字段白名单 — 09:26 盘前帧仅集合竞价可确认的数值列 (MON-01)。
+# 与 builtin pre_open 策略 (auction_*/t1_flash) 禁 EOD 列语义一致; EOD 列
+# (change_pct/close/vol_ratio_5d/amount) 配置期直接拒绝, 与盘前帧 change_pct
+# 恒 None 的诚实语义互为双保险 (R1)。
+PREOPEN_ALLOWED_FIELDS: frozenset[str] = frozenset({
+    "open_gap", "auction_volume", "auction_amount",
+    "auction_volume_ratio", "auction_unmatched_amount",
+})
 
 
 # ── 持久化 (镜像 custom_signals.py) ─────────────────────
@@ -123,6 +132,33 @@ def validate(rule: dict) -> None:
         thr = rule.get("threshold")
         if not isinstance(thr, (int, float)) or thr < 0:
             raise ValueError("threshold 必须是非负数字 (封单 ≤ 此值时报警)")
+    elif rule.get("type") == "preopen":
+        # 盘前规则 (MON-01): 只允许集合竞价可确认的数值列 (PREOPEN_ALLOWED_FIELDS)
+        # 与数值比较 OPS; op=truth 无布尔信号列可依 (盘前帧全数值), 配置期显式
+        # 拒绝 (D2)。scope 仅 symbols/all (sector/positions 与盘前语义无关, D3)。
+        if rule.get("scope", "symbols") not in {"symbols", "all"}:
+            raise ValueError("preopen 规则 scope 仅支持 symbols/all")
+        conds = rule.get("conditions")
+        if not isinstance(conds, list) or len(conds) == 0:
+            raise ValueError("conditions 不能为空")
+        if len(conds) > 8:
+            raise ValueError("conditions 最多 8 条")
+        if rule.get("logic", "and") not in LOGICS:
+            raise ValueError(f"logic 必须是 {LOGICS} 之一")
+        for i, c in enumerate(conds):
+            if not isinstance(c, dict):
+                raise ValueError(f"第 {i+1} 个条件格式错误")
+            if c.get("op") == "truth":
+                raise ValueError(f"第 {i+1} 个条件: preopen 规则不支持 op=truth (无布尔信号列)")
+            if c.get("op") not in OPS:
+                raise ValueError(f"第 {i+1} 个条件: op {c.get('op')!r} 非法 (preopen 仅 {OPS})")
+            if c.get("field") not in PREOPEN_ALLOWED_FIELDS:
+                raise ValueError(
+                    f"第 {i+1} 个条件: preopen 阈值字段 {c.get('field')!r} 不在盘前白名单 "
+                    f"{sorted(PREOPEN_ALLOWED_FIELDS)} (EOD 列如 change_pct/close/vol_ratio_5d 禁用)"
+                )
+            if not isinstance(c.get("value"), (int, float)):
+                raise ValueError(f"第 {i+1} 个条件: value 必须是数字")
     else:
         # 信号/价格/市场类型: 需要 conditions
         conds = rule.get("conditions")
