@@ -99,8 +99,12 @@ def _has_daily_rows(repo: KlineRepository, sym: str, start_d: str, end_d: str) -
         return False
 
 
-def _fetch_auction(provider, sym: str, start_d: str, end_d: str) -> pl.DataFrame:
-    """单 symbol 拉取 (恰 1 码/请求); 上游显式 429/限速异常 → 指数退避重试 (R1)。"""
+def _fetch_auction(provider, sym: str, start_d, end_d) -> pl.DataFrame:
+    """单 symbol 拉取 (恰 1 码/请求); 上游显式 429/限速异常 → 指数退避重试 (R1)。
+
+    ``start_d``/``end_d`` 为 ``datetime.date`` 对象 (provider 契约
+    ``start_date.strftime`` —— xyz_provider.get_auction:189)。
+    """
     wait = _RETRY_BASE_WAIT_S
     for attempt in range(_RETRY_ATTEMPTS + 1):
         try:
@@ -182,13 +186,16 @@ def run_auction_backfill(
     if provider is None:
         return _fail_closed(rpm, "no_provider")
 
-    # 有效范围 (provider 要求 start_date 非 None; aligned_dates 此处非空)
+    # 有效范围 (provider 要求 start_date 非 None; aligned_dates 此处非空)。
+    # provider 契约是 date 对象 (get_auction 内 strftime) —— 只转换一次。
     eff_start = start or aligned_dates[0]
     eff_end = end or aligned_dates[-1]
+    eff_start_date = date.fromisoformat(eff_start)
+    eff_end_date = date.fromisoformat(eff_end)
 
     # AQ-03a 预检可达性: 循环前一次真实请求; 异常 / 空且有本地覆盖 → 0 写 fail-closed
     try:
-        pre = _fetch_auction(provider, symbols[0], eff_start, eff_end)
+        pre = _fetch_auction(provider, symbols[0], eff_start_date, eff_end_date)
     except Exception as e:  # noqa: BLE001
         logger.exception("auction backfill preflight failed: %s", e)
         return _fail_closed(rpm, str(e)[:_ERROR_DETAIL_MAX])
@@ -211,7 +218,7 @@ def run_auction_backfill(
                 emit("done", 100, "回填被取消")
                 break
         try:
-            df = _fetch_auction(provider, sym, eff_start, eff_end)
+            df = _fetch_auction(provider, sym, eff_start_date, eff_end_date)
             if df.is_empty():
                 # 空 vs 宕机 (RESEARCH §8a): 该 symbol 范围内有 kline_daily 行 → 如实记 empty_response
                 if _has_daily_rows(repo, sym, eff_start, eff_end):
