@@ -763,6 +763,10 @@ export interface PoolHubResponse {
   auction_columns?: AuctionColumnsDecl
   /** 概念归属标注 (实时 join 当前 ext, 不冻结历史标签) */
   concept_attribution?: string
+  /** 概念归属生效日期 (CONCEPT-07): as_of_snapshot 时 = 分区日 (YYYY-MM-DD); 回退态缺键/Null */
+  concept_effective_date?: string | null
+  /** 概念分区归档时刻 (CONCEPT-07): as_of_snapshot 时 = manifest.captured_at; 回退态缺键/Null */
+  concept_captured_at?: string | null
 }
 
 /** 盘前预览载荷 (PM-04) — 扩展 PoolHubResponse: 窗口标注 / provisional / degraded / probe 透传。

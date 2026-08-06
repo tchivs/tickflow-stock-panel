@@ -12,7 +12,7 @@ import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
 import { StrategyCardGrid } from '@/components/pool-hub/StrategyCardGrid'
 import { ConceptFilter } from '@/components/pool-hub/ConceptFilter'
-import { StockListTable, AuctionColumnStatusBadge } from '@/components/pool-hub/StockListTable'
+import { StockListTable, AuctionColumnStatusBadge, ConceptAttributionBadge } from '@/components/pool-hub/StockListTable'
 import { DateNavigator } from '@/components/pool-hub/DateNavigator'
 import { GuestModeBanner } from '@/components/pool-hub/GuestModeBanner'
 
@@ -330,6 +330,13 @@ export function PoolHubPage() {
                     auctionColumns={data.auction_columns}
                     asOf={asOf}
                     degraded={showPremarket ? premarketQuery.data?.degraded : undefined}
+                  />
+                )}
+                {/* 概念归属诚实徽标 (CONCEPT-04/07): 服务端冻结 attribution 驱动; 载荷缺键 (guest/旧后端) → 零渲染 */}
+                {data?.concept_attribution && (
+                  <ConceptAttributionBadge
+                    attribution={data.concept_attribution}
+                    effectiveDate={data.concept_effective_date ?? null}
                   />
                 )}
                 <StockListTable

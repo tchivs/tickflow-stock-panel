@@ -11,6 +11,11 @@ const STRATEGY_TAG_CLS = 'inline-block px-1.5 py-px rounded text-[10px] font-med
 const CONCEPT_CHIP_CLS = 'inline-block max-w-40 truncate px-1.5 py-px rounded text-[10px] font-medium leading-tight bg-elevated text-secondary border border-border'
 const RESONANCE_BADGE_CLS = 'inline-block px-1.5 py-px rounded text-[10px] font-semibold leading-tight bg-accent/10 text-accent border border-accent/30'
 
+// 概念归属徽标文案 (CONCEPT-04) — e2e 断言共享同一字面量 (独立 spec 复制, 不 import 跨文件耦合)
+const CONCEPT_ATTRIBUTION_WARNING_TEXT = '概念归属为当前快照，非该日数据'
+const CONCEPT_ATTRIBUTION_AS_OF_TEXT = '概念按当日快照'
+const CONCEPT_EFFECTIVE_DATE_LABEL = '概念数据生效日期'
+
 const GUEST_COLUMNS = ['代码', '名称', '涨跌幅', '概念板块', '关联因子'] as const
 const VIP_COLUMNS = ['代码', '名称', '开盘涨幅', '涨跌幅', '概念板块', '关联因子'] as const
 
@@ -158,6 +163,38 @@ export function AuctionColumnStatusBadge({
         </span>
       )}
     </div>
+  )
+}
+
+/**
+ * ConceptAttributionBadge — 概念归属诚实徽标 (CONCEPT-04/07)。
+ * 服务端冻结的 concept_attribution 驱动 (28-01 `_project_hub`), 前端零推断 (PIT-3 纪律):
+ * as_of_snapshot → 「概念按当日快照」+ 概念数据生效日期 (分区日);
+ * 其余 (current_snapshot / unavailable / 未知) → 诚实警告「概念归属为当前快照，非该日数据」。
+ * 顶层元素 (detail header), 绝不按行标注; 载荷缺 attribution (guest 掩码/旧后端) → 零渲染, 向后兼容。
+ */
+export function ConceptAttributionBadge({
+  attribution,
+  effectiveDate,
+}: {
+  attribution?: string | null
+  effectiveDate?: string | null
+}) {
+  if (!attribution) return null
+  if (attribution === 'as_of_snapshot') {
+    return (
+      <span className="inline-flex items-center gap-1.5 font-medium text-accent" role="note">
+        <CheckCircle2 className="h-3.5 w-3.5 shrink-0" aria-hidden />
+        {CONCEPT_ATTRIBUTION_AS_OF_TEXT}
+        {effectiveDate ? ` · ${CONCEPT_EFFECTIVE_DATE_LABEL} ${effectiveDate}` : ''}
+      </span>
+    )
+  }
+  return (
+    <span className="inline-flex items-center gap-1.5 font-medium text-warning" role="note">
+      <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden />
+      {CONCEPT_ATTRIBUTION_WARNING_TEXT}
+    </span>
   )
 }
 
