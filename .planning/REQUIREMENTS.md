@@ -32,7 +32,7 @@ Requirements for the v2.1 milestone. Each maps to a roadmap phase. Research basi
 - [x] **PM-01**: A scheduled premarket job (09:26, after the 09:25 call-auction fix) generates a same-day premarket pool preview via `run_all_with_hits(as_of=T)` into an independent store (`premarket_results/date={T}/`) — it never writes `strategy_cache`/`screener_results` (EOD semantics untouched).
 - [x] **PM-02**: The premarket data frame is complete for strategy evaluation — `open_gap` is computed for the today frame (single implementation, no drift from the EOD Pass 4 source); absent real auction columns fail closed to derived factors; ex-dividend-day `open_gap` caliber (raw prev-close vs adjusted) is covered by fixtures.
 - [x] **PM-03**: Premarket auction-column semantics are probe-honest — when today's probe is `available`, real auction columns are injected at read time; otherwise they are absent and the UI shows a `degraded`/window status (never implying real auction data exists premarket).
-- [ ] **PM-04**: The frontend presents the premarket view distinctly from EOD — window annotation (pre-open preview vs post-close archive), honest empty state, and DateNavigator continues to list EOD snapshot dates (premarket preview never masquerades as an archived day).
+- [x] **PM-04**: The frontend presents the premarket view distinctly from EOD — window annotation (pre-open preview vs post-close archive), honest empty state, and DateNavigator continues to list EOD snapshot dates (premarket preview never masquerades as an archived day).
 
 ## Out of Scope (v2.1)
 
@@ -66,7 +66,7 @@ Populated during roadmap creation.
 | PM-01 | Phase 27 | Complete |
 | PM-02 | Phase 27 | Complete |
 | PM-03 | Phase 27 | Complete |
-| PM-04 | Phase 27 | Open |
+| PM-04 | Phase 27 | Complete |
 
 **Coverage:**
 

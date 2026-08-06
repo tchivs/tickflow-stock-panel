@@ -109,10 +109,10 @@ Plans:
   3. Probe-honest: today-probe `available` → real columns injected at read; else absent + `degraded`/window status; never implies real auction data premarket.
   4. Frontend distinguishes premarket preview from EOD archives (window annotation); DateNavigator lists EOD dates only.
 
-**Plans**: 1/2 plans executed
+**Plans**: 2/2 plans executed
 
 - [x] 27-01-PLAN.md
-- [ ] 27-02-PLAN.md
+- [x] 27-02-PLAN.md
 
 **Research flag**: 需要 `--research-phase` — open_gap 补算 seam、probe 今日窗口语义、预览存储 schema、调度并发（与 EOD job/维表同步互斥）.
 

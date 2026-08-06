@@ -5,16 +5,16 @@ milestone_name: 历史深度与自选联动 — planning
 current_phase: 27
 current_phase_name: Premarket Pool
 status: planning
-stopped_at: Completed 27-01-PLAN.md (backend PM-01/02/03)
-last_updated: "2026-08-06T08:19:16.122Z"
+stopped_at: Completed 27-02-PLAN.md (frontend PM-04 premarket view)
+last_updated: "2026-08-06T08:27:24.058Z"
 last_activity: 2026-08-06
-last_activity_desc: 27-01 complete (PM-01/02/03 premarket backend); 27-02 in progress
+last_activity_desc: 27-01 + 27-02 complete (backend PM-01/02/03 + frontend PM-04 premarket view)
 progress:
   total_phases: 4
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 8
-  completed_plans: 7
-  percent: 88
+  completed_plans: 8
+  percent: 100
 ---
 
 # Project State
@@ -29,9 +29,9 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 ## Current Position
 
 Phase: 27 — 盘前股池 (Premarket Pool)
-Plan: 1/2 in progress
-Status: In progress
-Last activity: 2026-08-06 — 27-01-PLAN.md complete (backend PM-01/02/03); 27-02 in progress
+Plan: 2/2 complete
+Status: In progress (awaiting phase verification)
+Last activity: 2026-08-06 — 27-01 + 27-02 complete (backend PM-01/02/03 + frontend PM-04 premarket view)
 
 ## v1.3 Phase Summary (shipped 2026-08-04)
 
@@ -84,8 +84,8 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-08-06T08:18:59.710Z
-Stopped at: Completed 27-01-PLAN.md (backend PM-01/02/03)
+Last session: 2026-08-06T08:27:24.050Z
+Stopped at: Completed 27-02-PLAN.md (frontend PM-04 premarket view)
 Resume file: None
 
 ## Operator Next Steps
@@ -118,6 +118,10 @@ Resume file: None
 - [Phase ?]: 固定 09:26 mon-fri Asia/Shanghai (CronTrigger + _PREMARKET_HOUR/_PREMARKET_MINUTE 常量), _run_tracked 单飞, misfire_grace_time=1800 (盘前窗口窄)
 - [Phase ?]: open_gap 补算放 compute_enriched_today (prev_close 对齐块后), 与 EOD Pass 4 同一公式; 预览服务零自算 (无第二实现)
 - [Phase ?]: GET /api/pool/premarket 只读零执行 (POOL-03); 预览缺失 → 200 available:false 诚实空态 (非 404); guest 掩码 + 白名单就位
+- [Phase ?]: Phase 27 / P2 (27-02): 盘前判定消费 dates 白名单 (hasTodayEod = today ∈ /api/pool/dates) 而非墙钟 — 15:35 EOD 快照落盘后自动回退 hub, e2e 可稳定复现
+- [Phase ?]: Phase 27 / P2 (27-02): QK.poolPremarket 不入 SSE_INVALIDATE_PREFIXES (定时快照非实时流) + staleTime 30s 对齐服务端 probe 30s TTL
+- [Phase ?]: Phase 27 / P2 (27-02): AuctionColumnStatusBadge degraded prop 置于 hasReal 之前 — 服务端冻结 probe 判定驱动诚实警告分支, 绝不渲染「竞价数据可用」
+- [Phase ?]: Phase 27 / P2 (27-02): showPremarketEmpty 时零池/策略网格短路 (盘前空态优先, 不混排昨日 hub 流) — Rule 3 修正
 
 ### v1.3 Decisions (carried)
 
@@ -160,3 +164,4 @@ Resume file: None
 | Phase 26-auction-history-chart P1 | 24 | 2 tasks | 8 files |
 | Phase 26 P2 | 38 | 2 tasks | 7 files |
 | Phase 27-premarket-pool P1 | 11 | 3 tasks | 8 files |
+| Phase 27 P2 | 35 | 3 tasks | 6 files |
