@@ -21,6 +21,10 @@ Protocol facts verified live against the endpoint:
     "volume", "money", ...}.
   - stockdb_get_bars: security (list), count, unit ('1d'/'1m'/...), end_dt.
     Rows: {"date": "YYYY-MM-DDTHH:MM:SS", "open", "high", "low", "close", ...}.
+  - stockdb_get_call_auction: security (list — 恰 1 码/请求, 上游带宽限制批量
+    请求), start_date, end_date (YYYY-MM-DD). 同样 Do NOT pass ``fields``.
+    Rows: {"code": str, "time": "YYYY-MM-DDTHH:MM:SS", "volume", "money",
+    "current", ...}. 上游只发 09:25:00 集合竞价撮合行。
 """
 from __future__ import annotations
 
@@ -28,7 +32,7 @@ import json
 import logging
 import time
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 import httpx
@@ -52,6 +56,7 @@ class XYZProvider:
         minute=True,
         realtime=False,
         financial=False,
+        auction=True,
     )
 
     def __init__(self, mcp_url: str = _DEFAULT_MCP_URL, timeout: float = 8.0) -> None:
@@ -147,6 +152,78 @@ class XYZProvider:
         if not frames:
             return pl.DataFrame()
         return pl.concat(frames, how="diagonal_relaxed")
+
+    def get_auction(
+        self,
+        symbols: list[str],
+        start_date: date | datetime | None = None,
+        end_date: date | datetime | None = None,
+    ) -> pl.DataFrame:
+        """拉取集合竞价撮合行 (stockdb_get_call_auction) 并映射为 canonical 子集列。
+
+        契约:
+          - 每次请求恰 1 个 symbol —— 上游带宽上限 (批量请求返回错误
+            「带宽限制批量请求, 检测到 N 个代码」); 多码/空列表 → ValueError
+            fail-fast, 绝不静默截断或批处理。
+          - 不传 ``fields`` 参数 —— 上游返回 请求参数错误 (probe #2 实测)。
+          - ``end_date is None`` → 单交易日形式 (start_date == end_date ==
+            trade_date), 兼容 auction_probe._default_fetcher 与 custom/provider
+            的单 date 调用; 范围形式 (backfill 路径) 由两端显式传入。
+          - 返回 symbol 带请求后缀 (``000001.SZ``), 与 kline_daily 一致 ——
+            kline_auction merge-upsert 键 [symbol, datetime] 要求后缀一致, 否则
+            回填行与 EOD 行同股两键 (同日碰撞规则)。
+        网络错误 → _call_tool 返回 "" (或异常) → 空 pl.DataFrame() 不抛; 空 vs
+        宕机由调用方闸门区分 (诚实 fail-closed)。
+        """
+        if len(symbols) != 1:
+            raise ValueError(
+                f"stockdb_get_call_auction 每次仅支持 1 个代码, 收到 {len(symbols)} 个"
+            )
+        if start_date is None:
+            raise ValueError("get_auction 需要 start_date (单日期形式下即交易日)")
+        if end_date is None:
+            start_date = end_date = start_date
+
+        args: dict[str, Any] = {
+            "security": [str(symbols[0]).split(".")[0]],
+            "start_date": start_date.strftime("%Y-%m-%d"),
+            "end_date": end_date.strftime("%Y-%m-%d"),
+        }
+        try:
+            payload = self._call_tool("stockdb_get_call_auction", args)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("xyz stockdb_get_call_auction failed: %s", e)
+            return pl.DataFrame()
+        rows = _parse_payload(payload)
+        if not rows:
+            return pl.DataFrame()
+
+        suffix_map = {str(s).split(".")[0]: str(s) for s in symbols}
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            ts = row.get("time")
+            if not ts:
+                continue
+            dt = _parse_iso(ts)
+            if dt is None:
+                continue
+            code = str(row.get("code") or "")
+            record = {
+                "symbol": suffix_map.get(code.split(".")[0], code),
+                "datetime": dt,
+                "auction_volume": _num(row.get("volume")),
+                "auction_amount": _num(row.get("money")),
+            }
+            # 可选列: 上游提供才产出 (诚实缺列不 0 填)
+            if row.get("current") is not None:
+                record["auction_virtual_price"] = _num(row.get("current"))
+            out.append(record)
+
+        if not out:
+            return pl.DataFrame()
+        return pl.DataFrame(out)
 
     def _call_tool(self, name: str, arguments: dict[str, Any]) -> str:
         self._request_id += 1
