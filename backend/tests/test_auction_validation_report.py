@@ -15,6 +15,8 @@ from datetime import date, datetime, timedelta
 
 import polars as pl
 import pytest
+from fastapi import FastAPI, Request
+from fastapi.testclient import TestClient
 
 # 竞价族 9 策略 (与服务模块硬编码集一致 — 独立复述, 防漂移)
 _AUCTION_FAMILY_IDS = {
@@ -632,4 +634,204 @@ def test_symbols_filter_limits_evaluation(repo_env):
     assert fg_one["n_hits"] == 5   # 5 日 × 1 symbol
     assert all(row["n_screened"] == 2 for row in fg_all["per_date"])
     assert all(row["n_screened"] == 1 for row in fg_one["per_date"])
+
+
+# ================================================================
+# 29-03 — 端点集成 (GET /api/research/auction/validation, BT-01/BT-06)
+# ================================================================
+
+
+def _make_client(repo, engine) -> TestClient:
+    """最小 FastAPI 应用 + stub auth + include research_auction router (镜像
+    test_auction_history.py:78-93 形; 端点无 guest 掩码 — stub auth 仅形制一致)。"""
+    from app.api import research_auction as research_auction_api
+
+    app = FastAPI()
+    app.state.repo = repo
+    app.state.strategy_engine = engine
+
+    @app.middleware("http")
+    async def _stub_auth(request: Request, call_next):
+        if request.cookies.get("tf_session") == "vip-token":
+            request.state.reviewer_principal = "reviewer_test"
+        return await call_next(request)
+
+    app.include_router(research_auction_api.router)
+    return TestClient(app)
+
+
+def _patch_service_probe(monkeypatch, verdict) -> None:
+    """patch 目标是 app.services.auction_validation.resolve_auction_probe (服务层
+    模块全局; AuctionValidationService 构造时经 probe_resolver 缺省取用)。"""
+    from app.services import auction_validation as av_module
+
+    monkeypatch.setattr(av_module, "resolve_auction_probe", lambda: verdict)
+
+
+def test_endpoint_empty_lake_full_shape_200(repo_env, monkeypatch):
+    """BT-01/BT-05 API 面: 空湖 → 200 全形状 (data_gate/empty_reason/coverage/
+    strategies 9 id / 4 real n_dates==0 branch real / probe 字段), 绝不 404/500;
+    branch 互斥 + minute_confirm 显式。"""
+    from app.services.auction_probe import AuctionProbeStatus, AuctionProbeVerdict
+
+    repo, data_dir = repo_env
+    _seed_enriched_cache(repo)  # 139 日 enriched, kline_auction 空
+    client = _make_client(repo, _make_engine())
+    verdict = AuctionProbeVerdict(
+        status=AuctionProbeStatus.not_configured, source=None, probed_at=None,
+        detail="hermetic probe",
+    )
+    _patch_service_probe(monkeypatch, verdict)
+
+    resp = client.get("/api/research/auction/validation")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["data_gate"] == "empty"
+    assert body["empty_reason"] == "no_auction_partitions"
+    assert body["coverage"]["auction_enabled_count"] == 0
+    assert body["coverage"]["coverage_ratio"] == 0.0
+    assert body["coverage"]["enriched_count"] > 0
+    assert body["probe"] == verdict.to_dict()
+    assert body["skipped_ids"] == []
+
+    ids = {s["id"] for s in body["strategies"]}
+    assert ids == _AUCTION_FAMILY_IDS
+    by_id = {s["id"]: s for s in body["strategies"]}
+    for sid in _REAL_IDS:
+        s = by_id[sid]
+        assert s["branch"] == "real", sid
+        assert s["n_dates"] == 0
+        assert s["n_hits"] == 0
+    assert by_id["auction_alpha"]["branch"] == "derived"
+    # branch 互斥 (BT-05) + minute_confirm 显式
+    for s in body["strategies"]:
+        assert s["branch"] in {"real", "derived", "eod"}
+        assert s["minute_confirm"] == "not_applied"
+
+
+def test_endpoint_available_gate_with_partitions(repo_env, monkeypatch):
+    """BT-01 API 面: enabled 日期存在 → data_gate=='available' + empty_reason null +
+    coverage>0 (auction_alpha real 翻转, BT-05)。"""
+    repo, data_dir = repo_env
+    _seed_enriched_cache(repo, days=10, start=date(2026, 7, 27), volume=100_000.0)
+    start, end = date(2026, 7, 30), date(2026, 8, 3)
+    for i in range(5):
+        d = start + timedelta(days=i)
+        _write_auction_partition(
+            data_dir, d,
+            _auction_rows(d, {"000001": (180_000.0, 3_000_000.0), "600000": (180_000.0, 3_000_000.0)}),
+        )
+    client = _make_client(repo, _make_engine())
+    _patch_service_probe(monkeypatch, _available_verdict())
+
+    resp = client.get(
+        "/api/research/auction/validation",
+        params={"start": "2026-07-30", "end": "2026-08-03"},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["data_gate"] == "available"
+    assert body["empty_reason"] is None
+    assert body["coverage"]["auction_enabled_count"] == 5
+    assert body["coverage"]["coverage_ratio"] == pytest.approx(1.0)
+    alpha = {s["id"]: s for s in body["strategies"]}["auction_alpha"]
+    assert alpha["branch"] == "real"
+    assert alpha["n_dates"] == 5
+
+
+def test_endpoint_param_matrix_400_422_empty_skipped_clamp(repo_env, monkeypatch):
+    """参数矩阵 (T-29-03-01): start>end → 400 RESEARCH_VALIDATION; 坏日期 → 422;
+    strategy_ids 空串 → strategies: []; 未知 id → 200 + skipped_ids (已知族仍报告);
+    超覆盖窗口 → effective 回夹 + requested 保留。"""
+    repo, data_dir = repo_env
+    _seed_enriched_cache(repo)
+    client = _make_client(repo, _make_engine())
+    _patch_service_probe(monkeypatch, _available_verdict())
+
+    # start > end → 400 RESEARCH_VALIDATION
+    resp = client.get(
+        "/api/research/auction/validation",
+        params={"start": "2026-08-05", "end": "2026-08-01"},
+    )
+    assert resp.status_code == 400
+    assert resp.json()["detail"]["code"] == "RESEARCH_VALIDATION"
+
+    # 坏日期 → FastAPI 422 (Query date)
+    resp = client.get("/api/research/auction/validation", params={"start": "2026-13-99"})
+    assert resp.status_code == 422
+
+    # strategy_ids 空串 → 显式空列表 → strategies: []
+    resp = client.get("/api/research/auction/validation", params={"strategy_ids": ""})
+    assert resp.status_code == 200
+    assert resp.json()["strategies"] == []
+
+    # 未知 id → 200 + skipped_ids (已知竞价族仍正常报告, 绝不 500)
+    resp = client.get(
+        "/api/research/auction/validation",
+        params={"strategy_ids": "no_such_strategy"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "no_such_strategy" in body["skipped_ids"]
+    assert len(body["strategies"]) == 9
+
+    # 超覆盖窗口 → effective 回夹到缓存边界 + requested 保留 (D-06 双字段回显)
+    resp = client.get(
+        "/api/research/auction/validation",
+        params={"start": "2026-01-01", "end": "2026-09-01"},
+    )
+    assert resp.status_code == 200
+    w = resp.json()["window"]
+    assert w["requested_start"] == "2026-01-01"
+    assert w["requested_end"] == "2026-09-01"
+    panel = repo._enriched_history_cache
+    assert w["effective_start"] == panel["date"].min().isoformat()
+    assert w["effective_end"] == panel["date"].max().isoformat()
+
+
+def test_endpoint_forward_stats_branch_minute_confirm(repo_env, monkeypatch):
+    """BT-04 公式经 API 复验 (auction_early_star, 2 日 fixture 手算: open_ret 0.065 /
+    close_ret 0.0875) + branch 互斥 + minute_confirm 显式 not_applied。"""
+    repo, data_dir = repo_env
+    t, t1 = date(2026, 8, 4), date(2026, 8, 5)
+    _seed_enriched_cache(
+        repo, days=2, start=t,
+        overrides={
+            ("600000", t): {"close": 20.5},
+            ("000001", t1): {"open": 10.8, "close": 11.0, "open_gap": 0.0, "change_pct": 0.01},
+            ("600000", t1): {"open": 21.0, "close": 21.5, "open_gap": 0.0, "change_pct": 0.01},
+        },
+    )
+    client = _make_client(repo, _make_engine())
+    _patch_service_probe(monkeypatch, _available_verdict())
+
+    resp = client.get(
+        "/api/research/auction/validation",
+        params={"start": "2026-08-04", "end": "2026-08-05"},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    by_id = {s["id"]: s for s in body["strategies"]}
+    s = by_id["auction_early_star"]
+    assert s["branch"] == "eod"
+    assert s["n_hits"] == 2
+    assert s["n_missing_outcomes"] == 0
+    fs = s["forward_stats"]
+    assert fs["next_day_open_ret"] == {
+        "mean": pytest.approx(0.065), "median": pytest.approx(0.065),
+        "win_rate": pytest.approx(1.0), "n": 2,
+    }
+    assert fs["next_day_close_ret"] == {
+        "mean": pytest.approx(0.0875), "median": pytest.approx(0.0875),
+        "win_rate": pytest.approx(1.0), "n": 2,
+    }
+    assert fs["open_gap_outcome"]["n"] == 2
+    # branch 互斥 (BT-05) + minute_confirm (含 auction_intraday_confirm)
+    for st in body["strategies"]:
+        assert st["branch"] in {"real", "derived", "eod"}
+        assert st["minute_confirm"] == "not_applied"
+    assert by_id["auction_intraday_confirm"]["minute_confirm"] == "not_applied"
 
