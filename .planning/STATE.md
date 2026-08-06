@@ -1,20 +1,20 @@
 ---
 gsd_state_version: 1.0
 milestone: v2.1
-milestone_name: 历史深度与自选联动
-status: planning
-stopped_at: 
-last_updated: "2026-08-05T17:05:00.000Z"
-last_activity: 2026-08-05
-last_activity_desc: Milestone v2.1 started
-progress:
-  total_phases: 0
-  completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
-  percent: 0
-current_phase: 24
+milestone_name: 历史深度与自选联动 — planning
 current_phase_name: 逐日全量存档 (Historical Archive)
+status: executing
+stopped_at: Completed 24-02-PLAN.md
+last_updated: "2026-08-06T09:30:00.000Z"
+last_activity: 2026-08-06
+last_activity_desc: Phase 24 executed (2/2 plans) — backfill core + gap signal + read-side provenance
+progress:
+  total_phases: 4
+  completed_phases: 1
+  total_plans: 2
+  completed_plans: 2
+  percent: 25
+current_phase: 24
 ---
 
 # Project State
@@ -28,10 +28,10 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 
 ## Current Position
 
-Phase: Not started (defining requirements)
+Phase: 24 — 逐日全量存档 (Historical Archive) — Complete (2/2 plans)
 Plan: —
-Status: Defining requirements
-Last activity: 2026-08-05 — Milestone v2.1 started
+Status: Phase 24 delivered; v2.1 continues to Phase 25 (自选股联动)
+Last activity: 2026-08-06 — Phase 24 both plans executed (24-01 backfill core + D6 fix; 24-02 gap signal + read-side provenance + source guard)
 
 ## v1.3 Phase Summary (shipped 2026-08-04)
 
@@ -84,16 +84,22 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-08-05T06:59:44.596Z
-Stopped at: Completed 21-01-PLAN.md
+Last session: 2026-08-06T09:30:00.000Z
+Stopped at: Completed 24-02-PLAN.md
 Resume file: None
 
 ## Operator Next Steps
 
-- Start the next milestone with /gsd-new-milestone
+- Phase 24 complete (2/2 plans); v2.1 继续 Phase 25 自选股联动 (WATCH-01..04)
+- 前端 PoolHubPage 缺口横幅/回填触发按钮可消费 `GET /api/pool/dates` 新字段 (backfill_needed/backfill_examples) — 后续增强
 
 ## Decisions
 
+- [Phase 24 / P2]: GET /api/pool/dates 增 backfill_needed (缺口计数) + backfill_examples (升序前 5 示例日), 数据源与回填共用 list_backfill_gaps 单点 (enriched 分区 − 快照分区), GET-only 零执行 (E4/E5 保持绿)
+- [Phase 24 / P2]: build_pool_hub_snapshot 读侧透传 snapshot_origin — present 快照 snap.get(...,"eod") (旧快照缺字段→eod, Pitfall 5), 空态 None; EOD 落盘快照 origin=="eod" 断言
+- [Phase 24 / P2]: D6 回归 source guard 作用域限定 def run_all 段 (W-1 修订), 避开 _update_single_strategy_cache 的 write_cache
+- [Phase 24 / P1]: persist_point_snapshot 增 origin 参数 (eod/backfill/manual), payload 写 snapshot_origin, schema_version=1; 旧快照缺字段读 eod
+- [Phase 24 / P1]: 回填路径绝不写 strategy_cache (byte-identical 断言锁死); 手动 run_all 历史 as_of 不写 cache 指针 (D6 latest_date 闸门)
 - [Phase 21 / P1]: StrategyDef 新字段 (minute_confirm_fn/evaluation_time/minute_confirm_required) 置于 file_path 之后 (dataclass 默认值字段必须尾随非默认字段)
 - [Phase 21 / P1]: auction_volume_ratio 受管列 = 竞价量/前5日均量(不含当日, PIT-safe), 注册进 ENRICHED_COLUMNS + BY_CATEGORY['auction'], 绝不进存储窄表/计算闭包; 无历史即列缺席
 - [Phase 21 / P1]: 引擎 requires_auction_data 短路空池 (缺 auction_volume → 空 StrategyResult) + 策略 filter pl.lit(False) 守卫双保险; 分钟确认 seam 单点 datetime.time() <= evaluation_time 截断, minute_confirm_required 决定缺分钟数据空池/跳过
@@ -129,6 +135,8 @@ Resume file: None
 | Phase 20 P1 | 32 | 3 tasks | 5 files |
 | Phase 20 P2 | 41 | 3 tasks | 5 files |
 | Phase 21 P1 | 36 | 3 tasks | 7 files |
+| Phase 24 P1 | — | 3 tasks | 6 files |
+| Phase 24 P2 | 22 | 3 tasks | 5 files |
 
 ---
 *Last updated: 2026-08-05 — Phase 21 plan 1 (STRAT-04/05/06 engine seam + managed column + P1 strategies) complete; Phase 21 in progress (plan 2 parallel)*

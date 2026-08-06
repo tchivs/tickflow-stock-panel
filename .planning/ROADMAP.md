@@ -3,9 +3,13 @@
 ## Milestones
 
 ### v1.0 MVP — shipped 2026-07-27
+
 ### v1.1 Operational Hardening — shipped 2026-07-29
+
 ### v1.2 End-to-End Factor Portfolio Pipeline — shipped 2026-08-03
+
 ### v1.3 竞价选股引擎 — shipped 2026-08-04
+
 ### v2.0 竞价深度与历史股池 — shipped 2026-08-05
 
 Four phases (20-23) delivered probe-gated real auction columns + `kline_auction/date={d}/` lake, six auction/tail strategies (27 builtin total), frozen point snapshots + date navigation + EOD persistence, and the DateNavigator frontend. Archived: `.planning/milestones/v2.0-phases/`, `v2.0-REQUIREMENTS.md`, `v2.0-ROADMAP.md`, `v2.0-MILESTONE-AUDIT.md`.
@@ -28,7 +32,7 @@ Four phases (20-23) delivered probe-gated real auction columns + `kline_auction/
 - [x] **Phase 21: 竞价策略族 (Auction Strategy Family)** - 极速抢筹/竞价阿尔法/金色两点半/竞价全面/T+1闪电/盘中确认 — STRAT-04..09 (completed 2026-08-05)
 - [x] **Phase 22: 股池日期导航 (Pool Hub Date Navigation)** - Frozen point snapshots + dates/as_of endpoints + EOD job — POOL-04..06 (completed 2026-08-05)
 - [x] **Phase 23: 前端 (Frontend)** - DateNavigator + auction column drill-down (real vs derived) — FRONT-01..02 (completed 2026-08-05)
-- [ ] **Phase 24: 逐日全量存档 (Historical Archive)** - User-triggered batch backfill + snapshot_origin provenance + backfill_needed gap signal + cache-pointer pollution fix — HIST-01..04
+- [x] **Phase 24: 逐日全量存档 (Historical Archive)** - User-triggered batch backfill + snapshot_origin provenance + backfill_needed gap signal + cache-pointer pollution fix — HIST-01..04 (completed 2026-08-06)
 - [ ] **Phase 25: 自选股联动 (Watchlist Sync)** - Pool drill-down watch stars + 只看自选 filter + shared cache consistency — WATCH-01..04
 - [ ] **Phase 26: 历史竞价图 + 派生列复活 (Auction History Chart)** - Read-only auction history API + ECharts chart + lake ingestion preserves delegation-volume columns — CHART-01..03
 - [ ] **Phase 27: 盘前股池 (Premarket Pool)** - Scheduled premarket preview job (independent store) + open_gap completion + probe-honest degraded semantics + frontend premarket view — PM-01..04
@@ -47,7 +51,11 @@ Four phases (20-23) delivered probe-gated real auction columns + `kline_auction/
   3. The API/UI surfaces `backfill_needed` for dates with no snapshot and observable progress; backfill is cancelable and bounded.
   4. Backfill surface is GET-only / operator-only, zero execution authority (POOL-03); manual `run_all` for historical as_of no longer writes the cache pointer.
 
-**Plans**: TBD
+**Plans**: 2/2 plans executed
+
+- [x] 24-01-PLAN.md
+- [x] 24-02-PLAN.md
+
 **Research flag**: 需要 `--research-phase` — 回填 job 触发方式（手动端点 vs 空闲自动）与默认边界（全量 vs 最近 N 日）需细化；历史 as_of 来源（交易日历 vs 现有快照/分区）。
 
 ### Phase 25: 自选股联动 (Watchlist Sync)
@@ -101,7 +109,7 @@ Phases execute in numeric order: 24 → 25 → 26 → 27
 
 | Phase | Requirements | Status |
 |-------|-------------|--------|
-| 24. 逐日全量存档 | HIST-01..04 | Not started |
+| 24. 逐日全量存档 | HIST-01..04 | Complete |
 | 25. 自选股联动 | WATCH-01..04 | Not started |
 | 26. 历史竞价图 + 派生列复活 | CHART-01..03 | Not started |
 | 27. 盘前股池 | PM-01..04 | Not started |
