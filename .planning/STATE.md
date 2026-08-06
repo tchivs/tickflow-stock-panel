@@ -5,16 +5,16 @@ milestone_name: 历史深度与自选联动 — planning
 current_phase: 27
 current_phase_name: Premarket Pool
 status: planning
-stopped_at: Completed 26-02-PLAN.md (frontend CHART-02) — Phase 26 both plans done
-last_updated: "2026-08-06T07:33:13.305Z"
+stopped_at: Completed 27-01-PLAN.md (backend PM-01/02/03)
+last_updated: "2026-08-06T08:19:16.122Z"
 last_activity: 2026-08-06
-last_activity_desc: Phase 26 complete, transitioned to Phase 27
+last_activity_desc: 27-01 complete (PM-01/02/03 premarket backend); 27-02 in progress
 progress:
   total_phases: 4
   completed_phases: 3
-  total_plans: 6
-  completed_plans: 6
-  percent: 75
+  total_plans: 8
+  completed_plans: 7
+  percent: 88
 ---
 
 # Project State
@@ -29,9 +29,9 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 ## Current Position
 
 Phase: 27 — 盘前股池 (Premarket Pool)
-Plan: Not started
-Status: Ready to plan
-Last activity: 2026-08-06 — Phase 26 complete, transitioned to Phase 27
+Plan: 1/2 in progress
+Status: In progress
+Last activity: 2026-08-06 — 27-01-PLAN.md complete (backend PM-01/02/03); 27-02 in progress
 
 ## v1.3 Phase Summary (shipped 2026-08-04)
 
@@ -84,8 +84,8 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-08-06T07:48:00Z
-Stopped at: Completed 26-02-PLAN.md (frontend CHART-02) — Phase 26 both plans done
+Last session: 2026-08-06T08:18:59.710Z
+Stopped at: Completed 27-01-PLAN.md (backend PM-01/02/03)
 Resume file: None
 
 ## Operator Next Steps
@@ -114,6 +114,10 @@ Resume file: None
 - [Phase 26 / CHART-02]: 历史竞价数据不可变 → QK.auctionHistory 不入 SSE_INVALIDATE_PREFIXES + useAuctionHistory staleTime 5min; 查询 days=120 显式
 - [Phase 26 / CHART-02]: 诚实空态 D6 — probe 非 available / available:false / rows 空 / guest → EmptyState「无历史竞价数据」, 绝不渲染零值柱; 派生列 auction_unmatched_amount 绝不混排真实列
 - [Phase 26 / CHART-02]: e2e 经 /screener 钻取打开弹窗 (B1 修订 — /pool-hub 不挂载 StockPreviewDialog); 轴单位/窗口标注以 DOM 文本渲染供 e2e 断言
+- [Phase ?]: 盘前预览只落 premarket_results/date={T}/part.json, 绝不写 strategy_cache/screener_results (single-as_of 指针 + EOD 语义不动); 09:26 固定 mon-fri Asia/Shanghai, _run_tracked 单飞
+- [Phase ?]: 固定 09:26 mon-fri Asia/Shanghai (CronTrigger + _PREMARKET_HOUR/_PREMARKET_MINUTE 常量), _run_tracked 单飞, misfire_grace_time=1800 (盘前窗口窄)
+- [Phase ?]: open_gap 补算放 compute_enriched_today (prev_close 对齐块后), 与 EOD Pass 4 同一公式; 预览服务零自算 (无第二实现)
+- [Phase ?]: GET /api/pool/premarket 只读零执行 (POOL-03); 预览缺失 → 200 available:false 诚实空态 (非 404); guest 掩码 + 白名单就位
 
 ### v1.3 Decisions (carried)
 
@@ -155,3 +159,4 @@ Resume file: None
 | Phase 25-watchlist-sync PP2 | 14 | 3 tasks | 6 files |
 | Phase 26-auction-history-chart P1 | 24 | 2 tasks | 8 files |
 | Phase 26 P2 | 38 | 2 tasks | 7 files |
+| Phase 27-premarket-pool P1 | 11 | 3 tasks | 8 files |

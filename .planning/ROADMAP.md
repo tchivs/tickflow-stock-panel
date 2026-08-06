@@ -109,7 +109,11 @@ Plans:
   3. Probe-honest: today-probe `available` → real columns injected at read; else absent + `degraded`/window status; never implies real auction data premarket.
   4. Frontend distinguishes premarket preview from EOD archives (window annotation); DateNavigator lists EOD dates only.
 
-**Plans**: TBD
+**Plans**: 1/2 plans executed
+
+- [x] 27-01-PLAN.md
+- [ ] 27-02-PLAN.md
+
 **Research flag**: 需要 `--research-phase` — open_gap 补算 seam、probe 今日窗口语义、预览存储 schema、调度并发（与 EOD job/维表同步互斥）.
 
 ## Progress
@@ -122,7 +126,7 @@ Phases execute in numeric order: 24 → 25 → 26 → 27
 | 24. 逐日全量存档 | HIST-01..04 | Complete    |
 | 25. 自选股联动 | WATCH-01..04 | Complete    |
 | 26. 历史竞价图 + 派生列复活 | CHART-01..03 | Complete    |
-| 27. 盘前股池 | PM-01..04 | Not started |
+| 27. 盘前股池 | PM-01..04 | In progress |
 
 ---
 *Last updated: 2026-08-05 — v2.1 milestone started; roadmap created (Phases 24-27)*
