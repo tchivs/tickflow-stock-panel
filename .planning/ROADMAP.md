@@ -160,12 +160,12 @@ Plans:
 
 **Research flag**: 需要 `--research-phase`（中） — `attach_auction_columns_range` 向量化与 enabled-dates 语义、`BACKTEST_MAX_SERVER_DAYS=186` 与 248 天 enriched 区间冲突、历史竞价数据源可行性（超出代码范围）.
 
-**Plans**: 1/3 plans executed
+**Plans**: 2/3 plans executed
 
 Plans:
 
 - [x] 29-01-PLAN.md — BT-02 区间竞价列注入原语: `attach_auction_columns_range` (分区存在性主闸门 + PIT-safe 向量化 ratio + enabled-dates) + 等价性属性测试 + 边界
-- [ ] 29-02-PLAN.md — BT-03/04/05 报告装配服务: `AuctionValidationService.build_report` (窗口回夹双字段回显、9 策略枚举 + 互斥 branch、候选掩码镜像、BT-04 前瞻统计、per_date)
+- [x] 29-02-PLAN.md — BT-03/04/05 报告装配服务: `AuctionValidationService.build_report` (窗口回夹双字段回显、9 策略枚举 + 互斥 branch、候选掩码镜像、BT-04 前瞻统计、per_date)
 - [ ] 29-03-PLAN.md — BT-01/06 API 面: `GET /api/research/auction/validation` + main.py 注册 + POOL-03 AST 守卫 + 端点集成测试 + docs
 
 ### Phase 30: 盘前监控告警 (Premarket Monitoring)
