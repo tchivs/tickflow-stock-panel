@@ -22,6 +22,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 from app.indicators.pipeline import run_pipeline
 from app.config import settings
+from app.market_time import cn_today
 from app.services import auction_sync, index_sync, instrument_sync, kline_sync, preferences as _prefs
 from app.tickflow.capabilities import Cap, CapabilitySet
 from app.tickflow.pools import DEMO_SYMBOLS, get_pool
@@ -962,6 +963,12 @@ def _register_review_job(scheduler, repo, hour: int, minute: int) -> None:
 _POOL_EOD_JOB_ID = "pool_eod_persist"
 _POOL_EOD_OFFSET_MIN = 5
 
+# 盘前预览 job (PM-01): 09:25 集合竞价撮合定盘后 09:26 生成盘前预览股池。
+# 固定 09:26 (mon-fri, Asia/Shanghai) — 位于 09:25 撮合定盘后 / 09:30 连续竞价前,
+# open 已定盘, open_gap 与 EOD 口径一致; 不开放偏好配置 (09:25 是硬边界)。
+_PREMARKET_JOB_ID = "premarket_pool_preview"
+_PREMARKET_HOUR, _PREMARKET_MINUTE = 9, 26
+
 
 def _pool_eod_persist(on_progress=None) -> dict:
     """盘后 EOD job: 经 service 级共享核心预生成当日冻结快照 + 刷新最新指针。
@@ -1005,6 +1012,49 @@ def _pool_eod_persist(on_progress=None) -> dict:
         )
     emit("done", 100, f"股池 EOD 持久化完成, {len(results)} 个策略")
     return {"as_of": str(as_of), "strategies": len(results)}
+
+
+def _premarket_pool_preview(on_progress=None) -> dict:
+    """盘前预览 job: 09:26 生成今日盘前股池到独立 ``premarket_results/date={T}/part.json``。
+
+    - 复用 ``ScreenerService.run_all_with_hits`` 单条代码路径 (与 EOD/回填同源),
+      as_of = 今日 T (北京时间); 经 ``build_premarket_preview`` 构造 payload。
+    - **绝不调 strategy_cache.write_cache / pool_snapshot.persist_point_snapshot**
+      (PM-01 铁律, 镜像 pool_backfill.py:1-11) — strategy_cache.json 的 as_of 与
+      screener_results/date=* 在本 job 运行后不被改动。
+    - 无 app state / 无 enriched 基准日 → 诚实 skip, 不写任何文件 (镜像
+      _pool_eod_persist 966-975 skip 语义)。
+    - 与手动 run_all / EOD job 的并发写防护由调用方 ``_run_tracked`` 单飞保证。
+    """
+    from app.services import premarket_pool, premarket_snapshot
+    from app.services.screener import ScreenerService
+
+    app_state = _get_app_state()
+    if app_state is None:
+        return {"as_of": None, "skipped": "no app state"}
+    repo = app_state.repo
+    svc = ScreenerService(repo)
+    if svc.latest_date() is None:
+        return {"as_of": None, "skipped": "no data date"}
+
+    today = cn_today()
+    emit = on_progress or _noop
+    emit(_PREMARKET_JOB_ID, 0, f"盘前预览 {today}: 运行全部策略…")
+    data_dir = repo.store.data_dir
+    payload = premarket_pool.build_premarket_preview(
+        repo,
+        engine=getattr(app_state, "strategy_engine", None),
+        as_of=today,
+    )
+    # 只在 available 时落盘 (空帧/无 live 缓存 → available:false → 不写文件, 诚实 skip)
+    if payload.get("available"):
+        premarket_snapshot.persist_premarket_snapshot(data_dir, str(today), payload)
+    emit("done", 100, f"盘前预览完成, {len(payload.get('results', {}))} 个策略")
+    return {
+        "as_of": str(today),
+        "strategies": len(payload.get("results", {})),
+        "degraded": payload.get("degraded"),
+    }
 
 
 def start_scheduler(repo: KlineRepository, capset: CapabilitySet) -> AsyncIOScheduler:
@@ -1085,6 +1135,20 @@ def start_scheduler(repo: KlineRepository, capset: CapabilitySet) -> AsyncIOSche
                             timezone="Asia/Shanghai"),
         id=_POOL_EOD_JOB_ID,
         misfire_grace_time=3600,
+        replace_existing=True,
+    )
+
+    # 盘前: 09:26 盘前预览 (PM-01) — 09:25 集合竞价撮合定盘后 / 09:30 连续竞价前。
+    # 固定 09:26 (mon-fri, Asia/Shanghai); 独立存储 premarket_results/date={T}/part.json,
+    # 绝不写 strategy_cache / screener_results (与手动 run_all / EOD 并发写防护由
+    # _run_tracked 单飞保证)。盘前窗口窄, misfire_grace_time 短于 EOD 的 3600。
+    scheduler.add_job(
+        lambda: _run_tracked(_premarket_pool_preview, "premarket_pool_preview"),
+        trigger=CronTrigger(day_of_week="mon-fri",
+                            hour=_PREMARKET_HOUR, minute=_PREMARKET_MINUTE,
+                            timezone="Asia/Shanghai"),
+        id=_PREMARKET_JOB_ID,
+        misfire_grace_time=1800,
         replace_existing=True,
     )
 
