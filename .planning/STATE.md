@@ -5,16 +5,16 @@ milestone_name: 决策闭环与历史纵深 — planning
 current_phase: 30
 current_phase_name: Premarket Monitoring
 status: planning
-stopped_at: Completed 29-03-PLAN.md
-last_updated: "2026-08-06T13:03:59.588Z"
+stopped_at: Completed 30-01-PLAN.md
+last_updated: "2026-08-06T13:42:25.759Z"
 last_activity: 2026-08-06
-last_activity_desc: Phase 29 complete, transitioned to Phase 30
+last_activity_desc: 30-01 complete (preopen backend core)
 progress:
   total_phases: 8
   completed_phases: 0
-  total_plans: 8
-  completed_plans: 6
-  percent: 0
+  total_plans: 12
+  completed_plans: 7
+  percent: 58
 ---
 
 # Project State
@@ -29,9 +29,9 @@ See: .planning/PROJECT.md (updated 2026-08-06)
 ## Current Position
 
 Phase: 30 — 盘前监控告警 (Premarket Monitoring)
-Plan: Not started
-Status: Ready to plan
-Last activity: 2026-08-06 — Phase 29 complete, transitioned to Phase 30
+Plan: 1/3 (30-01 complete)
+Status: In Progress
+Last activity: 2026-08-06 — 30-01 complete (preopen backend core: 类型/白名单/隔离评估/盘中跳过)
 
 ## v1.3 Phase Summary (shipped 2026-08-04)
 
@@ -84,8 +84,8 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-08-06T12:56:32.785Z
-Stopped at: Completed 29-03-PLAN.md
+Last session: 2026-08-06T13:42:25.751Z
+Stopped at: Completed 30-01-PLAN.md
 Resume file: None
 
 ## Operator Next Steps
@@ -138,6 +138,8 @@ Resume file: None
 - [Phase ?]: 29-02: probe 在 build_report 顶部解析一次, 所有路径 (含 enriched_unavailable) 均携带 probe 字段 — 200 形全形状一致
 - [Phase ?]: probe 透传由服务层承担: handler 直接构造 AuctionValidationService(repo, engine), 服务层 probe_resolver 顶部解析一次, 所有路径响应均带 probe 字段 (D-03)
 - [Phase ?]: Test 6 白名单补 collections.abc (29-02 服务既有 stdlib import 面, 计划 parenthetical 遗漏) — 不改已交付服务, 守卫仍为封闭白名单
+- [Phase ?]: preopen 规则 op=truth 配置期显式拒绝 (盘前帧无布尔信号列)
+- [Phase ?]: evaluate_premarket 帧重建 change_pct 恒 None + 白名单禁 EOD 列双保险
 
 ### v1.3 Decisions (carried)
 
@@ -188,3 +190,4 @@ Resume file: None
 | Phase 29 P2 | 55 | 3 tasks | 2 files |
 | Phase 29 P2 | 55 | 3 tasks | 2 files |
 | Phase 29 P3 | 7min | 3 tasks | 5 files |
+| Phase 30 P1 | 31 | 3 tasks | 4 files |
