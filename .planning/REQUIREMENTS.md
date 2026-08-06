@@ -58,10 +58,10 @@ Requirements for the v2.3 milestone. Each maps to a roadmap phase. Research basi
 | 34. 竞价回测解锁 | BT-08 | Complete |
 | 34. 竞价回测解锁 | BT-09 | Complete |
 | 34. 竞价回测解锁 | BT-10 | Complete |
-| 35. 遗留补全与部署验证 | LG-01 | Planned |
-| 35. 遗留补全与部署验证 | LG-02 | Planned |
-| 35. 遗留补全与部署验证 | LG-03 | Planned |
-| 35. 遗留补全与部署验证 | LG-04 | Planned |
-| 35. 遗留补全与部署验证 | LG-05 | Planned |
+| 35. 遗留补全与部署验证 | LG-01 | Complete |
+| 35. 遗留补全与部署验证 | LG-02 | Complete |
+| 35. 遗留补全与部署验证 | LG-03 | Complete |
+| 35. 遗留补全与部署验证 | LG-04 | Complete |
+| 35. 遗留补全与部署验证 | LG-05 | Complete |
 
 **Cross-cutting guards (apply to every phase):** zero new runtime dependencies · honest provenance (`origin=backfill`, `data_gate`, column absence never 0-filled) · POOL-03 zero-execution AST guard · `strategy_cache` single-as_of integrity · user `frontend/src/pages/Watchlist.tsx` never touched · no backfill forgery (upstream-limited items documented, not fabricated).
