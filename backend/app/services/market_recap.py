@@ -267,6 +267,10 @@ async def recap_market_stream(
         focus: 用户追加的复盘关注点。
         news: 预检索的新闻列表;None 时尝试从 hhxg 静态快照拉取焦点/宏观新闻,
             失败则走降级说明 (不再依赖后续 news_search 注入)。
+
+    事件序 (REV-04 契约, 锁死): meta → AI delta* → 面板 delta(有 present 块时)
+    → done。AI 失败路径 (error + return) 不发面板兜底 (R8); 面板全缺席 → 退化为
+    纯 AI 报告 (协议不破坏)。面板与 AI 复盘同一天 (overview['as_of'] 单一来源)。
     """
     if not news:
         try:
@@ -289,6 +293,16 @@ async def recap_market_stream(
             "message": "暂无市场数据,请先在「数据」页同步日 K 与指数后再复盘",
         }, ensure_ascii=False)
         return
+
+    # 1b. 确定性竞价复盘面板 (REV-04): 与 AI 复盘同一天 (as_of 单一来源, 绝不复解析)。
+    #     构建失败 → 记日志按无面板处理 (面板是增强, 绝不让面板失败拖垮 AI 复盘);
+    #     全缺席 → 面板 delta 不发, 复盘退化为现有纯 AI 报告 (协议不破坏, R8 保持)。
+    panel = None
+    try:
+        from app.services.auction_recap import build_auction_recap
+        panel = build_auction_recap(repo, date.fromisoformat(as_of_str))
+    except Exception:  # noqa: BLE001 — 面板是增强, 构建失败绝不拖垮 AI 复盘
+        logger.exception("auction recap panel build failed for %s", as_of_str)
 
     emo = overview.get("emotion") or {}
 
@@ -320,6 +334,18 @@ async def recap_market_stream(
         logger.exception("AI market recap failed for %s: %s", as_of_str, e)
         yield json.dumps({"type": "error", "message": f"AI 复盘失败: {e}"}, ensure_ascii=False)
         return
+
+    # 4b. 面板 delta (REV-04 事件序契约: meta → AI delta* → 面板 delta → done)。
+    #     仅在有 present 块时发; AI 失败路径已在上方 error + return (R8: 不发面板兜底)。
+    #     经同一 delta 机制, 归档/SSE/飞书推送 (content 累积) 零改动即收到面板。
+    if panel is not None and any(
+        b.get("present") for b in panel.get("blocks", {}).values()
+    ):
+        from app.services.auction_recap import render_auction_recap_markdown
+        yield json.dumps(
+            {"type": "delta", "content": render_auction_recap_markdown(panel)},
+            ensure_ascii=False,
+        )
 
     yield json.dumps({"type": "done"}, ensure_ascii=False)
 
