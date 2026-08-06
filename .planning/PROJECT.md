@@ -8,14 +8,15 @@ AthenaQuant is a shipped, self-hosted quantitative research platform for individ
 
 An investor can turn reliable market data and their own holdings into an auditable, actionable research and monitoring workflow without operating multiple disconnected tools.
 
-## Current Milestone: v2.0 竞价深度与历史股池
+## Current Milestone: v2.1 历史深度与自选联动
 
-**Goal:** 在 v1.3 竞价选股引擎基础上深化:解锁真实集合竞价数据列(probe-gated)、补充竞价策略族,并支持按交易日浏览历史股池。
+**Goal:** 在 v2.0 历史股池基础上深化:逐日全量存档模式突破单日回放、自选股与股池联动、以及依赖实时竞价数据源的盘前股池/历史竞价图候选(probe-gated 哲学延续)。
 
 **Target features:**
-- 日期导航:按交易日浏览历史股池,突破当前 single as_of 股池视图(POOL-04)
-- 更多竞价策略:竞价阿尔法、极速抢筹、T+1闪电、竞价全面策略、金色两点半(STRAT-04/05)
-- 真集合竞价数据列:竞价量、金额、虚拟成交等为一级列,依赖数据源可用性(probe-gated,DATA-04/05)
+- 逐日全量存档模式(非回放):历史股池逐日完整重建与查询,零存储漂移(HIST-01)
+- POOL-05 自选股联动:自选股与股池交叉高亮/过滤,自选清单本地持有一致(WATCH-01)
+- 盘前股池(09:30 前可用):依赖实时竞价数据源,probe 不可用时 fail-closed 诚实降级(候选,研究确认)
+- 历史竞价图 / 虚拟成交实时列:依赖实时/历史竞价数据源(候选,研究确认)
 - 沿平台边界:选股/股池结果始终为零执行权研究建议,无自动下单
 
 ## Success Metric

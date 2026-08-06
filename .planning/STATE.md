@@ -1,20 +1,20 @@
 ---
 gsd_state_version: 1.0
-milestone: v2.0
-milestone_name: 竞价深度与历史股池 — planning
-status: Awaiting next milestone
-stopped_at: Completed 21-01-PLAN.md
-last_updated: "2026-08-05T16:55:52.868Z"
+milestone: v2.1
+milestone_name: 历史深度与自选联动
+status: planning
+stopped_at: 
+last_updated: "2026-08-05T17:05:00.000Z"
 last_activity: 2026-08-05
-last_activity_desc: Milestone v2.0 completed and archived
+last_activity_desc: Milestone v2.1 started
 progress:
-  total_phases: 8
-  completed_phases: 4
-  total_plans: 8
-  completed_plans: 8
-  percent: 50
-current_phase: 23
-current_phase_name: 前端 (Frontend)
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
+current_phase: 
+current_phase_name: 
 ---
 
 # Project State
@@ -28,10 +28,10 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 
 ## Current Position
 
-Phase: Milestone v2.0 complete
+Phase: Not started (defining requirements)
 Plan: —
-Status: Awaiting next milestone
-Last activity: 2026-08-05 — Milestone v2.0 completed and archived
+Status: Defining requirements
+Last activity: 2026-08-05 — Milestone v2.1 started
 
 ## v1.3 Phase Summary (shipped 2026-08-04)
 
