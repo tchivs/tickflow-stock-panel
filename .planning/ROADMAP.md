@@ -34,7 +34,7 @@ Four phases (20-23) delivered probe-gated real auction columns + `kline_auction/
 - [x] **Phase 23: 前端 (Frontend)** - DateNavigator + auction column drill-down (real vs derived) — FRONT-01..02 (completed 2026-08-05)
 - [x] **Phase 24: 逐日全量存档 (Historical Archive)** - User-triggered batch backfill + snapshot_origin provenance + backfill_needed gap signal + cache-pointer pollution fix — HIST-01..04 (completed 2026-08-06)
 - [x] **Phase 25: 自选股联动 (Watchlist Sync)** - Pool drill-down watch stars + 只看自选 filter + shared cache consistency — WATCH-01..04 (completed 2026-08-06)
-- [ ] **Phase 26: 历史竞价图 + 派生列复活 (Auction History Chart)** - Read-only auction history API + ECharts chart + lake ingestion preserves delegation-volume columns — CHART-01..03
+- [x] **Phase 26: 历史竞价图 + 派生列复活 (Auction History Chart)** - Read-only auction history API + ECharts chart + lake ingestion preserves delegation-volume columns — CHART-01..03 (completed 2026-08-06)
 - [ ] **Phase 27: 盘前股池 (Premarket Pool)** - Scheduled premarket preview job (independent store) + open_gap completion + probe-honest degraded semantics + frontend premarket view — PM-01..04
 
 ## Phase Details
@@ -88,12 +88,12 @@ Four phases (20-23) delivered probe-gated real auction columns + `kline_auction/
   2. Frontend renders the chart in the stock popup with dual-axis 柱/线, empty state + 09:15–09:25 window annotation, zero new npm deps, `Watchlist.tsx` untouched.
   3. Auction lake canonical schema widens to 4 required + 2 optional delegation-volume columns (backward compatible); the derived `auction_unmatched_amount` branch activates with "估算" annotation intact.
 
-**Plans**: 1/2 plans executed
+**Plans**: 2/2 plans executed
 
 Plans:
 
 - [x] 26-01-PLAN.md — 后端: CHART-01 只读竞价历史聚合端点 (POOL-03 GET-only + 诚实空态 + guest 掩码) + CHART-03 湖摄入 canonical 扩为 4 必需 + 2 可选委托量输入列 (diagonal_relaxed)
-- [ ] 26-02-PLAN.md — 前端: CHART-02 竞价历史双轴柱线图 (StockPreviewDialog toggle + StockPanel prop + AuctionHistoryChart) + e2e mock 三态
+- [x] 26-02-PLAN.md — 前端: CHART-02 竞价历史双轴柱线图 (StockPreviewDialog toggle + StockPanel prop + AuctionHistoryChart) + e2e mock 三态
 
 **Research flag**: medium — 窗口内行粒度语义（末行 vs 逐分钟累计快照 vs 求和）需在接入真实源前钉死并写进验收.
 
@@ -121,7 +121,7 @@ Phases execute in numeric order: 24 → 25 → 26 → 27
 |-------|-------------|--------|
 | 24. 逐日全量存档 | HIST-01..04 | Complete    |
 | 25. 自选股联动 | WATCH-01..04 | Complete    |
-| 26. 历史竞价图 + 派生列复活 | CHART-01..03 | Not started |
+| 26. 历史竞价图 + 派生列复活 | CHART-01..03 | Complete |
 | 27. 盘前股池 | PM-01..04 | Not started |
 
 ---

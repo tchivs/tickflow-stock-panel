@@ -4,17 +4,17 @@ milestone: v2.1
 milestone_name: 历史深度与自选联动 — planning
 current_phase: 26
 current_phase_name: 历史竞价图 + 派生列复活 (Auction History Chart)
-status: planning
-stopped_at: Completed 26-01-PLAN.md (backend CHART-01/03)
-last_updated: "2026-08-06T07:06:53.865Z"
+status: complete
+stopped_at: Completed 26-02-PLAN.md (frontend CHART-02) — Phase 26 2/2 plans done
+last_updated: "2026-08-06T07:48:00Z"
 last_activity: 2026-08-06
-last_activity_desc: Phase 25 complete, transitioned to Phase 26
+last_activity_desc: Phase 26 complete (CHART-01..03)
 progress:
   total_phases: 4
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 6
-  completed_plans: 5
-  percent: 50
+  completed_plans: 6
+  percent: 100
 ---
 
 # Project State
@@ -29,9 +29,9 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 ## Current Position
 
 Phase: 26 — 历史竞价图 + 派生列复活 (Auction History Chart)
-Plan: Not started
-Status: Ready to plan
-Last activity: 2026-08-06 — Phase 25 complete, transitioned to Phase 26
+Plan: Complete (2/2)
+Status: Complete
+Last activity: 2026-08-06 — Phase 26 complete (CHART-01 read-only endpoint + CHART-02 frontend chart + CHART-03 write-path widening)
 
 ## v1.3 Phase Summary (shipped 2026-08-04)
 
@@ -84,8 +84,8 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-08-06T07:06:53.855Z
-Stopped at: Completed 26-01-PLAN.md (backend CHART-01/03)
+Last session: 2026-08-06T07:48:00Z
+Stopped at: Completed 26-02-PLAN.md (frontend CHART-02) — Phase 26 both plans done
 Resume file: None
 
 ## Operator Next Steps
@@ -110,6 +110,10 @@ Resume file: None
 - [Phase ?]: Phase 25 / P2: WATCH-01 二次 GET 断言用计数式而非精确次数 (StrictMode 双挂载免疫); no-mutating 守卫拆分 watchlist 写族与其余 non-GET 分别断言
 - [Phase ?]: CHART-01: per-trading-day last-row (09:25) aggregation endpoint GET /api/kline/auction/history with row_count/min/max labels, honest 200 available:false, explicit 400, guest masking, probe passthrough
 - [Phase ?]: CHART-03: CANONICAL_AUCTION_COLS stays 4 (R5); OPTIONAL_AUCTION_COLS = [auction_unmatched_volume, auction_virtual_price] kept by existence; merge-upsert how=diagonal_relaxed for old-4+new-6 schema union
+- [Phase 26 / CHART-02]: 集成点 = StockPreviewDialog 顶栏第三开关「竞价历史」(镜像分时按钮 + aria-pressed) + StockPanel showAuction prop — 全站挂该弹窗页面一改全生效; Watchlist.tsx 零触碰
+- [Phase 26 / CHART-02]: 历史竞价数据不可变 → QK.auctionHistory 不入 SSE_INVALIDATE_PREFIXES + useAuctionHistory staleTime 5min; 查询 days=120 显式
+- [Phase 26 / CHART-02]: 诚实空态 D6 — probe 非 available / available:false / rows 空 / guest → EmptyState「无历史竞价数据」, 绝不渲染零值柱; 派生列 auction_unmatched_amount 绝不混排真实列
+- [Phase 26 / CHART-02]: e2e 经 /screener 钻取打开弹窗 (B1 修订 — /pool-hub 不挂载 StockPreviewDialog); 轴单位/窗口标注以 DOM 文本渲染供 e2e 断言
 
 ### v1.3 Decisions (carried)
 
@@ -150,3 +154,4 @@ Resume file: None
 *Last updated: 2026-08-05 — Phase 21 plan 1 (STRAT-04/05/06 engine seam + managed column + P1 strategies) complete; Phase 21 in progress (plan 2 parallel)*
 | Phase 25-watchlist-sync PP2 | 14 | 3 tasks | 6 files |
 | Phase 26-auction-history-chart P1 | 24 | 2 tasks | 8 files |
+| Phase 26 P2 | 38 | 2 tasks | 7 files |

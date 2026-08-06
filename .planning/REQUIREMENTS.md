@@ -24,7 +24,7 @@ Requirements for the v2.1 milestone. Each maps to a roadmap phase. Research basi
 ### 历史竞价图 + 派生列复活 (Auction History Chart) — Phase 26
 
 - [x] **CHART-01**: Researcher can query per-symbol historical auction aggregates via a read-only `GET /api/kline/auction/history?symbol=&days=` endpoint — last-row (09:25 final call) semantics per trading day; empty lake returns honest 200 `available: false` (never 404); POOL-03-style GET-only, zero execution.
-- [ ] **CHART-02**: User can view the auction history chart in the stock drill-down popup — ECharts dual-axis (柱=竞价量, 线=竞价金额), honest empty state + 09:15–09:25 window annotation, zero new npm dependencies, no changes to the user-pending `Watchlist.tsx`.
+- [x] **CHART-02**: User can view the auction history chart in the stock drill-down popup — ECharts dual-axis (柱=竞价量, 线=竞价金额), honest empty state + 09:15–09:25 window annotation, zero new npm dependencies, no changes to the user-pending `Watchlist.tsx`.
 - [x] **CHART-03**: The auction lake ingestion path preserves the delegation-volume input columns (canonical schema widened from 4 required to 4 required + 2 optional `auction_unmatched_volume`/`auction_virtual_price`), activating the existing derived `auction_unmatched_amount` branch so the Phase 23 "派生·虚拟成交" UI group becomes live data rather than absent columns; schema/UI maintain the "估算" annotation and stay backward compatible.
 
 ### 盘前股池 (Premarket Pool) — Phase 27
@@ -61,7 +61,7 @@ Populated during roadmap creation.
 | WATCH-03 | Phase 25 | Complete |
 | WATCH-04 | Phase 25 | Complete (P2) |
 | CHART-01 | Phase 26 | Complete |
-| CHART-02 | Phase 26 | Open |
+| CHART-02 | Phase 26 | Complete |
 | CHART-03 | Phase 26 | Complete |
 | PM-01 | Phase 27 | Open |
 | PM-02 | Phase 27 | Open |
