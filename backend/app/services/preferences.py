@@ -431,15 +431,18 @@ RULE_DELIVERY_CHANNELS = {"feishu", "telegram"}
 
 
 def get_review_schedule() -> dict:
-    """定时复盘调度 {"enabled": False, "hour": 15, "minute": 10}。默认关闭。
+    """定时复盘调度 {"enabled": False, "hour": 15, "minute": 40}。默认关闭。
 
-    A股 15:00 收盘, 默认时间设为 15:10(收盘后即时复盘), 强制下限 15:00。
+    默认 15:40 的理由 (REV-04): 竞价同步 15:30 + EOD 股池持久化 15:35 之后, 竞价
+    复盘面板三块 (真实竞价活跃度 / 开盘涨幅快照 / 盘前信号质量) 才全亮。早跑或旧
+    偏好 → pre_eod 诚实标注 (是特性不是错误)。已存偏好优先于新默认
+    (load().get("review_schedule", default) 语义, 向后兼容)。强制下限 15:00。
     """
-    d = load().get("review_schedule", {"enabled": False, "hour": 15, "minute": 10})
+    d = load().get("review_schedule", {"enabled": False, "hour": 15, "minute": 40})
     return {
         "enabled": bool(d.get("enabled", False)),
         "hour": d.get("hour", 15),
-        "minute": d.get("minute", 10),
+        "minute": d.get("minute", 40),
     }
 
 

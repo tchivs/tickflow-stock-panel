@@ -478,3 +478,82 @@ async def test_slice_honest_when_panel_all_absent(monkeypatch, tmp_path):
     sys = captured["messages"][0]["content"]
     assert "禁止编造" in sys  # 护栏行已追加
     preferences.set_recap_auction_commentary(False)
+
+
+# ================================================================
+# Task 3 — 调度默认 15:40: preferences 默认 + Review.tsx 兜底字面量 + 回归
+#           (REV-04 验收 7)
+# ================================================================
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_review_schedule_default_1540(tmp_path, monkeypatch):
+    """无已存偏好 → 默认 {"enabled": False, "hour": 15, "minute": 40}; docstring 注明理由。"""
+    from app.config import settings as app_settings
+
+    monkeypatch.setattr(app_settings, "data_dir", tmp_path / "data")
+
+    from app.services import preferences
+
+    sched = preferences.get_review_schedule()
+    assert sched == {"enabled": False, "hour": 15, "minute": 40}
+    assert "15:40" in (preferences.get_review_schedule.__doc__ or "")
+
+
+def test_review_schedule_saved_pref_retained(tmp_path, monkeypatch):
+    """已存偏好保留 (向后兼容铁律): 旧偏好 15:10 → get 仍返回 10, 新默认不覆盖。"""
+    from app.config import settings as app_settings
+
+    monkeypatch.setattr(app_settings, "data_dir", tmp_path / "data")
+
+    from app.services import preferences
+
+    preferences.set_review_schedule(True, 15, 10)
+    sched = preferences.get_review_schedule()
+    assert sched == {"enabled": True, "hour": 15, "minute": 10}
+
+
+def test_review_schedule_floor_unchanged(tmp_path, monkeypatch):
+    """15:00 下限不动: 14:59 → clamp 到 15:00; 15:30 原样。"""
+    from app.config import settings as app_settings
+
+    monkeypatch.setattr(app_settings, "data_dir", tmp_path / "data")
+
+    from app.services import preferences
+
+    assert preferences.set_review_schedule(True, 14, 59) == {
+        "enabled": True, "hour": 15, "minute": 0,
+    }
+    assert preferences.set_review_schedule(True, 15, 30) == {
+        "enabled": True, "hour": 15, "minute": 30,
+    }
+
+
+def test_review_tsx_fallback_literal_1540():
+    """Review.tsx:105 兜底字面量 minute 10 → 40 (唯一前端触碰点, 非 Watchlist.tsx)。"""
+    src = _REPO_ROOT / "frontend" / "src" / "pages" / "Review.tsx"
+    text = src.read_text(encoding="utf-8")
+    sched_line = next(
+        (ln for ln in text.splitlines() if "reviewSched" in ln and "minute" in ln), "",
+    )
+    assert "minute: 40" in sched_line
+    assert "minute: 10" not in text
+
+
+def test_get_preferences_schedule_passthrough(tmp_path, monkeypatch):
+    """GET /preferences 透传联动: 无偏好 → minute 40; set 旧偏好 → 10。"""
+    client = _prefs_app(tmp_path, monkeypatch)
+
+    from app.services import preferences
+
+    assert client.get("/api/settings/preferences").json()["review_schedule"]["minute"] == 40
+    preferences.set_review_schedule(True, 15, 10)
+    assert client.get("/api/settings/preferences").json()["review_schedule"]["minute"] == 10
+
+
+def test_review_job_registration_consumes_schedule():
+    """注册消费零改动回归: daily_pipeline 仍按 review_sched["hour"]/["minute"] 注册。"""
+    src = _REPO_ROOT / "backend" / "app" / "jobs" / "daily_pipeline.py"
+    text = src.read_text(encoding="utf-8")
+    assert '_register_review_job(scheduler, repo, review_sched["hour"], review_sched["minute"])' in text
