@@ -19,6 +19,7 @@ from app.advanced import api as advanced_api
 from app.analysis import api as analysis_api
 from app.api import (
     alerts,
+    auction_backfill,
     auction_history,
     backtest,
     data,
@@ -851,6 +852,8 @@ app.include_router(auth_api.router)
 app.include_router(kline.router)
 # CHART-01 只读竞价历史聚合 (GET /api/kline/auction/history, POOL-03 零执行)
 app.include_router(auction_history.router)
+# AQ-02 竞价历史回填触发端点 (POST /api/kline/auction/backfill, 运营操作)
+app.include_router(auction_backfill.router)
 app.include_router(watchlist.router)
 app.include_router(pool.router)
 app.include_router(screener.router)
