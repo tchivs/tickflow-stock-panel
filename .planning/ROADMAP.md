@@ -56,7 +56,7 @@ Four phases (20-23) delivered probe-gated real auction columns + `kline_auction/
 - [x] **Phase 33: 股池回填 OQ-1 (Pool Backfill)** - Sandbox subset backfill verification + full-248 operator runbook + PIT interplay — PB-01..04 (completed 2026-08-06)
 - [x] **Phase 34: 竞价回测解锁 (BT-07 Full Auction Backtest)** - Real-branch activation + 248-day full backtest + backtest_results persistence — BT-07..10 (completed 2026-08-06)
 - [x] **Phase 35: 遗留补全与部署验证 (Legacy Completion & Deploy Verification)** - R13 regression + CHART-04 stance + deploy checklist + P2 extensions — LG-01..05 (completed 2026-08-06)
-- [ ] **Phase 36: 全量竞价回填 (Full-Universe Auction Backfill)** - Long-job timeout exemption + resume/only-missing + operator CLI + sandbox full 5537-symbol run + BJ honest ceiling — FA-01..06 (planned)
+- [x] **Phase 36: 全量竞价回填 (Full-Universe Auction Backfill)** - Long-job timeout exemption + resume/only-missing + operator CLI + sandbox full 5537-symbol run + BJ honest ceiling — FA-01..06 (planned) (completed 2026-08-07)
 - [ ] **Phase 37: 全量真列回测重跑 (Full Real-Column Backtest Rerun)** - run_id lake-coverage fingerprint + full-market real-column rerun + honest coverage reporting — RC-01..04 (planned)
 - [ ] **Phase 38: 分钟确认接线 BT-10 (Minute Confirm Wiring)** - minute loader factory + dual construction-site wiring + hermetic tests + doc sync — MN-01..04 (planned)
 - [ ] **Phase 39: 部署验证与残留 (Deploy Verification & Residue)** - D8 deploy-recipe preflight + checklist refresh + honest gap summary + observation plan — DV-01..04 (planned)
@@ -152,7 +152,7 @@ Phases execute in numeric order: 36 → 37 → 38 → 39 (37 depends on 36's lak
 
 | Phase | Requirements | Status |
 |-------|-------------|--------|
-| 36. 全量竞价回填 | FA-01..06 | Planned    |
+| 36. 全量竞价回填 | FA-01..06 | Complete    |
 | 37. 全量真列回测重跑 | RC-01..04 | Planned    |
 | 38. 分钟确认接线 BT-10 | MN-01..04 | Planned    |
 | 39. 部署验证与残留 | DV-01..04 | Planned    |

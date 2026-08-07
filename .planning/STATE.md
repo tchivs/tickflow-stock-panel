@@ -2,19 +2,19 @@
 gsd_state_version: 1.0
 milestone: v2.4
 milestone_name: 全量数据解锁 — planning
+current_phase: 37
+current_phase_name: Full Real-Column Backtest Rerun
 status: planning
 stopped_at: Completed 31-03-PLAN.md
-last_updated: "2026-08-06T19:18:41.209Z"
-last_activity: 2026-08-06
-last_activity_desc: Milestone v2.4 started
+last_updated: "2026-08-07T04:45:09.831Z"
+last_activity: 2026-08-07
+last_activity_desc: Phase 36 complete, transitioned to Phase 37
 progress:
-  total_phases: 0
+  total_phases: 4
   completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
+  total_plans: 4
+  completed_plans: 2
   percent: 0
-current_phase: (none)
-current_phase_name: (research)
 ---
 
 # Project State
@@ -28,10 +28,10 @@ See: .planning/PROJECT.md (updated 2026-08-06)
 
 ## Current Position
 
-Phase: Milestone v2.3 complete
-Plan: —
-Status: Awaiting next milestone
-Last activity: 2026-08-06 — Milestone v2.3 completed and archived
+Phase: 37 — 全量真列回测重跑 (Full Real-Column Backtest Rerun)
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-08-07 — Phase 36 complete, transitioned to Phase 37
 
 ## v1.3 Phase Summary (shipped 2026-08-04)
 

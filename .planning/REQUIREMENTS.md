@@ -43,12 +43,12 @@ Requirements for the v2.4 milestone. Each maps to a roadmap phase. Research basi
 
 | Phase | Requirement | Status |
 |-------|-------------|--------|
-| 36. 全量竞价回填 | FA-01 | Planned |
-| 36. 全量竞价回填 | FA-02 | Planned |
-| 36. 全量竞价回填 | FA-03 | Planned |
-| 36. 全量竞价回填 | FA-04 | Planned |
-| 36. 全量竞价回填 | FA-05 | Planned |
-| 36. 全量竞价回填 | FA-06 | Planned |
+| 36. 全量竞价回填 | FA-01 | Complete |
+| 36. 全量竞价回填 | FA-02 | Complete |
+| 36. 全量竞价回填 | FA-03 | Complete |
+| 36. 全量竞价回填 | FA-04 | Deferred (source-gated) |
+| 36. 全量竞价回填 | FA-05 | Complete |
+| 36. 全量竞价回填 | FA-06 | Complete |
 | 37. 全量真列回测重跑 | RC-01 | Planned |
 | 37. 全量真列回测重跑 | RC-02 | Planned |
 | 37. 全量真列回测重跑 | RC-03 | Planned |
