@@ -49,10 +49,10 @@ Requirements for the v2.4 milestone. Each maps to a roadmap phase. Research basi
 | 36. 全量竞价回填 | FA-04 | Deferred (source-gated) |
 | 36. 全量竞价回填 | FA-05 | Complete |
 | 36. 全量竞价回填 | FA-06 | Complete |
-| 37. 全量真列回测重跑 | RC-01 | Planned |
-| 37. 全量真列回测重跑 | RC-02 | Planned |
-| 37. 全量真列回测重跑 | RC-03 | Planned |
-| 37. 全量真列回测重跑 | RC-04 | Planned |
+| 37. 全量真列回测重跑 | RC-01 | Complete |
+| 37. 全量真列回测重跑 | RC-02 | Complete (≥0.94 deferred) |
+| 37. 全量真列回测重跑 | RC-03 | Complete |
+| 37. 全量真列回测重跑 | RC-04 | Complete |
 | 38. 分钟确认接线 BT-10 | MN-01 | Planned |
 | 38. 分钟确认接线 BT-10 | MN-02 | Planned |
 | 38. 分钟确认接线 BT-10 | MN-03 | Planned |
