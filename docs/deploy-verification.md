@@ -190,3 +190,28 @@
 | — | 随时 | D8 立场确认 | — |
 
 **Fail-closed 总则**：任何一项观察到「数据不可用但系统装作有数据」（空湖出非空断言、pre_eod 缺块无注记、探针影响 ext_data、09:26 落盘进 strategy_cache、复盘引用切片外数字）→ 记 BLOCKER 并报回开发，绝不静默放行。
+
+---
+
+### v2.4 实测事实 (2026-08-07)
+
+> 本小节为 v2.4 里程碑实测事实快照 (沙箱/研究实测, 非真实交易日观察), 供部署决策引用; 与 `.planning/research/v2.4-full-universe/` 与 36-02/37-03/38-03 阶段 SUMMARY parity。事实日期 2026-08-07, HEAD `2453366`。来源: AUCTION-FULL-BACKFILL.md / REAL-COLUMN-BACKTEST.md / DEPLOY-MINUTE-LEGACY.md §3.8 / 36-02-SUMMARY / 37-03-SUMMARY / 38-03-SUMMARY (容器 diff 回退 RESEARCH.md §3.8 — RUN-EVIDENCE-39-01.md 落地后以 39-01 实测为准)。
+
+**pilot 延迟 (竞价回填上游)**: mean 0.96s / median 0.82s / p95 1.24s 每请求 (n=20, min 0.38 / max 2.49), 28 请求 0×429 (AUCTION-FULL-BACKFILL.md §3.2 行 59-60)。全量 5537 标的校准 3.5-5.5h (含裕量, 行 81-84); rpm 30/60 吞吐几乎无差 — 瓶颈在 fetch+write 工作量而非限速 (同 §3.4)。
+
+**配额窗口与 campaign 纪律 (实测校准)**: 上游为 ~2h 滚动窗 + 窗口内累计配额 ~70-100 请求, 达额后冷却 ~2h (非永久封禁, tools/list 已复现 200)。纪律: 每 ~2h 窗跑 1 次 burst (≤40 symbols, rpm 30, ~90s); 达额即停等窗复位; 续跑永远 `--symbols <uncovered-chunk>` 或 `--only-missing` (merge-upsert 幂等); 全量 5537 ≈ 数周持续 (诚实估计, 36-02-SUMMARY:127-128)。
+
+**湖覆盖现状**: kline_auction covered=**40/5537** (0.72%), rows=10,904, 248 分区 (36-02-SUMMARY:129)。RC rerun `298d743e8083`: part.parquet **382,398 行** = gated-4 720 + EOD 329,087 + intraday 52,591; coverage 37/5537 = 0.67%, rows_present 8,951/1,373,176 honest partial (回填未完成, 绝不 claim ≥0.94); 只读 API 全规模 detail 0.052s / pushdown 0.015s (37-03-SUMMARY:42-50)。
+
+**容器 diff 证据 (D8 重建依据)**: image `athenaquant-app:latest` created 2026-08-04T10:59:12+04:00 vs HEAD 2026-08-07 (`2453366`); 4 个运行时文件 md5 全 DIFFER (详见 RESEARCH.md §3.8 / DEPLOY-MINUTE-LEGACY.md §3.8; 39-01 RUN-EVIDENCE 落地后以实测为准):
+
+| 文件 | 陈旧 3018 md5 | HEAD md5 |
+|---|---|---|
+| app/main.py | 641003ae8faab1c67201e9d2754da766 | 32468e1554898be3ed1a09ec7ac42e1b |
+| app/strategy/engine.py | 165b95a71850f71356766c0bb7fb974a | 4e33c236ef5b0cb6c6ea6c6c03e6c35a |
+| app/jobs/daily_pipeline.py | 72e17c3c2592570a9ec563ab040b631c | 1be3288bd34f8cea212f9446ebeef75f |
+| app/services/preferences.py | 23122ca0141152875091bdf83c152e46 | 901d11a9a5af364eac181d7aed5b8e75 |
+
+→ 运行中容器落后 HEAD (Phase 32-34 运行时提交 08-06 晚间晚于镜像), 重建对齐属部署动作; DV-01 预检配方 (build+boot+md5 parity) 在沙箱验证 (RUN-EVIDENCE-39-01.md)。
+
+**分钟接线状态 (BT-10, Phase 38)**: `make_minute_loader` 工厂 + 双构造点接线 (main.py:551/567 + governed_runner.py:55/72), 11 hermetic 测试全绿, 空湖行为逐字节保持 (required→空池 / optional→跳过确认); **点亮 deploy-gated** — kline_minute 湖当前 0 分区, 真点亮 = live 日同步后 (15:30 EOD 或手动) `data/kline_minute/date={T}/part.parquet` 存在 + `auction_intraday_confirm` 非空, **非盘中 09:45** (见上文 D8 bullet, 38-03-SUMMARY §4)。`minute_confirm='not_applied'` 报告语义冻结。
