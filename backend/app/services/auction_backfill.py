@@ -5,7 +5,8 @@
 - 只写 kline_daily 已对齐日期 (范围 = 分区目录 ∩ [start,end]; 写边界
   ``datetime.date().is_in(aligned_dates)`` —— 上游多返回的日期绝不 phantom-write);
 - per-symbol 失败台账 ``failed_symbols: [{symbol, reason}]`` 如实反映部分失败
-  (empty_response / 异常串前 200 字, 镜像 auction_probe._ERROR_DETAIL_MAX)。
+  (empty_response / source_blocked / 异常串前 200 字三态互斥, 镜像
+  auction_probe._ERROR_DETAIL_MAX)。
 
 铁律:
 - **绝不 consult ``auction_sync_enabled`` 偏好** (preferences.py:129-132 默认 False;
@@ -14,7 +15,8 @@
   ``origin="backfill"`` 只存在于终态 dict —— 湖无 provenance 列 (AQ-01..06 不加,
   provenance 即分区存在性)。
 - 每 symbol 串行 1 请求 (上游带宽上限); ``sleep_between_batches(i, rpm)`` 限速。
-- 上游显式 429/限速异常 → 指数退避重试 (R1)。
+- 上游显式 429/限速异常 → 指数退避重试 (R1); 策略封锁 (SourceBlockedError,
+  HTTP 403/配额窗) 非瞬时 → 零重试直接上抛。
 - 本模块不 import 执行族模块 (broker/order/trade/execution/portfolio/position/
   account/transaction) 与 ``strategy_cache`` (E1/E3 形, 32-03 守卫目标)。
 
@@ -22,7 +24,7 @@
 - 成功 (8 键): ``requested`` / ``backfilled_symbols`` / ``rows`` / ``dates`` /
   ``failed`` / ``failed_symbols`` / ``origin`` / ``rpm``。
 - fail-closed (9 键): 上述 8 键 + ``reason`` (source_unavailable / no_provider /
-  preflight_empty / no_scope / 预检异常串前 200 字)。
+  preflight_empty / no_scope / source_blocked / 预检异常串前 200 字)。
 """
 from __future__ import annotations
 
@@ -33,6 +35,7 @@ from datetime import date
 
 import polars as pl
 
+from app.data_providers.base import SourceBlockedError
 from app.tickflow.rate_limits import sleep_between_batches
 from app.tickflow.repository import KlineRepository
 
@@ -62,6 +65,14 @@ def _fail_closed(rpm: int, reason: str) -> dict:
         "origin": "backfill",
         "rpm": rpm,
     }
+
+
+def _emit_fail_closed(emit, reason: str) -> None:
+    """fail-closed 提前返回的终态进度行 (HON-02): 进度永不冻结。
+
+    与 ``_fail_closed`` 同 reason 字面量 —— 终态 dict 与 emit 一致性由测试断言。
+    """
+    emit("auction_backfill", 0, f"fail-closed: {reason}")
 
 
 def _lake_distinct_symbols(repo: KlineRepository, data_dir) -> list[str]:
@@ -137,11 +148,17 @@ def _fetch_auction(provider, sym: str, start_d, end_d) -> pl.DataFrame:
 
     ``start_d``/``end_d`` 为 ``datetime.date`` 对象 (provider 契约
     ``start_date.strftime`` —— xyz_provider.get_auction:189)。
+
+    策略封锁 (SourceBlockedError, HTTP 403/配额窗) 非瞬时 —— R1 绝不重试,
+    先捕直接重抛 (即便消息含「带宽」等 _RATE_LIMIT_MARKERS 重叠词也不误重试;
+    2h 配额窗 × 5537 symbols 退避放大即 DoS)。
     """
     wait = _RETRY_BASE_WAIT_S
     for attempt in range(_RETRY_ATTEMPTS + 1):
         try:
             return provider.get_auction([sym], start_d, end_d)
+        except SourceBlockedError:
+            raise
         except Exception as e:  # noqa: BLE001
             msg = str(e)
             if attempt >= _RETRY_ATTEMPTS or not any(
@@ -197,6 +214,7 @@ def run_auction_backfill(
 
     # AQ-03a 探针闸门: 非 available → 0 写 fail-closed
     if resolve_auction_probe().status != AuctionProbeStatus.available:
+        _emit_fail_closed(emit, "source_unavailable")
         return _fail_closed(rpm, "source_unavailable")
 
     # AQ-03b 范围对齐: dates = kline_daily 物理分区目录 ∩ [start,end] (ISO 字典序)
@@ -221,10 +239,12 @@ def run_auction_backfill(
     if symbols is None:
         symbols = _lake_distinct_symbols(repo, data_dir)
     if not symbols or not aligned_dates:
+        _emit_fail_closed(emit, "no_scope")
         return _fail_closed(rpm, "no_scope")
 
     provider = _first_auction_provider()
     if provider is None:
+        _emit_fail_closed(emit, "no_provider")
         return _fail_closed(rpm, "no_provider")
 
     # 有效范围 (provider 要求 start_date 非 None; aligned_dates 此处非空)。
@@ -261,10 +281,15 @@ def run_auction_backfill(
     # AQ-03a 预检可达性: 循环前一次真实请求; 异常 / 空且有本地覆盖 → 0 写 fail-closed
     try:
         pre = _fetch_auction(provider, symbols[0], eff_start_date, eff_end_date)
+    except SourceBlockedError as e:
+        logger.warning("auction backfill preflight source blocked: %s", e)
+        return _fail_closed(rpm, "source_blocked")
     except Exception as e:  # noqa: BLE001
         logger.exception("auction backfill preflight failed: %s", e)
+        _emit_fail_closed(emit, str(e)[:_ERROR_DETAIL_MAX])
         return _fail_closed(rpm, str(e)[:_ERROR_DETAIL_MAX])
     if pre.is_empty() and _has_daily_rows(repo, symbols[0], eff_start, eff_end):
+        _emit_fail_closed(emit, "preflight_empty")
         return _fail_closed(rpm, "preflight_empty")
 
     requested = len(symbols)
@@ -301,6 +326,10 @@ def run_auction_backfill(
             written = write_auction_partitions(df, repo)
             backfilled += 1
             rows += written  # 窗口过滤后行数; 0 → 仍记 backfilled, rows 不加 (诚实)
+        except SourceBlockedError as e:
+            logger.warning("auction backfill %s source blocked: %s", sym, e)
+            failed += 1
+            failed_symbols.append({"symbol": sym, "reason": "source_blocked"})
         except Exception as e:  # noqa: BLE001
             logger.exception("auction backfill %s failed: %s", sym, e)
             failed += 1
