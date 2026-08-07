@@ -373,6 +373,36 @@ def _evaluate_strategy_rows(
 # ── 覆盖统计 (BT-08 符号级诚实覆盖) ────────────────────────────────────────
 
 
+def _lake_auction_symbol_count(data_dir: Path, start: date, end: date) -> int:
+    """湖覆盖 digest 分量 (RC-01): [start, end] 窗口内 kline_auction 去重 symbol 数。
+
+    镜像 _coverage_symbols 的分区扫描语义逐字 (glob date=*/part.parquet,
+    fromisoformat 目录名解析, 坏名/空分区/缺 symbol 列跳过, 窗口过滤) —
+    保证 digest 与 coverage.symbols.auction_symbol_count 报告值恒等 (零 view-vs-scan 漂移)。
+    只读, 零写面 (E2 守卫安全); 异常/空湖 → 0 (fail-closed 确定性)。"""
+    base = data_dir / "kline_auction"
+    symbols: set[str] = set()
+    if base.exists():
+        for part in sorted(base.glob("date=*/part.parquet")):
+            name = part.parent.name
+            if not name.startswith("date="):
+                continue
+            try:
+                d = date.fromisoformat(name[len("date="):])
+            except ValueError:
+                continue
+            if not (start <= d <= end):
+                continue
+            try:
+                f = pl.read_parquet(part)
+            except Exception:  # noqa: BLE001 — 只读统计 fail-closed 跳过
+                continue
+            if f.is_empty() or "symbol" not in f.columns:
+                continue
+            symbols.update(f["symbol"].unique().to_list())
+    return len(symbols)
+
+
 def _coverage_symbols(
     data_dir: Path,
     start: date,
@@ -510,7 +540,13 @@ def run_full_backtest(
         params_snapshot[sid] = {p["id"]: p["default"] for p in s.meta.get("params", [])}
     strategy_version = strategy_fingerprint(engine)
     created_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    run_id = _compute_run_id(ids, eff_start, eff_end, params_snapshot, strategy_version, symbols)
+    # ⑤-1 湖覆盖 digest (RC-01): 同命令 + 湖覆盖变化 → 新 run_id (防陈旧数据幂等跳过)
+    lake_digest = (
+        _lake_auction_symbol_count(data_dir, eff_start, eff_end),
+        len(auction_enabled_dates),
+    )
+    run_id = _compute_run_id(ids, eff_start, eff_end, params_snapshot, strategy_version, symbols,
+                             lake_digest=lake_digest)
 
     # ⑥ 逐策略评估
     strategy_results: list[dict] = []
@@ -560,6 +596,7 @@ def run_full_backtest(
             "params": params_snapshot,
             "strategy_version": strategy_version,
             "symbols": sorted(symbols or []),
+            "lake_coverage": list(lake_digest),
         },
         sort_keys=True,
         ensure_ascii=False,
@@ -618,14 +655,21 @@ def _compute_run_id(
     params_snapshot: dict,
     strategy_version: str,
     symbols: list[str] | None,
+    *,
+    lake_digest: tuple[int, int] | None = None,
 ) -> str:
     """确定性运行 id (时间无关, 幂等身份锚点):
 
     sha1(sorted(strategy_ids) | start.isoformat | end.isoformat |
-    json(params_snapshot, sort_keys) | strategy_version | sorted(symbols))[:12]。
+    json(params_snapshot, sort_keys) | strategy_version | sorted(symbols)
+    [| lake:auction_symbol_count:auction_enabled_dates])[:12]。
 
     symbols 纳入哈希 (对 RESEARCH §6 公式的加固): 稀疏 2-symbol 真列运行与全市场
     运行绝不共 run_id, 防幂等跳过遮蔽小宇宙运行。on_progress/job_id 不参与。
+
+    湖覆盖 digest 纳入哈希 (RC-01, 2026-08-07 实测缺口): 同命令 + 湖回填后
+    覆盖变化 → 新 run_id, 防幂等跳过静默保留陈旧数据; 同湖同输入 → 仍幂等同 id
+    (digest 对湖态确定性)。lake_digest=None → 修复前 blob (向后兼容缺省)。
     """
     blob = (
         "|".join(sorted(strategy_ids))
@@ -635,6 +679,8 @@ def _compute_run_id(
         + "|" + strategy_version
         + "|" + "|".join(sorted(symbols or []))
     )
+    if lake_digest is not None:
+        blob += f"|lake:{lake_digest[0]}:{lake_digest[1]}"
     return hashlib.sha1(blob.encode("utf-8")).hexdigest()[:12]
 
 
@@ -693,7 +739,8 @@ def _build_manifest(
 
     origin 固定 'research' (与 {eod,backfill,manual} 池词汇区分); minute_note 承载
     BT-10 分钟确认维度诚实受限说明; fingerprint = run 身份输入的确定性 json
-    (与 _compute_run_id 输入同构, 幂等跳过判据)。"""
+    (与 _compute_run_id 输入同构 — 含 RC-01 lake_coverage digest 成员 —
+    幂等跳过判据)。"""
     return {
         "run_id": run_id,
         "origin": _ORIGIN,

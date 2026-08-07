@@ -399,6 +399,23 @@ def test_full_backtest_deterministic_run_id_idempotent(repo_env):
     r5 = run_full_backtest(repo, engine, strategy_ids=["auction_bullish"])
     assert r5["run_id"] != r1["run_id"]
 
+    # 湖覆盖变化 → 异 run_id (RC-01: 同命令 + 湖新增分区 → 新鲜 run_id, 绝不幂等跳过)
+    _write_auction_partition(
+        data_dir, d2,
+        _auction_rows(d2, {
+            "000001.SZ": (5_000_000.0, 2_000_000.0),
+            "000002.SZ": (5_000_000.0, 2_000_000.0),
+        }),
+    )
+    r6 = run_full_backtest(repo, engine)  # 同命令, 湖新增 d2 分区 (enabled dates 2→3)
+    assert r6["run_id"] != r1["run_id"]
+    assert r6["wrote"] is True
+    # 同湖同命令 → 幂等 (RC-01: 同覆盖 reused, part 不重写)
+    r7 = run_full_backtest(repo, engine)
+    assert r7["run_id"] == r6["run_id"]
+    assert r7["wrote"] is False and r7["reused"] is True
+    assert r7["status"] == "reused"
+
     # 无 .tmp 残留; part.parquet + manifest 可读
     assert list((data_dir / "backtest_results").rglob("*.tmp")) == []
     rows = pl.read_parquet(part_path)
@@ -409,6 +426,25 @@ def test_full_backtest_deterministic_run_id_idempotent(repo_env):
     )
     assert manifest["fingerprint"] and manifest["run_id"] == r1["run_id"]
     assert "start" in manifest["fingerprint"] and "symbols" in manifest["fingerprint"]
+
+
+def test_full_backtest_run_id_lake_digest_tracks_coverage(repo_env):
+    """湖覆盖 digest 是 run_id 身份成员 (RC-01): 同输入 + 异 digest → 异 run_id;
+    同 digest → 同 run_id; 缺省 None → 旧 blob (向后兼容); 12-hex 契约不变。"""
+    from app.services.auction_backtest import _compute_run_id
+    import re
+    kw = dict(strategy_ids=["auction_bullish"], start=date(2026, 3, 20),
+              end=date(2026, 3, 21), params_snapshot={}, strategy_version="v1",
+              symbols=["000001.SZ"])
+    sparse = _compute_run_id(**kw, lake_digest=(2, 2))
+    full = _compute_run_id(**kw, lake_digest=(37, 248))
+    sparse2 = _compute_run_id(**kw, lake_digest=(2, 2))
+    legacy = _compute_run_id(**kw)  # None → 修复前 blob (向后兼容缺省)
+    assert sparse != full          # 覆盖变化 → 新鲜 run_id
+    assert sparse == sparse2       # 同覆盖 → 幂等同 id
+    assert legacy != sparse        # digest 成员改变身份 (修复即语义翻转)
+    for rid in (sparse, full, legacy):
+        assert re.fullmatch(r"[0-9a-f]{12}", rid), "run_id 前缀 12-hex 契约"
 
 
 # ================================================================
