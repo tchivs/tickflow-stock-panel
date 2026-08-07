@@ -1,42 +1,41 @@
-# Requirements: AthenaQuant v2.3 数据纵深解锁
+# Requirements: AthenaQuant v2.4 全量数据解锁
 
-**Defined:** 2026-08-06
+**Defined:** 2026-08-07
 **Core Value:** An investor can turn reliable market data and their own holdings into an auditable, actionable research and monitoring workflow without operating multiple disconnected tools.
 
-## v2.3 Requirements
+## v2.4 Requirements
 
-Requirements for the v2.3 milestone. Each maps to a roadmap phase. Research basis: `.planning/research/v2.3-data-depth/SUMMARY.md` (auction backfill OPEN via xyz MCP — 实测 248 交易日真实集合竞价;minute backfill CLOSED;OQ-1 backfill machinery exists;R13 already fixed in code). Cross-cutting guards: zero new runtime deps, honest provenance (`origin=backfill`/`data_gate`/column-absence-never-filled), POOL-03 zero-execution AST guard, user `Watchlist.tsx` zero-touch.
+Requirements for the v2.4 milestone. Each maps to a roadmap phase. Research basis: `.planning/research/v2.4-full-universe/SUMMARY.md` (full-universe auction backfill FEASIBLE — measured 0.96s/request, 3.5-5.5h, BJ 333 upstream-empty → 94.0% ceiling; real-column rerun is a 2.3s compute but run_id fingerprint misses lake coverage; BT-10 minute wiring is pure-code sandbox-implementable; D8 stale container proven, build+boot preflight sandbox-executable). Cross-cutting guards: zero new runtime deps, honest provenance (`empty_response` ledger / `rows_present < expected` partial framing / coverage ≤94.0% never claimed 100%), POOL-03 zero-execution AST guard, user `Watchlist.tsx` zero-touch.
 
-### 竞价历史回填 (Auction History Backfill) — Phase 32
+### 全量竞价回填 (Full-Universe Auction Backfill) — Phase 36
 
-- [ ] **AQ-01**: The xyz provider declares auction capability — `ProviderCapabilities.auction = True` on `xyz_provider` plus a `get_auction(symbols, start_date, end_date)` method mapping `stockdb_get_call_auction` rows to canonical columns (`code→symbol` with `.SZ/.SH` suffix per `kline_daily` convention, `time→datetime`, `volume→auction_volume`, `money→auction_amount`, `current→auction_virtual_price`); `auction_probe._default_sources` auto-discovers it so `resolve_auction_probe() == available`, and the existing EOD `sync_and_persist_auction` live path unblocks without new wiring.
-- [ ] **AQ-02**: A backfill job service `auction_backfill.py` mirrors the `pool_backfill`/`extend_history` shape — single-flight, job_store tracking, progress emit, cooperative cancel — with trigger `POST /api/kline/auction/backfill` (operator surface, not scheduled).
-- [ ] **AQ-03**: Honest gates — (a) source reachable and returns in-window rows for the requested range, else 0 writes + fail-closed record; (b) only writes dates where a `kline_daily` partition exists (auction columns are the supplement face of daily K — never phantom dates); (c) per-symbol failure recorded and skipped, terminal state reflects partial failure honestly.
-- [ ] **AQ-04**: Idempotent atomic writes reusing the `auction_sync` write seam (555..565 window predicate, canonical 4+2 columns, partition merge-upsert `unique(["symbol","datetime"], keep="last")`, `.tmp` atomic rename); `auction_unmatched_volume` is absent from upstream → the column stays absent, never 0-filled, derived `auction_unmatched_amount` remains unavailable under the real source (honest column absence).
-- [ ] **AQ-05**: Rate limiting and cancel — upstream enforces 1 symbol/request; the job serializes symbols with pacing (reuse `tickflow/rate_limits` chunked/sleep patterns), progress + cooperative cancel via job_store; full-universe ~5500 symbols is a multi-hour operator run, subset-scoped runs supported.
-- [ ] **AQ-06** (P2): Minute-history backfill is formally deferred with the closed evidence recorded (xyz 1m ≈ 21 trading days, ifzq/sina trailing windows, TickFlow minute gated at pro+) — `kline_minute` keeps incremental ≤30-day sync (`sync_and_persist_minute` unchanged); deferral documented in docs/features.md.
+- [ ] **FA-01**: Long-job timeout exemption — `job_store.create(timeout_s=...)` persists a per-job timeout; `reap_stale()` honors `j.get("timeout_s", STALE_JOB_TIMEOUT_S)`; the auction backfill API passes `timeout_s=21600` (6h). A backfill job running past the old 600s ceiling is no longer reaped mid-run (regression test: fake job older than 600s with `timeout_s=21600` survives `reap_stale`; the 600s self-kill trap at `STALE_JOB_TIMEOUT_S` + cooperative-cancel break is closed).
+- [ ] **FA-02**: Resume/only-missing — `run_auction_backfill(only_missing=True)` pre-scans `kline_auction` coverage over the aligned date set (`SELECT symbol, COUNT(*) … GROUP BY symbol`, mirroring `_lake_distinct_symbols`); fully-covered symbols are skipped; partial coverage (interrupted residue) is re-fetched; the API body accepts `only_missing`; idempotent merge-upsert semantics preserved.
+- [ ] **FA-03**: Operator CLI `backend/scripts/auction_backfill.py` — mirrors `scripts/auction_backtest.py` conventions: `--symbols|--all`, `--start`, `--end`, `--rpm`, `--only-missing`; job_id=None → no job_store (no reap/single-flight); per-symbol progress to stdout; terminal dict (8 keys, failure + `failed_symbols` ledger) written to a JSON file; detached full-universe run carrier.
+- [ ] **FA-04**: Sandbox full-universe run — detached CLI executes the full 5537-symbol × 248-day backfill (3.5-5.5h observed); acceptance: backfilled_symbols ≥ 5200 (SZ/SH 5204; BJ 333 honestly recorded as `empty_response`), rows ≈ 1,290,592, lake = 248 partitions × ~5204 rows, no `.tmp` residue; cross-check sampled `auction_virtual_price` == `kline_daily.open` (≥3 dates, ≥3 symbols); top-up via `--only-missing` until stable.
+- [ ] **FA-05**: BJ honest ceiling — all 333 BJ symbols (920xxx) upstream-empty are recorded in `failed_symbols` with reason `empty_response` (never retried-forever, never fabricated); coverage reported ≤ 94.0% honestly (never claimed 100%); documentation stance records the 5 alternative code formats tested and the upstream gap.
+- [ ] **FA-06** (P2): EOD interplay regression — after the full backfill, EOD `sync_and_persist_auction` for covered symbols is an idempotent no-op crop (re-write leaves lake row count unchanged); cross-process write discipline documented (backfill scheduled outside the EOD run_all window; in-process run-slot serialization unchanged).
 
-### 股池历史回填 (OQ-1 Pool Backfill) — Phase 33
+### 全量真列回测重跑 (Full Real-Column Backtest Rerun) — Phase 37
 
-- [ ] **PB-01**: Sandbox subset backfill verified end to end — existing `POST /api/pipeline/backfill` runs 5-10 gap days on the enriched history: `snapshot_origin='backfill'` provenance on partitions, `strategy_cache` byte-identical (D2), `/pool/history` renders the backfilled dates, re-run is idempotent (gap set = partition diff, already-run dates skipped).
-- [ ] **PB-02**: Full-248-day operator runbook (deploy-gated) — documented procedure + progress/cancel/limits (`max_days` 1..500, single-flight, ~20-120min / 79-693MiB storage estimate), verified mechanics on the sandbox subset.
-- [ ] **PB-03** (P2): PIT interplay — `/pool/history` on backfilled dates resolves concept attribution via `_build_concept_map` as_of with honest `current_snapshot` fallback (ext_history is still EOD-forward-only; no forgery).
-- [ ] **PB-04**: `premarket_results` honest gap documented — directory creation is deploy-gated (09:26 job, non-fixture scheduler) and data-gated (live 09:15-09:25 feed); no sandbox path exists; recorded in docs, not fabricated.
+- [ ] **RC-01**: run_id lake-coverage fingerprint — `_compute_run_id` (auction_backtest.py:614-640) includes a lake coverage digest (e.g. `auction_symbol_count` + `len(auction_enabled_dates)`); same inputs + different lake coverage → different run_id; same lake → still idempotent `reused=True`. Regression test extends `test_full_backtest_deterministic_run_id_idempotent` (same input + coverage change → fresh run_id; same coverage → reused).
+- [ ] **RC-02**: Full-market real-column rerun — CLI full-market 248-day run post-backfill: `coverage.symbols` flips from 0.036% to ≥ 0.94 (auction_symbol_count ≈ 5204/5537); the 4 auction-column-gated strategies (fast_grab/allround/t1_flash/alpha) real-branch hits grow 12 → thousands+; EOD 4 strategies hits unchanged (329,087); `auction_intraday_confirm` hits unchanged (52,591, filter consumes no auction columns by design); total runtime ≤ 10s measured.
+- [ ] **RC-03**: Honest coverage reporting — `rows_present < expected` shown as honest partial (no interpolation); coverage ratio framed as backfilled/5537; intraday_confirm annotated in the run summary as `branch=real` without auction-column consumption (BT-10 note, semantics never silently changed); BT-04 forward formulas and `n_missing_outcomes` counting unchanged (verifier spot-check to 9dp).
+- [ ] **RC-04** (P2): Persistence & read-only surface at scale — `backtest_results` run_id directories (40-60 万行 part.parquet) queryable via `GET /api/research/backtest/{run_id}`; `--force` escape hatch bypassing the fingerprint check for operator reruns; AST guard E3 (mirror `test_pool_hub`) still green.
 
-### 竞价策略全量回测 (BT-07 Full Auction Backtest) — Phase 34
+### 分钟确认接线 BT-10 (Minute Confirm Wiring) — Phase 38
 
-- [ ] **BT-07**: Full auction backtest unlocks (v2.2-deferred; gate = `kline_auction` aligned with `kline_daily` per AQ-03) — the 9 auction/pre-market strategies run over the 248-day real-column panel (auction cols + daily K + concept PIT as_of), branches real/derived/eod mutually exclusive per BT-05, honest coverage and `n_missing` counting per BT-04 forward semantics.
-- [ ] **BT-08**: The validation report real branch activates — `GET /api/research/auction/validation` transitions from `data_gate:"empty"` to `"available"` when backfilled partitions exist; real-column strategies report real rows (never derived-downgraded), derived/EOD branches stay labeled.
-- [ ] **BT-09**: Backtest results persist to the `backtest_results` lake (origin, params, per-date rows) with a read-only query surface; zero-execution AST guard maintained (mirror `test_pool_hub` E3 — GET-only, never writes `strategy_cache`/`screener_results`).
-- [ ] **BT-10** (P2): Minute-dependent confirm dimensions documented as honestly limited (`kline_minute` historical CLOSED) — backtest output notes the limitation where a strategy's confirmation window would use minute bars.
+- [ ] **MN-01**: `make_minute_loader(data_dir)` factory — reads `kline_minute/date={as_of}/part.parquet` canonical columns, filters candidate symbols, sorts; missing partition → empty frame (fail-closed, no exception masking).
+- [ ] **MN-02**: Both construction sites wired — `main.py:562-565` (app engine) and `advanced/governed_runner.py:63-66` (research runner) pass `minute_loader`; empty-lake behavior byte-identical to today (required-strategy → empty StrategyResult; optional → confirm skipped, core daily pool kept).
+- [ ] **MN-03**: Hermetic tests — production factory + fixture partitions: empty-lake behavior-keep; partition-present lights `auction_intraday_confirm` with single-point truncation `datetime.time() <= evaluation_time` (T-21-01: no input after confirmation moment); loader read-only (zero writes to `kline_minute`); research/validation reports keep `minute_confirm='not_applied'`.
+- [ ] **MN-04** (P2): Documentation sync — one status line in docs/features.md + docs/deploy-verification.md: wiring live in sandbox, lighting requires live-day lake writes (post-sync 15:30/manual, NOT intraday 09:45 — honest fail-closed).
 
-### 遗留补全与部署验证 (Legacy Completion & Deploy Verification) — Phase 35
+### 部署验证与残留 (Deploy Verification & Residue) — Phase 39
 
-- [ ] **LG-01**: R13 deterministic regression test — locks the EOD cache-refresh semantics already fixed in code (`daily_pipeline` refresh_cache-in-finally): after the 15:30/run-now pipeline, the repo latest-day enriched asset holds EOD close values, and the 15:40 recap's `change_pct` block computes from EOD (pre-EOD rule still honored when run early).
-- [ ] **LG-02**: CHART-04 stance documented — the honest `估算` (derived estimate) labeling already shipped is confirmed as the standing stance; re-evaluation gate recorded (external source providing `auction_unmatched_volume`/`auction_virtual_price` → tier-2 gate re-open).
-- [ ] **LG-03**: Consolidated deploy-verification checklist (8 items: D1 09:26 premarket cron+isolation, D2 15:30 EOD+cache+15:35 persist, D3 tier-2 real auction cols+lake+BT-07, D4 09:26 monitor payload/close semantics, D5 15:40 recap+LLM live-model, D6 R13 EOD-cache, D7 OQ-3 weekly concept-drift probe, D8 stance) with verify-where/pass-criteria/owner/sequencing — becomes the deployment operator's operating manual.
-- [ ] **LG-04** (P2): WATCH-04 batch-add extension — pool table row checkboxes + selection set + batch add to watchlist (pure frontend + e2e, reuses existing idempotent watchlist batch endpoint; `Watchlist.tsx` untouched).
-- [ ] **LG-05** (P2): OQ-3 concept-drift probe smoke — `backend/scripts/probe_concept_drift.py` offline path run once on the current ext snapshot (weekly multi-day report remains deploy-gated).
+- [ ] **DV-01**: D8 deploy-recipe preflight — `docker build` from repo HEAD + fresh container boot smoke on a scratch port (e.g. 3020) with a temp data dir: container boots, new endpoints present (auction backfill/backtest read-only/validation available), md5 parity vs the stale 3018 container documented; proves the rebuild recipe without touching the running stale container.
+- [ ] **DV-02**: Deploy checklist v2.4 refresh — docs/deploy-verification.md updated with measured facts (pilot latencies, full-backfill runtime + coverage 94%, container diff evidence, minute wiring status); `.planning` research ↔ docs parity check maintained (no `## ` header drift, content preserved).
+- [ ] **DV-03** (P2): Honest gap summary — consolidated gap doc: `premarket_results` double-gate (deploy + live 09:15-09:25 data), BJ upstream gap, minute live-day gate, AI-key default-off; each with evidence, owner, and trigger condition.
+- [ ] **DV-04** (P2): Observation-window plan — D1..D8 post-deploy execution calendar (which trading day each item opens; sequencing D4 after D1, D5 after D2, D7 at ≥5th trading day; D8 at rebuild) — the operator's schedule, not sandbox work.
 
 ---
 
@@ -44,24 +43,23 @@ Requirements for the v2.3 milestone. Each maps to a roadmap phase. Research basi
 
 | Phase | Requirement | Status |
 |-------|-------------|--------|
-| 32. 竞价历史回填 | AQ-01 | Complete |
-| 32. 竞价历史回填 | AQ-02 | Complete |
-| 32. 竞价历史回填 | AQ-03 | Complete |
-| 32. 竞价历史回填 | AQ-04 | Complete |
-| 32. 竞价历史回填 | AQ-05 | Complete |
-| 32. 竞价历史回填 | AQ-06 | Complete |
-| 33. 股池回填 OQ-1 | PB-01 | Complete |
-| 33. 股池回填 OQ-1 | PB-02 | Complete |
-| 33. 股池回填 OQ-1 | PB-03 | Complete |
-| 33. 股池回填 OQ-1 | PB-04 | Complete |
-| 34. 竞价回测解锁 | BT-07 | Complete |
-| 34. 竞价回测解锁 | BT-08 | Complete |
-| 34. 竞价回测解锁 | BT-09 | Complete |
-| 34. 竞价回测解锁 | BT-10 | Complete |
-| 35. 遗留补全与部署验证 | LG-01 | Complete |
-| 35. 遗留补全与部署验证 | LG-02 | Complete |
-| 35. 遗留补全与部署验证 | LG-03 | Complete |
-| 35. 遗留补全与部署验证 | LG-04 | Complete |
-| 35. 遗留补全与部署验证 | LG-05 | Complete |
+| 36. 全量竞价回填 | FA-01 | Planned |
+| 36. 全量竞价回填 | FA-02 | Planned |
+| 36. 全量竞价回填 | FA-03 | Planned |
+| 36. 全量竞价回填 | FA-04 | Planned |
+| 36. 全量竞价回填 | FA-05 | Planned |
+| 36. 全量竞价回填 | FA-06 | Planned |
+| 37. 全量真列回测重跑 | RC-01 | Planned |
+| 37. 全量真列回测重跑 | RC-02 | Planned |
+| 37. 全量真列回测重跑 | RC-03 | Planned |
+| 37. 全量真列回测重跑 | RC-04 | Planned |
+| 38. 分钟确认接线 BT-10 | MN-01 | Planned |
+| 38. 分钟确认接线 BT-10 | MN-02 | Planned |
+| 38. 分钟确认接线 BT-10 | MN-03 | Planned |
+| 38. 分钟确认接线 BT-10 | MN-04 | Planned |
+| 39. 部署验证与残留 | DV-01 | Planned |
+| 39. 部署验证与残留 | DV-02 | Planned |
+| 39. 部署验证与残留 | DV-03 | Planned |
+| 39. 部署验证与残留 | DV-04 | Planned |
 
-**Cross-cutting guards (apply to every phase):** zero new runtime dependencies · honest provenance (`origin=backfill`, `data_gate`, column absence never 0-filled) · POOL-03 zero-execution AST guard · `strategy_cache` single-as_of integrity · user `frontend/src/pages/Watchlist.tsx` never touched · no backfill forgery (upstream-limited items documented, not fabricated).
+**Cross-cutting guards (apply to every phase):** zero new runtime dependencies · honest provenance (`empty_response` ledger, coverage ≤94.0% never claimed 100%, `rows_present < expected` partial framing) · POOL-03 zero-execution AST guard · `strategy_cache` single-as_of integrity · user `frontend/src/pages/Watchlist.tsx` never touched · no backfill forgery (upstream-limited items documented, not fabricated).
