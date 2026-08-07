@@ -1,5 +1,19 @@
 # Milestones
 
+## v2.4 v2.4 (Shipped: 2026-08-07)
+
+**Phases completed:** 4 phases, 12 plans, 0 tasks
+
+**Key accomplishments:**
+
+- `.planning/phases/36-auction-full-backfill/36-02-PLAN.md`
+- Wave
+- Phase
+- Phase
+- Phase
+
+---
+
 ## v2.3 v2.3 (Shipped: 2026-08-06)
 
 **Phases completed:** 4 phases, 12 plans, 4 tasks
