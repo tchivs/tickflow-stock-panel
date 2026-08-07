@@ -82,6 +82,16 @@ class Settings(BaseSettings):
         description="Base URL of a running free-stockdb server (stockdb C++ query service)",
     )
 
+    # Local stockdb (本机 docker :8000, X-API-Key header-only 鉴权)
+    local_stockdb_url: str = Field(
+        default="http://127.0.0.1:8000",
+        description="Base URL of the local stockdb HTTP service (docker :8000)",
+    )
+    local_stockdb_api_key: str = Field(
+        default="",
+        description="Dedicated X-API-Key for stockdb (server STOCKDB_API_KEYS member); env LOCAL_STOCKDB_API_KEY",
+    )
+
     # AI
     ai_provider: str = "openai_compat"
     ai_base_url: str = "https://api.zhaji.dev/v1"

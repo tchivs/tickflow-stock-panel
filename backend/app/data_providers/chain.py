@@ -37,6 +37,20 @@ def free_stockdb_provider() -> FreeStockDBProvider:
     return provider
 
 
+def local_stockdb_provider():
+    """Return the shared local stockdb HTTP provider (lazy singleton)."""
+    from app.data_providers.stockdb_provider import StockDBProvider
+
+    provider = _provider_cache.get("local_stockdb")
+    if provider is None:
+        provider = StockDBProvider(
+            base_url=settings.local_stockdb_url,
+            api_key=settings.local_stockdb_api_key,
+        )
+        _provider_cache["local_stockdb"] = provider
+    return provider
+
+
 def xyz_provider():
     """Return the shared xyz online MCP provider (lazy singleton)."""
     from app.data_providers.xyz_provider import XYZProvider
@@ -66,6 +80,8 @@ def _get_provider(name: str):
         return get_tf("tickflow")
     if name == "free_stockdb":
         return free_stockdb_provider()
+    if name == "local_stockdb":
+        return local_stockdb_provider()
     if name == "fixture":
         from app.data_providers.fixture_provider import FixtureProvider
 
