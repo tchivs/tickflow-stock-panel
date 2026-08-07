@@ -21,7 +21,7 @@ from __future__ import annotations
 import logging
 import re
 import time
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -36,6 +36,9 @@ logger = logging.getLogger(__name__)
 
 # 服务端 freq 为 int 枚举 (kernel/minute.py)
 _MINUTE_UNIT = {"1m": 1, "5m": 5, "15m": 15, "30m": 30, "60m": 60}
+
+# tick 端点档位 60/min/key (实测, routes.py:607-620) — 与 daily/minute 的 120/min 分桶
+_TICKS_RPM = 60
 
 _SYMBOL_PREFIX_RE = re.compile(r"^(SH|SZ|BJ)(\d{6})$")
 _SYMBOL_SUFFIX_RE = re.compile(r"^(\d{6})\.(SH|SZ|BJ)$")
@@ -236,3 +239,19 @@ class StockDBProvider:
         return pl.DataFrame(rows).select(
             ["symbol", "datetime", "open", "high", "low", "close", "volume", "amount", "freq"]
         )
+
+    def get_ticks(self, symbol: str, trade_date: date) -> list[dict]:
+        """GET /v1/ticks/{symbol}?date=YYYYMMDD — 单 symbol 全天分笔 (原始 TickBar list)。
+
+        服务端 fetch-on-miss (kernel/service.py:488-490): 湖文件缺失 → 全窗口一次
+        采集落盘; 文件存在 → 只读不刷新。一次 GET 即决定当日文件内容 → **请求必带
+        ?date=T** (09:15 前无 date 服务端回退上一交易日, Pitfall 3)。60/min 档位
+        用进程级共享限速器对齐 (tick 服务端档位, 与 daily/minute 的 120/min 分桶)。
+        返回原始 JSON list (TickBar dict 原样, 零归一化) — 归一化交给采集层
+        (staging 契约单点)。typed 异常 (401/429/400) 走 ``_get_json`` 唯一请求面。
+        """
+        sleep_between_batches(0, _TICKS_RPM)
+        payload = self._get_json(f"/v1/ticks/{_to_prefix(symbol)}", {
+            "date": trade_date.strftime("%Y%m%d"),
+        })
+        return payload if isinstance(payload, list) else []

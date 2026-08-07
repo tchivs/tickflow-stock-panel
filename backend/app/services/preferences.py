@@ -143,6 +143,18 @@ def set_auction_sync_symbols(symbols: list[str]) -> list[str]:
     return clean
 
 
+def get_auction_sidecar_symbols() -> list[str]:
+    """盘中竞价采集 sidecar 白名单 (43-01, A2); 空列表 = 回落 watchlist 自选池。"""
+    return _normalize_symbol_list(load().get("auction_sidecar_symbols", []))
+
+
+def set_auction_sidecar_symbols(symbols: list[str]) -> list[str]:
+    """保存盘中竞价采集白名单, 返回规范化后的列表; 空列表 = 回落自选池。"""
+    clean = _normalize_symbol_list(symbols)
+    save({"auction_sidecar_symbols": clean})
+    return clean
+
+
 # ===== 数据源选择 =====
 #
 # 模型: 每个数据集 (daily/minute/realtime/adj_factor/financial) 一个「有序启用链」,
