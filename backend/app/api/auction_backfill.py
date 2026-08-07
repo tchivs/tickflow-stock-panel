@@ -88,7 +88,9 @@ async def auction_backfill(request: Request) -> dict:
 
     job_store.reap_stale()
     # 单飞: 复用任何活跃 (pending∨running) 任务, is_new=False 时不再调度新任务
-    job_id, is_new = job_store.create()
+    # FA-01: 6h 豁免覆盖实测 3.5-5.5h 全量回填 + 裕量; 缺省 600s 自愈回收对
+    # EOD/手动 run_all (分钟级) 语义不变 —— 池回填 /run 与管道 /run 端点不传。
+    job_id, is_new = job_store.create(timeout_s=21600)
     if not is_new:
         return {"status": "reused", "job_id": job_id}
 

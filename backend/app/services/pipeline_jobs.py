@@ -26,6 +26,10 @@ JobStatus = Literal["pending", "running", "succeeded", "failed"]
 # 运行超过此秒数视为卡死(reload 后孤儿 task / 网络读无限阻塞等)。
 # 由 reap_stale() 在 /run 和 /jobs/{id} 轮询端点检查 — 保证卡死后能自愈,
 # 无需用户再次点击「同步」。
+#
+# 该值同时是 reap_stale 的缺省超时 (fallback): 单个 job 可用 create(timeout_s=...)
+# 声明自己的超时 (如竞价回填的 6h 豁免, FA-01) —— reap 时 ``j.get("timeout_s",
+# timeout_s)`` 优先 per-job 值; 缺省 job 仍按 600s 回收, EOD/手动 run_all 语义不变。
 STALE_JOB_TIMEOUT_S = 600
 
 
@@ -96,7 +100,7 @@ class JobStore:
 
     # ===== lifecycle =====
 
-    def create(self) -> tuple[str, bool]:
+    def create(self, timeout_s: int | None = None) -> tuple[str, bool]:
         """单飞创建任务。返回 (job_id, is_new)。
 
         去重条件为 **pending ∨ running**(而非仅 running):`/run` 先 create() 再在
@@ -105,6 +109,12 @@ class JobStore:
         _active_id,导致两条全市场拉取同时读改写同一 parquet。纳入 pending 后该窗口关闭。
 
         is_new=False 表示复用了已有活跃任务,调用方**不得**再调度新的后台任务。
+
+        timeout_s: 可选 per-job 超时豁免 (秒)。非 None 时持久化到 job 记录,由
+        reap_stale() 优先采用 (``j.get("timeout_s", timeout_s)``); 缺省 None → 记录
+        不含该键 → 回收仍按调用方的 timeout_s (默认 STALE_JOB_TIMEOUT_S=600)。
+        长时间任务 (如竞价回填全量, FA-01) 用它声明 6h 豁免, 绕开 600s 自愈回收;
+        succeed()/fail() 整 dict 落盘, 该键随磁盘 round-trip 保留。
         """
         with self._lock:
             if self._active_id:
@@ -113,7 +123,7 @@ class JobStore:
                     return self._active_id, False
 
             job_id = uuid.uuid4().hex[:10]
-            self._active_jobs[job_id] = {
+            job = {
                 "id": job_id,
                 "status": "pending",
                 "stage": "init",
@@ -126,6 +136,9 @@ class JobStore:
                 "result": None,
                 "error": None,
             }
+            if timeout_s is not None:
+                job["timeout_s"] = timeout_s
+            self._active_jobs[job_id] = job
             self._active_id = job_id
             return job_id, True
 
@@ -135,7 +148,12 @@ class JobStore:
             if not j:
                 return
             j["status"] = "running"
-            j["started_at"] = datetime.now(UTC).isoformat(timespec="seconds") + "Z"
+            # naive UTC + "Z" (文档契约, 与 fail() 一致): reap_stale/_duration_s 均按
+            # "…Z" 解析 —— datetime.now(UTC) (aware) 会产出 "+00:00Z" 双偏移,
+            # fromisoformat 解析失败 → reap 静默失效 (修复: FA-01 路径实测发现)。
+            j["started_at"] = datetime.now(UTC).replace(tzinfo=None).isoformat(
+                timespec="seconds",
+            ) + "Z"
 
     def succeed(self, job_id: str, result: Any) -> None:
         with self._lock:
@@ -143,7 +161,9 @@ class JobStore:
             if not j:
                 return
             j["status"] = "succeeded"
-            j["finished_at"] = datetime.now(UTC).isoformat(timespec="seconds") + "Z"
+            j["finished_at"] = datetime.now(UTC).replace(tzinfo=None).isoformat(
+                timespec="seconds",
+            ) + "Z"
             j["progress"] = 100
             j["result"] = result
             j["duration_s"] = _duration_s(j)
@@ -230,6 +250,10 @@ class JobStore:
         在 /run 和 /jobs/{id} 轮询端点都会调用 — 保证卡死后任意轮询都能自愈,
         无需用户再次手动触发同步。reload 后的孤儿 task(内存里已无 job 记录)
         不在此处理:它们没有 active_id,只能靠 executor 线程自然结束或进程重启。
+
+        超时判定 per-job 优先 (FA-01): job 记录含 ``timeout_s`` 键 (create 时声明)
+        → 用该值豁免至其声明的上限 (如竞价回填 6h, 不再被 600s 缺省误杀);
+        记录无该键 → 用本参数 (缺省 STALE_JOB_TIMEOUT_S=600, EOD/手动 run_all 语义不变)。
         """
         with self._lock:
             jid = self._active_id
@@ -241,6 +265,7 @@ class JobStore:
             started = j.get("started_at")
             if not started:
                 return
+            per_job_timeout = j.get("timeout_s", timeout_s)
         # 时间计算放到锁外(避免 datetime 解析持锁)。
         # started_at 形如 "2026-07-04T12:00:00Z"(start() 用 datetime.utcnow 存)。
         # 两端都用 timezone-aware UTC 比较,避免 naive/aware 混用导致 TypeError。
@@ -249,7 +274,7 @@ class JobStore:
             elapsed = (datetime.now(start_dt.tzinfo) - start_dt).total_seconds()
         except Exception:  # noqa: BLE001
             return
-        if elapsed > timeout_s:
+        if elapsed > per_job_timeout:
             logger.warning("reap_stale: 强制取消卡死 job %s (已运行 %.0fs)",
                            jid, elapsed)
             self.fail(jid, f"超时自动取消 (运行 {int(elapsed)}s, 疑似卡死)")
