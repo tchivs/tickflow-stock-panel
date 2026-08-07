@@ -184,3 +184,95 @@ def test_200_empty_bars_is_legitimate_vacuum():
     p = _provider({"/v1/daily": {"SH600519": []}})
     df = p.get_daily(["SH600519"])
     assert df.is_empty()
+
+
+# -- 批语义 + 限频对齐 + 分钟端日语义 (LOCAL-01) ------------------------------
+
+
+def test_batch_endpoint_parses_sym_bars_dict():
+    """批响应 {sym: [bars]} dict: 两 symbol 行都在, 各自归一化 (后缀形态)."""
+    p = _provider({"/v1/daily": _load_fixture("daily_sh600519_20260805.json")})
+    df = p.get_daily(["SH600519", "SH600000"])
+    assert sorted(df["symbol"].unique().to_list()) == ["600000.SH", "600519.SH"]
+    assert len(df) == 2
+
+
+def test_get_daily_chunks_by_batch_size(monkeypatch):
+    """3 symbols + batch_size=2 -> 2 次 /v1/daily 调用, 首次 2 个末次 1 个."""
+    monkeypatch.setattr("app.data_providers.stockdb_provider.sleep_between_batches", lambda i, rpm: None)
+    p = _provider({"/v1/daily": {"SH600519": [], "SH600000": [], "SZ000001": []}}, batch_size=2)
+    p.get_daily(["600519.SH", "600000.SH", "000001.SZ"])
+    params = [params for _, params in p._client.calls]
+    assert len(params) == 2
+    assert params[0]["symbols"] == "SH600519,SH600000"
+    assert params[1]["symbols"] == "SZ000001"
+
+
+def test_sleep_between_batches_aligns_to_server_rpm(monkeypatch):
+    """进程级共享槽 rpm 对齐服务端 daily/minute 档位 (120/min)."""
+    calls: list[tuple[int, int]] = []
+    monkeypatch.setattr(
+        "app.data_providers.stockdb_provider.sleep_between_batches",
+        lambda i, rpm: calls.append((i, rpm)),
+    )
+    p = _provider({"/v1/daily": {"SH600519": [], "SH600000": []}}, batch_size=1)
+    p.get_daily(["600519.SH", "600000.SH"])
+    assert calls == [(0, 120), (1, 120)]  # 默认 rpm=120
+
+
+def test_minute_end_excludes_end_day(monkeypatch):
+    """分钟窗口不含 end 日 (实测 Pitfall 3): end 请求参数 = end_time + 1day."""
+    monkeypatch.setattr("app.data_providers.stockdb_provider.sleep_between_batches", lambda i, rpm: None)
+    p = _provider({"/v1/minute": {"SH600519": []}})
+    p.get_minute(["600519.SH"], end_time=datetime(2026, 8, 5))
+    params = p._client.calls[0][1]
+    assert params["end"] == "2026-08-06"
+    assert params["freq"] == 1  # 服务端 freq 为 int 枚举
+
+
+def test_daily_end_includes_end_day(monkeypatch):
+    """日K窗口含 end 日 (实测): end 请求参数原样传递."""
+    monkeypatch.setattr("app.data_providers.stockdb_provider.sleep_between_batches", lambda i, rpm: None)
+    p = _provider({"/v1/daily": {"SH600519": []}})
+    p.get_daily(["600519.SH"], end_time=datetime(2026, 8, 5))
+    assert p._client.calls[0][1]["end"] == "2026-08-05"
+
+
+def test_minute_bar_time_is_naive():
+    """分钟 bar_time aware +08:00 -> 输出 naive 北京墙钟 (无 tzinfo)."""
+    p = _provider({"/v1/minute": _load_fixture("minute_sh600519_20260805.json")})
+    df = p.get_minute(["SH600519"])
+    dt = df["datetime"][0]
+    assert dt == datetime(2026, 8, 5, 9, 30)
+    assert dt.tzinfo is None
+    assert "freq" in df.columns and df["freq"][0] == "1m"
+
+
+def test_429_retry_after_header_controls_wait(monkeypatch):
+    """Retry-After 头 (50s) 决定重试前等待; 重试成功后返回正常帧."""
+    sleeps: list[float] = []
+    monkeypatch.setattr("app.data_providers.stockdb_provider.time.sleep", lambda s: sleeps.append(s))
+    p = _provider({
+        "/v1/daily": [
+            (429, _load_fixture("error_429.json"), {"Retry-After": "50"}),
+            (200, _load_fixture("daily_sh600519_20260805.json"), {}),
+        ],
+    })
+    df = p.get_daily(["SH600519"])
+    assert sleeps == [50.0]
+    assert not df.is_empty()
+
+
+def test_429_retry_after_falls_back_to_body(monkeypatch):
+    """无 Retry-After 头 -> 回退 body retry_after (实测 50)."""
+    sleeps: list[float] = []
+    monkeypatch.setattr("app.data_providers.stockdb_provider.time.sleep", lambda s: sleeps.append(s))
+    p = _provider({
+        "/v1/daily": [
+            (429, _load_fixture("error_429.json"), {}),
+            (200, _load_fixture("daily_sh600519_20260805.json"), {}),
+        ],
+    })
+    df = p.get_daily(["SH600519"])
+    assert sleeps == [50.0]
+    assert not df.is_empty()
