@@ -89,6 +89,127 @@ def test_chain_returns_empty_when_all_empty(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 # ---------------------------------------------------------------------------
+# local_stockdb 链首 — gap-merge / 空帧回退 / 异常跳过 (LOCAL-04)
+# ---------------------------------------------------------------------------
+
+
+def _minute_rows(times: list[str]) -> pl.DataFrame:
+    """分钟帧: 湖内规范列 + freq (与 free_stockdb get_minute 输出形状同构)。"""
+    return pl.DataFrame(
+        {
+            "symbol": ["000001"] * len(times),
+            "datetime": [datetime.fromisoformat(t) for t in times],
+            "open": [1.0] * len(times),
+            "high": [1.1] * len(times),
+            "low": [0.9] * len(times),
+            "close": [1.0] * len(times),
+            "volume": [100.0] * len(times),
+            "amount": [1000.0] * len(times),
+            "freq": ["1m"] * len(times),
+        }
+    )
+
+
+def test_chain_local_stockdb_heads_gap_merge(monkeypatch: pytest.MonkeyPatch) -> None:
+    """local_stockdb 链首 + free_stockdb 互补: 按 (symbol,date) 去重合并 (LOCAL-04 日K)。"""
+    local = _FakeProvider("local_stockdb", {"daily": _daily_rows(["2024-01-02", "2024-01-03"])})
+    free = _FakeProvider("free_stockdb", {"daily": _daily_rows(["2024-01-03", "2024-01-04"])})
+
+    monkeypatch.setattr(
+        chain, "_get_provider",
+        lambda name: {"local_stockdb": local, "free_stockdb": free}[name],
+    )
+    merged = chain.fetch_with_chain(
+        "daily", lambda p: p.get_daily(["000001"]), providers=["local_stockdb", "free_stockdb"]
+    )
+    assert merged.height == 3
+    dates = sorted(merged["date"].cast(pl.Utf8).to_list())
+    assert dates == ["2024-01-02", "2024-01-03", "2024-01-04"]
+
+
+def test_chain_local_stockdb_heads_minute_gap_merge(monkeypatch: pytest.MonkeyPatch) -> None:
+    """local_stockdb 链首分钟面: 按 (symbol,datetime) 去重合并 (LOCAL-04 分钟 gap-merge 用例)。"""
+    local = _FakeProvider("local_stockdb", {
+        "minute": _minute_rows(["2024-01-02 09:31:00", "2024-01-02 09:32:00"]),
+    })
+    free = _FakeProvider("free_stockdb", {
+        "minute": _minute_rows(["2024-01-02 09:32:00", "2024-01-02 09:33:00"]),
+    })
+
+    monkeypatch.setattr(
+        chain, "_get_provider",
+        lambda name: {"local_stockdb": local, "free_stockdb": free}[name],
+    )
+    merged = chain.fetch_with_chain(
+        "minute", lambda p: p.get_minute(["000001"]), providers=["local_stockdb", "free_stockdb"]
+    )
+    assert merged.height == 3
+    times = sorted(merged["datetime"].to_list())
+    assert times == [
+        datetime.fromisoformat("2024-01-02 09:31:00"),
+        datetime.fromisoformat("2024-01-02 09:32:00"),
+        datetime.fromisoformat("2024-01-02 09:33:00"),
+    ]
+
+
+def test_chain_local_empty_falls_through(monkeypatch: pytest.MonkeyPatch) -> None:
+    """local 空帧 → 跳过 + free 补全 (空帧回退语义保持, 反向于全空用例)。"""
+    local = _FakeProvider("local_stockdb", {})
+    free = _FakeProvider("free_stockdb", {"daily": _daily_rows(["2024-01-02"])})
+
+    monkeypatch.setattr(
+        chain, "_get_provider",
+        lambda name: {"local_stockdb": local, "free_stockdb": free}[name],
+    )
+    merged = chain.fetch_with_chain(
+        "daily", lambda p: p.get_daily(["000001"]), providers=["local_stockdb", "free_stockdb"]
+    )
+    assert merged.height == 1
+    assert merged["date"].cast(pl.Utf8).to_list() == ["2024-01-02"]
+
+
+def test_chain_local_exception_skips_with_warning(monkeypatch: pytest.MonkeyPatch, caplog) -> None:
+    """local 抛 typed 鉴权错 → 跳过 + 日志 warning; free 兜底 (通道身份进日志, LOCAL-04)。"""
+    from app.data_providers.stockdb_provider import StockDBAuthError
+
+    class _AuthFailProvider(_FakeProvider):
+        def get_daily(self, symbols, start_time=None, end_time=None, **kwargs):  # noqa: ARG002
+            raise StockDBAuthError("invalid api key")
+
+    local = _AuthFailProvider("local_stockdb", {})
+    free = _FakeProvider("free_stockdb", {"daily": _daily_rows(["2024-01-02"])})
+
+    monkeypatch.setattr(
+        chain, "_get_provider",
+        lambda name: {"local_stockdb": local, "free_stockdb": free}[name],
+    )
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="app.data_providers.chain"):
+        merged = chain.fetch_with_chain(
+            "daily", lambda p: p.get_daily(["000001"]), providers=["local_stockdb", "free_stockdb"]
+        )
+    assert merged.height == 1
+    assert any(
+        "chain[daily]" in r.message and "local_stockdb" in r.message
+        for r in caplog.records
+    ), "通道身份未出现在 chain[daily] 日志行"
+
+
+def test_chain_builtin_heads_local_stockdb(monkeypatch: pytest.MonkeyPatch) -> None:
+    """默认链首: 未配置 provider_chains 时 daily/minute 链首均为 local_stockdb (LOCAL-04)。"""
+    from app.services import preferences
+
+    monkeypatch.setattr(preferences, "load", lambda: {})
+    daily = preferences.get_provider_chain("daily")
+    minute = preferences.get_provider_chain("minute")
+    assert daily[0] == "local_stockdb"
+    assert minute[0] == "local_stockdb"
+    assert chain.chain_for("daily")[0] == "local_stockdb"
+    assert chain.chain_for("minute")[0] == "local_stockdb"
+
+
+# ---------------------------------------------------------------------------
 # FreeStockDBProvider — HTTP protocol mapping
 # ---------------------------------------------------------------------------
 
@@ -433,3 +554,42 @@ def test_bucket_minutes_session_alignment() -> None:
     times = [r["datetime"].strftime("%H:%M") for r in buckets.to_dicts()]
     # 09:30 bucket holds 09:30-09:34; 11:30 and 13:00-13:04 form separate buckets.
     assert times == ["09:30", "11:30", "13:00"]
+
+
+# ---------------------------------------------------------------------------
+# /api/settings/data-sources — builtin 列表含 local_stockdb 条目 (LOCAL-04 注册面)
+# ---------------------------------------------------------------------------
+
+
+def test_settings_data_sources_builtin_lists_local_stockdb(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """GET /api/settings/data-sources: builtin 含 local_stockdb (datasets/health/base_url)。
+
+    镜像 test_auction_backfill._make_auction_app 最小 app; monkeypatch health_check
+    防真实网络 probe; monkeypatch custom 插件面防插件加载副作用。
+    """
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.api import settings as settings_api
+    from app.config import settings
+    from app.data_providers import chain as provider_chain
+    from app.data_providers import custom as custom_sources
+
+    monkeypatch.setattr(provider_chain, "health_check", lambda name: "ok")
+    monkeypatch.setattr(custom_sources, "list_plugins", lambda: [])
+    monkeypatch.setattr(custom_sources, "list_sources", lambda: [])
+    monkeypatch.setattr(custom_sources, "errors", lambda: [])
+    monkeypatch.setattr(custom_sources, "data_sources_dir", lambda: tmp_path / "data-sources")
+
+    app = FastAPI()
+    app.include_router(settings_api.router)
+    client = TestClient(app)
+
+    resp = client.get("/api/settings/data-sources")
+    assert resp.status_code == 200
+    body = resp.json()
+    entry = next((e for e in body["builtin"] if e["name"] == "local_stockdb"), None)
+    assert entry is not None, "builtin 列表缺少 local_stockdb 条目"
+    assert entry["datasets"] == ["daily", "minute"]
+    assert entry["health"] == "ok"
+    assert entry["base_url"] == settings.local_stockdb_url

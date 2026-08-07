@@ -45,6 +45,31 @@ def test_builtin_chain_sources_are_swappable(monkeypatch):
     assert preferences.get_realtime_data_provider() == "tencent"
 
 
+def test_local_stockdb_swappable_via_preferences(monkeypatch):
+    """local_stockdb 必须可被选为 daily 首选 (白名单回归锁, LOCAL-04)。
+
+    若 _ALLOWED_DATA_PROVIDERS 缺 local_stockdb, 保存后被 _sanitize_chain 过滤回
+    tickflow —— 「切换成功但实际永远走 tickflow」的假象 (Pitfall 4 回归)。
+    """
+    _clean_whitelist()
+    saved: list[dict] = []
+
+    def fake_save(updates: dict) -> dict:
+        saved.append(updates)
+        return updates
+
+    monkeypatch.setattr(preferences, "save", fake_save)
+    monkeypatch.setattr(preferences, "load", lambda: saved[-1] if saved else {})
+
+    preferences.save({"daily_data_provider": "local_stockdb"})
+    assert preferences.get_daily_data_provider() == "local_stockdb", (
+        "local_stockdb 被白名单过滤回 tickflow —— 前端切换将假成功"
+    )
+    # 白名单外的未知源仍须安全回退 (既有语义不破坏)。
+    preferences.save({"daily_data_provider": "nonexistent"})
+    assert preferences.get_daily_data_provider() == "tickflow"
+
+
 def test_unknown_provider_falls_back_to_builtin_chain(monkeypatch):
     """白名单外的未知源须安全回退: 不再作为首选, 内置链兜底 (tickflow 在链末)。"""
     _clean_whitelist()
