@@ -15,7 +15,8 @@
 - 186 天 guard 不适用 (D-06): 本回测是单面板向量化扫描, 覆盖由 enriched 缓存
   边界决定, 窗口回夹 + requested/effective 双字段回显。
 - 分钟限制注解 (BT-10): kline_minute 历史 CLOSED, 逐行 minute_confirm="not_applied",
-  auction_intraday_confirm 恒空 —— 确认维度诚实受限, 本 CLI 不假装生效。
+  auction_intraday_confirm minute 确认恒空 (其日线初筛仅消费 open_gap, 不消费竞价列) ——
+  确认维度诚实受限, 本 CLI 不假装生效。
 - ``--rpm`` 为保留参数 (当前无操作): 本地向量化单面板回测无需限速 (与竞价回填
   CLI 对称, 诚实不假装生效)。
 
@@ -179,6 +180,11 @@ def _print_summary(result: dict, elapsed: float) -> None:
         f"ratio={syms['symbol_coverage_ratio']:.2%} "
         f"rows_present={syms['auction_rows_present']}/{syms['auction_rows_expected']}"
     )
+    if any(s["id"] == "auction_intraday_confirm" for s in result["strategies"]):
+        print(
+            "note: auction_intraday_confirm branch=real 但日线初筛仅消费 open_gap "
+            "(enriched 派生列) — hits 不随湖覆盖增长 (52,591 恒定), BT-10 注"
+        )
     print(f"path: {result['path']}  rows: {result['rows'].height}")
     print("BT-10: minute_confirm=not_applied — kline_minute 历史 CLOSED (确认维度诚实受限)")
     print(f"elapsed: {elapsed:.1f}s")

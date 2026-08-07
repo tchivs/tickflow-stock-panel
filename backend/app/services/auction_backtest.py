@@ -64,7 +64,11 @@ _WARMUP_DAYS = 14
 _ORIGIN = "research"
 # BT-10 逐行分钟确认注解
 _MINUTE_CONFIRM = "not_applied"
-_MINUTE_NOTE = "kline_minute 历史 CLOSED — 确认维度诚实受限; auction_intraday_confirm 恒空 (BT-10)"
+_MINUTE_NOTE = (
+    "kline_minute 历史 CLOSED — 确认维度诚实受限; auction_intraday_confirm minute 确认恒空 (BT-10); "
+    "auction_intraday_confirm branch=real 日线初筛仅消费 open_gap (enriched 派生列, 非竞价列) — "
+    "其 hits 不随湖覆盖增长 (52,591 全市场恒定, 2026-08-07 实测)"
+)
 
 # 写根 (E2): 本模块唯一写面
 _BACKTEST_ROOT = "backtest_results"

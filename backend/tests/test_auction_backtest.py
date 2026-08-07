@@ -486,6 +486,7 @@ def test_full_backtest_minute_annotation_and_manifest(repo_env):
     assert manifest["origin"] == "research"
     assert manifest["run_id"] == res["run_id"]
     assert "kline_minute" in manifest["minute_note"]
+    assert "不随湖覆盖增长" in manifest["minute_note"]  # RC-03: intraday_confirm 无竞价列消费注记
     assert set(manifest["window"]) == {
         "requested_start", "requested_end", "effective_start", "effective_end",
     }
