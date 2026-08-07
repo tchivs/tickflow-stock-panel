@@ -18,8 +18,8 @@ from app.data_providers.free_stockdb_provider import FreeStockDBProvider
 logger = logging.getLogger(__name__)
 
 _BUILTIN_CHAIN: dict[str, list[str]] = {
-    "daily": ["free_stockdb", "ifzq", "xyz", "tickflow"],
-    "minute": ["free_stockdb", "ifzq", "sina", "xyz", "tickflow"],
+    "daily": ["local_stockdb", "free_stockdb", "ifzq", "xyz", "tickflow"],
+    "minute": ["local_stockdb", "free_stockdb", "ifzq", "sina", "xyz", "tickflow"],
     "adj_factor": ["free_stockdb", "tickflow"],
     "financial": ["tickflow"],
     "instruments": ["tickflow"],
@@ -164,10 +164,13 @@ def health_check(name: str) -> str:
     """Lightweight health probe for a chain provider. Returns ok/warn/error."""
     if name == "tickflow":
         return "ok"
-    if name in {"free_stockdb", "xyz"}:
+    if name in {"free_stockdb", "local_stockdb", "xyz"}:
         try:
             provider = _get_provider(name)
-            probe = provider.get_daily(["000001"]) if hasattr(provider, "get_daily") else None
+            # 本机 stockdb 服务端 schemas.py:25 要求前缀形态符号 (SH600519),
+            # 裸 "000001" 会 400 → 误报 error。
+            probe_symbol = "SH600519" if name == "local_stockdb" else "000001"
+            probe = provider.get_daily([probe_symbol]) if hasattr(provider, "get_daily") else None
             return "ok" if probe is not None and not probe.is_empty() else "warn"
         except Exception as e:
             logger.warning("health[%s]: %s", name, e)

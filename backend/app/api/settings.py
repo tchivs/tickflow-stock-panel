@@ -440,6 +440,13 @@ def list_data_sources() -> dict:
             "base_url": settings.free_stockdb_url,
         },
         {
+            "name": "local_stockdb",
+            "display_name": "Local StockDB (本机)",
+            "datasets": ["daily", "minute"],
+            "health": provider_chain.health_check("local_stockdb"),
+            "base_url": settings.local_stockdb_url,
+        },
+        {
             "name": "ifzq",
             "display_name": "ifzq 免费K线",
             "datasets": ["daily", "minute"],

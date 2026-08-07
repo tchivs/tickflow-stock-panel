@@ -156,7 +156,7 @@ def set_auction_sync_symbols(symbols: list[str]) -> list[str]:
 # 注意: 必须与前端 /settings/data-sources 的 builtin 列表保持一致 —
 # 前端 builtin 里可切换的 free_stockdb / xyz 若不在白名单, 保存后会被过滤回
 # tickflow, 造成「切换成功但实际永远走 tickflow」的假象。
-_ALLOWED_DATA_PROVIDERS = {"tickflow", "tencent", "ifzq", "sina", "free_stockdb", "xyz"}
+_ALLOWED_DATA_PROVIDERS = {"tickflow", "tencent", "ifzq", "sina", "free_stockdb", "xyz", "local_stockdb"}
 
 # 数据集 → 旧单值字段 key (迁移/兼容用)。
 _LEGACY_PROVIDER_KEYS = {
