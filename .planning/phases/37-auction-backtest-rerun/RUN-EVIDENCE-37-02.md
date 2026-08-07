@@ -153,3 +153,24 @@ Expected (per REQUIREMENTS FA-04/RC-02): coverage 37/5537 → ≈5204/5537 (≥0
 - CLI summary prints the note when `auction_intraday_confirm` is among run strategies (observed in Run 1 stdout).
 - Test `test_full_backtest_minute_annotation_and_manifest` extended to assert `"不随湖覆盖增长" in manifest["minute_note"]`; manifest key-set exact-equality still green.
 - Guard batch pre-rerun: `pytest tests/test_auction_backtest.py tests/test_research_backtest_guard.py tests/test_research_backtest_api.py -q` → **18 passed**.
+
+---
+
+## 9. Read-only API at-scale check (37-03 T4, RC-04 — appended by ExecutorP3703)
+
+**Method**: TestClient bootstrapped on the real repo-root `data/` dir (`settings.data_dir = data/`; minimal FastAPI app + stub auth, mirroring `test_research_backtest_api.py:31-42`). No live server (port 3018 is the stale D8 container — deliberately not used). Read-only: GET-only router, zero writes.
+
+**Six calls, all measured 2026-08-07** (response time = wall clock):
+
+| # | Call | Expected | Measured | Verdict |
+|---|---|---|---|---|
+| 1 | `GET /api/research/backtest` | 200; count == backtest_results run dirs; includes fresh run_id | 200; **count=7** (6 old + fresh `298d743e8083`); fresh present | PASS |
+| 2 | `GET /api/research/backtest/298d743e8083` | 200; `stats.n_rows` == part.parquet height; `len(sample)` ≤ 20; per_strategy/per_date sums reconcile | 200; **n_rows=382,398** (== part.parquet height); sample=20; per_strategy sum **382,398**; per_date sum **382,398** | PASS |
+| 3 | `GET /api/research/backtest/298d743e8083?strategy=auction_fast_grab&branch=real` | 200; n_rows == fast_grab real hits (31) | 200; **n_rows=31** (predicate pushdown at scale) | PASS |
+| 4 | `GET /api/research/backtest/1cbb901a5637` | 200 (pre-rerun full-market run still served — old runs never invalidated) | 200; **n_rows=381,690** | PASS |
+| 5 | `GET /api/research/backtest/298d743e8083?as_of=bad-date` | 422 (contract untouched) | **422** | PASS |
+| 6 | `GET /api/research/backtest/zzz` | 400 `RESEARCH_BACKTEST` (12-hex run_id) | **400** | PASS |
+
+**Response times (wall clock, TestClient on real data)**: detail on the 382,398-row part.parquet = **0.052s** (sub-second; polars scan + predicate pushdown); pushdown detail = **0.015s**; old-run detail = **0.039s**; list = **0.012s**.
+
+**Honest skip at scale**: `backtest_results/` contains only `run_id=*` directories (0 flat `*.parquet` files); the count=7 check confirms no vectorbt flat file is misread as a run (the flat-file coexistence case stays unit-tested in `test_research_backtest_api.py`).
