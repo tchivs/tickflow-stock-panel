@@ -118,3 +118,12 @@ EXIT=1
 ## Watchlist proof
 
 `git status --short` (final): 唯一未暂存变更 = `M frontend/src/pages/Watchlist.tsx` — 其余全部已提交。
+
+## 附: 上游配额实测 (2026-08-07 二次封锁后, orchestrator)
+
+- **恢复窗**: 首次封锁 08:25 → 恢复 ~10:20 (**≈1h55m**); 恢复后 tools/list + 1 次真实竞价请求成功。
+- **每窗余量**: 恢复后 burst 50 symbols → **12 成功 (2,968 行) 后再次封锁** (tools/list 即时被拒) → 恢复后可用配额仅 ~13 请求。
+- **首窗累计**: pilot ~34 + 运行 ~36 → 首窗配额 ≈ 70 (封锁点)。
+- **解读**: 2h 滚动窗口 + 窗口内累计配额 (~70-100) + 达额后冷却 ~2h; 非永久封禁 (tools/list 已复现 200)。
+- **Campaign 纪律 (实测校准)**: 每 ~2h 窗跑 1 次 burst (≤40 symbols, rpm 30, ~90s); 达额即停, 等窗复位; 续跑永远 `--symbols <uncovered-chunk>` 或 `--only-missing` (merge-upsert 幂等); 全量 5537 ≈ 数周持续 (诚实估计, 非本里程碑可达)。
+- **今日终态**: 湖 covered=40 / rows=10,904 / 覆盖 0.72% (含 Phase 36 首轮 37 symbols)。
