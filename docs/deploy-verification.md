@@ -236,3 +236,41 @@
 → 运行中容器落后 HEAD (Phase 32-34 运行时提交 08-06 晚间晚于镜像), 重建对齐属部署动作; DV-01 预检配方 (build+boot+md5 parity) 在沙箱验证 (RUN-EVIDENCE-39-01.md)。
 
 **分钟接线状态 (BT-10, Phase 38)**: `make_minute_loader` 工厂 + 双构造点接线 (main.py:551/567 + governed_runner.py:55/72), 11 hermetic 测试全绿, 空湖行为逐字节保持 (required→空池 / optional→跳过确认); **点亮 deploy-gated** — kline_minute 湖当前 0 分区, 真点亮 = live 日同步后 (15:30 EOD 或手动) `data/kline_minute/date={T}/part.parquet` 存在 + `auction_intraday_confirm` 非空, **非盘中 09:45** (见上文 D8 bullet, 38-03-SUMMARY §4)。`minute_confirm='not_applied'` 报告语义冻结。
+
+---
+
+### v2.5 部署日执行面 (2026-08-07)
+
+> 本小节为 v2.5 里程碑部署日执行面快照 (44 期 DEP-01..04 脚本化落地 + 沙箱实测), 供部署日 operator 决策引用; 与 `.planning/phases/44-deploy-day/RESEARCH.md` / 39-03-OBSERVATION-WINDOW / RUN-EVIDENCE-39-01 parity。来源: 44-RESEARCH.md (live 实测: 网络/凭证/rebuild/md5/D1..D8 判定路径) + 44-01/44-02/44-03 沙箱验证 (脚本逻辑与 DTO 形状)。事实日期 2026-08-07, HEAD `8cbce15` (44 期 commit 不含 backend 代码改动, md5 基线不变)。
+
+**HEAD md5 基线 (8cbce15 实测)**:
+
+| 文件 | HEAD md5 | 39-01 旧基线 (已过期) |
+|---|---|---|
+| app/main.py | `32468e1554898be3ed1a09ec7ac42e1b` | 641003ae… (陈旧 3018 实测) |
+| app/strategy/engine.py | `4e33c236ef5b0cb6c6ea6c6c03e6c35a` | 165b95a7… (陈旧 3018 实测) |
+| app/jobs/daily_pipeline.py | `a48c48fab17097fbbe9aab4d022717b9` | `1be3288b…` (39-01 记录, 43 期改动后过期) |
+| app/services/preferences.py | `b05e01c72a57eaa0a6076d1b6b216561` | `901d11a9…` (39-01 记录, 43 期改动后过期) |
+
+> 对齐纪律: 以当前 HEAD 实测为准, 不抄 39-01 过期值 (daily_pipeline/preferences 43 期已变)。陈旧 3018 容器 (641003ae/165b95a7/72e17c3c/23122ca0) 4/4 DIFFER → 重建确有必要。
+
+**连通性定案 (DEP-01, live 实测)**: 容器内 `127.0.0.1:8000` **Connection refused** (自身 loopback 无服务) → 网关方案定案: 容器内 `http://172.18.0.1:8000` (athenaquant_default 桥接网关 = 宿主侧) 带 `X-API-Key` **200 真实数据** (quotes/daily 实测)。配置 = `.env` 追加 `LOCAL_STOCKDB_URL=http://172.18.0.1:8000` + `LOCAL_STOCKDB_API_KEY=<stockdb 容器 STOCKDB_API_KEYS 成员, 实测 testkey123>` (mode 600, git-ignored) → `docker-compose.yml` `env_file: .env` → 容器 env。备选: compose `extra_hosts: host.docker.internal:host-gateway` 域名方案 (需改 compose)。
+
+**200-body 沙箱实测 (DEP-02)**: login 200 + `tf_session` cookie → validation 8 顶层键 / backtest `{runs,count}` + 详情 `{manifest,stats,sample}` / backfill `{status,job_id}` + job 轮询 W-5 9 键 (reason `source_unavailable` fail-closed) — 与 `deploy_verify_endpoints.py` 断言一致; 401 门 3/3 先验实测。
+
+**脚本清单 (backend/scripts/, 部署日调用顺序)**:
+
+| 脚本 | 用途 | 部署日调用 |
+|---|---|---|
+| `deploy_check_connectivity.sh` | DEP-01: 网关 probe 三态 + md5 4/4 对齐 + 401 门 + 网关 IP 动态探测 | 步骤 0 (零触碰 3018, 只读) |
+| `deploy_verify_endpoints.py` | DEP-02: login + 3 新端点 200-body 键形状断言 | 重建后对 `--base-url :3018` 全流程 |
+| `deploy_day_runbook.sh` | DEP-03: D1..D8 三态判定 + JSON 台账 + 分钟点亮门 | 观测窗逐项 (39-03 日历对齐), BLOCKER exit 2 |
+| `deploy_rebuild.sh` | DEP-04: preflight (build→temp 副本→:3020 boot→md5 4/4→零残留) + `--apply` 步骤文档化 | preflight 先行; `--apply` 由 operator 逐条执行 |
+
+**D1..D8 判定引用**: 每项判据正文见 44-RESEARCH.md「D1..D8 判定路径表」/ 本文件上文各节, 此处仅一行语义 + 三态: D1 盘前预览键形状 (ABSENT → degraded 诚实) / D4 preopen 告警事件 (无行 → skipped fail-closed; event_json change_pct 非 None → BLOCKER) / D2 EOD enriched 分区 + screener `snapshot_origin=="eod"` (0 行 → BLOCKER) / D6 复盘 Block 3 avg_change_pct vs enriched 手动均值 ≤0.1% / D5 复盘归档 + 面板三块注记 (引用切片外数字 → pending_human) / D7 探针 drift.jsonl + ext_history 分区 + 零副作用 (探针写 ext_data → BLOCKER) / D8 sidecar 采集/对账/提审三闸门 (非交易日 skipped_no_data 零告警)。**分钟点亮门判据 (逐字)**: 墙钟 ≥15:30 Asia/Shanghai ∧ `kline_minute/date={T}/part.parquet` 存在且行数>0 ∧ 引擎运行结果 `auction_intraday_confirm` 命中行非空 → lit; 盘中 (<15:30) → `not_before_1530` 拒绝态; 分区缺/0 行 → 空湖 fail-closed 通过态; 分区在场但无命中且无注记 → BLOCKER。报告层 `minute_confirm` (auction_validation.py:535 恒 `not_applied`) **绝不参与** 点亮判定。
+
+**root-owned 卷清单 + chown 流程 (DEP-04)**: 容器进程 root 写卷 → 宿主侧运维面受阻 (39-01 W4 同因)。清单 (容器内 `ls -la /app/data` 实测): `forecast-checkpoints/` `forecast-inputs/` `forecast-outputs/` (700 root) / `ext_data/` `kline_daily_enriched/` (755 root) / `user_data/ai_market_recaps.json` `ai_stock_reports.json` (644 root) → 一次性 root 容器 `docker run --rm -v <repo>/data:/dst athenaquant-app:latest sh -c 'chown -R 999:995 /dst'` (sudo 无 tty 不可用 fallback, 39-01 同款)。数据卷为 bind mount → `docker compose up -d` 天然保留 (零数据迁移); `data/` 顶层保持 999:995。
+
+**执行顺序 (部署日)**: ① `deploy_check_connectivity.sh` (44-01 连通性预检: probe+md5+gate) → ② `deploy_rebuild.sh --preflight` (build+boot+md5 4/4, 零残留) → ③ operator 执行 `--apply` 步骤 (compose up -d + chown + 对齐确认) → ④ `deploy_verify_endpoints.py --base-url :3018` (44-02 200-body 全流程) → ⑤ `deploy_day_runbook.sh` D1..D8 观测窗 (39-03 日历对齐, 逐项三态台账)。与 39-03-OBSERVATION-WINDOW 执行顺序 (D1→D4→D2+D6→D5→D7→D7 周终→D3→D8) 对齐。
+
+**诚实标注**: 沙箱证的是脚本逻辑与 DTO 形状 (preflight build/boot/md5/三态台账/零残留); 部署日真实事件 — premarket_results/tick_staging 落盘、sidecar 点亮、分钟湖写入、3018 重建替换 — 是真实交易日/部署动作的观测记录, 由 operator 在观测窗逐项三态记录, **绝不混标为沙箱已证**。
