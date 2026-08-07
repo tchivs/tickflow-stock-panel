@@ -172,6 +172,7 @@
 - **OQ-1 批量回填 stance**（v2.1 audit:27）：回填 job 仍绝无回填——回填走手动 `POST /api/pipeline/backfill` 逐日 `run_all_with_hits`，不写 strategy_cache（byte-identical 断言）。部署不新增任何自动回填。
 - **WATCH-04**（v2.1 audit:24）：已交付，无部署项；可选真实后端浏览器 smoke（VIP 星标/只看自选/批量加自选 + guest 零控件），e2e 已覆盖等价行为。
 - **BT-07**：见 D3 第 5 条，湖积累后复评，不属本次部署验证。
+- **分钟确认点亮（Phase 38 接线落地）**：`make_minute_loader` 已接 app 引擎 + research runner（沙箱接线已测，空湖 fail-closed 不变）；真实点亮观察项 = **同步后** `data/kline_minute/date={T}/part.parquet` 存在（15:30 EOD 管道或手动同步后，**非盘中 09:45**）+ `auction_intraday_confirm` 命中行非空（引擎日志/结果）；分钟湖仍空 → `total=0` 空池为诚实通过态（同 D3「未配置时」通过态），无需 action。
 
 ---
 
