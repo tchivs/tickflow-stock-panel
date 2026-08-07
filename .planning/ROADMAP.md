@@ -30,11 +30,15 @@ Four phases (20-23) delivered probe-gated real auction columns + `kline_auction/
 
 三域研究确认（`research/v2.4-full-universe/SUMMARY.md`）：全量竞价回填 **FEASIBLE**（实测 0.96s/请求、3.5-5.5h、写缝 1.15s/标的、全湖 ~13 MB；BJ 333 上游恒空 → 覆盖上限 94.0% 诚实台账；600s 自杀陷阱与 resume/CLI 缺口需修）→ kline_auction 2-symbol → 5204-symbol 全量解锁；全量真列回测重跑（compute 2.3s 实测，run_id 指纹缺湖覆盖摘要必须补）；BT-10 分钟确认接线（纯代码增量，空湖行为保持）；部署验证残留（D8 陈旧容器实测 + build+boot 预检）——全部零新增运行时依赖，延续诚实 provenance 与 POOL-03 零执行权。
 
+### v2.5 诚实加固与本机数据源接入 — planning
+
+五 phase（40-44）研究确认（`research/v2.5-honesty-local-source/SUMMARY.md`，confidence HIGH）：本机 stockdb **无竞价端点**（openapi 41 路径零 auction）→ 竞价源仍受 xyz 配额窗约束，FA-04 不立即解锁，诚实声明统计口径路径；SDK 需 Python ≥3.12（PEP 695，3.11 实测 SyntaxError）→ 通道形态 = `local_stockdb` HTTP 适配器，**零新增运行时依赖**；日K+复权（600519=4024 行）与 T-day 竞价窗口（09:25 撮合行 price×vol 对账闭合）可用，分钟 09:30 bar = 集合竞价统计 → 5537 标的 ≈46min 历史统计路径；403-vs-真空吞错链与 fail-closed 零 emit 为两处真实诚实性缺口；双源归一化（symbol/单位/时区）为头号风险 → 适配器单点归一化 + 契约测试锁死。顺序：LOCAL 通道 → HON 诚实修复（可并行）→ MIN 扩湖（依赖通道）→ SDC sidecar（独立可并行）→ DEP 部署日（依赖 40-43 全就绪）。延续零新增运行时依赖、诚实 provenance、POOL-03 零执行权与 Watchlist.tsx 零触碰。
+
 ## Phases
 
 **Phase Numbering:**
 
-- v2.3 ended at Phase 35; v2.4 continues at Phase 36 (`phase_naming: sequential`)
+- v2.3 ended at Phase 35; v2.4 continued at Phases 36-39; v2.5 continues at Phase 40 (`phase_naming: sequential`)
 
 - [x] **Phase 16: 竞价数据层 (Auction Data)** - Minute-K sync, governed open-gap factor, auction probe — DATA-01..03 (completed 2026-08-04)
 - [x] **Phase 17: 竞价策略族 (Auction Strategy Family)** - 竞价多头/盘前强势量化/早盘之星 builtin strategies — STRAT-01..03 (completed 2026-08-04)
@@ -60,6 +64,11 @@ Four phases (20-23) delivered probe-gated real auction columns + `kline_auction/
 - [x] **Phase 37: 全量真列回测重跑 (Full Real-Column Backtest Rerun)** - run_id lake-coverage fingerprint + full-market real-column rerun + honest coverage reporting — RC-01..04 (planned) (completed 2026-08-07)
 - [x] **Phase 38: 分钟确认接线 BT-10 (Minute Confirm Wiring)** - minute loader factory + dual construction-site wiring + hermetic tests + doc sync — MN-01..04 (planned) (completed 2026-08-07)
 - [x] **Phase 39: 部署验证与残留 (Deploy Verification & Residue)** - D8 deploy-recipe preflight + checklist refresh + honest gap summary + observation plan — DV-01..04 (planned) (completed 2026-08-07)
+- [ ] **Phase 40: stockdb 本地通道接入 (Local Source Channel)** - HTTP 适配器 `local_stockdb` + 配置注册 + 归一化契约 + 日K/分钟旁路 — LOCAL-01..04
+- [ ] **Phase 41: 诚实性修复 (Honesty Fixes)** - `source_blocked` 三态化 + fail-closed 终态 emit — HON-01..02
+- [ ] **Phase 42: 分钟湖扩湖 (Minute Lake Expansion)** - backfill-minute 全量扩湖 + 历史竞价统计路径 + 诚实标注 — MIN-01..03
+- [ ] **Phase 43: T-day 竞价采集 sidecar (T-Day Auction Capture)** - 盘中逐秒快照 + 09:25 撮合行采集 + T-day 累积 + 诚实门 — SDC-01..03
+- [ ] **Phase 44: 部署日执行面 (Deploy-Day Execution)** - 凭证/连通性前置 + 200-body 验证 + D1..D8 runbook 脚本化 + 3018 rebuild — DEP-01..04
 
 ## Phase Details
 
@@ -145,6 +154,82 @@ Plans:
 
 - (planned 39-01/02/03)
 
+### Phase 40: stockdb 本地通道接入 (Local Source Channel)
+
+**Goal**: The local stockdb service (:8000) becomes a managed data-source channel — a `local_stockdb` HTTP adapter (zero new runtime deps, mirroring FreeStockDBProvider's httpx pattern) honestly declaring `ProviderCapabilities(auction=False)`, registered at the daily/minute chain-head with configurable position, normalizing symbol/unit/timezone at a single point (contract-locked against partition-key split and 100× volume distortion), with daily/minute bypass flowing through the existing `kline_sync` write path under the existing dual-source partition guards.
+**Depends on**: Nothing (first phase); research `v2.5-honesty-local-source/SUMMARY.md` (HTTP-adapter form locked — SDK needs Python ≥3.12 / PEP 695, AQ runtime 3.11)
+**Requirements**: LOCAL-01..04
+**Success Criteria** (what must be TRUE):
+
+  1. `_get_provider("local_stockdb")` resolves a lazy singleton; adapter declares `auction=False` honestly and never enters the auction_probe chain.
+  2. `local_stockdb_url` (默认 `http://127.0.0.1:8000`) + `local_stockdb_api_key` (env 注入, 不入 git) configured; all requests send X-API-Key header-only (禁 URL 传参), `sleep_between_batches` aligns to server rate tiers (quotes 300/min, daily/minute/intraday 120/min, ticks 60/min), 429 honored with Retry-After.
+  3. Normalization contract tests lock the three divergences — `SH600519→600519.SH`, volume 手→股 ×100, unified timezone (镜像 `_normalize_daily`) — so 同股双键/100×量失真/时区漂移 never occur; lake writes go only through the existing write path (merge-upsert idempotent + atomic rename).
+  4. daily/minute bypass: chain-head gap-merge consumes the local channel via existing `kline_sync` write path; dual-source guards hold (单源选择 + run-slot 互斥 + 幂等写); channel identity lands in ledger/终态 dict (湖无 provenance 列 — 铁律).
+  5. Zero new runtime dependencies (httpx/pydantic only); hermetic + live smoke pass.
+
+**Research flag**: 需 `--research-phase` — 适配器 symbol/单位/时区映射细节 UNKNOWN（须 live probe 定稿）；Docker 构建上下文不含 `../stockdb` 的部署形态；SDK 修订号锚定 (P6 版本锚纪律)。
+**Plans**: TBD
+
+### Phase 41: 诚实性修复 (Honesty Fixes)
+
+**Goal**: The two recorded honesty gaps (36-02/36-03 事故模式) are closed — upstream 403/配额窗 policy-blocks become a distinguishable `source_blocked` state (typed signal or reason-carrying empty frame, never collapsed into `empty_response`), and every fail-closed early return in auction backfill emits per-symbol terminal events so batch progress never freezes or misreports (cancel = `cancelled`/实际 pct, 绝不 `done`/100).
+**Depends on**: 无硬依赖 (与 Phase 40 互相独立、可并行；按顺序排于 40 后)
+**Requirements**: HON-01..02
+**Success Criteria** (what must be TRUE):
+
+  1. xyz provider classifies HTTP 403/配额窗 markers as policy-block signals (typed exception or reason-carrying empty frame); other network errors keep the「空帧不抛」contract (test_xyz_provider.py:126-137 保持绿).
+  2. Ledger gains third reason `"source_blocked"` (两键形状 {symbol,reason} 不变, 与 `empty_response`/`str(e)[:200]` 互斥); `auction_probe` preflight 遇 policy-block → verdict `fail_closed` + detail `"source_blocked"`; R1 重试只对可重试态生效.
+  3. All fail-closed early returns in `auction_backfill.py` (行 200/224/228/266/268) emit terminal events (每 symbol 一行, 含 reason); cancel path emits independent `cancelled` stage with actual pct — never `done`/100.
+  4. `scripts/auction_backfill.py` CLI streams per-symbol progress to stderr (现零进度输出); regression lock: 全空帧批量 → 每 symbol 有进度行 + 终态 failed 计数正确.
+
+**Research flag**: 无需 `--research-phase` — 三态化 + 台账第三类 reason + emit 补全均为既有代码模式的小幅扩展，证据锚点与行号已齐（xyz_provider.py:189-198/228-250、auction_backfill.py:200/224/228/266/268、verify_auction_backfill.py:187-217）。仅 xyz 403 真实响应体结构 UNKNOWN（2h 窗复现时回填定稿）。
+**Plans**: TBD
+
+### Phase 42: 分钟湖扩湖 (Minute Lake Expansion)
+
+**Goal**: The minute lake expands from 16 sparse files to full-universe coverage (~5537 symbols, ≈46min measured pace at 120/min rate alignment) via the stockdb `backfill-minute` channel, unlocking the historical auction statistics path — the 09:30 bar (集合竞价统计) feeds the auction coverage report as an independent, honestly-labeled statistical caliber (never tick-by-tick, never into the canonical auction lake).
+**Depends on**: Phase 40 (stockdb 通道, backfill-minute 源)
+**Requirements**: MIN-01..03
+**Success Criteria** (what must be TRUE):
+
+  1. `backfill-minute` via the stockdb channel populates `kline_minute` partitions for ~5537 标的 at ≈46min total (120/min 限频对齐); incremental re-runs are idempotent on covered dates.
+  2. Historical auction statistics path: minute 09:30 bar (量/额, 集合竞价统计口径) enters the auction coverage report as an independent caliber — 双口径并列报告, 绝不算逐笔.
+  3. FA-04/RC-02 统计口径解锁门: coverage ≥0.94 或诚实 partial, 双口径并列报告 (统计口径绝不算逐笔).
+  4. 09:30 bar 标注「集合竞价统计」非逐笔; canonical 竞价湖只收 09:25 撮合行 (09:15-09:24 委托统计绝不入湖); T-21-01 分钟截断语义不回归 (evaluation_time 截断保持).
+
+**Research flag**: 需 `--research-phase` — Tushare stk_mins 接入细节与 09:30 bar 统计口径落地待调研 (5537 标的 ≈46min 为研究实测估算路径)。
+**Plans**: TBD
+
+### Phase 43: T-day 竞价采集 sidecar (T-Day Auction Capture)
+
+**Goal**: A live-window sidecar (independent script + intraday cron) captures 09:15-09:25 per-second snapshots and the 09:25 撮合行 into staging (tick 湖/独立目录, never canonical 湖 — 虚拟量非成交), accumulating real auction columns (auction_volume/amount/price + num_trades metadata) day by day with live reconciliation closed (09:25 price×vol == intraday 09:30 bar amt) and fail-closed honesty gates (当日采集失败 → 无当日分区, 不伪造).
+**Depends on**: 无硬依赖 (独立于 Phase 40-42、可并行；按顺序排于 42 后)
+**Requirements**: SDC-01..03
+**Success Criteria** (what must be TRUE):
+
+  1. 09:15-09:25 逐秒快照 + 09:25 撮合行定时采集 (独立脚本 + 盘中 cron 窗口) 落 staging (tick 湖/独立目录); canonical 竞价湖零污染 (虚拟量非成交).
+  2. Live 对账闭合: 09:25 撮合行 price×vol == intraday 09:30 bar amt (研究实测锚点 17300×1308.66=22,639,818).
+  3. T-day 逐日累积真实竞价列 (auction_volume/amount/price, 多 num_trades 元数据); DATA-06 派生输入 (unmatched_volume/virtual_price) 语义经 probe 确认后映射 (不猜测).
+  4. 诚实门: 当日采集失败 → 无当日分区 (fail-closed, 不伪造); sidecar 状态可观测 (台账/告警, 09:26 后缺失可告).
+
+**Research flag**: 需 `--research-phase` — sidecar 采集窗口与 staging 落盘布局依赖真实交易日观测; DATA-06 派生输入语义 (unmatched_volume/virtual_price) UNKNOWN 须 probe 后映射。
+**Plans**: TBD
+
+### Phase 44: 部署日执行面 (Deploy-Day Execution)
+
+**Goal**: Deploy day executes cleanly against a verified system — stockdb 凭证/连通性 preflight green (容器内 loopback 或 host 网络/网关实测判定), 3018 容器对齐检查 (4 运行时文件 md5 vs HEAD), 3 新端点 (backfill/validation/backtest) auth-gated 200-body 脚本化验证 (不再只验 401 门), D1..D8 观测窗口逐项可执行 (分钟点亮门 = 15:30 后分区存在 && auction_intraday_confirm 非空, 非盘中误判), 3018 rebuild 配方落地 (build 66s + boot 18s 预检 + root-owned 卷修复 + 替换流程文档化).
+**Depends on**: Phase 40-43 (全部功能就绪)
+**Requirements**: DEP-01..04
+**Success Criteria** (what must be TRUE):
+
+  1. 凭证/连通性前置: stockdb key 配置 + 容器内 127.0.0.1:8000 连通性验证 (loopback 不通 → host 网络或网关方案, 实测判定); 3018 容器对齐检查完成 (4 运行时文件 md5 vs HEAD).
+  2. 3 新端点 (backfill/validation/backtest) 200-body 验证脚本化: login cookie → 请求 → body 键形状断言 (镜像空态契约 `{available:false}`), 不再只验 401 门.
+  3. D1..D8 runbook 每项可执行: 09:26 premarket / 15:30 EOD+池持久化 / 15:40 recap / D7 探针周终; 分钟点亮门 = 15:30 后 `kline_minute/date={T}` 分区存在 && `auction_intraday_confirm` 非空, 非盘中误判.
+  4. 3018 rebuild 对齐: 重建配方落地 (预检验证 build 66s + boot 18s) + 数据卷/权限检查 (root-owned 修复) + 旧容器替换流程文档化.
+
+**Research flag**: 需 `--research-phase` — 部署日 runbook 需对照真实容器/卷状态细化 (3018 容器 root-owned 处置、compose 凭证注入方式、loopback 不通时 host 网络/网关实测判定); 若需 `uv pip install -e --no-deps` 进镜像, 首次构建 build isolation 需网络调研。
+**Plans**: TBD
+
 ## Progress
 
 **Execution Order:**
@@ -157,5 +242,16 @@ Phases execute in numeric order: 36 → 37 → 38 → 39 (37 depends on 36's lak
 | 38. 分钟确认接线 BT-10 | MN-01..04 | Complete    |
 | 39. 部署验证与残留 | DV-01..04 | Complete    |
 
+**v2.5 Execution Order:**
+Phases execute in numeric order: 40 → 41 → 42 → 43 → 44 (41 与 40 互相独立、可并行; 42 依赖 40 的 stockdb 通道; 43 独立可并行; 44 依赖 40-43 全部就绪)
+
+| Phase | Requirements | Status |
+|-------|-------------|--------|
+| 40. stockdb 本地通道接入 | LOCAL-01..04 | Not started |
+| 41. 诚实性修复 | HON-01..02 | Not started |
+| 42. 分钟湖扩湖 | MIN-01..03 | Not started |
+| 43. T-day 竞价采集 sidecar | SDC-01..03 | Not started |
+| 44. 部署日执行面 | DEP-01..04 | Not started |
+
 ---
-*Last updated: 2026-08-07 — v2.4 milestone started; research synthesized (3 domains → 4 phases); requirements defined*
+*Last updated: 2026-08-07 — v2.5 roadmap created (5 phases 40-44); 16/16 requirements mapped*

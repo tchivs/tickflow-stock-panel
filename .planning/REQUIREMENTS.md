@@ -58,8 +58,19 @@ Requirements for the v2.5 milestone. Each maps to a roadmap phase. Research basi
 
 | REQ-ID | Phase | Status |
 |--------|-------|--------|
-| LOCAL-01..04 | Phase 40 | Planned |
-| HON-01..02 | Phase 41 | Planned |
-| MIN-01..03 | Phase 42 | Planned |
-| SDC-01..03 | Phase 43 | Planned |
-| DEP-01..04 | Phase 44 | Planned |
+| LOCAL-01 | Phase 40 | Planned |
+| LOCAL-02 | Phase 40 | Planned |
+| LOCAL-03 | Phase 40 | Planned |
+| LOCAL-04 | Phase 40 | Planned |
+| HON-01 | Phase 41 | Planned |
+| HON-02 | Phase 41 | Planned |
+| MIN-01 | Phase 42 | Planned |
+| MIN-02 | Phase 42 | Planned |
+| MIN-03 | Phase 42 | Planned |
+| SDC-01 | Phase 43 | Planned |
+| SDC-02 | Phase 43 | Planned |
+| SDC-03 | Phase 43 | Planned |
+| DEP-01 | Phase 44 | Planned |
+| DEP-02 | Phase 44 | Planned |
+| DEP-03 | Phase 44 | Planned |
+| DEP-04 | Phase 44 | Planned |

@@ -3,10 +3,12 @@ gsd_state_version: 1.0
 milestone: v2.5
 milestone_name: 诚实加固与本机数据源接入
 status: planning
-last_updated: "2026-08-07T10:36:04.978Z"
+current_phase: 40
+current_phase_name: stockdb 本地通道接入 (Local Source Channel)
+last_updated: "2026-08-07T12:13:09.000Z"
 last_activity: 2026-08-07
 progress:
-  total_phases: 0
+  total_phases: 5
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -20,14 +22,24 @@ progress:
 See: .planning/PROJECT.md (updated 2026-08-06)
 
 **Core value:** An investor can turn reliable market data and their own holdings into an auditable, actionable research and monitoring workflow without operating multiple disconnected tools.
-**Current focus:** Milestone v2.3 — 数据纵深解锁
+**Current focus:** Milestone v2.5 — 诚实加固与本机数据源接入
 
 ## Current Position
 
-Phase: Not started (defining requirements)
+Phase: Phase 40 — stockdb 本地通道接入 (Local Source Channel)
 Plan: —
-Status: Defining requirements
-Last activity: 2026-08-07 — Milestone v2.5 started
+Status: planning (roadmap ready, not started)
+Last activity: 2026-08-07 — v2.5 roadmap created (Phase 40-44, 16/16 requirements mapped)
+
+## v2.5 Phase Summary
+
+| Phase | Requirements | Status |
+|-------|-------------|--------|
+| 40 stockdb 本地通道接入 | LOCAL-01..04 | Not started |
+| 41 诚实性修复 | HON-01..02 | Not started |
+| 42 分钟湖扩湖 | MIN-01..03 | Not started |
+| 43 T-day 竞价采集 sidecar | SDC-01..03 | Not started |
+| 44 部署日执行面 | DEP-01..04 | Not started |
 
 ## v1.3 Phase Summary (shipped 2026-08-04)
 
