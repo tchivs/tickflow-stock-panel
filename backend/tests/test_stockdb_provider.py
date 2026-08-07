@@ -22,6 +22,7 @@ import json as _json
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 import polars as pl
@@ -84,7 +85,7 @@ class _JsonTransport:
 
     def get(self, url: str, params: dict[str, Any] | None = None, **kwargs: Any) -> _FakeResponse:
         self.calls.append((url, params))
-        route = self.routes[url]
+        route = self.routes[urlparse(url).path]
         if isinstance(route, list) and route and isinstance(route[0], tuple):
             status, body, headers = route.pop(0)
         else:
