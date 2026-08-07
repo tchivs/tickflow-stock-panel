@@ -223,8 +223,14 @@ Plans:
   3. T-day 逐日累积真实竞价列 (auction_volume/amount/price, 多 num_trades 元数据); DATA-06 派生输入 (unmatched_volume/virtual_price) 语义经 probe 确认后映射 (不猜测).
   4. 诚实门: 当日采集失败 → 无当日分区 (fail-closed, 不伪造); sidecar 状态可观测 (台账/告警, 09:26 后缺失可告).
 
-**Research flag**: 需 `--research-phase` — sidecar 采集窗口与 staging 落盘布局依赖真实交易日观测; DATA-06 派生输入语义 (unmatched_volume/virtual_price) UNKNOWN 须 probe 后映射。
-**Plans**: TBD
+**Research flag**: 无需 `--research-phase` — 研究已 live 实测锚定 (fetch-on-miss 单次 GET 全窗口 / 09:25 撮合行 1308.66·173手·120笔 / 对账闭合 22,639,818 / 3s 源粒度 A1 / 池 ≤200 A2; DATA-06 probe 结论: unmatched_volume 不可得 → 诚实缺列, virtual_price 可映射 + kline_daily.open 1e-6 交叉验证)。
+**Plans**: 3 plans
+
+Plans:
+
+- [ ] 43-01-PLAN.md — staging 契约 + 采集驱动 (get_ticks + fetch-on-miss + 完整性校验 + 三重对账 + 池 ≤200 白名单) (SDC-01)
+- [ ] 43-02-PLAN.md — T-day 累积 + canonical 转化 (仅 09:25 撮合行升湖 + 单位映射 + DATA-06 映射/交叉验证) (SDC-02)
+- [ ] 43-03-PLAN.md — 诚实门 (台账 + 告警 + 交易日判定) + sidecar 三 job 调度 + 文档 (SDC-03)
 
 ### Phase 44: 部署日执行面 (Deploy-Day Execution)
 
