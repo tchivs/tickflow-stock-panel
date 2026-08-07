@@ -67,7 +67,7 @@ Four phases (20-23) delivered probe-gated real auction columns + `kline_auction/
 - [x] **Phase 40: stockdb 本地通道接入 (Local Source Channel)** - HTTP 适配器 `local_stockdb` + 配置注册 + 归一化契约 + 日K/分钟旁路 — LOCAL-01..04 (completed 2026-08-07)
 - [x] **Phase 41: 诚实性修复 (Honesty Fixes)** - `source_blocked` 三态化 + fail-closed 终态 emit — HON-01..02 (completed 2026-08-07)
 - [x] **Phase 42: 分钟湖扩湖 (Minute Lake Expansion)** - backfill-minute 全量扩湖 + 历史竞价统计路径 + 诚实标注 — MIN-01..03 (completed 2026-08-07)
-- [ ] **Phase 43: T-day 竞价采集 sidecar (T-Day Auction Capture)** - 盘中逐秒快照 + 09:25 撮合行采集 + T-day 累积 + 诚实门 — SDC-01..03
+- [x] **Phase 43: T-day 竞价采集 sidecar (T-Day Auction Capture)** - 盘中逐秒快照 + 09:25 撮合行采集 + T-day 累积 + 诚实门 — SDC-01..03 (completed 2026-08-07)
 - [ ] **Phase 44: 部署日执行面 (Deploy-Day Execution)** - 凭证/连通性前置 + 200-body 验证 + D1..D8 runbook 脚本化 + 3018 rebuild — DEP-01..04
 
 ## Phase Details
@@ -228,9 +228,9 @@ Plans:
 
 Plans:
 
-- [ ] 43-01-PLAN.md — staging 契约 + 采集驱动 (get_ticks + fetch-on-miss + 完整性校验 + 三重对账 + 池 ≤200 白名单) (SDC-01)
-- [ ] 43-02-PLAN.md — T-day 累积 + canonical 转化 (仅 09:25 撮合行升湖 + 单位映射 + DATA-06 映射/交叉验证) (SDC-02)
-- [ ] 43-03-PLAN.md — 诚实门 (台账 + 告警 + 交易日判定) + sidecar 三 job 调度 + 文档 (SDC-03)
+- [x] 43-01-PLAN.md — staging 契约 + 采集驱动 (get_ticks + fetch-on-miss + 完整性校验 + 三重对账 + 池 ≤200 白名单) (SDC-01)
+- [x] 43-02-PLAN.md — T-day 累积 + canonical 转化 (仅 09:25 撮合行升湖 + 单位映射 + DATA-06 映射/交叉验证) (SDC-02)
+- [x] 43-03-PLAN.md — 诚实门 (台账 + 告警 + 交易日判定) + sidecar 三 job 调度 + 文档 (SDC-03)
 
 ### Phase 44: 部署日执行面 (Deploy-Day Execution)
 

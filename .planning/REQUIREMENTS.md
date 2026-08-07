@@ -27,9 +27,9 @@ Requirements for the v2.5 milestone. Each maps to a roadmap phase. Research basi
 
 ### T-day 竞价采集 sidecar (T-Day Auction Capture) — Phase 43
 
-- [ ] **SDC-01**: 盘中 sidecar 采集 — 09:15-09:25 逐秒快照 + 09:25 撮合行定时采集 (独立脚本 + 盘中 cron 窗口); live 对账闭合 (09:25 撮合行 price×vol == intraday 09:30 bar amt); 数据落 staging (tick 湖/独立目录), 不入 canonical 湖 (虚拟量非成交)。
-- [ ] **SDC-02**: T-day 累积 — 自 T-day 逐日累积真实竞价列 (auction_volume/amount/price, 多 num_trades 元数据); DATA-06 派生输入 (unmatched_volume/virtual_price) 语义经 probe 确认后映射 (不猜测)。
-- [ ] **SDC-03**: 诚实门 — 采集失败 fail-closed (当日无数据 → 无当日分区, 不伪造); sidecar 状态可观测 (台账/告警, 09:26 后缺失可告)。
+- [x] **SDC-01**: 盘中 sidecar 采集 — 09:15-09:25 逐秒快照 + 09:25 撮合行定时采集 (独立脚本 + 盘中 cron 窗口); live 对账闭合 (09:25 撮合行 price×vol == intraday 09:30 bar amt); 数据落 staging (tick 湖/独立目录), 不入 canonical 湖 (虚拟量非成交)。
+- [x] **SDC-02**: T-day 累积 — 自 T-day 逐日累积真实竞价列 (auction_volume/amount/price, 多 num_trades 元数据); DATA-06 派生输入 (unmatched_volume/virtual_price) 语义经 probe 确认后映射 (不猜测)。
+- [x] **SDC-03**: 诚实门 — 采集失败 fail-closed (当日无数据 → 无当日分区, 不伪造); sidecar 状态可观测 (台账/告警, 09:26 后缺失可告)。
 
 ### 部署日执行面 (Deploy-Day Execution) — Phase 44
 
@@ -67,9 +67,9 @@ Requirements for the v2.5 milestone. Each maps to a roadmap phase. Research basi
 | MIN-01 | Phase 42 | Complete |
 | MIN-02 | Phase 42 | Complete |
 | MIN-03 | Phase 42 | Complete |
-| SDC-01 | Phase 43 | Planned |
-| SDC-02 | Phase 43 | Planned |
-| SDC-03 | Phase 43 | Planned |
+| SDC-01 | Phase 43 | Complete |
+| SDC-02 | Phase 43 | Complete |
+| SDC-03 | Phase 43 | Complete |
 | DEP-01 | Phase 44 | Planned |
 | DEP-02 | Phase 44 | Planned |
 | DEP-03 | Phase 44 | Planned |
