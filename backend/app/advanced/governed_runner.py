@@ -52,6 +52,7 @@ class StrategyBacktestExperimentCollaborator:
         from app.backtest.engine import BacktestEngine
         from app.backtest.frozen_panel import FrozenPanelArtifactStore
         from app.backtest.strategy import StrategyBacktestService
+        from app.services.minute_loader import make_minute_loader
         from app.services.screener import ScreenerService
         from app.strategy.engine import StrategyEngine
         from app.tickflow.repository import DataStore, KlineRepository
@@ -68,6 +69,7 @@ class StrategyBacktestExperimentCollaborator:
                 data_dir / "strategies" / "custom",
                 data_dir / "strategies" / "ai",
             ],
+            minute_loader=make_minute_loader(data_dir),
         )
         return StrategyBacktestService(
             BacktestEngine(repository),

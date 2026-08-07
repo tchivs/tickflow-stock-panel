@@ -548,6 +548,7 @@ async def lifespan(app: FastAPI):
         app.state.financial_scheduler = financial_scheduler
 
     # 策略引擎
+    from app.services.minute_loader import make_minute_loader
     from app.services.screener import ScreenerService
     from app.strategy.engine import StrategyEngine
     from app.strategy.monitor import StrategyMonitorService
@@ -563,6 +564,7 @@ async def lifespan(app: FastAPI):
         enriched_loader=_screener_svc._load_enriched_for_date,
         enriched_history_loader=_screener_svc._load_enriched_history,
         strategy_dirs=strategy_dirs,
+        minute_loader=make_minute_loader(store.data_dir),
     )
     app.state.strategy_engine = strategy_engine
     logger.info("strategy engine loaded: %d strategies", len(strategy_engine.list_strategies()))

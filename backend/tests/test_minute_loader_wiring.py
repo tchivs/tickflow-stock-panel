@@ -404,3 +404,86 @@ def test_make_minute_loader_module_no_write_paths():
     )
     for pat in patterns:
         assert not pat.search(src), f"minute_loader.py 出现写面: {pat.pattern}"
+
+
+# ================================================================
+# 38-02 (MN-02) — 双接线结构门 + wired-vs-unwired 空湖字节保持证明
+# ================================================================
+
+
+def _main_src() -> str:
+    backend = Path(__file__).resolve().parents[1]
+    return (backend / "app" / "main.py").read_text(encoding="utf-8")
+
+
+def _governed_src() -> str:
+    backend = Path(__file__).resolve().parents[1]
+    return (backend / "app" / "advanced" / "governed_runner.py").read_text(encoding="utf-8")
+
+
+def test_main_wired_minute_loader():
+    """token minute_loader: main.py 结构门 — 接线 import + 构造参数存在 (镜像
+    test_auction_backfill.py:659-667 的 _main_src() 形; 后续重构不得静默拆除)。"""
+    src = _main_src()
+    assert "from app.services.minute_loader import make_minute_loader" in src
+    assert "minute_loader=make_minute_loader(store.data_dir)" in src
+
+
+def test_governed_runner_wired_minute_loader():
+    """token minute_loader: governed_runner.py 结构门 — _service() 内接线 + import 严格本地
+    (模块顶层零新增 import: make_minute_loader 的 import 行缩进 > 0, 防 DuckDB 单例采集期导入)。"""
+    src = _governed_src()
+    assert "minute_loader=make_minute_loader(data_dir)" in src
+    hit = False
+    for line in src.splitlines():
+        if "from app.services.minute_loader import make_minute_loader" in line:
+            hit = True
+            assert line.startswith(" "), \
+                "governed_runner.py 的 minute_loader import 必须留在 _service() 内 (缩进 > 0)"
+    assert hit, "governed_runner.py 缺少 minute_loader 本地 import"
+
+
+def test_wired_empty_lake_byte_identical_to_unwired(tmp_path):
+    """token empty: 生产形接线 (make_minute_loader(tmp_path) == 两构造点注入的同一工厂) vs
+    minute_loader=None 基线 — 同一 tmp_path/策略目录/日线 fixture, required+optional 双策略
+    逐字段一致 (strategy_id/total/rows/scores, elapsed_ms 时序字段除外);
+    补缺分区态: 湖有分区但 date={as_of} 缺席 → 工厂缺分区空帧路径 == 未接线路径。"""
+    from app.services.minute_loader import make_minute_loader
+
+    _write_strategy(tmp_path, "minute_req.py", _MINUTE_REQ_BODY)
+    _write_strategy(tmp_path, "minute_opt.py", _MINUTE_OPT_BODY)
+    daily = pl.DataFrame({"symbol": ["600001", "600002"], "open_gap": [0.03, 0.04]})
+    kwargs = {
+        "as_of": date(2026, 8, 4),
+        "precomputed": daily,
+        "overrides": {"basic_filter": {"enabled": False}},
+    }
+
+    def _assert_byte_identical(wired_engine, baseline_engine):
+        for sid in ("minute_req", "minute_opt"):
+            r_wired = wired_engine.run(sid, **kwargs)
+            r_base = baseline_engine.run(sid, **kwargs)
+            # 逐字段一致 (elapsed_ms 时序字段除外) — MN-02 空湖字节保持
+            assert r_wired.as_of == r_base.as_of
+            assert r_wired.strategy_id == r_base.strategy_id == sid
+            assert r_wired.total == r_base.total
+            assert r_wired.rows == r_base.rows
+            assert r_wired.scores == r_base.scores
+            if sid == "minute_req":
+                assert r_wired.total == 0 and r_wired.rows == []
+            else:
+                assert r_wired.total == 2  # optional → 跳过确认保留日线核心池
+
+    # 态 1: 空湖 (无 kline_minute) — required → 空 StrategyResult / optional → 跳过确认
+    wired = _engine(minute_loader=make_minute_loader(tmp_path),
+                    strategy_dirs=[tmp_path / "strategies"])
+    baseline = _engine(minute_loader=None, strategy_dirs=[tmp_path / "strategies"])
+    _assert_byte_identical(wired, baseline)
+
+    # 态 2: 湖有分区 (date=2026-08-03) 但 as_of=2026-08-04 缺席 → 工厂缺分区空帧 == 未接线
+    _write_partition(tmp_path, date(2026, 8, 3),
+                     _minute_frame(["600001"], [dt_time(9, 30)]))
+    wired2 = _engine(minute_loader=make_minute_loader(tmp_path),
+                     strategy_dirs=[tmp_path / "strategies"])
+    baseline2 = _engine(minute_loader=None, strategy_dirs=[tmp_path / "strategies"])
+    _assert_byte_identical(wired2, baseline2)
