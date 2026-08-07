@@ -42,13 +42,18 @@ async def auction_backfill(request: Request) -> dict:
     """异步触发竞价历史回填, 立即返回 job_id; 客户端轮询 /api/pipeline/jobs/{id}。
 
     body: ``{"symbols": list|null, "start": "YYYY-MM-DD"|null, "end": "YYYY-MM-DD"|null,
-    "rpm": int|30|null}`` → ``{"status": "started"|"reused", "job_id": "..."}``。
+    "rpm": int|30|null, "only_missing": bool|false|null}`` → ``{"status": "started"|"reused",
+    "job_id": "..."}``。
 
     - 校验 (镜像 pipeline.py:104-122): 日期 ``^\\d{4}-\\d{2}-\\d{2}$`` +
       ``date.fromisoformat``; ``start <= end``; rpm int 且非 bool, 1..60; symbols
       可选, 每项 ``_SYMBOL_RE`` fullmatch (``^\\d{6}\\.(SH|SZ|BJ)$``), 上限
-      ``_MAX_SYMBOLS``。非法一律 400 (防路径穿越 / 注入 / 无界长任务)。
+      ``_MAX_SYMBOLS``; only_missing 必须为 bool。非法一律 400 (防路径穿越 /
+      注入 / 无界长任务)。
     - 单飞: 复用任何活跃 (pending∨running) 任务, ``is_new=False`` 时不再调度新任务。
+    - FA-01 超时豁免: ``create(timeout_s=21600)`` (6h) —— 全量回填实测 3.5-5.5h,
+      缺省 600s 自愈回收不再误杀; 合作式取消不变 (每 symbol 查 job 状态)。
+    - FA-02: ``only_missing`` 透传服务层, 覆盖预扫描跳过已全覆盖标的 (顶补续跑)。
     - 重任务槽: ``try_acquire_run_slot`` 失败 (运行中的 pool backfill / EOD) →
       job fail 记录 ``"已有数据任务在运行"`` (R7 同族重任务互斥, 正确且有意)。
     - 后台执行: ``_long_task_executor`` 线程池跑 ``run_auction_backfill``;
@@ -59,6 +64,7 @@ async def auction_backfill(request: Request) -> dict:
     start = body.get("start")
     end = body.get("end")
     rpm = body.get("rpm", 30)
+    only_missing = body.get("only_missing", False)
 
     # 参数校验 (Pitfall 4 / T-32-02-01/02): 防路径穿越与无界长任务
     for name, v in (("start", start), ("end", end)):
@@ -73,6 +79,8 @@ async def auction_backfill(request: Request) -> dict:
         raise HTTPException(status_code=400, detail="start 不能晚于 end")
     if not isinstance(rpm, int) or isinstance(rpm, bool) or not (1 <= rpm <= 60):
         raise HTTPException(status_code=400, detail="rpm 必须为 1~60 的整数")
+    if not isinstance(only_missing, bool):
+        raise HTTPException(status_code=400, detail="only_missing 必须为布尔值")
     if symbols is not None:
         if not isinstance(symbols, list) or not all(isinstance(s, str) for s in symbols):
             raise HTTPException(status_code=400, detail="symbols 必须为字符串数组")
@@ -111,6 +119,7 @@ async def auction_backfill(request: Request) -> dict:
                 _long_task_executor,
                 lambda: run_auction_backfill(
                     repo, symbols=symbols, start=start, end=end, rpm=rpm,
+                    only_missing=only_missing,
                     on_progress=progress, job_id=job_id,
                 ),
             )

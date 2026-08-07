@@ -87,6 +87,39 @@ def _lake_distinct_symbols(repo: KlineRepository, data_dir) -> list[str]:
         return []
 
 
+def _covered_symbols(repo: KlineRepository, data_dir, aligned_date_set, eff_start, eff_end) -> set[str]:
+    """kline_auction 覆盖扫描: 对齐窗口内每 symbol 行数 >= len(aligned_dates) → 已全覆盖。
+
+    镜像 _lake_distinct_symbols 结构 (DuckDB 视图优先 / polars 兜底 / 异常回空)。
+    行列无 date 列 (分区分桶), 故用 CAST(datetime AS DATE) 范围过滤 — 与写边界
+    ``datetime.date().is_in(aligned_dates)`` 同语义 (分区恰为 aligned dates,
+    节假日无行, BETWEEN 等价于 IN)。1 行/标的/日 canonical 不变式下
+    n >= len(aligned_dates) ⇔ n == len(aligned_dates)。
+    """
+    full = len(aligned_date_set)
+    try:
+        rows = repo.db.execute(
+            "SELECT symbol, COUNT(*) FROM kline_auction "
+            "WHERE CAST(datetime AS DATE) >= ? AND CAST(datetime AS DATE) <= ? "
+            "GROUP BY symbol",
+            [eff_start, eff_end],
+        ).fetchall()
+        return {str(r[0]) for r in rows if r[0] and int(r[1]) >= full}
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        df = (
+            pl.scan_parquet(str(data_dir / "kline_auction" / "**" / "*.parquet"))
+            .filter(pl.col("datetime").dt.date().is_in(aligned_date_set))
+            .group_by("symbol")
+            .agg(pl.len())
+            .collect()
+        )
+        return {str(s) for s, n in df.iter_rows() if n >= full}
+    except Exception:  # noqa: BLE001
+        return set()
+
+
 def _has_daily_rows(repo: KlineRepository, sym: str, start_d: str, end_d: str) -> bool:
     """该 symbol 在 [start_d, end_d] (ISO) 内是否有 kline_daily 行 —— 空 vs 宕机启发式 (RESEARCH §8a)。"""
     try:
@@ -128,6 +161,7 @@ def run_auction_backfill(
     start: str | None = None,
     end: str | None = None,
     rpm: int = 30,
+    only_missing: bool = False,
     on_progress: Callable | None = None,
     job_id: str | None = None,
 ) -> dict:
@@ -140,6 +174,10 @@ def run_auction_backfill(
       ∩ [start,end]; symbols = ``symbols`` 子集参数或 kline_daily 湖 DISTINCT (开工一次)。
       写边界 ``datetime.date().is_in(aligned_dates)`` 过滤 —— 上游多返回的日期绝不
       phantom-write。
+    - only_missing (FA-02): 开工前覆盖预扫描 ``_covered_symbols`` (对齐窗口内行数
+      已达 len(aligned_dates) 的 symbol 视为全覆盖) → 从待回填列表剔除; 剩余为
+      空 → 8 键成功终态 requested=0 (幂等无事可做, 非 fail-closed); 部分覆盖残差
+      整窗重拉 → merge-upsert 幂等补齐。跳过量经进度 emit 传达, 终态键集不变。
     - 预检可达性 (AQ-03a): 循环前一次真实 ``get_auction([symbols[0]], ...)``; 异常或
       「有 kline_daily 覆盖却空」→ 0 写 fail-closed。
     - 串行循环 (AQ-05): 每 symbol 1 请求; ``sleep_between_batches(i, rpm)`` 限速
@@ -176,6 +214,9 @@ def run_auction_backfill(
     if end:
         aligned_dates = [d for d in aligned_dates if d <= end]
 
+    # W-4: aligned_date_set 需在 only_missing 覆盖扫描前就绪 (原位于预检后, 提升至此)。
+    aligned_date_set = {date.fromisoformat(d) for d in aligned_dates}
+
     # universe 开工时取一次 (AQ-05): 子集参数或湖 DISTINCT
     if symbols is None:
         symbols = _lake_distinct_symbols(repo, data_dir)
@@ -193,6 +234,30 @@ def run_auction_backfill(
     eff_start_date = date.fromisoformat(eff_start)
     eff_end_date = date.fromisoformat(eff_end)
 
+    # FA-02 only_missing: 覆盖预扫描 → 已全覆盖 (对齐窗口行数已达) 的 symbol 跳过。
+    # 部分覆盖残差整窗重拉, merge-upsert 幂等补齐; 全跳过 → 8 键成功终态
+    # requested=0 (幂等无事可做, 非 fail-closed no_scope)。
+    if only_missing:
+        covered = _covered_symbols(repo, data_dir, aligned_date_set, eff_start, eff_end)
+        symbols = [s for s in symbols if s not in covered]
+        # W-4: 跳过进度行先于空态返回 emit —— 每次 only_missing 运行都有 [progress] 行
+        # (hub ready 探针依赖), 且跳过量如实可见 (如全量顶补: 跳过 5204, 待回填 333)。
+        emit(
+            "auction_backfill", 0,
+            f"覆盖扫描: 跳过 {len(covered)} 已全覆盖, 待回填 {len(symbols)}",
+        )
+        if not symbols:
+            return {
+                "requested": 0,
+                "backfilled_symbols": 0,
+                "rows": 0,
+                "dates": len(aligned_dates),
+                "failed": 0,
+                "failed_symbols": [],
+                "origin": "backfill",
+                "rpm": rpm,
+            }
+
     # AQ-03a 预检可达性: 循环前一次真实请求; 异常 / 空且有本地覆盖 → 0 写 fail-closed
     try:
         pre = _fetch_auction(provider, symbols[0], eff_start_date, eff_end_date)
@@ -202,7 +267,6 @@ def run_auction_backfill(
     if pre.is_empty() and _has_daily_rows(repo, symbols[0], eff_start, eff_end):
         return _fail_closed(rpm, "preflight_empty")
 
-    aligned_date_set = {date.fromisoformat(d) for d in aligned_dates}
     requested = len(symbols)
     backfilled = rows = failed = 0
     failed_symbols: list[dict[str, str]] = []
