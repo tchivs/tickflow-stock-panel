@@ -153,3 +153,63 @@ def test_xyz_get_auction_omits_optional_col_when_absent():
     assert "auction_virtual_price" not in df.columns
     # 诚实: auction_unmatched_volume 上游无此字段, 永不产出
     assert "auction_unmatched_volume" not in df.columns
+
+
+# ================================================================
+# Test 6 — 三态化 (HON-01): HTTP 403 / 配额窗文案 → SourceBlockedError
+# ================================================================
+
+
+def test_xyz_get_auction_http_403_raises_source_blocked():
+    """HTTP 403 → SourceBlockedError 上抛 (typed 信号), 绝不塌缩空帧。"""
+    import httpx
+    from app.data_providers.base import SourceBlockedError
+    from app.data_providers.xyz_provider import XYZProvider
+
+    provider = XYZProvider()
+    provider._client.post = lambda *a, **k: httpx.Response(
+        403, request=httpx.Request("POST", "http://example.com"), text="quota window",
+    )
+
+    with pytest.raises(SourceBlockedError):
+        provider.get_auction(["000001.SZ"], date(2026, 8, 4))
+
+
+def test_xyz_get_auction_policy_text_raises_source_blocked():
+    """HTTP 200 载荷 error 串含配额窗文案 marker → SourceBlockedError (marker 面)。"""
+    import httpx
+    from app.data_providers.base import SourceBlockedError
+    from app.data_providers.xyz_provider import XYZProvider
+
+    provider = XYZProvider()
+    provider._client.post = lambda *a, **k: httpx.Response(
+        200, request=httpx.Request("POST", "http://example.com"),
+        json={"error": "配额窗口未开放"},
+    )
+
+    with pytest.raises(SourceBlockedError):
+        provider.get_auction(["000001.SZ"], date(2026, 8, 4))
+
+
+def test_xyz_get_auction_propagates_source_blocked():
+    """_call_tool 抛 SourceBlockedError → get_auction 原样重抛 (绝不吞成空帧)。"""
+    from app.data_providers.base import SourceBlockedError
+
+    provider = _provider_with(SourceBlockedError("blocked"))
+    with pytest.raises(SourceBlockedError):
+        provider.get_auction(["000001.SZ"], date(2026, 8, 4))
+
+
+def test_xyz_daily_minute_source_blocked_degrades_to_empty():
+    """daily/minute 路径 (scope 决策): 上游 403 → 空帧降级不抛 (契约不变)。"""
+    import httpx
+    from app.data_providers.xyz_provider import XYZProvider
+
+    provider = XYZProvider()
+    provider._client.post = lambda *a, **k: httpx.Response(
+        403, request=httpx.Request("POST", "http://example.com"), text="quota window",
+    )
+
+    df = provider.get_daily(["000001.SZ"])
+    assert isinstance(df, pl.DataFrame)
+    assert df.is_empty()
