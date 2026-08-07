@@ -1,0 +1,6 @@
+{
+  "error": "rate_limit_exceeded",
+  "detail": null,
+  "code": 429,
+  "retry_after": 50
+}

@@ -1,0 +1,32 @@
+{
+  "SH600519": [
+    {
+      "source": "tencent",
+      "fetched_at": "2026-08-07T08:24:37.315358Z",
+      "schema_version": 1,
+      "symbol": "SH600519",
+      "date": "2026-08-05T00:00:00+08:00",
+      "open": 1328.36,
+      "high": 1333.8,
+      "low": 1303.5,
+      "close": 1306.45,
+      "volume_hand": 42689,
+      "amount_yuan": 5600600000.0
+    }
+  ],
+  "SH600000": [
+    {
+      "source": "tencent",
+      "fetched_at": "2026-08-07T08:24:37.315358Z",
+      "schema_version": 1,
+      "symbol": "SH600000",
+      "date": "2026-08-05T00:00:00+08:00",
+      "open": 10.62,
+      "high": 10.75,
+      "low": 10.55,
+      "close": 10.7,
+      "volume_hand": 381642,
+      "amount_yuan": 409580000.0
+    }
+  ]
+}
