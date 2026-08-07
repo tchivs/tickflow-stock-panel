@@ -3,8 +3,10 @@
 把 staging (43-01 采集产物) 中**仅 09:25 num_trades>0 撮合行**升 canonical
 ``kline_auction``; 虚拟快照行 (num_trades=0) 与 09:25:01 回显行永不入湖
 (555..565 谓词 + 提审过滤双保险, Pitfall 2); 单位映射锁死 (手→股 ×100, Pitfall 7);
-DATA-06 派生输入映射 — ``auction_virtual_price`` = 09:25 price, ``auction_unmatched_volume``
-诚实缺列 (tick 源无未匹配量字段 → 绝不产出/绝不 0 填)。
+自 T-day 起逐日累积幂等 (``promote_trading_day``); DATA-06 派生输入映射 —
+``auction_virtual_price`` = 09:25 price 并交叉验证 ``kline_daily.open`` (1e-6, 镜像
+verify_auction_backfill [4]), ``auction_unmatched_volume`` 诚实缺列 (tick 源无未匹配量
+字段 → 绝不产出/绝不 0 填)。
 
 提审闸门 (Pitfall 6): 当日 staging manifest ``completeness.ok`` ∧
 ``reconciliation.status == "closed"`` — 当日 staging 判定, **绝不用**
@@ -13,7 +15,7 @@ DATA-06 派生输入映射 — ``auction_virtual_price`` = 09:25 price, ``auctio
 
 canonical 写面直调 ``auction_sync.write_auction_partitions`` (555..565 谓词 +
 存在性 crop + merge-upsert 幂等 + 原子写; probe 闸门不在其内)。num_trades 只进
-返回元数据 — canonical 无此列。
+返回/manifest 元数据 — canonical 无此列。
 """
 from __future__ import annotations
 
@@ -169,7 +171,7 @@ def promote_to_canonical(
         "auction_volume": [r["auction_volume"] for r in rows],
         "auction_amount": [r["auction_amount"] for r in rows],
         "auction_virtual_price": [r["auction_virtual_price"] for r in rows],
-    })
+    }).select(_PROMOTE_COLS)  # 输出列契约锁形 (4 canonical + virtual_price; 无 unmatched)
 
     # ---- 写湖: 555..565 谓词 + 存在性 crop + merge-upsert 幂等 + 原子写 (直调, probe 闸门不在其内) ----
     existing_keys = _existing_partition_keys(repo.store.data_dir, trade_date)
@@ -231,4 +233,69 @@ def promote_trading_day(
         "promoted_dates": promoted_dates,
         "skipped": skipped,
         "total_written": total_written,
+    }
+
+
+def cross_validate_virtual_price(
+    repo: KlineRepository,
+    trade_date: date,
+    symbols: list[str] | None = None,
+    tol: float = 1e-6,
+) -> dict:
+    """DATA-06 交叉验证: ``auction_virtual_price`` == ``kline_daily.open`` (1e-6)。
+
+    镜像 verify_auction_backfill [4] 语义 — kline_daily.open 是独立第二来源互证。
+    数据在场为准: 无 kline_daily 当日分区 → ``{"skipped": [symbols],
+    "reason": "no_kline_daily"}`` 诚实标注, 绝不猜测/绝不吞。
+
+    Returns:
+        ``{"checked": [{symbol, virtual_price, kline_open, diff, ok}],
+        "all_ok": bool, "skipped": [symbols], "reason"?: str}``
+    """
+    data_dir = repo.store.data_dir
+    auc_part = data_dir / "kline_auction" / f"date={trade_date.isoformat()}" / "part.parquet"
+    if not auc_part.exists():
+        return {"checked": [], "all_ok": True, "skipped": []}
+    auction = pl.read_parquet(auc_part)
+    if "auction_virtual_price" not in auction.columns:
+        return {"checked": [], "all_ok": True, "skipped": []}
+    if symbols is not None:
+        auction = auction.filter(pl.col("symbol").is_in(symbols))
+    if auction.is_empty():
+        return {"checked": [], "all_ok": True, "skipped": []}
+    auction_syms = sorted(auction["symbol"].unique().to_list())
+
+    daily_part = data_dir / "kline_daily" / f"date={trade_date.isoformat()}" / "part.parquet"
+    if not daily_part.exists() or "open" not in pl.read_parquet(daily_part).columns:
+        return {
+            "checked": [],
+            "all_ok": True,
+            "skipped": auction_syms,
+            "reason": "no_kline_daily",
+        }
+    daily = pl.read_parquet(daily_part).select(["symbol", "open"])
+
+    joined = auction.select(["symbol", "auction_virtual_price"]).join(
+        daily, on="symbol", how="left",
+    )
+    checked: list[dict] = []
+    skipped: list[str] = []
+    for rec in joined.iter_rows(named=True):
+        if rec.get("open") is None:  # 该 symbol 当日 daily 缺行 → 诚实标注
+            skipped.append(rec["symbol"])
+            continue
+        vp = float(rec["auction_virtual_price"])
+        open_ = float(rec["open"])
+        diff = abs(vp - open_)
+        checked.append({
+            "symbol": rec["symbol"],
+            "virtual_price": vp,
+            "kline_open": open_,
+            "diff": diff,
+            "ok": diff <= tol,
+        })
+    return {
+        "checked": checked,
+        "all_ok": all(c["ok"] for c in checked),
+        "skipped": sorted(set(skipped)),
     }
