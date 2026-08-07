@@ -68,7 +68,7 @@ Four phases (20-23) delivered probe-gated real auction columns + `kline_auction/
 - [x] **Phase 41: 诚实性修复 (Honesty Fixes)** - `source_blocked` 三态化 + fail-closed 终态 emit — HON-01..02 (completed 2026-08-07)
 - [x] **Phase 42: 分钟湖扩湖 (Minute Lake Expansion)** - backfill-minute 全量扩湖 + 历史竞价统计路径 + 诚实标注 — MIN-01..03 (completed 2026-08-07)
 - [x] **Phase 43: T-day 竞价采集 sidecar (T-Day Auction Capture)** - 盘中逐秒快照 + 09:25 撮合行采集 + T-day 累积 + 诚实门 — SDC-01..03 (completed 2026-08-07)
-- [ ] **Phase 44: 部署日执行面 (Deploy-Day Execution)** - 凭证/连通性前置 + 200-body 验证 + D1..D8 runbook 脚本化 + 3018 rebuild — DEP-01..04
+- [x] **Phase 44: 部署日执行面 (Deploy-Day Execution)** - 凭证/连通性前置 + 200-body 验证 + D1..D8 runbook 脚本化 + 3018 rebuild — DEP-01..04 (completed 2026-08-07)
 
 ## Phase Details
 
@@ -249,9 +249,9 @@ Plans:
 
 Plans:
 
-- [ ] 44-01-PLAN.md — 凭证/连通性前置: env 方案 (.env.example 网关+key 来源) + deploy_check_connectivity.sh (三态探测/md5 对齐/401 门) (DEP-01)
-- [ ] 44-02-PLAN.md — 200-body 验证脚本: deploy_verify_endpoints.py (401 先验→login→3 端点键断言→job 轮询 W-5) (DEP-02)
-- [ ] 44-03-PLAN.md — D1..D8 runbook + rebuild 配方: deploy_day_runbook.sh + deploy_rebuild.sh + deploy-verification.md v2.5 节 (DEP-03, DEP-04)
+- [x] 44-01-PLAN.md — 凭证/连通性前置: env 方案 (.env.example 网关+key 来源) + deploy_check_connectivity.sh (三态探测/md5 对齐/401 门) (DEP-01)
+- [x] 44-02-PLAN.md — 200-body 验证脚本: deploy_verify_endpoints.py (401 先验→login→3 端点键断言→job 轮询 W-5) (DEP-02)
+- [x] 44-03-PLAN.md — D1..D8 runbook + rebuild 配方: deploy_day_runbook.sh + deploy_rebuild.sh + deploy-verification.md v2.5 节 (DEP-03, DEP-04)
 
 ## Progress
 

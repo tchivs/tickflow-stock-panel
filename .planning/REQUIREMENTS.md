@@ -33,10 +33,10 @@ Requirements for the v2.5 milestone. Each maps to a roadmap phase. Research basi
 
 ### 部署日执行面 (Deploy-Day Execution) — Phase 44
 
-- [ ] **DEP-01**: 凭证/连通性前置 — stockdb key 配置 + 容器内连通性验证 (127.0.0.1:8000 loopback 不通 → host 网络或网关方案, 实测判定); 3018 容器对齐检查 (4 运行时文件 md5 vs HEAD)。
-- [ ] **DEP-02**: 新端点 200-body 验证脚本 — 3 新端点 (backfill/validation/backtest) auth-gated 200-body 脚本化 (login cookie → 请求 → body 形状断言, 不再只验 401 门)。
-- [ ] **DEP-03**: D1..D8 runbook 脚本化 — 观测窗口每项可执行 (09:26 premarket / 15:30 EOD+池持久化 / 15:40 recap / D7 探针周终 / 分钟点亮门 = 15:30 后分区存在 && auction_intraday_confirm 非空, 非盘中误判)。
-- [ ] **DEP-04**: 3018 rebuild 对齐 — 重建配方落地 (预检验证 build 66s + boot 18s) + 数据卷/权限检查 (root-owned 修复) + 旧容器替换流程文档化。
+- [x] **DEP-01**: 凭证/连通性前置 — stockdb key 配置 + 容器内连通性验证 (127.0.0.1:8000 loopback 不通 → host 网络或网关方案, 实测判定); 3018 容器对齐检查 (4 运行时文件 md5 vs HEAD)。
+- [x] **DEP-02**: 新端点 200-body 验证脚本 — 3 新端点 (backfill/validation/backtest) auth-gated 200-body 脚本化 (login cookie → 请求 → body 形状断言, 不再只验 401 门)。
+- [x] **DEP-03**: D1..D8 runbook 脚本化 — 观测窗口每项可执行 (09:26 premarket / 15:30 EOD+池持久化 / 15:40 recap / D7 探针周终 / 分钟点亮门 = 15:30 后分区存在 && auction_intraday_confirm 非空, 非盘中误判)。
+- [x] **DEP-04**: 3018 rebuild 对齐 — 重建配方落地 (预检验证 build 66s + boot 18s) + 数据卷/权限检查 (root-owned 修复) + 旧容器替换流程文档化。
 
 ## Future Requirements (Deferred)
 
@@ -70,7 +70,7 @@ Requirements for the v2.5 milestone. Each maps to a roadmap phase. Research basi
 | SDC-01 | Phase 43 | Complete |
 | SDC-02 | Phase 43 | Complete |
 | SDC-03 | Phase 43 | Complete |
-| DEP-01 | Phase 44 | Planned |
-| DEP-02 | Phase 44 | Planned |
-| DEP-03 | Phase 44 | Planned |
-| DEP-04 | Phase 44 | Planned |
+| DEP-01 | Phase 44 | Complete |
+| DEP-02 | Phase 44 | Complete |
+| DEP-03 | Phase 44 | Complete |
+| DEP-04 | Phase 44 | Complete |
