@@ -16,8 +16,8 @@ Requirements for the v2.5 milestone. Each maps to a roadmap phase. Research basi
 
 ### 诚实性修复 (Honesty Fixes) — Phase 41
 
-- [ ] **HON-01**: `source_blocked` 三态化 — xyz_provider.py:189-198/:228-250 HTTP 403/配额窗 markers 分类为 policy-block 信号 (typed 异常或带 reason 空帧), 其余网络错误保持「空帧不抛」契约 (test_xyz_provider.py:126-137 保持绿); 台账 reason 第三类 `"source_blocked"` (两键形状 {symbol,reason} 不变, 与 `empty_response`/`str(e)[:200]` 互斥); `services/auction_probe.py` preflight 遇 policy-block → verdict `fail_closed` + detail=`"source_blocked"`; R1 重试只对可重试态生效。
-- [ ] **HON-02**: fail-closed 终态 emit — `services/auction_backfill.py` 所有 fail-closed 提前返回路径 (行 200/224/228/266/268) 补终态 emit (每 symbol 一行, 含 reason); 取消路径独立 stage (`cancelled`/实际 pct, 绝不 `done`/100); `scripts/auction_backfill.py` CLI 接 on_progress 打 stderr (现零进度输出); 回归锁: 全空帧批量 → 断言每 symbol 进度行 + 终态 failed 计数正确。
+- [x] **HON-01**: `source_blocked` 三态化 — xyz_provider.py:189-198/:228-250 HTTP 403/配额窗 markers 分类为 policy-block 信号 (typed 异常或带 reason 空帧), 其余网络错误保持「空帧不抛」契约 (test_xyz_provider.py:126-137 保持绿); 台账 reason 第三类 `"source_blocked"` (两键形状 {symbol,reason} 不变, 与 `empty_response`/`str(e)[:200]` 互斥); `services/auction_probe.py` preflight 遇 policy-block → verdict `fail_closed` + detail=`"source_blocked"`; R1 重试只对可重试态生效。
+- [x] **HON-02**: fail-closed 终态 emit — `services/auction_backfill.py` 所有 fail-closed 提前返回路径 (行 200/224/228/266/268) 补终态 emit (每 symbol 一行, 含 reason); 取消路径独立 stage (`cancelled`/实际 pct, 绝不 `done`/100); `scripts/auction_backfill.py` CLI 接 on_progress 打 stderr (现零进度输出); 回归锁: 全空帧批量 → 断言每 symbol 进度行 + 终态 failed 计数正确。
 
 ### 分钟湖扩湖 → 历史竞价解锁 (Minute Lake Expansion) — Phase 42
 
@@ -62,8 +62,8 @@ Requirements for the v2.5 milestone. Each maps to a roadmap phase. Research basi
 | LOCAL-02 | Phase 40 | Complete |
 | LOCAL-03 | Phase 40 | Complete |
 | LOCAL-04 | Phase 40 | Complete |
-| HON-01 | Phase 41 | Planned |
-| HON-02 | Phase 41 | Planned |
+| HON-01 | Phase 41 | Complete |
+| HON-02 | Phase 41 | Complete |
 | MIN-01 | Phase 42 | Planned |
 | MIN-02 | Phase 42 | Planned |
 | MIN-03 | Phase 42 | Planned |
