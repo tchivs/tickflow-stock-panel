@@ -11,7 +11,7 @@ Hermetic (镜像 test_attach_auction_columns_range.py / test_auction_columns.py)
 """
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, time
 
 import polars as pl
 import pytest
@@ -73,6 +73,53 @@ def _auction_rows(
                 "datetime": datetime(trade_date.year, trade_date.month, trade_date.day, 9, _WINDOW_MINUTES[k]),
                 "auction_volume": av,
                 "auction_amount": aa,
+            })
+    return pl.DataFrame(rows)
+
+
+def _write_minute_partition(data_dir, trade_date: date, rows: pl.DataFrame) -> None:
+    """手工写盘 kline_minute/date=YYYY-MM-DD/part.parquet (镜像 _write_auction_partition)。"""
+    out = data_dir / "kline_minute" / f"date={trade_date.isoformat()}" / "part.parquet"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    rows.write_parquet(out)
+
+
+# 09:30 bar 统计口径锚点 (RESEARCH 双源实测 600519): OHLC 全等 1328.36 / vol 521 手
+# / amount 69,207,556 元 = 521×1328.36×100 精确闭合 (腾讯 mkline 无 amount 列的派生面)
+_MINUTE_ANCHOR_PRICE = 1328.36
+_MINUTE_ANCHOR_VOLUME = 521.0
+_MINUTE_ANCHOR_AMOUNT = _MINUTE_ANCHOR_VOLUME * _MINUTE_ANCHOR_PRICE * 100  # 69,207,556.0
+
+
+def _minute_rows(
+    trade_date: date,
+    symbols,
+    n_bars: int = 1,
+    *,
+    price: float = _MINUTE_ANCHOR_PRICE,
+    ohlc_eq: bool = True,
+    volume: float = _MINUTE_ANCHOR_VOLUME,
+) -> pl.DataFrame:
+    """kline_minute canonical 列: 每 symbol 生成 09:30 起 n_bars 根 (09:30, 09:31, ...)。
+
+    默认 OHLC 全等 (纯净竞价单价位): open==high==low==close==1328.36, volume 521 手
+    → amount 派生契约锚 521×1328.36×100≈69,207,556。ohlc_eq=False → close 偏移
+    (非全等 → amount UNKNOWN 面, 绝不猜)。
+    """
+    rows = []
+    for sym in symbols:
+        for k in range(n_bars):
+            t = time(9, 30 + k)
+            close = price if ohlc_eq else price + 1.64
+            rows.append({
+                "symbol": sym,
+                "datetime": datetime(trade_date.year, trade_date.month, trade_date.day, t.hour, t.minute),
+                "open": price,
+                "high": price,
+                "low": price,
+                "close": close,
+                "volume": volume,
+                "amount": None,
             })
     return pl.DataFrame(rows)
 
@@ -1073,3 +1120,155 @@ def test_minute_confirm_regression_after_coverage(repo_env):
     for st in report["strategies"]:
         assert st["minute_confirm"] == "not_applied", st["id"]
     assert by_id["auction_intraday_confirm"]["minute_confirm"] == "not_applied"
+
+
+# ================================================================
+# MIN-02 — 统计口径双报告 (coverage.minute_stats, caliber=statistical_minute_0930)
+# ================================================================
+
+
+def test_minute_stats_block_dual_caliber_parallel(repo_env):
+    """MIN-02 双口径并列: coverage.symbols (canonical 撮合) 与 coverage.minute_stats
+    (统计口径) 两独立键并存, 各按自身口径, 绝不相加; caliber 逐字标注。"""
+    from app.services.auction_validation import AuctionValidationService
+
+    repo, data_dir = repo_env
+    start = date(2026, 8, 4)
+    _seed_enriched_cache(repo, days=2, start=start, symbols=_ENRICHED_SYMBOLS_5)
+    # canonical 口径: 2 symbol 竞价分区 (555..565 窗口行)
+    _seed_auction_partitions(
+        data_dir, start, 2,
+        {"000001.SZ": (180_000.0, 3_000_000.0), "000002.SZ": (180_000.0, 3_000_000.0)},
+    )
+    # 统计口径: 3 symbol 09:30 bar 分区 (与 canonical 宇宙不同子集, 双口径可比)
+    for d in (start, start + timedelta(days=1)):
+        _write_minute_partition(data_dir, d, _minute_rows(d, ("000001.SZ", "600519.SH", "300750.SZ")))
+
+    engine = _make_engine()
+    svc = AuctionValidationService(repo, engine, probe_resolver=lambda: _available_verdict())
+
+    report = svc.build_report(start=start, end=start + timedelta(days=1))
+
+    assert report["data_gate"] == "available"
+    cov = report["coverage"]
+    assert "symbols" in cov and "minute_stats" in cov  # 双口径并列
+    ms = cov["minute_stats"]
+    assert ms["caliber"] == "statistical_minute_0930"
+    assert ms["auction_symbol_count"] == 3
+    assert ms["symbol_coverage_ratio"] == pytest.approx(3 / 5)
+    assert ms["universe_size"] == 5
+    assert ms["dates_covered"] == [start.isoformat(), (start + timedelta(days=1)).isoformat()]
+    # canonical 子块保持自身口径 (2 symbol) — 两键不相加、不混同
+    assert cov["symbols"]["auction_symbol_count"] == 2
+    assert ms["auction_symbol_count"] != cov["symbols"]["auction_symbol_count"]
+
+
+def test_minute_stats_only_0930_rows(repo_env):
+    """MIN-02 09:30-only: 统计只认 datetime.time()==09:30 的行; 09:31/14:59 行
+    绝不进统计口径 (symbol 覆盖与日期集合均排除)。"""
+    from app.services.auction_validation import AuctionValidationService
+
+    repo, data_dir = repo_env
+    start = date(2026, 8, 4)
+    _seed_enriched_cache(
+        repo, days=2, start=start,
+        symbols=("000001.SZ", "600519.SH", "300750.SZ", "601318.SH"),
+    )
+    # 第一日: 09:30 只有 000001.SZ; 600519.SH 只有 09:31; 300750.SZ 只有 14:59
+    rows = pl.concat([
+        _minute_rows(start, ("000001.SZ",)),
+        pl.DataFrame([{
+            "symbol": "600519.SH",
+            "datetime": datetime(2026, 8, 4, 9, 31),
+            "open": 1328.36, "high": 1328.36, "low": 1328.36, "close": 1328.36,
+            "volume": 999.0, "amount": None,
+        }]),
+        pl.DataFrame([{
+            "symbol": "300750.SZ",
+            "datetime": datetime(2026, 8, 4, 14, 59),
+            "open": 200.0, "high": 200.0, "low": 200.0, "close": 200.0,
+            "volume": 777.0, "amount": None,
+        }]),
+    ])
+    _write_minute_partition(data_dir, start, rows)
+    # 第二日: 分区在场但只有 09:31 行 → 该日绝不进统计口径 (dates_covered 只含实有 09:30 的日)
+    _write_minute_partition(
+        data_dir, start + timedelta(days=1),
+        pl.DataFrame([{
+            "symbol": "601318.SH",
+            "datetime": datetime(2026, 8, 5, 9, 31),
+            "open": 50.0, "high": 50.0, "low": 50.0, "close": 50.0,
+            "volume": 888.0, "amount": None,
+        }]),
+    )
+    engine = _make_engine()
+    svc = AuctionValidationService(repo, engine, probe_resolver=lambda: _available_verdict())
+
+    report = svc.build_report(start=start, end=start + timedelta(days=1))
+    ms = report["coverage"]["minute_stats"]
+
+    assert ms["auction_symbol_count"] == 1  # 只有 09:30 的 000001.SZ
+    assert ms["dates_covered"] == [start.isoformat()]
+
+
+def test_minute_stats_honest_empty(repo_env):
+    """MIN-02 诚实空态: 无 kline_minute 分区 → minute_stats 全 0 同键形状
+    (与 canonical 空态并列, 绝不编造覆盖/解锁)。"""
+    from app.services.auction_validation import AuctionValidationService
+
+    repo, data_dir = repo_env
+    start = date(2026, 8, 4)
+    _seed_enriched_cache(repo, days=2, start=start, symbols=_ENRICHED_SYMBOLS_5)
+    _seed_auction_partitions(
+        data_dir, start, 2,
+        {"000001.SZ": (180_000.0, 3_000_000.0), "000002.SZ": (180_000.0, 3_000_000.0)},
+    )
+    engine = _make_engine()
+    svc = AuctionValidationService(repo, engine, probe_resolver=lambda: _available_verdict())
+
+    report = svc.build_report(start=start, end=start + timedelta(days=1))
+    ms = report["coverage"]["minute_stats"]
+
+    assert ms["caliber"] == "statistical_minute_0930"
+    assert ms["auction_symbol_count"] == 0
+    assert ms["symbol_coverage_ratio"] == pytest.approx(0.0)
+    assert ms["unlock_met"] is False
+    assert ms["dates_covered"] == []
+    assert ms["universe_size"] == 5
+    # canonical 子块如实非 0 — 双口径独立, 统计空态不拖累 canonical
+    assert report["coverage"]["symbols"]["auction_symbol_count"] == 2
+
+
+def test_minute_stats_unlock_gate_fields(repo_env):
+    """MIN-02 解锁门可观测: unlock_threshold==0.94 (FA-04/RC-02 统计口径门);
+    3/3 覆盖 → unlock_met True; 1/3 → False (诚实 partial, 绝不假解锁)。"""
+    from app.services.auction_validation import AuctionValidationService
+
+    repo, data_dir = repo_env
+    start = date(2026, 8, 4)
+    syms3 = ("000001.SZ", "000002.SZ", "600519.SH")
+    _seed_enriched_cache(repo, days=2, start=start, symbols=syms3)
+    _seed_auction_partitions(
+        data_dir, start, 2,
+        {"000001.SZ": (180_000.0, 3_000_000.0), "000002.SZ": (180_000.0, 3_000_000.0)},
+    )
+    engine = _make_engine()
+    svc = AuctionValidationService(repo, engine, probe_resolver=lambda: _available_verdict())
+
+    # 3/3 覆盖 → 解锁
+    for d in (start, start + timedelta(days=1)):
+        _write_minute_partition(data_dir, d, _minute_rows(d, syms3))
+    report = svc.build_report(start=start, end=start + timedelta(days=1))
+    ms = report["coverage"]["minute_stats"]
+    assert ms["unlock_threshold"] == pytest.approx(0.94)
+    assert ms["auction_symbol_count"] == 3
+    assert ms["unlock_met"] is True
+
+    # 1/3 → 诚实 partial, 绝不假解锁
+    import shutil
+    shutil.rmtree(data_dir / "kline_minute")
+    _write_minute_partition(data_dir, start, _minute_rows(start, ("000001.SZ",)))
+    report2 = svc.build_report(start=start, end=start + timedelta(days=1))
+    ms2 = report2["coverage"]["minute_stats"]
+    assert ms2["auction_symbol_count"] == 1
+    assert ms2["unlock_met"] is False
