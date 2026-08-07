@@ -1,0 +1,226 @@
+{
+  "SH600519": [
+    {
+      "symbol": "SH600519",
+      "bar_time": "2026-08-03T09:30:00+08:00",
+      "freq": 1,
+      "open": 1328.36,
+      "high": 1328.36,
+      "low": 1328.36,
+      "close": 1328.36,
+      "volume_hand": 521,
+      "amount_yuan": 69207556.0
+    },
+    {
+      "symbol": "SH600519",
+      "bar_time": "2026-08-03T09:31:00+08:00",
+      "freq": 1,
+      "open": 1328.36,
+      "high": 1329.5,
+      "low": 1327.0,
+      "close": 1328.8,
+      "volume_hand": 412,
+      "amount_yuan": 54700000.0
+    },
+    {
+      "symbol": "SH600519",
+      "bar_time": "2026-08-03T09:32:00+08:00",
+      "freq": 1,
+      "open": 1328.8,
+      "high": 1330.0,
+      "low": 1328.5,
+      "close": 1329.9,
+      "volume_hand": 218,
+      "amount_yuan": 28980000.0
+    },
+    {
+      "symbol": "SH600519",
+      "bar_time": "2026-08-03T09:33:00+08:00",
+      "freq": 1,
+      "open": 1329.9,
+      "high": 1331.2,
+      "low": 1329.0,
+      "close": 1330.6,
+      "volume_hand": 305,
+      "amount_yuan": 40580000.0
+    },
+    {
+      "symbol": "SH600519",
+      "bar_time": "2026-08-03T09:34:00+08:00",
+      "freq": 1,
+      "open": 1330.6,
+      "high": 1332.0,
+      "low": 1330.1,
+      "close": 1331.4,
+      "volume_hand": 276,
+      "amount_yuan": 36740000.0
+    },
+    {
+      "symbol": "SH600519",
+      "bar_time": "2026-08-04T09:30:00+08:00",
+      "freq": 1,
+      "open": 1331.0,
+      "high": 1331.0,
+      "low": 1331.0,
+      "close": 1331.0,
+      "volume_hand": 488,
+      "amount_yuan": 64952800.0
+    },
+    {
+      "symbol": "SH600519",
+      "bar_time": "2026-08-04T09:31:00+08:00",
+      "freq": 1,
+      "open": 1331.0,
+      "high": 1332.8,
+      "low": 1330.2,
+      "close": 1332.1,
+      "volume_hand": 390,
+      "amount_yuan": 51950000.0
+    },
+    {
+      "symbol": "SH600519",
+      "bar_time": "2026-08-04T09:32:00+08:00",
+      "freq": 1,
+      "open": 1332.1,
+      "high": 1333.5,
+      "low": 1331.6,
+      "close": 1332.9,
+      "volume_hand": 224,
+      "amount_yuan": 29850000.0
+    },
+    {
+      "symbol": "SH600519",
+      "bar_time": "2026-08-04T09:33:00+08:00",
+      "freq": 1,
+      "open": 1332.9,
+      "high": 1334.2,
+      "low": 1332.0,
+      "close": 1333.7,
+      "volume_hand": 312,
+      "amount_yuan": 41610000.0
+    },
+    {
+      "symbol": "SH600519",
+      "bar_time": "2026-08-04T09:34:00+08:00",
+      "freq": 1,
+      "open": 1333.7,
+      "high": 1335.0,
+      "low": 1333.1,
+      "close": 1334.5,
+      "volume_hand": 267,
+      "amount_yuan": 35630000.0
+    }
+  ],
+  "SH600000": [
+    {
+      "symbol": "SH600000",
+      "bar_time": "2026-08-03T09:30:00+08:00",
+      "freq": 1,
+      "open": 10.0,
+      "high": 10.0,
+      "low": 10.0,
+      "close": 10.0,
+      "volume_hand": 1000,
+      "amount_yuan": 1000000.0
+    },
+    {
+      "symbol": "SH600000",
+      "bar_time": "2026-08-03T09:31:00+08:00",
+      "freq": 1,
+      "open": 10.0,
+      "high": 10.12,
+      "low": 9.98,
+      "close": 10.08,
+      "volume_hand": 860,
+      "amount_yuan": 866800.0
+    },
+    {
+      "symbol": "SH600000",
+      "bar_time": "2026-08-03T09:32:00+08:00",
+      "freq": 1,
+      "open": 10.08,
+      "high": 10.15,
+      "low": 10.05,
+      "close": 10.12,
+      "volume_hand": 740,
+      "amount_yuan": 748800.0
+    },
+    {
+      "symbol": "SH600000",
+      "bar_time": "2026-08-03T09:33:00+08:00",
+      "freq": 1,
+      "open": 10.12,
+      "high": 10.18,
+      "low": 10.08,
+      "close": 10.15,
+      "volume_hand": 690,
+      "amount_yuan": 700300.0
+    },
+    {
+      "symbol": "SH600000",
+      "bar_time": "2026-08-03T09:34:00+08:00",
+      "freq": 1,
+      "open": 10.15,
+      "high": 10.22,
+      "low": 10.12,
+      "close": 10.2,
+      "volume_hand": 810,
+      "amount_yuan": 826200.0
+    },
+    {
+      "symbol": "SH600000",
+      "bar_time": "2026-08-04T09:30:00+08:00",
+      "freq": 1,
+      "open": 10.2,
+      "high": 10.2,
+      "low": 10.2,
+      "close": 10.2,
+      "volume_hand": 950,
+      "amount_yuan": 969000.0
+    },
+    {
+      "symbol": "SH600000",
+      "bar_time": "2026-08-04T09:31:00+08:00",
+      "freq": 1,
+      "open": 10.2,
+      "high": 10.3,
+      "low": 10.16,
+      "close": 10.26,
+      "volume_hand": 880,
+      "amount_yuan": 902800.0
+    },
+    {
+      "symbol": "SH600000",
+      "bar_time": "2026-08-04T09:32:00+08:00",
+      "freq": 1,
+      "open": 10.26,
+      "high": 10.32,
+      "low": 10.22,
+      "close": 10.29,
+      "volume_hand": 720,
+      "amount_yuan": 740800.0
+    },
+    {
+      "symbol": "SH600000",
+      "bar_time": "2026-08-04T09:33:00+08:00",
+      "freq": 1,
+      "open": 10.29,
+      "high": 10.35,
+      "low": 10.25,
+      "close": 10.32,
+      "volume_hand": 660,
+      "amount_yuan": 681100.0
+    },
+    {
+      "symbol": "SH600000",
+      "bar_time": "2026-08-04T09:34:00+08:00",
+      "freq": 1,
+      "open": 10.32,
+      "high": 10.38,
+      "low": 10.28,
+      "close": 10.35,
+      "volume_hand": 790,
+      "amount_yuan": 817600.0
+    }
+  ]
+}
