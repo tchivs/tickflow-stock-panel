@@ -37,7 +37,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone, time
 
 import polars as pl
 
@@ -228,6 +228,10 @@ class AuctionValidationService:
                     len(auction_enabled_dates) / len(enriched_dates) if enriched_dates else 0.0
                 ),
                 "symbols": self._coverage_symbols(start, end, verification_panel, enriched_dates),
+                # MIN-02 统计口径: 与 canonical symbols 块并列, 绝不相加 (caliber 标注)
+                "minute_stats": self._minute_stats_coverage(
+                    start, end, verification_panel["symbol"].unique().to_list()
+                ),
             },
             "skipped_ids": skipped_ids,
             "strategies": strategies,
@@ -310,6 +314,60 @@ class AuctionValidationService:
             "auction_rows_expected": enriched_symbol_count * len(enriched_dates),
         }
 
+    def _minute_stats_coverage(
+        self,
+        start: date,
+        end: date,
+        universe: list[str],
+    ) -> dict:
+        """MIN-02 统计口径覆盖 digest: kline_minute 窗口内 09:30 bar (集合竞价统计,
+        非逐笔) 的 symbol 覆盖 — 与 canonical ``coverage.symbols`` 并列, 绝不相加,
+        物理上绝不写 kline_auction (555..565 排除保持)。
+
+        - 只扫 ``kline_minute/date=*`` 窗口内分区中 ``datetime.time()==09:30`` 的行
+          (纯净竞价统计 bar, RESEARCH 双源实测 600519: OHLC 全等 1328.36 / 521 手);
+          非 09:30 行 (09:31/14:59 等) 绝不进统计口径;
+        - 解锁门 (FA-04/RC-02 统计口径): unlock_threshold=0.94, unlock_met =
+          ratio >= 0.94; 未达 → 诚实 partial 双口径并列, 绝不假解锁;
+        - 诚实空态: 无分区/无 09:30 行 → 全 0 同键形状 (D-02, 与 canonical 空态并列);
+        - 量/额字段 (auction_volume_hands / auction_amount_yuan / amount_unknown_count)
+          由 amount 派生任务 (42-02 Task 2) 填充, 此处占位 0。
+        """
+        base = self._repo.store.data_dir / "kline_minute"
+        symbols: set[str] = set()
+        dates_covered: list[str] = []
+        if base.exists():
+            for part in sorted(base.glob("date=*/part.parquet")):
+                d = _dir_date(part)
+                if d is None or not (start <= d <= end):
+                    continue
+                try:
+                    f = pl.read_parquet(part)
+                except Exception:  # noqa: BLE001 — fail-closed, 镜像分区扫 (T-29-01-05)
+                    logger.debug("_minute_stats_coverage: skip unreadable partition %s", part)
+                    continue
+                if f.is_empty() or "datetime" not in f.columns or "symbol" not in f.columns:
+                    logger.debug("_minute_stats_coverage: skip empty/column-less partition %s", part)
+                    continue
+                bars = f.filter(pl.col("datetime").dt.time() == time(9, 30))
+                if bars.is_empty():
+                    continue
+                symbols.update(bars["symbol"].unique().to_list())
+                dates_covered.append(d.isoformat())
+        ratio = len(symbols) / len(universe) if universe else 0.0
+        return {
+            "caliber": "statistical_minute_0930",
+            "auction_symbol_count": len(symbols),
+            "symbol_coverage_ratio": ratio,
+            "unlock_threshold": 0.94,
+            "unlock_met": ratio >= 0.94,
+            "dates_covered": dates_covered,
+            "universe_size": len(universe),
+            "auction_volume_hands": 0.0,
+            "auction_amount_yuan": 0.0,
+            "amount_unknown_count": 0,
+        }
+
     def _empty_report(self, reason: str, *, window=None, probe_dict=None) -> dict:
         """诚实空态 200 形 dict (绝不 404/500/0 填, 镜像 premarket_pool 空态)。"""
         return {
@@ -330,6 +388,19 @@ class AuctionValidationService:
                     "symbol_coverage_ratio": 0.0,
                     "auction_rows_present": 0,
                     "auction_rows_expected": 0,
+                },
+                # MIN-02: 统计口径空态与实态同键形状 (D-02)
+                "minute_stats": {
+                    "caliber": "statistical_minute_0930",
+                    "auction_symbol_count": 0,
+                    "symbol_coverage_ratio": 0.0,
+                    "unlock_threshold": 0.94,
+                    "unlock_met": False,
+                    "dates_covered": [],
+                    "universe_size": 0,
+                    "auction_volume_hands": 0.0,
+                    "auction_amount_yuan": 0.0,
+                    "amount_unknown_count": 0,
                 },
             },
             "skipped_ids": [],
