@@ -163,12 +163,18 @@ Plans:
 
   1. `_get_provider("local_stockdb")` resolves a lazy singleton; adapter declares `auction=False` honestly and never enters the auction_probe chain.
   2. `local_stockdb_url` (默认 `http://127.0.0.1:8000`) + `local_stockdb_api_key` (env 注入, 不入 git) configured; all requests send X-API-Key header-only (禁 URL 传参), `sleep_between_batches` aligns to server rate tiers (quotes 300/min, daily/minute/intraday 120/min, ticks 60/min), 429 honored with Retry-After.
-  3. Normalization contract tests lock the three divergences — `SH600519→600519.SH`, volume 手→股 ×100, unified timezone (镜像 `_normalize_daily`) — so 同股双键/100×量失真/时区漂移 never occur; lake writes go only through the existing write path (merge-upsert idempotent + atomic rename).
+  3. Normalization contract tests lock the three divergences — `SH600519→600519.SH`, volume 恒等 ×1 (实测 stockdb volume_hand 手 == 湖内手; 契约锁死量级不漂移, 绝不 ×100), unified timezone (剥 aware→naive, 镜像 `_normalize_daily`) — so 同股双键/100×量失真/时区漂移 never occur; lake writes go only through the existing write path (merge-upsert idempotent + atomic rename).
   4. daily/minute bypass: chain-head gap-merge consumes the local channel via existing `kline_sync` write path; dual-source guards hold (单源选择 + run-slot 互斥 + 幂等写); channel identity lands in ledger/终态 dict (湖无 provenance 列 — 铁律).
   5. Zero new runtime dependencies (httpx/pydantic only); hermetic + live smoke pass.
 
 **Research flag**: 需 `--research-phase` — 适配器 symbol/单位/时区映射细节 UNKNOWN（须 live probe 定稿）；Docker 构建上下文不含 `../stockdb` 的部署形态；SDK 修订号锚定 (P6 版本锚纪律)。
-**Plans**: TBD
+**Plans**: 0/3 plans executed
+
+Plans:
+
+- [ ] 40-01-PLAN.md — 契约先行: 冻结夹具 + 三差异/错误/限频契约测试 + stockdb_provider.py 适配器本体 (LOCAL-01, LOCAL-03)
+- [ ] 40-02-PLAN.md — 注册: config 键 + chain 链首/分支/单例/health + 白名单 + settings builtin + 注册回归 (LOCAL-02)
+- [ ] 40-03-PLAN.md — 集成: 链 gap-merge + TestClient + 写路径冒烟 + AST 守卫改形 + 全量回归 (LOCAL-04)
 
 ### Phase 41: 诚实性修复 (Honesty Fixes)
 
