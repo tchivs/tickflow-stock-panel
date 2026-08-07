@@ -274,3 +274,21 @@
 **执行顺序 (部署日)**: ① `deploy_check_connectivity.sh` (44-01 连通性预检: probe+md5+gate) → ② `deploy_rebuild.sh --preflight` (build+boot+md5 4/4, 零残留) → ③ operator 执行 `--apply` 步骤 (compose up -d + chown + 对齐确认) → ④ `deploy_verify_endpoints.py --base-url :3018` (44-02 200-body 全流程) → ⑤ `deploy_day_runbook.sh` D1..D8 观测窗 (39-03 日历对齐, 逐项三态台账)。与 39-03-OBSERVATION-WINDOW 执行顺序 (D1→D4→D2+D6→D5→D7→D7 周终→D3→D8) 对齐。
 
 **诚实标注**: 沙箱证的是脚本逻辑与 DTO 形状 (preflight build/boot/md5/三态台账/零残留); 部署日真实事件 — premarket_results/tick_staging 落盘、sidecar 点亮、分钟湖写入、3018 重建替换 — 是真实交易日/部署动作的观测记录, 由 operator 在观测窗逐项三态记录, **绝不混标为沙箱已证**。
+
+### v2.5 部署日执行记录 (2026-08-07, 真实环境 :3018)
+
+**执行链**: `docker compose up -d --build` → LOCAL_STOCKDB 配置 → 容器内连通性验证 → 200-body 全流程。
+
+| 步骤 | 结果 | 证据 |
+|---|---|---|
+| compose up -d --build | ✅ 149s, 镜像重建 + 容器替换 (athenaquant-app:latest) | compose recreate/started; `com.docker.compose.config-files` = 本仓库 docker-compose.yml |
+| bind 卷数据保留 | ✅ 248 分区原样 | `docker exec ls /app/data/kline_auction/ | wc -l` = 248; data/ 宿主目录未动 |
+| /health | ✅ 200 `{"status":"ok","version":"1.2.0","mode":"free"}` | curl :3018/health |
+| LOCAL_STOCKDB_URL/API_KEY | ✅ 已配置 | `.env` 追加 `LOCAL_STOCKDB_URL=http://172.18.0.1:8000` + `LOCAL_STOCKDB_API_KEY` (取 stockdb `STOCKDB_API_KEYS` 成员, 明文不入 git); compose recreate 生效 |
+| 容器内 → 网关 → stockdb | ✅ **200 真实数据** | 容器内 python3 urllib `GET /v1/quotes/SH600519` + X-API-Key → 200, `source: tdx`; 网关 172.18.0.1 经 `docker network inspect` 复核 |
+| md5 对齐 | ✅ **4/4 == HEAD** | 容器内 md5sum 4 文件 == 仓库 HEAD: 32468e15/4e33c236/a48c48fa/b05e01c7; 与 44-03 基线逐值一致 |
+| 容器用户/权限 | ✅ root 运行 (uid 0) | `id -u`=0 → 700 root 目录 (forecast-*) 无碍; **chown -R 999:995 本部署非必需** (配方保留给非 root 部署) |
+| 日志 | ✅ 0 traceback/error | docker logs grep; enriched refresh + warmup done, /health 200 |
+| 200-body 全流程 | ✅ exit 0 | `deploy_verify_endpoints.py --base-url :3018`: 401 先验 3/3 → login 200 (tf_session) → validation/backtest 键形状断言 → backfill job succeeded (fail-closed 远未来窗, 零上游) |
+
+**未配置项 (诚实)**: stockdb 专用 AthenaQuant key 未另立 (沿用共享 STOCKDB_API_KEYS 成员; 限频桶共享, 审计归因按 key 粒度) — 升级为专用 key 待用户侧 stockdb 配置动作。D1..D8 观测窗 + sidecar 点亮 = 首个真实交易日记录 (39-03 日历), 不在此列。
