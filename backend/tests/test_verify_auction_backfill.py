@@ -105,14 +105,14 @@ def test_verify_partial_lake_fail_closed(tmp_path, monkeypatch):
 
 
 def test_verify_partial_source_block_yes_non_bj_failures(tmp_path, monkeypatch):
-    """partial + 台账含非 BJ 标的 empty_response → 疑似源受阻 YES (上游 403/配额吞请求)。"""
+    """partial + 台账含非 BJ 标的 source_blocked → YES 策略封锁 (上游 403/配额窗 typed 信号)。"""
     _seed_daily(tmp_path, [D1, D2, D3], [SZ, SH, BJ])
     _seed_auction(tmp_path, [D1, D2, D3], [SZ])  # SH 缺失
     ledger = tmp_path / "ledger.json"
     ledger.write_text(
         '{"requested": 3, "backfilled_symbols": 1, "rows": 3, "dates": 3,'
         ' "failed": 2, "failed_symbols": ['
-        '{"symbol": "600000.SH", "reason": "empty_response"},'
+        '{"symbol": "600000.SH", "reason": "source_blocked"},'
         '{"symbol": "920146.BJ", "reason": "empty_response"}],'
         ' "origin": "backfill", "rpm": 30}',
         encoding="utf-8",
@@ -122,7 +122,29 @@ def test_verify_partial_source_block_yes_non_bj_failures(tmp_path, monkeypatch):
     assert code == 1
     assert "verdict: PARTIAL" in out
     assert "suspected source-block: YES" in out
-    assert "1 个非 BJ 标的 empty_response" in out
+    assert "1 个非 BJ 标的 source_blocked" in out
+    assert "策略封锁" in out
+
+
+def test_verify_partial_source_block_vacuum_empty_response(tmp_path, monkeypatch):
+    """partial + 台账只有非 BJ empty_response → 疑似真空缺口 (403 伪装已不存在, HON-01)。"""
+    _seed_daily(tmp_path, [D1, D2, D3], [SZ, SH, BJ])
+    _seed_auction(tmp_path, [D1, D2, D3], [SZ])  # SH 缺失
+    ledger = tmp_path / "ledger.json"
+    ledger.write_text(
+        '{"requested": 2, "backfilled_symbols": 1, "rows": 3, "dates": 3,'
+        ' "failed": 1, "failed_symbols": ['
+        '{"symbol": "600000.SH", "reason": "empty_response"}],'
+        ' "origin": "backfill", "rpm": 30}',
+        encoding="utf-8",
+    )
+    code, out = _run(monkeypatch, tmp_path, "--ledger", str(ledger))
+
+    assert code == 1
+    assert "verdict: PARTIAL" in out
+    assert "suspected source-block: 疑似" in out
+    assert "真空" in out
+    assert "source_blocked 已独立归类" in out
 
 
 def test_verify_partial_source_block_no_bj_only_failures(tmp_path, monkeypatch):

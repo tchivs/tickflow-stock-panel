@@ -20,8 +20,8 @@ SELECT 推导 + data_dir 路径 glob; 零写入、零网络、零新依赖。绝
                  + 行数在 [kline_daily 推导下限, 非BJ数 x 分区数 上限] + 全部不变量成立
   1  PARTIAL   —— 回填进行中/中断/上游源受阻 (覆盖 symbol 数 < 预期, 或行数低于下限):
                  诚实打印 partial 状态, 绝不假装完成 (fail-closed); 若传 --ledger,
-                 按 failed_symbols 归类疑似源受阻 (非 BJ 标的的 empty_response = 上游
-                 403/配额吞请求, 与 BJ 永久缺口同标签 —— reason 本身无法区分, FA-05)
+                 按 failed_symbols 归类疑似源受阻 (非 BJ 标的 source_blocked = 上游
+                 403/配额窗策略封锁; empty_response = 真空缺口, HON-01 已区分, FA-05)
   2  FAIL      —— 计数已达终态但内在不变量被破坏 (交叉 mismatch / .tmp 残留 /
                  BJ 台账漂移 / 湖外多出 symbol)
 
@@ -30,7 +30,8 @@ SELECT 推导 + data_dir 路径 glob; 零写入、零网络、零新依赖。绝
     DATA_DIR=/path/to/data python scripts/verify_auction_backfill.py
 
 --ledger 为回填运行终态台账 (--out JSON, 只读旁证): 仅用于 partial 状态下归类
-疑似源受阻; PASS/FAIL 判定完全不依赖台账 (验收只信湖本身)。
+疑似源受阻 (source_blocked 策略封锁 / empty_response 真空缺口, HON-01 独立归类);
+PASS/FAIL 判定完全不依赖台账 (验收只信湖本身)。
 """
 from __future__ import annotations
 
@@ -187,8 +188,10 @@ def _tmp_residue(data_dir: Path) -> list[Path]:
 def _classify_source_block(ledger_path: str | None, lake_partial: bool) -> str:
     """partial 状态下按运行台账 failed_symbols 归类疑似源受阻 (只读旁证)。
 
-    - 非 BJ 标的 empty_response → 疑似源受阻 (上游 403/配额吞请求与 BJ 永久缺口
-      同标签, reason 无法区分 —— 诚实缺口, 见 FA-05-BJ-STANCE.md)。
+    - 非 BJ 标的 source_blocked → YES 策略封锁 (HON-01: 上游 403/配额窗 typed
+      信号, 与 empty_response 互斥)。
+    - 非 BJ 标的 empty_response → 疑似真空缺口 (HON-01 后不再含 403 伪装含义;
+      empty_response = 上游真空/无数据, 诚实缺口见 FA-05-BJ-STANCE.md)。
     - 全部失败皆 .BJ → 已知永久缺口; 湖仍缺非 BJ 覆盖 → 台账无法解释, 续跑
       --all --only-missing。
     - 无台账 → UNKNOWN, 明示缺口。
@@ -197,21 +200,31 @@ def _classify_source_block(ledger_path: str | None, lake_partial: bool) -> str:
         return "N/A — 湖已达预期终态, 无需归类"
     if not ledger_path:
         return (
-            "UNKNOWN — 未传 --ledger 运行台账; 注意: 上游 403/配额吞请求的空返回与"
-            " BJ 永久缺口同样记 empty_response (reason 无法区分, 诚实缺口见"
-            " FA-05-BJ-STANCE.md), 传 --ledger 即可归类"
+            "UNKNOWN — 未传 --ledger 运行台账; 403/配额窗策略封锁现已独立记"
+            " source_blocked (HON-01), 传 --ledger 即可归类"
         )
     try:
         data = json.loads(Path(ledger_path).read_text(encoding="utf-8"))
     except (OSError, ValueError) as e:
         return f"UNKNOWN — 台账不可读 ({e})"
     failed_symbols = data.get("failed_symbols") or []
+    blocked = [
+        f for f in failed_symbols
+        if f.get("reason") == "source_blocked"
+        and not str(f.get("symbol", "")).endswith(".BJ")
+    ]
+    if blocked:
+        sample = ", ".join(str(f.get("symbol")) for f in blocked[:5])
+        return (
+            f"YES — 台账含 {len(blocked)} 个非 BJ 标的 source_blocked"
+            f" (上游 403/配额窗策略封锁: {sample} ...)"
+        )
     non_bj = [f for f in failed_symbols if not str(f.get("symbol", "")).endswith(".BJ")]
     if non_bj:
         sample = ", ".join(str(f.get("symbol")) for f in non_bj[:5])
         return (
-            f"YES — 台账含 {len(non_bj)} 个非 BJ 标的 empty_response"
-            f" (上游 403/配额吞请求, 疑似源受阻: {sample} ...)"
+            f"疑似 — 台账含 {len(non_bj)} 个非 BJ 标的 empty_response"
+            f" (上游真空/无数据, 非策略封锁 — source_blocked 已独立归类: {sample} ...)"
         )
     if failed_symbols:
         return (
