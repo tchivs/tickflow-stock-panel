@@ -1338,3 +1338,41 @@ def test_minute_stats_amount_mixed_symbols(repo_env):
     assert ms["auction_symbol_count"] == 2
     assert ms["auction_amount_yuan"] == pytest.approx(_MINUTE_ANCHOR_AMOUNT, abs=1.0)
     assert ms["amount_unknown_count"] == 1
+
+
+def test_digest_source_default_unknown(repo_env):
+    """MIN-03 源身份诚实默认: build_report() 缺省 minute_source →
+    coverage.minute_stats["source"] == "unknown" (湖无 provenance 列, 报告绝不猜源)。"""
+    from app.services.auction_validation import AuctionValidationService
+
+    repo, data_dir = repo_env
+    start = date(2026, 8, 4)
+    _seed_enriched_cache(repo, days=2, start=start, symbols=("600519.SH", "000001.SZ"))
+    _write_minute_partition(data_dir, start, _minute_rows(start, ("600519.SH",)))
+    engine = _make_engine()
+    svc = AuctionValidationService(repo, engine, probe_resolver=lambda: _available_verdict())
+
+    report = svc.build_report(start=start, end=start + timedelta(days=1))
+    ms = report["coverage"]["minute_stats"]
+
+    assert ms["source"] == "unknown"
+
+
+def test_digest_source_declared(repo_env):
+    """MIN-03 源身份声明: build_report(minute_source="tencent-mkline") →
+    coverage.minute_stats["source"] == "tencent-mkline" (覆盖声明 = 源插件深度)。"""
+    from app.services.auction_validation import AuctionValidationService
+
+    repo, data_dir = repo_env
+    start = date(2026, 8, 4)
+    _seed_enriched_cache(repo, days=2, start=start, symbols=("600519.SH", "000001.SZ"))
+    _write_minute_partition(data_dir, start, _minute_rows(start, ("600519.SH",)))
+    engine = _make_engine()
+    svc = AuctionValidationService(repo, engine, probe_resolver=lambda: _available_verdict())
+
+    report = svc.build_report(
+        start=start, end=start + timedelta(days=1), minute_source="tencent-mkline",
+    )
+    ms = report["coverage"]["minute_stats"]
+
+    assert ms["source"] == "tencent-mkline"

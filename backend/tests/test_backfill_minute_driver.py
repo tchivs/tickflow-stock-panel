@@ -138,3 +138,30 @@ def test_backfill_driver_symbols_subset(tmp_path, monkeypatch):
     assert result["written"] == 0
     assert result["skipped"] == 0  # 空响应不伪 skip
     assert result["symbols_requested"] == 1
+
+
+def test_backfill_driver_source_label_passthrough(tmp_path, monkeypatch):
+    """MIN-03 --source-label 透传: 台账含通道身份 (覆盖 = 源插件深度);
+    缺省不传 → 台账 source 诚实 null (不声明)。"""
+    _seed_lake(tmp_path)
+    ledger = tmp_path / "ledger3.json"
+
+    code, _ = _run(
+        monkeypatch, tmp_path,
+        "--all", "--start", "2026-08-03", "--end", "2026-08-04",
+        "--source-label", "tencent-mkline",
+        "--out", str(ledger), _fetch=_empty_fetch,
+    )
+    assert code == 0
+    result = json.loads(ledger.read_text(encoding="utf-8"))
+    assert result["source"] == "tencent-mkline"  # 通道身份进台账
+
+    ledger4 = tmp_path / "ledger4.json"
+    code, _ = _run(
+        monkeypatch, tmp_path,
+        "--all", "--start", "2026-08-03", "--end", "2026-08-04",
+        "--out", str(ledger4), _fetch=_empty_fetch,
+    )
+    assert code == 0
+    result4 = json.loads(ledger4.read_text(encoding="utf-8"))
+    assert result4["source"] is None  # 缺省诚实不声明

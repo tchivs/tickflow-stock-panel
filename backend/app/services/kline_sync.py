@@ -536,6 +536,37 @@ CANONICAL_MINUTE_COLS = [
     "symbol", "datetime", "open", "high", "low", "close", "volume", "amount",
 ]
 
+# 源插件注册表 (MIN-03): 分钟数据源 profile 冻结体 — 值 = 42-RESEARCH Pattern 1
+# 实测矩阵 (2026-08-07)。覆盖声明 = 源插件深度: 驱动/报告按选定源的 depth_note /
+# has_0930_bar 如实标注, 绝不把「机制可测」冒充「源覆盖达标」。
+# 字段契约: {label, depth_note, has_0930_bar, amount_available} — 测试逐字断言。
+MINUTE_SOURCE_PROFILES: dict[str, dict] = {
+    "tushare-stk_mins": {
+        "label": "tushare-stk_mins",
+        "depth_note": "全历史 (官方语义, 本环境 token 档位 1 次/小时 实测)",
+        "has_0930_bar": True,
+        "amount_available": True,
+    },
+    "tencent-mkline": {
+        "label": "tencent-mkline",
+        "depth_note": "≈3 交易日 (本环境实测硬封顶)",
+        "has_0930_bar": True,
+        "amount_available": False,  # 无 amount 列 → 仅 OHLC 全等 09:30 bar 可派生
+    },
+    "tdx-pytdx": {
+        "label": "tdx-pytdx",
+        "depth_note": "≈90 交易日, 无 09:30 bar (09:31 合并根实测)",
+        "has_0930_bar": False,  # 实测锁死: 日首根 09:31 且含竞价量 (521+644 手合并)
+        "amount_available": True,
+    },
+    "canned-fixture": {
+        "label": "canned-fixture",
+        "depth_note": "测试夹具面 (零网络)",
+        "has_0930_bar": True,
+        "amount_available": True,
+    },
+}
+
 
 def _normalize_minute(df_in, default_symbol: str | None = None) -> pl.DataFrame:
     """把 SDK 返回的分钟 K 数据规范成 canonical 列。"""
@@ -932,6 +963,7 @@ def backfill_minute_history(
     batch_size: int = 200,
     fetch: Callable[[list[str], datetime, datetime], pl.DataFrame] | None = None,
     on_symbol_done: Callable[[int, int], None] | None = None,
+    source_label: str | None = None,
 ) -> tuple[int, list[str]]:
     """分钟历史回填驱动: 逐 symbol 幂等增量拉取 + merge-upsert 分区写。
 
@@ -942,6 +974,8 @@ def backfill_minute_history(
     - on_symbol_done(i+1, total) 每 symbol 恰一次 (含 skipped)。
     - rpm/batch_size 为 provider 侧节流契约 (缺省 fetch = stockdb_provider.get_minute,
       端日语义 end+1day 内置); 注入 fetch 的测试面零网络。
+    - source_label (MIN-03): 通道身份进日志/台账 (湖无 provenance 列铁律); 非 None →
+      完成时 logger.info 含 label 与 written/skipped 计数, 覆盖声明 = 源插件深度。
 
     返回 (written, skipped): written = 本次实际写入行数, skipped = 已覆盖跳过 symbol 列表。
     """
@@ -983,6 +1017,11 @@ def backfill_minute_history(
 
     # 写后刷新视图: 同进程后续读取 (含重跑判定) 看到最新分区
     _refresh_minute_view(repo)
+    if source_label is not None:
+        logger.info(
+            "minute backfill done: source=%s written=%d skipped=%d",
+            source_label, written, len(skipped),
+        )
     return written, skipped
 
 

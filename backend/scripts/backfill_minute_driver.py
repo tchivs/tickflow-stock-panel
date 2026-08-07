@@ -11,13 +11,16 @@
 - 诚实覆盖声明: 实际覆盖 = 源插件深度。本环境实测源封顶 (Tushare stk_mins 1 次/小时、
   腾讯 ≈3 日深度、TDX 无 09:30) —— 端到端覆盖由 42-03 的源插件 seam + checkpoint 门
   声明, 本 CLI 绝不虚报端到端时长或覆盖 (46min 全量回填在本环境不可达)。
+- 源身份 (MIN-03): ``--source-label`` (MINUTE_SOURCE_PROFILES 键之一) 透传
+  backfill_minute_history → 完成日志/台账含通道身份; 缺省 None 不声明
+  (湖无 provenance 列铁律, 报告 digest 诚实默认 unknown)。
 - 退出码: 0 = 正常完成 (含全 skipped 的幂等续跑); 2 = fetch/运行异常
   (stderr traceback, fail-closed —— 绝不伪装「该窗口无数据」)。
 
 用法:
     python scripts/backfill_minute_driver.py [--all|--symbols s1,s2] [--start YYYY-MM-DD]
                                              [--end YYYY-MM-DD] [--rpm N] [--batch-size N]
-                                             [--limit N] [--out PATH]
+                                             [--limit N] [--out PATH] [--source-label KEY]
     DATA_DIR=/path/to/data python scripts/backfill_minute_driver.py
 """
 from __future__ import annotations
@@ -123,6 +126,13 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         default=None,
         help="终态台账 JSON 路径 (缺省: 打印到 stdout)",
     )
+    parser.add_argument(
+        "--source-label",
+        default=None,
+        help="源插件 profile 键 (MINUTE_SOURCE_PROFILES: tushare-stk_mins / "
+        "tencent-mkline / tdx-pytdx / canned-fixture); 透传进完成日志/台账 "
+        "(覆盖 = 源插件深度, 缺省 None 不声明)",
+    )
     args = parser.parse_args(argv)
     if args.rpm < 1:
         parser.error(f"--rpm 必须为 >=1 的整数, got {args.rpm}")
@@ -186,12 +196,14 @@ def main(argv: list[str] | None = None, _fetch=None) -> int:
                 batch_size=args.batch_size,
                 fetch=_fetch,
                 on_symbol_done=lambda i, t: print(f"[{i}/{t}] symbols processed", flush=True),
+                source_label=args.source_label,
             )
             elapsed = time.monotonic() - t0
             result = {
                 "written": written,
                 "skipped": len(skipped),
                 "symbols_requested": len(symbols),
+                "source": args.source_label,  # MIN-03: 通道身份进台账 (None → 诚实不声明)
                 "started_at": started_at.isoformat(),
                 "finished_at": datetime.now().isoformat(),
             }

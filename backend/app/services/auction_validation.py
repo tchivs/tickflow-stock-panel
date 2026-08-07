@@ -135,6 +135,7 @@ class AuctionValidationService:
         end: date | None = None,
         strategy_ids: list[str] | None = None,
         symbols: list[str] | None = None,
+        minute_source: str | None = None,
     ) -> dict:
         """装配只读竞价策略历史验证报告 (BT-03)。
 
@@ -229,8 +230,10 @@ class AuctionValidationService:
                 ),
                 "symbols": self._coverage_symbols(start, end, verification_panel, enriched_dates),
                 # MIN-02 统计口径: 与 canonical symbols 块并列, 绝不相加 (caliber 标注)
+                # MIN-03 源身份: minute_source 透传 or "unknown" (湖无 provenance 列铁律, 不猜源)
                 "minute_stats": self._minute_stats_coverage(
-                    start, end, verification_panel["symbol"].unique().to_list()
+                    start, end, verification_panel["symbol"].unique().to_list(),
+                    minute_source=minute_source,
                 ),
             },
             "skipped_ids": skipped_ids,
@@ -319,6 +322,8 @@ class AuctionValidationService:
         start: date,
         end: date,
         universe: list[str],
+        *,
+        minute_source: str | None = None,
     ) -> dict:
         """MIN-02 统计口径覆盖 digest: kline_minute 窗口内 09:30 bar (集合竞价统计,
         非逐笔) 的 symbol 覆盖 — 与 canonical ``coverage.symbols`` 并列, 绝不相加,
@@ -334,7 +339,9 @@ class AuctionValidationService:
           实测湖内 volume 列=手); auction_amount_yuan 仅 OHLC 全等 (open==high==low==
           close, 纯净竞价单价位) 的 09:30 bar 以 volume×close×100 派生 (实测闭合
           521×1328.36×100≈69,207,556 元, RESEARCH Pattern 3); 非全等 → 该 bar 计入
-          amount_unknown_count, 绝不猜 (RESEARCH Pitfall 5)。
+          amount_unknown_count, 绝不猜 (RESEARCH Pitfall 5);
+        - 源身份 (MIN-03): source = minute_source 透传 or "unknown" (湖无 provenance
+          列铁律 — 报告不猜源; 覆盖声明 = 源插件深度, 见 MINUTE_SOURCE_PROFILES)。
         """
         base = self._repo.store.data_dir / "kline_minute"
         symbols: set[str] = set()
@@ -385,6 +392,8 @@ class AuctionValidationService:
             "auction_volume_hands": auction_volume_hands,
             "auction_amount_yuan": auction_amount_yuan,
             "amount_unknown_count": amount_unknown_count,
+            # MIN-03: 源身份 (覆盖 = 源插件深度, 绝不虚报); 缺省诚实 "unknown"
+            "source": minute_source or "unknown",
         }
 
     def _empty_report(self, reason: str, *, window=None, probe_dict=None) -> dict:
@@ -409,6 +418,7 @@ class AuctionValidationService:
                     "auction_rows_expected": 0,
                 },
                 # MIN-02: 统计口径空态与实态同键形状 (D-02)
+                # MIN-03: 源身份诚实默认 unknown (空态无源信息)
                 "minute_stats": {
                     "caliber": "statistical_minute_0930",
                     "auction_symbol_count": 0,
@@ -420,6 +430,7 @@ class AuctionValidationService:
                     "auction_volume_hands": 0.0,
                     "auction_amount_yuan": 0.0,
                     "amount_unknown_count": 0,
+                    "source": "unknown",
                 },
             },
             "skipped_ids": [],

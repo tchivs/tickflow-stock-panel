@@ -305,3 +305,71 @@ def test_resolve_minute_universe_dynamic(repo_env):
 
     _seed_daily(repo, [_SH000, _SH519, _SZ], [date(2026, 8, 3)])
     assert kline_sync._resolve_minute_universe(repo) == [_SZ, _SH000, _SH519]  # 排序
+
+
+# ============================================================
+# MIN-03: 源插件 seam — profile 注册 + source_label 透传
+# ============================================================
+
+
+def test_source_profiles_registry():
+    """MIN-03 源插件注册表: 恰 4 profile, 每 profile 字段集 ==
+    {label, depth_note, has_0930_bar, amount_available} (值 = 42-RESEARCH 实测矩阵冻结);
+    tdx-pytdx has_0930_bar 锁死 False (09:31 合并根实测); tencent-mkline depth_note
+    含 ≈3 日语义 (覆盖 = 源插件深度, 绝不虚报全量)。"""
+    from app.services.kline_sync import MINUTE_SOURCE_PROFILES
+
+    assert set(MINUTE_SOURCE_PROFILES) == {
+        "tushare-stk_mins", "tencent-mkline", "tdx-pytdx", "canned-fixture",
+    }
+    for key, profile in MINUTE_SOURCE_PROFILES.items():
+        assert set(profile) == {"label", "depth_note", "has_0930_bar", "amount_available"}
+        assert profile["label"] == key
+
+    # 实测矩阵逐字冻结 (RESEARCH Pattern 1: 源矩阵)
+    assert MINUTE_SOURCE_PROFILES["tushare-stk_mins"]["has_0930_bar"] is True
+    assert MINUTE_SOURCE_PROFILES["tushare-stk_mins"]["amount_available"] is True
+    assert "全历史" in MINUTE_SOURCE_PROFILES["tushare-stk_mins"]["depth_note"]
+
+    assert MINUTE_SOURCE_PROFILES["tencent-mkline"]["has_0930_bar"] is True
+    assert MINUTE_SOURCE_PROFILES["tencent-mkline"]["amount_available"] is False  # 无 amount 列
+    assert "≈3 交易日" in MINUTE_SOURCE_PROFILES["tencent-mkline"]["depth_note"]
+
+    assert MINUTE_SOURCE_PROFILES["tdx-pytdx"]["has_0930_bar"] is False  # 09:31 合并根, 锁死
+    assert MINUTE_SOURCE_PROFILES["tdx-pytdx"]["amount_available"] is True
+    assert "09:31" in MINUTE_SOURCE_PROFILES["tdx-pytdx"]["depth_note"]
+
+    assert MINUTE_SOURCE_PROFILES["canned-fixture"]["has_0930_bar"] is True
+    assert MINUTE_SOURCE_PROFILES["canned-fixture"]["amount_available"] is True
+    assert MINUTE_SOURCE_PROFILES["canned-fixture"]["depth_note"] == "测试夹具面 (零网络)"
+
+
+def test_driver_accepts_source_label(repo_env, caplog):
+    """MIN-03 source_label 透传: 非 None → 完成日志含 label 与 written/skipped 计数
+    (通道身份进日志/台账, 湖无 provenance 列铁律); 缺省 None 不崩且无 label 日志。"""
+    import logging
+
+    from app.services import kline_sync
+
+    repo, _ = repo_env
+    symbols = [_SH000, _SH519]  # 夹具含 600000.SH + 600519.SH
+    start, end = date(2026, 8, 3), date(2026, 8, 4)
+
+    with caplog.at_level(logging.INFO, logger="app.services.kline_sync"):
+        written, skipped = kline_sync.backfill_minute_history(
+            symbols, start, end, repo, fetch=_canned_fetch(), source_label="canned-fixture",
+        )
+    assert written > 0
+    assert skipped == []
+    assert "canned-fixture" in caplog.text
+    assert "written" in caplog.text
+
+    # 缺省 source_label=None → 不崩, 重跑幂等全跳过, 且无 label 日志
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="app.services.kline_sync"):
+        written2, skipped2 = kline_sync.backfill_minute_history(
+            symbols, start, end, repo, fetch=_canned_fetch(),
+        )
+    assert written2 == 0
+    assert skipped2 == symbols
+    assert "canned-fixture" not in caplog.text
