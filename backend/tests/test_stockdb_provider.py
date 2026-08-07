@@ -276,3 +276,96 @@ def test_429_retry_after_falls_back_to_body(monkeypatch):
     df = p.get_daily(["SH600519"])
     assert sleeps == [50.0]
     assert not df.is_empty()
+
+
+# ================================================================
+# LOCAL-01 硬验收 — 只读 HTTP 客户端 AST 守卫 (POOL-03 模板改形)
+# ================================================================
+#
+# stockdb_provider.py 是纯只读 HTTP 客户端, 四判据:
+#   A) 无执行族 import (镜像 POOL-03 E1: _imported_module_names 判据)
+#   B) 无写模式 token (open(写模式 / write_parquet / os.replace / unlink / mkdir)
+#   C) HTTP 动词仅 GET (client.get( 存在, 无 client.post/put/delete/patch)
+#   D) api_key 只出现于 headers dict (X-API-Key 仅 headers 行 — 禁 URL 传参)
+# 过滤规则镜像 test_pool_hub.py:951-972 同款判据并按 data_providers 面裁剪。
+# ---------------------------------------------------------------------------
+
+
+def _provider_source() -> str:
+    backend = Path(__file__).resolve().parents[1]
+    return (backend / "app" / "data_providers" / "stockdb_provider.py").read_text(encoding="utf-8")
+
+
+def _imported_module_names(source: str) -> list[str]:
+    import ast as _ast
+
+    tree = _ast.parse(source)
+    names: list[str] = []
+    for node in _ast.walk(tree):
+        if isinstance(node, _ast.Import):
+            names.extend(alias.name for alias in node.names)
+        elif isinstance(node, _ast.ImportFrom) and node.module:
+            names.append(node.module)
+    return names
+
+
+def _strip_comments_docstrings(source: str) -> str:
+    """tokenize 级剔除注释与文档串 (镜像 POOL-03「grep 过滤注释/文档串」判据)。
+
+    按 token 覆盖的行号剔除: 注释 token 与三引号文档串 token 起始行整体丢弃
+    (INDENT 等 token 的 line 属性会携带文档串首行, 不能按 tok.line 过滤)。
+    """
+    import io
+    import tokenize
+
+    skip_rows: set[int] = set()
+    for tok in tokenize.generate_tokens(io.StringIO(source).readline):
+        if tok.type == tokenize.COMMENT:
+            skip_rows.add(tok.start[0])
+        elif tok.type == tokenize.STRING and tok.string.startswith(('"""', "'''")):
+            skip_rows.update(range(tok.start[0], tok.end[0] + 1))
+    return "\n".join(
+        ln for i, ln in enumerate(source.splitlines(), 1) if i not in skip_rows
+    )
+
+
+def test_stockdb_provider_is_read_only_http_client():
+    """LOCAL-01 硬验收: provider 无执行族 import / 无写模式 / 仅 GET / api_key 仅 headers。"""
+    import re
+
+    src = _provider_source()
+
+    # A) 无执行族 import (POOL-03 E1 判据: broker|order|execution|trade|portfolio|watchlist|position|account|transaction|下单|委托)
+    execution_token = re.compile(
+        r"broker|order|execution|trade|portfolio|watchlist|position|account|transaction|下单|委托",
+        re.IGNORECASE,
+    )
+    for module in _imported_module_names(src):
+        assert not execution_token.search(module), (
+            f"stockdb_provider 引入了执行族模块: {module}"
+        )
+
+    # B) 无写模式 token
+    code = _strip_comments_docstrings(src)
+    write_patterns = (
+        re.compile(r"open\s*\(\s*[^,)]*,\s*[\"']w"),
+        re.compile(r"open\s*\(\s*[^,)]*,\s*[\"']wb"),
+        re.compile(r"open\s*\(\s*[^,)]*,\s*[\"']a"),
+        re.compile(r"write_parquet"),
+        re.compile(r"os\.replace"),
+        re.compile(r"unlink\s*\("),
+        re.compile(r"mkdir\s*\("),
+    )
+    for pattern in write_patterns:
+        assert not pattern.search(code), f"stockdb_provider 出现写路径: {pattern.pattern}"
+
+    # C) HTTP 动词仅 GET
+    assert "client.get(" in code, "stockdb_provider 缺少只读 GET 请求面"
+    for verb in ("post", "put", "delete", "patch"):
+        assert f"client.{verb}(" not in code, f"stockdb_provider 出现非 GET HTTP 动词: client.{verb}("
+
+    # D) api_key 仅 headers dict (禁 URL 传参 — LOCAL-01 硬验收)
+    key_lines = [ln for ln in code.splitlines() if "X-API-Key" in ln]
+    assert key_lines, "stockdb_provider 缺少 X-API-Key 注入"
+    for ln in key_lines:
+        assert "headers" in ln, f"api_key 出现在非 headers 行: {ln.strip()}"
