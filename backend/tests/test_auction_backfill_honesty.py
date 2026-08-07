@@ -305,6 +305,34 @@ def test_auction_backfill_empty_response_reason_category_distinct(tmp_path, monk
     assert term2["failed_symbols"][0]["reason"] != "empty_response"
 
 
+def test_auction_backfill_source_blocked_reason_category_distinct(tmp_path, monkeypatch):
+    """HON-01 三态互斥: A 正常 / B 抛 SourceBlockedError → reason 恰 "source_blocked"
+    / C 空+有 kline_daily 覆盖 → reason 恰 "empty_response"; 两键形状不变
+    (若 SourceBlockedError 落成 str(e)[:200] 或空帧吞成 empty_response 则红)。"""
+    from app.data_providers.base import SourceBlockedError
+
+    d1 = date(2026, 8, 3)
+    symbols = ["A", "B", "C"]
+    fake = _FakeAuctionProvider(
+        rows_by_symbol={"A": _symbol_rows("A", [d1])},  # A 正常
+        exc_by_symbol={"B": SourceBlockedError("配额窗口未开放")},  # B 策略封锁
+        # C: 有 kline_daily 覆盖但上游空 → empty_response
+    )
+    term, repo = _run_job(monkeypatch, tmp_path, [d1], symbols, fake)
+
+    assert term["failed"] == 2
+    assert term["backfilled_symbols"] == 1
+    assert term["failed_symbols"] == [
+        {"symbol": "B", "reason": "source_blocked"},
+        {"symbol": "C", "reason": "empty_response"},
+    ]
+    # 两键形状 (每条约 symbol+reason, 无杂键)
+    for entry in term["failed_symbols"]:
+        assert set(entry.keys()) == {"symbol", "reason"}
+    # source_blocked 与异常类别互斥: 不可能是 str(e)[:200]
+    assert term["failed_symbols"][0]["reason"] != "配额窗口未开放"
+
+
 def test_auction_backfill_fail_closed_ledger_shape_and_zero_writes(tmp_path, monkeypatch):
     """W-5 fail-closed 终态 = 8 成功键 + reason (9 键); 源不可达 → 0 写 fail-closed。"""
     d1 = date(2026, 8, 3)

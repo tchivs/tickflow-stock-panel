@@ -245,6 +245,54 @@ def test_auction_backfill_empty_response_recorded(env, monkeypatch):
     assert result["rows"] == 1
 
 
+def test_auction_backfill_preflight_source_blocked_zero_writes(env, monkeypatch):
+    """HON-01: 预检抛 SourceBlockedError → 终态 reason 恰 "source_blocked", 0 写, R1 零重试。
+
+    消息故意含「带宽」重叠 marker (也在 _RATE_LIMIT_MARKERS) —— 若误入重试面则
+    3 次调用 (2h 配额窗 × 5537 symbols 即 DoS); 断言恰 1 次。
+    """
+    from app.data_providers.base import SourceBlockedError
+    from app.services import auction_backfill
+
+    tmp, repo = env
+    provider = FakeAuctionProvider(
+        exc_by_symbol={"000001.SZ": SourceBlockedError("带宽限制批量请求")},
+    )
+    _patch_live(monkeypatch, provider)
+
+    result = auction_backfill.run_auction_backfill(repo, symbols=["000001.SZ"])
+
+    assert result["requested"] == 0
+    assert result["reason"] == "source_blocked"
+    assert result["backfilled_symbols"] == 0
+    assert result["failed"] == 0
+    assert len(provider.calls) == 1  # 预检 1 次, SourceBlockedError 零重试
+    assert not list((tmp / "kline_auction").glob("date=*")), "fail-closed 不得写任何分区"
+
+
+def test_auction_backfill_source_blocked_recorded(env, monkeypatch):
+    """HON-01: 循环内 SourceBlockedError → 台账第三类 reason 恰 "source_blocked" (两键),
+    其余 symbol 正常回填; 每 symbol 恰 1 次 provider 调用 (R1 零重试)。"""
+    from app.data_providers.base import SourceBlockedError
+    from app.services import auction_backfill
+
+    tmp, repo = env
+    rows_a = _auction_rows("000001.SZ", [datetime(2026, 8, 4, 9, 25)])
+    provider = FakeAuctionProvider(
+        rows_by_symbol={"000001.SZ": rows_a},
+        exc_by_symbol={"600000.SH": SourceBlockedError("带宽限制批量请求")},
+    )
+    _patch_live(monkeypatch, provider)
+
+    result = auction_backfill.run_auction_backfill(repo, symbols=["000001.SZ", "600000.SH"])
+
+    assert result["failed"] == 1
+    assert result["failed_symbols"] == [{"symbol": "600000.SH", "reason": "source_blocked"}]
+    assert result["backfilled_symbols"] == 1
+    assert result["rows"] == 1
+    assert len(provider.calls) == 3  # 预检 + A + B 各 1 次 (B 零重试)
+
+
 def test_auction_backfill_bounds(env, monkeypatch):
     """AQ-05: 子集 symbols + start/end 收窄日期集; 空范围 → no_scope 0 写短终态。"""
     from app.services import auction_backfill

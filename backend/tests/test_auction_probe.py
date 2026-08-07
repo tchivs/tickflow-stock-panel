@@ -100,6 +100,17 @@ def test_raising_provider_is_error():
     assert len(verdict["detail"]) <= 200
 
 
+def test_source_blocked_provider_is_fail_closed():
+    """HON-01: fetcher 抛 SourceBlockedError → verdict fail_closed + detail 恰 "source_blocked"
+    (策略封锁语义而非异常串); 与 RuntimeError 的 error 分支互斥。"""
+    from app.data_providers.base import SourceBlockedError
+
+    verdict = _probe(FakeAuctionProvider(exc=SourceBlockedError("quota window")))
+    assert verdict["status"] == "fail_closed"
+    assert verdict["detail"] == "source_blocked"
+    assert verdict["source"] == "fake_auction"
+
+
 # ================================================================
 # 诚实标签回归 (DATA-03 / T-16-01) —— 09:30 bar 永不是集合竞价数据
 # ================================================================

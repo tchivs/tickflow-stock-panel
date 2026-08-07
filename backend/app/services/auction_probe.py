@@ -13,6 +13,8 @@ from typing import Any, Callable
 
 import polars as pl
 
+from app.data_providers.base import SourceBlockedError
+
 # 探测使用的样本标的 —— 只用于探测数据源是否返回窗口内行, 不参与任何策略。
 PROBE_SYMBOL = "000001"
 
@@ -25,6 +27,8 @@ _WINDOW_END_MIN = 9 * 60 + 25
 
 NOT_CONFIGURED_DETAIL = "尚未配置竞价数据源；配置后平台将自动探测 9:15–9:25 集合竞价匹配数据的可用性。"
 FAIL_CLOSED_DETAIL = "平台未检测到可用的集合竞价匹配数据，已退化到派生开盘涨幅因子（open / prev_close − 1）。09:30 起的连续竞价 bar 不会被标记为集合竞价数据。"
+# 策略封锁 (HTTP 403/配额窗) 的 fail-closed detail —— 透出语义而非异常串 (T-41-03)
+SOURCE_BLOCKED_DETAIL = "source_blocked"
 
 # error 详情只透出截断的异常消息 (T-16-05 信息泄露 mitigation)
 _ERROR_DETAIL_MAX = 200
@@ -161,6 +165,15 @@ def resolve_auction_probe(
     source_name = str(getattr(provider, "name", "unknown"))
     try:
         rows = fetch(provider, [PROBE_SYMBOL], _last_trade_date())
+    except SourceBlockedError:
+        # 策略封锁 (HTTP 403/配额窗) → fail_closed + detail 恰 "source_blocked"
+        # (透出语义而非异常串; backfill 探针闸门 :199 保持 source_unavailable 不变)
+        return AuctionProbeVerdict(
+            status=AuctionProbeStatus.fail_closed,
+            source=source_name,
+            probed_at=_now_iso(),
+            detail=SOURCE_BLOCKED_DETAIL,
+        )
     except Exception as exc:  # noqa: BLE001
         return AuctionProbeVerdict(
             status=AuctionProbeStatus.error,
