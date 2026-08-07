@@ -465,6 +465,7 @@ def run_full_backtest(
     end: date | None = None,
     strategy_ids: list[str] | None = None,
     symbols: list[str] | None = None,
+    force: bool = False,
     on_progress: Callable[[str], None] | None = None,
     job_id: str | None = None,
 ) -> dict:
@@ -482,7 +483,8 @@ def run_full_backtest(
     ⑥ 每策略 _evaluate_strategy_rows (branch 互斥 + META 默认 params + 掩码 +
        per_date + 前瞻共源) → 长格式行帧;
     ⑦ coverage (dates + symbols 双块);
-    ⑧ 持久化 (Task 2): 确定性 run_id → 原子 part.parquet + manifest → 幂等跳过。
+    ⑧ 持久化 (Task 2): 确定性 run_id → 原子 part.parquet + manifest → 幂等跳过;
+       force=True 绕过指纹幂等跳过强制重写 (RC-04 operator escape hatch, 仅 CLI 接线)。
 
     on_progress/job_id 为 CLI/未来 job 包装保留 (v1 全 None, 幂等身份计算不含二者)。
     服务级异常直接冒泡 (CLI 负责 try/except); 诚实空 dict 路径不抛。
@@ -629,7 +631,7 @@ def run_full_backtest(
         per_date=per_date,
         fingerprint=fingerprint,
     )
-    run_dir, wrote, reused = _persist_run(data_dir, run_id, rows_df, manifest)
+    run_dir, wrote, reused = _persist_run(data_dir, run_id, rows_df, manifest, force=force)
     _progress(f"persist: run_id={run_id} wrote={wrote} reused={reused}")
 
     return {
@@ -765,6 +767,8 @@ def _persist_run(
     run_id: str,
     rows_df: pl.DataFrame,
     manifest: dict,
+    *,
+    force: bool = False,
 ) -> tuple[Path, bool, bool]:
     """原子持久化回测运行到 ``backtest_results/run_id={id}/`` (E2 写根隔离)。
 
@@ -772,6 +776,9 @@ def _persist_run(
       存在 manifest 即视为运行完整);
     - 幂等: manifest 已存在且 fingerprint 与本次相同 → 跳过重写
       (wrote=False, reused=True, 原子无操作, 镜像 pool_backfill 分区差集语义);
+    - force=True (RC-04 operator escape hatch, 仅 CLI 接线): 指纹相同也强制重写 —
+      provenance 诚实, 覆写时刻以 rewritten_at 记入 manifest (仅 force 路径,
+      键集契约不变; 正常路径幂等语义零影响);
     - 返回 (run_dir, wrote, reused)。"""
     run_dir = data_dir / _BACKTEST_ROOT / f"run_id={run_id}"
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -784,8 +791,12 @@ def _persist_run(
         except Exception:  # noqa: BLE001 — 损坏 manifest fail-open 重写 (诚实恢复)
             existing = {}
         if existing.get("fingerprint") == manifest["fingerprint"]:
-            logger.info("backtest run %s reused (identical fingerprint)", run_id)
-            return run_dir, False, True
+            if not force:
+                logger.info("backtest run %s reused (identical fingerprint)", run_id)
+                return run_dir, False, True
+            # --force: 绕过指纹幂等跳过强制重写 (RC-04 operator escape hatch);
+            # provenance 诚实 — 覆写时刻记入 manifest (仅 force 路径, 键集契约不变)
+            manifest["rewritten_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
     _atomic_write_parquet(rows_df, part_path)
     _atomic_write_json(manifest, manifest_path)

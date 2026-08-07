@@ -555,3 +555,107 @@ def test_full_backtest_write_root_isolation(repo_env):
     new_files = [p for p in data_dir.rglob("*") if p.is_file() and p not in files_before]
     assert new_files, "回测运行至少应写出 part.parquet + manifest.json"
     assert all("backtest_results" in p.parts for p in new_files)
+
+
+# ================================================================
+# Test 7 — --force 强制重写 (RC-04)
+# ================================================================
+
+
+def test_full_backtest_force_rewrites_when_fingerprint_matches(repo_env):
+    """同配置 + force → 强制重写 (RC-04): 同 run_id, wrote=True, part mtime 变化,
+    manifest 记 rewritten_at; 无 force → 幂等语义不变; 无 .tmp 残留。"""
+    from app.services.auction_backtest import run_full_backtest
+
+    repo, data_dir = repo_env
+    symbols = ("000001.SZ", "000002.SZ")
+    d0, d1, d2 = date(2026, 3, 20), date(2026, 3, 21), date(2026, 3, 22)
+    _seed_enriched_cache(repo, symbols=symbols, days=3, start=d0)
+    for d in (d0, d1):
+        _write_auction_partition(
+            data_dir, d,
+            _auction_rows(d, {
+                "000001.SZ": (5_000_000.0, 2_000_000.0),
+                "000002.SZ": (5_000_000.0, 2_000_000.0),
+            }),
+        )
+    engine = _make_engine()
+
+    # 同配置 + force → 强制重写 (RC-04): 同 run_id, wrote=True, part mtime 变化, manifest 记 rewritten_at
+    r1 = run_full_backtest(repo, engine)
+    part_path = data_dir / "backtest_results" / f"run_id={r1['run_id']}" / "part.parquet"
+    mtime_before = part_path.stat().st_mtime_ns
+    r2 = run_full_backtest(repo, engine, force=True)
+    assert r2["run_id"] == r1["run_id"]
+    assert r2["wrote"] is True and r2["reused"] is False
+    assert r2["status"] == "ok"
+    assert part_path.stat().st_mtime_ns != mtime_before, "force 必须重写分区"
+    manifest = json.loads((data_dir / "backtest_results" / f"run_id={r1['run_id']}" / "manifest.json")
+                          .read_text(encoding="utf-8"))
+    assert "rewritten_at" in manifest, "force 覆写 provenance 必须记录 rewritten_at"
+    # 无 force → 幂等语义不变 (指纹匹配仍 reused)
+    r3 = run_full_backtest(repo, engine)
+    assert r3["wrote"] is False and r3["reused"] is True
+    # 无 .tmp 残留
+    assert list((data_dir / "backtest_results").rglob("*.tmp")) == []
+
+
+def test_full_backtest_cli_force_flag(tmp_path, monkeypatch):
+    """--force (RC-04): --help 列出旗标 exit 0; hermetic main(["--force"]) 经
+    run_full_backtest 绑定透传 force=True → exit 0 (W1: ok-shaped fake dict);
+    main([]) → force=False。"""
+    import importlib.util
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    backend = Path(__file__).resolve().parents[1]
+    cli_path = backend / "scripts" / "auction_backtest.py"
+    spec = importlib.util.spec_from_file_location("auction_backtest_cli", cli_path)
+    cli = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cli)
+
+    # 1. --help exit 0 且列出 --force
+    proc = subprocess.run(
+        [sys.executable, str(cli_path), "--help"],
+        capture_output=True, text=True, cwd=str(backend),
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "--force" in proc.stdout, "help 缺 --force 旗标"
+
+    # 2. hermetic 透传: monkeypatch 脚本模块的 run_full_backtest 绑定 → 捕获 kwargs。
+    #    W1 (plan-check): main 的返回规则 = status ∈ {ok, reused} → 0, 因此 fake 必须
+    #    是 ok-shaped dict 且带 _print_summary 读取的全部键 (诚实空 dict → exit 1, 不可用于 0 断言)。
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    captured: dict = {}
+    fake_result = {
+        "run_id": "a1b2c3d4e5f6",
+        "status": "ok",
+        "wrote": True,
+        "reused": False,
+        "strategy_version": "v-test",
+        "origin": "research",
+        "window": {
+            "requested_start": "2026-03-20", "requested_end": "2026-03-22",
+            "effective_start": "2026-03-20", "effective_end": "2026-03-22",
+        },
+        "strategies": [],
+        "coverage": {"symbols": {
+            "auction_symbol_count": 0, "enriched_symbol_count": 0,
+            "symbol_coverage_ratio": 0.0, "auction_rows_present": 0,
+            "auction_rows_expected": 0,
+        }},
+        "path": str(tmp_path / "backtest_results" / "run_id=a1b2c3d4e5f6"),
+        "rows": pl.DataFrame({"x": [1]}),
+    }
+
+    def _fake_run_full_backtest(repo, engine, **kwargs):
+        captured.update(kwargs)
+        return fake_result
+
+    monkeypatch.setattr(cli, "run_full_backtest", _fake_run_full_backtest)
+    assert cli.main(["--force"]) == 0
+    assert captured.get("force") is True
+    captured.clear()
+    assert cli.main([]) == 0
+    assert captured.get("force") is False

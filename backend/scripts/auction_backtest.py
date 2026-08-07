@@ -22,7 +22,7 @@
 
 用法:
     python scripts/auction_backtest.py [--strategies id1,id2] [--range 248|START,END]
-                                       [--symbols s1,s2] [--rpm N]
+                                       [--symbols s1,s2] [--rpm N] [--force]
     DATA_DIR=/path/to/data python scripts/auction_backtest.py
 """
 from __future__ import annotations
@@ -115,6 +115,12 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         type=int,
         default=None,
         help="保留参数 (无操作): 本地向量化单面板回测无需限速 — 接受但当前不生效 (诚实注)",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="绕过指纹检查强制重写 (operator escape hatch; 仅 CLI, 零 API 面; "
+             "覆写时 manifest 记录 rewritten_at)",
     )
     return parser.parse_args(argv)
 
@@ -231,6 +237,7 @@ def main(argv: list[str] | None = None) -> int:
             end=end,
             strategy_ids=strategy_ids,
             symbols=symbols,
+            force=args.force,
             on_progress=lambda m: print(f"[progress] {m}"),
         )
         elapsed = time.monotonic() - t0
