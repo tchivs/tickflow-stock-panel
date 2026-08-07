@@ -189,7 +189,12 @@ Plans:
   4. `scripts/auction_backfill.py` CLI streams per-symbol progress to stderr (现零进度输出); regression lock: 全空帧批量 → 每 symbol 有进度行 + 终态 failed 计数正确.
 
 **Research flag**: 无需 `--research-phase` — 三态化 + 台账第三类 reason + emit 补全均为既有代码模式的小幅扩展，证据锚点与行号已齐（xyz_provider.py:189-198/228-250、auction_backfill.py:200/224/228/266/268、verify_auction_backfill.py:187-217）。仅 xyz 403 真实响应体结构 UNKNOWN（2h 窗复现时回填定稿）。
-**Plans**: TBD
+**Plans**: 0/2 plans executed
+
+Plans:
+
+- [ ] 41-01-PLAN.md — HON-01: xyz 三态化 (SourceBlockedError) + 台账第三类 reason + probe verdict + verify 区分门 (wave 1)
+- [ ] 41-02-PLAN.md — HON-02: fail-closed 五路径终态 emit + 取消独立 cancelled stage + CLI stderr + 回归锁 (wave 2)
 
 ### Phase 42: 分钟湖扩湖 (Minute Lake Expansion)
 
