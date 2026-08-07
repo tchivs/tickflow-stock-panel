@@ -9,10 +9,10 @@ Requirements for the v2.5 milestone. Each maps to a roadmap phase. Research basi
 
 ### stockdb 本地通道接入 (Local Source Channel) — Phase 40
 
-- [ ] **LOCAL-01**: `local_stockdb` HTTP 适配器 — `backend/app/data_providers/stockdb_provider.py` 镜像 FreeStockDBProvider httpx 模式: `name = "local_stockdb"`, `ProviderCapabilities` 诚实声明 (`auction=False`), X-API-Key header-only (禁 URL 传参), `sleep_between_batches` 对齐服务端限频档位 (quotes 300/min, daily/minute/intraday 120/min, ticks 60/min, 429 带 Retry-After); 零新增运行时依赖 (httpx/pydantic 已在 deps)。
-- [ ] **LOCAL-02**: 配置与注册 — `config.py` 新增 `local_stockdb_url` (默认 `http://127.0.0.1:8000`) + `local_stockdb_api_key` (env 注入, 不入 git, 建议专用 AthenaQuant key → 限频桶隔离 + 审计归因); `chain.py` `_get_provider` 新增分支 + lazy singleton + `_BUILTIN_CHAIN` 插槽 (daily/minute 链首, 受管源优先, 位置配置化)。
-- [ ] **LOCAL-03**: 归一化契约 — 适配器单点归一化: `SH600519→600519.SH` 前缀映射 + 量单位对齐 (**实测 stockdb 输出 `volume_hand` 手 == 湖内手, 恒等 ×1**; 研究 Q1: 需求原稿「手→股×100」为假设, 实测推翻 — 契约测试锁死量级不漂移) + 时区剥 aware (实测 `2026-08-05T00:00:00+08:00` → naive, 镜像 `kline_sync.py:93-132 _normalize_daily`), 契约测试锁死三差异 (同股双键/量级失真/时区漂移永不发生); 写湖唯一经既有写路径 (merge-upsert 幂等 + 原子 rename)。
-- [ ] **LOCAL-04**: 日K/分钟旁路 — daily/minute 流经新通道进链首 gap-merge 走既有 `kline_sync` 写路径; 双源分区守卫沿用现有机制 (单源选择 + run-slot 互斥 + 幂等写); 湖仍无 provenance 列 (铁律), 通道身份进台账/终态 dict。
+- [x] **LOCAL-01**: `local_stockdb` HTTP 适配器 — `backend/app/data_providers/stockdb_provider.py` 镜像 FreeStockDBProvider httpx 模式: `name = "local_stockdb"`, `ProviderCapabilities` 诚实声明 (`auction=False`), X-API-Key header-only (禁 URL 传参), `sleep_between_batches` 对齐服务端限频档位 (quotes 300/min, daily/minute/intraday 120/min, ticks 60/min, 429 带 Retry-After); 零新增运行时依赖 (httpx/pydantic 已在 deps)。
+- [x] **LOCAL-02**: 配置与注册 — `config.py` 新增 `local_stockdb_url` (默认 `http://127.0.0.1:8000`) + `local_stockdb_api_key` (env 注入, 不入 git, 建议专用 AthenaQuant key → 限频桶隔离 + 审计归因); `chain.py` `_get_provider` 新增分支 + lazy singleton + `_BUILTIN_CHAIN` 插槽 (daily/minute 链首, 受管源优先, 位置配置化)。
+- [x] **LOCAL-03**: 归一化契约 — 适配器单点归一化: `SH600519→600519.SH` 前缀映射 + 量单位对齐 (**实测 stockdb 输出 `volume_hand` 手 == 湖内手, 恒等 ×1**; 研究 Q1: 需求原稿「手→股×100」为假设, 实测推翻 — 契约测试锁死量级不漂移) + 时区剥 aware (实测 `2026-08-05T00:00:00+08:00` → naive, 镜像 `kline_sync.py:93-132 _normalize_daily`), 契约测试锁死三差异 (同股双键/量级失真/时区漂移永不发生); 写湖唯一经既有写路径 (merge-upsert 幂等 + 原子 rename)。
+- [x] **LOCAL-04**: 日K/分钟旁路 — daily/minute 流经新通道进链首 gap-merge 走既有 `kline_sync` 写路径; 双源分区守卫沿用现有机制 (单源选择 + run-slot 互斥 + 幂等写); 湖仍无 provenance 列 (铁律), 通道身份进台账/终态 dict。
 
 ### 诚实性修复 (Honesty Fixes) — Phase 41
 
@@ -58,10 +58,10 @@ Requirements for the v2.5 milestone. Each maps to a roadmap phase. Research basi
 
 | REQ-ID | Phase | Status |
 |--------|-------|--------|
-| LOCAL-01 | Phase 40 | Planned |
-| LOCAL-02 | Phase 40 | Planned |
-| LOCAL-03 | Phase 40 | Planned |
-| LOCAL-04 | Phase 40 | Planned |
+| LOCAL-01 | Phase 40 | Complete |
+| LOCAL-02 | Phase 40 | Complete |
+| LOCAL-03 | Phase 40 | Complete |
+| LOCAL-04 | Phase 40 | Complete |
 | HON-01 | Phase 41 | Planned |
 | HON-02 | Phase 41 | Planned |
 | MIN-01 | Phase 42 | Planned |
