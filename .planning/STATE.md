@@ -1,20 +1,20 @@
 ---
 gsd_state_version: 1.0
-milestone: v2.3
-milestone_name: 数据纵深解锁 — planning
-status: Awaiting next milestone
+milestone: v2.4
+milestone_name: 全量数据解锁 — planning
+status: planning
 stopped_at: Completed 31-03-PLAN.md
 last_updated: "2026-08-06T19:18:41.209Z"
 last_activity: 2026-08-06
-last_activity_desc: Milestone v2.3 completed and archived
+last_activity_desc: Milestone v2.4 started
 progress:
-  total_phases: 4
+  total_phases: 0
   completed_phases: 0
-  total_plans: 16
-  completed_plans: 12
+  total_plans: 0
+  completed_plans: 0
   percent: 0
-current_phase: 35
-current_phase_name: Legacy Completion & Deploy Verification
+current_phase: (none)
+current_phase_name: (research)
 ---
 
 # Project State

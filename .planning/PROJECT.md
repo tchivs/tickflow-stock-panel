@@ -8,15 +8,15 @@ AthenaQuant is a shipped, self-hosted quantitative research platform for individ
 
 An investor can turn reliable market data and their own holdings into an auditable, actionable research and monitoring workflow without operating multiple disconnected tools.
 
-## Current Milestone: v2.3 数据纵深解锁
+## Current Milestone: v2.4 全量数据解锁
 
-**Goal:** 在 v2.2 决策闭环（概念 PIT / 竞价验证 / 盘前监控 / 竞价复盘）基础上，解锁被数据湖空洞卡住的真实能力：竞价/分钟数据回填（BT-07 全量回测与真实竞价列的前置，probe-gated 诚实判定）、股池历史回填与 PIT 真实归属、遗留 P2 补全（批量自选、CHART-04 虚拟列立场、R13 缓存语义）与部署验证清单——全部延续零新增运行时依赖、诚实 provenance 与 POOL-03 零执行权。
+**Goal:** v2.3 已验证数据纵深机械（竞价回填 496 行冒烟、股池回填 8/248 分区、BT-07 全量回测 329k 行实跑、真列分支 0.04% 覆盖）。v2.4 将全量解锁真实数据态：全宇宙竞价回填（~5537 symbols，3-5.5h 长作业，幂等续跑）与真列覆盖率翻转、全量真列回测重跑与活跃度解锁、BT-10 分钟接线裁决、以及部署验证 D1..D8 真实交易日就绪面——延续零新增运行时依赖、诚实 provenance（origin=backfill / 失败台账 / 空态 fail-closed）与 POOL-03 零执行权。
 
 **Target features（研究驱动，可行性以研究确认）：**
-- 竞价/分钟数据纵深：kline_auction / kline_minute 湖回填可行性（上游历史端点存在性裁决，不存在则 fail-closed 明确记录）（BT-xx）
-- 股池历史回填（OQ-1）：screener_results 历史分区回填路径与 PIT 概念真实归属联动（HIST-xx/OQ-1）
-- 全量竞价回测：BT-07 依赖竞价湖非空，门控于回填可行性（BT-07）
-- 遗留补全：WATCH-04 批量加自选、CHART-04 虚拟成交列立场定案、R13 15:30 缓存语义验证（P2 补全）
+- 全量竞价回填：5537 symbols × 248 日长作业（resume/checkpoint、429 节奏、磁盘余量、探针长稳）→ kline_auction 全分区（AQ/BT 系）
+- 全量真列回测与活跃度：BT-07 真列分支全宇宙重跑 + 竞价活跃度报告/竞价格线解锁（BT 系）
+- 分钟接线裁决：kline_minute 增量 loader 与 intraday_confirm 接线可行性（live 日无历史源时 fail-closed 诚实注记）（BT-10 系）
+- 部署验证就绪：D1..D8 真实交易日观察清单的沙箱侧可执行面（D 系，premarket/周报双门禁）
 - 沿平台边界：选股/股池结果始终为零执行权研究建议，无自动下单
 
 ## Success Metric
@@ -158,4 +158,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-08-04 — v1.3 milestone started (竞价选股引擎)*
+*Last updated: 2026-08-06 — v2.4 milestone started (全量数据解锁)*
