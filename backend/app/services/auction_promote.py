@@ -19,8 +19,10 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from datetime import date, datetime
 from pathlib import Path
+from typing import Any
 
 import polars as pl
 
@@ -37,6 +39,51 @@ _MATCH_TIME_HI = "09:25:59"
 
 # 单位映射: 手 → 股 ×100 (data.py:772 语义; 契约 173×100=17300 股 / 173×100×1308.66=22,639,818 元)
 _HAND_TO_SHARE = 100
+
+
+# promote 输出列: 4 canonical + auction_virtual_price (OPTIONAL_AUCTION_COLS 子集);
+# auction_unmatched_volume 诚实缺列 — 本模块绝不构造该列。
+_PROMOTE_COLS = [
+    "symbol", "datetime", "auction_volume", "auction_amount", "auction_virtual_price",
+]
+
+
+def _json_default(obj: Any) -> Any:
+    """date/datetime → isoformat (镜像 premarket_snapshot._json_default)。"""
+    if isinstance(obj, (date, datetime)):
+        return obj.isoformat()
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
+
+def _existing_partition_keys(data_dir: Path, trade_date: date) -> set[tuple[str, datetime]]:
+    """kline_auction/date={T} 既有 (symbol, datetime) 键集 — 供 written 计数 (幂等重跑)。"""
+    part = data_dir / "kline_auction" / f"date={trade_date.isoformat()}" / "part.parquet"
+    if not part.exists():
+        return set()
+    df = pl.read_parquet(part)
+    return set(zip(df["symbol"].to_list(), df["datetime"].to_list()))
+
+
+def _update_manifest_promoted(stage_dir: Path, payload: dict) -> None:
+    """读旧 manifest → 增 promoted 块 → temp+os.replace 原子写 (镜像 premarket_snapshot)。
+
+    旧 manifest 缺失 (gate 已拒) 不写 — 绝不伪造提审状态; 旧键全部保留。
+    """
+    mf = stage_dir / "manifest.json"
+    if not mf.exists():
+        return
+    try:
+        manifest = json.loads(mf.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:  # pragma: no cover - gate 已验可读
+        logger.warning("promote: manifest unreadable, promoted block skipped: %s", e)
+        return
+    manifest.update(payload)
+    tmp = mf.with_name(mf.name + ".tmp")
+    tmp.write_text(
+        json.dumps(manifest, ensure_ascii=False, default=_json_default, indent=2),
+        encoding="utf-8",
+    )
+    os.replace(tmp, mf)
 
 
 def promote_to_canonical(
@@ -125,13 +172,63 @@ def promote_to_canonical(
     })
 
     # ---- 写湖: 555..565 谓词 + 存在性 crop + merge-upsert 幂等 + 原子写 (直调, probe 闸门不在其内) ----
+    existing_keys = _existing_partition_keys(repo.store.data_dir, trade_date)
+    new_keys = set(zip(
+        canonical_df["symbol"].to_list(), canonical_df["datetime"].to_list(),
+    ))
+    written = len(new_keys - existing_keys)
     write_auction_partitions(canonical_df, repo)
+
+    _update_manifest_promoted(stage_dir, {
+        "promoted": True,
+        "promoted_at": datetime.now().isoformat(timespec="seconds"),
+        "written": written,
+        "num_trades_by_symbol": num_trades_by_symbol,
+    })
     logger.info(
         "promote %s: %d 撮合行升湖 (symbols=%s)",
-        trade_date.isoformat(), canonical_df.height, sorted(num_trades_by_symbol),
+        trade_date.isoformat(), written, sorted(num_trades_by_symbol),
     )
     return {
-        "written": canonical_df.height,
+        "written": written,
         "symbols": sorted(num_trades_by_symbol),
         "num_trades_by_symbol": num_trades_by_symbol,
+    }
+
+
+def promote_trading_day(
+    repo: KlineRepository,
+    data_dir: Path,
+    trade_dates: list[date],
+) -> dict:
+    """自 T-day 起逐日累积: 每交易日一分区逐日提审 (幂等重跑 merge-upsert)。
+
+    无 staging 分区 → 该日 skipped (staging_missing), 不写湖不报错; gate 拒绝 →
+    该日 skipped (reason 透传) — 全链路诚实可观测。
+
+    Returns:
+        ``{"promoted_dates": [iso], "skipped": [{"date": iso, "reason": …}],
+        "total_written": int}``
+    """
+    promoted_dates: list[str] = []
+    skipped: list[dict] = []
+    total_written = 0
+    for d in trade_dates:
+        stage_dir = Path(data_dir) / "tick_staging" / f"date={d.isoformat()}"
+        if not (stage_dir / "part.parquet").exists():
+            skipped.append({"date": d.isoformat(), "reason": "staging_missing"})
+            continue
+        result = promote_to_canonical(stage_dir, repo, d)
+        if result.get("written", 0) > 0:
+            promoted_dates.append(d.isoformat())
+            total_written += result["written"]
+        else:
+            skipped.append({
+                "date": d.isoformat(),
+                "reason": result.get("reason", "no_match_rows"),
+            })
+    return {
+        "promoted_dates": promoted_dates,
+        "skipped": skipped,
+        "total_written": total_written,
     }
