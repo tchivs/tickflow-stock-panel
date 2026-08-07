@@ -55,6 +55,25 @@ def _seed_auction(tmp_path: Path, daily_dates, symbols, vp_by_pair=None) -> None
         pl.DataFrame(rows).write_parquet(part / "part.parquet")
 
 
+def _seed_minute(tmp_path: Path, daily_dates, symbols, include_0930=True) -> None:
+    """kline_minute/date=* 分区: 每日期每 symbol 一根 09:30 bar (canonical 列形,
+    镜像 _seed_auction)。include_0930=False → 只写 09:31 行 (无 09:30 → 统计 0)。"""
+    for d in daily_dates:
+        part = tmp_path / "kline_minute" / f"date={d.isoformat()}"
+        part.mkdir(parents=True, exist_ok=True)
+        minute = 30 if include_0930 else 31
+        rows = [
+            {
+                "symbol": s,
+                "datetime": datetime(d.year, d.month, d.day, 9, minute),
+                "open": 10.0, "high": 10.0, "low": 10.0, "close": 10.0,
+                "volume": 521.0, "amount": None,
+            }
+            for s in symbols
+        ]
+        pl.DataFrame(rows).write_parquet(part / "part.parquet")
+
+
 def _run(monkeypatch, tmp_path, *argv) -> tuple[int, str]:
     """DATA_DIR 指向 tmp 湖, 跑脚本 main(), 返回 (退出码, stdout)。"""
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
@@ -239,3 +258,48 @@ def test_verify_never_writes_lake(tmp_path, monkeypatch):
 
     assert code == 0
     assert before == after
+
+
+def test_verify_minute_stats_line_parallel(tmp_path, monkeypatch):
+    """MIN-02: [6] 双口径并列 — canonical 行 (1/3) 与 minute_stats 行 (2/3,
+    dates 计数 + caliber 标注) 各自独立打印, 绝不相加、绝不混同。"""
+    _seed_daily(tmp_path, [D1, D2, D3], [SZ, SH, BJ])
+    _seed_auction(tmp_path, [D1, D2, D3], [SZ])  # canonical 只覆盖 SZ
+    _seed_minute(tmp_path, [D1, D2, D3], [SZ, SH])  # 统计口径覆盖 SZ+SH
+    code, out = _run(monkeypatch, tmp_path)
+
+    assert code == 1  # canonical partial (SH 缺失)
+    assert "[6] coverage:" in out and "auction_symbol_count/3 = 0.333" in out
+    assert "minute_stats: 2/3 = 0.667" in out
+    assert "(dates=3" in out
+    assert "caliber=statistical_minute_0930" in out
+    assert "100%" not in out
+
+
+def test_verify_minute_stats_no_100_percent(tmp_path, monkeypatch):
+    """MIN-02: 满覆盖场景 (canonical 1.000 + minute_stats 1.000) → 绝不出 "100%"
+    字符串 (既有覆盖口径守卫对双口径同时生效)。"""
+    _seed_daily(tmp_path, [D1, D2, D3], [SZ, SH])
+    _seed_auction(tmp_path, [D1, D2, D3], [SZ, SH])
+    _seed_minute(tmp_path, [D1, D2, D3], [SZ, SH])
+    code, out = _run(monkeypatch, tmp_path)
+
+    assert code == 0
+    assert "verdict: PASS" in out
+    assert "[6] coverage:" in out and "= 1.000" in out
+    assert "minute_stats: 2/2 = 1.000" in out
+    assert "100%" not in out
+
+
+def test_verify_minute_stats_honest_empty(tmp_path, monkeypatch):
+    """MIN-02: 无 kline_minute 分区 → minute_stats 行 0/3 = 0.000, 退出码语义
+    与 canonical 空态一致 (统计空绝不误判完成/失败)。"""
+    _seed_daily(tmp_path, [D1, D2, D3], [SZ, SH, BJ])
+    _seed_auction(tmp_path, [D1, D2, D3], [SZ])
+    code, out = _run(monkeypatch, tmp_path)
+
+    assert code == 1
+    assert "minute_stats: 0/3 = 0.000" in out
+    assert "(dates=0" in out
+    assert "caliber=statistical_minute_0930" in out
+    assert "100%" not in out

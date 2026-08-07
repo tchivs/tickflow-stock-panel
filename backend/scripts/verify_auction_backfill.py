@@ -39,11 +39,14 @@ import argparse
 import json
 import os
 import sys
+from datetime import time
 from pathlib import Path
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(_SCRIPT_DIR))
 sys.path.insert(0, str(_SCRIPT_DIR.parent))  # backend/ — app 包根
+
+import polars as pl  # noqa: E402
 
 from app.tickflow.repository import DataStore, KlineRepository  # noqa: E402
 
@@ -79,6 +82,38 @@ def _lake(db, data_dir: Path) -> dict:
     rows = _fetch_one(db, "SELECT COUNT(*) FROM kline_auction") or 0
     syms = _fetch_one(db, "SELECT COUNT(DISTINCT symbol) FROM kline_auction") or 0
     return {"partitions": len(parts), "rows": int(rows), "symbols": int(syms)}
+
+
+def _minute_stats(data_dir: Path) -> dict:
+    """kline_minute 09:30 bar 统计口径 (只读, 镜像 _lake 形态)。
+
+    09:30 bar = 集合竞价统计 (非逐笔, caliber=statistical_minute_0930) — 只数
+    ``datetime.time()==09:30`` 的行; 坏分区/空分区/缺 canonical 列 → fail-closed
+    skip (T-29-01-05); dates = 含 09:30 行的分区数 (诚实 — 无 09:30 行的分区不计,
+    绝不虚报日期深度)。统计口径只进报告, 绝不写 canonical 湖。
+    """
+    base = data_dir / "kline_minute"
+    symbols: set[str] = set()
+    rows = 0
+    dates = 0
+    if base.exists():
+        for part in base.glob("date=*/part.parquet"):
+            try:
+                f = pl.read_parquet(part)
+            except Exception:  # noqa: BLE001 — fail-closed
+                continue
+            if (
+                f.is_empty()
+                or not {"datetime", "symbol"} <= set(f.columns)
+            ):
+                continue
+            bars = f.filter(pl.col("datetime").dt.time() == time(9, 30))
+            if bars.is_empty():
+                continue
+            symbols.update(bars["symbol"].unique().to_list())
+            rows += bars.height
+            dates += 1
+    return {"symbols": len(symbols), "rows": rows, "dates": dates}
 
 
 def _bj_ledger(db) -> dict:
@@ -294,6 +329,14 @@ def main(argv: list[str] | None = None) -> int:
     print(
         f"[6] coverage:      auction_symbol_count/{uni['total']} = {coverage:.3f}"
         f"{' — PARTIAL' if coverage < 1.0 else ''}"
+    )
+    # MIN-02 统计口径并列行 (独立 caliber, 与 canonical 绝不相加; 分母 = 运行期 universe)
+    m_stats = _minute_stats(data_dir)
+    m_ratio = (m_stats["symbols"] / uni["total"]) if uni["total"] else 0.0
+    print(
+        f"minute_stats: {m_stats['symbols']}/{uni['total']} = {m_ratio:.3f}"
+        f" (dates={m_stats['dates']}, caliber=statistical_minute_0930)"
+        f"{' — PARTIAL' if m_ratio < 1.0 else ''}"
     )
 
     complete = (
