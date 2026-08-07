@@ -144,7 +144,7 @@ def main(argv: list[str] | None = None) -> int:
             end=args.end,
             rpm=args.rpm,
             only_missing=args.only_missing,
-            on_progress=lambda stage, pct, msg, **kw: print(f"[progress] {msg}", flush=True),
+            on_progress=lambda stage, pct, msg, **kw: print(f"[progress] {msg}", file=sys.stderr, flush=True),
             job_id=None,  # 零任务注册表: 无单飞/无超时回收/无 run 槽 (重启中断安全)
         )
         elapsed = time.monotonic() - t0

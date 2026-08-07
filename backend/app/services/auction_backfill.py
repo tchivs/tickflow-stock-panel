@@ -283,6 +283,7 @@ def run_auction_backfill(
         pre = _fetch_auction(provider, symbols[0], eff_start_date, eff_end_date)
     except SourceBlockedError as e:
         logger.warning("auction backfill preflight source blocked: %s", e)
+        _emit_fail_closed(emit, "source_blocked")
         return _fail_closed(rpm, "source_blocked")
     except Exception as e:  # noqa: BLE001
         logger.exception("auction backfill preflight failed: %s", e)
@@ -297,14 +298,20 @@ def run_auction_backfill(
     failed_symbols: list[dict[str, str]] = []
 
     emit("auction_backfill", 0, f"回填 {requested} 个标的 × {len(aligned_dates)} 日…")
+    cancelled = False
     for i, sym in enumerate(symbols):
         # AQ-05 限速: 共享 _reserve_slot 节流 (每 symbol 1 请求, rpm 默认 30)
         sleep_between_batches(i, rpm)
-        # 合作式取消 (镜像 pool_backfill.py:88-91): job failed → 提前停止
+        # 合作式取消 (镜像 pool_backfill.py:88-91): job failed → 提前停止;
+        # 独立 stage cancelled + 实际 pct —— 绝不 done/100 误报 (HON-02)
         if job_id is not None:
             j = job_store.get(job_id)
             if j is None or j["status"] == "failed":
-                emit("done", 100, "回填被取消")
+                cancelled = True
+                emit(
+                    "cancelled", int(100 * i / requested),
+                    f"回填被取消 (已处理 {i}/{requested})",
+                )
                 break
         try:
             df = _fetch_auction(provider, sym, eff_start_date, eff_end_date)
@@ -313,19 +320,19 @@ def run_auction_backfill(
                 if _has_daily_rows(repo, sym, eff_start, eff_end):
                     failed += 1
                     failed_symbols.append({"symbol": sym, "reason": "empty_response"})
-                continue
-            # AQ-03b 写边界对齐 (承重): 上游多返回的日期绝不 phantom-write
-            if "datetime" in df.columns:
-                df = df.filter(pl.col("datetime").dt.date().is_in(aligned_date_set))
-            if df.is_empty():
-                if _has_daily_rows(repo, sym, eff_start, eff_end):
-                    failed += 1
-                    failed_symbols.append({"symbol": sym, "reason": "empty_response"})
-                continue
-            # 写湖唯一经 write_auction_partitions (单一写路径, 32-01)
-            written = write_auction_partitions(df, repo)
-            backfilled += 1
-            rows += written  # 窗口过滤后行数; 0 → 仍记 backfilled, rows 不加 (诚实)
+            else:
+                # AQ-03b 写边界对齐 (承重): 上游多返回的日期绝不 phantom-write
+                if "datetime" in df.columns:
+                    df = df.filter(pl.col("datetime").dt.date().is_in(aligned_date_set))
+                if df.is_empty():
+                    if _has_daily_rows(repo, sym, eff_start, eff_end):
+                        failed += 1
+                        failed_symbols.append({"symbol": sym, "reason": "empty_response"})
+                else:
+                    # 写湖唯一经 write_auction_partitions (单一写路径, 32-01)
+                    written = write_auction_partitions(df, repo)
+                    backfilled += 1
+                    rows += written  # 窗口过滤后行数; 0 → 仍记 backfilled, rows 不加 (诚实)
         except SourceBlockedError as e:
             logger.warning("auction backfill %s source blocked: %s", sym, e)
             failed += 1
@@ -334,13 +341,17 @@ def run_auction_backfill(
             logger.exception("auction backfill %s failed: %s", sym, e)
             failed += 1
             failed_symbols.append({"symbol": sym, "reason": str(e)[:_ERROR_DETAIL_MAX]})
+        # 每 processed symbol 一行进度 (HON-02 回归锁): 旧空帧分支 continue 会跳过
+        # 本 emit → 批量全空时进度冻结; if/else 化后每 symbol 都落一行
         emit(
             "auction_backfill",
             int(100 * (i + 1) / requested),
             f"{i + 1}/{requested} (成功 {backfilled}, 失败 {failed})",
             stage_pct=int(100 * (i + 1) / requested),
         )
-    emit("done", 100, f"回填完成: {backfilled} 成功, {failed} 失败")
+    # done 门 (HON-02): 取消后绝不回填完成 —— 消除二次 done/100 误导
+    if not cancelled:
+        emit("done", 100, f"回填完成: {backfilled} 成功, {failed} 失败")
     return {
         "requested": requested,
         "backfilled_symbols": backfilled,
