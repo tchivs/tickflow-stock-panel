@@ -1080,6 +1080,207 @@ def _premarket_pool_preview(on_progress=None) -> dict:
     return result
 
 
+# ================================================================
+# 竞价采集 sidecar (SDC-01..03) — 09:26 采集 / 09:40 对账 / EOD 15:40 提审
+# ================================================================
+
+# 09:26 与盘前预览同槽位不同 id (APScheduler 多 job 并发合法, 互不干扰);
+# 09:40 对账时 09:30 bar 已由服务端分钟采集产出 (数据在场判定交易日);
+# EOD 15:40 提审 (EOD 后宽窗口)。
+_SIDECAR_CAPTURE_JOB_ID = "auction_sidecar_capture"
+_SIDECAR_CAPTURE_HOUR, _SIDECAR_CAPTURE_MINUTE = 9, 26
+_SIDECAR_RECONCILE_JOB_ID = "auction_sidecar_reconcile"
+_SIDECAR_RECONCILE_HOUR, _SIDECAR_RECONCILE_MINUTE = 9, 40
+_SIDECAR_PROMOTE_JOB_ID = "auction_sidecar_promote"
+_SIDECAR_PROMOTE_HOUR, _SIDECAR_PROMOTE_MINUTE = 15, 40
+
+# 懒构造 provider 单例: app.state 无 provider 面, StockDBProvider 默认从 settings
+# 注入 base_url/api_key。构造失败 → job 抛异常 → _run_tracked 标记 failed (不吞)。
+_sidecar_provider = None
+
+
+def _get_sidecar_provider():
+    global _sidecar_provider
+    if _sidecar_provider is None:
+        from app.data_providers.stockdb_provider import StockDBProvider
+
+        _sidecar_provider = StockDBProvider()
+    return _sidecar_provider
+
+
+def _sidecar_failed_symbols(pool) -> list[str]:
+    """池解析 failed 列表 ({symbol, reason} dict 或 str) → symbol 字符串列表。"""
+    if not isinstance(pool, dict):
+        return []
+    failed = pool.get("failed") or []
+    return [f.get("symbol") if isinstance(f, dict) else str(f) for f in failed]
+
+
+def _sidecar_capture(on_progress=None) -> dict:
+    """09:26 竞价采集 job: fetch-on-miss 单次 GET 全窗口 → staging 原子写 + 台账。
+
+    - 绝不盘中轮询: 服务端湖文件缺失 → 首 GET 触发全窗口采集, 文件存在后永不刷新;
+    - 完整性 fail-closed 在 capture_auction_window 内 (归属日/撮合行/窗口阈值三拒,
+      全失败 → 无分区); 终态 → auction_sidecar_ledger.append_ledger (W-5 键集);
+    - 告警由 09:40 对账 job 判定 (09:26 时点 09:30 bar 未产出, 无法确认交易日)。
+    """
+    from app.services import auction_capture, auction_sidecar_ledger
+
+    app_state = _get_app_state()
+    if app_state is None:
+        return {"job": _SIDECAR_CAPTURE_JOB_ID, "skipped": "no app state"}
+    repo = app_state.repo
+    data_dir = repo.store.data_dir
+    today = cn_today()
+    emit = on_progress or _noop
+    emit(_SIDECAR_CAPTURE_JOB_ID, 0, f"竞价采集 {today}: 解析采集池…")
+
+    pool = auction_capture.resolve_sidecar_pool()
+    symbols = pool["symbols"] if isinstance(pool, dict) else list(pool)
+    failed_symbols = _sidecar_failed_symbols(pool)
+    if not symbols:
+        entry = {
+            "job": _SIDECAR_CAPTURE_JOB_ID,
+            "trade_date": today.isoformat(),
+            "requested": 0,
+            "ok": 0,
+            "failed_symbols": failed_symbols,
+        }
+        entry["reason"] = "no_pool"
+        auction_sidecar_ledger.append_ledger(data_dir, entry)
+        emit("done", 100, "竞价采集跳过: 采集池为空")
+        return entry
+
+    emit(_SIDECAR_CAPTURE_JOB_ID, 30,
+         f"采集池 {len(symbols)} symbol, 触发 fetch-on-miss 全窗口采集…")
+    result = auction_capture.capture_auction_window(
+        _get_sidecar_provider(), symbols, today, data_dir,
+    )
+    result_failed = result.get("failed") or []
+    entry = {
+        "job": _SIDECAR_CAPTURE_JOB_ID,
+        "trade_date": today.isoformat(),
+        "requested": result.get("requested", len(symbols)),
+        "ok": result.get("ok", 0),
+        "failed_symbols": [f.get("symbol") if isinstance(f, dict) else str(f)
+                           for f in result_failed],
+    }
+    if entry["ok"] == 0:
+        entry["reason"] = "capture_all_failed"
+    auction_sidecar_ledger.append_ledger(data_dir, entry)
+    emit("done", 100, f"竞价采集完成: ok={entry['ok']}/{entry['requested']}")
+    return entry
+
+
+def _sidecar_reconcile(on_progress=None) -> dict:
+    """09:40 对账 job: 09:25 撮合行 vs 09:30 bar 三重闭合 + 诚实门告警 + 台账。
+
+    - 交易日判定 = 数据在场 (reconcile_window.trading_day_confirmed — 09:30 bar
+      存在, AQ 无日历服务 Q6/A5); 非交易日 → 台账 skipped_no_data, 零告警;
+    - 告警 (SDC-03「09:26 后缺失可告」): 交易日 ∧ 09:26 采集缺失/不完整 →
+      auction_sidecar_capture_missing; 对账 mismatch → auction_sidecar_reconcile_fail;
+    - 内部 09:45 重试由 reconcile_window 实现 (09:30 bar 缺失 → 300s 重试 1 次 →
+      pending, A5)。
+    """
+    from app.services import auction_capture, auction_reconcile, auction_sidecar_ledger
+
+    app_state = _get_app_state()
+    if app_state is None:
+        return {"job": _SIDECAR_RECONCILE_JOB_ID, "skipped": "no app state"}
+    repo = app_state.repo
+    data_dir = repo.store.data_dir
+    today = cn_today()
+    emit = on_progress or _noop
+    emit(_SIDECAR_RECONCILE_JOB_ID, 0, f"竞价对账 {today}: 09:25 撮合行 vs 09:30 bar…")
+
+    result = auction_reconcile.reconcile_window(_get_sidecar_provider(), data_dir, today)
+    trading_day = bool(result.get("trading_day_confirmed", False))
+
+    entry = {
+        "job": _SIDECAR_RECONCILE_JOB_ID,
+        "trade_date": today.isoformat(),
+        "requested": 0,
+        "ok": 0,
+        "failed_symbols": [],
+    }
+    checks = result.get("checks") or {}
+    if isinstance(checks, dict) and checks:
+        entry["requested"] = len(checks)
+        entry["ok"] = sum(
+            1 for c in checks.values() if isinstance(c, dict) and c.get("status") == "closed"
+        )
+        entry["failed_symbols"] = [
+            sym for sym, c in checks.items()
+            if not (isinstance(c, dict) and c.get("status") == "closed")
+        ]
+    status = result.get("status")
+    if not trading_day:
+        entry["skipped"] = "no_data"
+        auction_sidecar_ledger.append_ledger(data_dir, entry)
+        emit("done", 100, f"竞价对账 {today}: 非交易日 (无 09:30 bar), 静默跳过")
+        return entry
+    if status == "mismatch":
+        entry["reason"] = "reconcile_mismatch"
+    elif status in ("staging_missing", "pending"):
+        entry["reason"] = status
+
+    capture_state = auction_sidecar_ledger.read_sidecar_capture_state(data_dir, today)
+    if capture_state is None:
+        # 09:26 采集分区/manifest 缺失 (采集 job 未跑或全失败未落盘) — 交易日上按池
+        # 解析给 requested 提示, ok=0 → capture_missing 告警 (缺失可告)。
+        pool = auction_capture.resolve_sidecar_pool()
+        symbols = pool["symbols"] if isinstance(pool, dict) else list(pool)
+        capture_state = {
+            "requested": len(symbols),
+            "ok": 0,
+            "failed_symbols": _sidecar_failed_symbols(pool),
+            "completeness_ok": False,
+        }
+    events = auction_sidecar_ledger.evaluate_sidecar_alerts(
+        data_dir, today.isoformat(), capture_state, result, trading_day,
+    )
+    entry["events"] = [e["rule_id"] for e in events] if events else []
+    auction_sidecar_ledger.append_ledger(data_dir, entry)
+    emit("done", 100, f"竞价对账完成: status={status}, 告警={len(events)}")
+    return entry
+
+
+def _sidecar_promote(on_progress=None) -> dict:
+    """EOD 15:40 提审 job: 对账 closed 的当日 staging 仅撮合行升 canonical + 台账。
+
+    - 提审闸门在 promote_trading_day 内 (staging manifest completeness.ok ∧
+      reconciliation.closed — Pitfall 6: 不用 xyz probe); 闸门不过 → 0 写 + reason;
+    - 虚拟快照行 (num_trades=0) 永不入湖 (43-02 谓词 + 提审过滤双保险)。
+    """
+    from app.services import auction_promote, auction_sidecar_ledger
+
+    app_state = _get_app_state()
+    if app_state is None:
+        return {"job": _SIDECAR_PROMOTE_JOB_ID, "skipped": "no app state"}
+    repo = app_state.repo
+    data_dir = repo.store.data_dir
+    today = cn_today()
+    emit = on_progress or _noop
+    emit(_SIDECAR_PROMOTE_JOB_ID, 0, f"竞价提审 {today}: 对账 closed → 仅撮合行升 canonical…")
+
+    result = auction_promote.promote_trading_day(repo, data_dir, [today])
+    promoted = today.isoformat() in (result.get("promoted_dates") or [])
+    entry = {
+        "job": _SIDECAR_PROMOTE_JOB_ID,
+        "trade_date": today.isoformat(),
+        "requested": 1,
+        "ok": 1 if promoted else 0,
+        "failed_symbols": [],
+    }
+    if not promoted:
+        skipped = result.get("skipped") or []
+        reasons = [s.get("reason") if isinstance(s, dict) else str(s) for s in skipped]
+        entry["reason"] = reasons[0] if reasons else "not_promoted"
+    auction_sidecar_ledger.append_ledger(data_dir, entry)
+    emit("done", 100, f"竞价提审完成: written={result.get('total_written', 0)}")
+    return entry
+
+
 def start_scheduler(repo: KlineRepository, capset: CapabilitySet) -> AsyncIOScheduler:
     """启动调度器。
 
@@ -1172,6 +1373,43 @@ def start_scheduler(repo: KlineRepository, capset: CapabilitySet) -> AsyncIOSche
                             timezone="Asia/Shanghai"),
         id=_PREMARKET_JOB_ID,
         misfire_grace_time=1800,
+        replace_existing=True,
+    )
+
+    # 盘中/盘后: 竞价采集 sidecar 三 job (SDC-01..03)。
+    #   09:26 采集 — 与盘前预览同槽位不同 id (APScheduler 多 job 并发合法);
+    #     fetch-on-miss 单次 GET 全窗口 → staging 原子写 + manifest (fail-closed:
+    #     不完整 → 无分区, 不伪造);
+    #   09:40 对账 — 09:30 bar 数据在场判定交易日 → 三重闭合 + 诚实门告警
+    #     (auction_sidecar_capture_missing / auction_sidecar_reconcile_fail);
+    #   EOD 15:40 提审 — 对账 closed → 仅 09:25 撮合行升 canonical (虚拟行永不入湖)。
+    # 盘前窗口窄 (09:26/09:40), misfire_grace_time=1800 镜像 premarket 09:26 job;
+    # EOD 后 15:40 宽窗口 3600。全部 _run_tracked 单飞 + replace_existing。
+    scheduler.add_job(
+        lambda: _run_tracked(_sidecar_capture, _SIDECAR_CAPTURE_JOB_ID),
+        trigger=CronTrigger(day_of_week="mon-fri",
+                            hour=_SIDECAR_CAPTURE_HOUR, minute=_SIDECAR_CAPTURE_MINUTE,
+                            timezone="Asia/Shanghai"),
+        id=_SIDECAR_CAPTURE_JOB_ID,
+        misfire_grace_time=1800,
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        lambda: _run_tracked(_sidecar_reconcile, _SIDECAR_RECONCILE_JOB_ID),
+        trigger=CronTrigger(day_of_week="mon-fri",
+                            hour=_SIDECAR_RECONCILE_HOUR, minute=_SIDECAR_RECONCILE_MINUTE,
+                            timezone="Asia/Shanghai"),
+        id=_SIDECAR_RECONCILE_JOB_ID,
+        misfire_grace_time=1800,
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        lambda: _run_tracked(_sidecar_promote, _SIDECAR_PROMOTE_JOB_ID),
+        trigger=CronTrigger(day_of_week="mon-fri",
+                            hour=_SIDECAR_PROMOTE_HOUR, minute=_SIDECAR_PROMOTE_MINUTE,
+                            timezone="Asia/Shanghai"),
+        id=_SIDECAR_PROMOTE_JOB_ID,
+        misfire_grace_time=3600,
         replace_existing=True,
     )
 

@@ -19,6 +19,8 @@
 |------|----------|----------|
 | 09:10 | instruments 同步（偏好） | — |
 | **09:26** | 盘前预览 job + 盘前监控尾段 | **D1**（09:26 cron）+ **D4**（监控 payload/close 语义） |
+| **09:26** | 竞价 sidecar 采集 job（fetch-on-miss 单窗口 → staging） | **D8**（sidecar 点亮门: `tick_staging/date={T}/part.parquet` 存在 ∧ manifest completeness.ok） |
+| **09:40 / 15:40** | 竞价 sidecar 对账 / 提审 | **D8**（09:40 对账 closed; 15:40 `kline_auction/date={T}` 分区出现 — 联动 D3 竞价数据流, 第二数据源 tick 通道） |
 | 15:00 | 收盘 | — |
 | 15:02 | depth 定版（默认） | — |
 | **15:30** | EOD 管道（偏好默认） | **D2**（EOD cron + 缓存刷新）+ **D6**（R13 语义） |
@@ -46,6 +48,25 @@
 4. 前端盘前视图可见该日预览（窗口标注 + 15:35 回退 EOD 语义不变）。
 
 **顺序**：D1 在任何竞价源接入前即可做（诚实 degraded 也是通过态）。
+
+---
+
+## D8 — 竞价 sidecar 点亮门 + 诚实空态（Phase 43 SDC-03）
+
+**验证什么**：09:26 竞价采集真实触发 staging 落盘（fetch-on-miss 单次 GET 全窗口），09:40 对账 closed，15:40 仅撮合行升 canonical；**非交易日无分区为诚实空态，不误判**（数据在场判定交易日: 09:30 bar 存在才告警）。
+
+**在哪看**：
+- 后端日志：`scheduled auction_sidecar_capture/reconcile/promote completed: job_id=…`（`_run_tracked` 单飞）；台账 `data/user_data/auction_sidecar_ledger.jsonl`（W-5 键集, JSONL 追加 + 滚动清理）。
+- 数据目录：`data/tick_staging/date={T}/part.parquet`（10 列）+ `manifest.json`（completeness/reconciliation/promoted 块同日沉淀）；EOD 后 `data/kline_auction/date={T}/part.parquet`。
+- 告警面：`data/user_data/alerts.jsonl`（`/api/alerts` 查询面）——交易日 ∧ 采集缺失/不完整 → `auction_sidecar_capture_missing`；对账 mismatch → `auction_sidecar_reconcile_fail`；非交易日 → 台账 `skipped_no_data` 零告警。
+
+**通过标准**：
+1. 09:26 后 `tick_staging/date={T}/part.parquet` 存在 && manifest `completeness.ok:true`（采集池 ≤200，白名单默认自选池；3s 快照级源粒度如实）。
+2. 09:40 后 manifest `reconciliation.status:"closed"`（09:25 撮合行 vs 09:30 bar 三重闭合，实测 22,639,818）；15:40 后 `kline_auction/date={T}` 分区出现且仅含 09:25 撮合行（虚拟快照行永不入湖）。
+3. 失败态 fail-closed：采集/对账失败 → 无当日分区 + 台账 reason + 告警（绝不伪造分区）；假日（mon-fri 非交易日）→ 无分区无告警，诚实空态。
+4. 09:26 与盘前预览同槽位不同 id（`premarket_pool_preview` / `auction_sidecar_capture`）互不干扰。
+
+**顺序**：首个真实交易日 09:26 起逐项确认；D8 联动 D3（第二数据源 tick 通道 → kline_auction 湖流）与 D5 复盘 Block 1（真实竞价活跃度）。
 
 ---
 

@@ -49,6 +49,10 @@
 - 只读端点 `GET /api/pool/premarket` 返回今日预览（缺失 → 200 `available:false` 诚实空态，非 404）；股池页「最新」视图在盘前预览存在且今日 EOD 快照未生成时展示预览池并标注「盘前预览 · 竞价窗口 09:15-09:25 · 非收盘定稿」，15:35 EOD 后自动回退收盘池。
 - **诚实边界**：真实竞价列仅在今日 probe `available` 且实时源返回今日窗口行时可用（第二档，依赖外部实时竞价源）；未配置时仅展示派生列（`degraded`），**绝不**把盘前预览标为收盘定稿、不把 09:30 bar 标为集合竞价数据；日期导航只列 EOD 快照日，盘前预览不进入归档日期。
 
+### 📡 T-day 竞价采集 sidecar（Phase 43）
+
+盘中竞价窗口 live 采集三 job（CronTrigger mon-fri Asia/Shanghai，`_run_tracked` 单飞 + replace_existing）：**09:26 采集**（fetch-on-miss 单次 GET 即触发服务端全窗口采集，文件存在后永不刷新、绝不盘中轮询，3s 快照级逐条）→ `data/tick_staging/date={T}/`（10 列 + manifest，原子写，不完整 fail-closed 无分区）→ **09:40 对账**（staged 09:25 撮合行 vs 09:30 bar 三重闭合：price 1e-6 / vol 恒等 / amount 仅 OHLC 全等派生，实测闭合 22,639,818；bar 缺失 300s 重试 1 次 → pending）→ **EOD 15:40 提审**（对账 closed → 仅 09:25 `num_trades>0` 撮合行升 canonical `kline_auction`：auction_volume 股 ×100 / auction_amount 元 / auction_virtual_price；num_trades 只进 staging/manifest，虚拟快照行永不入湖）。采集池 = 配置白名单 `auction_sidecar_symbols` 默认自选池，硬 cap ≤200（3s 源粒度如实）。**诚实门**：当日采集失败 → 无当日分区（不伪造）；状态可观测 — `data/user_data/auction_sidecar_ledger.jsonl` 台账（W-5 键集，JSONL 追加 + 滚动清理）+ manifest 同日沉淀 + `alerts.jsonl` 告警（交易日数据在场判定：09:30 bar 存在；交易日 ∧ 采集缺失/不完整 → `auction_sidecar_capture_missing`，对账 mismatch → `auction_sidecar_reconcile_fail`，非交易日静默 `skipped_no_data` 不告警风暴）。
+
 ### 🧪 竞价策略历史验证 (Auction Strategy Validation)
 
 只读端点 `GET /api/research/auction/validation` 输出 9 个竞价/盘前策略（极速抢筹、竞价全面、T+1闪电、盘中确认、竞价阿尔法、金色两点半、竞价多头、盘前强势量化、早盘之星）在 enriched 历史窗口上的**信号质量报告**（POOL-03 零执行：GET-only，不写任何湖/缓存，不触发计算/同步/回填；报告区间不受回测 186 天 guard 限制，覆盖由 enriched 缓存边界决定，窗口超覆盖自动回夹并双字段回显 `window.requested_*/effective_*`）。

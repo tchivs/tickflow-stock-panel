@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import date
+from pathlib import Path
 from types import SimpleNamespace
 
 import polars as pl
@@ -256,3 +257,306 @@ def test_refresh_cache_loads_latest_enriched_eod_frame(tmp_path):
         assert repo.enriched_latest_date() == t
     finally:
         store.db.close()
+
+
+# ================================================================
+# SDC-03 — 竞价采集 sidecar 调度注册 + 诚实门接线 (43-03)
+# ================================================================
+
+
+def _capture_registrations(monkeypatch, repo, capset) -> dict[str, tuple]:
+    """fake AsyncIOScheduler 捕获全部 add_job kwargs (id → (func, kwargs)), 不启动真调度器。
+
+    镜像 _capture_pipeline_fn 的 fake scheduler 形态, 扩展为捕获所有 job 供注册断言。
+    """
+    from app.jobs import daily_pipeline
+
+    captured: dict[str, tuple] = {}
+
+    class _FakeScheduler:
+        def __init__(self, **kwargs) -> None:
+            pass
+
+        def add_job(self, func, **kwargs):
+            captured[kwargs["id"]] = (func, kwargs)
+            return None
+
+        def start(self) -> None:
+            return None
+
+    monkeypatch.setattr(daily_pipeline, "AsyncIOScheduler", _FakeScheduler)
+    daily_pipeline.start_scheduler(repo, capset)
+    return captured
+
+
+def _stub_service_module(monkeypatch, name: str, **attrs):
+    """向 sys.modules 注入 stub service 模块 (wave-1/2 边界 seam)。
+
+    job 函数内 ``from app.services import auction_reconcile`` 等懒导入命中 stub —
+    对 43-03 接线测试 hermetic (不依赖 wave-1/2 模块落盘), 模块级行为由各自 wave
+    测试覆盖。同步 patch 父包属性: 一旦真实模块已 import, ``from pkg import mod``
+    会直接取包属性而绕过 sys.modules — 不 patch 属性则 stub 失效。
+    """
+    import sys
+    from types import ModuleType
+
+    mod = ModuleType(name)
+    for k, v in attrs.items():
+        setattr(mod, k, v)
+    monkeypatch.setitem(sys.modules, name, mod)
+    pkg_name, _, _sub = name.rpartition(".")
+    pkg = sys.modules.get(pkg_name)
+    if pkg is not None:
+        monkeypatch.setattr(pkg, _sub, mod, raising=False)
+    return mod
+
+
+def test_sidecar_jobs_registered_in_scheduler(tmp_path, monkeypatch):
+    """三 sidecar job 注册形锁死: id / CronTrigger 时点 (09:26/09:40/15:40 mon-fri
+    Asia/Shanghai) / replace_existing / misfire_grace_time; 09:26 与盘前预览同槽位
+    不同 id; 既有 job 零回归。"""
+    from app.jobs import daily_pipeline
+    from app.tickflow.capabilities import CapabilitySet
+    from app.tickflow.repository import DataStore, KlineRepository
+
+    store = DataStore(tmp_path / "data")
+    repo = KlineRepository(store)
+    try:
+        capset = CapabilitySet()
+        captured = _capture_registrations(monkeypatch, repo, capset)
+
+        expected = [
+            ("auction_sidecar_capture", "hour='9'", "minute='26'", 1800),
+            ("auction_sidecar_reconcile", "hour='9'", "minute='40'", 1800),
+            ("auction_sidecar_promote", "hour='15'", "minute='40'", 3600),
+        ]
+        for job_id, hour_s, minute_s, grace in expected:
+            assert job_id in captured, f"{job_id} 未注册到 fake scheduler"
+            _, kwargs = captured[job_id]
+            trigger = kwargs["trigger"]
+            assert "day_of_week='mon-fri'" in str(trigger)
+            assert hour_s in str(trigger) and minute_s in str(trigger)
+            assert "Asia/Shanghai" in str(trigger.timezone)
+            assert kwargs["replace_existing"] is True
+            assert kwargs["misfire_grace_time"] == grace
+
+        # 09:26 同槽位不同 id: premarket 与 sidecar capture 均 minute='26' 且 id 互异
+        pm_kwargs = captured["premarket_pool_preview"][1]
+        sc_kwargs = captured["auction_sidecar_capture"][1]
+        assert "minute='26'" in str(pm_kwargs["trigger"])
+        assert "minute='26'" in str(sc_kwargs["trigger"])
+        assert pm_kwargs["id"] != sc_kwargs["id"]
+
+        # 既有 job 零回归 (instruments/pipeline/EOD/premarket/depth)
+        for existing in (
+            "pre_market_instruments",
+            "daily_pipeline",
+            daily_pipeline._POOL_EOD_JOB_ID,
+            "premarket_pool_preview",
+            "depth_finalize",
+        ):
+            assert existing in captured, f"既有 job {existing} 丢失"
+
+        # 单飞接线 grep 门禁: _run_tracked 包裹 + 常量注册 (镜像 test_pool_eod_job 形)
+        src = Path(__file__).resolve().parents[1] / "app" / "jobs" / "daily_pipeline.py"
+        text = src.read_text(encoding="utf-8")
+        for short in ("capture", "reconcile", "promote"):
+            assert f"_run_tracked(_sidecar_{short}, _SIDECAR_{short.upper()}_JOB_ID)" in text
+    finally:
+        store.db.close()
+
+
+def test_sidecar_capture_append_ledger_and_return(tmp_path, monkeypatch):
+    """采集 job 接线: 池解析 + capture_auction_window 终态 → W-5 台账行 (部分失败
+    ok<requested, 无 reason) + 返回; 空池 → no_pool reason 台账行 (fail-closed 键形)。"""
+    from app.jobs import daily_pipeline
+    from app.services import auction_sidecar_ledger
+
+    data_dir = tmp_path / "data"
+    app_state = SimpleNamespace(repo=SimpleNamespace(store=SimpleNamespace(data_dir=data_dir)))
+    monkeypatch.setattr(daily_pipeline, "_get_app_state", lambda: app_state)
+    monkeypatch.setattr(daily_pipeline, "_get_sidecar_provider", lambda: object())
+    _stub_service_module(monkeypatch, "app.services.auction_capture",
+                         resolve_sidecar_pool=lambda: {
+                             "symbols": ["SH600519", "SH600000"], "pool_size": 2,
+                             "truncated": False, "failed": [], "source": "watchlist",
+                         },
+                         capture_auction_window=lambda provider, symbols, trade_date, data_dir, **kw: {
+                             "requested": 2, "ok": 1,
+                             "failed": [{"symbol": "SH600000", "reason": "incomplete:window_rows=10"}],
+                         })
+
+    result = daily_pipeline._sidecar_capture()
+    assert result["job"] == "auction_sidecar_capture"
+    assert result["requested"] == 2 and result["ok"] == 1
+    assert result["failed_symbols"] == ["SH600000"]
+
+    rows = auction_sidecar_ledger.list_ledger(data_dir)
+    assert len(rows) == 1
+    row = rows[0]
+    assert set(row.keys()) == {
+        "job", "trade_date", "requested", "ok", "failed_symbols", "started_at", "finished_at",
+    }
+    assert row["ok"] == 1 and row["failed_symbols"] == ["SH600000"]
+
+    # 空池 → no_pool reason
+    _stub_service_module(monkeypatch, "app.services.auction_capture",
+                         resolve_sidecar_pool=lambda: {
+                             "symbols": [], "pool_size": 0, "truncated": False,
+                             "failed": [{"symbol": "WATCH-01", "reason": "unparsable_symbol"}],
+                             "source": "watchlist",
+                         })
+    result2 = daily_pipeline._sidecar_capture()
+    assert result2["ok"] == 0 and result2["reason"] == "no_pool"
+    rows2 = auction_sidecar_ledger.list_ledger(data_dir)
+    row2 = next(r for r in rows2 if r["ok"] == 0)
+    assert row2["reason"] == "no_pool"
+    assert row2["failed_symbols"] == ["WATCH-01"]
+
+
+def test_sidecar_reconcile_alerts_on_mismatch(tmp_path, monkeypatch):
+    """告警链接线 (SDC-03): 交易日 ∧ 对账 mismatch → auction_sidecar_reconcile_fail
+    落 alerts.jsonl + 台账行 (reason=reconcile_mismatch); 采集完整 → 无 capture_missing。"""
+    import json
+
+    from app.jobs import daily_pipeline
+    from app.market_time import cn_today
+    from app.services import alert_store, auction_sidecar_ledger
+
+    data_dir = tmp_path / "data"
+    app_state = SimpleNamespace(repo=SimpleNamespace(store=SimpleNamespace(data_dir=data_dir)))
+    monkeypatch.setattr(daily_pipeline, "_get_app_state", lambda: app_state)
+    monkeypatch.setattr(daily_pipeline, "_get_sidecar_provider", lambda: object())
+
+    # 采集完整 manifest (09:26 已落盘, ok==requested) — 只触发 reconcile_fail
+    today = cn_today()
+    stage = data_dir / "tick_staging" / f"date={today.isoformat()}"
+    stage.mkdir(parents=True)
+    (stage / "manifest.json").write_text(json.dumps({
+        "trade_date": today.isoformat(), "pool_size": 1,
+        "symbols_ok": ["SH600519"], "symbols_failed": [],
+        "completeness": {"ok": True, "by_symbol": {"SH600519": {"ok": True}}},
+    }), encoding="utf-8")
+
+    _stub_service_module(monkeypatch, "app.services.auction_reconcile",
+                         reconcile_window=lambda provider, data_dir, trade_date, **kw: {
+                             "status": "mismatch",
+                             "checks": {"SH600519": {"status": "mismatch", "price_eq": False}},
+                             "trading_day_confirmed": True,
+                             "amount_derived_symbols": [],
+                         })
+
+    result = daily_pipeline._sidecar_reconcile()
+    assert result["job"] == "auction_sidecar_reconcile"
+    assert result["ok"] == 0 and result["failed_symbols"] == ["SH600519"]
+    assert result["events"] == ["auction_sidecar_reconcile_fail"]
+
+    alerts = alert_store.list_recent(data_dir, days=30, limit=500)
+    rules = [ev.get("rule_id") for ev in alerts if ev.get("source") == "auction_sidecar"]
+    assert "auction_sidecar_reconcile_fail" in rules
+    assert "auction_sidecar_capture_missing" not in rules
+
+    rows = auction_sidecar_ledger.list_ledger(data_dir)
+    assert rows[0]["job"] == "auction_sidecar_reconcile"
+    assert rows[0]["reason"] == "reconcile_mismatch"
+
+
+def test_sidecar_reconcile_capture_missing_no_manifest(tmp_path, monkeypatch):
+    """SDC-03「09:26 后缺失可告」接线: 交易日 ∧ 无采集 manifest (采集从未落盘) →
+    auction_sidecar_capture_missing 告警 (requested=池大小, ok=0)。"""
+    from app.jobs import daily_pipeline
+    from app.market_time import cn_today
+    from app.services import alert_store, auction_sidecar_ledger
+
+    data_dir = tmp_path / "data"
+    app_state = SimpleNamespace(repo=SimpleNamespace(store=SimpleNamespace(data_dir=data_dir)))
+    monkeypatch.setattr(daily_pipeline, "_get_app_state", lambda: app_state)
+    monkeypatch.setattr(daily_pipeline, "_get_sidecar_provider", lambda: object())
+
+    _stub_service_module(monkeypatch, "app.services.auction_reconcile",
+                         reconcile_window=lambda provider, data_dir, trade_date, **kw: {
+                             "status": "staging_missing", "checks": {},
+                             "trading_day_confirmed": True, "amount_derived_symbols": [],
+                         })
+    _stub_service_module(monkeypatch, "app.services.auction_capture",
+                         resolve_sidecar_pool=lambda: {
+                             "symbols": ["SH600519", "SH600000"], "pool_size": 2,
+                             "truncated": False, "failed": [], "source": "watchlist",
+                         })
+
+    result = daily_pipeline._sidecar_reconcile()
+    assert "auction_sidecar_capture_missing" in result["events"]
+
+    alerts = alert_store.list_recent(data_dir, days=30, limit=500)
+    ev = [e for e in alerts if e.get("rule_id") == "auction_sidecar_capture_missing"][0]
+    assert ev["requested"] == 2 and ev["ok"] == 0
+    assert ev["trade_date"] == cn_today().isoformat()
+
+    rows = auction_sidecar_ledger.list_ledger(data_dir)
+    assert rows[0]["job"] == "auction_sidecar_reconcile"
+    assert rows[0]["reason"] == "staging_missing"
+
+
+def test_sidecar_reconcile_skips_non_trading_day(tmp_path, monkeypatch):
+    """非交易日接线: trading_day_confirmed=False (无 09:30 bar) → 台账 skipped_no_data,
+    零告警 (假日静默, 不告警风暴)。"""
+    from app.jobs import daily_pipeline
+    from app.services import alert_store, auction_sidecar_ledger
+
+    data_dir = tmp_path / "data"
+    app_state = SimpleNamespace(repo=SimpleNamespace(store=SimpleNamespace(data_dir=data_dir)))
+    monkeypatch.setattr(daily_pipeline, "_get_app_state", lambda: app_state)
+    monkeypatch.setattr(daily_pipeline, "_get_sidecar_provider", lambda: object())
+    _stub_service_module(monkeypatch, "app.services.auction_reconcile",
+                         reconcile_window=lambda provider, data_dir, trade_date, **kw: {
+                             "status": "staging_missing", "checks": {},
+                             "trading_day_confirmed": False, "amount_derived_symbols": [],
+                         })
+
+    result = daily_pipeline._sidecar_reconcile()
+    assert result["skipped"] == "no_data"
+    assert "events" not in result
+    assert alert_store.list_recent(data_dir, days=30, limit=500) == []
+
+    rows = auction_sidecar_ledger.list_ledger(data_dir)
+    assert rows[0]["job"] == "auction_sidecar_reconcile"
+    assert rows[0]["skipped"] == "no_data"
+    assert "reason" not in rows[0]
+
+
+def test_sidecar_promote_append_ledger(tmp_path, monkeypatch):
+    """提审 job 接线: promote_trading_day 终态 → 台账 (promoted ok=1 7 键 / 未升湖 reason)。"""
+    from app.jobs import daily_pipeline
+    from app.market_time import cn_today
+    from app.services import auction_sidecar_ledger
+
+    data_dir = tmp_path / "data"
+    app_state = SimpleNamespace(repo=SimpleNamespace(store=SimpleNamespace(data_dir=data_dir)))
+    monkeypatch.setattr(daily_pipeline, "_get_app_state", lambda: app_state)
+
+    _stub_service_module(monkeypatch, "app.services.auction_promote",
+                         promote_trading_day=lambda repo, data_dir, trade_dates: {
+                             "promoted_dates": [cn_today().isoformat()],
+                             "skipped": [],
+                             "total_written": 1,
+                         })
+    result = daily_pipeline._sidecar_promote()
+    assert result["job"] == "auction_sidecar_promote"
+    assert result["ok"] == 1
+    row = auction_sidecar_ledger.list_ledger(data_dir)[0]
+    assert set(row.keys()) == {
+        "job", "trade_date", "requested", "ok", "failed_symbols", "started_at", "finished_at",
+    }
+
+    # 未升湖 (闸门不过/无 staging) → reason 透传 (fail-closed 键形)
+    _stub_service_module(monkeypatch, "app.services.auction_promote",
+                         promote_trading_day=lambda repo, data_dir, trade_dates: {
+                             "promoted_dates": [],
+                             "skipped": [{"date": cn_today().isoformat(), "reason": "staging_missing"}],
+                             "total_written": 0,
+                         })
+    result2 = daily_pipeline._sidecar_promote()
+    assert result2["ok"] == 0 and result2["reason"] == "staging_missing"
+    rows2 = auction_sidecar_ledger.list_ledger(data_dir)
+    row2 = next(r for r in rows2 if r["ok"] == 0)
+    assert row2["ok"] == 0 and row2["reason"] == "staging_missing"
