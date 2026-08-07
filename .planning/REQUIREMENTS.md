@@ -21,9 +21,9 @@ Requirements for the v2.5 milestone. Each maps to a roadmap phase. Research basi
 
 ### 分钟湖扩湖 → 历史竞价解锁 (Minute Lake Expansion) — Phase 42
 
-- [ ] **MIN-01**: 分钟湖扩湖 — stockdb 通道 backfill-minute 落 `kline_minute` 分区, 5537 标的全宇宙驱动 (逐 symbol 幂等跳过 + merge-upsert 原子写); 增量续跑幂等。**源覆盖 source-gated (研究实测, 42-RESEARCH)**: 当前 Tushare token stk_mins 频限 1 次/小时 (两次 40203 实测) → 全量覆盖需数年, 不可达; 备选源深度封顶 (腾讯 ≈3 日 / TDX ≈90 日无 09:30 bar / 东财不可达); ≈46min 仅为 AQ 读侧节奏 (5537×1 GET @120/min)。机制 (驱动/幂等/夹具测试) 零源依赖交付; 实际覆盖 = 源插件深度, 升级 token 档位或部署目标机 (3018) 重探为 checkpoint:human-verify (与 FA-04 source-gated 先例同构, 绝不虚报覆盖)。
-- [ ] **MIN-02**: 历史竞价统计路径 — 分钟 09:30 bar = 集合竞价统计 (量/额) 进入竞价覆盖报告 (独立统计口径, 绝不算逐笔); FA-04/RC-02 统计口径解锁门 (≥0.94 或诚实 partial, 双口径并列报告)。
-- [ ] **MIN-03**: 分钟诚实标注 — 09:30 bar 标注「集合竞价统计」非逐笔; canonical 竞价湖只收 09:25 撮合行 (09:15-09:24 委托统计绝不入湖); T-21-01 分钟截断语义不回归 (evaluation_time 截断保持)。
+- [x] **MIN-01**: 分钟湖扩湖 — stockdb 通道 backfill-minute 落 `kline_minute` 分区, 5537 标的全宇宙驱动 (逐 symbol 幂等跳过 + merge-upsert 原子写); 增量续跑幂等。**源覆盖 source-gated (研究实测, 42-RESEARCH)**: 当前 Tushare token stk_mins 频限 1 次/小时 (两次 40203 实测) → 全量覆盖需数年, 不可达; 备选源深度封顶 (腾讯 ≈3 日 / TDX ≈90 日无 09:30 bar / 东财不可达); ≈46min 仅为 AQ 读侧节奏 (5537×1 GET @120/min)。机制 (驱动/幂等/夹具测试) 零源依赖交付; 实际覆盖 = 源插件深度, 升级 token 档位或部署目标机 (3018) 重探为 checkpoint:human-verify (与 FA-04 source-gated 先例同构, 绝不虚报覆盖)。
+- [x] **MIN-02**: 历史竞价统计路径 — 分钟 09:30 bar = 集合竞价统计 (量/额) 进入竞价覆盖报告 (独立统计口径, 绝不算逐笔); FA-04/RC-02 统计口径解锁门 (≥0.94 或诚实 partial, 双口径并列报告)。
+- [x] **MIN-03**: 分钟诚实标注 — 09:30 bar 标注「集合竞价统计」非逐笔; canonical 竞价湖只收 09:25 撮合行 (09:15-09:24 委托统计绝不入湖); T-21-01 分钟截断语义不回归 (evaluation_time 截断保持)。
 
 ### T-day 竞价采集 sidecar (T-Day Auction Capture) — Phase 43
 
@@ -64,9 +64,9 @@ Requirements for the v2.5 milestone. Each maps to a roadmap phase. Research basi
 | LOCAL-04 | Phase 40 | Complete |
 | HON-01 | Phase 41 | Complete |
 | HON-02 | Phase 41 | Complete |
-| MIN-01 | Phase 42 | Planned |
-| MIN-02 | Phase 42 | Planned |
-| MIN-03 | Phase 42 | Planned |
+| MIN-01 | Phase 42 | Complete |
+| MIN-02 | Phase 42 | Complete |
+| MIN-03 | Phase 42 | Complete |
 | SDC-01 | Phase 43 | Planned |
 | SDC-02 | Phase 43 | Planned |
 | SDC-03 | Phase 43 | Planned |

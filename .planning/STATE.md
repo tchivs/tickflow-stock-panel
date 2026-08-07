@@ -2,18 +2,18 @@
 gsd_state_version: 1.0
 milestone: v2.5
 milestone_name: 诚实加固与本机数据源接入 — planning
-current_phase: 42
-current_phase_name: Minute Lake Expansion
+current_phase: 43
+current_phase_name: T-Day Auction Capture
 status: planning
 stopped_at: Completed 31-03-PLAN.md
-last_updated: "2026-08-07T16:00:43.510Z"
+last_updated: "2026-08-07T16:41:16.894Z"
 last_activity: 2026-08-07
-last_activity_desc: Phase 41 complete, transitioned to Phase 42
+last_activity_desc: Phase 42 complete, transitioned to Phase 43
 progress:
   total_phases: 9
   completed_phases: 0
-  total_plans: 7
-  completed_plans: 5
+  total_plans: 11
+  completed_plans: 8
   percent: 0
 ---
 
@@ -28,10 +28,10 @@ See: .planning/PROJECT.md (updated 2026-08-06)
 
 ## Current Position
 
-Phase: 42 — 分钟湖扩湖 (Minute Lake Expansion)
+Phase: 43 — T-day 竞价采集 sidecar (T-Day Auction Capture)
 Plan: Not started
 Status: Ready to plan
-Last activity: 2026-08-07 — Phase 41 complete, transitioned to Phase 42
+Last activity: 2026-08-07 — Phase 42 complete, transitioned to Phase 43
 
 ## v2.5 Phase Summary
 
