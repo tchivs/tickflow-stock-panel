@@ -700,3 +700,88 @@ def test_auction_backfill_endpoint_heavy_slot_fail_fast(tmp_path, monkeypatch):
             assert "已有数据任务在运行" in j["error"]
     finally:
         release_run_slot()
+
+
+# ================================================================
+# Task 1 (41-02) — fail-closed 提前返回终态 emit (HON-02)
+# ================================================================
+
+
+def test_auction_backfill_fail_closed_source_unavailable_emits(env, monkeypatch):
+    """HON-02 (tracer 单路径): 探针非 available → fail-closed 也 emit 终态进度行。
+
+    恰 1 行 ``fail-closed: source_unavailable`` (stage auction_backfill, pct 0),
+    进度永不冻结; 终态 dict 9 键 (W-5) 形状不变, 0 写。
+    """
+    from app.services import auction_backfill
+    from app.services.auction_probe import AuctionProbeStatus, AuctionProbeVerdict
+    from app.services import auction_probe
+
+    tmp, repo = env
+    verdict = AuctionProbeVerdict(
+        status=AuctionProbeStatus("not_configured"), source="fake", probed_at=None, detail="",
+    )
+    monkeypatch.setattr(auction_probe, "resolve_auction_probe", lambda: verdict)
+
+    lines: list[tuple] = []
+    result = auction_backfill.run_auction_backfill(
+        repo, on_progress=lambda stage, pct, msg, **kw: lines.append((stage, pct, msg)),
+    )
+
+    assert lines.count(("auction_backfill", 0, "fail-closed: source_unavailable")) == 1
+    assert result["reason"] == "source_unavailable"
+    assert set(result) == {
+        "requested", "backfilled_symbols", "rows", "dates", "failed",
+        "failed_symbols", "reason", "origin", "rpm",
+    }
+    assert not list((tmp / "kline_auction").glob("date=*")), "fail-closed 不得写任何分区"
+
+
+def test_auction_backfill_fail_closed_five_paths_emit(env, monkeypatch):
+    """HON-02: 五条 fail-closed 提前返回路径每条 emit 一行含 reason 的终态进度。
+
+    no_scope / no_provider / 预检异常 / preflight_empty — 每子跑断言 emit 行
+    与终态 dict reason 同字面量 (emit 与 _fail_closed 一致性), 且 0 写。
+    """
+    from app.services import auction_backfill
+
+    tmp, repo = env
+    rows = {
+        s: _auction_rows(s, [datetime(2026, 8, 4, 9, 25)])
+        for s in ("000001.SZ", "600000.SH")
+    }
+
+    def run(**kw) -> tuple[list[str], dict]:
+        lines: list[str] = []
+        result = auction_backfill.run_auction_backfill(
+            repo, on_progress=lambda stage, pct, msg, **kw2: lines.append(msg), **kw,
+        )
+        return lines, result
+
+    # (a) no_scope: 空 symbols → 范围对齐后空 → fail-closed
+    _patch_live(monkeypatch, FakeAuctionProvider(rows_by_symbol=rows))
+    lines_a, r_a = run(symbols=[])
+    assert "fail-closed: no_scope" in lines_a
+    assert r_a["reason"] == "no_scope"
+
+    # (b) no_provider: 无可用 provider → fail-closed
+    _patch_live(monkeypatch, None)
+    lines_b, r_b = run(symbols=["000001.SZ"])
+    assert "fail-closed: no_provider" in lines_b
+    assert r_b["reason"] == "no_provider"
+
+    # (c) 预检异常 → fail-closed, reason = 截断异常串 (emit 同字面量)
+    _patch_live(monkeypatch, FakeAuctionProvider(
+        exc_by_symbol={"000001.SZ": RuntimeError("boom preflight")},
+    ))
+    lines_c, r_c = run(symbols=["000001.SZ"])
+    assert "fail-closed: boom preflight" in lines_c
+    assert r_c["reason"] == "boom preflight"
+
+    # (d) preflight_empty: 预检空 + 首 symbol 有 kline_daily 覆盖 → fail-closed
+    _patch_live(monkeypatch, FakeAuctionProvider())
+    lines_d, r_d = run(symbols=["000001.SZ", "600000.SH"])
+    assert "fail-closed: preflight_empty" in lines_d
+    assert r_d["reason"] == "preflight_empty"
+
+    assert not list((tmp / "kline_auction").glob("date=*")), "fail-closed 不得写任何分区"
