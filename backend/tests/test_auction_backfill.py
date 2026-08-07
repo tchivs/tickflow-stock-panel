@@ -833,3 +833,110 @@ def test_auction_backfill_fail_closed_five_paths_emit(env, monkeypatch):
     assert r_d["reason"] == "preflight_empty"
 
     assert not list((tmp / "kline_auction").glob("date=*")), "fail-closed 不得写任何分区"
+
+
+# ================================================================
+# Task 2 (41-02) — 取消独立 cancelled stage + 回归锁 (HON-02)
+# ================================================================
+
+
+def test_auction_backfill_cancel_emits_cancelled_stage(env, monkeypatch):
+    """HON-02: 取消改独立 stage ``cancelled`` + 实际 pct, 绝不 done/100, 无二次 done。
+
+    镜像 test_auction_backfill_cooperative_cancel 双段式: (a) 预置 failed 立即停
+    (pct 0), (b) 循环中翻转 (pct 33) — 两段都断言零 done 行、零「回填完成」
+    消息 (二次 done bug 修复), 终态 8 键形状不变。
+    """
+    from app.services import auction_backfill
+    from app.services.pipeline_jobs import job_store
+
+    tmp, repo = env
+    rows = {
+        s: _auction_rows(s, [datetime(2026, 8, 4, 9, 25)])
+        for s in ("000001.SZ", "600000.SH", "920146.BJ")
+    }
+
+    def run(**kw) -> tuple[list[tuple], dict]:
+        lines: list[tuple] = []
+        result = auction_backfill.run_auction_backfill(
+            repo, on_progress=lambda stage, pct, msg, **kw2: lines.append((stage, pct, msg)),
+            **kw,
+        )
+        return lines, result
+
+    # (a) 预置 failed job → 首迭代即取消 (已处理 0/3, pct 0), 无任何 done 行
+    provider = FakeAuctionProvider(rows_by_symbol=rows)
+    _patch_live(monkeypatch, provider)
+    job_id, _ = job_store.create()
+    job_store.fail(job_id, "用户手动取消")
+    lines_a, r_a = run(symbols=["000001.SZ", "600000.SH", "920146.BJ"], job_id=job_id)
+
+    assert ("cancelled", 0, "回填被取消 (已处理 0/3)") in lines_a
+    assert not [l for l in lines_a if l[0] == "done"], f"取消后不得有 done 行: {lines_a}"
+    assert not [l for l in lines_a if "回填完成" in l[2]]
+    assert r_a["backfilled_symbols"] == 0
+    assert set(r_a) == {
+        "requested", "backfilled_symbols", "rows", "dates", "failed",
+        "failed_symbols", "origin", "rpm",
+    }
+
+    # (b) 循环中 job 翻转 failed → 首 symbol 后即取消 (已处理 1/3, pct 33)
+    provider2 = FakeAuctionProvider(rows_by_symbol=rows)
+    _patch_live(monkeypatch, provider2)
+    n = {"calls": 0}
+
+    def fake_get(job_id2):
+        n["calls"] += 1
+        if n["calls"] <= 1:
+            return {"status": "running"}
+        return {"status": "failed"}
+
+    monkeypatch.setattr(job_store, "get", fake_get)
+    lines_b, r_b = run(symbols=["000001.SZ", "600000.SH", "920146.BJ"], job_id="job-test")
+
+    assert ("cancelled", 33, "回填被取消 (已处理 1/3)") in lines_b
+    assert not [l for l in lines_b if l[0] == "done"], f"取消后不得有 done 行: {lines_b}"
+    assert not [l for l in lines_b if "回填完成" in l[2]]
+    assert r_b["backfilled_symbols"] == 1
+    assert set(r_b) == {
+        "requested", "backfilled_symbols", "rows", "dates", "failed",
+        "failed_symbols", "origin", "rpm",
+    }
+
+
+def test_auction_backfill_all_empty_progress_and_failed_count(env, monkeypatch):
+    """HON-02 回归锁: 全空帧批量 → 每 symbol 一行进度 + 终态 failed 计数正确。
+
+    预检 symbol 选无 kline_daily 覆盖的 920146.BJ (预检通过, 绕开 preflight_empty
+    整批返回门) + 其余两个有覆盖 symbol → 循环逐 symbol 空帧 → 各记
+    empty_response, 进度行逐 symbol 可见 (进度永不冻结)。
+    """
+    from app.services import auction_backfill
+
+    tmp, repo = env
+    provider = FakeAuctionProvider()  # 全空帧
+    _patch_live(monkeypatch, provider)
+
+    lines: list[tuple] = []
+    result = auction_backfill.run_auction_backfill(
+        repo,
+        symbols=["920146.BJ", "000001.SZ", "600000.SH"],
+        on_progress=lambda stage, pct, msg, **kw: lines.append((stage, pct, msg)),
+    )
+
+    # 起始行 + 每 symbol 一行进度 (3 symbols → 4 行 stage auction_backfill)
+    progress = [l for l in lines if l[0] == "auction_backfill"]
+    assert len(progress) == 1 + 3, f"应 1 起始 + 3 逐 symbol 进度行: {progress}"
+    assert progress[0] == ("auction_backfill", 0, "回填 3 个标的 × 2 日…")
+    assert [l[1] for l in progress[1:]] == [33, 66, 100], "逐 symbol pct 应如实推进"
+
+    assert result["requested"] == 3
+    assert result["backfilled_symbols"] == 0
+    assert result["failed"] == 2
+    assert result["failed_symbols"] == [
+        {"symbol": "000001.SZ", "reason": "empty_response"},
+        {"symbol": "600000.SH", "reason": "empty_response"},
+    ]
+    done = [l for l in lines if l[0] == "done"]
+    assert done == [("done", 100, "回填完成: 0 成功, 2 失败")]
+    assert not list((tmp / "kline_auction").glob("date=*")), "全空帧不得写任何分区"
