@@ -25,6 +25,15 @@ class ProviderCapabilities:
     financial: bool = False
     auction: bool = False
 
+
+class SourceBlockedError(Exception):
+    """上游策略封锁 (HTTP 403 / 配额窗文案) — 非瞬时, 重试无意义。
+
+    与空帧降级语义互斥: 网络错误 (超时/连接/非策略 4xx) → 空帧不抛, 而策略
+    封锁作为 typed 信号直达调用方 (台账/终态/verify 门/探针判定四消费面可见),
+    绝不塌缩为 ``pl.DataFrame()``。消息 ≤200 字符 (镜像 auction_probe 错误纪律)。
+    """
+
 class MarketDataProvider(Protocol):
     name: str
     capabilities: ProviderCapabilities

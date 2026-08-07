@@ -38,11 +38,27 @@ from typing import Any
 import httpx
 import polars as pl
 
-from app.data_providers.base import AssetType, ProviderCapabilities
+from app.data_providers.base import AssetType, ProviderCapabilities, SourceBlockedError
 
 logger = logging.getLogger(__name__)
 
 _DEFAULT_MCP_URL = "http://8.138.149.215:7898/mcp"
+
+# 策略封锁文案 markers (HON-01 双信号分类器文案面; HTTP 403 为状态码面)。
+# 配额窗 2h 复现时按真实响应体回填定稿 (RESEARCH UNKNOWN flag)。
+_POLICY_BLOCK_MARKERS = ("配额", "带宽", "限速", "限流", "频率", "频繁", "forbidden", "blocked", "denied")
+
+
+def _is_policy_block(status: int, text: str) -> bool:
+    """双信号分类器: HTTP 403 或文案命中策略封锁 markers → True。
+
+    状态码面 (403) 与文案面 (200 载荷内 error 串等) 互斥取或; 其余 4xx/5xx
+    与超时/连接错误不命中 → 空帧契约不变 (Test 4 :126-137 保持绿)。
+    """
+    if status == 403:
+        return True
+    lowered = text.lower()
+    return any(m in lowered for m in _POLICY_BLOCK_MARKERS)
 
 
 class XYZProvider:
@@ -123,7 +139,12 @@ class XYZProvider:
             args["start_date"] = start_time.strftime("%Y-%m-%d")
         if end_time is not None:
             args["end_date"] = end_time.strftime("%Y-%m-%d")
-        payload = self._call_tool("stockdb_get_price", args)
+        try:
+            payload = self._call_tool("stockdb_get_price", args)
+        except SourceBlockedError as e:
+            # daily/minute 路径 (scope 决策): 策略封锁 → 空帧降级保留, 契约不变
+            logger.warning("xyz %s source blocked (daily/minute 空帧降级): %s", frequency, e)
+            return pl.DataFrame()
         rows = _parse_payload(payload)
         if not rows:
             return pl.DataFrame()
@@ -173,7 +194,9 @@ class XYZProvider:
             kline_auction merge-upsert 键 [symbol, datetime] 要求后缀一致, 否则
             回填行与 EOD 行同股两键 (同日碰撞规则)。
         网络错误 → _call_tool 返回 "" (或异常) → 空 pl.DataFrame() 不抛; 空 vs
-        宕机由调用方闸门区分 (诚实 fail-closed)。
+        宕机由调用方闸门区分 (诚实 fail-closed)。策略封锁 (HTTP 403 / 配额窗) →
+        _call_tool 抛 SourceBlockedError → 原样上抛 (typed 信号直达调用方,
+        绝不吞成空帧 —— 36-03 事故链闭环)。
         """
         if len(symbols) != 1:
             raise ValueError(
@@ -191,6 +214,9 @@ class XYZProvider:
         }
         try:
             payload = self._call_tool("stockdb_get_call_auction", args)
+        except SourceBlockedError:
+            # 策略封锁信号直达调用方 (台账/终态/verify 门/探针判定), 绝不吞成空帧
+            raise
         except Exception as e:  # noqa: BLE001
             logger.warning("xyz stockdb_get_call_auction failed: %s", e)
             return pl.DataFrame()
@@ -242,10 +268,20 @@ class XYZProvider:
             )
             resp.raise_for_status()
             data = resp.json()
+        except httpx.HTTPStatusError as e:
+            status = e.response.status_code if e.response is not None else 0
+            text = e.response.text if e.response is not None else str(e)
+            if _is_policy_block(status, text):
+                raise SourceBlockedError(f"xyz {name} source blocked (HTTP {status})") from e
+            logger.warning("xyz %s failed: HTTP %s", name, status)
+            return ""
         except Exception as e:  # noqa: BLE001
             logger.warning("xyz %s failed: %s", name, e)
             return ""
         if "error" in data:
+            err_text = str(data["error"])
+            if _is_policy_block(200, err_text):
+                raise SourceBlockedError(f"xyz {name} source blocked: {err_text[:200]}")
             logger.warning("xyz %s error: %s", name, data["error"])
             return ""
         content = (data.get("result") or {}).get("content") or []
