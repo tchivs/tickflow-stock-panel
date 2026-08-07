@@ -53,10 +53,10 @@ Requirements for the v2.4 milestone. Each maps to a roadmap phase. Research basi
 | 37. 全量真列回测重跑 | RC-02 | Complete (≥0.94 deferred) |
 | 37. 全量真列回测重跑 | RC-03 | Complete |
 | 37. 全量真列回测重跑 | RC-04 | Complete |
-| 38. 分钟确认接线 BT-10 | MN-01 | Planned |
-| 38. 分钟确认接线 BT-10 | MN-02 | Planned |
-| 38. 分钟确认接线 BT-10 | MN-03 | Planned |
-| 38. 分钟确认接线 BT-10 | MN-04 | Planned |
+| 38. 分钟确认接线 BT-10 | MN-01 | Complete |
+| 38. 分钟确认接线 BT-10 | MN-02 | Complete |
+| 38. 分钟确认接线 BT-10 | MN-03 | Complete |
+| 38. 分钟确认接线 BT-10 | MN-04 | Complete |
 | 39. 部署验证与残留 | DV-01 | Planned |
 | 39. 部署验证与残留 | DV-02 | Planned |
 | 39. 部署验证与残留 | DV-03 | Planned |
