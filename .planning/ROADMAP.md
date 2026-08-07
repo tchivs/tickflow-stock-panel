@@ -245,7 +245,13 @@ Plans:
   4. 3018 rebuild 对齐: 重建配方落地 (预检验证 build 66s + boot 18s) + 数据卷/权限检查 (root-owned 修复) + 旧容器替换流程文档化.
 
 **Research flag**: 需 `--research-phase` — 部署日 runbook 需对照真实容器/卷状态细化 (3018 容器 root-owned 处置、compose 凭证注入方式、loopback 不通时 host 网络/网关实测判定); 若需 `uv pip install -e --no-deps` 进镜像, 首次构建 build isolation 需网络调研。
-**Plans**: TBD
+**Plans**: 3 plans
+
+Plans:
+
+- [ ] 44-01-PLAN.md — 凭证/连通性前置: env 方案 (.env.example 网关+key 来源) + deploy_check_connectivity.sh (三态探测/md5 对齐/401 门) (DEP-01)
+- [ ] 44-02-PLAN.md — 200-body 验证脚本: deploy_verify_endpoints.py (401 先验→login→3 端点键断言→job 轮询 W-5) (DEP-02)
+- [ ] 44-03-PLAN.md — D1..D8 runbook + rebuild 配方: deploy_day_runbook.sh + deploy_rebuild.sh + deploy-verification.md v2.5 节 (DEP-03, DEP-04)
 
 ## Progress
 
