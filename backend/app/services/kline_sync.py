@@ -826,6 +826,166 @@ def _migrate_symbol_to_date_partition(repo: KlineRepository) -> None:
     logger.info("minute-K migration done: %d rows migrated", combined.height)
 
 
+def _refresh_minute_view(repo: KlineRepository) -> None:
+    """重建 kline_minute 视图 (read_parquet glob, union_by_name)。幂等、失败仅告警。"""
+    try:
+        d = repo.store.data_dir.as_posix()
+        repo.db.execute(
+            f"""CREATE OR REPLACE VIEW kline_minute AS
+                SELECT * FROM read_parquet('{d}/kline_minute/**/*.parquet', union_by_name=true)"""
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("refresh kline_minute view failed: %s", e)
+
+
+def _persist_minute_partitions(df: pl.DataFrame, repo: KlineRepository) -> int:
+    """分钟 K 唯一写面: 按日期分区写 ``data/kline_minute/date={YYYY-MM-DD}/part.parquet``。
+
+    重跑天然幂等: 读既有分区 → concat → unique(subset=[symbol, datetime], keep=last)
+    → 原子写回。空帧 → 0 行不落盘。返回写入行数。
+    """
+    if df.is_empty():
+        return 0
+
+    # 按日期分区写: data/kline_minute/date={YYYY-MM-DD}/part.parquet
+    df = df.with_columns(
+        pl.col("datetime").dt.date().alias("_trade_date")
+    )
+    written = 0
+    for day_df in df.partition_by("_trade_date"):
+        trade_date = day_df["_trade_date"][0]
+        out = repo.store.data_dir / "kline_minute" / f"date={trade_date}" / "part.parquet"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        before = 0
+        if out.exists():
+            existing = pl.read_parquet(out)
+            if "datetime" in existing.columns:
+                existing = existing.filter(pl.col("datetime").is_not_null())
+            before = existing.height
+            day_df = pl.concat([existing, day_df.drop("_trade_date")]).unique(
+                subset=["symbol", "datetime"], keep="last",
+            )
+        else:
+            day_df = day_df.drop("_trade_date")
+        day_df = day_df.sort("symbol", "datetime")
+        _atomic_write_parquet(day_df, out)
+        # added = 合并后增量 (镜像 adj_factor merge 的 merged.height - before 语义)
+        written += day_df.height - before
+    return written
+
+
+def _latest_minute_dates(repo: KlineRepository) -> dict[str, datetime]:
+    """per-symbol 分钟 K 最新时间 (GROUP BY 查询面, 镜像 _latest_minute_datetime)。
+
+    异常 → 空 dict fail-closed: 宁可全量窗口重拉, 绝不静默错判已覆盖。
+    """
+    latest: dict[str, datetime] = {}
+    try:
+        res = repo.execute_all(
+            "SELECT symbol, max(datetime) FROM kline_minute GROUP BY symbol"
+        )
+        for sym, d in res:
+            if d is None:
+                continue
+            if isinstance(d, datetime):
+                latest[str(sym)] = d
+            else:
+                latest[str(sym)] = datetime.fromisoformat(str(d))
+    except Exception:  # noqa: BLE001
+        logger.warning("latest minute dates query failed; treating as no coverage")
+        return {}
+    return latest
+
+
+def _resolve_minute_universe(repo: KlineRepository) -> list[str]:
+    """全量分钟回填 universe = kline_daily DISTINCT symbol (运行期动态解析)。
+
+    绝不硬编码常量 (5538 vs 5537 差异以运行期为准)。首选 DuckDB 视图
+    (union_by_name=true 容忍 schema drift); 视图缺失/异常 → polars 列限扫描兜底
+    (镜像 auction_backfill._lake_distinct_symbols); 都失败 → 空列表 fail-closed。
+    """
+    try:
+        rows = repo.execute_all("SELECT DISTINCT symbol FROM kline_daily ORDER BY symbol")
+        return sorted(str(r[0]) for r in rows if r[0])
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        df = (
+            pl.scan_parquet(str(repo.store.data_dir / "kline_daily" / "**" / "*.parquet"))
+            .select("symbol")
+            .unique()
+            .collect()
+        )
+        return sorted(str(s) for s in df["symbol"].to_list() if s)
+    except Exception:  # noqa: BLE001
+        logger.warning("minute universe resolution failed; returning empty")
+        return []
+
+
+def backfill_minute_history(
+    symbols: list[str],
+    start_date: date,
+    end_date: date,
+    repo: KlineRepository,
+    *,
+    rpm: int = 120,
+    batch_size: int = 200,
+    fetch: Callable[[list[str], datetime, datetime], pl.DataFrame] | None = None,
+    on_symbol_done: Callable[[int, int], None] | None = None,
+) -> tuple[int, list[str]]:
+    """分钟历史回填驱动: 逐 symbol 幂等增量拉取 + merge-upsert 分区写。
+
+    - 幂等跳过: per-symbol latest.date() >= end_date → 已覆盖, 计入 skipped。
+    - 增量窗口: 部分覆盖只拉 ``[max(start_date, latest+1day), end_date]`` 缺口。
+    - 空响应 → 0 行不落盘、不伪 skip (下次重跑重试该 symbol)。
+    - fetch 异常 → 原样上抛 fail-closed (绝不伪装「该窗口无数据」)。
+    - on_symbol_done(i+1, total) 每 symbol 恰一次 (含 skipped)。
+    - rpm/batch_size 为 provider 侧节流契约 (缺省 fetch = stockdb_provider.get_minute,
+      端日语义 end+1day 内置); 注入 fetch 的测试面零网络。
+
+    返回 (written, skipped): written = 本次实际写入行数, skipped = 已覆盖跳过 symbol 列表。
+    """
+    if not symbols:
+        return 0, []
+
+    if fetch is None:
+        from app.data_providers.stockdb_provider import StockDBProvider
+        provider = StockDBProvider()
+
+        def _default_fetch(syms, start_time, end_time):
+            return provider.get_minute(
+                syms, start_time=start_time, end_time=end_time,
+            )
+
+        fetch = _default_fetch
+
+    # 视图先刷新: DuckDB 视图 connection-scoped, 跨进程续跑必须重建才能读到既有覆盖
+    _refresh_minute_view(repo)
+    latest = _latest_minute_dates(repo)
+
+    total = len(symbols)
+    written = 0
+    skipped: list[str] = []
+    for i, symbol in enumerate(symbols):
+        latest_dt = latest.get(symbol)
+        if latest_dt is not None and latest_dt.date() >= end_date:
+            skipped.append(symbol)
+        else:
+            win_start = latest_dt.date() + timedelta(days=1) if latest_dt is not None else start_date
+            win_start = max(win_start, start_date)
+            start_time = datetime(win_start.year, win_start.month, win_start.day)
+            end_time = datetime(end_date.year, end_date.month, end_date.day, 23, 59, 59)
+            df = fetch([symbol], start_time=start_time, end_time=end_time)
+            if not df.is_empty():
+                written += _persist_minute_partitions(df, repo)
+        if on_symbol_done:
+            on_symbol_done(i + 1, total)
+
+    # 写后刷新视图: 同进程后续读取 (含重跑判定) 看到最新分区
+    _refresh_minute_view(repo)
+    return written, skipped
+
+
 def sync_and_persist_minute(
     symbols: list[str],
     repo: KlineRepository,
@@ -889,37 +1049,11 @@ def sync_and_persist_minute(
     if df.is_empty():
         return 0
 
-    # 按日期分区写: data/kline_minute/date={YYYY-MM-DD}/part.parquet
-    df = df.with_columns(
-        pl.col("datetime").dt.date().alias("_trade_date")
-    )
-    written = 0
-    for day_df in df.partition_by("_trade_date"):
-        trade_date = day_df["_trade_date"][0]
-        out = repo.store.data_dir / "kline_minute" / f"date={trade_date}" / "part.parquet"
-        out.parent.mkdir(parents=True, exist_ok=True)
-        if out.exists():
-            existing = pl.read_parquet(out)
-            if "datetime" in existing.columns:
-                existing = existing.filter(pl.col("datetime").is_not_null())
-            day_df = pl.concat([existing, day_df.drop("_trade_date")]).unique(
-                subset=["symbol", "datetime"], keep="last",
-            )
-        else:
-            day_df = day_df.drop("_trade_date")
-        day_df = day_df.sort("symbol", "datetime")
-        _atomic_write_parquet(day_df, out)
-        written += day_df.height
+    # 按日期分区写 (唯一写面, merge-upsert 幂等)
+    written = _persist_minute_partitions(df, repo)
 
     # 刷新视图
-    try:
-        d = repo.store.data_dir.as_posix()
-        repo.db.execute(
-            f"""CREATE OR REPLACE VIEW kline_minute AS
-                SELECT * FROM read_parquet('{d}/kline_minute/**/*.parquet', union_by_name=true)"""
-        )
-    except Exception as e:  # noqa: BLE001
-        logger.warning("refresh kline_minute view failed: %s", e)
+    _refresh_minute_view(repo)
 
     logger.info("minute K synced: %d rows (%d symbols)", written, len(symbols))
     return written
