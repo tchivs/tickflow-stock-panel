@@ -330,12 +330,18 @@ class AuctionValidationService:
         - 解锁门 (FA-04/RC-02 统计口径): unlock_threshold=0.94, unlock_met =
           ratio >= 0.94; 未达 → 诚实 partial 双口径并列, 绝不假解锁;
         - 诚实空态: 无分区/无 09:30 行 → 全 0 同键形状 (D-02, 与 canonical 空态并列);
-        - 量/额字段 (auction_volume_hands / auction_amount_yuan / amount_unknown_count)
-          由 amount 派生任务 (42-02 Task 2) 填充, 此处占位 0。
+        - 量/额诚实派生: auction_volume_hands = 09:30 行 volume 恒等求和 (手, Phase 40
+          实测湖内 volume 列=手); auction_amount_yuan 仅 OHLC 全等 (open==high==low==
+          close, 纯净竞价单价位) 的 09:30 bar 以 volume×close×100 派生 (实测闭合
+          521×1328.36×100≈69,207,556 元, RESEARCH Pattern 3); 非全等 → 该 bar 计入
+          amount_unknown_count, 绝不猜 (RESEARCH Pitfall 5)。
         """
         base = self._repo.store.data_dir / "kline_minute"
         symbols: set[str] = set()
         dates_covered: list[str] = []
+        auction_volume_hands = 0.0
+        auction_amount_yuan = 0.0
+        amount_unknown_count = 0
         if base.exists():
             for part in sorted(base.glob("date=*/part.parquet")):
                 d = _dir_date(part)
@@ -346,7 +352,11 @@ class AuctionValidationService:
                 except Exception:  # noqa: BLE001 — fail-closed, 镜像分区扫 (T-29-01-05)
                     logger.debug("_minute_stats_coverage: skip unreadable partition %s", part)
                     continue
-                if f.is_empty() or "datetime" not in f.columns or "symbol" not in f.columns:
+                if (
+                    f.is_empty()
+                    or not {"datetime", "symbol", "volume", "open", "high", "low", "close"}
+                    <= set(f.columns)
+                ):
                     logger.debug("_minute_stats_coverage: skip empty/column-less partition %s", part)
                     continue
                 bars = f.filter(pl.col("datetime").dt.time() == time(9, 30))
@@ -354,6 +364,15 @@ class AuctionValidationService:
                     continue
                 symbols.update(bars["symbol"].unique().to_list())
                 dates_covered.append(d.isoformat())
+                auction_volume_hands += float(bars["volume"].sum())
+                # OHLC 全等 → 纯净竞价单价位 → vol×close×100 派生; 非全等 → UNKNOWN
+                closed = bars.filter(
+                    (pl.col("open") == pl.col("high"))
+                    & (pl.col("high") == pl.col("low"))
+                    & (pl.col("low") == pl.col("close"))
+                )
+                auction_amount_yuan += float((closed["volume"] * closed["close"] * 100).sum())
+                amount_unknown_count += bars.height - closed.height
         ratio = len(symbols) / len(universe) if universe else 0.0
         return {
             "caliber": "statistical_minute_0930",
@@ -363,9 +382,9 @@ class AuctionValidationService:
             "unlock_met": ratio >= 0.94,
             "dates_covered": dates_covered,
             "universe_size": len(universe),
-            "auction_volume_hands": 0.0,
-            "auction_amount_yuan": 0.0,
-            "amount_unknown_count": 0,
+            "auction_volume_hands": auction_volume_hands,
+            "auction_amount_yuan": auction_amount_yuan,
+            "amount_unknown_count": amount_unknown_count,
         }
 
     def _empty_report(self, reason: str, *, window=None, probe_dict=None) -> dict:

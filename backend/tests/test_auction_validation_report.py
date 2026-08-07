@@ -1272,3 +1272,69 @@ def test_minute_stats_unlock_gate_fields(repo_env):
     ms2 = report2["coverage"]["minute_stats"]
     assert ms2["auction_symbol_count"] == 1
     assert ms2["unlock_met"] is False
+
+
+def test_minute_stats_amount_derivation_closed(repo_env):
+    """MIN-02 amount 诚实派生: OHLC 全等 09:30 bar → volume×close×100
+    (521×1328.36×100≈69,207,556 契约闭合, RESEARCH live 实测); 量恒等手。"""
+    from app.services.auction_validation import AuctionValidationService
+
+    repo, data_dir = repo_env
+    start = date(2026, 8, 4)
+    _seed_enriched_cache(repo, days=2, start=start, symbols=("600519.SH",))
+    _write_minute_partition(data_dir, start, _minute_rows(start, ("600519.SH",)))
+    engine = _make_engine()
+    svc = AuctionValidationService(repo, engine, probe_resolver=lambda: _available_verdict())
+
+    report = svc.build_report(start=start, end=start + timedelta(days=1))
+    ms = report["coverage"]["minute_stats"]
+
+    assert ms["auction_volume_hands"] == pytest.approx(_MINUTE_ANCHOR_VOLUME)
+    assert ms["auction_amount_yuan"] == pytest.approx(_MINUTE_ANCHOR_AMOUNT, abs=1.0)
+    assert ms["amount_unknown_count"] == 0
+
+
+def test_minute_stats_amount_unknown_non_closed_ohlc(repo_env):
+    """MIN-02 amount 诚实缺额: OHLC 不全等 09:30 bar → 不计入 auction_amount_yuan,
+    amount_unknown_count==1 (绝不猜, RESEARCH Pitfall 5)。"""
+    from app.services.auction_validation import AuctionValidationService
+
+    repo, data_dir = repo_env
+    start = date(2026, 8, 4)
+    _seed_enriched_cache(repo, days=2, start=start, symbols=("600519.SH",))
+    _write_minute_partition(data_dir, start, _minute_rows(start, ("600519.SH",), ohlc_eq=False))
+    engine = _make_engine()
+    svc = AuctionValidationService(repo, engine, probe_resolver=lambda: _available_verdict())
+
+    report = svc.build_report(start=start, end=start + timedelta(days=1))
+    ms = report["coverage"]["minute_stats"]
+
+    assert ms["auction_volume_hands"] == pytest.approx(_MINUTE_ANCHOR_VOLUME)  # 量恒等计入
+    assert ms["auction_amount_yuan"] == pytest.approx(0.0)
+    assert ms["amount_unknown_count"] == 1
+
+
+def test_minute_stats_amount_mixed_symbols(repo_env):
+    """MIN-02 amount 混合: 2 symbol (一全等一非全等) → 派生额只含全等者,
+    amount_unknown_count==1。"""
+    from app.services.auction_validation import AuctionValidationService
+
+    repo, data_dir = repo_env
+    start = date(2026, 8, 4)
+    _seed_enriched_cache(repo, days=2, start=start, symbols=("600519.SH", "000001.SZ"))
+    _write_minute_partition(
+        data_dir, start,
+        pl.concat([
+            _minute_rows(start, ("600519.SH",)),                                   # 全等 → 派生
+            _minute_rows(start, ("000001.SZ",), price=10.0, ohlc_eq=False),        # 非全等 → UNKNOWN
+        ]),
+    )
+    engine = _make_engine()
+    svc = AuctionValidationService(repo, engine, probe_resolver=lambda: _available_verdict())
+
+    report = svc.build_report(start=start, end=start + timedelta(days=1))
+    ms = report["coverage"]["minute_stats"]
+
+    assert ms["auction_symbol_count"] == 2
+    assert ms["auction_amount_yuan"] == pytest.approx(_MINUTE_ANCHOR_AMOUNT, abs=1.0)
+    assert ms["amount_unknown_count"] == 1
