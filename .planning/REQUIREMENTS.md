@@ -57,9 +57,9 @@ Requirements for the v2.4 milestone. Each maps to a roadmap phase. Research basi
 | 38. 分钟确认接线 BT-10 | MN-02 | Complete |
 | 38. 分钟确认接线 BT-10 | MN-03 | Complete |
 | 38. 分钟确认接线 BT-10 | MN-04 | Complete |
-| 39. 部署验证与残留 | DV-01 | Planned |
-| 39. 部署验证与残留 | DV-02 | Planned |
-| 39. 部署验证与残留 | DV-03 | Planned |
-| 39. 部署验证与残留 | DV-04 | Planned |
+| 39. 部署验证与残留 | DV-01 | Complete |
+| 39. 部署验证与残留 | DV-02 | Complete |
+| 39. 部署验证与残留 | DV-03 | Complete |
+| 39. 部署验证与残留 | DV-04 | Complete |
 
 **Cross-cutting guards (apply to every phase):** zero new runtime dependencies · honest provenance (`empty_response` ledger, coverage ≤94.0% never claimed 100%, `rows_present < expected` partial framing) · POOL-03 zero-execution AST guard · `strategy_cache` single-as_of integrity · user `frontend/src/pages/Watchlist.tsx` never touched · no backfill forgery (upstream-limited items documented, not fabricated).
