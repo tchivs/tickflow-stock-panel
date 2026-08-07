@@ -65,9 +65,11 @@ _ORIGIN = "research"
 # BT-10 逐行分钟确认注解
 _MINUTE_CONFIRM = "not_applied"
 _MINUTE_NOTE = (
-    "kline_minute 历史 CLOSED — 确认维度诚实受限; auction_intraday_confirm minute 确认恒空 (BT-10); "
-    "auction_intraday_confirm branch=real 日线初筛仅消费 open_gap (enriched 派生列, 非竞价列) — "
-    "其 hits 不随湖覆盖增长 (52,591 全市场恒定, 2026-08-07 实测)"
+    "kline_minute 09:30 bar = 集合竞价统计 (非逐笔), 按统计口径 (caliber=statistical_minute_0930) "
+    "进入竞价覆盖报告 coverage.minute_stats — 绝不算逐笔、绝不写 canonical 竞价湖; "
+    "实际覆盖日期范围以 coverage.minute_stats.dates_covered 为准 (覆盖 = 源插件深度, 见 MINUTE_SOURCE_PROFILES); "
+    "auction_intraday_confirm minute 确认恒空 (BT-10); "
+    "auction_intraday_confirm branch=real 日线初筛仅消费 open_gap (enriched 派生列, 非竞价列)"
 )
 
 # 写根 (E2): 本模块唯一写面
