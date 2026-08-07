@@ -1,20 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v2.4
-milestone_name: 全量数据解锁 — planning
-status: Awaiting next milestone
-stopped_at: Completed 31-03-PLAN.md
-last_updated: "2026-08-07T06:14:13.960Z"
+milestone: v2.5
+milestone_name: 诚实加固与本机数据源接入
+status: planning
+last_updated: "2026-08-07T10:36:04.978Z"
 last_activity: 2026-08-07
-last_activity_desc: Milestone v2.4 completed and archived
 progress:
-  total_phases: 4
+  total_phases: 0
   completed_phases: 0
-  total_plans: 16
-  completed_plans: 5
+  total_plans: 0
+  completed_plans: 0
   percent: 0
-current_phase: 39
-current_phase_name: Deploy Verification & Residue
 ---
 
 # Project State
@@ -28,10 +24,10 @@ See: .planning/PROJECT.md (updated 2026-08-06)
 
 ## Current Position
 
-Phase: Milestone v2.4 complete
+Phase: Not started (defining requirements)
 Plan: —
-Status: Awaiting next milestone
-Last activity: 2026-08-07 — Milestone v2.4 completed and archived
+Status: Defining requirements
+Last activity: 2026-08-07 — Milestone v2.5 started
 
 ## v1.3 Phase Summary (shipped 2026-08-04)
 

@@ -8,15 +8,14 @@ AthenaQuant is a shipped, self-hosted quantitative research platform for individ
 
 An investor can turn reliable market data and their own holdings into an auditable, actionable research and monitoring workflow without operating multiple disconnected tools.
 
-## Current Milestone: v2.4 全量数据解锁
+## Current Milestone: v2.5 诚实加固与本机数据源接入
 
-**Goal:** v2.3 已验证数据纵深机械（竞价回填 496 行冒烟、股池回填 8/248 分区、BT-07 全量回测 329k 行实跑、真列分支 0.04% 覆盖）。v2.4 将全量解锁真实数据态：全宇宙竞价回填（~5537 symbols，3-5.5h 长作业，幂等续跑）与真列覆盖率翻转、全量真列回测重跑与活跃度解锁、BT-10 分钟接线裁决、以及部署验证 D1..D8 真实交易日就绪面——延续零新增运行时依赖、诚实 provenance（origin=backfill / 失败台账 / 空态 fail-closed）与 POOL-03 零执行权。
+**Goal:** 收口 v2.4 审计未决项并解锁数据源瓶颈：接入本机 stockdb 项目 SDK（服务已在 :8000 运行，REST/WS/MCP 三出口 + 联邦采集 + 本地数据湖，SDK 位于 ../stockdb/src/stockdb/sdk/）作为受管数据源通道——若 stockdb 提供集合竞价撮合明细（09:15-09:25 逐笔/快照）与历史日 K，则解除上游 xyz MCP ~2h 配额窗 gate（FA-04 全量回填、RC-02 ≥0.94 重跑可解锁），否则至少为日 K/实时行情提供本地旁路；同时修复两个记录在案的诚实性缺口（上游 403 源块与 BJ 真空无法区分 → source_blocked 标签；空帧批量失败进度冻结 → 逐 symbol 进度 emit），并把 D1..D8 真实交易日观测窗口 runbook 化（3 新端点 200-body、3018 容器 rebuild 对齐、分钟点亮门）。延续零新增运行时依赖、诚实 provenance（origin=backfill / 失败台账 / 空态 fail-closed）、POOL-03 零执行权与 Watchlist.tsx 零触碰。
 
 **Target features（研究驱动，可行性以研究确认）：**
-- 全量竞价回填：5537 symbols × 248 日长作业（resume/checkpoint、429 节奏、磁盘余量、探针长稳）→ kline_auction 全分区（AQ/BT 系）
-- 全量真列回测与活跃度：BT-07 真列分支全宇宙重跑 + 竞价活跃度报告/竞价格线解锁（BT 系）
-- 分钟接线裁决：kline_minute 增量 loader 与 intraday_confirm 接线可行性（live 日无历史源时 fail-closed 诚实注记）（BT-10 系）
-- 部署验证就绪：D1..D8 真实交易日观察清单的沙箱侧可执行面（D 系，premarket/周报双门禁）
+- stockdb SDK 接入：能力探测（竞价撮合明细？历史日 K？分时？复权？）→ provider 适配器（沿用 probe×分区双闸门语义）→ 竞价回填通道切换/并行 → campaign 解锁或本地旁路（SDK 系）
+- 诚实性修复：source_blocked 标签（403 源块 vs 真空可区分）+ 空帧批量失败逐 symbol 进度 emit（HON 系）
+- 部署日执行：D1..D8 观测 runbook + 3 新端点 200-body 验证 + 3018 容器对齐（D 系）
 - 沿平台边界：选股/股池结果始终为零执行权研究建议，无自动下单
 
 ## Success Metric
@@ -158,4 +157,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-08-06 — v2.4 milestone started (全量数据解锁)*
+*Last updated: 2026-08-07 — v2.5 milestone started (诚实加固与本机数据源接入)*
