@@ -19,6 +19,7 @@ that red state is the contract-first acceptance step.
 from __future__ import annotations
 
 import json as _json
+from datetime import date as _date
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -276,6 +277,36 @@ def test_429_retry_after_falls_back_to_body(monkeypatch):
     df = p.get_daily(["SH600519"])
     assert sleeps == [50.0]
     assert not df.is_empty()
+
+
+# -- tick 端点 (43-01): GET /v1/ticks/{sym}?date=YYYYMMDD ----------------------
+
+
+def test_get_ticks_requests_date_and_returns_raw_list():
+    """请求必带 date=T (Pitfall 3: 无 date 服务端回退上一交易日); 返回原始 TickBar list。
+
+    归一化 (staging 10 列) 交给采集层, provider 只透传原始 JSON list。
+    """
+    rows = [
+        {"symbol": "SH600519", "trade_date": "20260807", "time": "09:25:00",
+         "price": 1308.66, "vol_hand": 173, "num_trades": 120, "buyorsell": 2,
+         "source": "eastmoney", "fetched_at": None, "ingested_at": None},
+    ]
+    p = _provider({"/v1/ticks/SH600519": rows})
+    out = p.get_ticks("SH600519", _date(2026, 8, 7))
+    assert out == rows  # 原样透传 (无归一化, 契约单点归采集层)
+    url, params = p._client.calls[0]
+    assert urlparse(url).path == "/v1/ticks/SH600519"
+    assert params == {"date": "20260807"}  # 请求必带 date=T
+
+
+def test_get_ticks_accepts_suffix_input():
+    """湖内后缀形态输入 -> 请求侧前缀形态 (镜像 daily/minute 语义)。"""
+    p = _provider({"/v1/ticks/SH600519": []})
+    assert p.get_ticks("600519.SH", _date(2026, 8, 7)) == []
+    url, params = p._client.calls[0]
+    assert urlparse(url).path == "/v1/ticks/SH600519"
+    assert params == {"date": "20260807"}
 
 
 # ================================================================
