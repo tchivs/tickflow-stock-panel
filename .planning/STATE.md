@@ -2,18 +2,18 @@
 gsd_state_version: 1.0
 milestone: v2.5
 milestone_name: 诚实加固与本机数据源接入 — planning
-current_phase: 44
-status: completed
+status: Awaiting next milestone
 stopped_at: Completed 31-03-PLAN.md
-last_updated: "2026-08-07T17:54:41.753Z"
+last_updated: "2026-08-07T18:06:17.068Z"
 last_activity: 2026-08-07
-last_activity_desc: Phase 44 complete
+last_activity_desc: Milestone v2.5 completed and archived
 progress:
-  total_phases: 9
-  completed_phases: 0
+  total_phases: 5
+  completed_phases: 5
   total_plans: 19
   completed_plans: 14
   percent: 0
+current_phase: 44
 current_phase_name: Deploy-Day Execution
 ---
 
@@ -28,10 +28,10 @@ See: .planning/PROJECT.md (updated 2026-08-06)
 
 ## Current Position
 
-Phase: 44
-Plan: Not started
-Status: All phases complete
-Last activity: 2026-08-07 — Phase 44 complete
+Phase: Milestone v2.5 complete
+Plan: —
+Status: Awaiting next milestone
+Last activity: 2026-08-07 — Milestone v2.5 completed and archived
 
 ## v2.5 Phase Summary
 

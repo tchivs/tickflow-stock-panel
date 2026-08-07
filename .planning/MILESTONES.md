@@ -1,5 +1,28 @@
 # Milestones
 
+## v2.5 v2.5 (Shipped: 2026-08-07)
+
+**Phases completed:** 5 phases, 14 plans, 9 tasks
+
+**Key accomplishments:**
+
+- 40-stockdb-local-channel · **Wave:** 01 (契约先行) · **Date:** 2026-08-07
+- Phase
+- Phase
+- 41-honesty-fixes · **Wave:** 01 (HON-01 诚实性修复) · **Date:** 2026-08-07
+- 41-honesty-fixes · **Wave:** 02 (HON-02) · **Date:** 2026-08-07
+- 42-minute-lake-expansion · **Wave:** 01 (MIN-01 机制: 回填驱动 + 幂等) · **Date:** 2026-08-07
+- 42-minute-lake-expansion · **Wave:** 02 (MIN-02) · **Date:** 2026-08-07
+- 42-minute-lake-expansion · **Wave:** 03 (MIN-03) · **Date:** 2026-08-07
+- 盘中竞价窗口 live 采集: StockDBProvider.get_ticks (fetch-on-miss 单次 GET) + auction_capture 采集驱动 (三重完整性校验 fail-closed → tick_staging 10 列原子写 + manifest) + 池解析 (白名单≤200 默认自选池) + auction_reconcile 三重对账 (22,639,818 闭合)
+- 43-tday-auction-sidecar · **Wave:** 02 (SDC-02: T-day 逐日累积 + canonical 转化) · **Date:** 2026-08-07
+- 43-tday-auction-sidecar · **Wave:** 03 (SDC-03: 诚实门 + 调度) · **Date:** 2026-08-07
+- Phase
+- deploy_verify_endpoints.py — 3 新端点 200-body 键形状验证脚本 (python3 stdlib 零新依赖): 401 先验 3/3 → 真实登录 → validation 8 键 / backtest {runs,count}+详情 / backfill fail-closed + job 轮询 W-5 9 键 → JSON 台账 + 退出码, 沙箱 :3020 全流程实测通过
+- Executor
+
+---
+
 ## v2.4 v2.4 (Shipped: 2026-08-07)
 
 **Phases completed:** 4 phases, 12 plans, 0 tasks
