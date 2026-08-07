@@ -101,6 +101,18 @@
 - **AQ-06 注记（P2，doc-only）**：分钟历史回填已**正式关闭（CLOSED）** —— xyz 1m ≈ 21 交易日覆盖（实测）、ifzq/sina 仅尾随窗口、TickFlow 分钟档位 gated at pro+；`kline_minute` 保持增量 ≤30 日同步（`sync_and_persist_minute` 零改动）；证据：`research/v2.3-data-depth/AUCTION-BACKFILL.md` §4/§6。
 - **R3 注记（probe 缓存）**：`capabilities.auction=True` 后 `resolve_auction_probe()` 每次调用一次实时 HTTP（1.6s 名义 / 8s 超时）——影响 `GET /api/kline/auction/history` 与 EOD 闸门延迟；短 TTL probe 缓存是**后续可选守卫**，不在 Phase 32 内实现。
 
+- **AQ-07 全量回填实测规模（Phase 36, FA-04）**：宇宙 5537 码（SZ 2894 / SH 2310 / BJ 333，`_lake_distinct_symbols` 同源；kline_daily 1,326,996 行）× 248 交易日 → `kline_auction` 湖终态 ≈ **1,290,592 行** / 248 个 `date=` 分区（实测满分区 ~45 KiB → 全湖 ≈ **11-13 MB**）。实测 pilot 延迟 mean 0.96s / median 0.82s / p95 1.24s / max 2.49s（n=20 live，**0×429**）；rpm 30 全量 ≈ 3.4-3.8h，含裕量 **3.5-5.5h**（工作量主导，rpm 30/60 无差）。429 → 指数退避 2s→4s ×2。证据：`research/v2.3-data-depth/AUCTION-BACKFILL.md` + Phase 36 回填台账。
+- **AQ-08 断点续跑 / only-missing（FA-02）**：`--only-missing` / API body `only_missing: true` —— 开工前覆盖预扫描（`SELECT symbol, COUNT(*) … GROUP BY symbol`，对齐窗口内行数 == 交易日数 ⇒ 已全覆盖跳过；部分残差整窗重拉 merge-upsert 幂等补齐）；中断的 run 用同一命令**顶补而非重跑**（验收口径：连续两次 `--only-missing` **0 新增**）。BJ 333 恒 `empty_response` → 每次全量顶补仍请求 333 并如实记失败（幂等、0 新行，属预期噪声非异常，`requested>0` 正常）。
+- **AQ-09 长任务豁免（FA-01）**：回填 job 经 `job_store.create(timeout_s=21600)` 持久化 **6h 豁免**；`reap_stale` 按 per-job `timeout_s` 优先（`j.get("timeout_s", STALE_JOB_TIMEOUT_S)`，缺省仍 600s）——全量 3.5-5.5h 跑不再被 600s 陈旧回收误杀；取消仍为合作式（每 symbol 检查 job 状态）。
+- **AQ-10 运营 CLI（FA-03）**：`backend/scripts/auction_backfill.py`（`--all|--symbols --start --end --rpm 1..60 --only-missing --out <json>`，`--all` 为缺省行为，`DATA_DIR` 环境变量覆盖）；`job_id=None` 独立进程、**零 job_store**（无单飞/无超时回收/无 run 槽，重启中断安全）——detached 全量跑的载体；终态 dict（成功 8 键 `{requested, backfilled_symbols, rows, dates, failed, failed_symbols, origin, rpm}` / fail-closed +`reason` 9 键）+ `failed_symbols` 台账原子落盘 `--out`；退出码 0 = 无 reason 键（成功或部分成功含 BJ 失败，台账诚实存在），1 = fail-closed 或未捕获异常。
+- **AQ-11 诚实覆盖上限（FA-05）**：BJ 333 上游**恒空**（6 只 920xxx 实测 0 行；5 种替代代码格式 BJ920016 / 920016.BJ / bj920016 等全部 `请求参数错误`）→ 覆盖天花板 **94.0%**（5204/5537，SZ/SH 全量、BJ 逐 symbol `empty_response` 台账），**从不宣称 100%**、不预填、不假装覆盖；完整 stance 见 `FA-05-BJ-STANCE.md`。
+- **AQ-12 回填验证**：`backend/scripts/verify_auction_backfill.py` 只读输出检查清单（248 分区 / ~5204 行 / ≥3 日 × ≥3 码 `auction_virtual_price == kline_daily.open` 交叉验证 / BJ 920 号段 empty_response 集合 / 无 `.tmp` 残留）。
+- **调度纪律（EOD 交织, Phase 36）**：
+  1. 全量回填调度在 EOD `run_all` 窗口**之外**——跨进程 `kline_auction` 写**无锁**（read-modify-write + 原子 rename，last-rename-wins），窗口纪律是唯一保护；
+  2. 进程内 run-slot 串行（`try_acquire_run_slot`）不变，覆盖服务端并发（backfill API vs EOD vs pool backfill 同一进程）；EOD 侧双闸门（`daily_pipeline.py:699-708`：`auction_sync_enabled` 偏好 + probe 可达）默认关闭；
+  3. CLI（`job_id=None`）是独立进程、**不共享槽位**——EOD 窗口规则是唯一保护，**文档化而非工程化消除**（零新增依赖守卫）；
+  4. 交错写不会损坏湖（每分区原子 rename + merge-upsert），最坏 = 同日分区 last-rename-wins，纪律避免之。
+
 ### 🗄️ 股池回填 (Pool Backfill)
 
 运营触发端点 `POST /api/pipeline/backfill`，把 `screener_results` 湖的历史缺口（有 enriched 数据但缺冻结快照的交易日，`GET /api/pool/dates` 的 `backfill_needed` 计数）逐日补齐。body：`{"start"/"end": "YYYY-MM-DD" | null, "max_days": 1..500 | null}`；立即返回 `{"status": "started"|"reused", "job_id"}`（单飞：已有同类任务在跑 → `reused`）；与 EOD / 手动 run_all / 竞价回填共用一个**重任务执行槽**（并发 → 失败记录 `已有数据任务在运行`）。**全量 248 缺口一次调用即可覆盖**：`max_days` 上限 500 ≥ 248（248 个交易日 2025-07-29..2026-08-05），**无需分块**。
