@@ -140,10 +140,71 @@ def validate_sha256(value: str, field: str) -> None:
     """Fail closed unless ``value`` is a lowercase 64-hex digest."""
     if not isinstance(value, str) or not _SHA256_HEX.fullmatch(value):
         raise ValueError(f"{field} must be a lowercase SHA-256 hex digest")
+def _is_number(value: object) -> bool:
+    """True for a real int/float, excluding the bool subtype and NaN/inf."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    import math as _math
+    return _math.isfinite(float(value))
 
+
+def _validate_scoring_stage(manifest: Mapping[str, Any]) -> None:
+    """Additive scoring/cost/fold inputs, required ONLY when a scoring stage is declared.
+
+    A manifest without a ``scoring`` group validates byte-for-byte as before so
+    completed Phase 45/46 frozen snapshots are never invalidated (OQ2, T-47-04).
+    When ``scoring`` IS declared, the frozen manifest must also carry the
+    measured-date fold OOS geometry (``fold_geometry.oos_size``/``horizon`` —
+    the inputs ``wf_plans`` requires), a declared cost policy (``costs``), and
+    the scoring cadence/shape (``scoring.rebalance``/``n_groups``/``warmup_days``)
+    so a governed walk-forward + cost diagnostic can be rebuilt from the frozen
+    manifest. A changed scoring/cost/fold input changes the canonical digest and
+    creates a new run (no mutation, D-01).
+    """
+    scoring = manifest.get("scoring")
+    if not isinstance(scoring, Mapping) or not scoring:
+        if "scoring" in manifest:
+            raise ValueError("manifest group 'scoring' must not be empty and must be a mapping")
+        return  # no scoring stage declared → validate nothing new
+
+    fold = manifest["fold_geometry"]
+    for key in ("oos_size", "horizon"):
+        value = fold.get(key)
+        if type(value) is not int or value <= 0:
+            raise ValueError(f"manifest field 'fold_geometry.{key}' must be a positive integer")
+
+    costs = manifest.get("costs")
+    if not isinstance(costs, Mapping) or not costs:
+        raise ValueError("manifest group 'costs' must not be empty and must be a mapping")
+    for key in ("commission_pct", "stamp_tax_pct"):
+        value = costs.get(key)
+        if not _is_number(value) or not (0.0 <= float(value) < 1.0):
+            raise ValueError(f"manifest field 'costs.{key}' must be a bounded fraction in [0, 1)")
+    slippage = costs.get("slippage_bps")
+    # slippage_bps is expressed in basis points (mirrors BacktestConfig.slippage_bps,
+    # engine.py:44, default 5.0) and divided by 1e4 in the cost-rate diagnostic; the
+    # plan's literal "[0,1)" bound would reject any realistic basis-point value.
+    if not _is_number(slippage) or float(slippage) < 0.0 or float(slippage) >= 1e4:
+        raise ValueError("manifest field 'costs.slippage_bps' must be a non-negative basis-point float")
+
+    rebalance = scoring.get("rebalance")
+    if rebalance not in ("daily", "weekly", "monthly"):
+        raise ValueError("manifest field 'scoring.rebalance' must be daily, weekly, or monthly")
+    n_groups = scoring.get("n_groups")
+    if type(n_groups) is not int or n_groups < 2:
+        raise ValueError("manifest field 'scoring.n_groups' must be an integer >= 2")
+    warmup_days = scoring.get("warmup_days")
+    if type(warmup_days) is not int or warmup_days < 0:
+        raise ValueError("manifest field 'scoring.warmup_days' must be a non-negative integer")
 
 def validate_manifest(manifest: Mapping[str, Any]) -> None:
-    """Fail closed if required groups or nested fields have wrong shapes."""
+    """Fail closed if required groups or nested fields have wrong shapes.
+
+    Additive scoring/cost/fold fields (``fold_geometry.oos_size``/``horizon``,
+    ``costs``, ``scoring``) are validated ONLY when a ``scoring`` stage is
+    declared (Phase 47-02, OQ2); a manifest without ``scoring`` validates
+    byte-for-byte as before so completed Phase 45/46 snapshots are unchanged.
+    """
     if not isinstance(manifest, Mapping):
         raise ValueError("manifest must be a mapping")
     validate_bounded_json(manifest, "manifest")
@@ -178,6 +239,9 @@ def validate_manifest(manifest: Mapping[str, Any]) -> None:
                 raise ValueError(f"manifest field '{label}' must be a bounded non-negative integer")
         elif not isinstance(value, expected_type):
             raise ValueError(f"manifest field '{label}' has the wrong type")
+    # Additive scoring-stage inputs are required only when a scoring stage is
+    # declared; a no-scoring manifest validates byte-for-byte as before (OQ2).
+    _validate_scoring_stage(manifest)
 @dataclass(frozen=True, slots=True)
 class ResearchInputSnapshot:
     """Immutable server-frozen input snapshot bound to its canonical digest."""

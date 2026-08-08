@@ -86,6 +86,113 @@ class TestManifestFreeze:
             freeze_input_snapshot(manifest=manifest, created_at="2026-08-08T00:00:00+00:00")
 
 
+
+# ================================================================
+# Scoring-stage additive manifest extension (Phase 47-02, AF-REQ-06)
+# ================================================================
+
+
+def _scoring_manifest(*, seed: int = 42) -> dict:
+    """A complete D-04 manifest that also declares a scoring stage."""
+    manifest = _sample_manifest(seed=seed)
+    manifest["fold_geometry"]["oos_size"] = 20
+    manifest["fold_geometry"]["horizon"] = 5
+    manifest["costs"] = {
+        "commission_pct": 0.0003,
+        "stamp_tax_pct": 0.001,
+        "slippage_bps": 5.0,
+    }
+    manifest["scoring"] = {
+        "rebalance": "daily",
+        "n_groups": 5,
+        "warmup_days": 10,
+    }
+    return manifest
+
+
+class TestScoringStageManifest:
+    def test_manifest_without_scoring_validates_unchanged(self) -> None:
+        """No ``scoring`` group ⇒ no new checks (Phase 45/46 snapshots byte-identical)."""
+        baseline = _sample_manifest()
+        scoring = _scoring_manifest()
+        del scoring["scoring"]
+        # A no-scoring manifest validates identically to the baseline fixture.
+        freeze_input_snapshot(manifest=baseline, created_at="2026-08-08T00:00:00+00:00")
+        freeze_input_snapshot(manifest=scoring, created_at="2026-08-08T00:00:00+00:00")
+
+    def test_complete_scoring_manifest_freezes_with_deterministic_digest(
+        self, deterministic_clock: DeterministicClock
+    ) -> None:
+        manifest = _scoring_manifest()
+        now = deterministic_clock.now_iso()
+        snapshot_a = freeze_input_snapshot(manifest=manifest, created_at=now)
+        snapshot_b = freeze_input_snapshot(manifest=manifest, created_at=now)
+        assert snapshot_a.manifest_sha256 == snapshot_b.manifest_sha256
+        assert len(snapshot_a.manifest_sha256) == 64
+
+    def test_changing_scoring_field_changes_digest(
+        self, deterministic_clock: DeterministicClock
+    ) -> None:
+        now = deterministic_clock.now_iso()
+        base = freeze_input_snapshot(manifest=_scoring_manifest(seed=42), created_at=now)
+        changed = _scoring_manifest(seed=42)
+        changed["scoring"]["n_groups"] = 6
+        other = freeze_input_snapshot(manifest=changed, created_at=now)
+        assert base.manifest_sha256 != other.manifest_sha256
+
+    def test_scoring_manifest_missing_oos_size_fails_closed(self) -> None:
+        manifest = _scoring_manifest()
+        del manifest["fold_geometry"]["oos_size"]
+        with pytest.raises(ValueError, match="oos_size"):
+            freeze_input_snapshot(manifest=manifest, created_at="2026-08-08T00:00:00+00:00")
+
+    def test_scoring_manifest_missing_horizon_fails_closed(self) -> None:
+        manifest = _scoring_manifest()
+        del manifest["fold_geometry"]["horizon"]
+        with pytest.raises(ValueError, match="horizon"):
+            freeze_input_snapshot(manifest=manifest, created_at="2026-08-08T00:00:00+00:00")
+
+    def test_scoring_manifest_missing_costs_fails_closed(self) -> None:
+        manifest = _scoring_manifest()
+        del manifest["costs"]
+        with pytest.raises(ValueError, match="costs"):
+            freeze_input_snapshot(manifest=manifest, created_at="2026-08-08T00:00:00+00:00")
+
+    def test_scoring_manifest_cost_out_of_range_fails_closed(self) -> None:
+        manifest = _scoring_manifest()
+        manifest["costs"]["commission_pct"] = 1.5  # >= 1.0 is not a fraction
+        with pytest.raises(ValueError, match="commission_pct"):
+            freeze_input_snapshot(manifest=manifest, created_at="2026-08-08T00:00:00+00:00")
+
+    def test_scoring_manifest_negative_slippage_fails_closed(self) -> None:
+        manifest = _scoring_manifest()
+        manifest["costs"]["slippage_bps"] = -1.0
+        with pytest.raises(ValueError, match="slippage_bps"):
+            freeze_input_snapshot(manifest=manifest, created_at="2026-08-08T00:00:00+00:00")
+
+    def test_scoring_manifest_bad_rebalance_fails_closed(self) -> None:
+        manifest = _scoring_manifest()
+        manifest["scoring"]["rebalance"] = "hourly"
+        with pytest.raises(ValueError, match="rebalance"):
+            freeze_input_snapshot(manifest=manifest, created_at="2026-08-08T00:00:00+00:00")
+
+    def test_scoring_manifest_n_groups_below_two_fails_closed(self) -> None:
+        manifest = _scoring_manifest()
+        manifest["scoring"]["n_groups"] = 1
+        with pytest.raises(ValueError, match="n_groups"):
+            freeze_input_snapshot(manifest=manifest, created_at="2026-08-08T00:00:00+00:00")
+
+    def test_scoring_manifest_negative_warmup_fails_closed(self) -> None:
+        manifest = _scoring_manifest()
+        manifest["scoring"]["warmup_days"] = -1
+        with pytest.raises(ValueError, match="warmup_days"):
+            freeze_input_snapshot(manifest=manifest, created_at="2026-08-08T00:00:00+00:00")
+
+    def test_scoring_group_present_but_empty_fails_closed(self) -> None:
+        manifest = _scoring_manifest()
+        manifest["scoring"] = {}
+        with pytest.raises(ValueError, match="scoring"):
+            freeze_input_snapshot(manifest=manifest, created_at="2026-08-08T00:00:00+00:00")
 # ================================================================
 # Create → durable snapshot/run/event → replay contracts
 # ================================================================
