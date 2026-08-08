@@ -1580,6 +1580,242 @@ class ResearchRepository:
                 return None
             return self._alpha_run_row(connection, run_id)
 
+    # ----------------------------------------------------------------
+    # Guarded lifecycle cursor transitions (Wave 3: D-06, T-45-06/07/12)
+    # ----------------------------------------------------------------
+
+    def transition_alpha_run(
+        self,
+        *,
+        run_id: str,
+        principal: str,
+        from_status: str,
+        to_status: str,
+        expected_version: int,
+        event_id: str,
+        event_type: str,
+        idempotency_key: str,
+        terminal_reason: str | None = None,
+        extra_payload: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        """Atomically guard, transition the cursor, and append the lifecycle event.
+
+        Uses ``WHERE id = ? AND principal = ? AND status = ? AND
+        transition_version = ?`` so an illegal edge, stale expected-version, or
+        cross-principal write matches zero rows and produces no event/cursor
+        side effect (D-06, T-45-06, T-45-12).  Returns ``None`` when the run is
+        unknown or owned by another principal; raises ``AlphaRunConflictError``
+        when the idempotency key is reused with a different event.
+        """
+        from app.research.run_contract import TERMINAL_STATUSES, event_checksum
+
+        occurred_at = self._now()
+        started = occurred_at if to_status == "running" else None
+        finished = occurred_at if to_status in TERMINAL_STATUSES else None
+        payload: dict[str, Any] = {"from": from_status, "to": to_status}
+        if terminal_reason is not None:
+            payload["reason"] = terminal_reason
+        if extra_payload:
+            payload.update(extra_payload)
+        payload_json = _json(payload, "lifecycle event payload")
+        expected_checksum = event_checksum(payload, idempotency_key, event_type)
+
+        with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                # Idempotency: same key + same checksum returns the original event.
+                existing = connection.execute(
+                    "SELECT * FROM research_alpha_events "
+                    "WHERE run_id = ? AND idempotency_key = ?",
+                    (run_id, idempotency_key),
+                ).fetchone()
+                if existing is not None:
+                    if existing["payload_checksum"] != expected_checksum:
+                        raise AlphaRunConflictError(
+                            "lifecycle idempotency key reused with a different event"
+                        )
+                    connection.execute("COMMIT")
+                    return self._alpha_run_row(connection, run_id)
+
+                # Guarded cursor update: principal + status + expected version.
+                changed = connection.execute(
+                    """UPDATE research_alpha_runs
+                          SET status = ?,
+                              transition_version = transition_version + 1,
+                              started_at = COALESCE(started_at, ?),
+                              finished_at = ?,
+                              terminal_reason = ?
+                        WHERE id = ? AND principal = ? AND status = ? AND transition_version = ?""",
+                    (
+                        to_status, started, finished, terminal_reason,
+                        run_id, principal, from_status, expected_version,
+                    ),
+                ).rowcount
+                if changed != 1:
+                    # Either illegal/stale/cross-principal — no event, no cursor.
+                    connection.execute("ROLLBACK")
+                    return None
+
+                # Read the new cursor to get the next event sequence.
+                run = connection.execute(
+                    "SELECT last_event_seq, transition_version FROM research_alpha_runs WHERE id = ?",
+                    (run_id,),
+                ).fetchone()
+                next_seq = int(run["last_event_seq"]) + 1
+                try:
+                    connection.execute(
+                        """INSERT INTO research_alpha_events (
+                               id, run_id, seq, event_type, entity_kind, entity_id,
+                               occurred_at, idempotency_key, actor, source,
+                               payload_json, payload_checksum, artifact_id,
+                               producer_version, created_at
+                           ) VALUES (?, ?, ?, ?, 'run', ?, ?, ?, 'service', 'api', ?, ?, NULL, ?, ?)""",
+                        (
+                            event_id, run_id, next_seq, event_type, run_id,
+                            occurred_at, idempotency_key, payload_json,
+                            expected_checksum, PRODUCER_VERSION, occurred_at,
+                        ),
+                    )
+                except sqlite3.IntegrityError as error:
+                    if "UNIQUE" in str(error).upper():
+                        raise AlphaRunConflictError(
+                            "concurrent lifecycle event conflict"
+                        ) from error
+                    raise
+                connection.execute(
+                    "UPDATE research_alpha_runs SET last_event_seq = ? WHERE id = ?",
+                    (next_seq, run_id),
+                )
+                connection.execute("COMMIT")
+            except BaseException:
+                if connection.in_transaction:
+                    connection.execute("ROLLBACK")
+                raise
+        return self.get_alpha_run(run_id, principal=principal)
+
+    def cancel_alpha_run(
+        self,
+        *,
+        run_id: str,
+        principal: str,
+        expected_version: int,
+        event_id: str,
+        idempotency_key: str,
+    ) -> dict[str, Any] | None:
+        """Idempotently request cancellation (queued/running → cancel_requested).
+
+        Cooperative cancellation: appends ``cancel_requested`` and transitions
+        the cursor only if the run is currently ``queued`` or ``running``.  A
+        terminal run returns current state with no new event (D-07).
+        """
+        run = self.get_alpha_run(run_id, principal=principal)
+        if run is None:
+            return None
+        if run["status"] in ("cancel_requested", "cancelled", "completed", "failed", "preflight_failed"):
+            return run  # idempotent: already terminal or already requested
+        from_status = run["status"]  # queued or running
+        result = self.transition_alpha_run(
+            run_id=run_id,
+            principal=principal,
+            from_status=from_status,
+            to_status="cancel_requested",
+            expected_version=expected_version,
+            event_id=event_id,
+            event_type="cancel_requested",
+            idempotency_key=idempotency_key,
+        )
+        return result if result is not None else run
+
+    def update_progress(
+        self,
+        *,
+        run_id: str,
+        principal: str,
+        expected_version: int,
+        candidate_attempts_total: int | None = None,
+        candidate_attempts_completed: int | None = None,
+        folds_total: int | None = None,
+        folds_completed: int | None = None,
+    ) -> dict[str, Any] | None:
+        """Persist the four bounded server-owned progress counters (D-11).
+
+        Only non-``None`` counters are updated; each must be a non-negative
+        integer.  This does NOT evaluate folds — it persists declared totals
+        and completed counts reported by a worker.  Returns ``None`` for
+        unknown/cross-principal/stale-version.
+        """
+        for label, value in (
+            ("candidate_attempts_total", candidate_attempts_total),
+            ("candidate_attempts_completed", candidate_attempts_completed),
+            ("folds_total", folds_total),
+            ("folds_completed", folds_completed),
+        ):
+            if value is not None:
+                if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                    raise ValueError(f"{label} must be a non-negative integer")
+        sets: list[str] = []
+        params: list[Any] = []
+        for column, value in (
+            ("candidate_attempts_total", candidate_attempts_total),
+            ("candidate_attempts_completed", candidate_attempts_completed),
+            ("folds_total", folds_total),
+            ("folds_completed", folds_completed),
+        ):
+            if value is not None:
+                sets.append(f"{column} = ?")
+                params.append(value)
+        if not sets:
+            return self.get_alpha_run(run_id, principal=principal)
+        sets.append("transition_version = transition_version + 1")
+        params.extend([run_id, principal, expected_version])
+        with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                changed = connection.execute(
+                    f"""UPDATE research_alpha_runs SET {', '.join(sets)}
+                        WHERE id = ? AND principal = ? AND transition_version = ?""",
+                    params,
+                ).rowcount
+                if changed != 1:
+                    connection.execute("ROLLBACK")
+                    return None
+                connection.execute("COMMIT")
+            except BaseException:
+                if connection.in_transaction:
+                    connection.execute("ROLLBACK")
+                raise
+        return self.get_alpha_run(run_id, principal=principal)
+
+    def retry_alpha_run(
+        self,
+        *,
+        run_id: str,
+        principal: str,
+        idempotency_key: str,
+        snapshot: "ResearchInputSnapshot",
+        child_run_id: str,
+        child_event_id: str,
+    ) -> dict[str, Any] | None:
+        """Create a linked child run for a retry, preserving the parent.
+
+        Idempotency on ``(principal, idempotency_key)``: a repeat with the same
+        snapshot digest returns the existing child.  The parent is never
+        mutated.  Returns ``None`` when the parent is unknown or owned by
+        another principal (same boundary as unknown run, T-45-12).
+        """
+        parent = self.get_alpha_run(run_id, principal=principal)
+        if parent is None:
+            return None
+        return self.create_alpha_run(
+            run_id=child_run_id,
+            principal=principal,
+            idempotency_key=idempotency_key,
+            snapshot=snapshot,
+            event_id=child_event_id,
+            retry_of_run_id=run_id,
+            retry_attempt=int(parent["retry_attempt"]) + 1,
+        )
+
     def list_run_events(
         self,
         run_id: str,

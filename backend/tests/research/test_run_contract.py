@@ -1488,3 +1488,388 @@ class TestReplayReadOnly:
         # Pickle bytes (0x80 = protocol marker) are not valid UTF-8 JSON.
         with pytest.raises(AlphaCheckpointValidationError):
             service.validate_inline_checkpoint_payload(b"\x80\x04\x95")
+
+
+# ================================================================
+# Wave 3 — guarded lifecycle transitions, retry, cancellation
+# ================================================================
+
+
+class TestLifecycleTransitions:
+    """Legal edges, illegal edges, stale expected-version, and principal scoping."""
+
+    def test_legal_queued_to_running_transition_increments_version_and_appends_event(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        from app.research.run_service import ResearchRunService
+
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-lc-01")
+        service = ResearchRunService(alpha_run_repository)
+        result = service.start_or_resume(
+            run["id"],
+            principal="researcher@example.com",
+            expected_version=run["transition_version"],
+        )
+        assert result is not None
+        assert result["status"] == "running"
+        assert result["transition_version"] == run["transition_version"] + 1
+        events = alpha_run_repository.list_run_events(run["id"])
+        # run_created (seq 1) + run_started (seq 2)
+        assert len(events) == 2
+        assert events[1]["event_type"] == "run_started"
+        assert events[1]["seq"] == 2
+
+    def test_illegal_transition_queued_to_completed_is_rejected(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        from app.research.run_service import ResearchRunService
+
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-lc-02")
+        service = ResearchRunService(alpha_run_repository)
+        with pytest.raises(ValueError, match="illegal lifecycle"):
+            service.transition(
+                run["id"],
+                principal="researcher@example.com",
+                from_status="queued",
+                to_status="completed",
+                expected_version=run["transition_version"],
+            )
+        # Nothing changed: status, version, event count.
+        after = alpha_run_repository.get_alpha_run(run["id"])
+        assert after["status"] == "queued"
+        assert after["transition_version"] == run["transition_version"]
+        assert len(alpha_run_repository.list_run_events(run["id"])) == 1
+
+    def test_stale_expected_version_is_rejected_with_no_side_effect(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        from app.research.run_service import ResearchRunService
+
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-lc-03")
+        service = ResearchRunService(alpha_run_repository)
+        with pytest.raises(ValueError, match="stale|changed|expected"):
+            service.start_or_resume(
+                run["id"],
+                principal="researcher@example.com",
+                expected_version=999,  # stale
+            )
+        after = alpha_run_repository.get_alpha_run(run["id"])
+        assert after["status"] == "queued"
+        assert after["transition_version"] == run["transition_version"]
+
+    def test_terminal_state_cannot_transition_back(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        from app.research.run_service import ResearchRunService
+
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-lc-04")
+        service = ResearchRunService(alpha_run_repository)
+        # queued -> running -> completed
+        running = service.start_or_resume(
+            run["id"],
+            principal="researcher@example.com",
+            expected_version=run["transition_version"],
+        )
+        service.transition(
+            run["id"],
+            principal="researcher@example.com",
+            from_status="running",
+            to_status="completed",
+            expected_version=running["transition_version"],
+        )
+        # Now try an illegal transition out of terminal completed.
+        with pytest.raises(ValueError, match="illegal lifecycle"):
+            service.start_or_resume(
+                run["id"],
+                principal="researcher@example.com",
+                expected_version=running["transition_version"] + 1,
+            )
+        after = alpha_run_repository.get_alpha_run(run["id"])
+        assert after["status"] == "completed"
+
+    def test_preflight_failed_terminal_uses_run_level_not_candidate_invalid(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        from app.research.run_service import ResearchRunService
+
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-lc-05")
+        service = ResearchRunService(alpha_run_repository)
+        result = service.transition(
+            run["id"],
+            principal="researcher@example.com",
+            from_status="queued",
+            to_status="preflight_failed",
+            expected_version=run["transition_version"],
+            terminal_reason="missing vocabulary",
+        )
+        assert result["status"] == "preflight_failed"
+        assert result["terminal_reason"] == "missing vocabulary"
+        assert result["finished_at"] is not None
+
+    def test_cross_principal_transition_returns_none(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        from app.research.run_service import ResearchRunService
+
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-lc-06")
+        service = ResearchRunService(alpha_run_repository)
+        result = service.start_or_resume(
+            run["id"],
+            principal="attacker@example.com",
+            expected_version=run["transition_version"],
+        )
+        assert result is None
+        after = alpha_run_repository.get_alpha_run(run["id"])
+        assert after["status"] == "queued"
+
+
+class TestStartOrResumeIdempotency:
+    def test_duplicate_start_returns_running_and_no_duplicate_event(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        from app.research.run_service import ResearchRunService
+
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-dup-01")
+        service = ResearchRunService(alpha_run_repository)
+        first = service.start_or_resume(
+            run["id"],
+            principal="researcher@example.com",
+            expected_version=run["transition_version"],
+            idempotency_key="start-once",
+        )
+        # Same key again — should return existing running state, no new event.
+        second = service.start_or_resume(
+            run["id"],
+            principal="researcher@example.com",
+            expected_version=run["transition_version"],
+            idempotency_key="start-once",
+        )
+        assert second is not None
+        assert second["status"] == "running"
+        assert second["transition_version"] == first["transition_version"]
+        events = alpha_run_repository.list_run_events(run["id"])
+        assert len(events) == 2  # run_created + run_started (no duplicate)
+
+
+class TestCooperativeCancellation:
+    def test_cancel_appends_cancel_requested_then_cancelled(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        from app.research.run_service import ResearchRunService
+
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-can-01")
+        service = ResearchRunService(alpha_run_repository)
+        running = service.start_or_resume(
+            run["id"],
+            principal="researcher@example.com",
+            expected_version=run["transition_version"],
+        )
+        # Step 1: request cancel from running.
+        service.cancel(
+            run["id"],
+            principal="researcher@example.com",
+            expected_version=running["transition_version"],
+        )
+        mid = alpha_run_repository.get_alpha_run(run["id"])
+        assert mid["status"] == "cancel_requested"
+
+        # Step 2: worker observes and records terminal cancelled.
+        service.transition(
+            run["id"],
+            principal="researcher@example.com",
+            from_status="cancel_requested",
+            to_status="cancelled",
+            expected_version=mid["transition_version"],
+        )
+        final = alpha_run_repository.get_alpha_run(run["id"])
+        assert final["status"] == "cancelled"
+        assert final["finished_at"] is not None
+        event_types = [e["event_type"] for e in alpha_run_repository.list_run_events(run["id"])]
+        assert "cancel_requested" in event_types
+        assert "run_cancelled" in event_types
+
+    def test_late_worker_completion_after_cancel_is_rejected(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        from app.research.run_service import ResearchRunService
+
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-can-02")
+        service = ResearchRunService(alpha_run_repository)
+        running = service.start_or_resume(
+            run["id"],
+            principal="researcher@example.com",
+            expected_version=run["transition_version"],
+        )
+        service.cancel(
+            run["id"],
+            principal="researcher@example.com",
+            expected_version=running["transition_version"],
+        )
+        mid = alpha_run_repository.get_alpha_run(run["id"])
+        # A late worker tries to append success (completed) after cancel_requested.
+        with pytest.raises(ValueError, match="illegal lifecycle"):
+            service.transition(
+                run["id"],
+                principal="researcher@example.com",
+                from_status="cancel_requested",
+                to_status="completed",
+                expected_version=mid["transition_version"],
+            )
+        after = alpha_run_repository.get_alpha_run(run["id"])
+        assert after["status"] == "cancel_requested"
+
+    def test_cancel_is_idempotent(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        from app.research.run_service import ResearchRunService
+
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-can-03")
+        service = ResearchRunService(alpha_run_repository)
+        running = service.start_or_resume(
+            run["id"],
+            principal="researcher@example.com",
+            expected_version=run["transition_version"],
+        )
+        first = service.cancel(
+            run["id"],
+            principal="researcher@example.com",
+            expected_version=running["transition_version"],
+            idempotency_key="cancel-once",
+        )
+        before_events = len(alpha_run_repository.list_run_events(run["id"]))
+        second = service.cancel(
+            run["id"],
+            principal="researcher@example.com",
+            expected_version=running["transition_version"],
+            idempotency_key="cancel-once",
+        )
+        assert second is not None
+        assert second["status"] == "cancel_requested"
+        assert second["transition_version"] == first["transition_version"]
+        after_events = len(alpha_run_repository.list_run_events(run["id"]))
+        assert before_events == after_events  # no duplicate cancel event
+
+    def test_cancel_queued_before_start(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        from app.research.run_service import ResearchRunService
+
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-can-04")
+        service = ResearchRunService(alpha_run_repository)
+        result = service.cancel(
+            run["id"],
+            principal="researcher@example.com",
+            expected_version=run["transition_version"],
+        )
+        assert result["status"] == "cancel_requested"
+
+
+class TestRetry:
+    def test_retry_creates_linked_child_run_preserving_parent(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        from app.research.run_service import ResearchRunService
+
+        parent = _make_run(alpha_run_repository, deterministic_clock, run_id="run-retry-par")
+        service = ResearchRunService(alpha_run_repository)
+        child = service.retry(
+            parent["id"],
+            principal="researcher@example.com",
+            idempotency_key="retry-0001",
+            manifest=_sample_manifest(),
+        )
+        assert child is not None
+        assert child["id"] != parent["id"]
+        assert child["retry_of_run_id"] == parent["id"]
+        assert child["retry_attempt"] == 1
+        assert child["status"] == "queued"
+        assert child["snapshot_sha256"] == parent["snapshot_sha256"]
+        # Parent is immutable.
+        parent_after = alpha_run_repository.get_alpha_run(parent["id"])
+        assert parent_after["status"] == parent["status"]
+        assert parent_after["transition_version"] == parent["transition_version"]
+
+    def test_retry_idempotent_same_key_returns_existing_child(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        from app.research.run_service import ResearchRunService
+
+        parent = _make_run(alpha_run_repository, deterministic_clock, run_id="run-retry-idem")
+        service = ResearchRunService(alpha_run_repository)
+        first = service.retry(
+            parent["id"],
+            principal="researcher@example.com",
+            idempotency_key="retry-0002",
+            manifest=_sample_manifest(),
+        )
+        second = service.retry(
+            parent["id"],
+            principal="researcher@example.com",
+            idempotency_key="retry-0002",
+            manifest=_sample_manifest(),
+        )
+        assert second["id"] == first["id"]
+        assert second["transition_version"] == first["transition_version"]
+
+    def test_retry_changed_input_creates_new_snapshot_digest(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        from app.research.run_service import ResearchRunService
+
+        parent = _make_run(alpha_run_repository, deterministic_clock, run_id="run-retry-chg")
+        service = ResearchRunService(alpha_run_repository)
+        child = service.retry(
+            parent["id"],
+            principal="researcher@example.com",
+            idempotency_key="retry-0003",
+            manifest=_sample_manifest(seed=999),  # different input
+        )
+        assert child["snapshot_sha256"] != parent["snapshot_sha256"]
+        # Parent unchanged.
+        parent_after = alpha_run_repository.get_alpha_run(parent["id"])
+        assert parent_after["snapshot_sha256"] == parent["snapshot_sha256"]
+
+    def test_retry_cross_principal_returns_none(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        from app.research.run_service import ResearchRunService
+
+        parent = _make_run(alpha_run_repository, deterministic_clock, run_id="run-retry-xp")
+        service = ResearchRunService(alpha_run_repository)
+        result = service.retry(
+            parent["id"],
+            principal="attacker@example.com",
+            idempotency_key="retry-0004",
+            manifest=_sample_manifest(),
+        )
+        assert result is None

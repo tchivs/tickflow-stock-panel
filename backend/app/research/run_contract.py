@@ -352,3 +352,46 @@ def checkpoint_state_checksum(
         "frontier_artifact_id": frontier_artifact_id,
     }
     return digest_bytes(payload)
+
+
+# Bounded progress counter contract (D-11): four server-owned counters.
+PROGRESS_COUNTERS: tuple[str, ...] = (
+    "candidate_attempts_total",
+    "candidate_attempts_completed",
+    "folds_total",
+    "folds_completed",
+)
+
+
+def attempt_token_digest(token: str) -> str:
+    """Lowercase SHA-256 over an opaque attempt token.
+
+    Only the digest is persisted; the raw token is returned to the worker
+    adapter and never stored in durable plaintext (D-10, T-45-08).
+    """
+    if not isinstance(token, str) or not token:
+        raise ValueError("attempt_token must be a non-empty string")
+    return sha256(token.encode("utf-8")).hexdigest()
+
+
+def validate_progress_counters(
+    *,
+    candidate_attempts_total: int | None = None,
+    candidate_attempts_completed: int | None = None,
+    folds_total: int | None = None,
+    folds_completed: int | None = None,
+) -> None:
+    """Fail closed unless every provided counter is a non-negative integer.
+
+    Phase 45 persists and reports these bounded server-owned counters; it does
+    not calculate or evaluate folds (D-11).
+    """
+    for label, value in (
+        ("candidate_attempts_total", candidate_attempts_total),
+        ("candidate_attempts_completed", candidate_attempts_completed),
+        ("folds_total", folds_total),
+        ("folds_completed", folds_completed),
+    ):
+        if value is not None:
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                raise ValueError(f"{label} must be a non-negative integer")

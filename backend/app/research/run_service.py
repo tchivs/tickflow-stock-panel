@@ -12,6 +12,7 @@ broker, order, portfolio, monitor, or live-execution collaborators.
 """
 from __future__ import annotations
 
+import secrets
 import uuid
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
@@ -21,6 +22,33 @@ from app.research.run_contract import freeze_input_snapshot
 
 if TYPE_CHECKING:
     from app.research.artifacts import AlphaRunArtifactService
+
+# Event-type mapping for each lifecycle target status (D-06).
+_EVENT_TYPES: dict[str, str] = {
+    "running": "run_started",
+    "preflight_failed": "run_preflight_failed",
+    "cancel_requested": "cancel_requested",
+    "cancelled": "run_cancelled",
+    "completed": "run_completed",
+    "failed": "run_failed",
+}
+
+
+def _event_type_for(to_status: str) -> str:
+    """Map a lifecycle target status to its durable event type."""
+    return _EVENT_TYPES.get(to_status, f"run_{to_status}")
+
+
+def _generate_attempt_token() -> str:
+    """Generate an opaque server-owned attempt token (32 bytes, hex-encoded).
+
+    Only its SHA-256 digest is persisted; the raw token is returned to the
+    worker adapter and never appears in durable plaintext or projections
+    (D-10, T-45-08).
+    """
+    return secrets.token_hex(32)
+
+
 
 
 class AlphaRunPreflightError(ValueError):
@@ -84,6 +112,178 @@ class ResearchRunService:
             except Exception:  # noqa: BLE001
                 pass  # best-effort; committed facts are not rolled back
         return run
+
+    # ----------------------------------------------------------------
+    # Lifecycle matrix and guarded transitions (D-06, T-45-06/07/12)
+    # ----------------------------------------------------------------
+
+    #: Explicit legal lifecycle edges; every other transition is rejected.
+    LIFECYCLE_EDGES: dict[str, frozenset[str]] = {
+        "queued": frozenset({"running", "preflight_failed", "cancel_requested", "failed"}),
+        "running": frozenset({"cancel_requested", "completed", "failed"}),
+        "cancel_requested": frozenset({"cancelled", "failed"}),
+    }
+
+    def _is_legal_edge(self, from_status: str, to_status: str) -> bool:
+        return to_status in self.LIFECYCLE_EDGES.get(from_status, frozenset())
+
+    def transition(
+        self,
+        run_id: str,
+        *,
+        principal: str,
+        from_status: str,
+        to_status: str,
+        expected_version: int,
+        terminal_reason: str | None = None,
+        idempotency_key: str | None = None,
+        extra_payload: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        """Perform one guarded lifecycle transition atomically.
+
+        Validates the edge against the legal matrix, then delegates to the
+        repository's guarded SQL update + event append.  Illegal edges raise
+        ``ValueError``; stale expected-version or cross-principal access
+        returns ``None`` with no side effect (D-06, T-45-06).
+        """
+        if not self._is_legal_edge(from_status, to_status):
+            raise ValueError(
+                f"illegal lifecycle transition: {from_status} -> {to_status}"
+            )
+        if expected_version < 0:
+            raise ValueError("expected_version must be non-negative")
+        key = idempotency_key or f"transition-{from_status}-{to_status}-{expected_version}"
+        event_id = "aevt_" + uuid.uuid4().hex
+        event_type = _event_type_for(to_status)
+        result = self._repository.transition_alpha_run(
+            run_id=run_id,
+            principal=principal,
+            from_status=from_status,
+            to_status=to_status,
+            expected_version=expected_version,
+            event_id=event_id,
+            event_type=event_type,
+            idempotency_key=key,
+            terminal_reason=terminal_reason,
+            extra_payload=extra_payload,
+        )
+        if result is None:
+            # Distinguish unknown/cross-principal (None) from stale version/status.
+            run = self._repository.get_alpha_run(run_id, principal=principal)
+            if run is None:
+                return None
+            raise ValueError(
+                "stale expected_version or run status changed; refresh and retry"
+            )
+        return result
+
+    def start_or_resume(
+        self,
+        run_id: str,
+        *,
+        principal: str,
+        expected_version: int,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Transition ``queued → running``, issuing an opaque attempt token.
+
+        Returns the updated run row with a server-generated ``attempt_token``
+        (in the ``_attempt_token`` key, for the worker adapter only) or
+        ``None`` for unknown/cross-principal runs.  Only the token's SHA-256 is
+        durable, embedded in the ``run_started`` event payload (D-10, T-45-08).
+        A duplicate start of an already-running run returns existing running
+        state without reissuing a token (D-06); a terminal run raises
+        ``ValueError`` (illegal lifecycle).
+        """
+        from app.research.run_contract import TERMINAL_STATUSES, attempt_token_digest
+
+        run = self._repository.get_alpha_run(run_id, principal=principal)
+        if run is None:
+            return None
+        if run["status"] == "running":
+            return run  # idempotent: already started, no new event/token
+        if run["status"] in TERMINAL_STATUSES:
+            raise ValueError(
+                f"illegal lifecycle transition: {run['status']} -> running"
+            )
+        token = _generate_attempt_token()
+        token_digest = attempt_token_digest(token)
+        result = self.transition(
+            run_id,
+            principal=principal,
+            from_status="queued",
+            to_status="running",
+            expected_version=expected_version,
+            idempotency_key=idempotency_key,
+            extra_payload={"attempt_token_digest": token_digest},
+        )
+        if result is None:
+            return None
+        result["_attempt_token"] = token
+        return result
+
+    def cancel(
+        self,
+        run_id: str,
+        *,
+        principal: str,
+        expected_version: int,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Idempotently request cooperative cancellation.
+
+        Appends ``cancel_requested`` and transitions ``queued``/``running`` to
+        ``cancel_requested``.  Terminal runs return current state with no new
+        event (D-07).
+        """
+        run = self._repository.get_alpha_run(run_id, principal=principal)
+        if run is None:
+            return None
+        if run["status"] in ("cancel_requested", "cancelled", "completed", "failed", "preflight_failed"):
+            return run
+        key = idempotency_key or f"cancel-{run['status']}-{expected_version}"
+        event_id = "aevt_" + uuid.uuid4().hex
+        return self._repository.cancel_alpha_run(
+            run_id=run_id,
+            principal=principal,
+            expected_version=expected_version,
+            event_id=event_id,
+            idempotency_key=key,
+        )
+
+    def retry(
+        self,
+        run_id: str,
+        *,
+        principal: str,
+        idempotency_key: str,
+        manifest: Mapping[str, Any],
+        snapshot: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        """Create a linked child run, preserving the immutable parent.
+
+        A retry either resumes a valid checkpoint (Phase 48) or creates a new
+        linked child run with ``retry_of_run_id`` set to the parent.  The
+        parent's status/facts are never mutated.  Returns ``None`` for
+        unknown/cross-principal parents (D-07, T-45-12).
+        """
+        occurred_at = self._repository._now()
+        try:
+            frozen = freeze_input_snapshot(
+                manifest=manifest, snapshot=snapshot, created_at=occurred_at
+            )
+        except ValueError as error:
+            raise AlphaRunPreflightError(str(error)) from error
+        child_run_id = "arun_" + uuid.uuid4().hex
+        child_event_id = "aevt_" + uuid.uuid4().hex
+        return self._repository.retry_alpha_run(
+            run_id=run_id,
+            principal=principal,
+            idempotency_key=idempotency_key,
+            snapshot=frozen,
+            child_run_id=child_run_id,
+            child_event_id=child_event_id,
+        )
 
     def get(self, run_id: str, *, principal: str) -> dict[str, Any] | None:
         """Return one principal-scoped run row, or ``None`` for unknown/cross-principal."""
