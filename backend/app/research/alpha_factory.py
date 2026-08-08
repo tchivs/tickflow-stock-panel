@@ -74,3 +74,60 @@ def grammar_fingerprint(
         "max_nodes": max_nodes,
         "prng_algorithm": PRNG_ALGORITHM,
     })
+
+
+class VocabularyMismatchError(ValueError):
+    """A frozen run's vocabulary no longer matches the live Factor DSL.
+
+    Raised on replay/load when the stored ``vocabulary_fingerprint`` differs
+    from the value recomputed from the live DSL, so stored canonical
+    expressions cannot be silently reinterpreted against a changed grammar
+    (T-46-02).  The ``frozen``/``live`` attributes carry both digests for
+    structured diagnostics.
+    """
+
+    def __init__(self, *, frozen: str | None, live: str) -> None:
+        self.frozen = frozen
+        self.live = live
+        super().__init__(
+            "vocabulary fingerprint mismatch: the frozen run's vocabulary no "
+            "longer matches the live Factor DSL; refusing to reinterpret stored "
+            f"tokens (frozen={frozen!r}, live={live})"
+        )
+
+
+def normalize_manifest_fingerprints(manifest: Mapping[str, Any]) -> dict[str, Any]:
+    """Return a shallow-copied manifest with server-owned fingerprint slots.
+
+    ``grammar.fingerprint`` is set from the live grammar constraints (honouring
+    any declared ``max_depth``/``max_nodes``) and ``vocabulary.fingerprint``
+    from the live DSL vocabulary, overriding any client-supplied value so a
+    forged manifest fingerprint cannot survive freeze (research Pitfall 5,
+    T-46-01).  Every other key is left untouched and the caller's mapping is
+    never mutated.
+    """
+    normalized: dict[str, Any] = dict(manifest)
+    grammar = dict(normalized["grammar"])
+    grammar["fingerprint"] = grammar_fingerprint(
+        max_depth=grammar.get("max_depth", DEFAULT_MAX_DEPTH),
+        max_nodes=grammar.get("max_nodes", DEFAULT_MAX_NODES),
+    )
+    normalized["grammar"] = grammar
+    vocabulary = dict(normalized["vocabulary"])
+    vocabulary["fingerprint"] = vocabulary_fingerprint()
+    normalized["vocabulary"] = vocabulary
+    return normalized
+
+
+def verify_vocabulary_fingerprint(frozen: str | None) -> None:
+    """Fail closed unless ``frozen`` matches the live vocabulary fingerprint.
+
+    On replay or load the live vocabulary fingerprint is recomputed and
+    compared against the stored value; a missing value or any mismatch means
+    stored canonical expressions may reference tokens the live grammar
+    interprets differently, so the run fails closed rather than reinterpreting
+    stored tokens (T-46-02).
+    """
+    live = vocabulary_fingerprint()
+    if not isinstance(frozen, str) or frozen != live:
+        raise VocabularyMismatchError(frozen=frozen, live=live)

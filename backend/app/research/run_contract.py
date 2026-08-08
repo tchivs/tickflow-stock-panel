@@ -152,6 +152,8 @@ def freeze_input_snapshot(
     """
     validate_manifest(manifest)
     canonical_manifest = json.loads(canonical_json(manifest))
+    from app.research.alpha_factory import normalize_manifest_fingerprints
+    canonical_manifest = normalize_manifest_fingerprints(canonical_manifest)
     canonical_snapshot = (
         json.loads(canonical_json(snapshot)) if snapshot is not None else canonical_manifest
     )
