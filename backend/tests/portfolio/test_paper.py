@@ -39,7 +39,7 @@ def _record_plan(
         blocked_instruments_json=[],
         discretization_rmse=0.012,
         rmse_definition="simple",
-        expires_at="2026-08-08T00:00:00Z",
+        expires_at=(datetime.now(UTC) + timedelta(days=1)).isoformat(),
         output_sha256="b" * 64,
         artifact_relative_path="research_artifacts/run/rebalance/paper-plan-1.json",
         created_at="2026-08-01T00:00:00Z",
