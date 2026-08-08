@@ -1589,6 +1589,36 @@ class ResearchRepository:
         payload = json.loads(event["payload_json"])
         digest = payload.get("attempt_token_digest")
         return digest if isinstance(digest, str) else None
+    @staticmethod
+    def _attempt_fence_matches(
+        connection: sqlite3.Connection,
+        *,
+        run_id: str,
+        principal: str,
+        expected_version: int,
+        expected_attempt_token_digest: str,
+    ) -> bool:
+        """Check the live attempt fence while holding the repository write lock."""
+        run = connection.execute(
+            """SELECT transition_version FROM research_alpha_runs
+               WHERE id = ? AND principal = ? AND status = 'running'""",
+            (run_id, principal),
+        ).fetchone()
+        if run is None or int(run["transition_version"]) != expected_version:
+            return False
+        event = connection.execute(
+            """SELECT payload_json FROM research_alpha_events
+               WHERE run_id = ? AND event_type IN ('run_started', 'run_recovered')
+               ORDER BY seq DESC LIMIT 1""",
+            (run_id,),
+        ).fetchone()
+        if event is None:
+            return False
+        try:
+            payload = json.loads(event["payload_json"])
+        except (TypeError, ValueError):
+            return False
+        return payload.get("attempt_token_digest") == expected_attempt_token_digest
 
     def candidate_ids_for_run(
         self,
@@ -2181,17 +2211,12 @@ class ResearchRepository:
         reason: Mapping[str, Any],
         evidence_artifact_id: str | None = None,
         artifact_verified: bool = False,
-    ) -> dict[str, Any]:
-        """Append one candidate-attempt fact (one row per attempt, never deduped).
-
-        Every outcome — invalid, duplicate, low_coverage, failed, rejected,
-        admitted, cancelled, budget_exhausted — is a durable fact with its own
-        ordinal.  No ``INSERT OR IGNORE`` or expression-uniqueness rule erases a
-        duplicate attempt (AF-REQ-04, D-05).  An ``invalid`` candidate is
-        distinct from run-level ``preflight_failed``.
-        """
+        principal: str | None = None,
+        expected_version: int | None = None,
+        expected_attempt_token_digest: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Append a candidate under an optional atomic live-attempt fence."""
         from app.research.run_contract import CANDIDATE_STATUSES
-
         if not isinstance(run_id, str) or not run_id:
             raise ValueError("run_id is required")
         if evidence_artifact_id is not None and not artifact_verified:
@@ -2204,46 +2229,50 @@ class ResearchRepository:
         if status not in CANDIDATE_STATUSES:
             raise ValueError(f"status must be one of {CANDIDATE_STATUSES}")
         reason_json = _bounded_json(reason, "candidate reason")
+        fenced = principal is not None or expected_version is not None or expected_attempt_token_digest is not None
+        if fenced and (not isinstance(principal, str) or not isinstance(expected_version, int) or not isinstance(expected_attempt_token_digest, str)):
+            raise ValueError("candidate append requires a complete attempt fence")
+        if expected_attempt_token_digest is not None:
+            _wf_sha256(expected_attempt_token_digest, "expected_attempt_token_digest")
         occurred_at = self._now()
-        if evidence_artifact_id is not None:
-            with self._connection() as connection:
-                artifact = connection.execute(
-                    "SELECT run_id FROM research_alpha_artifacts WHERE id = ?",
-                    (evidence_artifact_id,),
+        with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                if fenced and not self._attempt_fence_matches(
+                    connection, run_id=run_id, principal=principal,
+                    expected_version=expected_version,
+                    expected_attempt_token_digest=expected_attempt_token_digest,
+                ):
+                    connection.execute("ROLLBACK")
+                    return None
+                if evidence_artifact_id is not None:
+                    artifact = connection.execute(
+                        "SELECT run_id FROM research_alpha_artifacts WHERE id = ?",
+                        (evidence_artifact_id,),
+                    ).fetchone()
+                    if artifact is None or artifact["run_id"] != run_id:
+                        raise ValueError("candidate artifact must belong to candidate run")
+                connection.execute(
+                    """INSERT INTO research_alpha_candidate_attempts (
+                           id, run_id, attempt_ordinal, candidate_digest,
+                           canonical_expression, ast_signature, shape_signature,
+                           dsl_version, operation, seed, step, status, reason_json,
+                           evidence_artifact_id, created_at
+                       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (candidate_id, run_id, attempt_ordinal, candidate_digest,
+                     canonical_expression, ast_signature, shape_signature,
+                     dsl_version, operation, seed, step, status, reason_json,
+                     evidence_artifact_id, occurred_at),
+                )
+                row = connection.execute(
+                    "SELECT * FROM research_alpha_candidate_attempts WHERE id = ?",
+                    (candidate_id,),
                 ).fetchone()
-            if artifact is None or artifact["run_id"] != run_id:
-                raise ValueError("candidate artifact must belong to candidate run")
-
-        with self._connection() as connection, connection:
-            connection.execute(
-                """INSERT INTO research_alpha_candidate_attempts (
-                       id, run_id, attempt_ordinal, candidate_digest,
-                       canonical_expression, ast_signature, shape_signature,
-                       dsl_version, operation, seed, step, status, reason_json,
-                       evidence_artifact_id, created_at
-                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    candidate_id,
-                    run_id,
-                    attempt_ordinal,
-                    candidate_digest,
-                    canonical_expression,
-                    ast_signature,
-                    shape_signature,
-                    dsl_version,
-                    operation,
-                    seed,
-                    step,
-                    status,
-                    reason_json,
-                    evidence_artifact_id,
-                    occurred_at,
-                ),
-            )
-            row = connection.execute(
-                "SELECT * FROM research_alpha_candidate_attempts WHERE id = ?",
-                (candidate_id,),
-            ).fetchone()
+                connection.execute("COMMIT")
+            except BaseException:
+                if connection.in_transaction:
+                    connection.execute("ROLLBACK")
+                raise
         assert row is not None
         return self._candidate_dict(row)
 
@@ -2256,12 +2285,11 @@ class ResearchRepository:
         parent_attempt_id: str,
         edge_ordinal: int,
         operation: str,
-    ) -> dict[str, Any]:
-        """Append one parent/child lineage edge, FK-bound and same-run validated.
-
-        Both the child and parent attempts must belong to ``run_id``; a
-        cross-run parent is rejected (T-45-02).
-        """
+        principal: str | None = None,
+        expected_version: int | None = None,
+        expected_attempt_token_digest: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Append lineage under an optional atomic live-attempt fence."""
         if not isinstance(run_id, str) or not run_id:
             raise ValueError("run_id is required")
         if not isinstance(lineage_id, str) or not lineage_id:
@@ -2270,39 +2298,51 @@ class ResearchRepository:
             raise ValueError("child and parent attempts must differ")
         if not isinstance(edge_ordinal, int) or edge_ordinal < 0:
             raise ValueError("edge_ordinal must be a non-negative integer")
+        fenced = principal is not None or expected_version is not None or expected_attempt_token_digest is not None
+        if fenced and (not isinstance(principal, str) or not isinstance(expected_version, int) or not isinstance(expected_attempt_token_digest, str)):
+            raise ValueError("lineage append requires a complete attempt fence")
+        if expected_attempt_token_digest is not None:
+            _wf_sha256(expected_attempt_token_digest, "expected_attempt_token_digest")
         occurred_at = self._now()
-        with self._connection() as connection, connection:
-            child = connection.execute(
-                "SELECT run_id FROM research_alpha_candidate_attempts WHERE id = ?",
-                (child_attempt_id,),
-            ).fetchone()
-            if child is None or child["run_id"] != run_id:
-                raise ValueError("child attempt does not belong to this run")
-            parent = connection.execute(
-                "SELECT run_id FROM research_alpha_candidate_attempts WHERE id = ?",
-                (parent_attempt_id,),
-            ).fetchone()
-            if parent is None or parent["run_id"] != run_id:
-                raise ValueError("parent attempt does not belong to this run")
-            connection.execute(
-                """INSERT INTO research_alpha_candidate_lineage (
-                       id, run_id, child_attempt_id, parent_attempt_id,
-                       edge_ordinal, operation, created_at
-                   ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    lineage_id,
-                    run_id,
-                    child_attempt_id,
-                    parent_attempt_id,
-                    edge_ordinal,
-                    operation,
-                    occurred_at,
-                ),
-            )
-            row = connection.execute(
-                "SELECT * FROM research_alpha_candidate_lineage WHERE id = ?",
-                (lineage_id,),
-            ).fetchone()
+        with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                if fenced and not self._attempt_fence_matches(
+                    connection, run_id=run_id, principal=principal,
+                    expected_version=expected_version,
+                    expected_attempt_token_digest=expected_attempt_token_digest,
+                ):
+                    connection.execute("ROLLBACK")
+                    return None
+                child = connection.execute(
+                    "SELECT run_id FROM research_alpha_candidate_attempts WHERE id = ?",
+                    (child_attempt_id,),
+                ).fetchone()
+                if child is None or child["run_id"] != run_id:
+                    raise ValueError("child attempt does not belong to this run")
+                parent = connection.execute(
+                    "SELECT run_id FROM research_alpha_candidate_attempts WHERE id = ?",
+                    (parent_attempt_id,),
+                ).fetchone()
+                if parent is None or parent["run_id"] != run_id:
+                    raise ValueError("parent attempt does not belong to this run")
+                connection.execute(
+                    """INSERT INTO research_alpha_candidate_lineage (
+                           id, run_id, child_attempt_id, parent_attempt_id,
+                           edge_ordinal, operation, created_at
+                       ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (lineage_id, run_id, child_attempt_id, parent_attempt_id,
+                     edge_ordinal, operation, occurred_at),
+                )
+                row = connection.execute(
+                    "SELECT * FROM research_alpha_candidate_lineage WHERE id = ?",
+                    (lineage_id,),
+                ).fetchone()
+                connection.execute("COMMIT")
+            except BaseException:
+                if connection.in_transaction:
+                    connection.execute("ROLLBACK")
+                raise
         assert row is not None
         return dict(row)
 
@@ -2562,10 +2602,6 @@ class ResearchRepository:
             ).fetchone()
         return None if row is None else self._checkpoint_dict(row)
 
-    # Compatibility name retained for existing callers; it is deliberately
-    # documented as an unchecked read and must not be used for recovery.
-    def get_latest_valid_checkpoint(self, run_id: str, *, principal: str | None = None) -> dict[str, Any] | None:
-        return self._get_latest_checkpoint_unvalidated(run_id, principal=principal)
 
     @staticmethod
     def _checkpoint_dict(row: sqlite3.Row) -> dict[str, Any]:

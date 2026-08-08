@@ -427,7 +427,7 @@ class TestEventHistoryRoute:
 class TestCandidateHistoryRoute:
     def _seed_candidates(self, client: TestClient, run_id: str) -> None:
         repository: ResearchRepository = client._alpha_repository  # type: ignore[attr-defined]
-        statuses = ["invalid", "duplicate", "failed", "admitted", "rejected"]
+        statuses = ["invalid", "duplicate", "generated", "failed", "admitted", "rejected"]
         for idx, status in enumerate(statuses, start=1):
             repository.append_candidate_attempt(
                 run_id=run_id,
@@ -454,11 +454,11 @@ class TestCandidateHistoryRoute:
         )
         assert response.status_code == 200, response.text
         candidates = response.json()
-        assert len(candidates) == 5
+        assert len(candidates) == 6
         statuses = [c["status"] for c in candidates]
-        assert statuses == ["invalid", "duplicate", "failed", "admitted", "rejected"]
+        assert statuses == ["invalid", "duplicate", "generated", "failed", "admitted", "rejected"]
         ordinals = [c["attempt_ordinal"] for c in candidates]
-        assert ordinals == [1, 2, 3, 4, 5]
+        assert ordinals == [1, 2, 3, 4, 5, 6]
         # No raw reason internals or evidence paths leaked.
         for cand in candidates:
             assert "reason" not in cand

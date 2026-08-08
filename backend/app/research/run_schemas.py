@@ -176,6 +176,7 @@ class AlphaCandidateDTO(StrictAlphaModel):
         "invalid",
         "duplicate",
         "low_coverage",
+        "generated",
         "failed",
         "rejected",
         "admitted",

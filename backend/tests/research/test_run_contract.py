@@ -512,7 +512,7 @@ class TestCandidateAppendAndReadback:
     ) -> None:
         run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-8-out")
         statuses = [
-            "invalid", "duplicate", "low_coverage", "failed",
+            "invalid", "duplicate", "low_coverage", "generated", "failed",
             "rejected", "admitted", "cancelled", "budget_exhausted",
         ]
         for idx, status in enumerate(statuses, start=1):
@@ -525,9 +525,9 @@ class TestCandidateAppendAndReadback:
                 )
             )
         candidates = alpha_run_repository.list_candidates(run["id"])
-        assert len(candidates) == 8
+        assert len(candidates) == 9
         assert [c["status"] for c in candidates] == statuses
-        assert [c["attempt_ordinal"] for c in candidates] == list(range(1, 9))
+        assert [c["attempt_ordinal"] for c in candidates] == list(range(1, 10))
         for c in candidates:
             assert c["reason"] == {"note": f"candidate {c['attempt_ordinal']}"}
             assert len(c["candidate_digest"]) == 64
@@ -1182,10 +1182,34 @@ class TestCheckpointValidation:
             clock=deterministic_clock,
             artifact_root=tmp_path / "alpha_artifacts",
         )
-        recovered = fresh.get_latest_valid_checkpoint(run["id"])
+        recovered = ResearchRunService(fresh).get_latest_valid_checkpoint(
+            run["id"], principal="researcher@example.com"
+        )
         assert recovered is not None
         assert recovered["checkpoint_version"] == 1
         assert recovered["committed_event_seq"] == 1
+    def test_checkpoint_validation_verifies_artifact_backed_event_prefix(self, alpha_run_repository: ResearchRepository, deterministic_clock: DeterministicClock, alpha_artifact_root: Path) -> None:
+        from app.research.artifacts import AlphaRunArtifactService
+        from app.research.run_service import ResearchRunService
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-chk-event-artifact")
+        artifacts = AlphaRunArtifactService(alpha_artifact_root.parent)
+        descriptor = artifacts.write(run_id=run["id"], payload={"event": "verified"})
+        alpha_run_repository.append_artifact(
+            run_id=run["id"], artifact_id="event-artifact", logical_kind="event-evidence",
+            relative_path=descriptor["relative_path"], content_type=descriptor["content_type"],
+            byte_size=descriptor["byte_size"], checksum_sha256=descriptor["checksum_sha256"],
+        )
+        service = ResearchRunService(alpha_run_repository, artifact_service=artifacts)
+        event = service.append_event(
+            run_id=run["id"], principal="researcher@example.com", event_type="stage_started",
+            entity_kind="stage", entity_id="search", idempotency_key="artifact-event-key",
+            actor="worker", source="worker", payload={"stage": "search"}, artifact_id="event-artifact",
+        )
+        assert event is not None and event["seq"] == 2
+        checkpoint = self._make_checkpoint_params(run, event_seq=2)
+        assert service.validate_checkpoint(
+            run_id=run["id"], principal="researcher@example.com", checkpoint=checkpoint,
+        )["committed_event_seq"] == 2
 
     def test_stale_snapshot_digest_rejected(
         self,
@@ -1316,7 +1340,7 @@ class TestCheckpointValidation:
             expected_attempt_token_digest=attempt_token_digest(started["_attempt_token"]), **params,
         )
         # Cross-principal: same None boundary as unknown run.
-        assert alpha_run_repository.get_latest_valid_checkpoint(
+        assert ResearchRunService(alpha_run_repository).get_latest_valid_checkpoint(
             run["id"], principal="other@example.com"
         ) is None
         service = ResearchRunService(alpha_run_repository)
@@ -2405,9 +2429,13 @@ class TestReviewFixInvariants:
 
         run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-json-bound")
         service = ResearchRunService(alpha_run_repository)
+        started = service.start_or_resume(
+            run["id"], principal="researcher@example.com", expected_version=run["transition_version"]
+        )
         with pytest.raises(ValueError, match="oversized|string|bound"):
             service.append_candidate(
                 run_id=run["id"], principal="researcher@example.com", candidate_id="cand-json-bound",
+                expected_version=started["transition_version"], attempt_token=started["_attempt_token"],
                 attempt_ordinal=1, candidate_digest="b" * 64, canonical_expression="close", ast_signature="ast",
                 shape_signature="shape", dsl_version="v1", operation="generate", seed=1, step=1,
                 status="failed", reason={"detail": "x" * 5000},
@@ -2634,10 +2662,14 @@ class TestReviewFixInvariants:
             byte_size=descriptor["byte_size"], checksum_sha256=descriptor["checksum_sha256"],
         )
         service = ResearchRunService(alpha_run_repository, artifact_service=artifacts)
+        started = service.start_or_resume(
+            run["id"], principal="researcher@example.com", expected_version=run["transition_version"]
+        )
         service.append_candidate(
             run_id=run["id"], principal="researcher@example.com", candidate_id="candidate-evidence",
             attempt_ordinal=1, candidate_digest="b" * 64, canonical_expression="close", ast_signature="ast",
             shape_signature="shape", dsl_version="v1", operation="generate", seed=1, step=1,
+            expected_version=started["transition_version"], attempt_token=started["_attempt_token"],
             status="admitted", reason={"code": "ok"}, evidence_artifact_id=artifact["id"],
         )
         (alpha_artifact_root.parent / descriptor["relative_path"]).write_bytes(b"tampered")
@@ -2672,6 +2704,74 @@ class TestReviewFixInvariants:
         assert first is not None and second is not None
         assert "_attempt_token" in first and "_attempt_token" not in second
         assert second["transition_version"] == first["transition_version"]
+    def test_recovery_without_key_is_idempotent_without_plaintext_retry_token(self, alpha_run_repository: ResearchRepository, deterministic_clock: DeterministicClock) -> None:
+        from app.research.run_service import ResearchRunService
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-recovery-derived-idem")
+        service = ResearchRunService(alpha_run_repository)
+        started = service.start_or_resume(run["id"], principal="researcher@example.com", expected_version=run["transition_version"])
+        first = service.recover_running_attempt(run["id"], principal="researcher@example.com", expected_version=started["transition_version"])
+        second = service.recover_running_attempt(run["id"], principal="researcher@example.com", expected_version=started["transition_version"])
+        assert first is not None and second is not None
+        assert "_attempt_token" in first and "_attempt_token" not in second
+        assert second["transition_version"] == first["transition_version"]
+    def test_worker_candidate_and_lineage_callbacks_have_no_post_cancel_or_recovery_side_effects(self, alpha_run_repository: ResearchRepository, deterministic_clock: DeterministicClock) -> None:
+        from app.research.run_service import ResearchRunService
+        from app.research.run_worker import ResearchRunWorkerAdapter
+        service = ResearchRunService(alpha_run_repository)
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-worker-fence")
+        started = service.start_or_resume(run["id"], principal="researcher@example.com", expected_version=run["transition_version"])
+        adapter = ResearchRunWorkerAdapter(service, principal="researcher@example.com")
+
+        def append(candidate_id: str, ordinal: int) -> dict[str, object] | None:
+            return adapter.append_candidate(
+                run_id=run["id"], expected_version=started["transition_version"],
+                attempt_token=started["_attempt_token"], candidate_id=candidate_id,
+                attempt_ordinal=ordinal, candidate_digest=("c" * 60 + f"{ordinal:04d}"),
+                canonical_expression=f"close + {ordinal}", ast_signature=f"ast-{ordinal}",
+                shape_signature=f"shape-{ordinal}", dsl_version="v1", operation="generate",
+                seed=1, step=ordinal, status="generated", reason={"code": "generated"},
+            )
+
+        assert append("worker-parent", 1) is not None
+        assert append("worker-child", 2) is not None
+        cancelled = service.cancel(
+            run["id"], principal="researcher@example.com",
+            expected_version=started["transition_version"], idempotency_key="cancel-worker-fence",
+        )
+        assert cancelled is not None
+        assert append("worker-stale", 3) is None
+        assert adapter.append_candidate_lineage(
+            run_id=run["id"], expected_version=started["transition_version"],
+            attempt_token=started["_attempt_token"], lineage_id="lineage-stale",
+            child_attempt_id="worker-child", parent_attempt_id="worker-parent",
+            edge_ordinal=0, operation="mutation",
+        ) is None
+        assert len(alpha_run_repository.list_candidates(run["id"])) == 2
+        with alpha_run_repository._connection() as connection:
+            assert connection.execute(
+                "SELECT COUNT(*) AS count FROM research_alpha_candidate_lineage WHERE run_id = ?",
+                (run["id"],),
+            ).fetchone()["count"] == 0
+        recovered_run = _make_run(
+            alpha_run_repository, deterministic_clock, run_id="run-worker-recovery-fence",
+            idempotency_key="idem-worker-recovery-fence",
+        )
+        recovered_start = service.start_or_resume(
+            recovered_run["id"], principal="researcher@example.com", expected_version=recovered_run["transition_version"]
+        )
+        recovered = service.recover_running_attempt(
+            recovered_run["id"], principal="researcher@example.com",
+            expected_version=recovered_start["transition_version"],
+        )
+        assert recovered is not None
+        assert adapter.append_candidate(
+            run_id=recovered_run["id"], expected_version=recovered_start["transition_version"],
+            attempt_token=recovered_start["_attempt_token"], candidate_id="recovery-stale",
+            attempt_ordinal=1, candidate_digest="d" * 64, canonical_expression="close",
+            ast_signature="ast", shape_signature="shape", dsl_version="v1", operation="generate",
+            seed=1, step=1, status="generated", reason={"code": "generated"},
+        ) is None
+        assert alpha_run_repository.list_candidates(recovered_run["id"]) == []
 
     def test_worker_exposes_no_unfenced_recovery_callback(self) -> None:
         from app.research.run_worker import ResearchRunWorkerAdapter
