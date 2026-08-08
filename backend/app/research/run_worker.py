@@ -163,7 +163,6 @@ class ResearchRunWorkerAdapter:
             operation=operation,
         )
 
-
     def append_checkpoint(
         self,
         *,
