@@ -241,15 +241,20 @@ class ResearchRunService:
             return None
         if run["status"] in ("cancel_requested", "cancelled", "completed", "failed", "preflight_failed"):
             return run
+        if run["transition_version"] != expected_version:
+            raise ValueError("stale expected_version; refresh and retry")
         key = idempotency_key or f"cancel-{run['status']}-{expected_version}"
         event_id = "aevt_" + uuid.uuid4().hex
-        return self._repository.cancel_alpha_run(
+        result = self._repository.cancel_alpha_run(
             run_id=run_id,
             principal=principal,
             expected_version=expected_version,
             event_id=event_id,
             idempotency_key=key,
         )
+        if result is not None and result["status"] == run["status"] and result["transition_version"] == run["transition_version"]:
+            return None
+        return result
 
     def retry(
         self,

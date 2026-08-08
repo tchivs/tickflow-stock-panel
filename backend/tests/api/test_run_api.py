@@ -221,6 +221,26 @@ class TestRetryRoute:
             headers={"X-Test-Principal": _PRINCIPAL},
         )
         assert response.status_code == 422
+    def test_retry_same_key_with_changed_manifest_returns_409(self, alpha_client: TestClient) -> None:
+        parent = _create_run(alpha_client, idempotency_key="idem-retry-00000000005")
+        body = {
+            "idempotency_key": "idem-retry-child-conflict-001",
+            "manifest": alpha_manifest(seed=99),
+        }
+        first = alpha_client.post(
+            f"/api/research/alpha/runs/{parent['id']}/retry",
+            json=body,
+            headers={"X-Test-Principal": _PRINCIPAL},
+        )
+        assert first.status_code == 201
+        changed = {**body, "manifest": alpha_manifest(seed=100)}
+        second = alpha_client.post(
+            f"/api/research/alpha/runs/{parent['id']}/retry",
+            json=changed,
+            headers={"X-Test-Principal": _PRINCIPAL},
+        )
+        assert second.status_code == 409
+
 
 
 # ================================================================
@@ -305,6 +325,14 @@ class TestCancelRoute:
             headers={"X-Test-Principal": _OTHER_PRINCIPAL},
         )
         assert response.status_code == 404
+    def test_cancel_stale_version_returns_409(self, alpha_client: TestClient) -> None:
+        run = _create_run(alpha_client, idempotency_key="idem-cancel-0000000005")
+        response = alpha_client.post(
+            f"/api/research/alpha/runs/{run['id']}/cancel",
+            json={"expected_version": run["transition_version"] - 1},
+            headers={"X-Test-Principal": _PRINCIPAL},
+        )
+        assert response.status_code == 409
 
 
 # ================================================================

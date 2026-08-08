@@ -11,6 +11,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from app.research import projections
+from app.research.repository import AlphaRunConflictError
 from app.research.run_service import (
     AlphaRunPreflightError,
     ResearchRunService,
@@ -78,6 +79,8 @@ async def create_run(
                 "reason": _bounded_reason(str(error)),
             },
         ) from error
+    except AlphaRunConflictError as error:
+        raise HTTPException(status_code=409, detail="idempotency key conflicts with an existing run") from error
     return AlphaRunReadDTO(**projections.run(run))
 
 
@@ -142,6 +145,8 @@ async def retry_run(
             status_code=422,
             detail={"status": "preflight_failed", "reason": _bounded_reason(str(error))},
         ) from error
+    except AlphaRunConflictError as error:
+        raise HTTPException(status_code=409, detail="idempotency key conflicts with an existing retry") from error
     if child is None:
         raise HTTPException(status_code=404, detail="run not found")
     return AlphaRunReadDTO(**projections.run(child))
@@ -161,14 +166,19 @@ async def cancel_run(
     """
     service = _service(request)
     principal = _principal(request)
-    result = service.cancel(
-        run_id,
-        principal=principal,
-        expected_version=body.expected_version,
-        idempotency_key=body.idempotency_key,
-    )
-    if result is None:
+    if service.get(run_id, principal=principal) is None:
         raise HTTPException(status_code=404, detail="run not found")
+    try:
+        result = service.cancel(
+            run_id,
+            principal=principal,
+            expected_version=body.expected_version,
+            idempotency_key=body.idempotency_key,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail="stale lifecycle request") from error
+    if result is None:
+        raise HTTPException(status_code=409, detail="stale lifecycle request")
     return AlphaRunReadDTO(**projections.run(result))
 
 
