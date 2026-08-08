@@ -46,7 +46,7 @@ from app.api import (
     strategy,
     watchlist,
 )
-from app.api import portfolio_panels
+from app.api import research_alpha
 from app.api import research_panels
 from app.api import walkforward_sse
 from app.api import analysis as analysis_menus
@@ -188,6 +188,9 @@ async def lifespan(app: FastAPI):
     artifact_service = EvaluationArtifactService(store.data_dir)
     app.state.portfolio_repository = PortfolioRepository(operational.database_path)
     app.state.research_repository = research_repository
+    from app.research.run_service import ResearchRunService
+
+    app.state.research_run_service = ResearchRunService(research_repository)
     app.state.factor_registry = FactorRegistry(research_repository)
     app.state.research_artifact_service = artifact_service
     app.state.experiment_catalog = ExperimentCatalog(research_repository)
@@ -882,8 +885,8 @@ app.include_router(market_recap.router)
 app.include_router(market_recap_auction.router)
 app.include_router(settings_api.router)
 app.include_router(strategy.router)
-app.include_router(signals.router)
-app.include_router(monitor_rules.router)
+app.include_router(research_alpha.router)
+app.include_router(research_panels.router)
 app.include_router(portfolio.router)
 app.include_router(decision.router)
 app.include_router(research_panels.router)
