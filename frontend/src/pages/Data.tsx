@@ -546,7 +546,7 @@ export function Data() {
             <button
               onClick={() => startSync.mutate()}
               disabled={isStarting}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-btn bg-gradient-to-r from-accent/25 to-accent/10 border border-accent/30 text-accent text-xs font-medium hover:from-accent/35 hover:to-accent/20 disabled:opacity-40 transition-all duration-150"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-btn bg-accent/10 border border-accent/30 text-accent text-xs font-medium hover:bg-accent/15 disabled:opacity-40 transition-all duration-150"
             >
               {(isRunning || isStarting) ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -710,7 +710,7 @@ export function Data() {
                   </div>
                   <div className="flex items-center gap-2 font-mono text-secondary">
                     {s?.last_instruments_run && (
-                      <span className={`inline-flex flex-col items-center leading-tight ${isToday(s.last_instruments_run) ? 'text-bear' : 'text-secondary/70'}`}>
+                      <span className={`inline-flex flex-col items-center leading-tight ${isToday(s.last_instruments_run) ? 'text-foreground' : 'text-secondary/70'}`}>
                         <span>✓ {formatScheduleDatePart(s.last_instruments_run)}</span>
                         <span>{formatScheduleTimePart(s.last_instruments_run)}</span>
                       </span>
@@ -757,7 +757,7 @@ export function Data() {
                   </div>
                   <div className="flex items-center gap-2 font-mono text-secondary">
                     {s?.last_pipeline_run && (
-                      <span className={`inline-flex flex-col items-center leading-tight ${isToday(s.last_pipeline_run) ? 'text-bear' : 'text-secondary/70'}`}>
+                      <span className={`inline-flex flex-col items-center leading-tight ${isToday(s.last_pipeline_run) ? 'text-foreground' : 'text-secondary/70'}`}>
                         <span>✓ {formatScheduleDatePart(s.last_pipeline_run)}</span>
                         <span>{formatScheduleTimePart(s.last_pipeline_run)}</span>
                       </span>
@@ -1003,7 +1003,7 @@ export function Data() {
                     <button
                       onClick={() => setIndexExtendValue(v => Math.max(1, v - 1))}
                       disabled={!hasDailyBatchCap || !!activeJobId || syncIndexDaily.isPending}
-                      className="h-6 w-6 flex items-center justify-center rounded-l-btn bg-elevated border border-border text-secondary hover:bg-border/50 disabled:opacity-30 transition-colors text-xs"
+                      className="h-6 w-6 flex items-center justify-center rounded-l-btn bg-elevated border border-border text-secondary hover:bg-border/50 disabled:opacity-30 transition-colors text-xs max-md:h-11 max-md:w-11"
                     >−</button>
                     <div className="h-6 w-8 flex items-center justify-center border-y border-border text-[11px] font-mono tabular-nums text-foreground bg-base">
                       {indexExtendValue}
@@ -1011,7 +1011,7 @@ export function Data() {
                     <button
                       onClick={() => setIndexExtendValue(v => Math.min(indexExtendUnit === 'year' ? 10 : 36, v + 1))}
                       disabled={!hasDailyBatchCap || !!activeJobId || syncIndexDaily.isPending}
-                      className="h-6 w-6 flex items-center justify-center rounded-r-btn bg-elevated border border-border text-secondary hover:bg-border/50 disabled:opacity-30 transition-colors text-xs"
+                      className="h-6 w-6 flex items-center justify-center rounded-r-btn bg-elevated border border-border text-secondary hover:bg-border/50 disabled:opacity-30 transition-colors text-xs max-md:h-11 max-md:w-11"
                     >+</button>
                   </div>
 

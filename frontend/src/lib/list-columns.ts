@@ -5,6 +5,8 @@
  * 公共能力集中在这里，避免每个股票列表重复实现。
  */
 
+import type { ReactNode } from 'react'
+
 export type ColumnSource =
   | { type: 'builtin'; key: string }
   | { type: 'ext'; configId: string; fieldName: string; fieldLabel?: string }
@@ -126,7 +128,7 @@ export interface ColumnConfig {
 export interface ColumnGroup {
   id: string
   label: string
-  icon?: string
+  icon?: ReactNode
   /** builtin/computed source key 列表 */
   keys: string[]
 }

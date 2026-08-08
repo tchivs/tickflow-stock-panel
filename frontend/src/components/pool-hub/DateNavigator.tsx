@@ -115,7 +115,7 @@ export function DateNavigator({
             type="button"
             onClick={onRetry}
             className="inline-flex items-center h-6 px-2 rounded text-xs font-medium
-              bg-surface border border-border text-secondary hover:text-accent hover:border-accent/50 transition-colors cursor-pointer"
+              bg-surface border border-border text-secondary hover:text-accent hover:border-accent/50 transition-colors cursor-pointer max-md:min-h-11 max-md:min-w-11"
           >
             重试
           </button>

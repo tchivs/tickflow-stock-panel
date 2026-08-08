@@ -6,6 +6,8 @@
  */
 
 import { storage } from '@/lib/storage'
+import { createElement } from 'react'
+import { Coins, BarChart3, TrendingUp, Ruler, Microscope, Rocket, Flame, Satellite, ClipboardList } from 'lucide-react'
 import {
   buildExtColumnsParam as buildExtColumnsParamBase,
   createExtColumn as createExtColumnBase,
@@ -86,15 +88,15 @@ export const BUILTIN_COLUMNS: ColumnConfig[] = [
 ]
 
 export const COLUMN_GROUPS: ColumnGroup[] = [
-  { id: 'price', label: '价格', icon: '💰', keys: ['price', 'pct', 'change_amount', 'amplitude'] },
-  { id: 'volume', label: '成交', icon: '📊', keys: ['turnover', 'amount', 'float_val', 'vol_ratio', 'annual_vol'] },
-  { id: 'ma', label: '均线', icon: '📈', keys: ['ma5', 'ma10', 'ma20', 'ma60'] },
-  { id: 'range', label: '区间', icon: '📏', keys: ['high_60d', 'low_60d'] },
-  { id: 'tech', label: '技术指标', icon: '🔬', keys: ['rsi6', 'rsi14', 'rsi24', 'macd_dif', 'macd_dea', 'macd_hist', 'kdj_k', 'kdj_d', 'kdj_j', 'boll_upper', 'boll_lower', 'atr14', 'vol_ma5', 'vol_ma10'] },
-  { id: 'momentum', label: '动量', icon: '🚀', keys: ['momentum_5d', 'momentum_10d', 'momentum_20d', 'momentum_30d', 'momentum_60d'] },
-  { id: 'limit', label: '连板', icon: '🔥', keys: ['limit_ups', 'limit_downs'] },
-  { id: 'signal', label: '信号', icon: '📡', keys: ['signals', 'candle', 'intraday'] },
-  { id: 'finance', label: '财务', icon: '📋', keys: ['eps', 'bps', 'roe', 'pe_ttm', 'pb', 'gross_margin', 'net_margin', 'revenue_yoy', 'net_income_yoy', 'debt_ratio'] },
+  { id: 'price', label: '价格', icon: createElement(Coins, { className: 'h-4 w-4 text-secondary' }), keys: ['price', 'pct', 'change_amount', 'amplitude'] },
+  { id: 'volume', label: '成交', icon: createElement(BarChart3, { className: 'h-4 w-4 text-secondary' }), keys: ['turnover', 'amount', 'float_val', 'vol_ratio', 'annual_vol'] },
+  { id: 'ma', label: '均线', icon: createElement(TrendingUp, { className: 'h-4 w-4 text-secondary' }), keys: ['ma5', 'ma10', 'ma20', 'ma60'] },
+  { id: 'range', label: '区间', icon: createElement(Ruler, { className: 'h-4 w-4 text-secondary' }), keys: ['high_60d', 'low_60d'] },
+  { id: 'tech', label: '技术指标', icon: createElement(Microscope, { className: 'h-4 w-4 text-secondary' }), keys: ['rsi6', 'rsi14', 'rsi24', 'macd_dif', 'macd_dea', 'macd_hist', 'kdj_k', 'kdj_d', 'kdj_j', 'boll_upper', 'boll_lower', 'atr14', 'vol_ma5', 'vol_ma10'] },
+  { id: 'momentum', label: '动量', icon: createElement(Rocket, { className: 'h-4 w-4 text-secondary' }), keys: ['momentum_5d', 'momentum_10d', 'momentum_20d', 'momentum_30d', 'momentum_60d'] },
+  { id: 'limit', label: '连板', icon: createElement(Flame, { className: 'h-4 w-4 text-secondary' }), keys: ['limit_ups', 'limit_downs'] },
+  { id: 'signal', label: '信号', icon: createElement(Satellite, { className: 'h-4 w-4 text-secondary' }), keys: ['signals', 'candle', 'intraday'] },
+  { id: 'finance', label: '财务', icon: createElement(ClipboardList, { className: 'h-4 w-4 text-secondary' }), keys: ['eps', 'bps', 'roe', 'pe_ttm', 'pb', 'gross_margin', 'net_margin', 'revenue_yoy', 'net_income_yoy', 'debt_ratio'] },
 ]
 
 // 操作列（始终显示，不参与自定义）

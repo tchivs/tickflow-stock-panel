@@ -18,7 +18,7 @@ export function PageHeader({ title, subtitle, titleExtra, right, className }: Pr
       )}
     >
       <div className="flex min-w-0 items-center gap-2">
-        <h1 data-phase5-typography className="shrink-0 whitespace-nowrap text-[22px] font-semibold leading-[1.25] tracking-tight text-foreground sm:text-[24px]">{title}</h1>
+        <h1 data-phase5-typography className="shrink-0 whitespace-nowrap text-2xl font-semibold leading-[1.25] tracking-tight text-foreground">{title}</h1>
         {titleExtra && <div className="shrink-0">{titleExtra}</div>}
         {subtitle && <span className="min-w-0 truncate text-xs text-muted">{subtitle}</span>}
       </div>

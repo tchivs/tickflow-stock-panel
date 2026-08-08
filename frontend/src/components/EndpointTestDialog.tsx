@@ -114,7 +114,7 @@ export function EndpointTestDialog({ hasKey, tierLabel, currentEndpoint, onClose
 
           {/* 当前使用 */}
           <div className="mx-4 mt-3 px-3 py-2 rounded-btn bg-accent/8 border border-accent/20 flex items-center gap-2 shrink-0">
-            <span className="inline-block h-1.5 w-1.5 rounded-full bg-accent shadow-[0_0_4px_rgba(61,214,140,0.5)]" />
+            <span className="inline-block h-1.5 w-1.5 rounded-full bg-accent" />
             <span className="text-[11px] text-secondary">当前使用</span>
             <span className="text-[11px] font-medium text-foreground">{currentLabel}</span>
             <span className="text-[10px] text-muted font-mono ml-auto">{currentEndpoint.replace('https://', '')}</span>
@@ -175,7 +175,7 @@ function EpRow({ ep, result, testing, isCurrent, isFree, canUsePremium, switchin
         isError
           ? 'border-danger/30 bg-danger/5'
           : result?.ok
-            ? 'border-bear/20 bg-bear/5'
+            ? 'border-border bg-surface'
             : isCurrent
               ? 'border-accent/20 bg-accent/5'
               : 'border-border bg-surface'
@@ -213,7 +213,7 @@ function EpRow({ ep, result, testing, isCurrent, isFree, canUsePremium, switchin
             ) : testing ? (
               <span className="text-[11px] text-muted animate-pulse">测试中…</span>
             ) : result && result.ok && median != null ? (
-              <span className={median < 500 ? 'text-bear' : median < 1000 ? 'text-warning' : 'text-danger'}>
+              <span className={median < 500 ? 'text-accent' : median < 1000 ? 'text-warning' : 'text-danger'}>
                 {median} ms
               </span>
             ) : result && !result.ok ? (

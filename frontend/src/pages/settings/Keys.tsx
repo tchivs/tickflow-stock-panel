@@ -95,13 +95,13 @@ export function SettingsKeysPanel() {
                 <div className="mt-1 flex items-center gap-2 min-w-0">
                   {mode === 'api_key' ? (
                     <>
-                      <CheckCircle2 className="h-4 w-4 text-bear shrink-0" />
+                      <CheckCircle2 className="h-4 w-4 text-accent shrink-0" />
                       <span className="text-sm font-medium shrink-0">已配置</span>
                       <span className="font-mono text-xs text-secondary truncate">{masked}</span>
                     </>
                   ) : mode === 'free' ? (
                     <>
-                      <CheckCircle2 className="h-4 w-4 text-bear shrink-0" />
+                      <CheckCircle2 className="h-4 w-4 text-accent shrink-0" />
                       <span className="text-sm font-medium shrink-0">免费 Key</span>
                       <span className="font-mono text-xs text-secondary truncate">{masked}</span>
                     </>
@@ -139,7 +139,7 @@ export function SettingsKeysPanel() {
                   placeholder={mode === 'none' ? '粘贴 TickFlow API Key' : '粘贴新 Key 替换当前'}
                   value={keyInput}
                   onChange={(e) => { setKeyInput(e.target.value); if (saved) setSaved(false) }}
-                  className="w-full px-3 py-2 pr-9 rounded-input bg-base border border-border text-sm font-mono focus:outline-none focus:border-accent transition-colors duration-150 ease-smooth"
+                  className="w-full px-3 py-2 pr-9 rounded-input bg-base border border-border text-sm font-mono focus:border-accent focus-visible:ring-2 focus-visible:ring-accent/60 transition-colors duration-150 ease-smooth"
                 />
                 <button
                   type="button"
@@ -194,7 +194,7 @@ export function SettingsKeysPanel() {
               </div>
             )}
             {save.data?.ok && (
-              <div className="mt-3 text-xs text-bear flex items-center gap-1.5">
+              <div className="mt-3 text-xs text-accent flex items-center gap-1.5">
                 <CheckCircle2 className="h-3 w-3" />
                 保存成功 — 档位 {save.data.tier_label}
                 {save.data.mode === 'free' && '(免费档 · 历史日K + 自选实时监控)'}

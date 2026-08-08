@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useRef, type FocusEvent, type KeyboardEvent, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Play, FlaskConical, Clock, Loader2, Square, Search, Plus, X, SlidersHorizontal, BarChart3, Gauge, Zap, ListPlus, HelpCircle } from 'lucide-react'
+import { Play, FlaskConical, Clock, Loader2, Square, Search, Plus, X, SlidersHorizontal, BarChart3, Gauge, Zap, ListPlus, HelpCircle, AlertTriangle } from 'lucide-react'
 import {
   api,
   type StrategyBacktestResult,
@@ -242,9 +242,9 @@ const fmtLots = (v: number | null | undefined) => {
 }
 
 const statValueColor = (v: number | null | undefined) => {
-  // 中性值继承页面前景色 (亮暗主题都可读), 不再写死近白色
-  if (v == null || Number.isNaN(v) || v === 0) return 'inherit'
-  return v > 0 ? '#f87171' : '#34d399'
+  // 盈利保持中性前景色, 亏损用 danger 强调 (亮暗主题都可读); 不使用牛熊红绿
+  if (v == null || Number.isNaN(v) || v === 0) return undefined
+  return v < 0 ? 'text-danger' : 'text-foreground'
 }
 
 function ExitReasonBadge({ reason }: { reason: string }) {
@@ -434,13 +434,12 @@ function SharpeLabel() {
   )
 }
 
-function Stat({ label, value, color }: { label: ReactNode; value: string; color?: string }) {
+function Stat({ label, value, colorCls }: { label: ReactNode; value: string; colorCls?: string }) {
   return (
     <div className="min-w-0 rounded-btn border border-border/70 bg-elevated/70 px-3 py-2">
       <div className="text-[11px] text-secondary">{label}</div>
       <div
-        className="mt-1 break-words text-sm font-mono font-semibold leading-tight tracking-tight num xl:text-base"
-        style={{ color: color ?? 'inherit' }}
+        className={`mt-1 break-words text-sm font-mono font-semibold leading-tight tracking-tight num xl:text-base${colorCls ? ` ${colorCls}` : ''}`}
         title={value}
       >
         {value}
@@ -522,7 +521,7 @@ function StrategyParamInput({ param, value, onChange }: {
           type="button"
           onClick={() => onChange(!checked)}
           className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors duration-200 cursor-pointer ${
-            checked ? 'bg-accent shadow-[0_0_6px_rgba(59,130,246,0.3)]' : 'bg-elevated'
+            checked ? 'bg-accent' : 'bg-elevated'
           }`}
           aria-pressed={checked}
         >
@@ -1110,6 +1109,16 @@ export function StrategyBacktest({ onStrategyChange }: { onStrategyChange?: (str
     if (!editingScoring) setScoringDraft(scoringToPct(scoring))
   }, [scoring, editingScoring])
 
+  // 高级策略设置抽屉: ESC 关闭
+  useEffect(() => {
+    if (!settingsOpen || !strategyDetail.data) return
+    const onKeyDown = (e: globalThis.KeyboardEvent) => {
+      if (e.key === 'Escape') setSettingsOpen(false)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [settingsOpen, strategyDetail.data])
+
   const updateOverride = (key: string, value: any) => {
     setOverrides(prev => ({ ...prev, [key]: value }))
   }
@@ -1194,7 +1203,7 @@ export function StrategyBacktest({ onStrategyChange }: { onStrategyChange?: (str
                 disabled={isFreeTier}
                 title={isFreeTier
                   ? '高颗粒回测（分钟K精确回测）：需 Starter+ 档位'
-                  : '高颗粒回测（分钟K精确回测）：切换后结合每日分钟K更精确回测。⚠️ 开发中，且会显著影响性能、回测很慢。'
+                  : '高颗粒回测（分钟K精确回测）：切换后结合每日分钟K更精确回测。开发中，且会显著影响性能、回测很慢。'
                 }
                 className={`group relative inline-flex h-3.5 w-6 items-center rounded-full shrink-0 transition-colors duration-200 ${
                   isFreeTier ? 'bg-elevated opacity-50 cursor-not-allowed'
@@ -1219,7 +1228,7 @@ export function StrategyBacktest({ onStrategyChange }: { onStrategyChange?: (str
               <div className="text-[10px] leading-snug text-amber-400/90">
                 <span className="font-medium">高颗粒回测（开发中）</span>
                 ：将结合每日分钟K进行更精确的回测。
-                <span className="text-amber-400/70"> ⚠️ 此功能尚未完成，且开启后会显著拖慢回测速度、占用大量资源。</span>
+                <span className="text-amber-400/70"><AlertTriangle className="mr-1 inline-block h-3 w-3" aria-hidden="true" />此功能尚未完成，且开启后会显著拖慢回测速度、占用大量资源。</span>
               </div>
             </div>
           )}
@@ -1252,7 +1261,7 @@ export function StrategyBacktest({ onStrategyChange }: { onStrategyChange?: (str
                 onClick={() => setSelectedStrategy(st.id)}
                 className={`px-2 py-1 rounded-btn text-[11px] border transition-all duration-150 ease-smooth cursor-pointer
                   ${selectedStrategy === st.id
-                    ? 'border-accent/50 bg-accent/10 text-accent shadow-[0_0_10px_rgba(59,130,246,0.1)]'
+                    ? 'border-accent/50 bg-accent/10 text-accent'
                     : 'border-border bg-base text-secondary hover:border-accent/40'
                   }`}
               >
@@ -1492,10 +1501,7 @@ export function StrategyBacktest({ onStrategyChange }: { onStrategyChange?: (str
           <button
             onClick={handleRun}
             disabled={!selectedStrategy || strategyDetail.isLoading}
-            className="group w-full inline-flex items-center justify-center gap-2.5 rounded-btn border border-accent/40
-              bg-gradient-to-r from-accent to-blue-500 px-3 py-2.5 text-white shadow-[0_10px_24px_rgba(59,130,246,0.22)]
-              transition-all duration-150 ease-smooth hover:-translate-y-0.5 hover:shadow-[0_14px_28px_rgba(59,130,246,0.28)]
-              disabled:translate-y-0 disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-none"
+            className="group w-full inline-flex items-center justify-center gap-2.5 rounded-btn bg-accent px-3 py-2.5 text-white transition-colors duration-150 ease-smooth hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <span className="flex h-6 w-6 items-center justify-center rounded-full bg-white/18 ring-1 ring-white/25 transition-transform group-hover:scale-105">
               <Play className="h-3.5 w-3.5 translate-x-px fill-current" />
@@ -1644,14 +1650,14 @@ export function StrategyBacktest({ onStrategyChange }: { onStrategyChange?: (str
 
             {/* 统计卡片 */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-              <Stat label="平均收益" value={fmtPct(result.stats.avg_return)} color={statValueColor(result.stats.avg_return)} />
-              <Stat label="中位数" value={fmtPct(result.stats.median_return)} color={statValueColor(result.stats.median_return)} />
-              <Stat label="胜率" value={fmtPct(result.stats.win_rate)} color={statValueColor(result.stats.win_rate)} />
+              <Stat label="平均收益" value={fmtPct(result.stats.avg_return)} colorCls={statValueColor(result.stats.avg_return)} />
+              <Stat label="中位数" value={fmtPct(result.stats.median_return)} colorCls={statValueColor(result.stats.median_return)} />
+              <Stat label="胜率" value={fmtPct(result.stats.win_rate)} colorCls={statValueColor(result.stats.win_rate)} />
               <Stat label="盈亏比" value={result.stats.profit_factor != null ? Number(result.stats.profit_factor).toFixed(2) : '—'} />
-              <Stat label="超额(vs基准)" value={fmtPct(result.stats.excess)} color={statValueColor(result.stats.excess)} />
+              <Stat label="超额(vs基准)" value={fmtPct(result.stats.excess)} colorCls={statValueColor(result.stats.excess)} />
               <Stat label="夏普" value={result.stats.sharpe != null ? Number(result.stats.sharpe).toFixed(2) : '—'} />
-              <Stat label="最大回撤" value={fmtPct(result.stats.max_drawdown)} color={statValueColor(result.stats.max_drawdown)} />
-              <Stat label="累计收益" value={fmtPct(result.stats.total_return)} color={statValueColor(result.stats.total_return)} />
+              <Stat label="最大回撤" value={fmtPct(result.stats.max_drawdown)} colorCls="text-warning" />
+              <Stat label="累计收益" value={fmtPct(result.stats.total_return)} colorCls={statValueColor(result.stats.total_return)} />
             </div>
 
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted">
@@ -1743,21 +1749,21 @@ export function StrategyBacktest({ onStrategyChange }: { onStrategyChange?: (str
             <div className="rounded-card border border-border bg-surface p-4">
               <div className="grid grid-cols-[repeat(auto-fit,minmax(9rem,1fr))] gap-3">
                 <Stat label="总收益" value={strategyReturn != null ? fmtPct(strategyReturn) : '—'}
-                  color={statValueColor(strategyReturn)} />
+                  colorCls={statValueColor(strategyReturn)} />
                 <Stat label="年化" value={pick('annual_return') != null ? fmtPct(pick('annual_return') as number) : '—'}
-                  color={statValueColor(pick('annual_return') as number)} />
+                  colorCls={statValueColor(pick('annual_return') as number)} />
                 <Stat label="同期上证" value={benchmarkReturn != null ? fmtPct(benchmarkReturn) : '—'}
-                  color={statValueColor(benchmarkReturn)} />
+                  colorCls={statValueColor(benchmarkReturn)} />
                 <Stat label="超额收益" value={excessReturn != null ? fmtPct(excessReturn) : '—'}
-                  color={statValueColor(excessReturn)} />
+                  colorCls={statValueColor(excessReturn)} />
                 <Stat label={<SharpeLabel />} value={pick('sharpe') != null ? Number(pick('sharpe')).toFixed(2) : '—'} />
                 <Stat label="索提诺" value={pick('sortino') != null ? Number(pick('sortino')).toFixed(2) : '—'} />
                 <Stat label="最大回撤" value={pick('max_drawdown') != null ? fmtPct(pick('max_drawdown') as number) : '—'}
-                  color="#34d399" />
+                  colorCls="text-warning" />
                 <Stat label="蒙卡回撤(中位)" value={pick('mc_maxdd_p50') != null ? fmtPct(pick('mc_maxdd_p50') as number) : '—'}
-                  color="#34d399" />
+                  colorCls="text-secondary" />
                 <Stat label="蒙卡回撤(95%置信不差于此)" value={pick('mc_maxdd_p95') != null ? fmtPct(pick('mc_maxdd_p95') as number) : '—'}
-                  color="#34d399" />
+                  colorCls="text-secondary" />
                 <Stat label="胜率" value={pick('win_rate') != null ? fmtPct(pick('win_rate') as number) : '—'} />
                 <Stat label="交易数" value={pick('n_trades') != null ? String(pick('n_trades')) : '—'} />
                 {result.stats.full_kind === 'candidate_execution' ? (
@@ -2070,6 +2076,9 @@ export function StrategyBacktest({ onStrategyChange }: { onStrategyChange?: (str
             className="fixed inset-0 z-50 bg-black/45 backdrop-blur-[1px]"
           />
           <motion.aside
+            role="dialog"
+            aria-modal="true"
+            aria-label="高级策略设置"
             initial={{ x: 32, opacity: 0 }}
             animate={{ x: 0, opacity: 1 }}
             transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}

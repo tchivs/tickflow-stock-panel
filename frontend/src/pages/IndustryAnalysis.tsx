@@ -463,7 +463,18 @@ export function IndustryAnalysis() {
               <IndustryFocus stat={selected} onStockClick={(sym, name) => { setPreviewSymbol(sym); setPreviewName(name ?? '') }} />
             </div>
           ) : rowsQuery.isLoading ? (
-            <div className="rounded-2xl border border-border bg-surface px-6 py-16 text-center text-sm text-muted">正在计算行业强度...</div>
+            <div className="rounded-card border border-border bg-surface px-6 py-16 text-center text-sm text-muted">正在计算行业强度…</div>
+          ) : rowsQuery.isError && !rowsQuery.data ? (
+            <div role="alert" className="flex items-center gap-2 text-sm text-danger bg-danger/10 border border-danger/30 rounded-btn px-3 py-2">
+              <span className="mr-1">行业数据加载失败：{rowsQuery.error instanceof Error ? rowsQuery.error.message : '请检查数据源'}。请重试。</span>
+              <button
+                type="button"
+                onClick={() => rowsQuery.refetch()}
+                className="inline-flex items-center h-6 px-2 rounded text-xs font-medium bg-surface border border-border text-secondary hover:text-accent hover:border-accent/50 transition-colors cursor-pointer"
+              >
+                重试
+              </button>
+            </div>
           ) : needsIndustryFetch ? (
             <PresetFetchState
               title="未获取行业数据"
@@ -543,7 +554,7 @@ function HeroMetric({ icon: Icon, label, value, hint, tone }: {
     blue: 'text-foreground',
   }[tone]
   return (
-    <div className="rounded-xl border border-border bg-surface px-3 py-2">
+    <div className="rounded-card border border-border bg-surface px-3 py-2">
       <div className="flex items-center justify-between text-[11px] text-muted">
         <span>{label}</span>
         <span className={cn('rounded-md p-1', toneClass)}><Icon className="h-3.5 w-3.5" /></span>
@@ -598,7 +609,7 @@ function PulseList({
   const toneHover = mode === 'up' ? 'hover:border-bull/35' : 'hover:border-bear/35'
 
   return (
-    <div className={cn('rounded-xl border bg-base/35 p-2', toneBorder)}>
+    <div className={cn('rounded-card border bg-base/35 p-2', toneBorder)}>
       <div className="mb-1.5 flex items-center justify-between px-1">
         <div className={cn('flex items-center gap-1.5 text-xs font-medium', toneText)}>
           {mode === 'up' ? <TrendingUp className="h-3.5 w-3.5" /> : <TrendingDown className="h-3.5 w-3.5" />}
@@ -650,7 +661,22 @@ function PulseList({
                   {Array.from({ length: 3 }).map((_, i) => {
                     const stock = leaders[i]
                     return stock ? (
-                      <span key={stock.symbol} title={stock.name || stock.symbol} onClick={e => { e.stopPropagation(); onStockClick(stock.symbol, stock.name || undefined) }} className={cn('flex min-w-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] cursor-pointer hover:brightness-125', i === 0 ? 'bg-amber-300/10 text-foreground' : 'bg-elevated/60 text-secondary')}>
+                      <span
+                        key={stock.symbol}
+                        role="button"
+                        tabIndex={0}
+                        title={stock.name || stock.symbol}
+                        aria-label={`查看${stock.name || stock.symbol}详情`}
+                        onClick={e => { e.stopPropagation(); onStockClick(stock.symbol, stock.name || undefined) }}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault()
+                            e.stopPropagation()
+                            onStockClick(stock.symbol, stock.name || undefined)
+                          }
+                        }}
+                        className={cn('flex min-w-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] cursor-pointer hover:brightness-125 focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-1 focus:ring-offset-base', i === 0 ? 'bg-amber-300/10 text-foreground' : 'bg-elevated/60 text-secondary')}
+                      >
                         <span className="flex min-w-0 items-center gap-1">
                           <span className="min-w-0 truncate font-medium">{stock.name || stock.symbol}</span>
                         </span>
@@ -688,7 +714,7 @@ function IndustryRail({
   onSelect: (v: string) => void
 }) {
   return (
-    <section className="rounded-2xl border border-border bg-surface p-2.5">
+    <section className="rounded-card border border-border bg-surface p-2.5">
       <div className="px-1 pb-2.5">
         <div className="flex items-center justify-between">
           <h3 className="text-sm font-semibold text-foreground">行业矩阵</h3>
@@ -696,7 +722,7 @@ function IndustryRail({
         </div>
         <div className="mt-2 relative">
           <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted" />
-          <input value={search} onChange={e => onSearch(e.target.value)} placeholder="搜索行业" className="h-8 w-full rounded-lg border border-border bg-base pl-8 pr-3 text-xs text-foreground outline-none focus:border-accent/50" />
+          <input value={search} onChange={e => onSearch(e.target.value)} placeholder="搜索行业" className="h-8 w-full rounded-lg border border-border bg-base pl-8 pr-3 text-xs text-foreground outline-none focus:border-accent/50 max-md:min-h-11" />
         </div>
         <div className="mt-2 grid grid-cols-5 overflow-hidden rounded-lg border border-border text-[10px]">
           {([
@@ -736,7 +762,7 @@ function IndustryFocus({ stat, onStockClick }: { stat: IndustryStat | null; onSt
   const stocks = [...stat.stocks].sort((a, b) => b.leaderScore - a.leaderScore).slice(0, MAX_RENDERED_STOCKS)
   const topLeaders = stocks.slice(0, 3)
   return (
-    <section className="flex max-h-[720px] flex-col overflow-hidden rounded-2xl border border-border bg-surface">
+    <section className="flex max-h-[720px] flex-col overflow-hidden rounded-card border border-border bg-surface">
       <div className="shrink-0 border-b border-border px-5 py-4">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div className="min-w-0">
@@ -771,23 +797,30 @@ function IndustryFocus({ stat, onStockClick }: { stat: IndustryStat | null; onSt
         <table className="min-w-full text-left text-xs">
           <thead className="bg-elevated/60 text-[11px] text-muted">
             <tr>
-              <th className="px-4 py-2 font-medium">排名</th>
-              <th className="px-4 py-2 font-medium">股票</th>
-              <th className="px-4 py-2 font-medium">涨跌幅</th>
-              <th className="px-4 py-2 font-medium">换手率</th>
-              <th className="px-4 py-2 font-medium">成交额</th>
-              <th className="px-4 py-2 font-medium">流通市值</th>
-              <th className="px-4 py-2 font-medium">量比</th>
-              <th className="px-4 py-2 font-medium">龙头分</th>
+              <th scope="col" className="px-4 py-2 font-medium">排名</th>
+              <th scope="col" className="px-4 py-2 font-medium">股票</th>
+              <th scope="col" className="px-4 py-2 font-medium">涨跌幅</th>
+              <th scope="col" className="px-4 py-2 font-medium">换手率</th>
+              <th scope="col" className="px-4 py-2 font-medium">成交额</th>
+              <th scope="col" className="px-4 py-2 font-medium">流通市值</th>
+              <th scope="col" className="px-4 py-2 font-medium">量比</th>
+              <th scope="col" className="px-4 py-2 font-medium">龙头分</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-border/70">
             {stocks.map((s, idx) => (
-              <tr key={`${s.symbol}-${idx}`} className="hover:bg-elevated/30 cursor-pointer" onClick={() => onStockClick(s.symbol, s.name || undefined)}>
+              <tr key={`${s.symbol}-${idx}`} className="hover:bg-elevated/30">
                 <td className="px-4 py-2 font-mono text-muted">{idx + 1}</td>
                 <td className="px-4 py-2">
-                  <div className="font-medium text-foreground">{s.name || '—'}</div>
-                  <div className="font-mono text-[10px] text-muted">{s.symbol}</div>
+                  <button
+                    type="button"
+                    onClick={() => onStockClick(s.symbol, s.name || undefined)}
+                    aria-label={`查看${s.name || s.symbol}详情`}
+                    className="rounded text-left cursor-pointer focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-base"
+                  >
+                    <div className="font-medium text-foreground">{s.name || '—'}</div>
+                    <div className="font-mono text-[10px] text-muted">{s.symbol}</div>
+                  </button>
                 </td>
                 <td className={cn('px-4 py-2 font-mono tabular-nums', priceColorClass(s.change_pct))}>{s.change_pct != null ? fmtPct(s.change_pct) : '—'}</td>
                 <td className="px-4 py-2 font-mono text-foreground">{s.turnover_rate != null ? `${s.turnover_rate.toFixed(2)}%` : '—'}</td>
@@ -815,16 +848,21 @@ function MiniStat({ label, value, cls }: { label: string; value: string; cls: st
 }
 
 function LeaderStage({ stocks, onStockClick }: { stocks: EnrichedStock[]; onStockClick: (symbol: string, name?: string) => void }) {
-  if (!stocks.length) return <div className="rounded-xl border border-border/60 bg-surface p-4 text-sm text-muted">暂无龙头候选</div>
+  if (!stocks.length) return <div className="rounded-card bg-elevated/50 p-4 text-sm text-muted">暂无龙头候选</div>
   return (
-    <div className="rounded-xl border border-border/60 bg-surface p-3">
+    <div className="rounded-card bg-elevated/50 p-3">
       <div className="mb-2 flex items-center gap-2 text-xs font-medium text-amber-300">
         <Crown className="h-3.5 w-3.5" />
         本行业三龙头
       </div>
       <div className="grid gap-2 md:grid-cols-3">
         {stocks.map((stock, idx) => (
-          <div key={stock.symbol} onClick={() => onStockClick(stock.symbol, stock.name || undefined)} className={cn('rounded-lg border p-3 cursor-pointer hover:brightness-110 transition-all', idx === 0 ? 'border-amber-400/25 bg-amber-400/[0.06]' : 'border-border/60 bg-base/35')}>
+          <button
+            key={stock.symbol}
+            type="button"
+            onClick={() => onStockClick(stock.symbol, stock.name || undefined)}
+            className={cn('rounded-lg border p-3 text-left cursor-pointer hover:brightness-110 transition-all focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-base', idx === 0 ? 'border-amber-400/25 bg-amber-400/[0.06]' : 'border-border/60 bg-base/35')}
+          >
             <div className="flex items-center justify-between gap-2">
               <span className={cn('text-[10px] font-medium', idx === 0 ? 'text-amber-300' : 'text-muted')}>{idx === 0 ? '主龙头' : `辅龙 ${idx}`}</span>
               <span className="font-mono text-[11px] text-amber-300">{stock.leaderScore.toFixed(0)}</span>
@@ -834,7 +872,7 @@ function LeaderStage({ stocks, onStockClick }: { stocks: EnrichedStock[]; onStoc
               <span className="font-mono text-muted">{stock.symbol}</span>
               <span className={cn('font-mono', priceColorClass(stock.change_pct))}>{stock.change_pct != null ? fmtPct(stock.change_pct) : '—'}</span>
             </div>
-          </div>
+          </button>
         ))}
       </div>
     </div>
@@ -842,10 +880,10 @@ function LeaderStage({ stocks, onStockClick }: { stocks: EnrichedStock[]; onStoc
 }
 
 function ScoreExplain({ stock }: { stock?: EnrichedStock }) {
-  if (!stock) return <div className="rounded-xl border border-border/60 bg-surface p-4 text-sm text-muted">暂无评分拆解</div>
+  if (!stock) return <div className="rounded-card bg-elevated/50 p-4 text-sm text-muted">暂无评分拆解</div>
   const parts = stock.leaderParts
   return (
-    <div className="rounded-xl border border-border/60 bg-surface p-3">
+    <div className="rounded-card bg-elevated/50 p-3">
       <div className="mb-2 flex items-center justify-between">
         <span className="text-xs font-medium text-foreground">主龙头评分拆解</span>
         <span className="text-[11px] text-muted">涨幅 / 换手 / 成交 / 市值 / 量比 / 连板</span>

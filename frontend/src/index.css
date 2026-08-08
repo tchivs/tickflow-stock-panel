@@ -14,19 +14,19 @@
  * HSL 形式以兼容 Tailwind alpha-value 语法
  */
 :root {
-  /* 亮色(可切换) */
+  /* 亮色(可切换) — 对比度按 WCAG 2.2 AA 校准: muted/accent/bull/bear/warning 文本 ≥4.5:1 on #FFF/#FAFAFA */
   --base: 0 0% 98%;          /* #FAFAFA */
   --surface: 0 0% 100%;      /* #FFFFFF */
   --elevated: 240 5% 96%;    /* #F4F4F5 */
   --border: 240 6% 90%;      /* #E4E4E7 */
   --fg-primary: 240 6% 10%;  /* #18181B */
   --fg-secondary: 240 4% 35%;/* #52525B */
-  --fg-muted: 240 5% 65%;    /* #A1A1AA */
-  --accent: 217 91% 60%;     /* #3B82F6 电光蓝 */
-  --bull: 4 87% 60%;         /* #F04438 红涨 */
-  --bear: 152 67% 45%;       /* #12B76A 绿跌 */
-  --warning: 32 95% 50%;     /* #F79009 */
-  --danger: 4 87% 60%;       /* #F04438 */
+  --fg-muted: 240 4% 46%;    /* #71717A — 原 #A1A1AA 2.5:1 不达标 */
+  --accent: 221 83% 53%;     /* #2563EB 电光蓝(亮色加深) — 原 #3B82F6 3.5:1 不达标 */
+  --bull: 0 72% 51%;         /* #DC2626 红涨(亮色加深) */
+  --bear: 142 72% 29%;       /* #15803D 绿跌(亮色加深) */
+  --warning: 26 90% 37%;     /* #B45309 警示橙(亮色加深) */
+  --danger: 0 72% 51%;       /* #DC2626 */
 }
 
 html.dark {
@@ -74,6 +74,13 @@ html.dark {
 
 /* 默认 1px 细分隔线(暗色用边框区分层次,不用 shadow) */
 * { border-color: hsl(var(--border)); }
+
+/* 键盘焦点环 — 全局兜底 (WCAG 2.4.7): 组件内可自定义 focus-visible 覆盖;
+   设计规范: 2px 电光蓝环 + offset, 仅键盘导航显示 */
+:focus-visible {
+  outline: 2px solid hsl(var(--accent));
+  outline-offset: 2px;
+}
 
 body {
   background: hsl(var(--base));

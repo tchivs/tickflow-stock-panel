@@ -27,7 +27,7 @@ export function ReportPanel({ report, evidence }: { report: AnalysisReport; evid
 
     <section aria-labelledby="perspectives-heading" className="space-y-3">
       <h3 id="perspectives-heading" className="text-base font-semibold text-foreground">多视角</h3>
-      {report.perspectives.map(perspective => <section key={perspective.name} className="border-l-2 border-border pl-3">
+      {report.perspectives.map(perspective => <section key={perspective.name} className="pl-3">
         <h4 className="text-sm font-semibold text-foreground">{perspective.name}</h4>
         {hasConflict && <p className="mt-1 text-sm text-warning">受未解决来源差异影响</p>}
         <p className="mt-1 max-w-[65ch] break-words text-sm text-secondary">{perspective.conclusion}</p>

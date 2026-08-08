@@ -5,7 +5,7 @@ import { useActiveTasks, restoreDialog } from '@/lib/aiReportStore'
 import type { ActiveTask } from '@/lib/aiReportStore'
 
 /**
- * AI 分析任务全局气泡容器 —— 玻璃拟态卡片,挂在网页右侧。
+ * AI 分析任务全局气泡容器 —— 挂在网页右侧的紧凑胶囊卡片。
  *
  * 拖拽丝滑的关键(60fps):
  *   - 位置用 transform: translate3d 存储(走 GPU 合成层,不触发 layout/paint)
@@ -14,10 +14,10 @@ import type { ActiveTask } from '@/lib/aiReportStore'
  *   - 拖动时给容器加 .dragging 类,禁用所有 transition,消除回弹延迟
  *
  * 视觉:
- *   - 玻璃拟态(frosted glass):半透明 + backdrop-blur + 细边框 + 内发光
+ *   - 设计系统 token 胶囊(bg-elevated / border-border / accent),无渐变玻璃
  *   - 固定宽度,内容居中,多任务竖向堆叠
- *   - 生成中:柔和呼吸光环(非刺眼 ping)
- *   - hover:展开操作区,带平滑过渡
+ *   - 生成中:顶部流动进度线(非刺眼 ping)
+ *   - hover:轻微放大,带平滑过渡
  */
 
 const BUBBLE_W = 148          // 卡片固定宽度(紧凑单行版)
@@ -159,12 +159,12 @@ function BubbleItem({ task, isLast, onPointerDown }: {
   const isWorking = task.phase === 'loading' || task.phase === 'streaming'
   const isError = task.phase === 'error'
 
-  // 状态配色
-  const accent = isWorking
-    ? 'from-purple-500/25 to-fuchsia-500/20 text-purple-300 border-purple-300/40 shadow-[0_6px_24px_-10px_rgba(168,85,247,0.5)]'
+  // 状态配色:工作=accent,失败=danger,完成=中性
+  const shell = isWorking
+    ? 'border-accent/40 bg-accent/10'
     : isError
-      ? 'from-red-500/20 to-red-500/10 text-red-300 border-red-300/40 shadow-[0_6px_20px_-10px_rgba(239,68,68,0.4)]'
-      : 'from-emerald-500/20 to-emerald-500/10 text-emerald-300 border-emerald-300/40 shadow-[0_6px_20px_-10px_rgba(16,185,129,0.35)]'
+      ? 'border-danger/40 bg-danger/10'
+      : 'border-border bg-elevated'
 
   return (
     <motion.div
@@ -179,23 +179,23 @@ function BubbleItem({ task, isLast, onPointerDown }: {
         role="button"
         tabIndex={0}
         title={isWorking ? '生成中,点击恢复对话框' : isError ? '分析失败,点击重试' : '点击查看报告'}
-        className={`group relative flex w-full cursor-pointer items-center gap-1.5 overflow-hidden rounded-lg border bg-gradient-to-br px-2 py-1.5 backdrop-blur-xl transition-all duration-200 hover:scale-[1.02] active:scale-[0.99] ${accent}`}
+        className={`group relative flex w-full cursor-pointer items-center gap-1.5 overflow-hidden rounded-lg border px-2 py-1.5 transition-all duration-200 hover:scale-[1.02] active:scale-[0.99] ${shell}`}
       >
         {/* 生成中:顶部进度流光 */}
         {isWorking && (
           <div className="absolute inset-x-0 top-0 h-px overflow-hidden">
-            <div className="h-full w-1/2 bg-gradient-to-r from-transparent via-purple-200 to-transparent animate-bubble-progress" />
+            <div className="h-full w-1/2 bg-accent/60 animate-bubble-progress" />
           </div>
         )}
 
         {/* 状态图标 */}
         <span className="flex h-4 w-4 items-center justify-center shrink-0">
           {isWorking ? (
-            <Loader2 className="h-3 w-3 animate-spin" />
+            <Loader2 className="h-3 w-3 animate-spin text-accent" />
           ) : isError ? (
-            <AlertCircle className="h-3 w-3" />
+            <AlertCircle className="h-3 w-3 text-danger" />
           ) : (
-            <Check className="h-3 w-3" />
+            <Check className="h-3 w-3 text-accent" />
           )}
         </span>
 
@@ -207,11 +207,11 @@ function BubbleItem({ task, isLast, onPointerDown }: {
         {/* 状态后缀 */}
         <span className="shrink-0 text-[9px] leading-none">
           {isWorking ? (
-            <span className="text-purple-300/80">分析中</span>
+            <span className="text-accent">分析中</span>
           ) : isError ? (
-            <span className="text-red-300/80">失败</span>
+            <span className="text-danger">失败</span>
           ) : (
-            <span className="text-emerald-300/80">点击查看</span>
+            <span className="text-secondary">点击查看</span>
           )}
         </span>
       </div>

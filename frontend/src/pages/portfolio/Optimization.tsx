@@ -54,6 +54,12 @@ export function Optimization() {
             </div>
             <div className="max-h-[calc(100vh-16rem)] overflow-auto p-2 space-y-1">
               {runsQuery.isLoading && <div className="px-3 py-6 text-center text-xs text-muted">加载中…</div>}
+              {runsQuery.isError && !runsQuery.data && (
+                <div role="alert" className="rounded-btn border border-danger/30 bg-danger/10 px-3 py-3 text-xs text-danger">
+                  优化记录加载失败：{runsQuery.error instanceof Error ? runsQuery.error.message : String(runsQuery.error ?? '未知错误')}
+                  <button type="button" onClick={() => runsQuery.refetch()} className="ml-2 inline-flex items-center rounded-btn border border-danger/30 bg-danger/10 px-2 py-1 text-xs font-medium text-danger hover:bg-danger/20 max-md:min-h-11 max-md:min-w-11">重试</button>
+                </div>
+              )}
               {runsQuery.data?.length === 0 && (
                 <EmptyState icon={Layers} title="暂无优化运行" hint="在回测工作台运行策略后,优化记录会出现在这里。" />
               )}
@@ -104,13 +110,13 @@ function RunListItem({ run, active, onClick }: { run: OptimizationRunDTO; active
         {isFailed ? (
           <XCircle className="h-3.5 w-3.5 shrink-0 text-danger" />
         ) : (
-          <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-bear" />
+          <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-accent" />
         )}
       </div>
       <div className="mt-1 flex items-center gap-2 text-[10px] text-muted">
         <span className="rounded bg-elevated px-1.5 py-px font-medium">{objectiveLabel}</span>
         <span className="font-mono">{run.as_of}</span>
-        <span className={`font-medium ${isFailed ? 'text-danger' : 'text-bear'}`}>{isFailed ? run.problem_status : '最优'}</span>
+        <span className={`font-medium ${isFailed ? 'text-danger' : 'text-accent'}`}>{isFailed ? run.problem_status : '最优'}</span>
       </div>
     </button>
   )
@@ -137,7 +143,7 @@ function RunDetail({ run }: { run: OptimizationRunDTO }) {
               <span>·</span>
               <span>{run.universe}</span>
               <span>·</span>
-              <span className={`font-medium ${isFailed ? 'text-danger' : 'text-bear'}`}>{isFailed ? run.problem_status : '最优'}</span>
+              <span className={`font-medium ${isFailed ? 'text-danger' : 'text-accent'}`}>{isFailed ? run.problem_status : '最优'}</span>
             </div>
           </div>
           <div className="text-right">

@@ -5,8 +5,9 @@ const DESKTOP_PROJECT = 'desktop-chromium'
 
 // ===== 共享 mock 载荷 =====
 
-// /screener 钻取载荷 (B1 修订: /pool-hub 不挂载 StockPreviewDialog, 改在 /screener
-// 点击 ScreenerTable 行情行打开弹窗 —— ScreenerTable.tsx:173 onPreview)。
+// /screener 钻取载荷 (B1 修订: 竞价历史钻取走 /screener 打开弹窗 —
+// 点击 ScreenerTable 行情行 (ScreenerTable.tsx:173) → onPreview → StockPreviewDialog。
+// /pool-hub 现已同样挂载 StockPreviewDialog (名称列点击), 但本夹具保留 /screener 路径)。
 const screenerStrategy = {
   id: 'auction_bullish',
   name: '竞价多头',
@@ -157,8 +158,8 @@ async function installShell(page: Page) {
 }
 
 /**
- * 打开个股弹窗 (B1 修订 — /pool-hub 不挂载 StockPreviewDialog):
- * 注入 strategy-pool → /screener → 点策略卡 → 点行情行 (ScreenerTable.tsx:173) → 弹窗。
+ * 打开个股弹窗: 注入 strategy-pool → /screener → 点策略卡 → 点行情行 (ScreenerTable.tsx:173) → 弹窗。
+ * (B1 修订后 /pool-hub 名称列也已挂载 StockPreviewDialog, 但本夹具保留 /screener 路径不变。)
  * 返回后调用方可注册具体 auction-history 路由再点「竞价历史」。
  */
 async function openPreviewDialog(page: Page) {

@@ -141,15 +141,15 @@ export function Monitor() {
             <div className="flex flex-wrap items-center gap-2 border-b border-border/60 bg-surface/60 px-3 py-3">
               <SectionHeader icon={BellRing} title="触发记录" />
               <div className="order-3 flex w-full flex-wrap items-center gap-1 md:order-none md:w-auto" aria-label="告警类型筛选">
-                {(['all', 'position', 'price', 'signal', 'market', 'strategy'] as const).map(value => <button key={value} type="button" aria-pressed={filter === value} onClick={() => setFilter(value)} className={cn('min-h-8 rounded-btn px-2 text-xs', filter === value ? 'bg-accent/15 text-accent' : 'text-muted hover:bg-elevated hover:text-secondary')}>{value === 'all' ? '全部' : TYPE_LABEL[value]}</button>)}
+                {(['all', 'position', 'price', 'signal', 'market', 'strategy'] as const).map(value => <button key={value} type="button" aria-pressed={filter === value} onClick={() => setFilter(value)} className={cn('min-h-8 rounded-btn px-2 text-xs max-md:min-h-11 max-md:min-w-11', filter === value ? 'bg-accent/15 text-accent' : 'text-muted hover:bg-elevated hover:text-secondary')}>{value === 'all' ? '全部' : TYPE_LABEL[value]}</button>)}
               </div>
               <label className="sr-only" htmlFor="monitor-severity">严重级别</label>
-              <select id="monitor-severity" value={severity} onChange={event => setSeverity(event.target.value as typeof severity)} className="h-8 rounded-btn border border-border bg-base px-2 text-xs text-secondary"><option value="all">全部级别</option><option value="info">普通</option><option value="warn">警告</option><option value="critical">重要</option></select>
+              <select id="monitor-severity" value={severity} onChange={event => setSeverity(event.target.value as typeof severity)} className="h-8 rounded-btn border border-border bg-base px-2 text-xs text-secondary max-md:min-h-11 max-md:min-w-11"><option value="all">全部级别</option><option value="info">普通</option><option value="warn">警告</option><option value="critical">重要</option></select>
               <label className="sr-only" htmlFor="monitor-delivery">投递状态</label>
-              <select id="monitor-delivery" value={delivery} onChange={event => setDelivery(event.target.value as typeof delivery)} className="h-8 rounded-btn border border-border bg-base px-2 text-xs text-secondary"><option value="all">全部投递</option><option value="pending">待投递</option><option value="sent">已发送</option><option value="failed">投递失败</option><option value="skipped">已跳过</option></select>
+              <select id="monitor-delivery" value={delivery} onChange={event => setDelivery(event.target.value as typeof delivery)} className="h-8 rounded-btn border border-border bg-base px-2 text-xs text-secondary max-md:min-h-11 max-md:min-w-11"><option value="all">全部投递</option><option value="pending">待投递</option><option value="sent">已发送</option><option value="failed">投递失败</option><option value="skipped">已跳过</option></select>
               <div className="ml-auto flex items-center gap-2">
                 <span className="rounded-md bg-elevated/50 px-1.5 py-0.5 text-[10px] font-medium text-muted">{total}</span>
-                {total > 0 && <button onClick={() => setConfirmClear(true)} className="inline-flex min-h-8 items-center gap-1 rounded-btn px-2 text-xs text-muted hover:bg-danger/10 hover:text-danger"><Trash2 className="h-3 w-3" />清空</button>}
+                {total > 0 && <button onClick={() => setConfirmClear(true)} className="inline-flex min-h-8 items-center gap-1 rounded-btn px-2 text-xs text-muted hover:bg-danger/10 hover:text-danger max-md:min-h-11 max-md:min-w-11"><Trash2 className="h-3 w-3" />清空</button>}
               </div>
             </div>
             <div className="min-h-0 flex-1 overflow-auto p-3">
@@ -166,7 +166,7 @@ export function Monitor() {
                 <button
                   onClick={() => { setEditingRule(null); setEditorOpen(true) }}
                   title="新建规则"
-                  className="inline-flex h-6 w-6 items-center justify-center rounded-lg border border-border/60 bg-surface text-muted transition-all hover:border-accent/40 hover:text-accent hover:shadow-sm cursor-pointer"
+                  className="inline-flex h-6 w-6 items-center justify-center rounded-lg border border-border/60 bg-surface text-muted transition-all hover:border-accent/40 hover:text-accent hover:shadow-sm cursor-pointer max-md:min-h-11 max-md:min-w-11"
                 >
                   <Plus className="h-3.5 w-3.5" />
                 </button>
@@ -174,7 +174,7 @@ export function Monitor() {
                   onClick={() => setConfirmClearRules(true)}
                   disabled={rulesCount === 0}
                   title="清除全部规则"
-                  className="inline-flex h-6 w-6 items-center justify-center rounded-lg border border-border/60 bg-surface text-muted transition-all hover:border-danger/40 hover:text-danger disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                  className="inline-flex h-6 w-6 items-center justify-center rounded-lg border border-border/60 bg-surface text-muted transition-all hover:border-danger/40 hover:text-danger disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer max-md:min-h-11 max-md:min-w-11"
                 >
                   <Trash2 className="h-3.5 w-3.5" />
                 </button>
@@ -268,6 +268,11 @@ function AlertsList({ alertsQuery, confirmClear, setConfirmClear, total, enterTs
             <Skeleton key={i} h="h-14" rounded="rounded-card" />
           ))}
         </div>
+      ) : alertsQuery.isError && !alertsQuery.data ? (
+        <div role="alert" className="rounded-card border border-danger/30 bg-danger/10 px-3 py-3 text-sm text-danger">
+          触发记录加载失败：{alertsQuery.error instanceof Error ? alertsQuery.error.message : String(alertsQuery.error ?? '未知错误')}
+          <button type="button" onClick={() => alertsQuery.refetch()} className="ml-2 inline-flex items-center rounded-btn border border-danger/30 bg-danger/10 px-2 py-1 text-xs font-medium text-danger hover:bg-danger/20 max-md:min-h-11 max-md:min-w-11">重试</button>
+        </div>
       ) : events.length === 0 ? (
         <EmptyState
           icon={Bell}
@@ -336,14 +341,14 @@ function AlertsList({ alertsQuery, confirmClear, setConfirmClear, total, enterTs
                             )
                           })()}
                           {ev.price != null && (
-                            <span className={cn('inline-flex items-center gap-0.5 text-[11px] font-mono', _pct >= 0 ? 'text-danger' : 'text-bear')}>
+                            <span className={cn('inline-flex items-center gap-0.5 text-[11px] font-mono', _pct >= 0 ? 'text-bull' : 'text-bear')}>
                               {_pct >= 0 ? <TrendingUp className="h-2.5 w-2.5" /> : <TrendingDown className="h-2.5 w-2.5" />}
                               {fmtPrice(ev.price)}
                             </span>
                           )}
                           {ev.change_pct != null && (
                             <span className={cn('text-[11px] font-mono font-medium',
-                              _pct >= 0 ? 'text-danger' : 'text-bear')}>
+                              _pct >= 0 ? 'text-bull' : 'text-bear')}>
                               {fmtPct(_pct)}
                             </span>
                           )}
@@ -382,14 +387,14 @@ function AlertsList({ alertsQuery, confirmClear, setConfirmClear, total, enterTs
                           )
                         })()}
                         {ev.price != null && (
-                          <span className={cn('inline-flex items-center gap-0.5 text-[11px] font-mono', (ev.change_pct ?? 0) >= 0 ? 'text-danger' : 'text-bear')}>
+                          <span className={cn('inline-flex items-center gap-0.5 text-[11px] font-mono', (ev.change_pct ?? 0) >= 0 ? 'text-bull' : 'text-bear')}>
                             {(ev.change_pct ?? 0) >= 0 ? <TrendingUp className="h-2.5 w-2.5" /> : <TrendingDown className="h-2.5 w-2.5" />}
                             {fmtPrice(ev.price)}
                           </span>
                         )}
                         {ev.change_pct != null && (
                           <span className={cn('text-[11px] font-mono font-medium',
-                            ev.change_pct >= 0 ? 'text-danger' : 'text-bear')}>
+                            ev.change_pct >= 0 ? 'text-bull' : 'text-bear')}>
                             {fmtPct(ev.change_pct)}
                           </span>
                         )}
@@ -465,7 +470,7 @@ function AlertsList({ alertsQuery, confirmClear, setConfirmClear, total, enterTs
                   {primaryDelivery && (() => {
                     const meta = DELIVERY_LABEL[primaryDelivery.status]
                     const Icon = meta.icon
-                    return ev.id ? <button type="button" onClick={() => onDelivery(ev.id)} className={`inline-flex min-h-7 items-center gap-1 rounded-btn px-1.5 text-[10px] ${meta.className} hover:bg-elevated`} title="查看投递详情"><Icon className="h-3 w-3" />{outcomes.length > 1 && primaryDelivery.status === 'sent' ? `${outcomes.filter(outcome => outcome.status === 'sent').length}/${outcomes.length} 已发送` : meta.label}</button> : <span className={`inline-flex items-center gap-1 text-[10px] ${meta.className}`}><Icon className="h-3 w-3" />{meta.label}</span>
+                    return ev.id ? <button type="button" onClick={() => onDelivery(ev.id)} className={`inline-flex min-h-7 items-center gap-1 rounded-btn px-1.5 text-[10px] max-md:min-h-11 max-md:min-w-11 ${meta.className} hover:bg-elevated`} title="查看投递详情"><Icon className="h-3 w-3" />{outcomes.length > 1 && primaryDelivery.status === 'sent' ? `${outcomes.filter(outcome => outcome.status === 'sent').length}/${outcomes.length} 已发送` : meta.label}</button> : <span className={`inline-flex items-center gap-1 text-[10px] ${meta.className}`}><Icon className="h-3 w-3" />{meta.label}</span>
                   })()}
 
                   {confirmTs === ev.ts ? (
@@ -482,7 +487,7 @@ function AlertsList({ alertsQuery, confirmClear, setConfirmClear, total, enterTs
                       onClick={() => handleClickDelete(ev.ts)}
                       disabled={delMut.isPending}
                       title="删除"
-                      className="rounded p-1 text-muted/0 transition-colors group-hover:text-muted/40 hover:!text-danger hover:bg-danger/10 cursor-pointer"
+                      className="rounded p-1 text-muted/0 transition-colors group-hover:text-muted/40 hover:!text-danger hover:bg-danger/10 cursor-pointer max-md:min-h-11 max-md:min-w-11"
                     >
                       <Trash2 className="h-3 w-3" />
                     </button>
@@ -580,6 +585,11 @@ function RulesList({ rulesQuery, onEdit }: {
             <Skeleton key={i} h="h-16" rounded="rounded-card" />
           ))}
         </div>
+      ) : rulesQuery.isError && !rulesQuery.data ? (
+        <div role="alert" className="rounded-card border border-danger/30 bg-danger/10 px-3 py-3 text-sm text-danger">
+          监控规则加载失败：{rulesQuery.error instanceof Error ? rulesQuery.error.message : String(rulesQuery.error ?? '未知错误')}
+          <button type="button" onClick={() => rulesQuery.refetch()} className="ml-2 inline-flex items-center rounded-btn border border-danger/30 bg-danger/10 px-2 py-1 text-xs font-medium text-danger hover:bg-danger/20 max-md:min-h-11 max-md:min-w-11">重试</button>
+        </div>
       ) : rules.length === 0 ? (
         <EmptyState
           icon={RadioTower}
@@ -633,7 +643,7 @@ function RulesList({ rulesQuery, onEdit }: {
                     onClick={() => toggleEnabled(r)}
                     title={r.enabled ? '停用' : '启用'}
                     className={cn(
-                      'p-1 rounded-md transition-all cursor-pointer',
+                      'p-1 rounded-md transition-all cursor-pointer max-md:min-h-11 max-md:min-w-11',
                       r.enabled ? 'text-accent hover:bg-accent/10' : 'text-muted hover:bg-elevated hover:text-accent',
                     )}
                   >
@@ -641,7 +651,7 @@ function RulesList({ rulesQuery, onEdit }: {
                   </button>
                   <button
                     onClick={() => onEdit(r)}
-                    className="p-1 rounded-md text-secondary transition-all hover:bg-accent/10 hover:text-accent cursor-pointer"
+                    className="p-1 rounded-md text-secondary transition-all hover:bg-accent/10 hover:text-accent cursor-pointer max-md:min-h-11 max-md:min-w-11"
                     title="编辑"
                   >
                     <Settings2 className="h-3.5 w-3.5" />
@@ -658,7 +668,7 @@ function RulesList({ rulesQuery, onEdit }: {
                     <button
                       onClick={() => handleClickDelete(r.id)}
                       disabled={del.isPending}
-                      className="p-1 rounded-md text-secondary transition-all hover:bg-danger/10 hover:text-danger cursor-pointer"
+                      className="p-1 rounded-md text-secondary transition-all hover:bg-danger/10 hover:text-danger cursor-pointer max-md:min-h-11 max-md:min-w-11"
                       title="删除"
                     >
                       <Trash2 className="h-3.5 w-3.5" />
@@ -722,5 +732,5 @@ function ConfirmDialog({ open, title, message, confirmText, danger, pending, onC
   onConfirm: () => void
 }) {
   if (!open) return null
-  return <Modal onClose={onCancel} ariaLabel={title} panelClassName="w-[calc(100vw-32px)] max-w-sm rounded-card border border-border bg-surface p-5 shadow-xl"><h3 className="text-sm font-medium text-foreground">{title}</h3><p className="mt-1.5 text-xs text-muted">{message}</p><div className="mt-4 flex justify-end gap-2"><button onClick={onCancel} className="px-3 py-1.5 rounded-btn bg-elevated text-secondary text-xs">取消</button><button onClick={onConfirm} disabled={pending} className={cn('px-3 py-1.5 rounded-btn text-xs font-medium disabled:opacity-50', danger ? 'bg-danger text-base' : 'bg-accent text-base')}>{confirmText ?? '确定'}</button></div></Modal>
+  return <Modal onClose={onCancel} ariaLabel={title} panelClassName="w-[calc(100vw-32px)] max-w-sm rounded-card border border-border bg-surface p-5 shadow-xl"><h3 className="text-sm font-medium text-foreground">{title}</h3><p className="mt-1.5 text-xs text-muted">{message}</p><div className="mt-4 flex justify-end gap-2"><button onClick={onCancel} className="px-3 py-1.5 rounded-btn bg-elevated text-secondary text-xs max-md:min-h-11 max-md:min-w-11">取消</button><button onClick={onConfirm} disabled={pending} className={cn('px-3 py-1.5 rounded-btn text-xs font-medium disabled:opacity-50 max-md:min-h-11 max-md:min-w-11', danger ? 'bg-danger text-base' : 'bg-accent text-base')}>{confirmText ?? '确定'}</button></div></Modal>
 }

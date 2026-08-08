@@ -101,7 +101,6 @@ function MonitorWidget() {
     queryKey: QK.alertsRecent(10),
     queryFn: () => api.alertsList({ days: 7, limit: 10 }),
     refetchInterval: 10000,
-    refetchIntervalInBackground: true,
   })
   const events: AlertEvent[] = alerts.data?.alerts ?? []
 
@@ -155,7 +154,7 @@ function MonitorWidget() {
                   <span className="text-[10px] font-mono text-foreground/60 shrink-0">{fmtPrice(ev.price)}</span>
                 )}
                 {ev.change_pct != null && (
-                  <span className={cn('text-[10px] font-mono font-medium shrink-0 w-12 text-right', pct >= 0 ? 'text-danger' : 'text-bear')}>
+                  <span className={cn('text-[10px] font-mono font-medium shrink-0 w-12 text-right', pct >= 0 ? 'text-bull' : 'text-bear')}>
                     {fmtPct(pct)}
                   </span>
                 )}
@@ -676,11 +675,11 @@ export function Dashboard() {
           <button
             onClick={handleRefresh}
             disabled={manualFetching}
-            className="inline-flex items-center gap-1 rounded-btn border border-border bg-elevated px-2 py-1 text-[11px] text-secondary transition-colors hover:text-foreground disabled:opacity-50"
+            className="inline-flex items-center gap-1 rounded-btn border border-border bg-elevated px-2 py-1 text-[11px] text-secondary transition-colors hover:text-foreground disabled:opacity-50 max-md:min-h-11 max-md:min-w-11"
           >
             <RefreshCw className={`h-3 w-3 ${manualFetching ? 'animate-spin' : ''}`} />重载
           </button>
-          <button onClick={() => setPlaybookOpen(true)} className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-btn border border-border bg-elevated px-2 py-1 text-[11px] text-secondary transition-colors hover:text-foreground"><Target className="h-3 w-3" />查看决策计划</button>
+          <button onClick={() => setPlaybookOpen(true)} className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-btn border border-border bg-elevated px-2 py-1 text-[11px] text-secondary transition-colors hover:text-foreground max-md:min-h-11 max-md:min-w-11"><Target className="h-3 w-3" />查看决策计划</button>
         </div>
       </div>
 
@@ -845,9 +844,9 @@ function FetchDataCard({
               </div>
               <div className="h-1.5 rounded-full bg-elevated overflow-hidden">
                 <motion.div
-                  className="h-full bg-accent"
-                  initial={{ width: 0 }}
-                  animate={{ width: `${Math.max(2, Math.min(100, fetchPct ?? 0))}%` }}
+                  className="h-full origin-left bg-accent"
+                  initial={{ scaleX: 0 }}
+                  animate={{ scaleX: Math.max(0.02, Math.min(1, (fetchPct ?? 0) / 100)) }}
                   transition={{ duration: 0.4, ease: 'easeOut' }}
                 />
               </div>
@@ -857,7 +856,7 @@ function FetchDataCard({
               <span className="text-xs text-danger">同步失败,请重试</span>
               <button
                 onClick={onStart}
-                className="inline-flex items-center gap-1.5 px-3 h-8 rounded-btn bg-accent text-white text-xs font-medium hover:bg-accent/90 transition-colors"
+                className="inline-flex items-center gap-1.5 px-3 h-8 rounded-btn bg-accent text-white text-xs font-medium hover:bg-accent/90 transition-colors max-md:min-h-11"
               >
                 <Play className="h-3.5 w-3.5" />重新获取
               </button>
@@ -866,7 +865,7 @@ function FetchDataCard({
             <div className="mt-3 flex items-center gap-3">
               <button
                 onClick={onStart}
-                className="inline-flex items-center gap-1.5 px-4 h-8 rounded-btn bg-accent text-white text-xs font-medium hover:bg-accent/90 transition-colors"
+                className="inline-flex items-center gap-1.5 px-4 h-8 rounded-btn bg-accent text-white text-xs font-medium hover:bg-accent/90 transition-colors max-md:min-h-11"
               >
                 <Play className="h-3.5 w-3.5" />立即获取数据
               </button>

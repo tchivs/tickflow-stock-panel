@@ -9,6 +9,8 @@ import {
   Zap,
   Webhook,
   ChevronDown,
+  BookOpen,
+  Lightbulb,
 } from 'lucide-react'
 import {
   usePreferences,
@@ -299,9 +301,8 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
   if (isNoneTier) {
     return (
       <div className="flex flex-col items-center justify-center py-20 text-center">
-        <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl
-                        bg-gradient-to-br from-purple-500/20 to-blue-500/20 mb-5">
-          <Activity className="h-7 w-7 text-purple-400" />
+        <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-accent/10 mb-5">
+          <Activity className="h-7 w-7 text-accent" />
         </div>
         <h2 className="text-lg font-medium text-foreground mb-2">实时监控</h2>
         <p className="text-sm text-secondary max-w-md mb-6">
@@ -555,7 +556,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
                       value={feishuDraft}
                       onChange={e => setFeishuDraft(e.target.value)}
                       placeholder={FEISHU_PREFIX + 'xxxxxxxx'}
-                      className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs font-mono text-foreground focus:outline-none focus:border-accent/50"
+                      className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs font-mono text-foreground focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60"
                     />
                   </label>
 
@@ -566,7 +567,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
                       value={feishuSecretDraft}
                       onChange={e => setFeishuSecretDraft(e.target.value)}
                       placeholder="机器人未启用签名校验则留空"
-                      className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs font-mono text-foreground focus:outline-none focus:border-accent/50"
+                      className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs font-mono text-foreground focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60"
                     />
                   </label>
 
@@ -597,7 +598,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
                       <li>粘贴到上方输入框并保存</li>
                     </ol>
                     <p className="mt-1.5 pl-4 text-muted/70">
-                      📖 官方文档:
+                      <BookOpen className="inline-block h-3 w-3 text-muted" /> 官方文档:
                       <a href="https://open.feishu.cn/document/client-docs/bot-v3/add-custom-bot?lang=zh-CN" target="_blank" rel="noreferrer" className="text-accent hover:text-accent/80">
                         自定义机器人使用指南 ↗
                       </a>
@@ -641,7 +642,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
                       value={telegramTokenDraft}
                       onChange={e => setTelegramTokenDraft(e.target.value)}
                       placeholder="123456789:AAxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-                      className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs font-mono text-foreground focus:outline-none focus:border-accent/50"
+                      className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs font-mono text-foreground focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60"
                     />
                   </label>
 
@@ -651,7 +652,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
                       value={telegramChatDraft}
                       onChange={e => setTelegramChatDraft(e.target.value)}
                       placeholder="123456789 或 -1001234567890"
-                      className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs font-mono text-foreground focus:outline-none focus:border-accent/50"
+                      className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs font-mono text-foreground focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60"
                     />
                   </label>
 
@@ -681,7 +682,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
                       <li>把 Token 和 Chat ID 填到上方输入框并保存</li>
                     </ol>
                     <p className="mt-1.5 pl-4 text-muted/70">
-                      📖 官方文档:
+                      <BookOpen className="inline-block h-3 w-3 text-muted" /> 官方文档:
                       <a href="https://core.telegram.org/bots/features#botfather" target="_blank" rel="noreferrer" className="text-accent hover:text-accent/80">
                         BotFather 使用指南 ↗
                       </a>
@@ -713,7 +714,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
                       value={wecomDraft}
                       onChange={e => setWecomDraft(e.target.value)}
                       placeholder={WECOM_PREFIX + '?key=xxxxxxxx' + ' 或直接填 key'}
-                      className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs font-mono text-foreground focus:outline-none focus:border-accent/50"
+                      className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs font-mono text-foreground focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60"
                     />
                   </label>
 
@@ -744,7 +745,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
                       <li>企业微信群的消息可同步到绑定的个人微信,实现"微信推送"</li>
                     </ol>
                     <p className="mt-1.5 pl-4 text-muted/70">
-                      📖 官方文档:
+                      <BookOpen className="inline-block h-3 w-3 text-muted" /> 官方文档:
                       <a href="https://developer.work.weixin.qq.com/document/path/91770" target="_blank" rel="noreferrer" className="text-accent hover:text-accent/80">
                         群推送 Webhook 使用指南 ↗
                       </a>
@@ -789,7 +790,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
                       value={botIdDraft}
                       onChange={e => setBotIdDraft(e.target.value)}
                       placeholder="智能机器人的唯一标识"
-                      className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs font-mono text-foreground focus:outline-none focus:border-accent/50"
+                      className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs font-mono text-foreground focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60"
                     />
                   </label>
 
@@ -800,7 +801,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
                       value={botSecretDraft}
                       onChange={e => setBotSecretDraft(e.target.value)}
                       placeholder="开启长连接 API 模式后获取的密钥"
-                      className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs font-mono text-foreground focus:outline-none focus:border-accent/50"
+                      className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs font-mono text-foreground focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60"
                     />
                   </label>
 
@@ -834,11 +835,11 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
                       <li>页面显示 <b>BotID</b> 和 <b>Secret</b>, 复制填到上方输入框</li>
                     </ol>
                     <p className="mt-1.5 pl-4 text-muted/70">
-                      💡 智能机器人支持 @交互和流式回复, 与群推送 Webhook(单向推送)互补。
+                      <Lightbulb className="inline-block h-3 w-3 text-muted" /> 智能机器人支持 @交互和流式回复, 与群推送 Webhook(单向推送)互补。
                       保存后后端会自动建立 WebSocket 长连接保活。
                     </p>
                     <p className="mt-1.5 pl-4 text-muted/70">
-                      📖 官方文档:
+                      <BookOpen className="inline-block h-3 w-3 text-muted" /> 官方文档:
                       <a href="https://developer.work.weixin.qq.com/document/path/101463" target="_blank" rel="noreferrer" className="text-accent hover:text-accent/80">
                         智能机器人长连接 ↗
                       </a>

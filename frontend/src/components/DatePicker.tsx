@@ -114,9 +114,11 @@ export function DatePicker({
       <button
         type="button"
         onClick={() => setOpen(!open)}
-        className={`inline-flex items-center gap-1.5 h-7 px-2.5 rounded-input border border-border
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        className={`inline-flex items-center gap-1.5 h-7 max-md:min-h-11 px-2.5 rounded-input border border-border
           bg-elevated hover:border-accent/50 text-xs text-foreground num
-          focus:outline-none focus:border-accent/60 transition-colors duration-150 cursor-pointer ${buttonClassName}`}
+          focus:border-accent/60 focus-visible:ring-2 focus-visible:ring-accent/60 transition-colors duration-150 cursor-pointer ${buttonClassName}`}
       >
         <Calendar className="h-3.5 w-3.5 text-accent" />
         <span className={value ? undefined : 'text-muted'}>{displayLabel}</span>
@@ -138,6 +140,7 @@ export function DatePicker({
               <button
                 type="button"
                 onClick={showYearPicker ? () => setViewYear(viewYear - 12) : prevMonth}
+                aria-label={showYearPicker ? '上一批年份' : '上个月'}
                 className="p-1 rounded-btn hover:bg-elevated text-secondary hover:text-foreground transition-colors"
               >
                 <ChevronLeft className="h-4 w-4" />
@@ -155,6 +158,7 @@ export function DatePicker({
               <button
                 type="button"
                 onClick={showYearPicker ? () => setViewYear(viewYear + 12) : nextMonth}
+                aria-label={showYearPicker ? '下一批年份' : '下个月'}
                 className="p-1 rounded-btn hover:bg-elevated text-secondary hover:text-foreground transition-colors"
               >
                 <ChevronRight className="h-4 w-4" />
@@ -203,15 +207,17 @@ export function DatePicker({
                     return (
                       <button
                         key={i}
-                    type="button"
-                    disabled={c.disabled}
-                    onClick={() => {
-                      if (!c.disabled) {
-                        onChange(c.dateStr)
-                        setOpen(false)
-                      }
-                    }}
-                    className={`
+                        type="button"
+                        disabled={c.disabled}
+                        aria-label={`${c.dateStr.slice(0, 4)}年${Number(c.dateStr.slice(5, 7))}月${c.day}日`}
+                        aria-current={isSelected ? 'date' : undefined}
+                        onClick={() => {
+                          if (!c.disabled) {
+                            onChange(c.dateStr)
+                            setOpen(false)
+                          }
+                        }}
+                        className={`
                       h-7 w-full text-xs rounded-btn transition-colors duration-100
                       ${c.cur ? 'text-foreground' : 'text-muted/40'}
                       ${isSelected ? 'bg-accent text-white font-bold' : ''}
@@ -219,9 +225,9 @@ export function DatePicker({
                       ${!isSelected && !c.disabled ? 'hover:bg-elevated' : ''}
                       ${c.disabled ? 'opacity-20 cursor-not-allowed' : 'cursor-pointer'}
                     `}
-                  >
-                    {c.day}
-                  </button>
+                      >
+                        {c.day}
+                      </button>
                 )
               })}
             </div>

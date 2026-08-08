@@ -78,7 +78,7 @@ export function CustomSignalDialog({ open, signal, defaultKind = 'exit', onClose
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: 10 }}
             transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
-            className="w-full max-w-3xl max-h-[88vh] bg-surface/95 backdrop-blur-xl border border-border/50 rounded-2xl shadow-2xl flex flex-col overflow-hidden"
+            className="w-full max-w-3xl max-h-[88vh] bg-surface border border-border rounded-dialog shadow-2xl flex flex-col overflow-hidden"
             onClick={e => e.stopPropagation()}
           >
             <div className="flex items-center justify-between gap-3 border-b border-border/50 px-5 py-4">
@@ -128,10 +128,10 @@ export function CustomSignalDialog({ open, signal, defaultKind = 'exit', onClose
                   {draft.conditions.map((c, i) => (
                     <div key={i} className="flex items-center gap-1.5">
                       <span className="text-[10px] text-muted/60 w-6 text-right shrink-0">{i === 0 ? '当' : '且'}</span>
-                      <select value={c.left} onChange={e => updateCond(i, { left: e.target.value })} className="w-32 h-7 px-1.5 rounded bg-base border border-border text-[11px] text-foreground focus:outline-none focus:border-accent/50">
+                      <select value={c.left} onChange={e => updateCond(i, { left: e.target.value })} className="w-32 h-7 px-1.5 rounded bg-base border border-border text-[11px] text-foreground focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60">
                         {fields.map(f => <option key={f.key} value={f.key}>{f.label}</option>)}
                       </select>
-                      <select value={c.op} onChange={e => updateCond(i, { op: e.target.value })} className="w-12 h-7 px-1 rounded bg-base border border-border text-[11px] font-mono text-foreground text-center focus:outline-none focus:border-accent/50">
+                      <select value={c.op} onChange={e => updateCond(i, { op: e.target.value })} className="w-12 h-7 px-1 rounded bg-base border border-border text-[11px] font-mono text-foreground text-center focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60">
                         {operators.map(op => <option key={op} value={op}>{op}</option>)}
                       </select>
                       <RightValueInput cond={c} fields={fields} onChange={v => updateCond(i, { right: v })} />
@@ -170,7 +170,7 @@ function RightValueInput({ cond, fields, onChange }: { cond: CustomSignalConditi
     <div className="flex items-center gap-1">
       {isField ? (
         <>
-          <select value={fieldValue} onChange={e => onChange(`field:${e.target.value}`)} className="w-32 h-7 px-1.5 rounded bg-base border border-border text-[11px] text-foreground focus:outline-none focus:border-accent/50">
+          <select value={fieldValue} onChange={e => onChange(`field:${e.target.value}`)} className="w-32 h-7 px-1.5 rounded bg-base border border-border text-[11px] text-foreground focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60">
             {fields.map(f => <option key={f.key} value={f.key}>{f.label}</option>)}
           </select>
           <button onClick={() => onChange('0')} title="切换为数字" className="p-0.5 rounded text-muted hover:text-accent cursor-pointer">
@@ -179,7 +179,7 @@ function RightValueInput({ cond, fields, onChange }: { cond: CustomSignalConditi
         </>
       ) : (
         <>
-          <input type="number" value={numValue} onChange={e => onChange(e.target.value)} step="any" className="w-24 h-7 px-1.5 rounded bg-base border border-border text-[11px] font-mono text-foreground text-center focus:outline-none focus:border-accent/50" />
+          <input type="number" value={numValue} onChange={e => onChange(e.target.value)} step="any" className="w-24 h-7 px-1.5 rounded bg-base border border-border text-[11px] font-mono text-foreground text-center focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60" />
           <button onClick={() => onChange('field:close')} title="切换为字段" className="p-0.5 rounded text-muted hover:text-accent cursor-pointer">
             <ArrowRight className="h-3 w-3 -rotate-90" />
           </button>

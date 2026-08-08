@@ -12,7 +12,7 @@ export function SectionTitle({ icon: Icon, children }: { icon: React.ComponentTy
 
 export function HistoryRow({ job, onClick }: { job: any; onClick: () => void }) {
   const statusIcon = {
-    succeeded: { icon: CheckCircle2, color: 'text-bear' },
+    succeeded: { icon: CheckCircle2, color: 'text-foreground' },
     failed:    { icon: XCircle, color: 'text-danger' },
     running:   { icon: Loader2, color: 'text-accent', spinning: true },
     pending:   { icon: Loader2, color: 'text-muted', spinning: true },

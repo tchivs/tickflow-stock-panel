@@ -205,6 +205,7 @@ export function ExtDataPullPanel({ config, onSaved }: {
             type="button"
             role="switch"
             aria-checked={enabled}
+            aria-label="定时拉取"
             disabled={toggling}
             onClick={() => handleToggle(!enabled)}
             className={`relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors duration-200 disabled:opacity-50 ${

@@ -5,10 +5,10 @@ import { useBubbleTasks, restoreDialog } from '@/lib/stockAnalysisStore'
 import type { ActiveTask } from '@/lib/stockAnalysisStore'
 
 /**
- * AI 个股分析任务全局气泡 —— 与财务分析胶囊并列,蓝色主题区分。
+ * AI 个股分析任务全局气泡 —— 与财务分析胶囊并列,共用 accent 主题色。
  * 挂在右侧,拖拽丝滑(逻辑同 AiReportBubble,独立状态池)。
  *
- * 与财务胶囊的差异:蓝色系 + "个股分析中"文案,避免与财务分析混淆。
+ * 与财务胶囊的差异:文案("个股分析" vs "分析中")区分,避免与财务分析混淆。
  */
 
 const BUBBLE_W = 148
@@ -134,12 +134,12 @@ function BubbleItem({ task, isLast, onPointerDown }: {
   const isWorking = task.phase === 'loading' || task.phase === 'streaming'
   const isError = task.phase === 'error'
 
-  // 蓝色系(区别于财务分析的紫色)
-  const accent = isWorking
-    ? 'from-sky-500/25 to-blue-500/20 text-sky-300 border-sky-300/40 shadow-[0_6px_24px_-10px_rgba(14,165,233,0.5)]'
+  // 状态配色:工作=accent,失败=danger,完成=中性
+  const shell = isWorking
+    ? 'border-accent/40 bg-accent/10'
     : isError
-      ? 'from-red-500/20 to-red-500/10 text-red-300 border-red-300/40 shadow-[0_6px_20px_-10px_rgba(239,68,68,0.4)]'
-      : 'from-emerald-500/20 to-emerald-500/10 text-emerald-300 border-emerald-300/40 shadow-[0_6px_20px_-10px_rgba(16,185,129,0.35)]'
+      ? 'border-danger/40 bg-danger/10'
+      : 'border-border bg-elevated'
 
   return (
     <motion.div
@@ -154,25 +154,25 @@ function BubbleItem({ task, isLast, onPointerDown }: {
         role="button"
         tabIndex={0}
         title={isWorking ? '个股分析中,点击恢复' : isError ? '分析失败,点击重试' : '点击查看个股分析报告'}
-        className={`group relative flex w-full cursor-pointer items-center gap-1.5 overflow-hidden rounded-lg border bg-gradient-to-br px-2 py-1.5 backdrop-blur-xl transition-all duration-200 hover:scale-[1.02] active:scale-[0.99] ${accent}`}
+        className={`group relative flex w-full cursor-pointer items-center gap-1.5 overflow-hidden rounded-lg border px-2 py-1.5 transition-all duration-200 hover:scale-[1.02] active:scale-[0.99] ${shell}`}
       >
         {isWorking && (
           <div className="absolute inset-x-0 top-0 h-px overflow-hidden">
-            <div className="h-full w-1/2 bg-gradient-to-r from-transparent via-sky-200 to-transparent animate-sa-bubble-progress" />
+            <div className="h-full w-1/2 bg-accent/60 animate-sa-bubble-progress" />
           </div>
         )}
         <span className="flex h-4 w-4 items-center justify-center shrink-0">
-          {isWorking ? <Loader2 className="h-3 w-3 animate-spin" />
-            : isError ? <AlertCircle className="h-3 w-3" />
-            : <Check className="h-3 w-3" />}
+          {isWorking ? <Loader2 className="h-3 w-3 animate-spin text-accent" />
+            : isError ? <AlertCircle className="h-3 w-3 text-danger" />
+            : <Check className="h-3 w-3 text-accent" />}
         </span>
         <span className="flex-1 min-w-0 text-[11px] font-medium text-foreground leading-none truncate">
           {task.name || task.symbol}
         </span>
         <span className="shrink-0 text-[9px] leading-none">
-          {isWorking ? <span className="text-sky-300/80">个股分析</span>
-            : isError ? <span className="text-red-300/80">失败</span>
-            : <span className="text-emerald-300/80">点击查看</span>}
+          {isWorking ? <span className="text-accent">个股分析</span>
+            : isError ? <span className="text-danger">失败</span>
+            : <span className="text-secondary">点击查看</span>}
         </span>
       </div>
       <style>{`

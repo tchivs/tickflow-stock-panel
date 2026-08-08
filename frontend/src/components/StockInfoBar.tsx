@@ -219,7 +219,7 @@ export function StockInfoBar({ symbol, name, stockInfo, rows, fields, onFieldsCh
           {onToggleWatchlist && (
             <button
               onClick={onToggleWatchlist}
-              className={`p-1 rounded-btn transition-colors cursor-pointer ${inWatchlist ? 'text-[#FACC15]' : 'text-muted hover:text-foreground hover:bg-elevated'}`}
+              className={`p-1 rounded-btn transition-colors cursor-pointer max-md:h-11 max-md:w-11 ${inWatchlist ? 'text-[#FACC15]' : 'text-muted hover:text-foreground hover:bg-elevated'}`}
               title={inWatchlist ? '移出自选' : '加自选'}
             >
               <Star className="h-3.5 w-3.5" />
@@ -228,7 +228,7 @@ export function StockInfoBar({ symbol, name, stockInfo, rows, fields, onFieldsCh
           {onMonitor && (
             <button
               onClick={onMonitor}
-              className="p-1 rounded-btn text-amber-400 hover:bg-amber-400/10 transition-colors cursor-pointer"
+              className="p-1 rounded-btn text-amber-400 hover:bg-amber-400/10 transition-colors cursor-pointer max-md:h-11 max-md:w-11"
               title="加监控"
             >
               <RadioTower className="h-3.5 w-3.5" />
@@ -236,7 +236,7 @@ export function StockInfoBar({ symbol, name, stockInfo, rows, fields, onFieldsCh
           )}
           <button
             onClick={() => setCustomizerOpen(true)}
-            className="p-1 rounded-btn text-muted hover:text-foreground hover:bg-elevated transition-colors"
+            className="p-1 rounded-btn text-muted hover:text-foreground hover:bg-elevated transition-colors max-md:h-11 max-md:w-11"
             title="自定义信息条"
           >
             <Settings2 className="h-3.5 w-3.5" />

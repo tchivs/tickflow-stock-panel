@@ -8,7 +8,7 @@
  * - DimensionGroupSidebar: 维度分组侧边栏
  */
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
 import {
@@ -83,6 +83,14 @@ export function AnalysisConfigDialog({
     f => !['symbol', 'code', 'date', 'name'].includes(f.name),
   )
 
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
       <motion.div
@@ -91,10 +99,13 @@ export function AnalysisConfigDialog({
         exit={{ opacity: 0, scale: 0.95 }}
         className="w-[calc(100vw-2rem)] max-w-[420px] rounded-lg border border-border bg-surface shadow-xl"
         onClick={e => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label="配置数据源"
       >
         <div className="flex items-center justify-between px-4 pt-3 pb-2">
           <span className="text-sm font-medium">配置数据源</span>
-          <button onClick={onClose} className="p-0.5 text-muted hover:text-foreground">
+          <button onClick={onClose} aria-label="关闭" className="p-0.5 text-muted hover:text-foreground">
             <X className="h-4 w-4" />
           </button>
         </div>
@@ -106,7 +117,7 @@ export function AnalysisConfigDialog({
             <select
               value={draft.configId ?? ''}
               onChange={e => setDraft(d => ({ ...d, configId: e.target.value || undefined, dimensionField: undefined }))}
-              className="w-full h-8 bg-elevated border border-border rounded text-xs text-foreground px-2 focus:outline-none focus:border-accent/50"
+              className="w-full h-8 max-md:min-h-11 bg-elevated border border-border rounded text-xs text-foreground px-2 focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60"
             >
               <option value="">自动选择</option>
               {configs.map(c => (
@@ -122,7 +133,7 @@ export function AnalysisConfigDialog({
               <select
                 value={draft.dimensionField ?? ''}
                 onChange={e => setDraft(d => ({ ...d, dimensionField: e.target.value || undefined }))}
-                className="w-full h-8 bg-elevated border border-border rounded text-xs text-foreground px-2 focus:outline-none focus:border-accent/50"
+                className="w-full h-8 max-md:min-h-11 bg-elevated border border-border rounded text-xs text-foreground px-2 focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60"
               >
                 <option value="">自动探测</option>
                 {nonMetaFields.map(f => (
@@ -138,7 +149,7 @@ export function AnalysisConfigDialog({
               <select
                 value={draft.hierarchyLevel ?? 2}
                 onChange={e => setDraft(d => ({ ...d, hierarchyLevel: Number(e.target.value) as 1 | 2 | 3 }))}
-                className="w-full h-8 bg-elevated border border-border rounded text-xs text-foreground px-2 focus:outline-none focus:border-accent/50"
+                className="w-full h-8 max-md:min-h-11 bg-elevated border border-border rounded text-xs text-foreground px-2 focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60"
               >
                 <option value={1}>一级行业</option>
                 <option value={2}>二级行业（默认）</option>
@@ -341,7 +352,7 @@ export function DimensionGroupSidebar({
             value={searchValue}
             onChange={e => onSearchChange(e.target.value)}
             placeholder={`搜索${kindLabel}`}
-            className="h-8 w-full rounded-btn border border-border bg-base pl-8 pr-3 text-xs text-foreground placeholder:text-muted/50 focus:outline-none focus:border-accent/50"
+            className="h-8 max-md:min-h-11 w-full rounded-btn border border-border bg-base pl-8 pr-3 text-xs text-foreground placeholder:text-muted/50 focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60"
           />
         </div>
       </div>
@@ -491,7 +502,7 @@ export function PresetFetchState({
           )}
         </button>
         {errMsg && (
-          <p className="mt-3 flex items-center justify-center gap-1.5 text-xs text-bear">
+          <p className="mt-3 flex items-center justify-center gap-1.5 text-xs text-danger">
             <AlertCircle className="h-3.5 w-3.5" /> {errMsg}
           </p>
         )}

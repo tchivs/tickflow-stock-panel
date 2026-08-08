@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import * as echarts from 'echarts'
 import type { ECharts, EChartsOption, TooltipComponentFormatterCallbackParams } from 'echarts'
 import { BarChart3 } from 'lucide-react'
@@ -144,7 +144,7 @@ export function AuctionHistoryChart({ symbol, height = 320, className }: Props) 
   // days=120 显式: 更多历史 = 更完整趋势 (服务端上限 120, 历史不可变 → 5min stale)
   const { data, isPending, isError } = useAuctionHistory(symbol, 120)
 
-  const rows = data?.rows ?? []
+  const rows = useMemo(() => data?.rows ?? [], [data])
   // 诚实空态 D6: probe 非 available / available:false / rows 空 → 一律不画零值柱
   const showChart = !!data && data.available && data.probe.status === 'available' && rows.length > 0
 

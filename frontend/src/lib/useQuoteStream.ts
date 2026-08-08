@@ -193,6 +193,11 @@ export function useQuoteStream(
       es.addEventListener('quotes_updated', () => {
         // 实时行情未开启时不处理行情刷新
         if (!enabledRef.current) return
+        // 日K批量 = 历史静态数据 (Watchlist 设了 5min staleTime), 不随行情 tick 失效 —
+        // 与 minute-batch/auction-history 同一先例 (queryKeys 注释); 否则每个 tick
+        // 全量重拉 N 只 × M 天 K 线, 高频下打爆带宽与重渲染。
+        const isStaticKlineBatch = (q: { queryKey: readonly unknown[] }) =>
+          String(q.queryKey[0]) === 'watchlist-kline-batch'
         // 根据用户配置过滤 invalidation
         const pages = pagesRef.current
         if (pages) {
@@ -204,6 +209,7 @@ export function useQuoteStream(
           })
           qc.invalidateQueries({
             predicate: (query) =>
+              !isStaticKlineBatch(query) &&
               activePrefixes.some(
                 (prefix) => String(query.queryKey[0]).startsWith(prefix),
               ),
@@ -212,6 +218,7 @@ export function useQuoteStream(
           // 无配置时全部刷新 (向后兼容)
           qc.invalidateQueries({
             predicate: (query) =>
+              !isStaticKlineBatch(query) &&
               SSE_INVALIDATE_PREFIXES.some(
                 (prefix) => String(query.queryKey[0]).startsWith(prefix),
               ),

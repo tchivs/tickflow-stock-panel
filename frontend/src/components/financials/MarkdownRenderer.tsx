@@ -21,7 +21,7 @@ import { Fragment, type ReactNode } from 'react'
 
 function renderInline(text: string, keyBase: string): ReactNode[] {
   const nodes: ReactNode[] = []
-  // 正则:匹配 **加粗** 或 `代码` 或 ★ 评级
+  // 正则:匹配 **加粗** 或 `代码` 或星号评级
   const re = /(\*\*([^*]+)\*\*)|(`([^`]+)`)/g
   let last = 0
   let m: RegExpExecArray | null
@@ -117,7 +117,7 @@ export function MarkdownRenderer({ content }: { content: string }) {
         i++
       }
       blocks.push(
-        <blockquote key={key++} className="my-4 pl-3 border-l-2 border-amber-400/40 bg-amber-400/[0.04] py-1.5 pr-2 rounded-r text-xs text-secondary">
+        <blockquote key={key++} className="my-4 pl-3 border-l-2 border-border py-1.5 pr-2 rounded-r text-xs text-secondary">
           {renderInline(quoteLines.join(' '), `q-${key}`)}
         </blockquote>,
       )

@@ -1,13 +1,15 @@
 import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { Link } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, RefreshCw, Clock, Gavel } from 'lucide-react'
+import { X, RefreshCw, Clock, Gavel, Zap, ArrowUpRight } from 'lucide-react'
 import { api } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { cnSignal } from '@/lib/signals'
 import { StockPanel, getDefaultRange } from '@/components/StockPanel'
 import { DatePicker } from '@/components/DatePicker'
 import { RuleEditor } from '@/components/monitor/RuleEditor'
+import { boardTag } from '@/components/stock-table/primitives'
 
 interface Props {
   symbol: string | null
@@ -23,20 +25,13 @@ interface Props {
   } | null
 }
 
-// ===== 板块标识（与 Screener 列表一致）=====
+// ===== 板块标识 (统一由 stock-table/primitives boardTag 提供, 全站唯一实现) =====
 
 // 预设快捷范围（只保留半年和1年）
 const PRESETS: { label: string; months: number }[] = [
   { label: '半年', months: 6 },
   { label: '1年', months: 12 },
 ]
-
-function boardTag(symbol: string): { label: string; color: string } | null {
-  if (/^(300|301)/.test(symbol)) return { label: '创', color: 'text-[#f97316] bg-[#f97316]/12 border-[#f97316]/25' }
-  if (/^688/.test(symbol))       return { label: '科', color: 'text-purple-400 bg-purple-400/12 border-purple-400/25' }
-  if (/^[48]/.test(symbol))      return { label: '北', color: 'text-cyan-400 bg-cyan-400/12 border-cyan-400/25' }
-  return null
-}
 
 export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props) {
   const [showIntraday, setShowIntraday] = useState(false)
@@ -102,21 +97,32 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props
             className="relative w-[92vw] max-w-[1100px] max-h-[95vh] rounded-card border border-border bg-base shadow-2xl overflow-hidden flex flex-col"
           >
             {/* 顶栏 */}
-            <div className="flex items-center justify-between px-5 py-3 border-b border-border shrink-0">
-              <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-5 py-3 border-b border-border shrink-0">
+              <div className="flex items-center gap-2 min-w-0">
                 {(() => {
                   const board = symbol ? boardTag(symbol) : null
                   return board ? (
-                    <span className={`inline-flex items-center justify-center w-[18px] h-[18px] rounded text-[9px] font-bold leading-none border ${board.color}`}>
+                    <span className={`shrink-0 inline-flex items-center justify-center w-[18px] h-[18px] rounded text-[9px] font-bold leading-none border ${board.color}`}>
                       {board.label}
                     </span>
                   ) : null
                 })()}
                 <span className="font-mono text-sm font-medium text-foreground">{symbol}</span>
-                {name && <span className="text-xs text-muted">{name}</span>}
+                {name && <span className="text-xs text-muted truncate">{name}</span>}
               </div>
 
-              <div className="flex items-center gap-1.5">
+              <div className="flex flex-wrap items-center justify-end gap-1.5 max-w-full">
+                {/* 升级到个股分析页 (详情漏斗: 预览 → 完整分析) */}
+                {symbol && (
+                  <Link
+                    to={`/stock-analysis?symbol=${encodeURIComponent(symbol)}&name=${encodeURIComponent(name ?? '')}`}
+                    onClick={onClose}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs text-accent border border-accent/30 bg-accent/10 hover:bg-accent/20 transition-colors"
+                  >
+                    <ArrowUpRight className="h-3 w-3" aria-hidden />
+                    个股分析
+                  </Link>
+                )}
                 {/* 日期范围快捷 */}
                 {PRESETS.map(p => {
                   const now = new Date()
@@ -133,7 +139,7 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props
                         ns.setMonth(ns.getMonth() - p.months)
                         setDateRange({ start: ns.toISOString().slice(0, 10), end })
                       }}
-                      className={`h-6 px-1.5 rounded text-[11px] transition-colors cursor-pointer
+                      className={`h-6 max-md:h-9 px-1.5 rounded text-[11px] transition-colors cursor-pointer
                         ${isActive
                           ? 'bg-accent/20 text-accent font-medium border border-accent/30'
                           : 'text-muted hover:text-foreground hover:bg-elevated border border-transparent'
@@ -191,7 +197,8 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props
                 {/* 刷新 */}
                 <button
                   onClick={handleRefresh}
-                  className="p-1 rounded-btn text-secondary hover:text-foreground hover:bg-elevated transition-colors"
+                  className="p-1 max-md:h-9 max-md:w-9 rounded-btn text-secondary hover:text-foreground hover:bg-elevated transition-colors"
+                  aria-label="刷新"
                   title="刷新"
                 >
                   <RefreshCw className="h-3.5 w-3.5" />
@@ -200,7 +207,8 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props
                 {/* 关闭 */}
                 <button
                   onClick={onClose}
-                  className="p-1 rounded-btn text-secondary hover:text-foreground hover:bg-elevated transition-colors"
+                  className="p-1 max-md:h-9 max-md:w-9 rounded-btn text-secondary hover:text-foreground hover:bg-elevated transition-colors"
+                  aria-label="关闭"
                 >
                   <X className="h-4 w-4" />
                 </button>
@@ -209,10 +217,13 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props
 
             {/* 触发信息条 (来自监控触发记录) */}
             {triggerInfo && (
-              <div className="flex items-center gap-4 border-b border-amber-400/20 bg-amber-400/[0.06] px-5 py-2 shrink-0">
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-amber-400/20 bg-amber-400/[0.06] px-5 py-2 shrink-0">
                 {/* 左: 触发标记 + 时间 */}
                 <div className="flex items-center gap-2 shrink-0">
-                  <span className="text-[10px] font-semibold text-amber-400">⚡ 触发</span>
+                  <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-amber-400">
+                    <Zap className="h-3 w-3" aria-hidden />
+                    触发
+                  </span>
                   {triggerInfo.ts && (
                     <span className="text-[11px] text-secondary font-mono">
                       {new Date(triggerInfo.ts).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}
@@ -226,7 +237,7 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props
                     <span className="text-[11px] font-mono text-foreground/80">{triggerInfo.price.toFixed(2)}</span>
                   )}
                   {triggerInfo.changePct != null && (
-                    <span className={`text-[11px] font-mono font-medium ${triggerInfo.changePct >= 0 ? 'text-danger' : 'text-bear'}`}>
+                    <span className={`text-[11px] font-mono font-medium ${triggerInfo.changePct >= 0 ? 'text-bull' : 'text-bear'}`}>
                       {triggerInfo.changePct >= 0 ? '+' : ''}{(triggerInfo.changePct * 100).toFixed(2)}%
                     </span>
                   )}

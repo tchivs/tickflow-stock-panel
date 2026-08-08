@@ -12,7 +12,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   BookOpenCheck, RefreshCw, Sparkles, Trash2, History, ChevronRight, AlertTriangle,
-  Database, Wand2, Copy, Download, Clock, X, Check,
+  Database, Wand2, Copy, Download, Clock, X, Check, Target, BarChart3, Flame, Banknote, Newspaper,
 } from 'lucide-react'
 
 import { api, type OverviewMarket, type AiReviewReport } from '@/lib/api'
@@ -278,10 +278,27 @@ export function Review() {
                 <RefreshCw className="h-4 w-4 animate-spin" /> 加载市场数据…
               </div>
             </div>
+          ) : marketQuery.isError && !data ? (
+            <div role="alert" className="flex flex-col items-center justify-center gap-4 rounded-card border border-danger/30 bg-danger/10 px-6 py-14">
+              <div className="grid h-12 w-12 place-items-center rounded-full bg-danger/10">
+                <AlertTriangle className="h-5 w-5 text-danger" />
+              </div>
+              <div className="text-center">
+                <div className="text-sm font-medium text-foreground">市场数据加载失败</div>
+                <p className="mt-1 text-xs text-muted">无法获取市场数据，请检查网络或数据源后重试。</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => marketQuery.refetch()}
+                className="inline-flex items-center gap-1.5 rounded-btn bg-accent px-4 py-2 text-xs font-medium text-white transition-all hover:bg-accent/90 max-md:min-h-11 max-md:min-w-11"
+              >
+                <RefreshCw className="h-3.5 w-3.5" />重试
+              </button>
+            </div>
           ) : !data || !data.as_of ? (
             <div className="flex flex-col items-center justify-center gap-4 rounded-card border border-border bg-surface/80 px-6 py-16">
               <div className="relative">
-                <div className="grid h-14 w-14 place-items-center rounded-2xl bg-gradient-to-br from-accent/20 to-purple-500/15 border border-accent/30">
+                <div className="grid h-14 w-14 place-items-center rounded-2xl bg-accent/10 border border-accent/30">
                   <Database className="h-6 w-6 text-accent" strokeWidth={1.8} />
                 </div>
               </div>
@@ -404,13 +421,13 @@ export function Review() {
                   <input
                     type="number" min={0} max={23} value={draft.hour}
                     onChange={e => setDraft(d => ({ ...d, hour: Math.max(0, Math.min(23, Number(e.target.value))) }))}
-                    className="w-12 px-1.5 py-1 rounded-btn bg-base border border-border text-xs font-mono text-foreground text-center focus:outline-none focus:border-accent/50"
+                    className="w-12 px-1.5 py-1 rounded-btn bg-base border border-border text-xs font-mono text-foreground text-center focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60"
                   />
                   <span className="text-xs text-muted">:</span>
                   <input
                     type="number" min={0} max={59} value={draft.minute}
                     onChange={e => setDraft(d => ({ ...d, minute: Math.max(0, Math.min(59, Number(e.target.value))) }))}
-                    className="w-12 px-1.5 py-1 rounded-btn bg-base border border-border text-xs font-mono text-foreground text-center focus:outline-none focus:border-accent/50"
+                    className="w-12 px-1.5 py-1 rounded-btn bg-base border border-border text-xs font-mono text-foreground text-center focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60"
                   />
                   <span className="text-[10px] text-muted/70">不早于 15:00 · 工作日执行</span>
                 </div>
@@ -637,7 +654,7 @@ function ReportPanel({
     return (
       <div className="flex min-h-[28rem] flex-col items-center justify-center gap-5 rounded-card border border-border bg-surface/80 px-6 py-16">
         <div className="relative">
-          <div className="grid h-20 w-20 place-items-center rounded-2xl bg-gradient-to-br from-accent/20 to-purple-500/15 border border-accent/30">
+          <div className="grid h-20 w-20 place-items-center rounded-2xl bg-accent/10 border border-accent/30">
             <BookOpenCheck className="h-9 w-9 text-accent" strokeWidth={1.8} />
           </div>
           <Sparkles className="absolute -right-1 -top-1 h-5 w-5 text-accent" />
@@ -652,16 +669,16 @@ function ReportPanel({
         {/* 报告七节预览 —— 空状态也有内容感,暗示报告结构 */}
         <div className="mt-2 grid w-full max-w-md grid-cols-2 gap-2 sm:grid-cols-4">
           {[
-            { icon: '🎯', label: '一句话定调' },
-            { icon: '📊', label: '盘面总览' },
-            { icon: '🔥', label: '板块主线' },
-            { icon: '💰', label: '资金情绪' },
-            { icon: '📰', label: '消息催化' },
-            { icon: '🎯', label: '明日计划' },
-            { icon: '⚠️', label: '风险提示' },
+            { icon: Target, label: '一句话定调' },
+            { icon: BarChart3, label: '盘面总览' },
+            { icon: Flame, label: '板块主线' },
+            { icon: Banknote, label: '资金情绪' },
+            { icon: Newspaper, label: '消息催化' },
+            { icon: Target, label: '明日计划' },
+            { icon: AlertTriangle, label: '风险提示' },
           ].map((s) => (
             <div key={s.label} className="flex flex-col items-center gap-1 rounded-btn bg-elevated/40 px-2 py-2">
-              <span className="text-base">{s.icon}</span>
+              <s.icon className="h-5 w-5 text-secondary" aria-hidden />
               <span className="text-[10px] text-secondary">{s.label}</span>
             </div>
           ))}
@@ -687,7 +704,7 @@ function ReportPanel({
       animate={{ opacity: 1 }}
       className="overflow-hidden rounded-card border border-border bg-surface/80"
     >
-      <div className="flex items-center justify-between border-b border-border bg-gradient-to-r from-accent/5 to-transparent px-4 py-2.5">
+      <div className="flex items-center justify-between border-b border-border bg-elevated/50 px-4 py-2.5">
         <div className="flex items-center gap-1.5">
           {isGenerating ? <RefreshCw className="h-3.5 w-3.5 animate-spin text-accent" /> : <BookOpenCheck className="h-3.5 w-3.5 text-accent" />}
           <span className="text-xs font-medium text-foreground">
@@ -709,7 +726,7 @@ function ReportPanel({
         {isLoading ? (
           <div className="flex flex-col items-center justify-center gap-3 py-16">
             <div className="relative">
-              <div className="grid h-11 w-11 place-items-center rounded-full bg-gradient-to-br from-accent/20 to-purple-500/15 border border-accent/30">
+              <div className="grid h-11 w-11 place-items-center rounded-full bg-accent/10 border border-accent/30">
                 <Sparkles className="h-5 w-5 animate-pulse text-accent" />
               </div>
               <RefreshCw className="absolute -inset-1 h-13 w-13 animate-spin text-accent/30" style={{ animationDuration: '3s' }} />
@@ -748,7 +765,7 @@ function HistoryPanel({
   const empty = !generating && reports.length === 0
   return (
     <div className="overflow-hidden rounded-card border border-border bg-surface/80">
-      <div className="flex items-center gap-1.5 border-b border-border bg-gradient-to-r from-accent/5 to-transparent px-3 py-2.5">
+      <div className="flex items-center gap-1.5 border-b border-border bg-elevated/50 px-3 py-2.5">
         <History className="h-3.5 w-3.5 text-accent" />
         <span className="text-xs font-medium text-foreground">历史复盘</span>
         <span className="font-mono text-[10px] text-muted">({reports.length})</span>
@@ -826,7 +843,7 @@ function HistoryPanel({
                   </div>
                   <button
                     onClick={(e) => { e.stopPropagation(); onDelete(r.id) }}
-                    className="shrink-0 p-1 text-muted opacity-0 transition-all hover:text-bear group-hover:opacity-100"
+                    className="shrink-0 p-1 text-muted opacity-0 transition-all hover:text-danger group-hover:opacity-100"
                     title="删除"
                   >
                     <Trash2 className="h-3.5 w-3.5" />

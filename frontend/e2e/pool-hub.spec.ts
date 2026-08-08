@@ -494,6 +494,116 @@ test.describe('Phase 18 pool hub', () => {
     await expect(page.getByText('+1.05%', { exact: true })).toBeVisible()
   })
 
+  test('vip name click opens StockPreviewDialog (watchlist-style detail popup)', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
+    await installShell(page)
+    await page.route('**/api/pool/hub**', route => json(route, hubPayload))
+    // 弹窗内日 K 请求 mock 成功 (不落 unhandled 500)
+    await page.route('**/api/kline/daily**', route => json(route, { symbol: '300750.SZ', name: '宁德时代', rows: [], source: 'mock' }))
+
+    await page.goto('/pool-hub')
+    await expect(page.getByText('宁德时代', { exact: true })).toBeVisible()
+
+    // 点击名称 → 弹窗出现 (可观测锚点: 「竞价历史」toggle 仅 StockPreviewDialog 挂载时存在, 同 auction-history.spec)
+    await page.getByRole('button', { name: /宁德时代/ }).click()
+    await expect(page.getByRole('button', { name: '竞价历史' })).toBeVisible()
+
+    // 详情漏斗: 弹窗内「个股分析」链接直达 /stock-analysis (携带 symbol+name)
+    // 侧边栏导航也有 个股分析 项 → 用弹窗遮罩层作用域消歧
+    const escalate = page.locator('div.fixed.inset-0').getByRole('link', { name: /个股分析/ })
+    await expect(escalate).toHaveAttribute('href', '/stock-analysis?symbol=300750.SZ&name=%E5%AE%81%E5%BE%B7%E6%97%B6%E4%BB%A3')
+
+    // ESC 关闭 → 弹窗消失
+    await page.keyboard.press('Escape')
+    await expect(page.getByRole('button', { name: '竞价历史' })).toHaveCount(0)
+  })
+
+  test('light theme token contrast passes WCAG AA (muted/bull/bear/accent on surface)', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
+    await installShell(page)
+    await page.addInitScript(() => localStorage.setItem('tf-theme', 'light'))
+    await page.route('**/api/pool/hub**', route => json(route, hubPayload))
+    await page.route('**/api/kline/daily**', route => json(route, { symbol: '300750.SZ', name: '宁德时代', rows: [], source: 'mock' }))
+
+    await page.goto('/pool-hub')
+    await expect(page.getByText('宁德时代', { exact: true })).toBeVisible()
+
+    // 计算实际渲染色的 WCAG 对比度 (token 级回归: :root 亮色 token 必须 ≥4.5:1 on surface)
+    const ratios = await page.evaluate(() => {
+      const probe = (sel: string) => {
+        const el = document.querySelector(sel)
+        if (!el) return null
+        const color = getComputedStyle(el).color
+        const rgb = color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/)
+        if (!rgb) return null
+        return [Number(rgb[1]), Number(rgb[2]), Number(rgb[3])] as const
+      }
+      const lum = ([r, g, b]: readonly number[]) => {
+        const f = (c: number) => { c /= 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4 }
+        return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b)
+      }
+      const ratio = (a: readonly number[], b: readonly number[]) => {
+        const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x)
+        return (hi + 0.05) / (lo + 0.05)
+      }
+      // 行内价格单元格 (text-bull) 与弹窗按钮 (text-accent) 覆盖两种 token 场景
+      const bull = probe('.text-bull') ?? probe('.num.tabular-nums')
+      const muted = probe('.text-muted')
+      const accent = probe('.text-accent')
+      const surface = getComputedStyle(document.body).backgroundColor.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/)?.slice(1).map(Number) ?? [255, 255, 255]
+      const bg = surface as readonly number[]
+      return {
+        bullOnSurface: bull ? ratio(bull, bg) : null,
+        mutedOnSurface: muted ? ratio(muted, bg) : null,
+        accentOnSurface: accent ? ratio(accent, bg) : null,
+      }
+    })
+    for (const [name, r] of Object.entries(ratios)) {
+      expect(r, `${name} contrast`).not.toBeNull()
+      expect(r!, `${name} ≥ 4.5:1`).toBeGreaterThanOrEqual(4.5)
+    }
+  })
+
+  test('keyboard Tab shows a visible focus ring (global :focus-visible)', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
+    await installShell(page)
+    await page.route('**/api/pool/hub**', route => json(route, hubPayload))
+
+    await page.goto('/pool-hub')
+    await expect(page.getByText('宁德时代', { exact: true })).toBeVisible()
+
+    // Tab 到首个可聚焦控件 (刷新股池按钮), 断言获得可见焦点环
+    await page.keyboard.press('Tab')
+    const outline = await page.evaluate(() => {
+      const el = document.activeElement as HTMLElement
+      const s = getComputedStyle(el)
+      return { tag: el.tagName, width: s.outlineWidth, style: s.outlineStyle }
+    })
+    expect(outline.style).not.toBe('none')
+    expect(Number.parseFloat(outline.width)).toBeGreaterThan(0)
+  })
+
+  test('preview dialog fits 375px viewport without horizontal overflow', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
+    await installShell(page)
+    await page.setViewportSize({ width: 375, height: 800 })
+    await page.route('**/api/pool/hub**', route => json(route, hubPayload))
+    await page.route('**/api/kline/daily**', route => json(route, { symbol: '300750.SZ', name: '宁德时代', rows: [], source: 'mock' }))
+
+    await page.goto('/pool-hub')
+    await page.getByRole('button', { name: /宁德时代/ }).click()
+    await expect(page.getByRole('button', { name: '竞价历史' })).toBeVisible()
+
+    const overflow = await page.evaluate(() => {
+      const panel = [...document.querySelectorAll('div')].find(d => d.classList.contains('w-[92vw]'))
+      if (!panel) return null
+      return { scrollW: panel.scrollWidth, clientW: panel.clientWidth, bodyScrollW: document.body.scrollWidth, winW: window.innerWidth }
+    })
+    expect(overflow).not.toBeNull()
+    expect(overflow!.scrollW, 'dialog panel must not overflow horizontally').toBeLessThanOrEqual(overflow!.clientW)
+    expect(overflow!.bodyScrollW, 'page must not overflow horizontally').toBeLessThanOrEqual(overflow!.winW)
+  })
+
   test('guest↔vip mode switch toggles the 开盘涨幅 column from the server mode field', async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
     await installShell(page)
@@ -626,7 +736,8 @@ test.describe('Phase 18 pool hub', () => {
     // 白名单: 股池页唯一交互 = 刷新 / 卡片钻取 / 概念输入 / 清除筛选 / DateNavigator 步进
     // WATCH-01/02/04 控件可访问名全部登记 (P1): 星标 移出自选/加入自选 + 开关 只看自选 + 批量加自选
     // WATCH-04 复选框列 (LG-04): checkbox 只允许 选择{6位code} / 全选
-    const ALLOWED_RE = /刷新股池|当日池|当日无命中|数据不可用|清除筛选|清除概念筛选|重试|收起|\+\d+|上一个交易日|下一个交易日|最新|只看自选|批量加自选|加入自选|移出自选|选择\d{6}|全选/
+    // 名称列详情按钮: aria-label = 查看{名称}详情 → 打开只读个股弹窗 (Watchlist 同款交互, 非执行动作)
+    const ALLOWED_RE = /刷新股池|当日池|当日无命中|数据不可用|清除筛选|清除概念筛选|重试|收起|\+\d+|上一个交易日|下一个交易日|最新|只看自选|批量加自选|加入自选|移出自选|选择\d{6}|全选|查看.{1,32}详情/
     const btnCount = await main.getByRole('button').count()
     for (let i = 0; i < btnCount; i++) {
       const btn = main.getByRole('button').nth(i)

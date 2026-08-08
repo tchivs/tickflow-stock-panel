@@ -6,7 +6,7 @@ export function NotFound() {
     <div className="min-h-screen bg-base flex flex-col items-center justify-center gap-4 px-4 text-center">
       <Logo size={40} className="text-foreground" />
       <div>
-        <p className="text-sm font-semibold text-foreground">404 · 页面不存在</p>
+        <h1 className="text-sm font-semibold text-foreground">404 · 页面不存在</h1>
         <p className="mt-1 text-xs text-muted">地址可能已变更,或该页面从未存在。</p>
       </div>
       <Link

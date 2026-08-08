@@ -258,4 +258,26 @@ test.describe('Phase 30 preopen monitor (MON-07 frontend)', () => {
     // 命中条件行 (cnSignal: rsi_14 → RSI14)
     await expect(page.getByText('RSI14<30')).toBeVisible()
   })
+
+  test('MON-07: 告警/规则加载失败 → role=alert + 重试可恢复 (错误≠空态)', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
+    await installShell(page)
+    let alertsFail = true
+    await page.route('**/api/alerts**', route => alertsFail
+      ? route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ detail: 'boom' }) })
+      : json(route, { alerts: [signalAlertPayload], total: 1 }))
+
+    await page.goto('/monitor')
+
+    // 失败 → 错误告警 (绝不伪装成 暂无触发记录 空态); 查询默认 retry 3 次, 放宽超时等重试耗尽
+    const alertBox = page.getByRole('alert').filter({ hasText: '触发记录加载失败' })
+    await expect(alertBox).toBeVisible({ timeout: 20_000 })
+    await expect(page.getByText('暂无触发记录')).toHaveCount(0)
+
+    // 重试 → 恢复渲染
+    alertsFail = false
+    await alertBox.getByRole('button', { name: '重试' }).click()
+    await expect(page.getByText('+1.20%')).toBeVisible()
+    await expect(page.getByRole('alert').filter({ hasText: '触发记录加载失败' })).toHaveCount(0)
+  })
 })

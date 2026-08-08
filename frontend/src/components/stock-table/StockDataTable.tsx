@@ -84,20 +84,35 @@ export function StockDataTable({
               return (
                 <th
                   key={col.id}
-                  className={`${alignThClass(col.align)} ${sortable ? 'cursor-pointer select-none group' : ''}`}
-                  onClick={sortable ? () => onSortToggle!(col.id) : undefined}
+                  scope="col"
+                  aria-sort={isSorted ? (dir === 'asc' ? 'ascending' : 'descending') : undefined}
+                  className={`${alignThClass(col.align)} ${sortable ? 'group' : ''}`}
                 >
-                  {contentOverride !== undefined ? contentOverride : col.label}
-                  {sortable && (
-                    <span className="inline-block ml-1 text-[10px] opacity-30 group-hover:opacity-60 transition-opacity">
-                      {isSorted ? (dir === 'asc' ? '↑' : '↓') : '↕'}
-                    </span>
+                  {contentOverride !== undefined ? (
+                    contentOverride
+                  ) : sortable ? (
+                    /* 键盘可排序 (P1 a11y): 真实 button 承载点击/Enter/Space, th 声明 aria-sort */
+                    <button
+                      type="button"
+                      onClick={() => onSortToggle!(col.id)}
+                      className="inline-flex w-full items-center gap-1 cursor-pointer select-none"
+                    >
+                      <span className={col.align === 'right' ? 'flex-1 text-right' : ''}>{col.label}</span>
+                      <span
+                        className="text-[10px] opacity-30 group-hover:opacity-60 transition-opacity"
+                        aria-hidden
+                      >
+                        {isSorted ? (dir === 'asc' ? '↑' : '↓') : '↕'}
+                      </span>
+                    </button>
+                  ) : (
+                    col.label
                   )}
                 </th>
               )
             })}
             {extraHeader && (
-              <th className="px-3 py-2.5 font-medium text-right">{extraHeader}</th>
+              <th scope="col" className="px-3 py-2.5 font-medium text-right">{extraHeader}</th>
             )}
           </tr>
         </thead>

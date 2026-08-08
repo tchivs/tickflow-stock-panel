@@ -17,7 +17,7 @@ const TRANSITION_LABEL: Record<string, string> = {
 function stateMeta(state: string | null): { label: string; className: string; dot: string } {
   switch (state) {
     case 'approved':
-      return { label: '已审批', className: 'text-bear border-bear/30 bg-bear/10', dot: 'bg-bear' }
+      return { label: '已审批', className: 'text-foreground border-border bg-elevated', dot: 'bg-foreground' }
     case 'rejected':
       return { label: '已驳回', className: 'text-danger border-danger/30 bg-danger/10', dot: 'bg-danger' }
     case 'filled':
@@ -59,6 +59,12 @@ export function RebalancePlan() {
             </div>
             <div className="max-h-[calc(100vh-16rem)] overflow-auto p-2 space-y-1">
               {listQuery.isLoading && <div className="px-3 py-6 text-center text-xs text-muted">加载中…</div>}
+              {listQuery.isError && !listQuery.data && (
+                <div role="alert" className="rounded-btn border border-danger/30 bg-danger/10 px-3 py-3 text-xs text-danger">
+                  再平衡计划加载失败：{listQuery.error instanceof Error ? listQuery.error.message : String(listQuery.error ?? '未知错误')}
+                  <button type="button" onClick={() => listQuery.refetch()} className="ml-2 inline-flex items-center rounded-btn border border-danger/30 bg-danger/10 px-2 py-1 text-xs font-medium text-danger hover:bg-danger/20 max-md:min-h-11 max-md:min-w-11">重试</button>
+                </div>
+              )}
               {listQuery.data?.length === 0 && (
                 <EmptyState icon={ClipboardList} title="暂无再平衡计划" hint="对优化权重做离散化后,计划会出现在这里。" />
               )}
@@ -196,7 +202,7 @@ function PlanDetail({ planId }: { planId: string }) {
               <button
                 onClick={() => approve.mutate()}
                 disabled={approve.isPending}
-                className="inline-flex min-h-8 items-center gap-1.5 rounded-btn border border-bear/40 bg-bear/10 px-3 text-xs font-medium text-bear transition-colors hover:bg-bear/20 disabled:opacity-50"
+                className="inline-flex min-h-8 items-center gap-1.5 rounded-btn border border-accent/40 bg-accent/10 px-3 text-xs font-medium text-accent transition-colors hover:bg-accent/20 disabled:opacity-50"
               >
                 <ThumbsUp className="h-3.5 w-3.5" />
                 {approve.isPending ? '记录中…' : '审批'}
@@ -316,7 +322,7 @@ function PlanDetail({ planId }: { planId: string }) {
 }
 
 function TransitionBadge({ transition }: { transition: string }) {
-  const icon = transition === 'approved' ? <CheckCircle2 className="h-3 w-3 text-bear" />
+  const icon = transition === 'approved' ? <CheckCircle2 className="h-3 w-3 text-foreground" />
     : transition === 'rejected' ? <XCircle className="h-3 w-3 text-danger" />
     : <Clock className="h-3 w-3 text-muted" />
   return (

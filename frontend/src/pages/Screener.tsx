@@ -32,6 +32,12 @@ import {
   type ColumnConfig,
 } from '@/lib/screener-columns'
 
+function errMsg(err: unknown): string {
+  if (err instanceof Error) return err.message
+  if (err && typeof err === 'object' && 'message' in err) return String((err as { message: unknown }).message)
+  return String(err ?? '未知错误')
+}
+
 export function Screener() {
   const [assetType, setAssetType] = useState<'stock' | 'etf'>('stock')
   const [activeStrategy, setActiveStrategy] = useState<string | null>(null)
@@ -524,7 +530,7 @@ export function Screener() {
                 <button
                   key={t}
                   onClick={() => { setAssetType(t); setActiveStrategy(null); setResult(null); setShowAll(false) }}
-                  className={`h-full px-2.5 text-xs font-medium transition-colors cursor-pointer
+                  className={`h-full px-2.5 text-xs font-medium transition-colors cursor-pointer max-md:min-h-11 max-md:min-w-11
                     ${assetType === t
                       ? 'bg-accent/10 text-accent'
                       : 'text-muted hover:text-secondary hover:bg-elevated'
@@ -573,7 +579,7 @@ export function Screener() {
                 <button
                   key={sz}
                   onClick={() => { setCardSize(sz); storage.screenerCardSize.set(sz) }}
-                  className={`h-full px-2 text-[10px] font-medium transition-colors cursor-pointer
+                  className={`h-full px-2 text-[10px] font-medium transition-colors cursor-pointer max-md:min-h-11 max-md:min-w-11
                     ${cardSize === sz
                       ? 'bg-accent/10 text-accent'
                       : 'text-muted hover:text-secondary hover:bg-elevated'
@@ -660,8 +666,15 @@ export function Screener() {
         {/* 结果 */}
         <section>
           {run.isError && (
-            <div className="text-sm text-danger bg-danger/10 border border-danger/30 rounded-btn px-3 py-2">
-              {String((run.error as any).message)}
+            <div role="alert" className="text-sm text-danger bg-danger/10 border border-danger/30 rounded-btn px-3 py-2">
+              {errMsg(run.error)}
+              <button
+                type="button"
+                onClick={() => run.mutate(run.variables ?? { id: activeStrategy ?? '', date: assetType !== 'stock' ? '' : asOf })}
+                className="ml-2 inline-flex items-center rounded-btn border border-danger/30 bg-danger/10 px-2 py-1 text-xs font-medium text-danger hover:bg-danger/20 max-md:min-h-11 max-md:min-w-11"
+              >
+                重试
+              </button>
             </div>
           )}
 

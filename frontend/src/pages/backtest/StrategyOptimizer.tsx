@@ -14,7 +14,7 @@ import {
 } from '@/lib/optimizerTask'
 import { buildDefaultOverrides } from '@/lib/strategyOverrides'
 
-const INPUT_CLS = 'w-full px-2.5 py-1.5 rounded-input bg-surface border border-border text-xs focus:outline-none focus:border-accent'
+const INPUT_CLS = 'w-full px-2.5 py-1.5 rounded-input bg-surface border border-border text-xs focus:border-accent focus-visible:ring-2 focus-visible:ring-accent/60'
 
 // 可选优化目标 (对齐后端 VALID_OBJECTIVES) + 中文标签 + 是否越小越好
 const OBJECTIVES: { id: string; label: string; min?: boolean }[] = [

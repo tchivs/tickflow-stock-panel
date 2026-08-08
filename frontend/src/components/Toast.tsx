@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { Check } from 'lucide-react'
 
 // ===== 全局 toast 状态 =====
 type ToastItem = { id: number; msg: string; kind: 'error' | 'success' }
@@ -41,13 +42,14 @@ export function ToastContainer() {
       {items.map(t => (
         <div
           key={t.id}
-          className={`pointer-events-auto max-w-full break-words [overflow-wrap:anywhere] px-4 py-2.5 rounded-lg shadow-lg text-sm font-medium animate-in slide-in-from-bottom-2 fade-in duration-200 ${
+          className={`pointer-events-auto flex max-w-full items-start gap-2 break-words [overflow-wrap:anywhere] px-4 py-2.5 rounded-lg shadow-lg text-sm font-medium animate-in slide-in-from-bottom-2 fade-in duration-200 ${
             t.kind === 'error'
-              ? 'bg-red-500/90 text-white'
-              : 'bg-emerald-500/90 text-white'
+              ? 'bg-danger/90 text-white'
+              : 'bg-elevated text-foreground'
           }`}
         >
-          {t.msg}
+          {t.kind === 'success' && <Check className="mt-0.5 h-4 w-4 shrink-0 text-accent" aria-hidden="true" />}
+          <span>{t.msg}</span>
         </div>
       ))}
     </div>

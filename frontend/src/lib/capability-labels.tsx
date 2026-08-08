@@ -29,44 +29,44 @@ export function isExpertOrAbove(label: string): boolean {
   return tierRank(label) >= EXPERT_RANK
 }
 
-/** 档位完整样式(tag 背景 + 圆点 + 文字渐变), 与左侧菜单 TierBadge 一致 */
+/** 档位完整样式(tag 背景 + 圆点 + 文字颜色), 与左侧菜单 TierBadge 一致 */
 export interface TierStyle {
   tagBg: { background: string }
   dotStyle: { background: string }
-  labelTextStyle: { color?: string; background?: string; WebkitBackgroundClip?: string; backgroundClip?: string }
+  labelTextStyle: { color?: string }
   desc: string
 }
 
-const TIER_STYLE: Record<string, TierStyle> = {
+export const TIER_STYLE: Record<string, TierStyle> = {
   none: {
     desc: '未配置 Key · 仅历史日K',
     tagBg: { background: 'rgba(113,113,122,0.15)' },
     dotStyle: { background: '#52525b' },
-    labelTextStyle: { color: '#71717a' },
+    labelTextStyle: { color: 'hsl(var(--fg-muted))' },
   },
   free: {
     desc: '历史日K · 自选实时',
     tagBg: { background: 'rgba(113,113,122,0.3)' },
     dotStyle: { background: '#71717a' },
-    labelTextStyle: { color: '#a1a1aa' },
+    labelTextStyle: { color: 'hsl(var(--fg-secondary))' },
   },
   starter: {
     desc: '除权因子 · 全市场实时',
     tagBg: { background: 'rgba(59,130,246,0.2)' },
     dotStyle: { background: '#3b82f6' },
-    labelTextStyle: { color: '#60a5fa' },
+    labelTextStyle: { color: 'hsl(var(--fg-secondary))' },
   },
   pro: {
     desc: '分钟K · 盘口',
-    tagBg: { background: 'linear-gradient(135deg, rgba(168,85,247,0.2), rgba(124,58,237,0.15))' },
-    dotStyle: { background: 'linear-gradient(135deg, #a855f7, #7c3aed)' },
-    labelTextStyle: { background: 'linear-gradient(135deg, #c084fc, #a855f7)', WebkitBackgroundClip: 'text', backgroundClip: 'text', color: 'transparent' },
+    tagBg: { background: 'rgba(168,85,247,0.2)' },
+    dotStyle: { background: '#a855f7' },
+    labelTextStyle: { color: 'hsl(var(--fg-secondary))' },
   },
   expert: {
     desc: 'WebSocket · 财务数据',
-    tagBg: { background: 'linear-gradient(135deg, rgba(59,130,246,0.2), rgba(168,85,247,0.2), rgba(245,158,11,0.2))' },
-    dotStyle: { background: 'linear-gradient(135deg, #3b82f6, #a855f7, #f59e0b)' },
-    labelTextStyle: { background: 'linear-gradient(135deg, #60a5fa, #c084fc, #fbbf24)', WebkitBackgroundClip: 'text', backgroundClip: 'text', color: 'transparent' },
+    tagBg: { background: 'rgba(168,85,247,0.2)' },
+    dotStyle: { background: '#f59e0b' },
+    labelTextStyle: { color: 'hsl(var(--fg-secondary))' },
   },
 }
 
@@ -83,23 +83,23 @@ export function tierStyle(label: string): TierStyle {
 /** 所有档位(有序, 供档位列表渲染) */
 export const ALL_TIERS = ['none', 'free', 'starter', 'pro', 'expert'] as const
 
-/** 返回档位标签的渐变文字样式(用于大字显示, 如 Keys 页档位) */
-export function tierTextStyle(label: string): { color?: string; background?: string; WebkitBackgroundClip?: string; backgroundClip?: string } {
+/** 返回档位标签的文字颜色样式(用于大字显示, 如 Keys 页档位) */
+export function tierTextStyle(label: string): { color?: string } {
   return tierStyle(label).labelTextStyle
 }
 
 /** 渲染档位 tag(与左侧菜单一致的胶囊样式) */
 export function TierTag({ label, className = '' }: { label: string; className?: string }) {
-  const t = tierStyle(label)
   const base = tierBaseName(label)
   // none 档显示英文「None」,其余档显示英文档名
   const display = base === 'none' ? 'None' : base
+  // 顶级档(expert)用 accent 胶囊突出,其余档用中性浅色胶囊
+  const chip = base === 'expert' ? 'bg-accent/10 border border-accent/30 text-accent' : 'bg-elevated text-secondary'
   return (
     <span
-      className={`inline-flex h-[18px] max-w-[80px] shrink-0 items-center overflow-hidden rounded px-1.5 text-[10px] font-bold font-mono leading-none ${className}`}
-      style={t.tagBg}
+      className={`inline-flex h-[18px] max-w-[80px] shrink-0 items-center overflow-hidden rounded px-1.5 text-[10px] font-bold font-mono leading-none ${chip} ${className}`}
     >
-      <span className="truncate capitalize" style={t.labelTextStyle}>{display}</span>
+      <span className="truncate capitalize">{display}</span>
     </span>
   )
 }

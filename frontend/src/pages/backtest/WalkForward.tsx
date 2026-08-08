@@ -90,7 +90,7 @@ function LiveProgress({ planId }: { planId: string }) {
         <div className="text-xs font-semibold text-foreground">
           实时进度
           <span className={`ml-2 rounded px-1.5 py-0.5 text-[10px] font-medium ${
-            state.status === 'done' ? 'bg-bear/15 text-bear'
+            state.status === 'done' ? 'bg-elevated text-foreground'
               : state.status === 'running' ? 'bg-accent/15 text-accent'
                 : state.status === 'reconnecting' ? 'bg-warning/15 text-warning'
                   : 'bg-elevated text-muted'
@@ -351,9 +351,9 @@ function ValidatedSection({ rows, loading }: { rows: WfValidatedStrategyDTO[]; l
           <div className="space-y-1.5">
             {rows.map(row => (
               <div key={row.id} className="flex flex-wrap items-center gap-2 rounded-btn bg-elevated/30 px-2.5 py-1.5 text-[11px]">
-                {row.validated ? <CheckCircle2 className="h-3.5 w-3.5 text-bear" /> : <FlaskConical className="h-3.5 w-3.5 text-warning" />}
+                {row.validated ? <CheckCircle2 className="h-3.5 w-3.5 text-accent" /> : <FlaskConical className="h-3.5 w-3.5 text-warning" />}
                 <span className="font-mono text-secondary">{row.strategy_id}</span>
-                <span className={row.validated ? 'text-bear' : 'text-warning'}>{row.validated ? '通过' : '未通过'}</span>
+                <span className={row.validated ? 'text-accent' : 'text-warning'}>{row.validated ? '通过' : '未通过'}</span>
                 {row.oos_score != null && <span className="ml-auto font-mono tabular-nums text-accent">OOS {row.oos_score.toFixed(4)}</span>}
               </div>
             ))}

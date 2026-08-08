@@ -92,7 +92,7 @@ export function Auth() {
           <h1 className="text-lg font-semibold text-foreground">AthenaQuant</h1>
         </div>
 
-        <div className="rounded-card border border-border bg-surface/90 p-6 shadow-2xl backdrop-blur">
+        <div className="rounded-card border border-border bg-surface p-6 shadow-2xl">
           {/* 标题区: 图标 + 文案随模式切换 */}
           <div className="mb-5 flex items-center gap-2.5">
             <div className={cn(
@@ -119,14 +119,16 @@ export function Auth() {
                 value={password}
                 onChange={e => setPassword(e.target.value)}
                 placeholder="访问密码"
+                aria-label="访问密码"
                 autoFocus
-                className="h-10 w-full rounded-btn border border-border bg-base px-3 pr-9 text-sm text-foreground outline-none transition-colors focus:border-accent/50"
+                className="h-10 w-full rounded-btn border border-border bg-base px-3 pr-9 text-sm text-foreground outline-none transition-colors focus-visible:ring-2 focus-visible:ring-accent/60 focus:border-accent/50"
               />
               <button
                 type="button"
                 onClick={() => setShowPwd(s => !s)}
+                aria-label={showPwd ? '隐藏密码' : '显示密码'}
+                aria-pressed={showPwd}
                 className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-muted hover:text-foreground"
-                tabIndex={-1}
               >
                 {showPwd ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
               </button>
@@ -139,7 +141,8 @@ export function Auth() {
                 value={confirmPassword}
                 onChange={e => setConfirmPassword(e.target.value)}
                 placeholder="再次输入密码"
-                className="h-10 w-full rounded-btn border border-border bg-base px-3 text-sm text-foreground outline-none transition-colors focus:border-accent/50"
+                aria-label="再次输入密码"
+                className="h-10 w-full rounded-btn border border-border bg-base px-3 text-sm text-foreground outline-none transition-colors focus-visible:ring-2 focus-visible:ring-accent/60 focus:border-accent/50"
               />
             )}
 

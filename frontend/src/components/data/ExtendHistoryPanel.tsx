@@ -41,7 +41,7 @@ export function ExtendHistoryPanel({ caps, isRunning, earliestDate, onStart }: {
           <button
             onClick={() => setValue(Math.max(1, value - 1))}
             disabled={!hasBatchCap || isRunning}
-            className="h-6 w-6 flex items-center justify-center rounded-l-btn bg-elevated border border-border text-secondary hover:bg-border/50 disabled:opacity-30 transition-colors text-xs"
+            className="h-6 w-6 flex items-center justify-center rounded-l-btn bg-elevated border border-border text-secondary hover:bg-border/50 disabled:opacity-30 transition-colors text-xs max-md:h-11 max-md:w-11"
           >−</button>
           <div className="h-6 w-8 flex items-center justify-center border-y border-border text-[11px] font-mono tabular-nums text-foreground bg-base">
             {value}
@@ -49,7 +49,7 @@ export function ExtendHistoryPanel({ caps, isRunning, earliestDate, onStart }: {
           <button
             onClick={() => setValue(Math.min(unit === 'year' ? 10 : 36, value + 1))}
             disabled={!hasBatchCap || isRunning}
-            className="h-6 w-6 flex items-center justify-center rounded-r-btn bg-elevated border border-border text-secondary hover:bg-border/50 disabled:opacity-30 transition-colors text-xs"
+            className="h-6 w-6 flex items-center justify-center rounded-r-btn bg-elevated border border-border text-secondary hover:bg-border/50 disabled:opacity-30 transition-colors text-xs max-md:h-11 max-md:w-11"
           >+</button>
         </div>
 

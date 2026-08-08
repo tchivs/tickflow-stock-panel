@@ -20,7 +20,7 @@ import {
   useToggleRealtimeQuotes,
 } from '@/lib/useSharedMutations'
 import { QK } from '@/lib/queryKeys'
-import { tierRank } from '@/lib/capability-labels'
+import { tierRank, tierStyle } from '@/lib/capability-labels'
 import { providerDatasets, providerDisplayName, isNonTickflow } from '@/lib/dataSources'
 import {
   Star,
@@ -179,45 +179,7 @@ function TierBadge({ label, hasKey }: { label: string; hasKey?: boolean }) {
   const base = label.split(' ')[0].split('+')[0].toLowerCase()
   const isNone = base === 'none'
 
-  const tierConfig: Record<string, {
-    desc: string
-    tagBg: React.CSSProperties
-    dotStyle: React.CSSProperties
-    labelTextStyle: React.CSSProperties
-  }> = {
-    none: {
-      desc: '未配置 Key · 仅历史日K',
-      tagBg: { background: 'rgba(113,113,122,0.15)' },
-      dotStyle: { background: '#52525b' },
-      labelTextStyle: { color: '#71717a' },
-    },
-    free: {
-      desc: '基础日K · 自选实时',
-      tagBg: { background: 'rgba(113,113,122,0.3)' },
-      dotStyle: { background: '#71717a' },
-      labelTextStyle: { color: '#a1a1aa' },
-    },
-    starter: {
-      desc: '批量同步 · 行情池',
-      tagBg: { background: 'rgba(59,130,246,0.2)' },
-      dotStyle: { background: '#3b82f6' },
-      labelTextStyle: { color: '#60a5fa' },
-    },
-    pro: {
-      desc: '分钟K · 实时行情 · 盘口',
-      tagBg: { background: 'linear-gradient(135deg, rgba(168,85,247,0.2), rgba(124,58,237,0.15))' },
-      dotStyle: { background: 'linear-gradient(135deg, #a855f7, #7c3aed)' },
-      labelTextStyle: { background: 'linear-gradient(135deg, #c084fc, #a855f7)', WebkitBackgroundClip: 'text', backgroundClip: 'text', color: 'transparent' },
-    },
-    expert: {
-      desc: 'WebSocket · 财务数据',
-      tagBg: { background: 'linear-gradient(135deg, rgba(59,130,246,0.2), rgba(168,85,247,0.2), rgba(245,158,11,0.2))' },
-      dotStyle: { background: 'linear-gradient(135deg, #3b82f6, #a855f7, #f59e0b)' },
-      labelTextStyle: { background: 'linear-gradient(135deg, #60a5fa, #c084fc, #fbbf24)', WebkitBackgroundClip: 'text', backgroundClip: 'text', color: 'transparent' },
-    },
-  }
-
-  const t = tierConfig[base] || tierConfig.none
+  const t = tierStyle(label)
   // none 档显示英文「None」,无 label 时也显示「None」
   const displayLabel = isNone ? 'None' : (label || 'None')
 
@@ -227,9 +189,8 @@ function TierBadge({ label, hasKey }: { label: string; hasKey?: boolean }) {
       className="mt-2.5 group block -mx-2.5"
       title="API 设置"
     >
-      <div className="relative overflow-hidden rounded-lg border border-blue-400/20 bg-gradient-to-br from-blue-500/[0.12] via-surface to-surface px-3 py-2 transition-all hover:border-blue-400/35 hover:from-blue-500/[0.16]">
-        <div className="absolute -right-5 -top-6 h-14 w-14 rounded-full bg-blue-500/10 blur-2xl" />
-        <div className="relative flex items-center gap-2">
+      <div className="relative rounded-lg border border-border bg-surface px-3 py-2 transition-colors hover:border-accent/40">
+        <div className="flex items-center gap-2">
           <div className="flex h-6 w-6 items-center justify-center rounded-md bg-blue-400/10 text-blue-300 ring-1 ring-blue-400/20">
             <Key className="h-3.5 w-3.5" />
           </div>
@@ -266,16 +227,15 @@ function AIConfigBadge({ configured, model }: { configured?: boolean; model?: st
       className="mt-2 group block -mx-2.5"
       title="AI 配置"
     >
-      <div className="relative overflow-hidden rounded-lg border border-purple-400/20 bg-gradient-to-br from-purple-500/[0.12] via-surface to-surface px-3 py-2 transition-all hover:border-purple-400/35 hover:from-purple-500/[0.16]">
-        <div className="absolute -right-5 -top-6 h-14 w-14 rounded-full bg-purple-500/10 blur-2xl" />
-        <div className="relative flex items-center gap-2">
+      <div className="relative rounded-lg border border-border bg-surface px-3 py-2 transition-colors hover:border-accent/40">
+        <div className="flex items-center gap-2">
           <div className="flex h-6 w-6 items-center justify-center rounded-md bg-purple-400/10 text-purple-300 ring-1 ring-purple-400/20">
             <Sparkles className="h-3.5 w-3.5" />
           </div>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-1.5">
               <span className="text-xs font-medium text-foreground">AI 配置</span>
-              <span className={`h-1.5 w-1.5 rounded-full ${configured ? 'bg-bear' : 'bg-warning'}`} />
+              <span className={`h-1.5 w-1.5 rounded-full ${configured ? 'bg-accent' : 'bg-warning'}`} />
             </div>
             <div className="mt-0.5 truncate text-[10px] leading-tight text-muted">
               {configured ? (model || '已接入模型') : '接入策略生成模型'}
@@ -560,7 +520,7 @@ export function Layout() {
               onClick={() => { if (isMobile) setMobileNavOpen(false) }}
               className={({ isActive }) =>
                 cn(
-                  'flex items-center gap-3 px-3 py-2 rounded-btn text-sm transition-colors duration-150 ease-smooth',
+                  'flex min-h-11 items-center gap-3 px-3 rounded-btn text-sm transition-colors duration-150 ease-smooth',
                   isActive
                     ? 'bg-elevated text-foreground font-medium'
                     : 'text-foreground/80 hover:bg-elevated hover:text-foreground',
@@ -595,7 +555,7 @@ export function Layout() {
         {/* 数据源状态条 */}
         <button
           onClick={() => navigate('/settings?tab=data-sources')}
-          className="mx-2 mb-1 flex items-center gap-2 rounded-btn px-2.5 py-2 text-left transition-colors hover:bg-elevated/60 shrink-0 group"
+          className="mx-2 mb-1 flex min-h-11 items-center gap-2 rounded-btn px-2.5 text-left transition-colors hover:bg-elevated/60 shrink-0 group"
           title="数据源设置"
         >
           <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md ${
@@ -734,7 +694,7 @@ export function Layout() {
               to="/settings"
               className={({ isActive }) =>
                 cn(
-                  'flex flex-1 items-center justify-between gap-3 px-3 py-2 rounded-btn text-sm transition-colors duration-150 ease-smooth',
+                  'flex min-h-11 flex-1 items-center justify-between gap-3 px-3 rounded-btn text-sm transition-colors duration-150 ease-smooth',
                   isActive
                     ? 'bg-elevated text-foreground font-medium'
                     : 'text-foreground/80 hover:bg-elevated hover:text-foreground',

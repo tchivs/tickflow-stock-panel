@@ -7,6 +7,8 @@
  */
 
 import { storage } from '@/lib/storage'
+import { createElement } from 'react'
+import { Coins, BarChart3, TrendingUp, ClipboardList } from 'lucide-react'
 import {
   buildExtColumnsParam as buildExtColumnsParamBase,
   mergeColumns as mergeColumnsBase,
@@ -45,10 +47,10 @@ export const BUILTIN_INFO_FIELDS: ColumnConfig[] = [
 ]
 
 export const INFO_GROUPS: ColumnGroup[] = [
-  { id: 'scale', label: '规模', icon: '🏦', keys: ['market_cap', 'float_market_cap'] },
-  { id: 'volume', label: '成交', icon: '📊', keys: ['turnover', 'volume', 'amplitude'] },
-  { id: 'quote', label: '行情', icon: '📈', keys: ['open', 'high', 'low'] },
-  { id: 'finance', label: '财务', icon: '📋', keys: ['eps', 'bps', 'roe', 'pe_ttm', 'pb', 'gross_margin', 'net_margin', 'debt_ratio', 'revenue_yoy', 'net_income_yoy'] },
+  { id: 'scale', label: '规模', icon: createElement(Coins, { className: 'h-4 w-4 text-secondary' }), keys: ['market_cap', 'float_market_cap'] },
+  { id: 'volume', label: '成交', icon: createElement(BarChart3, { className: 'h-4 w-4 text-secondary' }), keys: ['turnover', 'volume', 'amplitude'] },
+  { id: 'quote', label: '行情', icon: createElement(TrendingUp, { className: 'h-4 w-4 text-secondary' }), keys: ['open', 'high', 'low'] },
+  { id: 'finance', label: '财务', icon: createElement(ClipboardList, { className: 'h-4 w-4 text-secondary' }), keys: ['eps', 'bps', 'roe', 'pe_ttm', 'pb', 'gross_margin', 'net_margin', 'debt_ratio', 'revenue_yoy', 'net_income_yoy'] },
 ]
 
 // ===== localStorage 持久化 =====

@@ -62,7 +62,7 @@ export function ActiveJobCard({ job }: { job: PipelineJob }) {
   const statusMap = {
     running:   { icon: Loader2,     color: 'text-accent',   label: '运行中', spinning: true,  border: 'border-accent/40', bg: 'bg-accent/5' },
     pending:   { icon: Loader2,     color: 'text-muted',    label: '排队中', spinning: true,  border: 'border-border',    bg: 'bg-surface' },
-    succeeded: { icon: CheckCircle2, color: 'text-bear',     label: '完成',   spinning: false, border: 'border-bear/30',   bg: 'bg-bear/5' },
+    succeeded: { icon: CheckCircle2, color: 'text-foreground', label: '完成',   spinning: false, border: 'border-border',   bg: 'bg-surface' },
     failed:    { icon: XCircle,     color: 'text-danger',   label: '失败',   spinning: false, border: 'border-danger/40', bg: 'bg-danger/5' },
   } as const
   const meta = statusMap[job.status]
@@ -95,8 +95,9 @@ export function ActiveJobCard({ job }: { job: PipelineJob }) {
         <div className="mb-2">
           <div className="h-1.5 rounded-full bg-elevated overflow-hidden">
             <motion.div
-              className="h-full bg-accent"
-              animate={{ width: `${job.progress}%` }}
+              className="h-full bg-accent origin-left"
+              initial={{ scaleX: 0 }}
+              animate={{ scaleX: job.progress / 100 }}
               transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
             />
           </div>

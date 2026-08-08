@@ -79,7 +79,7 @@ export function StockFinancialSearch({ onSelect }: Props) {
           onFocus={() => { if (trimmed) setOpen(true) }}
           onKeyDown={handleKeyDown}
           // 较宽、更醒目 —— 作为财务页主入口
-          className="w-full h-11 pl-11 pr-10 rounded-card bg-surface border border-border text-sm text-foreground placeholder:text-muted focus:outline-none focus:border-accent/50 focus:bg-base transition-colors"
+          className="w-full h-11 pl-11 pr-10 rounded-card bg-surface border border-border text-sm text-foreground placeholder:text-muted focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60 focus:bg-base transition-colors"
         />
         {search.isFetching && (
           <Loader2 className="absolute right-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted animate-spin" />

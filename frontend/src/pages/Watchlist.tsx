@@ -1,4 +1,5 @@
-import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react'
+import React, { useState, useCallback, useRef, useEffect, useMemo, useLayoutEffect } from 'react'
+import { createPortal } from 'react-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Trash2, RefreshCw, Star, X, Search, LayoutGrid, List, Settings2, Plus, Check, Filter, Eye, EyeOff, Minus, ChevronsUp, Clock, RotateCcw } from 'lucide-react'
@@ -188,7 +189,9 @@ function StockSearchBox({
   const [open, setOpen] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  const dropdownRef = useRef<HTMLDivElement>(null)
   const [activeIdx, setActiveIdx] = useState(-1)
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null)
 
   const search = useQuery({
     queryKey: QK.instrumentSearch(query, 'stock,etf'),
@@ -198,12 +201,37 @@ function StockSearchBox({
   })
 
   const results = search.data?.results ?? []
+  const dropdownVisible = open && results.length > 0
+
+  // 下拉列表渲染到 body (createPortal), 绕开 PageHeader 右侧 overflow-x-auto
+  // 的裁剪 —— overflow-x:auto 会强制 overflow-y:auto, 把绝对定位的下拉框裁掉。
+  // 因此用 fixed 定位 + 锚点 rect 实时计算, 并随滚动/缩放重算位置。
+  useLayoutEffect(() => {
+    if (!dropdownVisible || !inputRef.current) return
+    const update = () => {
+      const el = inputRef.current
+      if (!el) return
+      const rect = el.getBoundingClientRect()
+      const POPUP_W = 256
+      const GAP = 4
+      const left = Math.min(Math.max(rect.right - POPUP_W, 8), window.innerWidth - POPUP_W - 8)
+      setPos({ top: rect.bottom + GAP, left })
+    }
+    update()
+    window.addEventListener('scroll', update, true)
+    window.addEventListener('resize', update)
+    return () => {
+      window.removeEventListener('scroll', update, true)
+      window.removeEventListener('resize', update)
+    }
+  }, [dropdownVisible, query, results.length])
 
   useEffect(() => {
     function handleClick(e: MouseEvent) {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        setOpen(false)
-      }
+      const t = e.target as Node
+      if (containerRef.current?.contains(t)) return
+      if (dropdownRef.current?.contains(t)) return
+      setOpen(false)
     }
     document.addEventListener('mousedown', handleClick)
     return () => document.removeEventListener('mousedown', handleClick)
@@ -248,54 +276,59 @@ function StockSearchBox({
         />
       </div>
 
-      <AnimatePresence>
-        {open && results.length > 0 && (
-          <motion.div
-            initial={{ opacity: 0, y: -4 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -4 }}
-            transition={{ duration: 0.12, ease: [0.16, 1, 0.3, 1] }}
-            className="absolute right-0 top-full mt-1 z-50 w-64 max-h-[320px] overflow-y-auto rounded-card border border-border bg-base shadow-xl"
-          >
-            {results.map((r, i) => {
-              const inWatchlist = existingSymbols.includes(r.symbol)
-              return (
-                <div
-                  key={r.symbol}
-                  className={`flex items-center gap-2.5 px-3 py-2 text-xs transition-colors duration-100 ${
-                    i === activeIdx ? 'bg-accent/10 text-accent' : 'hover:bg-elevated text-foreground'
-                  }`}
-                >
-                  <button
-                    type="button"
-                    onClick={() => handleSelect(r)}
-                    className="flex items-center gap-2.5 flex-1 min-w-0 text-left"
-                  >
-                    <span className="font-mono shrink-0 w-[80px]">{r.symbol}</span>
-                    <span className="truncate text-secondary flex-1">{r.name}</span>
-                    {r.asset_type === 'etf' && (
-                      <span className="shrink-0 px-1 py-0.5 rounded text-[10px] leading-none bg-accent/10 text-accent">ETF</span>
-                    )}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={e => { e.stopPropagation(); onAdd(r.symbol) }}
-                    disabled={inWatchlist}
-                    className={`shrink-0 p-1 rounded transition-colors ${
-                      inWatchlist
-                        ? 'text-accent bg-accent/10 cursor-default'
-                        : 'text-muted hover:text-accent hover:bg-accent/10'
+      {createPortal(
+        <AnimatePresence>
+          {dropdownVisible && (
+            <motion.div
+              ref={dropdownRef}
+              initial={{ opacity: 0, y: -4 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -4 }}
+              transition={{ duration: 0.12, ease: [0.16, 1, 0.3, 1] }}
+              style={{ position: 'fixed', top: pos?.top ?? 0, left: pos?.left ?? 0, zIndex: 50 }}
+              className="w-64 max-h-[320px] overflow-y-auto rounded-card border border-border bg-base shadow-xl"
+            >
+              {results.map((r, i) => {
+                const inWatchlist = existingSymbols.includes(r.symbol)
+                return (
+                  <div
+                    key={r.symbol}
+                    className={`flex items-center gap-2.5 px-3 py-2 text-xs transition-colors duration-100 ${
+                      i === activeIdx ? 'bg-accent/10 text-accent' : 'hover:bg-elevated text-foreground'
                     }`}
-                    title={inWatchlist ? '已加自选' : '加入自选'}
                   >
-                    {inWatchlist ? <Check className="h-3.5 w-3.5" /> : <Plus className="h-3.5 w-3.5" />}
-                  </button>
-                </div>
-              )
-            })}
-          </motion.div>
-        )}
-      </AnimatePresence>
+                    <button
+                      type="button"
+                      onClick={() => handleSelect(r)}
+                      className="flex items-center gap-2.5 flex-1 min-w-0 text-left"
+                    >
+                      <span className="font-mono shrink-0 w-[80px]">{r.symbol}</span>
+                      <span className="truncate text-secondary flex-1">{r.name}</span>
+                      {r.asset_type === 'etf' && (
+                        <span className="shrink-0 px-1 py-0.5 rounded text-[10px] leading-none bg-accent/10 text-accent">ETF</span>
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={e => { e.stopPropagation(); onAdd(r.symbol) }}
+                      disabled={inWatchlist}
+                      className={`shrink-0 p-1 rounded transition-colors ${
+                        inWatchlist
+                          ? 'text-accent bg-accent/10 cursor-default'
+                          : 'text-muted hover:text-accent hover:bg-accent/10'
+                      }`}
+                      title={inWatchlist ? '已加自选' : '加入自选'}
+                    >
+                      {inWatchlist ? <Check className="h-3.5 w-3.5" /> : <Plus className="h-3.5 w-3.5" />}
+                    </button>
+                  </div>
+                )
+              })}
+            </motion.div>
+          )}
+        </AnimatePresence>,
+        document.body,
+      )}
     </div>
   )
 }

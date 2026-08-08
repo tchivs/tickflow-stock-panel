@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { motion, AnimatePresence } from 'framer-motion'
+import { motion, AnimatePresence, useReducedMotion } from 'framer-motion'
 import {
   Eye,
   EyeOff,
@@ -45,10 +45,10 @@ const HIGHLIGHTS = [
   { icon: TrendingUp,  title: '个股分析',   desc: 'AI 四维分析个股,关键价位、技术形态一目了然', tint: 'text-warning' },
   { icon: Flame,       title: '连板梯队',   desc: '涨停梯队、封板强度、炸板监控,情绪温度计', tint: 'text-warning' },
   { icon: Landmark,    title: '概念行业',   desc: '概念板块、行业维度的资金流向与热度排名', tint: 'text-accent' },
-  { icon: FileText,    title: '财务分析',   desc: 'AI 解读财报,利润、资负、现金流、核心指标', tint: 'text-bear' },
+  { icon: FileText,    title: '财务分析',   desc: 'AI 解读财报,利润、资负、现金流、核心指标', tint: 'text-accent' },
   { icon: ShieldCheck, title: '回测验证',   desc: '策略历史回测、因子分析,用数据验证逻辑', tint: 'text-accent' },
-  { icon: Radar,       title: '实时监控',   desc: '自定义条件 / 策略监控,盘中触发即推送告警', tint: 'text-bear' },
-  { icon: BellRing,    title: '本地优先',   desc: '数据本地存储,隐私可控,断网仍可查阅', tint: 'text-bull' },
+  { icon: Radar,       title: '实时监控',   desc: '自定义条件 / 策略监控,盘中触发即推送告警', tint: 'text-accent' },
+  { icon: BellRing,    title: '本地优先',   desc: '数据本地存储,隐私可控,断网仍可查阅', tint: 'text-accent' },
 ]
 
 export function Onboarding() {
@@ -180,7 +180,7 @@ function DisclaimerStep({ onNext }: { onNext: () => void }) {
 
       <h1 className="mt-6 text-2xl font-bold text-foreground tracking-tight">使用前请知悉</h1>
 
-      <div className="mt-5 rounded-card border border-border bg-surface/80 backdrop-blur-sm p-5 text-left">
+      <div className="mt-5 rounded-card border border-border bg-surface p-5 text-left">
         <div className="flex items-start gap-2.5">
           <ShieldCheck className="h-4 w-4 text-accent shrink-0 mt-0.5" />
           <div className="space-y-2.5 text-sm text-secondary leading-relaxed">
@@ -210,7 +210,7 @@ function DisclaimerStep({ onNext }: { onNext: () => void }) {
       <div className="mt-6 flex items-center justify-center">
         <button
           onClick={onNext}
-          className="inline-flex items-center gap-2 px-6 h-11 rounded-xl bg-accent text-white text-sm font-semibold shadow-lg shadow-accent/20 hover:bg-accent/90 hover:shadow-accent/30 transition-all"
+          className="inline-flex items-center gap-2 px-6 h-11 rounded-xl bg-accent text-white text-sm font-semibold hover:bg-accent/90 transition-all"
         >
           我已了解,继续
           <ArrowRight className="h-4 w-4" />
@@ -253,7 +253,7 @@ function WelcomeStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => voi
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.3, delay: 0.04 * i + 0.1 }}
             whileHover={{ y: -2 }}
-            className="group flex items-start gap-2.5 rounded-card border border-border bg-surface/80 backdrop-blur-sm p-2.5 transition-colors hover:border-accent/30"
+            className="group flex items-start gap-2.5 rounded-card border border-border bg-surface p-2.5 transition-colors hover:border-accent/30"
           >
             <div className="rounded-lg bg-elevated/50 p-1.5 shrink-0">
               <h.icon className={`h-4 w-4 ${h.tint} transition-transform group-hover:scale-110`} />
@@ -269,7 +269,7 @@ function WelcomeStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => voi
       <div className="mt-8 flex items-center justify-center gap-3">
         <button
           onClick={onNext}
-          className="inline-flex items-center gap-2 px-6 h-11 rounded-xl bg-accent text-white text-sm font-semibold shadow-lg shadow-accent/20 hover:bg-accent/90 hover:shadow-accent/30 transition-all"
+          className="inline-flex items-center gap-2 px-6 h-11 rounded-xl bg-accent text-white text-sm font-semibold hover:bg-accent/90 transition-all"
         >
           开始配置
           <ArrowRight className="h-4 w-4" />
@@ -355,7 +355,7 @@ function KeyStep({ onNext, onSkip, onBack }: { onNext: () => void; onSkip: () =>
 
       {/* Key 已配置提示 */}
       {alreadyHasKey && !save.isPending && (
-        <div className="mt-4 flex items-start gap-2 rounded-btn border border-bear/30 bg-bear/10 px-3 py-2.5 text-xs text-bear">
+        <div className="mt-4 flex items-start gap-2 rounded-btn border border-accent/30 bg-accent/10 px-3 py-2.5 text-xs text-accent">
           <CheckCircle2 className="h-3.5 w-3.5 mt-px shrink-0" />
           <span>
             已检测到配置好的 Key(<span className="font-mono">{settings.data?.tickflow_api_key_masked}</span>)。
@@ -468,7 +468,7 @@ function KeyStep({ onNext, onSkip, onBack }: { onNext: () => void; onSkip: () =>
             ) : (
               <Save className="h-4 w-4" />
             )}
-            {save.isPending ? '保存中...' : saved ? '已保存' : '保存并检测'}
+            {save.isPending ? '保存中…' : saved ? '已保存' : '保存并检测'}
           </button>
         </div>
       </div>
@@ -503,7 +503,7 @@ function ResultStep({ onNext, onBack }: { onNext: () => void; onBack: () => void
             中重新检测或更换 Key。
           </p>
 
-          <div className="mt-5 rounded-card border border-border bg-surface/80 backdrop-blur-sm p-5">
+          <div className="mt-5 rounded-card border border-border bg-surface p-5">
             <div className="flex items-baseline justify-between">
               <span className="text-[10px] uppercase tracking-widest text-muted">订阅档位</span>
               <span className="font-mono text-2xl font-bold tracking-tight text-foreground">
@@ -522,7 +522,7 @@ function ResultStep({ onNext, onBack }: { onNext: () => void; onBack: () => void
                   const meta = CAP_LABELS[cap]
                   return (
                     <div key={cap} className="flex items-center gap-2 text-xs">
-                      <CheckCircle2 className="h-3.5 w-3.5 text-bear shrink-0" />
+                      <CheckCircle2 className="h-3.5 w-3.5 text-accent shrink-0" />
                       <span className="text-foreground">{meta?.name ?? cap}</span>
                     </div>
                   )
@@ -537,7 +537,7 @@ function ResultStep({ onNext, onBack }: { onNext: () => void; onBack: () => void
           </div>
         </>
       ) : (
-        <div className="mt-5 rounded-card border border-border bg-surface/80 backdrop-blur-sm p-6 text-center">
+        <div className="mt-5 rounded-card border border-border bg-surface p-6 text-center">
           <div className="mx-auto w-fit rounded-xl bg-elevated p-3">
             <Zap className="h-6 w-6 text-warning" />
           </div>
@@ -576,6 +576,7 @@ function FinishStep({ onNext, onBack, pending }: { onNext: () => void; onBack: (
   const settings = useSettings()
   // 是否已配置 Key(free 或 api_key 都算,None 档算未配置)
   const hasKey = settings.data?.mode === 'free' || settings.data?.mode === 'api_key'
+  const reduceMotion = useReducedMotion()
 
   // 首要行动:获取数据(不管配没配 Key, 新用户都需要先拉数据)
   // 快速上手入口(精简为核心功能)
@@ -597,13 +598,17 @@ function FinishStep({ onNext, onBack, pending }: { onNext: () => void; onBack: (
           className="relative rounded-2xl p-5 border border-border"
           style={{ background: `linear-gradient(135deg, ${BRAND}22, transparent)` }}
         >
-          <CheckCircle2 className="h-12 w-12 text-bear" />
+          <CheckCircle2 className="h-12 w-12 text-accent" />
           {/* 光晕脉冲 */}
-          <motion.div
-            animate={{ scale: [1, 1.4], opacity: [0.4, 0] }}
-            transition={{ duration: 1.8, repeat: Infinity, ease: 'easeOut' }}
-            className="absolute inset-5 rounded-full bg-bear/30"
-          />
+          {reduceMotion ? (
+            <div className="absolute inset-5 rounded-full bg-accent/30" />
+          ) : (
+            <motion.div
+              animate={{ scale: [1, 1.4], opacity: [0.4, 0] }}
+              transition={{ duration: 1.8, repeat: Infinity, ease: 'easeOut' }}
+              className="absolute inset-5 rounded-full bg-accent/30"
+            />
+          )}
         </div>
       </motion.div>
 
@@ -640,7 +645,7 @@ function FinishStep({ onNext, onBack, pending }: { onNext: () => void; onBack: (
             initial={{ opacity: 0, x: -10 }}
             animate={{ opacity: 1, x: 0 }}
             transition={{ duration: 0.3, delay: 0.1 * i + 0.3 }}
-            className="flex items-center gap-3 rounded-card border border-border bg-surface/80 backdrop-blur-sm px-3.5 py-2.5"
+            className="flex items-center gap-3 rounded-card border border-border bg-surface px-3.5 py-2.5"
           >
             <div className="rounded-lg bg-accent/10 p-1.5 shrink-0">
               <t.icon className="h-3.5 w-3.5 text-accent" />
@@ -662,7 +667,7 @@ function FinishStep({ onNext, onBack, pending }: { onNext: () => void; onBack: (
         <button
           onClick={onNext}
           disabled={pending}
-          className="inline-flex items-center gap-2 px-6 h-10 rounded-xl bg-accent text-white text-sm font-semibold shadow-lg shadow-accent/20 hover:bg-accent/90 hover:shadow-accent/30 disabled:opacity-60 transition-all"
+          className="inline-flex items-center gap-2 px-6 h-10 rounded-xl bg-accent text-white text-sm font-semibold hover:bg-accent/90 disabled:opacity-60 transition-all"
         >
           {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
           {pending ? '正在进入…' : '进入面板'}

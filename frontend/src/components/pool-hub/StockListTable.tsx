@@ -55,6 +55,8 @@ interface StockListTableProps {
   onToggleSelection: (symbol: string) => void
   /** 表头 全选/全不选 可见行 */
   onToggleSelectAll: () => void
+  /** 点击股票名称 → 打开个股详情弹窗 (Watchlist 同款交互; guest 脱敏名不触发) */
+  onPreview: (symbol: string, name: string) => void
 }
 
 /** 概念板块 chips — 首 3 个 + `+{N}` 展开/收起, 绝不截断标签中间 */
@@ -229,6 +231,7 @@ export function StockListTable({
   selection,
   onToggleSelection,
   onToggleSelectAll,
+  onPreview,
 }: StockListTableProps) {
   if (!strategy) return null
   const conceptActive = filterText.trim().length > 0
@@ -442,7 +445,7 @@ export function StockListTable({
                             disabled={watchlistPending}
                             aria-label={inList ? '移出自选' : '加入自选'}
                             title={inList ? '移出自选' : '加入自选'}
-                            className="p-1 rounded-btn transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                            className="p-1 max-md:h-10 max-md:w-10 rounded-btn transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                           >
                             <Star
                               className={'h-3.5 w-3.5 ' + (inList ? 'text-[#FACC15]' : 'text-muted hover:text-foreground hover:bg-elevated')}
@@ -455,10 +458,21 @@ export function StockListTable({
                     </td>
                     <td className="px-3 py-2">
                       {isGuest ? (
-                        /* 游客 名称: 服务端脱敏值原样渲染 (mono muted), 永不空/— */
+                        /* 游客 名称: 服务端脱敏值原样渲染 (mono muted), 永不空/—, 无预览 affordance */
                         <span className="num tabular-nums text-muted">{row.name}</span>
                       ) : row.name ? (
-                        <span className="block max-w-40 truncate text-foreground">{row.name}</span>
+                        /* VIP 名称: 可点击按钮 → onPreview 打开个股详情 (Watchlist 同款 hover 变色) */
+                        <button
+                          type="button"
+                          onClick={() => onPreview(row.symbol, row.name)}
+                          aria-label={`查看 ${row.name} 详情`}
+                          title={`查看 ${row.name} 详情`}
+                          className="flex items-center text-left min-w-0 max-w-40 group"
+                        >
+                          <span className="block max-w-40 truncate text-foreground group-hover:text-accent transition-colors duration-150">
+                            {row.name}
+                          </span>
+                        </button>
                       ) : (
                         <span className="text-muted">—</span>
                       )}

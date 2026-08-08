@@ -311,13 +311,13 @@ export function ListColumnCustomizer({
       transition={{ duration: 0.15 }}
       className="overflow-hidden"
     >
-      <div className="pl-10 pr-3 py-2 space-y-2 border-l-2 border-accent/20 ml-[18px]">
+      <div className="pl-14 pr-3 py-2 space-y-2">
         <label className="flex items-center gap-2 text-xs">
           <span className="text-secondary w-16 shrink-0">显示模式</span>
           <select
             value={col.extDisplay?.displayMode ?? 'tag'}
             onChange={e => updateExtDisplay(col.id, { displayMode: e.target.value as 'tag' | 'text' })}
-            className="flex-1 h-7 rounded bg-elevated border border-border text-foreground text-xs px-2 focus:outline-none focus:border-accent/50"
+            className="flex-1 h-7 max-md:min-h-11 rounded bg-elevated border border-border text-foreground text-xs px-2 focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60"
           >
             <option value="tag">标签</option>
             <option value="text">纯文本</option>
@@ -331,7 +331,7 @@ export function ListColumnCustomizer({
               value={col.extDisplay?.separator ?? ''}
               onChange={e => updateExtDisplay(col.id, { separator: e.target.value })}
               placeholder="默认：、,，;；-"
-              className="flex-1 h-7 rounded bg-elevated border border-border text-foreground text-xs px-2 placeholder:text-muted focus:outline-none focus:border-accent/50"
+              className="flex-1 h-7 max-md:min-h-11 rounded bg-elevated border border-border text-foreground text-xs px-2 placeholder:text-muted focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60"
             />
           </label>
         )}
@@ -342,7 +342,7 @@ export function ListColumnCustomizer({
             value={col.extDisplay?.maxWidth ?? ''}
             onChange={e => updateExtDisplay(col.id, { maxWidth: e.target.value })}
             placeholder="如 200px"
-            className="flex-1 h-7 rounded bg-elevated border border-border text-foreground text-xs px-2 placeholder:text-muted focus:outline-none focus:border-accent/50"
+            className="flex-1 h-7 max-md:min-h-11 rounded bg-elevated border border-border text-foreground text-xs px-2 placeholder:text-muted focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60"
           />
         </label>
         {(col.extDisplay?.displayMode ?? 'tag') === 'tag' && (
@@ -356,7 +356,7 @@ export function ListColumnCustomizer({
                 updateExtDisplay(col.id, { maxTags: v, ...(v ? {} : { hiddenIndices: undefined }) })
               }}
               placeholder="0=全部"
-              className="flex-1 h-7 rounded bg-elevated border border-border text-foreground text-xs px-2 placeholder:text-muted focus:outline-none focus:border-accent/50"
+              className="flex-1 h-7 max-md:min-h-11 rounded bg-elevated border border-border text-foreground text-xs px-2 placeholder:text-muted focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60"
             />
           </label>
         )}
@@ -426,7 +426,7 @@ export function ListColumnCustomizer({
       transition={{ duration: 0.15 }}
       className="overflow-hidden"
     >
-      <div className="pl-10 pr-3 py-2 space-y-2 border-l-2 border-accent/20 ml-[18px]">
+      <div className="pl-14 pr-3 py-2 space-y-2">
         <label className="flex items-center gap-2 text-xs">
           <span className="text-secondary w-16 shrink-0">显示前N个</span>
           <input
@@ -437,7 +437,7 @@ export function ListColumnCustomizer({
               updateExtDisplay(col.id, { maxTags: v, ...(v ? {} : { hiddenIndices: undefined }) })
             }}
             placeholder="0=全部"
-            className="flex-1 h-7 rounded bg-elevated border border-border text-foreground text-xs placeholder:text-muted focus:outline-none focus:border-accent/50"
+            className="flex-1 h-7 max-md:min-h-11 rounded bg-elevated border border-border text-foreground text-xs placeholder:text-muted focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60"
           />
         </label>
         {(col.extDisplay?.maxTags ?? 0) > 0 && (
@@ -518,7 +518,7 @@ export function ListColumnCustomizer({
             const merged = resolveCandleConfig({ ...col.candleConfig, [field]: raw === '' ? undefined : Number(raw) })
             updateCandleConfig(col.id, { [field]: merged[field] } as Partial<CandleColumnConfig>)
           }}
-          className="flex-1 h-7 rounded bg-elevated border border-border text-foreground text-xs px-2 focus:outline-none focus:border-accent/50 tabular-nums"
+          className="flex-1 h-7 max-md:min-h-11 rounded bg-elevated border border-border text-foreground text-xs px-2 focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60 tabular-nums"
         />
       </label>
     )
@@ -530,7 +530,7 @@ export function ListColumnCustomizer({
         transition={{ duration: 0.15 }}
         className="overflow-hidden"
       >
-        <div className="pl-10 pr-3 py-2 space-y-2 border-l-2 border-accent/20 ml-[18px]">
+        <div className="pl-14 pr-3 py-2 space-y-2">
           {numInput('days', '日k天数')}
           {numInput('enabledWidth', '开启宽度')}
           {numInput('enabledHeight', '开启高度')}
@@ -571,7 +571,7 @@ export function ListColumnCustomizer({
             const merged = resolveIntradayConfig({ ...col.intradayConfig, [field]: raw === '' ? undefined : Number(raw) })
             updateIntradayConfig(col.id, { [field]: merged[field] } as Partial<IntradayColumnConfig>)
           }}
-          className="flex-1 h-7 rounded bg-elevated border border-border text-foreground text-xs px-2 focus:outline-none focus:border-accent/50 tabular-nums"
+          className="flex-1 h-7 max-md:min-h-11 rounded bg-elevated border border-border text-foreground text-xs px-2 focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60 tabular-nums"
         />
       </label>
     )
@@ -583,7 +583,7 @@ export function ListColumnCustomizer({
         transition={{ duration: 0.15 }}
         className="overflow-hidden"
       >
-        <div className="pl-10 pr-3 py-2 space-y-2 border-l-2 border-accent/20 ml-[18px]">
+        <div className="pl-14 pr-3 py-2 space-y-2">
           {numInput('width', '宽度')}
           {numInput('height', '高度')}
           <div className="text-[10px] text-muted leading-relaxed pt-0.5">
@@ -670,7 +670,7 @@ export function ListColumnCustomizer({
           >
             <div className="flex items-center justify-between px-4 py-3 border-b border-border">
               <h3 className="text-sm font-medium text-foreground">{title}</h3>
-              <button onClick={onClose} className="p-1 rounded hover:bg-elevated text-muted hover:text-foreground transition-colors">
+              <button onClick={onClose} aria-label="关闭" className="p-1 rounded hover:bg-elevated text-muted hover:text-foreground transition-colors">
                 <X className="h-4 w-4" />
               </button>
             </div>
@@ -683,7 +683,7 @@ export function ListColumnCustomizer({
                   value={searchQuery}
                   onChange={e => setSearchQuery(e.target.value)}
                   placeholder="搜索列名..."
-                  className="w-full h-8 pl-8 pr-3 rounded-lg bg-elevated border border-border text-xs text-foreground placeholder:text-muted focus:outline-none focus:border-accent/50 transition-colors"
+                  className="w-full h-8 max-md:min-h-11 pl-8 pr-3 rounded-lg bg-elevated border border-border text-xs text-foreground placeholder:text-muted focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60 transition-colors"
                 />
               </div>
             </div>

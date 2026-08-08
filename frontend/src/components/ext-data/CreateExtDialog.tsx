@@ -442,7 +442,7 @@ export function CreateExtDialog({ onClose }: { onClose: () => void }) {
                   value={url}
                   onChange={(e) => setUrl(e.target.value)}
                   placeholder="https://api.example.com/data"
-                  className="h-8 flex-1 min-w-0 rounded-lg border border-border bg-base px-3 text-[11px] font-mono text-foreground placeholder:text-muted/40 focus:outline-none focus:border-accent/50"
+                  className="h-8 flex-1 min-w-0 rounded-lg border border-border bg-base px-3 text-[11px] font-mono text-foreground placeholder:text-muted/40 focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60"
                 />
                 <button
                   onClick={handleDetectUrl}
@@ -460,7 +460,7 @@ export function CreateExtDialog({ onClose }: { onClose: () => void }) {
                     value={responsePath}
                     onChange={(e) => setResponsePath(e.target.value)}
                     placeholder="data.list（可留空自动识别）"
-                    className="w-full h-8 rounded-lg border border-border bg-base px-2 text-[10px] font-mono text-foreground placeholder:text-muted/40 focus:outline-none focus:border-accent/50"
+                    className="w-full h-8 rounded-lg border border-border bg-base px-2 text-[10px] font-mono text-foreground placeholder:text-muted/40 focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60"
                   />
                 </div>
                 <div>
@@ -470,7 +470,7 @@ export function CreateExtDialog({ onClose }: { onClose: () => void }) {
                     min={1}
                     value={schedule}
                     onChange={(e) => setSchedule(Number(e.target.value) || 1)}
-                    className="w-full h-8 rounded-lg border border-border bg-base px-2 text-[10px] font-mono text-foreground focus:outline-none focus:border-accent/50"
+                    className="w-full h-8 rounded-lg border border-border bg-base px-2 text-[10px] font-mono text-foreground focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60"
                   />
                 </div>
               </div>
@@ -482,7 +482,7 @@ export function CreateExtDialog({ onClose }: { onClose: () => void }) {
                     onChange={(e) => setHeaderStr(e.target.value)}
                     rows={2}
                     placeholder='{"Authorization":"Bearer xxx"}'
-                    className="w-full rounded-lg border border-border bg-base px-2 py-1.5 text-[10px] font-mono text-foreground placeholder:text-muted/40 resize-none focus:outline-none focus:border-accent/50"
+                    className="w-full rounded-lg border border-border bg-base px-2 py-1.5 text-[10px] font-mono text-foreground placeholder:text-muted/40 resize-none focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60"
                   />
                 </div>
                 <div>
@@ -492,7 +492,7 @@ export function CreateExtDialog({ onClose }: { onClose: () => void }) {
                     onChange={(e) => setFieldMapStr(e.target.value)}
                     rows={2}
                     placeholder='{"code":"symbol","val":"score"}'
-                    className="w-full rounded-lg border border-border bg-base px-2 py-1.5 text-[10px] font-mono text-foreground placeholder:text-muted/40 resize-none focus:outline-none focus:border-accent/50"
+                    className="w-full rounded-lg border border-border bg-base px-2 py-1.5 text-[10px] font-mono text-foreground placeholder:text-muted/40 resize-none focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60"
                   />
                 </div>
               </div>
@@ -504,7 +504,7 @@ export function CreateExtDialog({ onClose }: { onClose: () => void }) {
                     onChange={(e) => setBody(e.target.value)}
                     rows={3}
                     placeholder='{"page":1}'
-                    className="w-full rounded-lg border border-border bg-base px-2 py-1.5 text-[10px] font-mono text-foreground placeholder:text-muted/40 resize-none focus:outline-none focus:border-accent/50"
+                    className="w-full rounded-lg border border-border bg-base px-2 py-1.5 text-[10px] font-mono text-foreground placeholder:text-muted/40 resize-none focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60"
                   />
                 </div>
               )}
@@ -677,13 +677,13 @@ export function CreateExtDialog({ onClose }: { onClose: () => void }) {
                         value={f.label}
                         onChange={(e) => updateField(idx, 'label', e.target.value)}
                         placeholder="显示名"
-                        className="w-[72px] h-7 px-2 rounded-md border border-border bg-base text-[11px] text-foreground placeholder:text-muted/40 focus:outline-none focus:border-accent/40"
+                        className="w-[72px] h-7 px-2 rounded-md border border-border bg-base text-[11px] text-foreground placeholder:text-muted/40 focus:border-accent/40 focus-visible:ring-2 focus-visible:ring-accent/60"
                       />
                       <input
                         value={f.name}
                         onChange={(e) => updateField(idx, 'name', e.target.value)}
                         placeholder="字段名"
-                        className="flex-1 h-7 px-2 rounded-md border border-border bg-base text-[11px] font-mono text-foreground placeholder:text-muted/40 focus:outline-none focus:border-accent/40"
+                        className="flex-1 h-7 px-2 rounded-md border border-border bg-base text-[11px] font-mono text-foreground placeholder:text-muted/40 focus:border-accent/40 focus-visible:ring-2 focus-visible:ring-accent/60"
                       />
                       <select
                         value={f.dtype}

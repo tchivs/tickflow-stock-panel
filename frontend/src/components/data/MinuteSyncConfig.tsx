@@ -64,7 +64,7 @@ export function MinuteSyncConfig({ caps, isRunning, onStart }: { caps: { label: 
             <button
               onClick={() => { const v = Math.max(1, localDays - 1); setLocalDays(v); update.mutate({ enabled, days: v }) }}
               disabled={!hasMinuteCap || !enabled || localDays <= 1}
-              className="h-6 w-6 flex items-center justify-center rounded-l-btn bg-elevated border border-border text-secondary hover:bg-border/50 disabled:opacity-30 transition-colors text-xs"
+              className="h-6 w-6 flex items-center justify-center rounded-l-btn bg-elevated border border-border text-secondary hover:bg-border/50 disabled:opacity-30 transition-colors text-xs max-md:h-11 max-md:w-11"
             >
               −
             </button>
@@ -78,7 +78,7 @@ export function MinuteSyncConfig({ caps, isRunning, onStart }: { caps: { label: 
             <button
               onClick={() => { const v = Math.min(15, localDays + 1); setLocalDays(v); update.mutate({ enabled, days: v }) }}
               disabled={!hasMinuteCap || !enabled || localDays >= 15}
-              className="h-6 w-6 flex items-center justify-center rounded-r-btn bg-elevated border border-border text-secondary hover:bg-border/50 disabled:opacity-30 transition-colors text-xs"
+              className="h-6 w-6 flex items-center justify-center rounded-r-btn bg-elevated border border-border text-secondary hover:bg-border/50 disabled:opacity-30 transition-colors text-xs max-md:h-11 max-md:w-11"
             >
               +
             </button>
@@ -150,7 +150,7 @@ function MinuteExtendControls({ hasMinuteCap, tierLabel, isRunning, onStart }: {
           <button
             onClick={() => setValue(Math.max(1, value - 1))}
             disabled={!hasMinuteCap || isRunning || extend.isPending}
-            className="h-6 w-6 flex items-center justify-center rounded-l-btn bg-elevated border border-border text-secondary hover:bg-border/50 disabled:opacity-30 transition-colors text-xs"
+            className="h-6 w-6 flex items-center justify-center rounded-l-btn bg-elevated border border-border text-secondary hover:bg-border/50 disabled:opacity-30 transition-colors text-xs max-md:h-11 max-md:w-11"
           >−</button>
           <div className="h-6 w-8 flex items-center justify-center border-y border-border text-[11px] font-mono tabular-nums text-foreground bg-base">
             {value}
@@ -158,7 +158,7 @@ function MinuteExtendControls({ hasMinuteCap, tierLabel, isRunning, onStart }: {
           <button
             onClick={() => setValue(Math.min(maxValue, value + 1))}
             disabled={!hasMinuteCap || isRunning || extend.isPending || value >= maxValue}
-            className="h-6 w-6 flex items-center justify-center rounded-r-btn bg-elevated border border-border text-secondary hover:bg-border/50 disabled:opacity-30 transition-colors text-xs"
+            className="h-6 w-6 flex items-center justify-center rounded-r-btn bg-elevated border border-border text-secondary hover:bg-border/50 disabled:opacity-30 transition-colors text-xs max-md:h-11 max-md:w-11"
           >+</button>
         </div>
 

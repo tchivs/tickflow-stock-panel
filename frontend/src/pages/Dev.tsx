@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { Loader2, Search, AlertTriangle, CheckCircle2, XCircle, FlaskConical, Activity, Bell } from 'lucide-react'
+import { Loader2, Search, AlertTriangle, Check, X, Circle, CheckCircle2, XCircle, FlaskConical, Activity, Bell } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/cn'
@@ -320,7 +320,7 @@ function SeedPanel() {
 function LadderTestPanel() {
   const [result, setResult] = useState<Awaited<ReturnType<typeof api.monitorRuleTestLadder>> | null>(null)
   const [error, setError] = useState('')
-  const [pushMsg, setPushMsg] = useState('')
+  const [pushMsg, setPushMsg] = useState<ReactNode>('')
 
   const testMut = useMutation({
     mutationFn: () => api.monitorRuleTestLadder(),
@@ -331,11 +331,11 @@ function LadderTestPanel() {
   const triggerMut = useMutation({
     mutationFn: () => api.monitorRuleTriggerLadder(),
     onSuccess: (data) => {
-      setPushMsg(`✅ 已真实触发 ${data.triggered} 条预警 (落盘 + 飞书 + SSE)`)
+      setPushMsg(<span className="inline-flex items-center gap-1.5"><Check className="h-4 w-4" aria-hidden="true" />已真实触发 {data.triggered} 条预警 (落盘 + 飞书 + SSE)</span>)
       setTimeout(() => setPushMsg(''), 6000)
     },
     onError: (e: any) => {
-      setPushMsg(`❌ 触发失败: ${e?.message ?? String(e)}`)
+      setPushMsg(<span className="inline-flex items-center gap-1.5"><X className="h-4 w-4" aria-hidden="true" />触发失败: {e?.message ?? String(e)}</span>)
       setTimeout(() => setPushMsg(''), 6000)
     },
   })
@@ -401,7 +401,7 @@ function LadderTestPanel() {
 
       {result && result.triggered.length > 0 && (
         <div className="space-y-2">
-          <h3 className="text-sm font-medium text-emerald-400">✅ 会触发 ({result.triggered.length})</h3>
+          <h3 className="flex items-center gap-1.5 text-sm font-medium text-emerald-400"><Check className="h-4 w-4" aria-hidden="true" />会触发 ({result.triggered.length})</h3>
           {result.triggered.map((ev) => (
             <div key={ev.rule_id} className="rounded-btn border border-emerald-400/30 bg-emerald-400/5 p-3 text-sm">
               <div className="flex items-center gap-2 mb-1">
@@ -420,7 +420,7 @@ function LadderTestPanel() {
 
       {result && result.not_triggered.length > 0 && (
         <div className="space-y-2">
-          <h3 className="text-sm font-medium text-muted">⚪ 未触发 ({result.not_triggered.length})</h3>
+          <h3 className="flex items-center gap-1.5 text-sm font-medium text-muted"><Circle className="h-4 w-4" aria-hidden="true" />未触发 ({result.not_triggered.length})</h3>
           {result.not_triggered.map((r) => (
             <div key={r.rule_id} className="rounded-btn border border-border bg-surface/40 p-3 text-sm">
               <div className="flex items-center gap-2 mb-1">

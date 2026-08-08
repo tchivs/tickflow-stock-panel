@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { BarChart3, ChevronDown, ChevronUp, Plus, Save, Trash2 } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
 import { Skeleton } from '@/components/data/Skeleton'
+import { EmptyState } from '@/components/EmptyState'
 import { api, type AnalysisColumn, type ExtDataConfig, type ExtDataField } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 
@@ -290,8 +291,22 @@ export function Analysis() {
                 <Skeleton h="h-8" rounded="rounded-btn" />
               </div>
             ))}
-          {!menus.isLoading && menuItems.length === 0 && (
-            <div className="rounded-card border border-border bg-surface px-5 py-10 text-center text-sm text-muted md:col-span-2 xl:col-span-3">暂无分析菜单，点击右上角新建。</div>
+          {menus.isError && !menus.data && (
+            <div role="alert" className="rounded-card border border-danger/30 bg-danger/10 px-5 py-8 text-center text-sm text-danger md:col-span-2 xl:col-span-3">
+              分析菜单加载失败
+              <button
+                type="button"
+                onClick={() => menus.refetch()}
+                className="ml-2 inline-flex items-center rounded-btn border border-danger/30 bg-danger/10 px-2 py-1 text-xs font-medium text-danger hover:bg-danger/20 max-md:min-h-11 max-md:min-w-11"
+              >
+                重试
+              </button>
+            </div>
+          )}
+          {!menus.isLoading && !menus.isError && menuItems.length === 0 && (
+            <div className="md:col-span-2 xl:col-span-3">
+              <EmptyState icon={BarChart3} title="暂无分析菜单，点击右上角新建。" />
+            </div>
           )}
         </section>
       </div>

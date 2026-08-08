@@ -51,10 +51,22 @@ function FactorCatalog() {
         <span className="ml-2 font-normal text-muted">IC 与 RankIC 为独立指标，绝不合并</span>
       </div>
       {factorsQuery.isLoading && <div className="px-4 py-10 text-center text-sm text-muted">加载中…</div>}
+      {factorsQuery.isError && (
+        <div role="alert" className="flex items-center justify-center gap-3 px-4 py-10 text-center text-sm">
+          <span className="text-foreground">加载失败</span>
+          <button
+            type="button"
+            onClick={() => factorsQuery.refetch()}
+            className="rounded-btn bg-accent/15 px-3 py-1.5 text-xs text-accent hover:bg-accent/25"
+          >
+            重试
+          </button>
+        </div>
+      )}
       {factorsQuery.data?.length === 0 && (
         <EmptyState icon={FlaskConical} title="暂无因子" hint="在策略工作台评估并准入因子后，目录会显示在这里。" />
       )}
-      <div className="overflow-x-auto">
+      {!factorsQuery.isError && <div className="overflow-x-auto">
         <table className="w-full text-left text-xs">
           <thead className="bg-elevated/50 text-[11px] text-muted">
             <tr>
@@ -71,7 +83,7 @@ function FactorCatalog() {
             ))}
           </tbody>
         </table>
-      </div>
+      </div>}
     </section>
   )
 }
@@ -92,6 +104,15 @@ function FactorRow({ factor }: { factor: FactorRevisionDTO }) {
       <tr
         className="cursor-pointer transition-colors hover:bg-elevated/30"
         onClick={() => setExpanded(v => !v)}
+        role="button"
+        tabIndex={0}
+        aria-expanded={expanded}
+        onKeyDown={e => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            setExpanded(v => !v)
+          }
+        }}
       >
         <td className="px-4 py-2.5">
           <div className="flex items-center gap-2">
@@ -108,7 +129,7 @@ function FactorRow({ factor }: { factor: FactorRevisionDTO }) {
           {factor.rank_ic != null ? factor.rank_ic.toFixed(4) : '—'}
         </td>
         <td className="px-4 py-2.5">
-          <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${admitted ? 'bg-bear/15 text-bear' : 'bg-warning/15 text-warning'}`}>
+          <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${admitted ? 'bg-accent/15 text-accent' : 'bg-warning/15 text-warning'}`}>
             {admitted ? '已准入' : factor.status}
           </span>
         </td>
@@ -154,10 +175,22 @@ function ModelCatalog() {
       <div className="border-b border-border px-4 py-2.5 text-xs font-semibold text-secondary">
         组合模型 {modelsQuery.data ? `(${modelsQuery.data.length})` : ''}
       </div>
+      {modelsQuery.isError && (
+        <div role="alert" className="flex items-center justify-center gap-3 px-4 py-10 text-center text-sm">
+          <span className="text-foreground">加载失败</span>
+          <button
+            type="button"
+            onClick={() => modelsQuery.refetch()}
+            className="rounded-btn bg-accent/15 px-3 py-1.5 text-xs text-accent hover:bg-accent/25"
+          >
+            重试
+          </button>
+        </div>
+      )}
       {modelsQuery.data?.length === 0 && (
         <EmptyState icon={Layers} title="暂无组合模型" hint="准入多个因子后，可构建多因子预期收益模型。" />
       )}
-      <div className="overflow-x-auto">
+      {!modelsQuery.isError && <div className="overflow-x-auto">
         <table className="w-full text-left text-xs">
           <thead className="bg-elevated/50 text-[11px] text-muted">
             <tr>
@@ -171,7 +204,7 @@ function ModelCatalog() {
             {modelsQuery.data?.map(model => <ModelRow key={model.model_id} model={model} />)}
           </tbody>
         </table>
-      </div>
+      </div>}
     </section>
   )
 }
@@ -186,7 +219,19 @@ function ModelRow({ model }: { model: ModelDefinitionDTO }) {
 
   return (
     <>
-      <tr className="cursor-pointer transition-colors hover:bg-elevated/30" onClick={() => setExpanded(v => !v)}>
+      <tr
+        className="cursor-pointer transition-colors hover:bg-elevated/30"
+        onClick={() => setExpanded(v => !v)}
+        role="button"
+        tabIndex={0}
+        aria-expanded={expanded}
+        onKeyDown={e => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            setExpanded(v => !v)
+          }
+        }}
+      >
         <td className="px-4 py-2.5">
           <div className="flex items-center gap-2">
             {expanded ? <ChevronDown className="h-3 w-3 text-muted" /> : <ChevronRight className="h-3 w-3 text-muted" />}

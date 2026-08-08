@@ -102,6 +102,12 @@ export function RiskAttribution() {
             </div>
             <div className="max-h-[calc(100vh-16rem)] overflow-auto p-2 space-y-1">
               {listQuery.isLoading && <div className="px-3 py-6 text-center text-xs text-muted">加载中…</div>}
+              {listQuery.isError && !listQuery.data && (
+                <div role="alert" className="rounded-btn border border-danger/30 bg-danger/10 px-3 py-3 text-xs text-danger">
+                  归因证据加载失败：{listQuery.error instanceof Error ? listQuery.error.message : String(listQuery.error ?? '未知错误')}
+                  <button type="button" onClick={() => listQuery.refetch()} className="ml-2 inline-flex items-center rounded-btn border border-danger/30 bg-danger/10 px-2 py-1 text-xs font-medium text-danger hover:bg-danger/20 max-md:min-h-11 max-md:min-w-11">重试</button>
+                </div>
+              )}
               {listQuery.data?.length === 0 && (
                 <EmptyState icon={Layers} title="暂无归因证据" hint="对优化运行做风险归因后,证据会出现在这里。" />
               )}

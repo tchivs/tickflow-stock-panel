@@ -119,7 +119,7 @@ export function EditExtDialog({ config, onClose }: { config: ExtDataConfig; onCl
             <input
               value={label}
               onChange={(e) => setLabel(e.target.value)}
-              className="w-full h-8 px-3 rounded-btn bg-base border border-border text-xs text-foreground placeholder:text-muted/40 focus:outline-none focus:border-accent/50"
+              className="w-full h-8 px-3 rounded-btn bg-base border border-border text-xs text-foreground placeholder:text-muted/40 focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60"
             />
           </div>
 
@@ -129,7 +129,7 @@ export function EditExtDialog({ config, onClose }: { config: ExtDataConfig; onCl
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               placeholder="可选，简要说明数据的用途"
-              className="w-full h-8 px-3 rounded-btn bg-base border border-border text-xs text-foreground placeholder:text-muted/40 focus:outline-none focus:border-accent/50"
+              className="w-full h-8 px-3 rounded-btn bg-base border border-border text-xs text-foreground placeholder:text-muted/40 focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60"
             />
           </div>
 
@@ -187,7 +187,7 @@ export function EditExtDialog({ config, onClose }: { config: ExtDataConfig; onCl
                       onChange={(e) => updateField(i, 'label', e.target.value)}
                       placeholder="显示名"
                       disabled={isBuiltin}
-                      className={`w-20 h-7 px-2 rounded-btn border text-[11px] text-foreground placeholder:text-muted/40 focus:outline-none focus:border-accent/50 ${
+                      className={`w-20 h-7 px-2 rounded-btn border text-[11px] text-foreground placeholder:text-muted/40 focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60 ${
                         isBuiltin
                           ? 'bg-elevated/50 border-border text-muted cursor-not-allowed'
                           : 'bg-base border-border'
@@ -198,7 +198,7 @@ export function EditExtDialog({ config, onClose }: { config: ExtDataConfig; onCl
                       onChange={(e) => updateField(i, 'name', e.target.value)}
                       placeholder="字段名 (英文)"
                       disabled={isBuiltin}
-                      className={`flex-1 h-7 px-2 rounded-btn border text-[11px] font-mono placeholder:text-muted/40 focus:outline-none focus:border-accent/50 ${
+                      className={`flex-1 h-7 px-2 rounded-btn border text-[11px] font-mono placeholder:text-muted/40 focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60 ${
                         isBuiltin
                           ? 'bg-elevated/50 border-border text-muted cursor-not-allowed'
                           : 'bg-base border-border'

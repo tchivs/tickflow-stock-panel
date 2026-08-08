@@ -20,7 +20,6 @@ interface DimensionAnalysisProps {
   subtitle?: string
   kindLabel?: string
   emptyHint?: string
-  accentClass?: string
   keywords?: string[]
   fallbackFieldNames?: string[]
 }
@@ -151,7 +150,6 @@ export function ExtDimensionAnalysis({
   subtitle,
   kindLabel = '维度',
   emptyHint = '还没有可用于分析的扩展数据。',
-  accentClass = 'bg-[radial-gradient(circle_at_top_right,rgba(59,130,246,0.16),transparent_36%)]',
   keywords = [],
   fallbackFieldNames = [],
 }: DimensionAnalysisProps) {
@@ -260,7 +258,7 @@ export function ExtDimensionAnalysis({
             <select
               value={activeConfigId}
               onChange={(e) => { setSelectedConfigId(e.target.value); setDimensionField(''); setSelectedGroup(null) }}
-              className="h-8 w-full min-w-0 rounded-btn border border-border bg-surface px-2 text-xs text-foreground focus:outline-none focus:border-accent/50 sm:w-auto sm:min-w-40"
+              className="h-8 max-md:min-h-11 w-full min-w-0 rounded-btn border border-border bg-surface px-2 text-xs text-foreground focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60 sm:w-auto sm:min-w-40"
             >
               {availableConfigs.length === 0 ? (
                 <option value="">暂无扩展数据</option>
@@ -272,7 +270,7 @@ export function ExtDimensionAnalysis({
               value={activeDimensionField}
               onChange={(e) => { setDimensionField(e.target.value); setSelectedGroup(null) }}
               disabled={!activeConfig}
-              className="h-8 w-full min-w-0 rounded-btn border border-border bg-surface px-2 text-xs text-foreground disabled:opacity-50 focus:outline-none focus:border-accent/50 sm:w-auto sm:min-w-36"
+              className="h-8 max-md:min-h-11 w-full min-w-0 rounded-btn border border-border bg-surface px-2 text-xs text-foreground disabled:opacity-50 focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60 sm:w-auto sm:min-w-36"
             >
               {dimensionOptions.length === 0 ? (
                 <option value="">暂无字段</option>
@@ -285,7 +283,7 @@ export function ExtDimensionAnalysis({
       />
 
       <div className="px-8 py-6 space-y-6 max-w-7xl">
-        <section className={`relative overflow-hidden rounded-2xl border border-border bg-surface p-6 ${accentClass}`}>
+        <section className="relative overflow-hidden rounded-card border border-border bg-surface p-6">
           <div className="relative z-10 max-w-3xl">
             <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] text-secondary">
               <Layers3 className="h-3.5 w-3.5" />
@@ -343,7 +341,7 @@ export function ExtDimensionAnalysis({
                         value={search}
                         onChange={(e) => { setSearch(e.target.value); setSelectedGroup(null) }}
                         placeholder={`搜索${activeKindLabel}`}
-                        className="h-8 w-full rounded-btn border border-border bg-base pl-8 pr-3 text-xs text-foreground placeholder:text-muted/50 focus:outline-none focus:border-accent/50"
+                        className="h-8 max-md:min-h-11 w-full rounded-btn border border-border bg-base pl-8 pr-3 text-xs text-foreground placeholder:text-muted/50 focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60"
                       />
                     </div>
                   </div>
@@ -401,7 +399,7 @@ export function ExtDimensionAnalysis({
                     <thead className="bg-elevated/50 text-[11px] text-muted">
                       <tr>
                         {displayColumns.map(col => (
-                          <th key={col.field} className="whitespace-nowrap px-4 py-2 font-medium" style={col.width ? { width: col.width } : undefined}>{col.label || col.field}</th>
+                          <th key={col.field} scope="col" className="whitespace-nowrap px-4 py-2 font-medium" style={col.width ? { width: col.width } : undefined}>{col.label || col.field}</th>
                         ))}
                       </tr>
                     </thead>

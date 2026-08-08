@@ -38,6 +38,17 @@ export function StockAnalysis() {
   // 进入页面立即加载历史报告(供右侧常驻列表)。store 内部有 historyLoaded 去重, 重复调用安全。
   useEffect(() => { loadHistory() }, [])
 
+  // 支持 ?symbol=&name= 直达 (StockPreviewDialog「个股分析」入口): 优先于 localStorage 恢复
+  useEffect(() => {
+    const sp = new URLSearchParams(window.location.search)
+    const s = sp.get('symbol')
+    if (s) {
+      setSymbol(s)
+      setName(sp.get('name') ?? '')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   // 自动恢复上次选中的股票(切走再回来不丢)。useLastStock 的 last 来自 localStorage, 同步可用。
   useEffect(() => {
     if (!symbol && lastStock) {

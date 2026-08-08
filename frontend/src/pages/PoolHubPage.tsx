@@ -13,6 +13,7 @@ import { EmptyState } from '@/components/EmptyState'
 import { StrategyCardGrid } from '@/components/pool-hub/StrategyCardGrid'
 import { ConceptFilter } from '@/components/pool-hub/ConceptFilter'
 import { StockListTable, AuctionColumnStatusBadge, ConceptAttributionBadge } from '@/components/pool-hub/StockListTable'
+import { StockPreviewDialog } from '@/components/StockPreviewDialog'
 import { DateNavigator } from '@/components/pool-hub/DateNavigator'
 import { GuestModeBanner } from '@/components/pool-hub/GuestModeBanner'
 
@@ -90,6 +91,13 @@ export function PoolHubPage() {
   const qc = useQueryClient()
   const [watchlistOnly, setWatchlistOnly] = useState(() => storage.poolWatchlistOnly.get(false))
   const [batchMsg, setBatchMsg] = useState('')
+  // 个股详情弹窗 (Watchlist 同款交互): 点击明细表名称 → StockPreviewDialog
+  const [previewSymbol, setPreviewSymbol] = useState<string | null>(null)
+  const [previewName, setPreviewName] = useState('')
+  const closePreview = () => {
+    setPreviewSymbol(null)
+    setPreviewName('')
+  }
   const watchlist = useQuery({
     queryKey: QK.watchlist,
     queryFn: api.watchlistList,
@@ -402,6 +410,10 @@ export function PoolHubPage() {
                   selection={selected}
                   onToggleSelection={handleToggleSelection}
                   onToggleSelectAll={handleToggleSelectAll}
+                  onPreview={(symbol, name) => {
+                    setPreviewSymbol(symbol)
+                    setPreviewName(name)
+                  }}
                 />
               </section>
             )}
@@ -411,6 +423,13 @@ export function PoolHubPage() {
         {/* 研究参考声明 (POOL-03) */}
         <footer className="pt-4 text-xs text-muted">{RESEARCH_FOOTER}</footer>
       </div>
+
+      {/* 个股详情弹窗 (Watchlist 同款交互) — symbol null 时零渲染 */}
+      <StockPreviewDialog
+        symbol={previewSymbol}
+        name={previewName}
+        onClose={closePreview}
+      />
     </>
   )
 }

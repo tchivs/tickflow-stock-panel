@@ -30,7 +30,7 @@ const CARD_STYLES: Record<CardSize, {
   },
   normal: {
     wrap: 'gap-2',
-    card: 'relative inline-flex items-center gap-2 pl-3 pr-12 py-1.5 rounded-lg',
+    card: 'relative inline-flex items-center gap-2 pl-3 pr-12 py-1.5 rounded-lg max-md:pr-20',
     name: 'text-xs',
     count: 'text-xs',
     desc: 'text-[10px] text-muted leading-tight mt-0.5 line-clamp-1 max-w-[120px]',
@@ -38,7 +38,7 @@ const CARD_STYLES: Record<CardSize, {
   },
   large: {
     wrap: 'gap-2',
-    card: 'relative inline-flex flex-col items-start pl-3.5 pr-12 py-2.5 rounded-btn min-w-[100px]',
+    card: 'relative inline-flex flex-col items-start pl-3.5 pr-12 py-2.5 rounded-btn min-w-[100px] max-md:pr-20',
     name: 'text-xs',
     count: 'text-lg font-mono font-bold tabular-nums',
     desc: 'text-[10px] text-muted leading-tight mt-0.5 line-clamp-2 max-w-[140px]',
@@ -146,12 +146,12 @@ export function StrategyCard({
             {loading && <div className="mt-1 h-4 w-10 rounded bg-elevated animate-pulse" />}
           </button>
           <button onClick={(e) => { e.stopPropagation(); onSettings() }}
-            className="absolute top-1.5 right-1.5 p-0.5 rounded hover:bg-elevated transition-colors cursor-pointer" title="策略设置">
+            className="absolute top-1.5 right-1.5 inline-flex items-center justify-center p-0.5 rounded hover:bg-elevated transition-colors cursor-pointer max-md:h-9 max-md:w-9" title="策略设置">
             <Settings2 className="h-3 w-3 text-muted hover:text-accent transition-colors" />
           </button>
           {onToggleMonitor && (
             <button onClick={(e) => { e.stopPropagation(); onToggleMonitor() }}
-              className="absolute top-1.5 right-7 p-0.5 rounded hover:bg-elevated transition-colors cursor-pointer" title={monitored ? '取消策略监控' : '开启策略监控'}>
+              className="absolute top-1.5 right-7 inline-flex items-center justify-center p-0.5 rounded hover:bg-elevated transition-colors cursor-pointer max-md:right-11 max-md:h-9 max-md:w-9" title={monitored ? '取消策略监控' : '开启策略监控'}>
               <RadioTower className={`relative h-3 w-3 transition-colors ${monitored ? 'text-accent' : 'text-muted hover:text-accent'}`} />
               {monitored && <span className="absolute inset-0 rounded animate-ping bg-accent/20" />}
             </button>
@@ -179,12 +179,12 @@ export function StrategyCard({
             </div>
           </button>
           <button onClick={(e) => { e.stopPropagation(); onSettings() }}
-            className="absolute top-1.5 right-1.5 p-0.5 rounded hover:bg-elevated transition-colors cursor-pointer" title="策略设置">
+            className="absolute top-1.5 right-1.5 inline-flex items-center justify-center p-0.5 rounded hover:bg-elevated transition-colors cursor-pointer max-md:h-9 max-md:w-9" title="策略设置">
             <Settings2 className="h-3 w-3 text-muted hover:text-accent transition-colors" />
           </button>
           {onToggleMonitor && (
             <button onClick={(e) => { e.stopPropagation(); onToggleMonitor() }}
-              className="absolute top-1.5 right-7 p-0.5 rounded hover:bg-elevated transition-colors cursor-pointer" title={monitored ? '取消策略监控' : '开启策略监控'}>
+              className="absolute top-1.5 right-7 inline-flex items-center justify-center p-0.5 rounded hover:bg-elevated transition-colors cursor-pointer max-md:right-11 max-md:h-9 max-md:w-9" title={monitored ? '取消策略监控' : '开启策略监控'}>
               <RadioTower className={`relative h-3 w-3 transition-colors ${monitored ? 'text-accent' : 'text-muted hover:text-accent'}`} />
               {monitored && <span className="absolute inset-0 rounded animate-ping bg-accent/20" />}
             </button>
@@ -194,9 +194,9 @@ export function StrategyCard({
         /* mini */
         <>
           <button onClick={onRun} disabled={disabled}
-            className="flex items-center gap-1 cursor-pointer disabled:opacity-50 disabled:cursor-wait">
-            <span className="text-[8px] px-0.5 rounded bg-secondary/10 text-muted border border-border font-medium leading-tight">{srcLabel}</span>
-            <span className="text-[10px] font-medium whitespace-nowrap text-foreground">{name}</span>
+            className="flex min-w-0 max-w-[120px] items-center gap-1 cursor-pointer disabled:opacity-50 disabled:cursor-wait">
+            <span className="text-[8px] px-0.5 rounded bg-secondary/10 text-muted border border-border font-medium leading-tight shrink-0">{srcLabel}</span>
+            <span className="text-[10px] font-medium truncate text-foreground">{name}</span>
             {count != null && !loading && (
               <span className={`text-xs font-mono font-bold tabular-nums ${countCls}`}>{count}</span>
             )}
@@ -207,13 +207,13 @@ export function StrategyCard({
           </button>
           {onToggleMonitor && (
             <button onClick={(e) => { e.stopPropagation(); onToggleMonitor() }}
-              className="relative p-0.5 rounded hover:bg-elevated transition-colors cursor-pointer" title={monitored ? '取消策略监控' : '开启策略监控'}>
+              className="relative inline-flex items-center justify-center p-0.5 rounded hover:bg-elevated transition-colors cursor-pointer max-md:h-9 max-md:w-9" title={monitored ? '取消策略监控' : '开启策略监控'}>
               <RadioTower className={`h-3 w-3 transition-colors ${monitored ? 'text-accent' : 'text-muted hover:text-accent'}`} />
               {monitored && <span className="absolute inset-0 rounded animate-ping bg-accent/20" />}
             </button>
           )}
           <button onClick={(e) => { e.stopPropagation(); onSettings() }}
-            className="p-0.5 rounded hover:bg-elevated transition-colors cursor-pointer" title="策略设置">
+            className="inline-flex items-center justify-center p-0.5 rounded hover:bg-elevated transition-colors cursor-pointer max-md:h-9 max-md:w-9" title="策略设置">
             <Settings2 className="h-3 w-3 text-muted hover:text-accent transition-colors" />
           </button>
         </>

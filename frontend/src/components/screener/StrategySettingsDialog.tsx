@@ -93,7 +93,7 @@ function RangeField({ label, minVal, maxVal, onMinChange, onMaxChange, unit, ste
         onChange={e => onMinChange(e.target.value === '' ? null : Number(e.target.value))}
         placeholder="最小"
         step={step}
-        className="w-20 px-1.5 py-0.5 rounded bg-base border border-border text-[11px] font-mono text-foreground text-center focus:outline-none focus:border-accent/50"
+        className="w-20 px-1.5 py-0.5 rounded bg-base border border-border text-[11px] font-mono text-foreground text-center focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60"
       />
       <span className="text-[10px] text-muted">~</span>
       <input
@@ -102,7 +102,7 @@ function RangeField({ label, minVal, maxVal, onMinChange, onMaxChange, unit, ste
         onChange={e => onMaxChange(e.target.value === '' ? null : Number(e.target.value))}
         placeholder="最大"
         step={step}
-        className="w-20 px-1.5 py-0.5 rounded bg-base border border-border text-[11px] font-mono text-foreground text-center focus:outline-none focus:border-accent/50"
+        className="w-20 px-1.5 py-0.5 rounded bg-base border border-border text-[11px] font-mono text-foreground text-center focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60"
       />
       {unit && <span className="text-[10px] text-muted shrink-0">{unit}</span>}
     </div>
@@ -145,7 +145,7 @@ function ParamField({ def, value, onChange }: {
         <select
           value={value ?? def.default}
           onChange={e => onChange(e.target.value)}
-          className="w-24 px-1.5 py-0.5 rounded bg-base border border-border text-[11px] font-mono text-foreground focus:outline-none focus:border-accent/50"
+          className="w-24 px-1.5 py-0.5 rounded bg-base border border-border text-[11px] font-mono text-foreground focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60"
         >
           {def.options.map(o => <option key={o} value={o}>{o}</option>)}
         </select>
@@ -163,7 +163,7 @@ function ParamField({ def, value, onChange }: {
         step={def.step ?? 0.1}
         min={def.min}
         max={def.max}
-        className="w-20 px-1.5 py-0.5 rounded bg-base border border-border text-[11px] font-mono text-foreground text-center focus:outline-none focus:border-accent/50"
+        className="w-20 px-1.5 py-0.5 rounded bg-base border border-border text-[11px] font-mono text-foreground text-center focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60"
       />
       {def.min != null && def.max != null && (
         <span className="text-[10px] text-muted">{def.min}~{def.max}</span>
@@ -388,7 +388,7 @@ export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModif
                   <div className="flex items-center gap-1.5 pb-0.5 shrink-0">
                     <span className="text-[10px] text-muted/50">显示上限</span>
                     <input type="number" value={displayLimit ?? ''} onChange={e => setDisplayLimit(e.target.value ? Number(e.target.value) : null)} step={1} min={10} max={200} placeholder="不限"
-                      className="w-14 h-8 px-1.5 rounded-lg bg-base border border-border/40 text-xs font-mono text-foreground text-center focus:outline-none focus:border-accent/50" />
+                      className="w-14 h-8 px-1.5 rounded-lg bg-base border border-border/40 text-xs font-mono text-foreground text-center focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60" />
                     <span className="text-[10px] text-muted/50">只</span>
                   </div>
                 </div>
@@ -503,13 +503,13 @@ export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModif
                         <div className="flex items-center gap-1.5">
                           <span className="text-[11px] text-secondary w-12 shrink-0">止损</span>
                           <input type="number" value={stopLoss ?? ''} onChange={e => setStopLoss(e.target.value === '' ? null : Number(e.target.value))} step={0.01} min={-0.5} max={0}
-                            className="w-16 h-6 px-1.5 rounded bg-base border border-border text-[11px] font-mono text-foreground text-center focus:outline-none focus:border-accent/50" />
+                            className="w-16 h-6 px-1.5 rounded bg-base border border-border text-[11px] font-mono text-foreground text-center focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60" />
                           <span className="text-[10px] text-muted">{stopLoss != null ? `${(stopLoss * 100).toFixed(1)}%` : '—'}</span>
                         </div>
                         <div className="flex items-center gap-1.5">
                           <span className="text-[11px] text-secondary w-12 shrink-0">持有</span>
                           <input type="number" value={maxHoldDays ?? ''} onChange={e => setMaxHoldDays(e.target.value === '' ? null : Number(e.target.value))} step={1} min={1}
-                            className="w-16 h-6 px-1.5 rounded bg-base border border-border text-[11px] font-mono text-foreground text-center focus:outline-none focus:border-accent/50" />
+                            className="w-16 h-6 px-1.5 rounded bg-base border border-border text-[11px] font-mono text-foreground text-center focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60" />
                           <span className="text-[10px] text-muted">天</span>
                         </div>
                         <div className="text-[11px] text-muted pt-1 border-t border-border/10">

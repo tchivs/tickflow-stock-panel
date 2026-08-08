@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useMemo } from 'react'
+import React, { useState, useCallback, useMemo, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
 import { RefreshCw, ChevronDown, Flame, Settings2, X, Bell, BellOff, AlertCircle } from 'lucide-react'
@@ -489,7 +489,7 @@ function MonitorMenu({ stock, direction, sealMode, monitorRule, anchorRect, hasD
             <Bell className="h-3.5 w-3.5 text-amber-400 shrink-0" />
             <span className="font-medium text-foreground truncate">{stock.name ?? stock.symbol}</span>
           </div>
-          <button onClick={onClose} className="text-muted hover:text-foreground shrink-0"><X className="h-3.5 w-3.5" /></button>
+          <button onClick={onClose} aria-label="关闭" className="text-muted hover:text-foreground shrink-0"><X className="h-3.5 w-3.5" /></button>
         </div>
 
         <div className="px-3 py-2.5 space-y-2.5">
@@ -524,12 +524,12 @@ function MonitorMenu({ stock, direction, sealMode, monitorRule, anchorRect, hasD
               value={threshold}
               onChange={e => setThreshold(e.target.value)}
               placeholder="≤ 报警"
-              className="flex-1 min-w-0 h-7 px-2 rounded bg-base border border-border text-foreground text-center tabular-nums placeholder:text-muted/40 focus:outline-none focus:border-accent/50"
+              className="flex-1 min-w-0 h-7 px-2 rounded bg-base border border-border text-foreground text-center tabular-nums placeholder:text-muted/40 focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60"
             />
             <select
               value={unitKey}
               onChange={e => setUnitKey(e.target.value)}
-              className="h-7 px-1.5 rounded bg-base border border-border text-secondary text-[11px] focus:outline-none focus:border-accent/50 cursor-pointer"
+              className="h-7 px-1.5 rounded bg-base border border-border text-secondary text-[11px] focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60 cursor-pointer"
             >
               {units.map(u => (
                 <option key={u.key} value={u.key}>{u.label}</option>
@@ -1105,7 +1105,8 @@ function Toggle({ label, checked, onChange }: { label: string; checked: boolean;
   return (
     <label className="flex items-center justify-between gap-2 text-xs cursor-pointer">
       <span className="text-secondary">{label}</span>
-      <span
+      <button
+        type="button"
         role="switch"
         aria-checked={checked}
         onClick={() => onChange(!checked)}
@@ -1115,10 +1116,10 @@ function Toggle({ label, checked, onChange }: { label: string; checked: boolean;
         <span
           style={{
             position: 'absolute', top: 2, left: 0, width: 14, height: 14, borderRadius: '50%', background: '#fff',
-            transition: 'transform 0.15s', transform: checked ? 'translateX(16px)' : 'translateX(2px)',
+            transition: 'transform 0.15s', transform: checked ? 'translateX(16px)' : 'translateX(2px)', pointerEvents: 'none',
           }}
         />
-      </span>
+      </button>
     </label>
   )
 }
@@ -1144,7 +1145,7 @@ function NumInput({ label, value, onChange, min, max, placeholder }: {
           onChange(v)
         }}
         placeholder={placeholder}
-        className="w-16 h-7 bg-elevated border border-border rounded text-xs text-foreground text-center px-1 placeholder:text-muted focus:outline-none focus:border-accent/50"
+        className="w-16 h-7 bg-elevated border border-border rounded text-xs text-foreground text-center px-1 placeholder:text-muted focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60"
       />
     </label>
   )
@@ -1159,7 +1160,7 @@ function FieldSelect({ value, onChange, options }: {
       <select
         value={value}
         onChange={e => onChange(e.target.value)}
-        className="w-full h-7 bg-elevated border border-border rounded text-xs text-foreground px-2 focus:outline-none focus:border-accent/50"
+        className="w-full h-7 bg-elevated border border-border rounded text-xs text-foreground px-2 focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60"
       >
       <option value="">不显示</option>
       {options.map(o => (
@@ -1214,7 +1215,7 @@ function ExtFieldSection({ item, onChange, options }: {
                   value={cfg?.separator ?? ''}
                   onChange={e => updateDisplay({ separator: e.target.value })}
                   placeholder="留空"
-                  className="flex-1 min-w-0 h-7 bg-elevated border border-border rounded text-xs text-foreground px-2 placeholder:text-muted focus:outline-none focus:border-accent/50"
+                  className="flex-1 min-w-0 h-7 bg-elevated border border-border rounded text-xs text-foreground px-2 placeholder:text-muted focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60"
                 />
               </div>
               <div className="text-[10px] text-muted mt-1" style={{ paddingLeft: 72 }}>
@@ -1233,7 +1234,7 @@ function ExtFieldSection({ item, onChange, options }: {
                   updateDisplay({ maxTags: v, ...(v ? {} : { hiddenIndices: undefined }) })
                 }}
                 placeholder="不限制"
-                className="flex-1 min-w-0 h-7 bg-elevated border border-border rounded text-xs text-foreground px-2 placeholder:text-muted focus:outline-none focus:border-accent/50"
+                className="flex-1 min-w-0 h-7 bg-elevated border border-border rounded text-xs text-foreground px-2 placeholder:text-muted focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60"
               />
             </div>
           )}
@@ -1321,6 +1322,14 @@ function ExtConfigDialog({ fields, onSave, onClose }: {
     queryFn: api.extDataSchemaAll,
   })
 
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
   const options = useMemo((): SchemaOption[] => {
     if (!schemaData?.items) return []
     return schemaData.items.filter(item =>
@@ -1343,11 +1352,14 @@ function ExtConfigDialog({ fields, onSave, onClose }: {
         exit={{ opacity: 0, scale: 0.95 }}
         className="w-[calc(100vw-2rem)] max-w-3xl max-h-[calc(100vh-2rem)] overflow-y-auto rounded-lg border border-border bg-surface shadow-xl"
         onClick={e => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label="字段配置"
       >
         {/* 头部 */}
         <div className="flex items-center justify-between px-4 pt-3 pb-1">
           <span className="text-sm font-medium">配置</span>
-          <button onClick={onClose} className="p-0.5 text-muted hover:text-foreground"><X className="h-4 w-4" /></button>
+          <button onClick={onClose} aria-label="关闭" className="p-0.5 text-muted hover:text-foreground"><X className="h-4 w-4" /></button>
         </div>
         {/* 三列平铺 */}
         <div className="grid grid-cols-1 gap-0 border-b border-border px-2 sm:grid-cols-3">
@@ -1471,7 +1483,7 @@ export function LimitUpLadder() {
 
   const extColumnsParam = useMemo(() => buildExtColumnsParam(extFields), [extFields])
 
-  const { data, isLoading, refetch, isFetching } = useQuery({
+  const { data, isLoading, isError, refetch, isFetching } = useQuery({
     queryKey: [QK.limitLadder(asOf || undefined), extColumnsParam, direction],
     queryFn: () => api.limitLadder(asOf || undefined, extColumnsParam, direction),
     staleTime: 5 * 60_000,
@@ -1493,6 +1505,26 @@ export function LimitUpLadder() {
   }
 
   const dateValue = displayDate || new Date().toISOString().slice(0, 10)
+
+  if (isError && !data) {
+    return (
+      <div className="flex flex-col h-full">
+        <PageHeader title={direction === 'down' ? '连跌梯队' : '连板梯队'} />
+        <div role="alert" className="flex flex-col items-center justify-center flex-1 gap-3 px-4 text-center">
+          <AlertCircle className="h-6 w-6 text-warning" />
+          <p className="text-sm text-foreground">加载失败</p>
+          <p className="text-xs text-muted">无法获取{direction === 'down' ? '连跌' : '连板'}数据，请稍后重试。</p>
+          <button
+            type="button"
+            onClick={() => refetch()}
+            className="px-3 py-1.5 text-xs bg-accent/15 text-accent rounded hover:bg-accent/25"
+          >
+            重试
+          </button>
+        </div>
+      </div>
+    )
+  }
 
   if (!data || rawTiers.length === 0) {
     return (

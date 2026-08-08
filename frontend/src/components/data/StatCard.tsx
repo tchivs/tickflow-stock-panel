@@ -213,12 +213,12 @@ export function StatCard({
         <div className="flex items-center gap-1.5">
           {auto !== undefined && !loading && (
             <span className="inline-flex items-center gap-1 text-[10px] font-medium">
-              <span className={`inline-block h-1.5 w-1.5 rounded-full ${auto ? 'bg-accent shadow-[0_0_4px_rgba(61,214,140,0.5)]' : 'bg-muted'}`} />
+              <span className={`inline-block h-1.5 w-1.5 rounded-full ${auto ? 'bg-accent' : 'bg-muted'}`} />
               <span className={auto ? 'text-accent/70' : 'text-muted'}>{auto ? '自动' : '关闭'}</span>
             </span>
           )}
           {active && <Loader2 className="h-3.5 w-3.5 text-accent animate-spin" />}
-          {done && !active && !skipped && <CheckCircle2 className="h-3.5 w-3.5 text-bear" />}
+          {done && !active && !skipped && <CheckCircle2 className="h-3.5 w-3.5 text-foreground" />}
           {skipped && !active && (
             <span className="text-[10px] text-muted bg-elevated rounded px-1.5 py-px font-medium">
               本次跳过
@@ -318,9 +318,9 @@ export function StatCard({
       {active && stagePct > 0 && (
         <div className="h-1 bg-elevated overflow-hidden rounded-b-card">
           <motion.div
-            className="h-full bg-accent"
-            initial={{ width: 0 }}
-            animate={{ width: `${stagePct}%` }}
+            className="h-full bg-accent origin-left"
+            initial={{ scaleX: 0 }}
+            animate={{ scaleX: stagePct / 100 }}
             transition={{ duration: 0.3, ease: 'easeOut' }}
           />
         </div>

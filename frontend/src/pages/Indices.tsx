@@ -5,6 +5,7 @@ import { Activity, ChevronDown, Loader2, Lock, RefreshCw, Search } from 'lucide-
 import { api, type IndexInstrument, type KlineRow, type MinuteKlineRow } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { useCapabilities } from '@/lib/useSharedQueries'
+import { EmptyState } from '@/components/EmptyState'
 import { EChartsCandlestick, type OHLC } from '@/components/EChartsCandlestick'
 import { EChartsIntraday } from '@/components/EChartsIntraday'
 
@@ -219,9 +220,10 @@ export function Indices() {
       <div className="max-h-[calc(100vh-24rem)] space-y-1 overflow-auto pr-1">
         {(list.isLoading || search.isLoading) && <div className="py-4 text-center text-xs text-muted">加载中…</div>}
         {!list.isLoading && listRows.length === 0 && (
-          <div className="rounded-btn bg-elevated p-3 text-xs text-muted">
-            {keyword.trim() ? '无匹配指数。' : '暂无更多指数，先点击“同步指数列表”。'}
-          </div>
+          <EmptyState
+            icon={Search}
+            title={keyword.trim() ? '无匹配指数。' : '暂无更多指数，先点击“同步指数列表”。'}
+          />
         )}
         {listRows.map(renderIndexItem)}
       </div>
@@ -241,7 +243,7 @@ export function Indices() {
           <button
             onClick={() => syncInstruments.mutate()}
             disabled={syncInstruments.isPending}
-            className="inline-flex min-w-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-btn bg-elevated px-3 py-1.5 text-xs text-secondary hover:text-foreground disabled:opacity-50"
+            className="inline-flex min-w-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-btn bg-elevated px-3 py-1.5 text-xs text-secondary hover:text-foreground disabled:opacity-50 max-md:min-h-11 max-md:min-w-11"
           >
             {syncInstruments.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
             同步指数列表
@@ -249,7 +251,7 @@ export function Indices() {
           <button
             onClick={() => syncDaily.mutate()}
             disabled={syncDaily.isPending}
-            className="inline-flex min-w-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-btn bg-accent px-3 py-1.5 text-xs font-medium text-base hover:bg-accent/90 disabled:opacity-50"
+            className="inline-flex min-w-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-btn bg-accent px-3 py-1.5 text-xs font-medium text-base hover:bg-accent/90 disabled:opacity-50 max-md:min-h-11 max-md:min-w-11"
           >
             {syncDaily.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
             同步指数日K
@@ -309,7 +311,18 @@ export function Indices() {
           </div>
 
           {daily.isLoading && <div className="py-10 text-center text-sm text-muted">日K加载中…</div>}
-          {daily.isError && <div className="py-4 text-sm text-danger">指数日K加载失败</div>}
+          {daily.isError && !daily.data && (
+            <div role="alert" className="flex flex-col items-center gap-3 py-4 text-sm text-danger">
+              指数日K加载失败
+              <button
+                type="button"
+                onClick={() => daily.refetch()}
+                className="inline-flex items-center gap-1 rounded-btn border border-danger/30 bg-danger/10 px-3 py-1.5 text-xs font-medium text-danger hover:bg-danger/20 max-md:min-h-11 max-md:min-w-11"
+              >
+                重试
+              </button>
+            </div>
+          )}
           {!daily.isLoading && !daily.isError && chartRows.length === 0 && (
             <div className="rounded-card bg-elevated p-6 text-center text-sm text-muted">
               暂无日K数据。可以先同步指数日K，或选择其他指数。
