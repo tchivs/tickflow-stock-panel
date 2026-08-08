@@ -8,15 +8,16 @@ AthenaQuant is a shipped, self-hosted quantitative research platform for individ
 
 An investor can turn reliable market data and their own holdings into an auditable, actionable research and monitoring workflow without operating multiple disconnected tools.
 
-## Current Milestone: v2.5 诚实加固与本机数据源接入
+## Current Milestone: v3.0 可回放 Alpha Factory 与 FactorResearchAgent
 
-**Goal:** 收口 v2.4 审计未决项并解锁数据源瓶颈：接入本机 stockdb 项目 SDK（服务已在 :8000 运行，REST/WS/MCP 三出口 + 联邦采集 + 本地数据湖，SDK 位于 ../stockdb/src/stockdb/sdk/）作为受管数据源通道——若 stockdb 提供集合竞价撮合明细（09:15-09:25 逐笔/快照）与历史日 K，则解除上游 xyz MCP ~2h 配额窗 gate（FA-04 全量回填、RC-02 ≥0.94 重跑可解锁），否则至少为日 K/实时行情提供本地旁路；同时修复两个记录在案的诚实性缺口（上游 403 源块与 BJ 真空无法区分 → source_blocked 标签；空帧批量失败进度冻结 → 逐 symbol 进度 emit），并把 D1..D8 真实交易日观测窗口 runbook 化（3 新端点 200-body、3018 容器 rebuild 对齐、分钟点亮门）。延续零新增运行时依赖、诚实 provenance（origin=backfill / 失败台账 / 空态 fail-closed）、POOL-03 零执行权与 Watchlist.tsx 零触碰。
+**Goal:** 在现有受治理数据、Factor DSL、共享信号链、准入门和独立 OOS 基础上，交付可重放的自动因子挖掘与两阶段研究 Agent 工作流：模型只提出受限研究假设，确定性代码负责候选生成、评估、门禁和研究资产晋级；全程保持 provenance、人工确认和零自动实盘执行权。
 
-**Target features（研究驱动，可行性以研究确认）：**
-- stockdb SDK 接入：能力探测（竞价撮合明细？历史日 K？分时？复权？）→ provider 适配器（沿用 probe×分区双闸门语义）→ 竞价回填通道切换/并行 → campaign 解锁或本地旁路（SDK 系）
-- 诚实性修复：source_blocked 标签（403 源块 vs 真空可区分）+ 空帧批量失败逐 symbol 进度 emit（HON 系）
-- 部署日执行：D1..D8 观测 runbook + 3 新端点 200-body 验证 + 3018 容器对齐（D 系）
-- 沿平台边界：选股/股池结果始终为零执行权研究建议，无自动下单
+**Target features（研究驱动，先确定性后学习型）：**
+- Alpha Factory：稳定 vocabulary、受限 AST/grammar 候选生成、mutation/crossover、精英池、谱系、多样性和成本压力评估
+- FactorResearchAgent：Preflight → Stage 1 研究诊断 → 确定性搜索 → Stage 2 候选复核，严格 JSON、失败留痕、可取消、可恢复
+- 研究运行工作台：持久化 run/event/candidate/evidence，poll/SSE Timeline，候选比较和 OOS 证据展示
+- Research-only Promotion Ticket：晋级前刷新数据与准入证据，显式人工确认后才注册正式因子/组合模型
+- 平台边界：不复制 AGPL 源码，不引入自动实盘、券商连接或任意 Python 执行
 
 ## Success Metric
 
@@ -26,7 +27,7 @@ The v1.0 release is successful when all 23 requirements are verified end to end,
 
 ### Active
 
-Building toward v1.3 (竞价选股引擎). Requirements are defined in `.planning/REQUIREMENTS.md`.
+Building toward v3.0 (可回放 Alpha Factory 与 FactorResearchAgent). Requirements are defined in `.planning/REQUIREMENTS.md`.
 
 ### Validated in v1.1
 
@@ -157,4 +158,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-08-07 — v2.5 milestone started (诚实加固与本机数据源接入)*
+*Last updated: 2026-08-08 — v3.0 milestone started (可回放 Alpha Factory 与 FactorResearchAgent)*
