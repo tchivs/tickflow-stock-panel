@@ -26,14 +26,14 @@ Locked boundaries:
 - [x] **AF-REQ-02**: Given the same frozen specification, seed, and governed input manifest, a replay produces the same canonical candidate expressions, candidate IDs/digests, order, statuses, and checksums.
 - [x] **AF-REQ-03**: Every generated expression is parsed and validated before evaluation; unsupported fields/functions/operators, invalid arity or partition semantics, excessive depth/window, non-finite literals, and malformed expressions become explicit invalid candidate records with diagnostics.
 - [x] **AF-REQ-04**: The run retains every attempted candidate, including invalid, duplicate, low-coverage, failed, rejected, and admitted outcomes, with parent/mutation lineage, seed/step, status, reason, and evidence references; the system never retains only the champion.
-- [ ] **AF-REQ-05**: Factory scoring, Agent-requested evaluation, admission, composite use, walk-forward folds, and later as-of serving all compute factor values through the existing governed `FactorSignalChain` and expose the panel/universe/source/warmup fingerprints used.
-- [ ] **AF-REQ-06**: A replay uses measured A-share trading dates and point-in-time membership; missing, suspended, non-finite, warmup, and source-quality states follow the declared policy, and current-constituent/full-lake substitution fails closed.
+- [x] **AF-REQ-05**: Factory scoring, Agent-requested evaluation, admission, composite use, walk-forward folds, and later as-of serving all compute factor values through the existing governed `FactorSignalChain` and expose the panel/universe/source/warmup fingerprints used.
+- [x] **AF-REQ-06**: A replay uses measured A-share trading dates and point-in-time membership; missing, suspended, non-finite, warmup, and source-quality states follow the declared policy, and current-constituent/full-lake substitution fails closed.
 
 ### Evaluation, Admission, OOS, and Provenance
 
-- [ ] **AF-REQ-07**: For every evaluated candidate, a researcher can inspect resolved configuration and immutable evidence including per-date IC/RankIC, summaries, ICIR, positive rate, coverage, monthly robustness, group/long-short evidence, costs, and diagnostics; evaluation failure is a terminal reason, not a zero score.
-- [ ] **AF-REQ-08**: Candidate status is produced by the existing deterministic admission policy with each gate's observed value, threshold, and reason visible; the Factory and Agent cannot edit thresholds, reorder gates, or convert rejection into admission.
-- [ ] **AF-REQ-09**: Search and Agent review never consume the reserved OOS fold; the UI distinguishes selection-fold evidence, selection OOS, and any future final-blind holdout, and never labels selection OOS as blind final validation.
+- [x] **AF-REQ-07**: For every evaluated candidate, a researcher can inspect resolved configuration and immutable evidence including per-date IC/RankIC, summaries, ICIR, positive rate, coverage, monthly robustness, group/long-short evidence, costs, and diagnostics; evaluation failure is a terminal reason, not a zero score.
+- [x] **AF-REQ-08**: Candidate status is produced by the existing deterministic admission policy with each gate's observed value, threshold, and reason visible; the Factory and Agent cannot edit thresholds, reorder gates, or convert rejection into admission.
+- [x] **AF-REQ-09**: Search and Agent review never consume the reserved OOS fold; the UI distinguishes selection-fold evidence, selection OOS, and any future final-blind holdout, and never labels selection OOS as blind final validation.
 - [x] **AF-REQ-10**: A run can be replayed from stored data/partition, universe, factor/DSL, grammar/vocabulary, seed, configuration, code/build, provider/model, candidate-order, and artifact checksums; missing required manifest fields fail closed.
 
 ### FactorResearchAgent
@@ -86,11 +86,11 @@ Locked boundaries:
 | AF-REQ-02 | Phase 46 | Complete |
 | AF-REQ-03 | Phase 46 | Complete |
 | AF-REQ-04 | Phase 45 | Complete |
-| AF-REQ-05 | Phase 47 | Pending |
-| AF-REQ-06 | Phase 47 | Pending |
-| AF-REQ-07 | Phase 47 | Pending |
-| AF-REQ-08 | Phase 47 | Pending |
-| AF-REQ-09 | Phase 47 | Pending |
+| AF-REQ-05 | Phase 47 | Complete |
+| AF-REQ-06 | Phase 47 | Complete |
+| AF-REQ-07 | Phase 47 | Complete |
+| AF-REQ-08 | Phase 47 | Complete |
+| AF-REQ-09 | Phase 47 | Complete |
 | AF-REQ-10 | Phase 45 | Complete |
 | AF-REQ-11 | Phase 48 | Pending |
 | AF-REQ-12 | Phase 48 | Pending |

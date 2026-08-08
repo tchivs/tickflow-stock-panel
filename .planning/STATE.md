@@ -2,19 +2,19 @@
 gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: 可回放 Alpha Factory 与 FactorResearchAgent
-current_phase: 47
-current_phase_name: Governed Scoring, Admission & Selection OOS
+current_phase: 48
+current_phase_name: FactorResearchAgent Two-Stage Workflow
 status: planning
-stopped_at: Completed Phase 46-04-PLAN.md; ready to plan Phase 47
-last_updated: "2026-08-08T18:28:31Z"
-last_activity: 2026-08-08
-last_activity_desc: Phase 45 and Phase 46 complete; transitioned to Phase 47
+stopped_at: Phase 46 complete; ready to plan Phase 47
+last_updated: "2026-08-08T20:39:12.394Z"
+last_activity: 2026-08-09
+last_activity_desc: Phase 47 complete, transitioned to Phase 48
 progress:
   total_phases: 6
-  completed_phases: 2
-  total_plans: 9
-  completed_plans: 8
-  percent: 33
+  completed_phases: 1
+  total_plans: 14
+  completed_plans: 12
+  percent: 17
 ---
 
 # Project State
@@ -28,10 +28,10 @@ See: .planning/PROJECT.md (updated 2026-08-06)
 
 ## Current Position
 
-Phase: 47 — Governed Scoring, Admission & Selection OOS
+Phase: 48 — FactorResearchAgent Two-Stage Workflow
 Plan: Not started
 Status: Ready to plan
-Last activity: 2026-08-08 — Phase 45 and Phase 46 complete; transitioned to Phase 47
+Last activity: 2026-08-09 — Phase 47 complete, transitioned to Phase 48
 
 ## v3.0 Phase Summary
 

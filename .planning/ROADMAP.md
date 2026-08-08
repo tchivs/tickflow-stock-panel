@@ -19,7 +19,7 @@
 
 - [x] **Phase 45: Durable Governed Run Contract** - Freeze immutable run/input snapshots and establish the append-only candidate, event, checkpoint, lifecycle, and idempotency foundation. (completed 2026-08-08)
 - [x] **Phase 46: Deterministic Alpha Factory Core** - Generate only restricted canonical candidates with versioned vocabulary, lineage, bounded budgets, and stable replay order. (completed 2026-08-08)
-- [ ] **Phase 47: Governed Scoring, Admission & Selection OOS** - Score candidates through the shared chain, retain evidence and gate trails, stress cost/robustness, and consume reserved selection OOS exactly once.
+- [x] **Phase 47: Governed Scoring, Admission & Selection OOS** - Score candidates through the shared chain, retain evidence and gate trails, stress cost/robustness, and consume reserved selection OOS exactly once. (completed 2026-08-09)
 - [ ] **Phase 48: FactorResearchAgent Two-Stage Workflow** - Add deterministic preflight, strict Stage 1/Stage 2 contracts, provider failure traces, bounded retry, cancellation, and checkpointed orchestration.
 - [ ] **Phase 49: Research-Only Promotion Ticket** - Refresh evidence at approval and hand an explicitly reviewed candidate to an immutable `FactorRevision`/catalog record without execution authority.
 - [ ] **Phase 50: Replay Workbench & Release Hardening** - Project durable progress and evidence through SSE/polling, expose lineage/comparison/stress/degradation views, and harden release/license/execution boundaries.
@@ -179,7 +179,7 @@ Plans:
 |-------|----------------|--------|-----------|
 | 45. Durable Governed Run Contract | 4/4 | Complete    | 2026-08-08 |
 | 46. Deterministic Alpha Factory Core | 4/4 | Complete    | 2026-08-08 |
-| 47. Governed Scoring, Admission & Selection OOS | 0/TBD | Not started | - |
+| 47. Governed Scoring, Admission & Selection OOS | 4/4 | Complete    | 2026-08-09 |
 | 48. FactorResearchAgent Two-Stage Workflow | 0/TBD | Not started | - |
 | 49. Research-Only Promotion Ticket | 0/TBD | Not started | - |
 | 50. Replay Workbench & Release Hardening | 0/TBD | Not started | - |
