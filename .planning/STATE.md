@@ -3,10 +3,10 @@ gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: 可回放 Alpha Factory 与 FactorResearchAgent
 status: planning
-last_updated: "2026-08-08T10:31:45.310Z"
+last_updated: "2026-08-08T10:47:21Z"
 last_activity: 2026-08-08
 progress:
-  total_phases: 0
+  total_phases: 6
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -20,24 +20,35 @@ progress:
 See: .planning/PROJECT.md (updated 2026-08-06)
 
 **Core value:** An investor can turn reliable market data and their own holdings into an auditable, actionable research and monitoring workflow without operating multiple disconnected tools.
-**Current focus:** Milestone v2.5 — 诚实加固与本机数据源接入
+**Current focus:** Milestone v3.0 — 可回放 Alpha Factory 与 FactorResearchAgent
 
 ## Current Position
 
-Phase: Not started (defining requirements)
+Phase: 45 (roadmap created; not started)
 Plan: —
-Status: Defining requirements
-Last activity: 2026-08-08 — Milestone v3.0 started
+Status: Ready for phase planning
+Last activity: 2026-08-08 — v3.0 roadmap created with six phases and complete traceability
+
+## v3.0 Phase Summary
+
+| Phase | Requirements | Status |
+|-------|-------------|--------|
+| 45 Durable Governed Run Contract | AF-REQ-01, 04, 10, 16 | Not started |
+| 46 Deterministic Alpha Factory Core | AF-REQ-02, 03, 19, 23 | Not started |
+| 47 Governed Scoring, Admission & Selection OOS | AF-REQ-05..09 | Not started |
+| 48 FactorResearchAgent Two-Stage Workflow | AF-REQ-11..14, 21, 26 | Not started |
+| 49 Research-Only Promotion Ticket | AF-REQ-15, 17 | Not started |
+| 50 Replay Workbench & Release Hardening | AF-REQ-18, 20, 22, 24, 25 | Not started |
 
 ## v2.5 Phase Summary
 
 | Phase | Requirements | Status |
 |-------|-------------|--------|
-| 40 stockdb 本地通道接入 | LOCAL-01..04 | Not started |
-| 41 诚实性修复 | HON-01..02 | Not started |
-| 42 分钟湖扩湖 | MIN-01..03 | Not started |
-| 43 T-day 竞价采集 sidecar | SDC-01..03 | Not started |
-| 44 部署日执行面 | DEP-01..04 | Not started |
+| 40 stockdb 本地通道接入 | LOCAL-01..04 | Complete |
+| 41 诚实性修复 | HON-01..02 | Complete |
+| 42 分钟湖扩湖 | MIN-01..03 | Complete |
+| 43 T-day 竞价采集 sidecar | SDC-01..03 | Complete |
+| 44 部署日执行面 | DEP-01..04 | Complete |
 
 ## v1.3 Phase Summary (shipped 2026-08-04)
 
@@ -59,6 +70,15 @@ Last activity: 2026-08-08 — Milestone v3.0 started
 
 ## Accumulated Context
 
+### v3.0 Roadmap Decisions
+
+- [Roadmap]: v3.0 continues from completed Phase 44 and uses exactly six sequential phases, 45–50, in dependency order: durable run contract → deterministic factory → governed scoring/OOS → Agent → promotion → workbench/hardening.
+- [Roadmap]: Run specifications, input snapshots, candidates, events, evidence, checkpoints, tickets, and revisions are immutable or append-only facts; retries are idempotent and never overwrite earlier runs or repeat committed OOS/promotion effects.
+- [Roadmap]: Candidate generation is deterministic seeded restricted Factor DSL grammar/evolution with stable vocabulary fingerprints and canonical ordering; no second evaluator, PyTorch/RL/GPU, arbitrary Python, or distributed queue.
+- [Roadmap]: All factor values use the existing `FactorSignalChain`; measured-calendar PIT folds, fixed admission gates, and reserved selection OOS exactly once remain authoritative. Selection OOS is never called final-blind validation.
+- [Roadmap]: FactorResearchAgent output is untrusted proposal/review data. Preflight, strict Stage 1/2 schemas, server evidence, explicit human review, and approval-time refresh own authority; promotion registers only research assets and never executes.
+- [Roadmap]: Workbench progress replays durable SQLite events through SSE/polling; UI labels provenance/degradation/OOS state and cannot establish scientific or execution authority.
+
 ### v2.0 Roadmap Decisions
 
 - [Roadmap]: v2.0 continues v1.3 numbering (Phase 20 start, after Phase 19); phase IDs are sequential (`phase_naming: sequential`).
@@ -75,9 +95,21 @@ None.
 
 ### Blockers/Concerns
 
-- [v2.0 / Phase 20]: DATA-04 集合竞价数据源可用性未验证 — 本期最大不确定项。Phase 20 规划前必须先做 probe 探测（`--research-phase`）；全部下游策略与 UI 以 fail-closed 为前提设计。
-- [v2.0 / Phase 20]: 虚拟成交（`auction_virtual_fill`）字段语义依赖具体上游 — 物化前以 probe 实测确认，不做来源推测。
-- [v2.0 / Phase 22]: 概念板块 PIT — 历史 ext 概念映射分区目前不存在；历史视图概念标签需标注「当前快照」或引入历史 ext 分区。
+- [v3.0 / Phase 45]: Event/checkpoint transaction boundaries, sequence/idempotency conflicts, and restart cursor consistency require focused design before schema implementation.
+- [v3.0 / Phase 46]: Narrow grammar legality, diversity/complexity costs, and candidate/resource budgets require calibration against governed A-share panels.
+- [v3.0 / Phase 47]: Alpha fold persistence shape and factor-specific cost/robustness evidence must reuse existing measured-calendar and exactly-once OOS contracts without duplicating gates.
+- [v3.0 / Phase 48]: Provider retry/failure taxonomy, bounded response retention, and strict Stage 1/2 semantic reference rules require fault-injection design.
+- [v3.0 / Phase 49]: Transient candidate to immutable `FactorRevision`/catalog mapping and approval-time refresh conflict behavior require compatibility verification.
+
+## Session Continuity
+
+Last session: 2026-08-08T10:47:21Z
+Stopped at: v3.0 roadmap and traceability artifacts created
+Resume file: None
+
+## Operator Next Steps
+
+- Start planning Phase 45 with `/gsd-plan-phase 45`.
 
 ## Deferred Items
 
@@ -88,15 +120,6 @@ None.
 | Feature | 盘前/竞价监控告警（v2.1 盘前预览 + 竞价列接入规则引擎） | Deferred to v2.2 (research) |
 | Feature | 竞价复盘（盘后复盘扩展竞价维度） | Deferred to v2.2 (research) |
 
-## Session Continuity
-
-Last session: 2026-08-06T15:34:27.037Z
-Stopped at: Completed 31-03-PLAN.md
-Resume file: None
-
-## Operator Next Steps
-
-- Start the next milestone with /gsd-new-milestone
 
 ## Decisions
 

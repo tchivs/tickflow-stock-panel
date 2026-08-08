@@ -82,32 +82,32 @@ Locked boundaries:
 
 | REQ-ID | Phase | Status |
 |---|---:|---|
-| AF-REQ-01 | — | Pending |
-| AF-REQ-02 | — | Pending |
-| AF-REQ-03 | — | Pending |
-| AF-REQ-04 | — | Pending |
-| AF-REQ-05 | — | Pending |
-| AF-REQ-06 | — | Pending |
-| AF-REQ-07 | — | Pending |
-| AF-REQ-08 | — | Pending |
-| AF-REQ-09 | — | Pending |
-| AF-REQ-10 | — | Pending |
-| AF-REQ-11 | — | Pending |
-| AF-REQ-12 | — | Pending |
-| AF-REQ-13 | — | Pending |
-| AF-REQ-14 | — | Pending |
-| AF-REQ-15 | — | Pending |
-| AF-REQ-16 | — | Pending |
-| AF-REQ-17 | — | Pending |
-| AF-REQ-18 | — | Pending |
-| AF-REQ-19 | — | Pending |
-| AF-REQ-20 | — | Pending |
-| AF-REQ-21 | — | Pending |
-| AF-REQ-22 | — | Pending |
-| AF-REQ-23 | — | Pending |
-| AF-REQ-24 | — | Pending |
-| AF-REQ-25 | — | Pending |
-| AF-REQ-26 | — | Pending |
+| AF-REQ-01 | Phase 45 | Pending |
+| AF-REQ-02 | Phase 46 | Pending |
+| AF-REQ-03 | Phase 46 | Pending |
+| AF-REQ-04 | Phase 45 | Pending |
+| AF-REQ-05 | Phase 47 | Pending |
+| AF-REQ-06 | Phase 47 | Pending |
+| AF-REQ-07 | Phase 47 | Pending |
+| AF-REQ-08 | Phase 47 | Pending |
+| AF-REQ-09 | Phase 47 | Pending |
+| AF-REQ-10 | Phase 45 | Pending |
+| AF-REQ-11 | Phase 48 | Pending |
+| AF-REQ-12 | Phase 48 | Pending |
+| AF-REQ-13 | Phase 48 | Pending |
+| AF-REQ-14 | Phase 48 | Pending |
+| AF-REQ-15 | Phase 49 | Pending |
+| AF-REQ-16 | Phase 45 | Pending |
+| AF-REQ-17 | Phase 49 | Pending |
+| AF-REQ-18 | Phase 50 | Pending |
+| AF-REQ-19 | Phase 46 | Pending |
+| AF-REQ-20 | Phase 50 | Pending |
+| AF-REQ-21 | Phase 48 | Pending |
+| AF-REQ-22 | Phase 50 | Pending |
+| AF-REQ-23 | Phase 46 | Pending |
+| AF-REQ-24 | Phase 50 | Pending |
+| AF-REQ-25 | Phase 50 | Pending |
+| AF-REQ-26 | Phase 48 | Pending |
 
 ---
 *Requirements defined: 2026-08-08 — v3.0 Alpha Factory + FactorResearchAgent*
