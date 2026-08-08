@@ -2497,3 +2497,71 @@ class TestReviewFixInvariants:
         assert [row["attempt_ordinal"] for row in service.list_candidates(
             run["id"], principal="researcher@example.com", after_ordinal=1
         )] == [2]
+
+    def test_recovered_token_authenticates_new_attempt(self, alpha_run_repository: ResearchRepository, deterministic_clock: DeterministicClock) -> None:
+        from app.research.run_service import ResearchRunService
+
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-recover-valid")
+        service = ResearchRunService(alpha_run_repository)
+        started = service.start_or_resume(run["id"], principal="researcher@example.com", expected_version=run["transition_version"])
+        recovered = service.recover_running_attempt(run["id"], principal="researcher@example.com", expected_version=started["transition_version"])
+        assert recovered is not None
+        assert service.update_progress(
+            run["id"], principal="researcher@example.com", expected_version=recovered["transition_version"],
+            attempt_token=recovered["_attempt_token"], folds_total=1,
+        ) is not None
+        assert service.update_progress(
+            run["id"], principal="researcher@example.com", expected_version=recovered["transition_version"],
+            attempt_token=started["_attempt_token"], folds_total=2,
+        ) is None
+
+    def test_checkpoint_cursor_state_survives_fresh_repository(self, alpha_run_repository: ResearchRepository, deterministic_clock: DeterministicClock) -> None:
+        from app.research.run_contract import checkpoint_state_checksum
+        from app.research.run_service import ResearchRunService
+
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-checkpoint-restart")
+        alpha_run_repository.append_candidate_attempt(
+            run_id=run["id"], candidate_id="checkpoint-candidate", attempt_ordinal=1,
+            candidate_digest="a" * 64, canonical_expression="close", ast_signature="ast",
+            shape_signature="shape", dsl_version="v1", operation="generate", seed=1, step=1,
+            status="admitted", reason={"code": "ok"},
+        )
+        summary = {"frontier": "candidate-1"}
+        checksum = checkpoint_state_checksum(
+            run_id=run["id"], checkpoint_version=1, committed_event_seq=1, stage="search",
+            snapshot_sha256=run["snapshot_sha256"], manifest_sha256=run["manifest_sha256"],
+            referenced_candidate_ids=["checkpoint-candidate"], inline_summary=summary,
+            frontier_artifact_id=None,
+        )
+        service = ResearchRunService(alpha_run_repository)
+        service.append_checkpoint(
+            run_id=run["id"], principal="researcher@example.com",
+            checkpoint={"id": "checkpoint-restart", "checkpoint_version": 1, "committed_event_seq": 1,
+                        "stage": "search", "snapshot_sha256": run["snapshot_sha256"],
+                        "manifest_sha256": run["manifest_sha256"], "state_checksum": checksum},
+            referenced_candidate_ids=["checkpoint-candidate"], inline_summary=summary,
+        )
+        recovered = ResearchRunService(alpha_run_repository).get_latest_valid_checkpoint(
+            run["id"], principal="researcher@example.com"
+        )
+        assert recovered is not None
+        assert recovered["referenced_candidate_ids"] == ["checkpoint-candidate"]
+        assert recovered["inline_summary"] == summary
+
+    def test_checkpoint_rejects_coerced_scalar_types(self, alpha_run_repository: ResearchRepository, deterministic_clock: DeterministicClock) -> None:
+        from app.research.run_service import AlphaCheckpointValidationError, ResearchRunService
+
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-checkpoint-types")
+        checkpoint = {"checkpoint_version": "1", "committed_event_seq": 1, "stage": "search",
+                      "snapshot_sha256": run["snapshot_sha256"], "manifest_sha256": run["manifest_sha256"],
+                      "state_checksum": "0" * 64}
+        with pytest.raises(AlphaCheckpointValidationError, match="shape"):
+            ResearchRunService(alpha_run_repository).validate_checkpoint(
+                run_id=run["id"], principal="researcher@example.com", checkpoint=checkpoint
+            )
+
+    def test_manifest_counters_are_non_negative_and_bounded(self) -> None:
+        manifest = _sample_manifest()
+        manifest["budgets"]["max_candidates"] = -1
+        with pytest.raises(ValueError, match="bounded|non-negative"):
+            freeze_input_snapshot(manifest=manifest, created_at="2026-08-08T00:00:00+00:00")
