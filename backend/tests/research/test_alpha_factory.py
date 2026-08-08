@@ -32,7 +32,13 @@ from app.research.alpha_factory import (
 )
 from app.research.run_contract import digest_bytes, freeze_input_snapshot
 from app.research.alpha_factory import AlphaFactory, GenerationResult, candidate_digest
-from app.research.alpha_factory import ValidationResult, measure_complexity, validate_candidate
+from app.research.alpha_factory import (
+    ValidationResult,
+    invalid_reason,
+    measure_complexity,
+    validate_candidate,
+    validate_expression_text,
+)
 
 _HEX64 = re.compile(r"[0-9a-f]{64}\Z")
 
@@ -852,3 +858,152 @@ class TestValidateCandidate:
             vr = validate_candidate(result_obj.ast, max_depth=DEFAULT_MAX_DEPTH, max_nodes=DEFAULT_MAX_NODES)
             assert vr.status == "valid", (result_obj.canonical_expression, vr.reason)
             assert vr.features is not None
+
+
+# ================================================================
+# Task 46-03-02: structured invalid diagnostics for every AF-REQ-03 mode
+# ================================================================
+
+_DEFAULTS = {"max_depth": DEFAULT_MAX_DEPTH, "max_nodes": DEFAULT_MAX_NODES}
+
+
+@pytest.mark.parametrize(
+    "mode, source, max_depth, max_nodes",
+    [
+        # --- DSL-validated rejection modes (raised by parse_factor) ---
+        ("denied_field", "label", DEFAULT_MAX_DEPTH, DEFAULT_MAX_NODES),
+        ("unknown_field", "not_a_field", DEFAULT_MAX_DEPTH, DEFAULT_MAX_NODES),
+        ("unknown_function", "foo(close)", DEFAULT_MAX_DEPTH, DEFAULT_MAX_NODES),
+        ("invalid_arity", "rank(close, open)", DEFAULT_MAX_DEPTH, DEFAULT_MAX_NODES),
+        ("excessive_window", "rolling_mean(close, 500)", DEFAULT_MAX_DEPTH, DEFAULT_MAX_NODES),
+        ("nonfinite_literal", "1e999", DEFAULT_MAX_DEPTH, DEFAULT_MAX_NODES),
+        ("division_by_literal_zero", "close / 0", DEFAULT_MAX_DEPTH, DEFAULT_MAX_NODES),
+        ("reversed_clip_bounds", "clip(close, 5, 1)", DEFAULT_MAX_DEPTH, DEFAULT_MAX_NODES),
+        ("malformed_syntax", "close +", DEFAULT_MAX_DEPTH, DEFAULT_MAX_NODES),
+        # --- complexity rejection modes (raised here, not by the DSL) ---
+        # 7 operands -> depth 7 > max_depth 6; nodes 13 <= 40
+        ("excessive_depth", "close + close + close + close + close + close + close", 6, DEFAULT_MAX_NODES),
+        # 7 operands -> depth 7 <= 20; nodes 13 > max_nodes 5
+        ("excessive_nodes", "close + close + close + close + close + close + close", 20, 5),
+    ],
+)
+def test_each_rejection_mode_is_invalid(mode, source, max_depth, max_nodes) -> None:
+    result = validate_expression_text(source, max_depth=max_depth, max_nodes=max_nodes)
+    assert result.status == "invalid", (mode, result)
+    assert result.features is None
+    reason = result.reason
+    # Every payload carries the full structured diagnostic (research §4).
+    assert reason["diagnostic"], (mode, reason)
+    assert reason["location"], (mode, reason)
+    assert reason["dsl_version"] == factor_dsl.DSL_VERSION
+    assert reason["vocab_version"] == vocabulary_fingerprint()
+    assert "raw_expression" in reason
+
+
+@pytest.mark.parametrize(
+    "mode, source",
+    [
+        ("denied_field", "label"),
+        ("unknown_function", "foo(close)"),
+        ("invalid_arity", "rank(close, open)"),
+        ("excessive_window", "rolling_mean(close, 500)"),
+        ("division_by_literal_zero", "close / 0"),
+        ("reversed_clip_bounds", "clip(close, 5, 1)"),
+        ("malformed_syntax", "close +"),
+    ],
+)
+def test_dsl_error_location_sourced_from_diagnostic_display(mode, source) -> None:
+    # The location field comes from FactorDslError.diagnostic.location.display()
+    # ("line N, column M") for every DSL-raised error.
+    result = validate_expression_text(source, **_DEFAULTS)
+    assert result.status == "invalid"
+    assert re.match(r"line \d+, column \d+\Z", result.reason["location"]), (mode, result.reason["location"])
+
+
+def test_complexity_location_names_measured_dimension() -> None:
+    # The complexity location comes from the measurement, not a source location.
+    deep = validate_expression_text(
+        "close + close + close + close + close + close + close", max_depth=6, max_nodes=DEFAULT_MAX_NODES
+    )
+    assert deep.reason["diagnostic"] == "expression depth 7 exceeds max_depth 6"
+    assert deep.reason["location"] == "depth 7"
+    wide = validate_expression_text(
+        "close + close + close + close + close + close + close", max_depth=20, max_nodes=5
+    )
+    assert wide.reason["diagnostic"] == "expression nodes 13 exceeds max_nodes 5"
+    assert wide.reason["location"] == "nodes 13"
+
+
+class TestAstOnlyRejectionModes:
+    """Two rejection modes are unreachable from text and need a constructed AST.
+
+    * partition semantics: a function present in _FUNCTION_ARITY but absent from
+      _FUNCTION_PARTITION -- impossible from text because the two dicts are kept
+      in lockstep by an invariant test, so exercised via monkeypatch.
+    * unsupported operator: the grammar only tokenizes +-*/(), so an illegal
+      operator only arises from a directly-constructed Binary node.
+    """
+
+    def test_missing_partition_semantics_is_invalid(self, monkeypatch) -> None:
+        monkeypatch.delitem(factor_dsl._FUNCTION_PARTITION, "rank")
+        ast = factor_dsl.Call("rank", (_tfield("close"),), _TLOC)
+        result = validate_candidate(ast, **_DEFAULTS)
+        assert result.status == "invalid"
+        assert "partition" in result.reason["diagnostic"].lower()
+        assert result.reason["dsl_version"] == factor_dsl.DSL_VERSION
+        assert result.reason["vocab_version"] == vocabulary_fingerprint()
+
+    def test_unsupported_binary_operator_is_invalid(self) -> None:
+        ast = factor_dsl.Binary("^", _tfield("close"), _tfield("open"), _TLOC)
+        result = validate_candidate(ast, **_DEFAULTS)
+        assert result.status == "invalid"
+        assert "operator" in result.reason["diagnostic"].lower()
+        assert result.reason["dsl_version"] == factor_dsl.DSL_VERSION
+
+    def test_unsupported_unary_operator_is_invalid(self) -> None:
+        ast = factor_dsl.Unary("~", _tfield("close"), _TLOC)
+        result = validate_candidate(ast, **_DEFAULTS)
+        assert result.status == "invalid"
+        assert "operator" in result.reason["diagnostic"].lower()
+
+
+class TestInvalidReasonPayload:
+    def test_carries_full_diagnostic_payload(self) -> None:
+        try:
+            factor_dsl.parse_factor("label")
+        except factor_dsl.FactorDslError as error:
+            payload = invalid_reason(error, "label", vocabulary_fingerprint())
+        else:  # pragma: no cover
+            raise AssertionError("parse_factor('label') should have raised")
+        assert set(payload) == {"diagnostic", "location", "dsl_version", "vocab_version", "raw_expression"}
+        assert "label" in payload["diagnostic"]
+        assert payload["dsl_version"] == factor_dsl.DSL_VERSION
+        assert payload["raw_expression"] == "label"
+
+
+class TestInvalidCandidatesNeverSuppressed:
+    def test_validate_never_raises_or_returns_none_for_rejections(self) -> None:
+        # AF-REQ-03 / T-46-09: rejections are durable invalid records, never
+        # raised past the boundary or swallowed to None.
+        for source in ("label", "foo(close)", "close / 0", "close +", "1e999"):
+            result = validate_expression_text(source, **_DEFAULTS)
+            assert result is not None
+            assert result.status == "invalid"
+
+    def test_valid_expression_text_is_valid(self) -> None:
+        for source in ("close", "close + open", "rank(close)", "rolling_mean(close, 20)", "clip(close, 1, 5)"):
+            result = validate_expression_text(source, **_DEFAULTS)
+            assert result.status == "valid", (source, result)
+            assert result.features is not None
+            assert result.reason == {}
+
+    def test_invalid_result_round_trips_to_json(self) -> None:
+        # The reason payload must be JSON-serializable so the worker loop can
+        # persist it verbatim as reason_json (plan 46-04).
+        import json
+
+        result = validate_expression_text("foo(close)", **_DEFAULTS)
+        encoded = json.dumps(dict(result.reason))
+        decoded = json.loads(encoded)
+        assert decoded["diagnostic"]
+        assert decoded["dsl_version"] == factor_dsl.DSL_VERSION
