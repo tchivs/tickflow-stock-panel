@@ -2,12 +2,19 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
 from app.research.factor_dsl import FactorFeatures, ParsedFactor, parse_factor
 from app.research.repository import ResearchRepository
+
+
+# Provenance kind marking a transient, research-only revision that binds a
+# generated AlphaCandidateAttempt to one evaluatable identity (Phase 47 OQ1,
+# option A). Exploratory revisions never enter the formal factor catalog or the
+# admission similarity pool; Phase 49 owns catalog promotion.
+ALPHA_EXPLORATORY_KIND: str = "alpha_exploratory"
 
 
 @dataclass(frozen=True, slots=True)
@@ -241,7 +248,93 @@ class FactorRegistry:
         return [FactorRevision.from_record(record) for record in self.repository.list_revisions(factor_id)]
 
     def list_current(self) -> list[FactorRevision]:
-        return [FactorRevision.from_record(record) for record in self.repository.list_current_revisions()]
+        """Current formal-catalog revisions.
+
+        Transient ``alpha_exploratory`` revisions are excluded (T-47-01): they are
+        research-only candidate identities that must never appear in the formal
+        factor catalog or the admission similarity pool. Phase 49 owns catalog
+        promotion.
+        """
+        return [
+            revision
+            for revision in (
+                FactorRevision.from_record(record)
+                for record in self.repository.list_current_revisions()
+            )
+            if revision.provenance.get("kind") != ALPHA_EXPLORATORY_KIND
+        ]
+
+    def find_exploratory_revision(
+        self, run_id: str, candidate_digest: str
+    ) -> FactorRevision | None:
+        """Return the exploratory revision for ``(run_id, candidate_digest)``, or None.
+
+        Queries the raw revision store rather than the catalog-filtered
+        ``list_current`` so a transient ``alpha_exploratory`` revision — excluded
+        from the formal catalog — is still locatable for reconnect/retry
+        idempotency.
+        """
+        for record in self.repository.list_current_revisions():
+            provenance = record.get("provenance") or {}
+            if (
+                provenance.get("kind") == ALPHA_EXPLORATORY_KIND
+                and provenance.get("run_id") == run_id
+                and provenance.get("candidate_digest") == candidate_digest
+            ):
+                return FactorRevision.from_record(record)
+        return None
+
+    def create_exploratory_revision(
+        self,
+        *,
+        run_id: str,
+        candidate_id: str,
+        candidate_digest: str,
+        canonical_expression: str,
+        dsl_version: str,
+        fields: Sequence[str],
+        step: int,
+    ) -> FactorRevision:
+        """Bind a generated candidate to one evaluatable identity (OQ1, option A).
+
+        Mints a research-only ``FactorRevision`` with
+        ``provenance.kind="alpha_exploratory"`` so the existing chain/evaluation/
+        admission operate unchanged against the candidate identity. Idempotent: a
+        reconnect/retry of the same ``(run_id, candidate_digest)`` returns the
+        existing revision rather than minting a duplicate.
+
+        Fail-closed: the candidate's declared ``dsl_version``/``fields`` must
+        round-trip through the parsed expression — mirroring
+        ``FactorSignalChain._binding`` — so a stale candidate provenance never
+        mints a revision.
+        """
+        existing = self.find_exploratory_revision(run_id, candidate_digest)
+        if existing is not None:
+            return existing
+        parsed = parse_factor(canonical_expression)
+        if parsed.dsl_version != dsl_version:
+            raise ValueError(
+                f"candidate dsl_version {dsl_version!r} does not match the parsed "
+                f"expression dsl_version {parsed.dsl_version!r} "
+                "(exploratory revision rejected)"
+            )
+        if tuple(sorted(parsed.referenced_fields)) != tuple(sorted(fields)):
+            raise ValueError(
+                "candidate fields do not match the parsed expression's referenced "
+                "fields (exploratory revision rejected)"
+            )
+        return self.create_factor(
+            name=f"alpha-exploratory:{run_id}:{candidate_digest}",
+            expression=canonical_expression,
+            hypothesis="",
+            provenance={
+                "kind": ALPHA_EXPLORATORY_KIND,
+                "run_id": run_id,
+                "candidate_id": candidate_id,
+                "candidate_digest": candidate_digest,
+                "step": step,
+            },
+        )
 
     def discover_similar(
         self,
