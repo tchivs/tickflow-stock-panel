@@ -1892,16 +1892,12 @@ class ResearchRepository:
         after_seq: int = 0,
         limit: int = 500,
         principal: str | None = None,
+        artifact_service: Any | None = None,
     ) -> list[dict[str, Any]]:
-        """Return append-only events for ``run_id`` in sequence order.
-
-        When ``principal`` is supplied, the run is first scoped to that
-        principal so cross-principal reads return the same empty boundary as an
-        unknown run (T-45-12).
-        """
-        if not isinstance(after_seq, int) or after_seq < 0:
+        """Return events only after checksum and artifact verification."""
+        if type(after_seq) is not int or after_seq < 0:
             raise ValueError("after_seq must be a non-negative integer")
-        if not isinstance(limit, int) or limit < 1:
+        if type(limit) is not int or limit < 1:
             raise ValueError("limit must be a positive integer")
         with self._connection() as connection:
             if principal is not None:
@@ -1913,11 +1909,35 @@ class ResearchRepository:
                     return []
             rows = connection.execute(
                 """SELECT * FROM research_alpha_events
-                    WHERE run_id = ? AND seq > ?
-                    ORDER BY seq, id LIMIT ?""",
+                    WHERE run_id = ? AND seq > ? ORDER BY seq, id LIMIT ?""",
                 (run_id, after_seq, limit),
             ).fetchall()
-        return [self._alpha_event_dict(row) for row in rows]
+            events = [self._alpha_event_dict(row) for row in rows]
+            for event in events:
+                expected = event_checksum(
+                    event["payload"], event["idempotency_key"], event["event_type"]
+                )
+                if expected != event["payload_checksum"]:
+                    raise ValueError("event checksum validation failed")
+                if event["artifact_id"] is not None:
+                    artifact = connection.execute(
+                        "SELECT * FROM research_alpha_artifacts WHERE id = ? AND run_id = ?",
+                        (event["artifact_id"], run_id),
+                    ).fetchone()
+                    if artifact is None:
+                        raise ValueError("event artifact reference is missing or unbound")
+                    if artifact_service is None:
+                        raise ValueError("event artifact verification service is required")
+                    descriptor = dict(artifact)
+                    expected_path = f"research_artifacts/alpha_runs/{run_id}/{descriptor['checksum_sha256']}.json"
+                    if descriptor["relative_path"] != expected_path:
+                        raise ValueError("event artifact managed key mismatch")
+                    artifact_service.verify_artifact(
+                        run_id=run_id, checksum_sha256=descriptor["checksum_sha256"],
+                        expected_byte_size=descriptor["byte_size"],
+                        expected_content_type=descriptor["content_type"],
+                    )
+        return events
 
     def get_run_snapshot(self, run_id: str) -> dict[str, Any] | None:
         """Return the frozen input snapshot bound to ``run_id`` (read-only)."""
@@ -1952,6 +1972,7 @@ class ResearchRepository:
         source: str,
         payload: Mapping[str, Any],
         artifact_id: str | None = None,
+        artifact_verified: bool = False,
     ) -> dict[str, Any]:
         """Append one lifecycle event with a server-allocated contiguous sequence.
 
@@ -1966,6 +1987,8 @@ class ResearchRepository:
 
         if not isinstance(run_id, str) or not run_id:
             raise ValueError("run_id is required")
+        if artifact_id is not None and not artifact_verified:
+            raise ValueError("event artifact must be verified by the service-owned seam")
         if not isinstance(event_id, str) or not event_id:
             raise ValueError("event_id is required")
         if not isinstance(event_type, str) or not event_type:
@@ -2063,6 +2086,7 @@ class ResearchRepository:
         status: str,
         reason: Mapping[str, Any],
         evidence_artifact_id: str | None = None,
+        artifact_verified: bool = False,
     ) -> dict[str, Any]:
         """Append one candidate-attempt fact (one row per attempt, never deduped).
 
@@ -2076,6 +2100,8 @@ class ResearchRepository:
 
         if not isinstance(run_id, str) or not run_id:
             raise ValueError("run_id is required")
+        if evidence_artifact_id is not None and not artifact_verified:
+            raise ValueError("candidate artifact must be verified by the service-owned seam")
         if not isinstance(candidate_id, str) or not candidate_id:
             raise ValueError("candidate_id is required")
         if not isinstance(attempt_ordinal, int) or attempt_ordinal <= 0:
@@ -2229,15 +2255,10 @@ class ResearchRepository:
         content_type: str,
         byte_size: int,
         checksum_sha256: str,
+        artifact_service: Any | None = None,
     ) -> dict[str, Any]:
-        """Append one content-addressed artifact reference fact.
-
-        The ``relative_path`` must exactly match the server-derived key
-        ``research_artifacts/alpha_runs/{run_id}/{checksum_sha256}.json``;
-        clients cannot supply or alter the path (D-03, T-45-04).
-        """
+        """Record only a descriptor whose server-managed bytes verify."""
         from app.research.run_contract import ARTIFACT_SCHEMA_VERSION
-
         if not isinstance(run_id, str) or not run_id:
             raise ValueError("run_id is required")
         if not isinstance(artifact_id, str) or not artifact_id:
@@ -2247,16 +2268,32 @@ class ResearchRepository:
         _wf_sha256(checksum_sha256, "checksum_sha256")
         expected_path = f"research_artifacts/alpha_runs/{run_id}/{checksum_sha256}.json"
         if relative_path != expected_path:
-            raise ValueError(
-                "relative_path must be the server-derived content-addressed key"
-            )
-        if not isinstance(byte_size, int) or isinstance(byte_size, bool) or byte_size < 0:
+            raise ValueError("relative_path must be the server-derived content-addressed key")
+        if type(byte_size) is not int or byte_size < 0:
             raise ValueError("byte_size must be a non-negative integer")
+        if content_type != "application/json":
+            raise ValueError("content_type must be application/json")
+        managed_path = None
         if self._artifact_root is not None:
-            try:
-                (self._artifact_root / relative_path).resolve().relative_to(self._artifact_root)
-            except ValueError as error:
-                raise ValueError("artifact path escapes the configured managed root") from error
+            for candidate in (self._artifact_root / relative_path, self._artifact_root.parent / relative_path):
+                try:
+                    candidate.resolve().relative_to(self._artifact_root.parent.resolve())
+                except ValueError as error:
+                    raise ValueError("artifact path escapes the configured managed root") from error
+                if candidate.is_file():
+                    managed_path = candidate
+                    break
+        if artifact_service is not None:
+            artifact_service.verify_artifact(
+                run_id=run_id, checksum_sha256=checksum_sha256,
+                expected_byte_size=byte_size, expected_content_type=content_type,
+            )
+        elif managed_path is None:
+            raise ValueError("managed artifact bytes are required before descriptor insertion")
+        if managed_path is not None:
+            content = managed_path.read_bytes()
+            if len(content) != byte_size or sha256(content).hexdigest() != checksum_sha256:
+                raise ValueError("managed artifact bytes do not match descriptor")
         occurred_at = self._now()
         with self._connection() as connection, connection:
             connection.execute(
@@ -2264,17 +2301,8 @@ class ResearchRepository:
                        id, run_id, logical_kind, relative_path, content_type,
                        byte_size, checksum_sha256, schema_version, created_at
                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    artifact_id,
-                    run_id,
-                    logical_kind,
-                    relative_path,
-                    content_type,
-                    byte_size,
-                    checksum_sha256,
-                    ARTIFACT_SCHEMA_VERSION,
-                    occurred_at,
-                ),
+                (artifact_id, run_id, logical_kind, relative_path, content_type,
+                 byte_size, checksum_sha256, ARTIFACT_SCHEMA_VERSION, occurred_at),
             )
             row = connection.execute(
                 "SELECT * FROM research_alpha_artifacts WHERE id = ?", (artifact_id,)
@@ -2296,105 +2324,118 @@ class ResearchRepository:
         principal: str | None = None,
         referenced_candidate_ids: Sequence[str] = (),
         inline_summary: Mapping[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        """Append only a principal/run-bound, structurally validated cursor.
+        expected_version: int | None = None,
+        expected_attempt_token_digest: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Append a structurally checked cursor under an optional running-attempt fence.
 
-        Semantic checksum validation and managed-file verification are owned by
-        ``ResearchRunService.append_checkpoint``; repository checks still make
-        direct misuse fail closed rather than becoming authority.
+        The expected version/digest guard is evaluated in the same write
+        transaction as validation and insertion.  A terminal/cancelled or
+        superseded attempt therefore produces no checkpoint side effect.
         """
         from app.research.run_contract import MAX_INLINE_CHECKPOINT_BYTES, validate_bounded_json
-        if not isinstance(committed_event_seq, int) or committed_event_seq < 0:
+        if type(committed_event_seq) is not int or committed_event_seq < 0:
             raise ValueError("committed_event_seq must be a non-negative integer")
-        if not isinstance(stage, str) or not 1 <= len(stage) <= 128:
+        if type(stage) is not str or not 1 <= len(stage) <= 128:
             raise ValueError("stage must be a bounded string")
         if inline_summary is not None:
             validate_bounded_json(
                 inline_summary, "inline checkpoint summary", max_bytes=MAX_INLINE_CHECKPOINT_BYTES
             )
-        if any(not isinstance(candidate_id, str) or not candidate_id for candidate_id in referenced_candidate_ids):
+        if any(type(candidate_id) is not str or not candidate_id for candidate_id in referenced_candidate_ids):
             raise ValueError("referenced_candidate_ids must contain non-empty strings")
+        if len(referenced_candidate_ids) > 256:
+            raise ValueError("referenced_candidate_ids exceeds the 256-reference bound")
         if not isinstance(run_id, str) or not run_id:
             raise ValueError("run_id is required")
         if not isinstance(checkpoint_id, str) or not checkpoint_id:
             raise ValueError("checkpoint_id is required")
-        if not isinstance(checkpoint_version, int) or checkpoint_version <= 0:
+        if type(checkpoint_version) is not int or checkpoint_version <= 0:
             raise ValueError("checkpoint_version must be a positive integer")
         _wf_sha256(snapshot_sha256, "snapshot_sha256")
         _wf_sha256(manifest_sha256, "manifest_sha256")
         _wf_sha256(state_checksum, "state_checksum")
+        referenced_json = _bounded_json(list(referenced_candidate_ids), "checkpoint candidate references")
+        summary_json = _bounded_json(dict(inline_summary) if inline_summary is not None else {}, "inline checkpoint summary")
         occurred_at = self._now()
-        with self._connection() as connection, connection:
-            run = connection.execute(
-                "SELECT snapshot_sha256, manifest_sha256, last_event_seq, principal "
-                "FROM research_alpha_runs WHERE id = ?", (run_id,)
-            ).fetchone()
-            if run is None or (principal is not None and run["principal"] != principal):
-                raise ValueError("checkpoint run is not owned by principal")
-            if run["snapshot_sha256"] != snapshot_sha256 or run["manifest_sha256"] != manifest_sha256:
-                raise ValueError("checkpoint snapshot/manifest binding mismatch")
-            if committed_event_seq > int(run["last_event_seq"]):
-                raise ValueError("checkpoint references a future event sequence")
-            event_count = connection.execute(
-                "SELECT COUNT(*) FROM research_alpha_events WHERE run_id = ? AND seq <= ?",
-                (run_id, committed_event_seq),
-            ).fetchone()[0]
-            if int(event_count) != committed_event_seq:
-                raise ValueError("checkpoint event sequence is not contiguous")
-            for candidate_id in referenced_candidate_ids:
-                candidate = connection.execute(
-                    "SELECT 1 FROM research_alpha_candidate_attempts WHERE id = ? AND run_id = ?",
-                    (candidate_id, run_id),
+        with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                run = connection.execute(
+                    "SELECT snapshot_sha256, manifest_sha256, last_event_seq, principal, status, transition_version "
+                    "FROM research_alpha_runs WHERE id = ?", (run_id,)
                 ).fetchone()
-                if candidate is None:
-                    raise ValueError("checkpoint references a candidate from another run")
-            if frontier_artifact_id is not None:
-                artifact = connection.execute(
-                    "SELECT 1 FROM research_alpha_artifacts WHERE id = ? AND run_id = ?",
-                    (frontier_artifact_id, run_id),
+                if run is None or (principal is not None and run["principal"] != principal):
+                    connection.execute("ROLLBACK")
+                    return None
+                if expected_version is not None and (
+                    run["status"] != "running" or run["transition_version"] != expected_version
+                ):
+                    connection.execute("ROLLBACK")
+                    return None
+                if expected_attempt_token_digest is not None:
+                    latest = connection.execute(
+                        "SELECT event_type, payload_json FROM research_alpha_events "
+                        "WHERE run_id = ? AND event_type IN ('run_started', 'run_recovered') "
+                        "ORDER BY seq DESC LIMIT 1", (run_id,)
+                    ).fetchone()
+                    current_digest = None if latest is None else json.loads(latest["payload_json"]).get("attempt_token_digest")
+                    if current_digest != expected_attempt_token_digest:
+                        connection.execute("ROLLBACK")
+                        return None
+                if run["snapshot_sha256"] != snapshot_sha256 or run["manifest_sha256"] != manifest_sha256:
+                    raise ValueError("checkpoint snapshot/manifest binding mismatch")
+                if committed_event_seq > int(run["last_event_seq"]):
+                    raise ValueError("checkpoint references a future event sequence")
+                event_count = connection.execute(
+                    "SELECT COUNT(*) FROM research_alpha_events WHERE run_id = ? AND seq <= ?",
+                    (run_id, committed_event_seq),
+                ).fetchone()[0]
+                if int(event_count) != committed_event_seq:
+                    raise ValueError("checkpoint event sequence is not contiguous")
+                for candidate_id in referenced_candidate_ids:
+                    candidate = connection.execute(
+                        "SELECT 1 FROM research_alpha_candidate_attempts WHERE id = ? AND run_id = ?",
+                        (candidate_id, run_id),
+                    ).fetchone()
+                    if candidate is None:
+                        raise ValueError("checkpoint references a candidate from another run")
+                if frontier_artifact_id is not None:
+                    artifact = connection.execute(
+                        "SELECT 1 FROM research_alpha_artifacts WHERE id = ? AND run_id = ?",
+                        (frontier_artifact_id, run_id),
+                    ).fetchone()
+                    if artifact is None:
+                        raise ValueError("checkpoint frontier artifact must belong to checkpoint run")
+                connection.execute(
+                    """INSERT INTO research_alpha_checkpoints (
+                           id, run_id, checkpoint_version, committed_event_seq,
+                           stage, snapshot_sha256, manifest_sha256, state_checksum,
+                           referenced_candidate_ids_json, inline_summary_json,
+                           frontier_artifact_id, created_at
+                       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (checkpoint_id, run_id, checkpoint_version, committed_event_seq,
+                     stage, snapshot_sha256, manifest_sha256, state_checksum,
+                     referenced_json, summary_json, frontier_artifact_id, occurred_at),
+                )
+                row = connection.execute(
+                    "SELECT * FROM research_alpha_checkpoints WHERE id = ?", (checkpoint_id,)
                 ).fetchone()
-                if artifact is None:
-                    raise ValueError("checkpoint frontier artifact must belong to checkpoint run")
-            connection.execute(
-                """INSERT INTO research_alpha_checkpoints (
-                       id, run_id, checkpoint_version, committed_event_seq,
-                       stage, snapshot_sha256, manifest_sha256, state_checksum,
-                       frontier_artifact_id, created_at
-                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    checkpoint_id,
-                    run_id,
-                    checkpoint_version,
-                    committed_event_seq,
-                    stage,
-                    snapshot_sha256,
-                    manifest_sha256,
-                    state_checksum,
-                    frontier_artifact_id,
-                    occurred_at,
-                ),
-            )
-            row = connection.execute(
-                "SELECT * FROM research_alpha_checkpoints WHERE id = ?",
-                (checkpoint_id,),
-            ).fetchone()
+                connection.execute("COMMIT")
+            except BaseException:
+                if connection.in_transaction:
+                    connection.execute("ROLLBACK")
+                raise
         assert row is not None
-        return dict(row)
+        return self._checkpoint_dict(row)
 
-    def get_latest_valid_checkpoint(
+    def _get_latest_checkpoint_unvalidated(
         self,
         run_id: str,
         *,
         principal: str | None = None,
     ) -> dict[str, Any] | None:
-        """Return the highest-version checkpoint for ``run_id`` (read-only).
-
-        Principal-scoped: a non-matching principal returns ``None``, the same
-        boundary as an unknown run (T-45-12).  Semantic validation (snapshot /
-        manifest digest match, contiguous event sequence, referenced candidate
-        existence, artifact verification, cursor checksum) is performed by the
-        service before advancing work; this read returns the raw cursor row.
-        """
+        """Read the raw cursor row; callers must validate through the service."""
         with self._connection() as connection:
             if principal is not None:
                 owned = connection.execute(
@@ -2405,11 +2446,24 @@ class ResearchRepository:
                     return None
             row = connection.execute(
                 """SELECT * FROM research_alpha_checkpoints
-                    WHERE run_id = ?
-                    ORDER BY checkpoint_version DESC LIMIT 1""",
+                    WHERE run_id = ? ORDER BY checkpoint_version DESC LIMIT 1""",
                 (run_id,),
             ).fetchone()
-        return None if row is None else dict(row)
+        return None if row is None else self._checkpoint_dict(row)
+
+    # Compatibility name retained for existing callers; it is deliberately
+    # documented as an unchecked read and must not be used for recovery.
+    def get_latest_valid_checkpoint(self, run_id: str, *, principal: str | None = None) -> dict[str, Any] | None:
+        return self._get_latest_checkpoint_unvalidated(run_id, principal=principal)
+
+    @staticmethod
+    def _checkpoint_dict(row: sqlite3.Row) -> dict[str, Any]:
+        record = dict(row)
+        record["referenced_candidate_ids"] = json.loads(
+            record.pop("referenced_candidate_ids_json", "[]")
+        )
+        record["inline_summary"] = json.loads(record.pop("inline_summary_json", "{}"))
+        return record
 
     @staticmethod
     def _candidate_dict(row: sqlite3.Row) -> dict[str, Any]:

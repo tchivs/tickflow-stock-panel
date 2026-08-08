@@ -98,9 +98,11 @@ class ResearchRunService:
         repository: ResearchRepository,
         *,
         publisher: "RunEventPublisher | None" = None,
+        artifact_service: "AlphaRunArtifactService | None" = None,
     ) -> None:
         self._repository = repository
         self._publisher = publisher
+        self._artifact_service = artifact_service
 
     def create(
         self,
@@ -371,13 +373,13 @@ class ResearchRunService:
             return False
         if run["transition_version"] != expected_version:
             return False
-        # Find the run_started event carrying this version's token digest.
+        # The newest attempt event is authoritative after restart recovery.
         events = self._repository.list_run_events(
             run_id, after_seq=0, limit=500, principal=principal
         )
         candidate_digest = attempt_token_digest(attempt_token)
         for event in reversed(events):
-            if event["event_type"] == "run_started":
+            if event["event_type"] in {"run_started", "run_recovered"}:
                 stored = event["payload"].get("attempt_token_digest")
                 return stored == candidate_digest
         return False
@@ -385,14 +387,15 @@ class ResearchRunService:
     def _progress_limits(self, run_id: str) -> tuple[int, int]:
         snapshot = self._repository.get_run_snapshot(run_id)
         manifest = snapshot.get("manifest", {}) if snapshot else {}
-        budgets = manifest.get("budgets", {}) if isinstance(manifest, Mapping) else {}
-        geometry = manifest.get("fold_geometry", {}) if isinstance(manifest, Mapping) else {}
+        budgets = manifest.get("budgets") if isinstance(manifest, Mapping) else None
+        geometry = manifest.get("fold_geometry") if isinstance(manifest, Mapping) else None
         candidate_limit = budgets.get("max_candidates") if isinstance(budgets, Mapping) else None
         fold_limit = geometry.get("n_folds") if isinstance(geometry, Mapping) else None
-        return (
-            candidate_limit if isinstance(candidate_limit, int) and candidate_limit >= 0 else (1 << 63) - 1,
-            fold_limit if isinstance(fold_limit, int) and fold_limit >= 0 else (1 << 63) - 1,
-        )
+        if type(candidate_limit) is not int or candidate_limit < 0 or candidate_limit > 1_000_000_000:
+            raise ValueError("frozen max_candidates budget is invalid")
+        if type(fold_limit) is not int or fold_limit < 0 or fold_limit > 1_000_000_000:
+            raise ValueError("frozen n_folds budget is invalid")
+        return candidate_limit, fold_limit
 
     def update_progress(
         self,
@@ -469,7 +472,8 @@ class ResearchRunService:
             raise ValueError("replay pagination bounds are invalid")
         snapshot = self._repository.get_run_snapshot(run_id)
         events = self._repository.list_run_events(
-            run_id, after_seq=after_seq, limit=limit, principal=principal
+            run_id, after_seq=after_seq, limit=limit, principal=principal,
+            artifact_service=self._artifact_service,
         )
         last_seq = int(events[-1]["seq"]) if events else after_seq
         truncated = bool(events) and len(events) >= limit and last_seq < int(run["last_event_seq"])
@@ -492,7 +496,8 @@ class ResearchRunService:
         limit: int = 500,
     ) -> list[dict[str, Any]]:
         return self._repository.list_run_events(
-            run_id, after_seq=after_seq, limit=limit, principal=principal
+            run_id, after_seq=after_seq, limit=limit, principal=principal,
+            artifact_service=self._artifact_service,
         )
 
     def list_candidates(
@@ -532,11 +537,14 @@ class ResearchRunService:
         run = self._repository.get_alpha_run(run_id, principal=principal)
         if run is None:
             return None
+        if artifact_id is not None:
+            self._verify_artifact_reference(run_id, artifact_id)
         event = self._repository.append_run_event(
             run_id=run_id, event_id="aevt_" + uuid.uuid4().hex,
             event_type=event_type, entity_kind=entity_kind, entity_id=entity_id,
             idempotency_key=idempotency_key, actor=actor, source=source,
             payload=payload, artifact_id=artifact_id,
+            artifact_verified=artifact_id is not None,
         )
         if self._publisher is not None:
             try:
@@ -574,6 +582,8 @@ class ResearchRunService:
         run = self._repository.get_alpha_run(run_id, principal=principal)
         if run is None:
             return None
+        if evidence_artifact_id is not None:
+            self._verify_artifact_reference(run_id, evidence_artifact_id)
         return self._repository.append_candidate_attempt(
             run_id=run_id,
             candidate_id=candidate_id,
@@ -589,6 +599,41 @@ class ResearchRunService:
             status=status,
             reason=reason,
             evidence_artifact_id=evidence_artifact_id,
+            artifact_verified=evidence_artifact_id is not None,
+        )
+
+    def append_artifact(
+        self,
+        *,
+        run_id: str,
+        principal: str,
+        artifact_id: str,
+        logical_kind: str,
+        descriptor: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        """Verify managed bytes before recording an artifact descriptor."""
+        if self._repository.get_alpha_run(run_id, principal=principal) is None:
+            return None
+        verifier = self._artifact_service
+        if verifier is None:
+            raise AlphaCheckpointValidationError("artifact verification service is required")
+        try:
+            checksum = descriptor["checksum_sha256"]
+            expected_path = f"research_artifacts/alpha_runs/{run_id}/{checksum}.json"
+            if descriptor.get("relative_path") != expected_path:
+                raise ValueError("artifact key does not match run-bound checksum")
+            verifier.verify_artifact(
+                run_id=run_id, checksum_sha256=checksum,
+                expected_byte_size=descriptor.get("byte_size"),
+                expected_content_type=descriptor.get("content_type"),
+            )
+        except Exception as error:
+            raise AlphaCheckpointValidationError("artifact verification failed") from error
+        return self._repository.append_artifact(
+            run_id=run_id, artifact_id=artifact_id, logical_kind=logical_kind,
+            relative_path=descriptor["relative_path"], content_type=descriptor["content_type"],
+            byte_size=descriptor["byte_size"], checksum_sha256=descriptor["checksum_sha256"],
+            artifact_service=verifier,
         )
     def append_checkpoint(
         self,
@@ -598,24 +643,25 @@ class ResearchRunService:
         checkpoint: Mapping[str, Any],
         referenced_candidate_ids: Sequence[str] = (),
         inline_summary: Mapping[str, Any] | None = None,
-        artifact_service: "AlphaRunArtifactService | None" = None,
-    ) -> dict[str, Any]:
-        """Validate every binding then persist one recovery cursor."""
+        expected_version: int | None = None,
+        attempt_token: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Validate and persist one recovery cursor through the owned seam."""
         validated = self.validate_checkpoint(
             run_id=run_id, principal=principal, checkpoint=checkpoint,
             referenced_candidate_ids=referenced_candidate_ids,
-            inline_summary=inline_summary, artifact_service=artifact_service,
+            inline_summary=inline_summary,
         )
+        expected_digest = attempt_token_digest(attempt_token) if attempt_token else None
         return self._repository.append_checkpoint(
             run_id=run_id, checkpoint_id=str(validated.get("id", checkpoint.get("id"))),
-            checkpoint_version=int(validated["checkpoint_version"]),
-            committed_event_seq=int(validated["committed_event_seq"]),
-            stage=str(validated["stage"]), snapshot_sha256=str(validated["snapshot_sha256"]),
-            manifest_sha256=str(validated["manifest_sha256"]),
-            state_checksum=str(validated["state_checksum"]),
-            frontier_artifact_id=validated.get("frontier_artifact_id"),
+            checkpoint_version=validated["checkpoint_version"],
+            committed_event_seq=validated["committed_event_seq"], stage=validated["stage"],
+            snapshot_sha256=validated["snapshot_sha256"], manifest_sha256=validated["manifest_sha256"],
+            state_checksum=validated["state_checksum"], frontier_artifact_id=validated.get("frontier_artifact_id"),
             principal=principal, referenced_candidate_ids=referenced_candidate_ids,
-            inline_summary=inline_summary,
+            inline_summary=inline_summary, expected_version=expected_version,
+            expected_attempt_token_digest=expected_digest,
         )
 
     def validate_checkpoint(
@@ -643,12 +689,20 @@ class ResearchRunService:
         if run is None:
             raise AlphaCheckpointValidationError("run not found for principal")
         try:
-            checkpoint_version = int(checkpoint["checkpoint_version"])
-            committed_seq = int(checkpoint["committed_event_seq"])
-            stage = str(checkpoint["stage"])
-            snapshot_sha256 = str(checkpoint["snapshot_sha256"])
-            manifest_sha256 = str(checkpoint["manifest_sha256"])
-            state_checksum = str(checkpoint["state_checksum"])
+            raw_version = checkpoint["checkpoint_version"]
+            raw_seq = checkpoint["committed_event_seq"]
+            stage = checkpoint["stage"]
+            snapshot_sha256 = checkpoint["snapshot_sha256"]
+            manifest_sha256 = checkpoint["manifest_sha256"]
+            state_checksum = checkpoint["state_checksum"]
+            if type(raw_version) is not int or type(raw_seq) is not int:
+                raise TypeError("checkpoint integer fields must be exact integers")
+            if type(stage) is not str or type(snapshot_sha256) is not str:
+                raise TypeError("checkpoint text fields must be exact strings")
+            if type(manifest_sha256) is not str or type(state_checksum) is not str:
+                raise TypeError("checkpoint text fields must be exact strings")
+            checkpoint_version = raw_version
+            committed_seq = raw_seq
         except (KeyError, TypeError, ValueError) as error:
             raise AlphaCheckpointValidationError("checkpoint shape is invalid") from error
         if checkpoint_version <= 0 or committed_seq < 0 or not 1 <= len(stage) <= 128:
@@ -659,12 +713,11 @@ class ResearchRunService:
             raise AlphaCheckpointValidationError("manifest digest mismatch (stale cursor)")
         if inline_summary is not None:
             try:
-                validate_bounded_json(
-                    inline_summary, "inline checkpoint summary",
-                    max_bytes=MAX_INLINE_CHECKPOINT_BYTES,
-                )
                 if not isinstance(inline_summary, Mapping):
                     raise ValueError("inline checkpoint summary must be an object")
+                validate_bounded_json(
+                    inline_summary, "inline checkpoint summary", max_bytes=MAX_INLINE_CHECKPOINT_BYTES
+                )
             except ValueError as error:
                 raise AlphaCheckpointValidationError(str(error)) from error
         if run["last_event_seq"] < committed_seq:
@@ -679,8 +732,10 @@ class ResearchRunService:
         if not expected_seqs.issubset(actual_seqs):
             raise AlphaCheckpointValidationError("committed event sequence is not contiguous")
         candidate_ids = list(referenced_candidate_ids or [])
-        if len(candidate_ids) > 256 or any(not isinstance(cid, str) for cid in candidate_ids):
+        if len(candidate_ids) > 256 or any(type(cid) is not str or not cid for cid in candidate_ids):
             raise AlphaCheckpointValidationError("checkpoint candidate references are invalid")
+        if len(set(candidate_ids)) != len(candidate_ids):
+            raise AlphaCheckpointValidationError("checkpoint candidate references must be ordered and unique")
         if candidate_ids:
             present = {
                 str(c["id"]) for c in self._repository.list_candidates(
@@ -691,11 +746,12 @@ class ResearchRunService:
                 raise AlphaCheckpointValidationError("checkpoint references missing candidate(s)")
         frontier_artifact_id = checkpoint.get("frontier_artifact_id")
         if frontier_artifact_id is not None:
-            if artifact_service is None:
-                raise AlphaCheckpointValidationError(
-                    "frontier artifact verification service is required"
-                )
-            artifact_row = self._get_artifact(str(frontier_artifact_id), run_id)
+            if type(frontier_artifact_id) is not str or not frontier_artifact_id:
+                raise AlphaCheckpointValidationError("frontier artifact reference is invalid")
+            verifier = self._artifact_service or artifact_service
+            if verifier is None:
+                raise AlphaCheckpointValidationError("frontier artifact verification service is required")
+            artifact_row = self._get_artifact(frontier_artifact_id, run_id)
             if artifact_row is None:
                 raise AlphaCheckpointValidationError("frontier artifact reference missing")
             if artifact_row["relative_path"] != (
@@ -703,15 +759,13 @@ class ResearchRunService:
             ):
                 raise AlphaCheckpointValidationError("frontier artifact managed key mismatch")
             try:
-                artifact_service.verify_artifact(
+                verifier.verify_artifact(
                     run_id=run_id, checksum_sha256=artifact_row["checksum_sha256"],
                     expected_byte_size=artifact_row["byte_size"],
                     expected_content_type=artifact_row["content_type"],
                 )
             except Exception as error:
-                raise AlphaCheckpointValidationError(
-                    "frontier artifact verification failed"
-                ) from error
+                raise AlphaCheckpointValidationError("frontier artifact verification failed") from error
         expected_checksum = checkpoint_state_checksum(
             run_id=run_id, checkpoint_version=checkpoint_version,
             committed_event_seq=committed_seq, stage=stage,
@@ -733,6 +787,33 @@ class ResearchRunService:
             ).fetchone()
         return None if row is None else dict(row)
 
+    def get_latest_valid_checkpoint(self, run_id: str, *, principal: str) -> dict[str, Any] | None:
+        """Read and validate the newest durable cursor before recovery use."""
+        raw = self._repository._get_latest_checkpoint_unvalidated(run_id, principal=principal)
+        if raw is None:
+            return None
+        return self.validate_checkpoint(
+            run_id=run_id, principal=principal, checkpoint=raw,
+            referenced_candidate_ids=raw.get("referenced_candidate_ids", []),
+            inline_summary=raw.get("inline_summary", {}),
+        )
+
+    def _verify_artifact_reference(self, run_id: str, artifact_id: str) -> None:
+        verifier = self._artifact_service
+        if verifier is None:
+            raise AlphaCheckpointValidationError("artifact verification service is required")
+        row = self._get_artifact(artifact_id, run_id)
+        if row is None or row["relative_path"] != (
+            f"research_artifacts/alpha_runs/{run_id}/{row['checksum_sha256']}.json" if row else ""
+        ):
+            raise AlphaCheckpointValidationError("artifact reference is missing or unbound")
+        try:
+            verifier.verify_artifact(
+                run_id=run_id, checksum_sha256=row["checksum_sha256"],
+                expected_byte_size=row["byte_size"], expected_content_type=row["content_type"],
+            )
+        except Exception as error:
+            raise AlphaCheckpointValidationError("artifact verification failed") from error
     def validate_inline_checkpoint_payload(self, payload_bytes: bytes) -> None:
         """Reject inline checkpoint payloads over 16 KiB or non-canonical JSON (D-07, T-45-05).
 

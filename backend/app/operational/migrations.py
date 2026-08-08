@@ -2108,6 +2108,10 @@ MIGRATIONS: tuple[str, ...] = (
         OR NEW.folds_completed > NEW.folds_total
     BEGIN SELECT RAISE(ABORT, 'alpha progress counters exceed bounded totals'); END;
     """,
+    """
+    ALTER TABLE research_alpha_checkpoints ADD COLUMN referenced_candidate_ids_json TEXT NOT NULL DEFAULT '[]';
+    ALTER TABLE research_alpha_checkpoints ADD COLUMN inline_summary_json TEXT NOT NULL DEFAULT '{}';
+    """,
 )
 
 

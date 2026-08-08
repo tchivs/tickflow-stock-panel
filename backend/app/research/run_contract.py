@@ -160,14 +160,23 @@ def validate_manifest(manifest: Mapping[str, Any]) -> None:
         ("universe.name", "universe", str), ("measured_window.start", "measured_window", str),
         ("measured_window.end", "measured_window", str),
         ("fold_geometry.train_size", "fold_geometry", int),
-        ("budgets.max_candidates", "budgets", int), ("objective.name", "objective", str),
+        ("fold_geometry.gap_size", "fold_geometry", int),
+        ("fold_geometry.test_size", "fold_geometry", int),
+        ("fold_geometry.n_folds", "fold_geometry", int),
+        ("budgets.max_candidates", "budgets", int),
+        ("budgets.max_expressions", "budgets", int),
+        ("objective.name", "objective", str),
         ("code_manifest.fingerprint", "code_manifest", str),
         ("data_manifest.fingerprint", "data_manifest", str),
     )
+    max_counter = 1_000_000_000
     for label, group, expected_type in required_types:
         key = label.split(".", 1)[1]
         value = manifest[group].get(key)
-        if not isinstance(value, expected_type) or isinstance(value, bool):
+        if expected_type is int:
+            if type(value) is not int or value < 0 or value > max_counter:
+                raise ValueError(f"manifest field '{label}' must be a bounded non-negative integer")
+        elif not isinstance(value, expected_type):
             raise ValueError(f"manifest field '{label}' has the wrong type")
 @dataclass(frozen=True, slots=True)
 class ResearchInputSnapshot:
