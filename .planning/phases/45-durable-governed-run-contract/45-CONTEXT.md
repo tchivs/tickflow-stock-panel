@@ -20,7 +20,7 @@ This phase does not generate factor expressions, evaluate folds, call a provider
 
 - **D-01:** Keep `operational.db` as the authoritative store for small immutable run metadata, lifecycle transitions, candidate-attempt metadata, event envelopes, idempotency keys, and checkpoint cursors. Do not add Redis/Kafka/NATS/Celery/RQ or another database.
 - **D-02:** Put the Phase 45 implementation in the `backend/app/research/` domain and reuse `backend/app/operational/migrations.py` plus the existing short-lived SQLite repository/transaction patterns. Do not place Alpha Factory tables in `advanced_*` strategy/authorization tables.
-- **D-03:** Large evidence/response/checkpoint payloads are artifact references, not unbounded SQLite blobs: store a content-addressed path/key plus lowercase SHA-256, size/type metadata, and bounded JSON summaries; missing or mismatched artifacts fail closed.
+- **D-03:** Large evidence/response/checkpoint payloads are artifact references, not unbounded SQLite blobs: store a content-addressed key under `research_artifacts/alpha_runs/{run_id}/{sha256}.json` plus lowercase SHA-256, size/type metadata, and a bounded JSON summary; the digest-derived relative path is server-generated, never client-supplied. Inline checkpoint JSON is limited to 16 KiB UTF-8 and larger state must use a verified artifact; missing or mismatched artifacts fail closed.
 
 ### Immutable run and event contracts
 
@@ -32,8 +32,9 @@ This phase does not generate factor expressions, evaluate folds, call a provider
 ### Replay and integration surface
 
 - **D-08:** Replay reads only the frozen manifest and durable event/candidate/checkpoint facts. It must be deterministic and read-only in Phase 45; it must not silently fetch current constituents, rewrite historical facts, or consume reserved OOS.
-- **D-09:** Expose a minimal server API/service seam for create, get/replay, retry, cancel, and event-history reads so later Factory/Agent/UI phases consume one contract. Phase 45 need not provide a browser workbench or live SSE transport; Phase 50 owns the user-facing projection and reconnect transport.
-- **D-10:** Any background execution adapter is an untrusted worker around the research run service. It may request a transition/checkpoint but cannot choose policy, mutate frozen inputs, bypass idempotency, or grant execution/promotion authority.
+- **D-09:** Expose a minimal server API/service seam for create, get/replay, retry, cancel, event-history, candidate-history, and bounded progress reads so later Factory/Agent/UI phases consume one contract. Phase 45 need not provide a browser workbench or live SSE transport; Phase 50 owns the user-facing projection and reconnect transport. `backend/app/main.py` must initialize the shared `ResearchRepository`, construct `ResearchRunService`, store it in `app.state.research_run_service`, and include the typed router.
+- **D-10:** Any background execution adapter is an untrusted worker around the research run service. Each `running` transition issues a server-generated opaque `attempt_token`; only its SHA-256 is persisted, and callbacks must supply the token plus expected `transition_version`. Terminal/cancel/retry/version changes invalidate older tokens. The adapter may request a transition/checkpoint/progress update but cannot choose policy, mutate frozen inputs, bypass idempotency, or grant execution/promotion authority.
+- **D-11:** The run cursor exposes bounded `candidate_attempts_total`, `candidate_attempts_completed`, `folds_total`, and `folds_completed` counters through the safe projection/API. Phase 45 persists and tests these server-owned counters and allows a worker to report bounded progress; it does not calculate or evaluate factor folds. A fresh run may report zero/declared fold totals until later phases populate evidence.
 
 ### Claude's Discretion
 

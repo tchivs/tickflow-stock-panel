@@ -393,29 +393,19 @@ if changed != 1:
 |---|---|---|---|
 | A1 | The proposed table names and module names are suitable decomposition (`research_alpha_*`, `run_contract.py`, `run_service.py`, `run_api.py`). | Recommended Project Structure / Schema | Planner may need to choose different names while preserving the listed constraints. |
 | A2 | A dedicated append-only checkpoint table is preferable to an event-only projection for Phase 45. | Architecture Patterns | A typed event plus latest projection could reduce tables but must prove the same uniqueness and cursor checks. |
-| A3 | `preflight_failed` should cover invalid/preflight terminal status, with invalidity retained in reason rather than a second mutable `invalid` status. | Lifecycle matrix | Requirement interpretation could require a distinct `invalid` status; resolve before locking the API enum. |
-| A4 | Alpha artifact references can share the existing managed `research_artifacts` root with a distinct namespace. | Artifact references | Deployment may require a separate root/retention policy; path safety and checksum semantics remain mandatory. |
-| A5 | A linked retry may safely reuse the exact frozen manifest digest while receiving a new run ID/attempt identity. | Retry semantics | If retry intentionally changes a declared dimension, it must create a new snapshot/digest and record the changed field. |
-| A6 | `BEGIN IMMEDIATE` is acceptable for short run/event/checkpoint writes at the expected single-host research scale. | Sequence allocation | Long transactions or network filesystems could cause contention; keep writes short and validate deployment filesystem assumptions. |
+| A3 | `preflight_failed` is the run-level terminal status for invalid/incomplete preflight; candidate attempts retain a distinct `invalid` outcome. | Lifecycle matrix | Resolved by D-06 and AF-REQ-04; API tests must assert both scopes. |
+| A4 | Alpha artifact references share the existing managed `research_artifacts` root with a distinct digest-derived namespace. | Artifact references | Resolved: server generates `research_artifacts/alpha_runs/{run_id}/{sha256}.json`; clients cannot choose paths. |
+| A5 | A linked retry may safely reuse the exact frozen manifest digest while receiving a new run ID/attempt identity. | Retry semantics | A retry that changes a declared dimension creates a new snapshot/digest and records the changed field. |
+| A6 | `BEGIN IMMEDIATE` is acceptable for short run/event/checkpoint writes at the expected single-host research scale. | Sequence allocation | Keep transactions short and validate deployment filesystem assumptions. |
 
-## Open Questions
+## Resolved Decisions
 
-1. **Do invalid requests need a distinct `invalid` status?**
-   - What we know: D-06 explicitly requires `preflight_failed`; requirements describe invalid/preflight failure. `[VERIFIED: .planning/phases/45-durable-governed-run-contract/45-CONTEXT.md:27-30]`
-   - What's unclear: Whether client projections need to distinguish malformed input from an unavailable preflight dependency.
-   - Recommendation: Use `preflight_failed` plus bounded machine-readable `terminal_reason` unless the planner locks a separate `invalid` enum; test both API and transition matrix against the chosen enum.
-2. **Should checkpoint payloads be inline or artifact-only?**
-   - What we know: D-03 requires large payloads as artifact references; existing artifact validation supports bounded metadata. `[VERIFIED: .planning/phases/45-durable-governed-run-contract/45-CONTEXT.md:21-24]` `[VERIFIED: backend/app/research/repository.py:406-435]`
-   - What's unclear: The exact inline byte/field limit.
-   - Recommendation: Keep only a small bounded cursor summary inline and require a verified artifact for frontier/queue data; make the limit a named schema constant and test rejection above it.
-3. **How should active stale workers be fenced?**
-   - What we know: JobStore can reap a stale in-memory job but explicitly cannot interrupt an orphan executor thread. `[VERIFIED: backend/app/services/pipeline_jobs.py:247-280]`
-   - What's unclear: Whether Phase 45 needs a lease token now or only expected run transition version.
-   - Recommendation: Require worker callbacks to carry a server-issued run/attempt token plus expected transition version; add a lease only if the implementation launches concurrent workers.
-4. **Where should a new Alpha repository be mounted in `main.py`?**
-   - What we know: `main.py` constructs `ResearchRepository` over `operational.database_path` and mounts it in `app.state`. `[VERIFIED: backend/app/main.py:134-137,187-190]`
-   - What's unclear: Whether to expose `ResearchRepository` methods directly or mount a separate run service.
-   - Recommendation: Keep repository persistence methods narrow and mount a service for transition/authority logic; API routes should resolve the service from `app.state` and not write SQL.
+1. **Invalid versus preflight status — (RESOLVED):** A malformed or incomplete run specification fails before queueing with run status `preflight_failed` and a bounded machine-readable terminal reason. A generated candidate that fails expression validation is retained as candidate status `invalid`; it never becomes a run status. The enum and projection tests cover both scopes.
+2. **Checkpoint inline/artifact boundary — (RESOLVED):** A checkpoint may carry only a canonical UTF-8 JSON summary no larger than 16 KiB (`MAX_INLINE_CHECKPOINT_BYTES = 16 * 1024`). Frontier/queue/state beyond that limit must be written first to a verified managed artifact whose server-generated relative key is `research_artifacts/alpha_runs/{run_id}/{sha256}.json`; the descriptor stores type, size, and lowercase SHA-256. Oversized inline input and client-supplied paths are rejected.
+3. **Stale-worker fencing — (RESOLVED):** Every transition to `running` generates an opaque server-owned `attempt_token`; only its SHA-256 is persisted. Worker callbacks must provide the token and expected `transition_version`. Any cancel, terminal transition, retry, or version change invalidates the old token. No separate lease is needed for Phase 45 because the token/version pair is the concurrency fence.
+4. **Application mounting — (RESOLVED):** `backend/app/main.py` initializes `ResearchRepository` from the existing `operational.database_path`, constructs `ResearchRunService`, stores it as `app.state.research_run_service`, and includes the typed Phase 45 router. Routes never call repository SQL directly. The service exposes bounded candidate/fold progress counters but does not evaluate folds.
+
+These resolutions replace the former open questions and are incorporated into `45-CONTEXT.md` D-03, D-09, D-10, and D-11. No unresolved Phase 45 research decision remains.
 
 ## Environment Availability
 
