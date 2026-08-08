@@ -1,184 +1,176 @@
-# Feature Research: AthenaQuant v2.0 竞价深度与历史股池
+# Feature Landscape: v3.0 Alpha Factory + FactorResearchAgent
 
-**Domain:** A-share 竞价选股 (call-auction stock screening) — historical pool browsing, auction strategy family, true auction match-data columns
-**Researched:** 2026-08-04
-**Confidence:** MEDIUM (web research cross-checked across multiple Chinese quant sources; existing-seam claims HIGH, grounded in shipped v1.3 code)
+**Domain:** Replayable automatic factor mining and two-stage factor research for an A-share quantitative research workbench  
+**Milestone:** v3.0 (expected roadmap phases 45 onward)  
+**Researched:** 2026-08-08  
+**Scope confidence:** HIGH for current AthenaQuant contracts; MEDIUM for patterns synthesized from local AlphaMaster/PA_Agent analyses; LOW for general web corroboration (web results were used only as a sanity check).
 
-## Scope Note
+## Scope and product boundary
 
-本文件只研究 **v2.0 新增能力**(POOL-04 日期导航 / STRAT-04 竞价策略族扩展 / STRAT-05 盘中确认 / DATA-04 真集合竞价数据列 / DATA-05 盘前股池)。v1.3 已验证的能力**不重复研究**,作为既有基线被依赖:
+v3.0 should turn the existing governed factor workflow into a replayable **Alpha Factory** and add a two-stage **FactorResearchAgent** without weakening the existing research boundaries. The factory searches only a deterministic, seeded grammar/evolution space and emits restricted factor expressions. The Agent proposes and explains research candidates, then synthesizes measured evidence; it does not become the owner of factor computation, admission policy, OOS reservation, or trading execution.
 
-- 分钟 K 同步(`kline_minute`,09:30 起,`minute_sync_symbols` 作用域旋钮) — DATA-01
-- `open_gap`(open/prev_close−1)受管 enriched 列 — DATA-02
-- 竞价探测服务(`not_configured/available/fail_closed/error`,30s TTL,09:30 bar 永不标竞价) — DATA-03
-- 3 个核心竞价策略(竞价多头 / 盘前强势量化 / 早盘之星)+ 每策略 `hit_factors` 因子命中聚合 — STRAT-01/02/03
-- 股池 Hub:单一 as_of 投影、五列下钻、概念筛选、交叉共振、`GET /api/pool/hub`、guest 脱敏服务端权威 — POOL-01/02/03, GUEST-01/02
-- 21 内置策略、Polars 向量化、Parquet/DuckDB 数据湖、SQLite 运行态、FastAPI 单宿主
+The current stack already supplies the hard boundaries that v3.0 should consume rather than replace:
 
----
+- `backend/app/research/factor_dsl.py`: `DSL_VERSION`, `ALLOWED_FIELDS`, `DENIED_FIELDS`, parser/compiler, declared partition semantics, and no source-text escape hatch.
+- `backend/app/research/factor_registry.py`: immutable `FactorRevision`, canonical expression/signature metadata, revisions, and deterministic `discover_similar` results.
+- `backend/app/research/signal_chain.py`: `FactorSignalChain.compute()` as the single compile-to-compute path, governed panel loading, PIT universe resolution, warmup/missing-data handling, and panel/universe fingerprints.
+- `backend/app/research/evaluation.py`: fully resolved evaluation configuration and retention-ready evidence (`IC`, `RankIC`, `ICIR`, monthly robustness, coverage, group and long-short evidence, input manifest, and artifacts).
+- `backend/app/research/admission.py`: ordered deterministic gates (`no_lookahead`, `coverage`, `no_label_leakage`, `similarity_dedup`, `train_ic`, `val_ic`) with append-only admission or rejection verdicts.
+- `backend/app/research/catalog.py`: immutable experiment/evidence snapshots, explicit retention, comparison candidates, and summary-only admitted catalog entries.
+- `backend/app/research/hypotheses.py`: a proposal-only, parser-confirmed hypothesis draft and explicit `reviewed_draft` transition; the configured provider has no registry/evaluator/filesystem authority.
+- `backend/app/api/research.py` and `frontend/src/pages/backtest/FactorBacktest.tsx`: the observable baseline of validate → save revision → optional hypothesis review → evaluate → retain, with `ResearchLibrary.tsx` showing revision/history/evidence state.
+- `backend/app/backtest/walkforward.py` and its Phase 13 migration: measured-calendar rolling folds, a structurally reserved OOS fold, and exactly-once OOS evidence. A walk-forward selection OOS is still selection evidence, not a final blind holdout.
 
-## Feature Landscape
+Local analysis supports the same direction. AlphaMaster's restricted token/grammar generation, bounded candidate scoring, diversity pressure, checkpoints, and shared execution path are reusable patterns, but its own analysis warns that heuristics are not statistical guarantees, that one-file walk-forward OOS is not final blind evidence, and that its manifest is incomplete (`../docs/aaa/alphamaster/DEEP-ANALYSIS.md`). PA_Agent's preflight → structured stage 1 → validation → stage 2 → validation → persisted record flow is reusable as an architectural pattern only; its AGPL license, Price Action assumptions, crypto-specific risk rules, and paper execution are not product code or domain defaults (`../docs/aaa/pa-agent/DEEP-ANALYSIS.md`). The cross-project synthesis reinforces data contracts, replayable tool envelopes, fail-closed gates, visible evidence/failure state, and read-only or paper-only high-risk boundaries (`../docs/aaa/10-SYNTHESIS.md`).
 
-### Table Stakes (Users Expect These)
+## Table stakes
 
-| Feature | Why Expected | Complexity | Notes |
-|---------|--------------|------------|-------|
-| **日期导航(历史股池浏览,POOL-04)** | 参考 UI 有 `交易日 2026/08/04 ‹ ›`;短线打板/复盘文化(开盘啦「竞价页面选日期」、淘股吧历史竞价图)默认可回看任意交易日的股池。单一 as_of 视图让"今天选出的池子昨天什么样"无从回答,产品显得残缺。 | MEDIUM | 引擎已支持按日回放(`run_all(body.as_of)` → `_load_enriched_for_date`),enriched 按 `date=YYYY-MM-DD` 分区(实测 246 个交易日分区)。真正的成本在:把 `strategy_cache.json` 的**单一 as_of 结构**泛化为按日缓存/按日回放,以及**历史日概念标签的 PIT 问题**(见 PITFALL 一节)。 |
-| **真集合竞价数据列:竞价量 / 竞价金额(DATA-04)** | v2.0 的核心卖点,也是参考 UI 之外产品差异化的数据地基。Tushare `stk_auction_o`(盘后更新,vol/amount/vwap)与 BigQuant `cn_stock_factors_auction`(`open_auction_trade_volume/amount`)**真实 09:25 撮合成交**是权威语义。probe-gated:仅当 DATA-03 探测 `available` 时作为一级列。 | MEDIUM | 与 v1.3 canonical 列 `auction_volume/auction_amount`(自定义源 09:15–09:25 窗口)同构,可直接落为 enriched 受管列。**真实成交 vs 派生的边界**必须严格区分(见下)。 |
-| **5 个策略标签落成第一性原理因子定义(STRAT-04)** | 参考产品把「竞价阿尔法/极速抢筹/T+1闪电/竞价全面策略/金色两点半」当策略卡片列出,用户期待竞价策略族完整;但这些都是**产品标签,无公开配方** — 必须像 v1.3 三个核心策略一样,用自己的因子/阈值/权重诚实定义。 | MEDIUM | 每个策略一个 `strategy/builtin/*.py`,进 `strategy/builtin/` 唯一注册轨道(STRAT-03 铁律)。**金色两点半不是竞价策略**(见 Differentiators/Anti-Features),必须诚实归类。 |
-| **交易日历约束的日期步进** | 日期导航的 ‹ › 必须落在**真实交易日**,且跳过无数据日(停牌同步缺口/未同步日期)给出空态而非报错。用户期待像看历史行情一样翻交易日。 | LOW | 复用 `research/calendar.py`(实测 241 交易日/年 的 A 股日历校准)+ enriched 分区集合求交集;非交易日禁用步进按钮。 |
+Missing any of these makes the Alpha Factory or Agent unsuitable for controlled research. Complexity is an implementation estimate for v3.0, not a claim that the current code already provides the feature.
 
-### Differentiators (Competitive Advantage)
+| REQ-ID | Feature | Observable behavior / acceptance signal | Complexity | Dependencies and grounding |
+|---|---|---|---|---|
+| AF-REQ-01 | **Immutable factory run specification** | Before generation starts, the user can inspect a frozen run record containing DSL/grammar version, ordered field/operator/function vocabulary, seed, maximum expression length/depth, candidate budget, objective weights, universe, measured date range, fold geometry, cost policy, and code/data manifest. Editing the form after start creates a new run rather than mutating the old one. | High | Depends on `FactorRevision` provenance, `ResolvedEvaluationConfig`, artifact/catalog persistence, and `walkforward.py` geometry. |
+| AF-REQ-02 | **Deterministic seeded grammar/evolution search** | Given the same frozen run specification, seed, and governed input manifest, a replay produces the same candidate canonical expressions and candidate IDs/hashes in the same order. The default implementation is seeded grammar/evolution search; no PyTorch or RL dependency is required. | High | `factor_dsl.py` parser/canonicalization; AlphaMaster grammar/constrained-sampler pattern is reusable, but not its neural/RL dependency. |
+| AF-REQ-03 | **Restricted candidate generation** | Every generated expression is parsed before evaluation. Unsupported fields/functions/operators, invalid arity/partition semantics, excessive windows/depth, non-finite literals, and malformed expressions become explicit `invalid` candidate records with diagnostics; no arbitrary Python, imports, source text, or executable fallback can enter the factory. | Medium | Reuse `parse_factor`, `FactorDslError`, `ALLOWED_FIELDS`, `DENIED_FIELDS`, and `DSL_VERSION`; mirrors current `/api/research/dsl/validate`. |
+| AF-REQ-04 | **Candidate ledger, not top-K-only output** | The run records every attempted candidate, including invalid, duplicate, low-coverage, leakage, failed-evaluation, rejected, and admitted outcomes. Each record includes candidate expression/signatures, parent/mutation lineage, seed/step, status, reason, and links to evaluation/gate evidence. A user can answer “why was this candidate discarded?” without rerunning the search. | High | Requires append-only SQLite operational state and catalog/artifact links; extends `admission.py`'s persisted rejection trail rather than replacing it. |
+| AF-REQ-05 | **One governed signal path** | Factory scoring, Agent-requested evaluation, admission, composite use, walk-forward folds, and any later as-of signal all call `FactorSignalChain.compute()` for factor values. A run exposes the revision ID, panel fingerprint, resolved-universe fingerprint, source fields, warmup, and missing-data policy it used. | High | Directly grounded in `FactorSignalChain.compute()` and its “single compile-to-compute path” contract. |
+| AF-REQ-06 | **Point-in-time A-share universe and calendar semantics** | A replay resolves membership as of each date, uses measured trading dates rather than synthetic weekdays, and displays the resolved symbol counts/fingerprint and date coverage. Suspended/missing/non-finite observations follow the declared policy; silently substituting the full lake or current constituents is a run failure. | High | `signal_chain.py`, `universe.py`, `walkforward.py`; protects against survivor/look-ahead bias. |
+| AF-REQ-07 | **Bounded evaluation evidence** | For every evaluated candidate, the user can inspect the resolved config and immutable evidence: per-date IC/RankIC, summaries/observations, ICIR, positive rate, coverage, monthly robustness, group statistics/NAV, long-short statistics/NAV, fees/slippage, and diagnostics. Evaluation failure is a terminal state with a reason, not a zero score. | High | Reuse `FactorEvaluationService.evaluate()` and `FactorEvaluationResult`; UI shape exists in `FactorBacktest.tsx`'s `Evidence`. |
+| AF-REQ-08 | **Deterministic admission gates** | Candidate status is produced by the existing ordered gate policy, with each gate's observed value, threshold, and pass/fail reason visible. The Agent and factory can request a gate run but cannot edit thresholds, reorder gates, or convert rejection to admission. Every rejection is retained. | Medium | `run_admission`, `ADMISSION_POLICY_VERSION`, fixed thresholds, and append-only verdicts in `admission.py`. |
+| AF-REQ-09 | **Honest temporal separation** | Search/tuning never consumes the reserved OOS fold. The UI labels fold-level test results as selection evidence and labels the reserved OOS result separately; it never calls the walk-forward selection OOS a “blind final validation.” A final blind holdout, if configured, is a distinct data range unavailable to search, feature selection, threshold tuning, and Agent synthesis. | High | `walkforward.py` and migration constraints structurally exclude OOS from search; AlphaMaster analysis explicitly warns that same-file walk-forward OOS is not final blind evidence. |
+| AF-REQ-10 | **Replayable artifact/provenance manifest** | A run can be replayed from stored identifiers/hashes for data files/partitions, universe resolution, factor revision/DSL version, grammar vocabulary, seed, configuration, code/build version, candidate ordering, model/provider metadata (if Agent used), and artifact checksums. Missing required manifest fields fail closed rather than being filled with “unknown.” | High | Extends `FactorEvidencePackage`, `input_manifest`, artifact descriptors, catalog snapshots, and local synthesis's replayable tool-envelope principle. |
+| AF-REQ-11 | **Two-stage Agent with deterministic preflight** | Stage 0/preflight checks data availability/freshness, measured calendar, universe scope, required fields, sample length, DSL/grammar compatibility, budget, provider availability, and policy mode. A failed preflight returns machine-readable reasons and makes zero model calls. | Medium | PA_Agent pattern (`check_preflight_data()` described in `../docs/aaa/pa-agent/DEEP-ANALYSIS.md`); current `FactorHypothesisService` already rejects unavailable providers. |
+| AF-REQ-12 | **Stage 1: structured candidate/hypothesis proposal** | Stage 1 consumes a user thesis and permitted DSL/grammar options, and returns schema-validated JSON containing hypothesis, canonical expression(s), explanation, assumptions, requested scope, and uncertainty. The response is parser-confirmed; it remains a transient proposal until an explicit review/promotion action. | Medium | Reuse `FactorHypothesisService.draft()`, `HypothesisDraft`, `_decode_provider_draft`, and `reviewed_draft`; no raw natural-language text may create a revision. |
+| AF-REQ-13 | **Stage 2: evidence-aware research synthesis** | Stage 2 receives only frozen run inputs and measured candidate/evaluation/gate evidence. It returns schema-validated JSON with candidate references, evidence citations, observed metrics, rejection/gate reasons, caveats, and a bounded recommendation (`reject`, `needs_review`, or `eligible_for_explicit_review`). It cannot change expressions, metrics, thresholds, data windows, OOS state, or admission status. | High | Depends on AF-REQ-07/08/09/10 and PA_Agent's diagnosis-before-decision separation; model output is explanatory/proposal data only. |
+| AF-REQ-14 | **Complete Agent trace and failure records** | For every Stage 1/2 call, the run stores prompt/template version, provider/model/version, request scope, raw-response checksum or bounded raw response, parsed output, validation errors/retries, cancellation, token/latency metadata, and links to the input run. Partial failures remain inspectable; provider failure is not silently replaced with a fake draft. | High | Extends current hypothesis provenance (`provider`, `model`, `model_version`, `prompt_template_version`, `draft_id`) using PA_Agent's persisted `AnalysisRecord` pattern. |
+| AF-REQ-15 | **Explicit human review and promotion** | A researcher can compare proposal, expression, assumptions, evidence, gate trail, and provenance, then explicitly save a new immutable revision. Unreviewed Agent output is absent from the factor catalog and comparison candidates. Modified expression/explanation/provenance is rejected if it no longer matches the issued draft. | Medium | Current UI already requires “reviewed” before `/api/research/hypotheses/reviewed-factor`; current server `reviewed_draft` verifies exact match. |
+| AF-REQ-16 | **Run lifecycle, retry, cancellation, and resume** | The workbench shows queued/running/completed/failed/cancelled states and progress by candidate/fold. Cancellation leaves a terminal, replayable partial ledger. A retry either resumes from a recorded deterministic checkpoint or creates a new run linked to its parent; it never overwrites an earlier run. | High | Needs operational SQLite job state and event/replay contract; local synthesis recommends explicit task state and replayable calls. |
+| AF-REQ-17 | **Research-only delivery boundary** | The final action available from an Alpha Factory/Agent run is inspect, compare, retain research evidence, or explicitly promote a factor revision. There is no route from Agent output or admission success to a live broker order. UI copy and API responses state research-only status. | Low | Existing workbench copy (`PoolHubPage.tsx`) and local synthesis's read-only/paper-only default; preserves the milestone non-goal. |
 
-| Feature | Value Proposition | Complexity | Notes |
-|---------|-------------------|------------|-------|
-| **历史股池「确定性回放」+ 可选「逐日存档」双模式** | 大多数零售工具要么只有当日竞价、要么要手动保存。回放模式=今天策略定义在 D 日数据上的确定性重算(等于小回测,零存储);存档模式=当日真实计算结果逐日落盘(等于历史记录)。区分两者是对"历史股池"语义的诚实回答。 | MEDIUM | 回放直接复用 `run_all(as_of)` + `_load_enriched_for_date`,确定性、可审计。存档需要每日写入任务(扩 `strategy_cache.write_cache` 为按日键)。**推荐回放优先**,存档为可选增强。 |
-| **竞价未匹配金额 / 竞价换手(派生列)** | 零售抢筹文化的核心代理:同花顺问财「竞价抢筹」= 竞价未匹配金额 > 0 + 竞价量比;SuperMind「竞价量能双指标」= 量比 + 竞价成交额(杜绝无量虚涨)。这些**可从 委托量−成交量 派生**,不需要 Level-2,是大多数免费平台不做、但短线用户认的指标。 | MEDIUM | 需要 `order_volume/order_amount`(委托量)输入 — 来自 BigQuant 级因子源或自定义 auction 源扩展;无委托量时 fail-closed 回退到 竞价量比/竞价金额。 |
-| **STRAT-05 盘中确认(09:30–10:00 分钟 K 复评)** | 竞价信号是**开盘瞬间的猜测**;用 09:30–10:00 分钟 K 确认(量价齐升、不破开盘价、分钟级回踩不深)再收窄池子,显著降低 竞价高开低走 的假阳性。这是「早盘之星/盘前策略」的增强,也是平台已有分钟 K 能力(Data-01)的差异化复用。 | MEDIUM | 依赖 `kline_minute` + 交易日历;策略形态为「竞价初筛 → 盘中确认收窄」两阶段。与 T+1闪电 的「次日早盘卖出」共享分钟 K。 |
-| **虚拟成交(虚拟匹配量)的实时采集或诚实派生** | 09:15–09:25 界面上滚动的「虚拟成交/虚拟匹配量」是**实时盘口快照,盘后 EOD 源不持久化**。能把它作为实时列(竞价时段)或从撮合/委托差派生(盘后近似)是少数产品才有的能力。 | HIGH | 实时路径需竞价时段数据源(Tushare `stk_auction` 09:26–09:29 可拉当日;实时行情源 09:15 起快照);盘后只能派生/标注为估计值,**绝不冒充历史观测**。 |
-| **DATA-05 盘前股池(09:30 前可用)** | 竞价策略的价值在开盘前;若竞价源支持实时盘前评估,股池在 09:30 前即可浏览 — 对齐 开盘啦「早盘竞价/竞价涨停委买」的实时模式,是 T+0 工作流差异点。 | HIGH | 依赖:实时竞价源 + 交易日当天的盘中判定;与平台「研究建议、零执行权」边界不冲突(仍是只读股池)。 |
+## Differentiators
 
-### Anti-Features (Commonly Requested, Often Problematic)
+These features make v3.0 materially more useful than a batch formula generator while staying inside the governed stack. They should be scheduled only after the table stakes above are durable.
 
-| Feature | Why Requested | Why Problematic | Alternative |
-|---------|---------------|-----------------|-------------|
-| **把「金色两点半」当 09:15–09:25 竞价策略实现** | 参考产品把五个标签并排;表面看都属"竞价策略族"。 | 金色两点半是**尾盘(14:30 后)策略**:选当天涨幅 3%–5%、尾盘走强的票,14:30–15:00 买入,隔夜持有,次日 09:30–10:00 卖出(大智慧金色两点半股票池、尾盘选股法)。它需要的是 T 日盘中/日 K 数据,**不是竞价窗口数据**;塞进竞价窗口 = 语义造假。 | 诚实归类:实现为 T 日尾盘选股策略(依赖 `change_pct` + 分钟 K),命名与描述明确「尾盘/隔夜」而非「竞价」;或从"竞价策略族"卡片组移出单独成组。 |
-| **用 09:30 连续竞价 bar 充当竞价量/金额** | 免费分钟数据只有 09:30 起,取巧最快。 | v1.3 已用回归测试锁死「09:30 bar 永不标集合竞价」(T-16-01);任何把 09:30 成交量当竞价成交量的实现都违反平台契约且误导用户。 | 探测 `available` 时用真实竞价列;否则 fail-closed 到派生 `open_gap`/量比。 |
-| **把「虚拟成交」作为历史序列持久化** | 用户想要历史竞价图(开盘啦/淘股吧有)。 | 虚拟成交是 09:15–09:25 的**实时预撮合估计,不是最终成交**;EOD 源无历史虚拟序列。用 09:25 最终成交或委托差反推并标注"估计",否则是编造历史。 | 历史图只画**真实竞价量/金额/未匹配金额**(可持久化);虚拟成交仅实时展示,标注「实时估计」。 |
-| **逐日全量存档每个交易日的股池 JSON,永久保留** | "历史记录"听起来可靠。 | 单宿主 Parquet+SQLite 部署下,存储随交易日线性膨胀;而 enriched 分区已冻结历史数据,**确定性回放**随时可重建同一池子。 | 回放优先(零存储,可审计);存档仅作为可选增强,按天键控(如按日 `strategy_cache.{date}.json`),支持清理策略。 |
-| **复刻专有策略配方(陈星量化等)** | 参考产品有这些名字,用户点名。 | 无公开规格,复刻=猜测+可能侵权;v1.3 已确立「第一性原理 + 诚实命名」铁律。 | 用自己的因子定义,名字用自己能解释的标签;META.description 写清"参考标签的诚实解读"。 |
-| **日期导航放行任意日期(含无数据日)** | 输入框自由输日期。 | 无 enriched 分区/未同步的日期返回空池,用户误以为策略"失效";非交易日导航无意义。 | 导航受限在「有 enriched 分区」的真实交易日集合内;无数据日给空态文案而非报错。 |
-| **在 DATA-04 探测确认前一次性实现全部 5 个策略** | "一起做完"。 | 竞价全面策略/极速抢筹/竞价阿尔法 的因子价值高度依赖真实竞价列;无真列时它们退化为 open_gap+量比 的重复组合,产品同质化。 | 顺序化:先探测 → 先落地 2 个真列可支撑的策略,其余按数据可用性分批。 |
+| REQ-ID | Feature | Observable behavior / acceptance signal | Complexity | Dependencies and rationale |
+|---|---|---|---|---|
+| AF-REQ-18 | **Lineage-aware evolution and replay UI** | A researcher can see parent → mutation/crossover → child lineage, canonical expression diffs, seed/step, and the exact reason a branch stopped. Selecting “replay this branch” reproduces only that branch under the same frozen inputs. | High | Depends on AF-REQ-02/04/10/16; adapts AlphaMaster's elite/restart lineage without inheriting its model. |
+| AF-REQ-19 | **Diversity and redundancy frontier** | Search ranking shows objective score beside structural similarity, field/operator overlap, factor-output/IC-series correlation, and coverage. The researcher can inspect Pareto-like candidates rather than only the highest IC; candidates too similar to admitted factors are visibly penalized/rejected under fixed policy. | Medium | Reuses `FactorRegistry.discover_similar()` and admission IC-correlation gate; turns current explanatory similarity into search feedback without changing policy at runtime. |
+| AF-REQ-20 | **A-share robustness/cost stress board** | For a candidate family, the workbench displays results across rebalance cadence, fees/slippage stress, calendar regimes, coverage bands, and symbol subsets, with the exact trial matrix recorded. Stress trials cannot tune or rewrite the primary admission thresholds. | High | Builds on `FactorEvaluationResult` group/long-short evidence, resolved configs, and governed data; helps expose high-turnover or narrow-universe illusions. |
+| AF-REQ-21 | **Evidence-linked Agent challenge/review** | Stage 2 can identify a missing assumption, contradictory metric, gate failure, narrow coverage period, or likely redundancy and link each statement to a candidate/evaluation/gate/artifact ID. It may ask for a new explicitly scoped experiment but cannot launch an unbounded search or alter the frozen run. | High | Depends on AF-REQ-13/14 and catalog IDs. Uses PA_Agent's “diagnosis then decision” pattern, not a free-form debate swarm. |
+| AF-REQ-22 | **Experiment templates and deterministic cloning** | Users can clone a completed run into a new immutable spec while changing exactly declared dimensions (for example, horizon or cost stress). The UI shows a field-level diff and retains parent/child links; unchanged inputs retain their hashes. | Medium | Requires AF-REQ-01/10 and existing revision/experiment history in `ResearchLibrary.tsx`. |
+| AF-REQ-23 | **Budget-aware parallel evaluation** | The run enforces candidate/time/memory/evaluation budgets server-side, reports consumption, and prevents a retry or Agent loop from bypassing them. Parallel scheduling changes throughput only; candidate ordering and replay result remain deterministic. | High | Needs job state and deterministic scheduler contract; AlphaMaster's CPU observations suggest measuring this workload before adding GPU/ML infrastructure. |
+| AF-REQ-24 | **Candidate-family and admitted-factor comparison** | The researcher can compare explicitly retained experiment snapshots and candidate families side by side, including configuration, evidence, provenance, gate status, and artifacts, without a hidden winner score. | Medium | Extends `ExperimentCatalog`, `/api/research/comparison`, `ResearchLibrary.tsx`, and `ExperimentComparison.tsx`, whose current copy already says comparison does not compute a winner. |
+| AF-REQ-25 | **Visible data-quality and degradation banners** | The UI displays data date, provider/source, cache/degradation state, missing fields, membership coverage, and whether a result is exploratory, selection-OOS, or final-blind. A stale/degraded run cannot look equivalent to a clean completed run. | Medium | Directly follows `../docs/aaa/10-SYNTHESIS.md` quality-banner principle and current governed input manifests. |
+| AF-REQ-26 | **Offline deterministic Agent fixture mode** | With no configured provider, users/tests can run a declared offline fixture that produces a known proposal and full validation trace; production paths never silently switch to it. The UI labels fixture output as non-production evidence. | Low | Current `OfflineFakeHypothesisGateway` is test-only and provider failures are availability boundaries; useful for replay/UI acceptance without weakening production semantics. |
 
----
+## Anti-features (explicitly do not build in v3.0)
 
-## Feature Dependencies
+| Anti-feature | Why it is unsafe or out of scope | Required alternative / guard |
+|---|---|---|
+| **Arbitrary Python, imports, generated source, or unrestricted expression execution** | It defeats the restricted DSL's parser/compiler boundary, creates code-execution and reproducibility risk, and makes candidate provenance impossible to normalize. The existing advanced strategy sandbox is not permission to add arbitrary code to factor mining. | Generate only the versioned grammar/DSL AST; reject unknown tokens before any Polars expression is allocated (AF-REQ-03). |
+| **PyTorch/RL/neural policy as the default search engine** | Adds an unnecessary dependency and nondeterministic training surface to a milestone whose default decision is deterministic seeded search. It would make replay and debugging harder before the grammar/evidence contract is proven. | Seeded grammar/evolution search with explicit budgets, checkpoints, and candidate ledger; reserve ML search for a separately approved milestone. |
+| **Agent authority over deterministic gates or policy thresholds** | A model can explain weak evidence but cannot make look-ahead, coverage, leakage, similarity, train IC, val IC, PIT, or reserved-OOS failures disappear. | Program-owned `FactorSignalChain`, evaluation, walk-forward, and `run_admission`; Agent output is proposal/synthesis only (AF-REQ-08/13). |
+| **Raw LLM text directly creating or changing a factor revision** | Free text can contain invalid DSL, hidden assumptions, prompt injection, or a changed expression that no longer matches the reviewed draft. | Schema validation → DSL parse/canonicalization → explicit human review → immutable registry revision (AF-REQ-12/15). |
+| **Automatic live broker actions, order submission, or “signal implies execution”** | The milestone is a research workbench, not an execution system. Admission is not a risk approval, broker acknowledgement, or live-trading authorization. | Research-only result and explicit no-broker boundary (AF-REQ-17); any future paper/live path needs a separate scoped design. |
+| **Calling walk-forward selection OOS a blind final OOS** | The selection OOS can still influence interpretation, promotion, or future choices. Mislabeling it inflates confidence and defeats honest statistical separation. | Reserve it structurally, label it `selection_oos`, evaluate once, and require a separately frozen final-blind holdout for any final claim (AF-REQ-09). |
+| **Dropping rejected/invalid candidates or retaining only the champion** | Survivorship in the research log prevents audit, hides search breadth/multiple comparisons, and makes a replay claim unverifiable. | Append every candidate and rejection reason to the ledger (AF-REQ-04). |
+| **Mutable factor definitions or in-place experiment updates** | Historical evidence would silently change when an expression, data scope, or policy is edited. | New immutable `FactorRevision`/run/snapshot with parent link; no overwrite (AF-REQ-01/10/22). |
+| **Synthetic, current-constituent, or full-lake fallback when PIT data is missing** | It introduces survivor bias and makes an apparently successful run incomparable with prior runs. | Fail closed with resolved-universe and data-quality diagnostics (AF-REQ-06/11/25). |
+| **Provider fallback that fabricates a draft or silently changes model semantics** | A provider outage must not create an untraceable candidate or mix evidence across models. | Return `HYPOTHESIS_PROVIDER_UNAVAILABLE`/Agent failure, or use an explicitly labeled offline fixture only (AF-REQ-14/26). |
+| **Unbounded multi-agent swarm, self-modifying prompts, or autonomous research loops** | More roles do not make a factor valid; hidden state and repeated search multiply comparisons and make budget/OOS boundaries porous. | Two stages with narrow schemas, frozen inputs, bounded budgets, persisted trace, and explicit new-run requests (AF-REQ-13/16/23). |
+| **Copying PA_Agent source or domain rules** | PA_Agent is AGPL-3.0-or-later and its Price Action/crypto rules are not the A-share factor domain; direct reuse conflicts with the current MIT backend declaration. | Absorb public architectural patterns only; implement AthenaQuant contracts independently (`../docs/aaa/pa-agent/QUICK-START.md`). |
+| **Treating high IC or model confidence as a trading recommendation** | Cross-sectional metrics, Agent confidence, and admission status are research evidence, not execution authorization or guaranteed returns. | UI explicitly distinguishes metrics, gates, selection OOS, final-blind evidence, and research-only status. |
 
+## Observable user workflows and REQ-ready behavior
+
+### Workflow A — Seeded Alpha Factory run
+
+1. The researcher chooses a governed A-share universe, measured date window, horizon/rebalance/cost policy, grammar vocabulary, candidate limit, fold geometry, and seed.
+2. The server validates the specification and creates an immutable `AF-REQ-01` run before any candidate generation. The UI displays the run ID, DSL/grammar version, data/universe manifest, budget, and OOS reservation state.
+3. The factory generates candidates deterministically. Each candidate is canonicalized or rejected before evaluation. The ledger records candidate order, lineage, seed/step, status, and diagnostics (`AF-REQ-02`–`AF-REQ-04`).
+4. Valid candidates are evaluated through `FactorSignalChain.compute()` only. Search folds use PIT membership and measured dates; the reserved OOS fold is not touched (`AF-REQ-05`, `AF-REQ-06`, `AF-REQ-09`).
+5. The factory records IC/RankIC/ICIR/coverage/robustness/cost evidence and executes fixed admission gates. The researcher can filter by admitted, rejected, invalid, failed, duplicate, and “not evaluated due to budget” (`AF-REQ-07`, `AF-REQ-08`).
+6. The user selects a candidate for explicit review. Retention creates a catalog snapshot; it never mutates the source run or silently promotes a candidate (`AF-REQ-10`, `AF-REQ-15`).
+7. Choosing “replay” with the same manifest and seed produces the same canonical candidate sequence, statuses, and checksums; a changed input creates a new run and visible diff (`AF-REQ-02`, `AF-REQ-22`).
+
+**Measurable acceptance:** same spec/seed produces identical ordered candidate hashes; all attempted candidates have terminal or resumable ledger states; no search record references the reserved OOS fold; every retained candidate references a completed evidence package and gate verdict.
+
+### Workflow B — FactorResearchAgent two-stage review
+
+1. The researcher enters a thesis and permitted scope. Deterministic preflight checks provider availability, data freshness, required DSL fields, universe/calendar/sample sufficiency, and policy mode. On failure, the UI shows the reason and records zero provider calls (`AF-REQ-11`).
+2. Stage 1 returns strict JSON proposals (expression, explanation, assumptions, scope, uncertainty). The server parses/canonicalizes the expression and presents it as a non-persistent draft with provider/model/template provenance. Invalid or malformed output is rejected; no fallback draft is invented (`AF-REQ-12`, `AF-REQ-14`).
+3. The researcher edits only through an explicit review flow. Exact expression, explanation, and provenance binding are revalidated before creating an immutable revision (`AF-REQ-15`).
+4. The server evaluates the revision and runs deterministic gates. Stage 2 receives frozen evidence and can summarize, identify contradictions, and request a bounded follow-up run, but cannot rewrite evidence or gate status (`AF-REQ-13`).
+5. The UI shows each Stage 2 claim beside candidate/evaluation/gate/artifact IDs, plus data quality and OOS labels. The researcher may retain evidence or explicitly promote the reviewed revision; there is no “execute” button (`AF-REQ-17`, `AF-REQ-21`, `AF-REQ-25`).
+
+**Measurable acceptance:** no model call occurs after failed preflight; all successful stages validate against a versioned schema; a model output cannot change a deterministic gate result; a modified draft/provenance is rejected; every Agent run has a replayable trace and terminal failure state.
+
+### Workflow C — Reserved OOS and final evidence honesty
+
+1. Before search, the system reserves a measured-calendar OOS interval and records its fold manifest.
+2. Search and Agent synthesis use only non-reserved folds. Any request that includes `is_oos` in a search fold fails closed.
+3. The reserved fold is evaluated once after candidate selection under the frozen candidate/config and receives an explicit `selection_oos` label. Reconnect/retry returns the existing evidence rather than scoring it again.
+4. If a final blind claim is needed, the user must configure a separate holdout not present in any factory, Agent, feature-selection, or threshold-tuning input. The UI reports “not available” rather than inferring final validity from selection OOS.
+
+**Measurable acceptance:** a run's search manifest excludes the reserved OOS fold; one immutable OOS evidence row is linked to the candidate; repeated run requests cannot create a second OOS attempt; UI labels selection OOS and final blind separately.
+
+## Feature dependencies
+
+```text
+Frozen run spec + grammar/version + seed + data manifest
+    -> deterministic candidate generation
+    -> parse/canonicalize + candidate ledger/lineage
+    -> PIT universe + measured calendar
+    -> FactorSignalChain.compute (single factor-value path)
+    -> fold evaluation/evidence + cost/stability stress
+    -> deterministic admission gates
+    -> catalog snapshot / explicit retention / comparison
+
+Agent preflight
+    -> Stage 1 structured proposal
+    -> DSL parse + explicit human review
+    -> immutable FactorRevision
+    -> governed evaluation + admission + OOS boundaries
+    -> Stage 2 evidence synthesis
+    -> research-only decision / bounded follow-up run
 ```
-[竞价量/金额一级列 (DATA-04)]
-    └──requires──> [竞价探测 available (DATA-03 既有 seam)]
-                       └──requires──> [自定义 auction 数据集 or 内置 auction 能力源 (v1.3 已建)]
-                           └──enhances──> [极速抢筹 / 竞价阿尔法 / 竞价全面策略 (STRAT-04)]
 
-[竞价未匹配金额 / 竞价换手 (派生列)]
-    └──requires──> [委托量 order_volume/amount 输入]  ──可选──> [DATA-04 源扩展]
-                    (无委托量 → fail-closed 回退 量比+金额)
+The critical ordering is intentional: the Agent cannot bypass the DSL or registry; the factory cannot bypass the signal chain or admission; selection cannot consume reserved OOS; and no research result implies broker execution.
 
-[极速抢筹] ──requires──> [竞价量比 / 竞价金额 / 竞价涨幅甜点区 (2.8%–3.5%,>7% 风险)]
-[竞价阿尔法] ──requires──> [open_gap + 竞价量比/金额强度 综合]
-[T+1闪电] ──requires──> [open_gap + change_pct + 分钟K(次日卖出择时)]
-[金色两点半] ──requires──> [T 日 change_pct + 分钟K(尾盘)]  ──NOT──> [竞价数据]
-[STRAT-05 盘中确认] ──requires──> [分钟K同步 (DATA-01 既有)] ──enhances──> [早盘之星/盘前/极速抢筹]
+## MVP recommendation and 4–6 phase roadmap implications
 
-[日期导航 (POOL-04)]
-    └──requires──> [引擎按日回放 run_all(as_of) (既有) + enriched date 分区 (既有)]
-    └──requires──> [strategy_cache 按日键泛化 or 直接回放不落 today 缓存]
-    └──requires──> [交易日历 ∩ 分区集合]
-    └──conflicts──> [概念板块 PIT: 当前概念映射是快照,历史日池子概念标签 = T 日标签而非 D 日标签]
+Prioritize a five-phase vertical sequence (starting at Phase 45 as requested):
 
-[DATA-05 盘前股池] ──requires──> [实时竞价源 + 当日盘中判定]  ──deferred──> [DATA-04 稳定后]
-```
+1. **Phase 45 — Frozen run contract and replay ledger** (High): define the immutable spec, manifest, seed/checkpoint, candidate identity/lineage, lifecycle, cancellation, and all-outcome ledger. This is the prerequisite for every later claim of replayability and prevents a UI-only search feature.
+2. **Phase 46 — Deterministic Alpha Factory search** (High): implement restricted grammar/evolution generation, bounded scheduling, canonicalization, duplicate/diversity accounting, and candidate diagnostics. Keep generation deterministic and ML-free; do not wire Agent autonomy or OOS until the ledger is trustworthy.
+3. **Phase 47 — Governed scoring, admission, and honest OOS** (High): connect candidates to the existing signal chain/evaluation/admission/catalog, enforce PIT and measured calendar, reserve and evaluate OOS exactly once, and expose evidence/gate trails. Add cost/coverage/stability stress only after the primary path is immutable.
+4. **Phase 48 — FactorResearchAgent Stage 1 and explicit review** (Medium/High): turn the current proposal-only hypothesis flow into a run-bound structured proposal stage with deterministic preflight, schema/versioned provenance, parser confirmation, and explicit revision promotion. No Stage 2 should be allowed to imply execution.
+5. **Phase 49 — Stage 2 evidence synthesis and workbench UX** (High): persist complete stage traces, evidence-linked bounded recommendations, replay/failure views, lineage explorer, comparison, degradation/OOS banners, and bounded follow-up run creation. Validate that model output cannot alter deterministic verdicts.
+6. **Optional Phase 50 — Robustness/frontier and operational hardening** (Medium/High): add multi-objective candidate frontiers, cost/regime/symbol-subset stress, resumable parallelism, and a separate final-blind holdout contract if product users need stronger research claims. Keep live broker integration out of this milestone.
 
-### Dependency Notes
+**MVP must include:** AF-REQ-01 through AF-REQ-17, with a narrow candidate grammar, one A-share universe, one measured-calendar fold policy, one deterministic seed path, and explicit review. **Defer:** broad grammar expansion, neural/RL search, multi-agent debate, live/paper execution, and a separate final-blind holdout until the immutable evidence and replay contracts have been exercised.
 
-- **DATA-04 是 STRAT-04 的价值前置**:极速抢筹/竞价阿尔法/竞价全面策略 的区分度来自真实竞价量/金额/量比;没有真列,这五个策略彼此塌缩为同一组 open_gap+量比 组合,无法支撑"策略族完整"的卖点。因此**先探测、先落列,再批量做策略**。
-- **金色两点半与竞价数据无依赖**:它需要的是 T 日涨跌幅与尾盘分钟 K — 这是它与竞价策略族最大的语义断裂,必须体现在命名/描述/分组上。
-- **日期导航零新数据依赖**:`run_all(body.as_of)` 已支持任意日回放,enriched 已有 246 个交易日分区 — POOL-04 的工程量在缓存结构泛化与 PIT 概念处理,不在数据采集。
-- **PIT 概念是 POOL-04 唯一的真陷阱**:`pool_hub` 的 `_build_concept_map` 读**当前** ext 概念快照;历史日回放若直接 join,会拿今天的板块标签贴过去的票。规避:历史视图要么标注"概念为当前快照",要么用当日概念快照(需历史 ext 分区,目前没有)。
-- **DATA-05 依赖 DATA-04 的源能力**:实时盘前池需要同一竞价源在 09:15–09:29 窗口可拉数;盘后源(EOD 更新)满足不了盘前场景,所以 DATA-05 排在 DATA-04 稳定之后。
-- **STRAT-05 增强而非替换**:盘中确认收窄的是竞价初筛池,不改初筛语义;它复用 `kline_minute`,不新增数据轨道。
+## Sources and confidence notes
 
----
+### Current AthenaQuant evidence — HIGH confidence (observed in repository)
 
-## MVP Definition
+- `backend/app/research/factor_dsl.py` — `DSL_VERSION`, allowed/denied fields, parser/compiler and partition semantics.
+- `backend/app/research/factor_registry.py` — `FactorRevision`, `FactorRegistry.create_factor`, `revise_factor`, `discover_similar`.
+- `backend/app/research/signal_chain.py` — `FactorSignalChain.compute`, `SignalChainConfig`, PIT membership and fingerprints.
+- `backend/app/research/evaluation.py` — `ResolvedEvaluationConfig`, `FactorEvaluationService.evaluate`, `FactorEvaluationResult`.
+- `backend/app/research/admission.py` — fixed admission constants, `temporal_split`, `run_admission`, append-only gate trail.
+- `backend/app/research/catalog.py` — `FactorEvidencePackage`, `ExperimentCatalog.record_factor_evaluation`, retention/comparison behavior.
+- `backend/app/research/hypotheses.py` — `FactorHypothesisService`, `HypothesisDraft`, `reviewed_draft`, configured/offline gateway boundaries.
+- `backend/app/api/research.py` — `/dsl/validate`, factor/revision, hypothesis draft/review, evaluate, retain, and comparison endpoints.
+- `frontend/src/pages/backtest/FactorBacktest.tsx`, `ResearchLibrary.tsx`, `ExperimentComparison.tsx` — current user-visible validate/review/evaluate/retain/history/comparison workflow.
+- `backend/app/backtest/walkforward.py`, `backend/app/backtest/optimizer.py`, `backend/app/operational/migrations.py` — measured-calendar fold geometry, reserved OOS exclusion, exactly-once/append-only persistence contracts.
 
-### Launch With (v2.0 core)
+### Local upstream analyses — MEDIUM confidence (static analyses, not source reuse)
 
-最小可用 v2.0 — 验证「竞价深度 + 历史回看」概念:
+- `../docs/aaa/alphamaster/DEEP-ANALYSIS.md` and `QUICK-START.md` — constrained formula generation, candidate scoring, factor diversity, checkpoints, shared execution, and explicit limitations around heuristics/manifests/OOS.
+- `../docs/aaa/pa-agent/DEEP-ANALYSIS.md` and `QUICK-START.md` — two-stage orchestration, deterministic preflight, schema/semantic validation, persisted partial failures, and approval boundaries; AGPL/domain-specific portions excluded.
+- `../docs/aaa/10-SYNTHESIS.md` — data-contract-first, replayable tool calls, visible quality/degradation state, bounded Agent roles, and research/paper-only safety posture.
 
-- [ ] **竞价量/金额一级列(DATA-04,probe-gated)** — 探测 `available` 时把 `auction_volume/auction_amount`(09:15–09:25 窗口,真实 09:25 撮合)落为受管列,在股池/明细展示;不可用则维持 open_gap 派生降级。**这是全部下游的入口。**
-- [ ] **日期导航(POOL-04,回放模式)** — 交易日历步进 + 日期选择;按日调用 `run_all(as_of)` 确定性回放;strategy_cache 泛化为按日键(不污染今日缓存);无数据日空态;概念标签标注「当前快照」。
-- [ ] **极速抢筹 + 竞价阿尔法(STRAT-04 前 2 个)** — 第一性原理因子定义(竞价量比/竞价金额/竞价涨幅甜点区 与 open_gap+量比+金额强度综合),落 `strategy/builtin/`,带 hit_factors。
-- [ ] **金色两点半(诚实归类)** — 尾盘(14:30+)选股因子(T 日涨幅 3%–5% + 尾盘分钟确认),命名/描述明确「尾盘隔夜」,不混入竞价窗口。
-- [ ] **派生列:竞价未匹配金额(可选输入)** — 委托量可得时派生;无委托量回退量比+金额。
+### General web corroboration — LOW confidence
 
-### Add After Validation (v2.0.x)
-
-- [ ] **竞价全面策略(STRAT-04 综合版)** — 全因子加权复合(open_gap+量比+金额+换手+未匹配金额);触发:DATA-04 稳定、用户需要"一把梭"综合池。
-- [ ] **T+1闪电(STRAT-04)** — 竞价强信号买入 + 次日早盘分钟 K 卖出择时;触发:STRAT-05 分钟确认能力落地。
-- [ ] **STRAT-05 盘中确认(09:30–10:00 复评)** — 竞价初筛 + 分钟 K 确认收窄;触发:竞价池已有、用户反馈高开低走假阳性多。
-- [ ] **竞价换手/委托失衡派生列** — 需委托量输入;触发:auction 源扩展出 order 字段。
-
-### Future Consideration (v2.1+)
-
-- [ ] **虚拟成交实时列 / 历史竞价图** — 需实时竞价源 + 盘中快照采集;EOD 源无法支撑,标注「实时估计」。
-- [ ] **DATA-05 盘前股池(09:30 前可用)** — 需实时竞价源;触发:找到稳定的盘前数据通道。
-- [ ] **逐日存档模式(非回放)** — 每日写入当日池子快照;触发:回放被验证、用户要求"当日真实记录"审计语义。
-- [ ] **POOL-05 自选股联动/异动提醒** — 池成员变化进 watchlist;独立需求,不在本次竞价深度范围。
-
----
-
-## Feature Prioritization Matrix
-
-| Feature | User Value | Implementation Cost | Priority |
-|---------|------------|---------------------|----------|
-| 竞价量/金额一级列(DATA-04,probe-gated) | HIGH | MEDIUM | P1 |
-| 日期导航 · 回放模式(POOL-04) | HIGH | MEDIUM | P1 |
-| 极速抢筹(STRAT-04) | HIGH | LOW–MEDIUM | P1 |
-| 竞价阿尔法(STRAT-04) | HIGH | LOW–MEDIUM | P1 |
-| 金色两点半 · 尾盘诚实归类(STRAT-04) | MEDIUM | LOW–MEDIUM | P1 |
-| 竞价未匹配金额派生列 | MEDIUM | MEDIUM | P2 |
-| 竞价全面策略(STRAT-04 综合) | MEDIUM | MEDIUM | P2 |
-| T+1闪电(STRAT-04) | MEDIUM | MEDIUM | P2 |
-| STRAT-05 盘中确认(09:30–10:00) | MEDIUM–HIGH | MEDIUM | P2 |
-| 竞价换手 / 委托失衡派生列 | MEDIUM | MEDIUM | P2 |
-| 虚拟成交实时列 / 历史竞价图 | MEDIUM | HIGH | P3 |
-| DATA-05 盘前股池 | MEDIUM | HIGH | P3 |
-| 逐日存档模式 | LOW–MEDIUM | MEDIUM | P3 |
-| POOL-05 自选股联动 | MEDIUM | MEDIUM | P3 |
-
-**Priority key:**
-- P1: 必须随 v2.0 发布 — 数据地基 + 最高价值策略 + 参考 UI 已见的日期导航
-- P2: 应有,数据/分钟确认能力到位后补
-- P3: 未来 — 依赖实时源或独立需求
-
----
-
-## Competitor Feature Analysis
-
-| Feature | 开盘啦 (kaipanla) | 同花顺问财 (iwencai) | Tushare / BigQuant (数据侧) | 参考 UI(策略选股附件) | Our Approach |
-|---------|-------------------|----------------------|------------------------------|------------------------|--------------|
-| 竞价选股策略 | 竞价系统(早盘竞价/板块竞价/竞价涨停委买),实时竞价多维分析 | 自然语言竞价选股(涨幅/量比/未匹配金额/竞价成交额公式) | 数据接口,无策略 UI | 策略卡片 + 股池 N | 内置策略族(第一性原理因子),`strategy/builtin/` 唯一轨道 |
-| 历史股池/竞价回看 | 历史竞价图:选日期+代码查询个股竞价 | 日期限定自然语言筛选 | 盘后 EOD 数据可回放 | 日期导航 `‹ ›`(参考) | 确定性回放(按日 `run_all`)+ 交易日历约束 + PIT 概念标注 |
-| 真实竞价数据列 | 实时竞价(自有行情) | 指标计算(部分付费) | `stk_auction_o` / `cn_stock_factors_auction`(真实撮合成交) | 开盘涨幅/涨跌幅/关联因子 | probe-gated 一级列(竞价量/金额),可用即升,不可用 fail-closed |
-| 虚拟成交 | 实时展示 | 不持久化 | 无历史 | — | 仅实时/派生估计,不伪造历史 |
-| 盘中确认 | 实时分时 | — | 分钟数据(09:30 bar=竞价聚合) | — | STRAT-05:竞价初筛 + 09:30–10:00 分钟 K 收窄 |
-| 研究边界 | 资讯/工具属性 | 选股工具 | 数据服务 | 选股建议 | 零执行权研究建议(平台自 v1.0 边界,POOL-03 延续) |
-
----
-
-## Sources
-
-**数据与规则(MEDIUM–HIGH,多源交叉 + 官方文档直取):**
-- Tushare `stk_auction_o` 开盘集合竞价数据(官方文档直取,字段 close/open/high/low/vol/amount/vwap,盘后更新) — https://tushare.pro/document/2?doc_id=353
-- Tushare `stk_auction` 当日集合竞价成交(09:26–09:29 可取,历史自 2025-01) — https://tushare.pro/document/2?doc_id=369
-- Tushare `stk_mins` 分钟数据(09:30:00 bar 标注为集合竞价统计) — http://tushare.xcsc.com:7173/document/2?doc_id=10222
-- BigQuant `cn_stock_factors_auction` 集合竞价因子表(官方数据页直取:open_auction_trade_volume/amount, order_volume/amount, cancel_volume, turnover, overnight_change_ratio, limit_up/down) — https://bigquant.com/data/datasources/cn_stock_factors_auction
-- 集合竞价规则(多源:知乎/雪球/百度百科;09:15–09:20 可撤单、09:20–09:25 不可撤单、09:25 撮合、最大成交量优先) — https://zhuanlan.zhihu.com/p/137762677 ; https://xueqiu.com/1009642805/192622908
-
-**策略标签文化(MEDIUM,web 交叉):**
-- 金色两点半 = 尾盘 14:30 后选股、隔夜持有、次日早盘卖(复盘网/新浪/东方财富/大智慧金色两点半股票池) — https://www.fupanwang.com/zhishi/1248.html ; https://www.sina.cn/news/detail/5289750221293652.html ; https://baike.baidu.com/item/大智慧金色两点半股票池
-- 竞价抢筹/未匹配金额/竞价量比(同花顺问财公式、55188、SuperMind) — https://www.55188.com/keywords-集合竞价抢筹量比选股.html ; https://k.sina.cn/article_7879922977_1d5ae152101901dscg.html
-- 竞价量比与涨幅甜点区(SuperMind:量比+竞价成交额、2.8%–3.5% 甜点、>7% 风险) — https://quant.10jqka.com.cn/view/community
-
-**竞品 UX(MEDIUM):**
-- 开盘啦 竞价系统 + 历史竞价图(选日期+代码) — https://apps.apple.com/cn/app/开盘啦/id1071188962 ; https://www.tgb.cn/dialog/1LTvSi3O5wI_54540345_1
-
-**既有基线(HIGH,直接检视 v1.3 代码):**
-- `backend/app/services/auction_probe.py`(DATA-03 探测服务)、`backend/app/services/pool_hub.py`(单一 as_of 投影)、`backend/app/services/strategy_cache.py`(单一 as_of 缓存结构)
-- `backend/app/api/screener.py::run_all`(`as_of` 任意日回放 + `_load_enriched_for_date`)、`backend/app/strategy/builtin/auction_*.py`(3 核心策略)
-- `backend/app/data_providers/custom/provider.py::get_auction`(09:15–09:25 canonical 列)、`data/kline_daily_enriched/`(246 个 date 分区)
-
----
-*Feature research for: AthenaQuant v2.0 竞价深度与历史股池*
-*Researched: 2026-08-04*
+Search results on formulaic alpha mining and deterministic agent workflows were directionally consistent with bounded grammars, walk-forward caution, structured outputs, and replay/audit records, but were not used as authoritative requirements. The v3.0 feature decisions above are grounded in the current repository and the local analyses instead.
