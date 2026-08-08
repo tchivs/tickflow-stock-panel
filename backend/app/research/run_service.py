@@ -285,6 +285,86 @@ class ResearchRunService:
             child_event_id=child_event_id,
         )
 
+    def _validate_attempt_token(
+        self,
+        run_id: str,
+        *,
+        principal: str,
+        expected_version: int,
+        attempt_token: str | None,
+    ) -> bool:
+        """Validate an opaque attempt token plus expected transition version.
+
+        Only the SHA-256 of the token is durable (in the ``run_started`` event
+        payload); the raw token is never persisted.  Cancel, terminal
+        transition, retry, or any version change invalidates older tokens
+        (D-10, T-45-08).  Returns ``True`` only if both the token digest and
+        the expected version match the current running state.
+        """
+        from app.research.run_contract import attempt_token_digest
+
+        if not attempt_token:
+            return False
+        run = self._repository.get_alpha_run(run_id, principal=principal)
+        if run is None or run["status"] != "running":
+            return False
+        if run["transition_version"] != expected_version:
+            return False
+        # Find the run_started event carrying this version's token digest.
+        events = self._repository.list_run_events(
+            run_id, after_seq=0, limit=500, principal=principal
+        )
+        candidate_digest = attempt_token_digest(attempt_token)
+        for event in reversed(events):
+            if event["event_type"] == "run_started":
+                stored = event["payload"].get("attempt_token_digest")
+                return stored == candidate_digest
+        return False
+
+    def update_progress(
+        self,
+        run_id: str,
+        *,
+        principal: str,
+        expected_version: int,
+        attempt_token: str | None = None,
+        candidate_attempts_total: int | None = None,
+        candidate_attempts_completed: int | None = None,
+        folds_total: int | None = None,
+        folds_completed: int | None = None,
+    ) -> dict[str, Any] | None:
+        """Persist bounded server-owned progress counters (D-11).
+
+        Validates the attempt token plus expected version before persisting any
+        counter.  Only non-``None`` counters are updated; each must be a
+        non-negative integer.  This does NOT evaluate folds — it persists
+        declared totals and completed counts reported by a worker.  Returns
+        ``None`` for unknown/cross-principal/stale/token-mismatch (fail closed,
+        T-45-08).
+        """
+        from app.research.run_contract import validate_progress_counters
+
+        validate_progress_counters(
+            candidate_attempts_total=candidate_attempts_total,
+            candidate_attempts_completed=candidate_attempts_completed,
+            folds_total=folds_total,
+            folds_completed=folds_completed,
+        )
+        if not self._validate_attempt_token(
+            run_id, principal=principal,
+            expected_version=expected_version, attempt_token=attempt_token,
+        ):
+            return None
+        return self._repository.update_progress(
+            run_id=run_id,
+            principal=principal,
+            expected_version=expected_version,
+            candidate_attempts_total=candidate_attempts_total,
+            candidate_attempts_completed=candidate_attempts_completed,
+            folds_total=folds_total,
+            folds_completed=folds_completed,
+        )
+
     def get(self, run_id: str, *, principal: str) -> dict[str, Any] | None:
         """Return one principal-scoped run row, or ``None`` for unknown/cross-principal."""
         return self._repository.get_alpha_run(run_id, principal=principal)

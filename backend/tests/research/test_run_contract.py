@@ -1873,3 +1873,429 @@ class TestRetry:
             manifest=_sample_manifest(),
         )
         assert result is None
+
+
+# ================================================================
+# Wave 3 — worker adapter, token fencing, progress seam, restart
+# ================================================================
+
+
+class TestAttemptTokenFencing:
+    """Opaque server token + expected-version fencing for worker callbacks."""
+
+    def test_running_transition_issues_opaque_token_persisting_only_sha256(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        from app.research.run_service import ResearchRunService
+
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-tok-01")
+        service = ResearchRunService(alpha_run_repository)
+        result = service.start_or_resume(
+            run["id"],
+            principal="researcher@example.com",
+            expected_version=run["transition_version"],
+        )
+        assert result is not None
+        token = result["_attempt_token"]
+        assert isinstance(token, str) and len(token) == 64  # 32 bytes hex
+        # The raw token bytes must NEVER appear in durable plaintext.
+        events = alpha_run_repository.list_run_events(run["id"])
+        started_event = [e for e in events if e["event_type"] == "run_started"][0]
+        # The raw token bytes must NEVER appear in durable plaintext or projections.
+        assert token not in str(started_event)
+        # Only the SHA-256 digest appears in the payload.
+        from app.research.run_contract import attempt_token_digest
+
+        assert started_event["payload"]["attempt_token_digest"] == attempt_token_digest(token)
+        assert token not in str(started_event["payload"])
+
+    def test_valid_callback_requires_both_token_and_expected_version(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        from app.research.run_service import ResearchRunService
+        from app.research.run_worker import ResearchRunWorkerAdapter
+
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-tok-02")
+        service = ResearchRunService(alpha_run_repository)
+        started = service.start_or_resume(
+            run["id"],
+            principal="researcher@example.com",
+            expected_version=run["transition_version"],
+        )
+        adapter = ResearchRunWorkerAdapter(service, principal="researcher@example.com")
+        # Missing token.
+        with pytest.raises(ValueError, match="token"):
+            adapter.report_progress(
+                run_id=run["id"], expected_version=started["transition_version"],
+                attempt_token=None, folds_total=10,
+            )
+        # Valid token + version works.
+        result = adapter.report_progress(
+            run_id=run["id"], expected_version=started["transition_version"],
+            attempt_token=started["_attempt_token"], folds_total=10,
+        )
+        assert result is not None
+        assert result["folds_total"] == 10
+
+    def test_stale_token_is_rejected_after_version_change(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        from app.research.run_service import ResearchRunService
+        from app.research.run_worker import ResearchRunWorkerAdapter
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-tok-03")
+        service = ResearchRunService(alpha_run_repository)
+        started = service.start_or_resume(
+            run["id"],
+            principal="researcher@example.com",
+            expected_version=run["transition_version"],
+        )
+        old_token = started["_attempt_token"]
+        old_version = started["transition_version"]
+        # Cancel changes the version, invalidating old tokens.
+        service.cancel(
+            run["id"],
+            principal="researcher@example.com",
+            expected_version=old_version,
+        )
+        mid = alpha_run_repository.get_alpha_run(run["id"])
+        adapter = ResearchRunWorkerAdapter(service, principal="researcher@example.com")
+        # Old token + old version must fail closed.
+        result = adapter.report_progress(
+            run_id=run["id"], expected_version=old_version,
+            attempt_token=old_token, folds_total=10,
+        )
+        assert result is None  # stale — no side effect
+        after = alpha_run_repository.get_alpha_run(run["id"])
+        assert after["folds_total"] == 0  # progress was NOT applied
+
+    def test_invalid_token_fails_closed(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        from app.research.run_service import ResearchRunService
+        from app.research.run_worker import ResearchRunWorkerAdapter
+
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-tok-04")
+        service = ResearchRunService(alpha_run_repository)
+        started = service.start_or_resume(
+            run["id"],
+            principal="researcher@example.com",
+            expected_version=run["transition_version"],
+        )
+        adapter = ResearchRunWorkerAdapter(service, principal="researcher@example.com")
+        # Wrong token.
+        result = adapter.report_progress(
+            run_id=run["id"], expected_version=started["transition_version"],
+            attempt_token="deadbeef" * 8, folds_total=10,
+        )
+        assert result is None
+        after = alpha_run_repository.get_alpha_run(run["id"])
+        assert after["folds_total"] == 0
+
+
+class TestProgressCounters:
+    """Four bounded server-owned counters persist/report without evaluating folds."""
+
+    def test_progress_persists_all_four_counters(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        from app.research.run_service import ResearchRunService
+
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-prog-01")
+        service = ResearchRunService(alpha_run_repository)
+        started = service.start_or_resume(
+            run["id"],
+            principal="researcher@example.com",
+            expected_version=run["transition_version"],
+        )
+        service.update_progress(
+            run["id"],
+            principal="researcher@example.com",
+            expected_version=started["transition_version"],
+            attempt_token=started["_attempt_token"],
+            candidate_attempts_total=100,
+            candidate_attempts_completed=50,
+            folds_total=10,
+            folds_completed=5,
+        )
+        after = alpha_run_repository.get_alpha_run(run["id"])
+        assert after["candidate_attempts_total"] == 100
+        assert after["candidate_attempts_completed"] == 50
+        assert after["folds_total"] == 10
+        assert after["folds_completed"] == 5
+
+    def test_zero_totals_are_valid_for_fresh_run(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-prog-02")
+        after = alpha_run_repository.get_alpha_run(run["id"])
+        assert after["candidate_attempts_total"] == 0
+        assert after["candidate_attempts_completed"] == 0
+        assert after["folds_total"] == 0
+        assert after["folds_completed"] == 0
+
+    def test_negative_counter_is_rejected(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        from app.research.run_service import ResearchRunService
+
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-prog-03")
+        service = ResearchRunService(alpha_run_repository)
+        with pytest.raises(ValueError, match="non-negative"):
+            service.update_progress(
+                run["id"],
+                principal="researcher@example.com",
+                expected_version=run["transition_version"],
+                attempt_token=None,
+                folds_total=-1,
+            )
+
+    def test_stale_version_progress_is_rejected(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        from app.research.run_service import ResearchRunService
+
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-prog-04")
+        service = ResearchRunService(alpha_run_repository)
+        started = service.start_or_resume(
+            run["id"],
+            principal="researcher@example.com",
+            expected_version=run["transition_version"],
+        )
+        result = service.update_progress(
+            run["id"],
+            principal="researcher@example.com",
+            expected_version=999,  # stale
+            attempt_token=started["_attempt_token"],
+            folds_total=10,
+        )
+        assert result is None
+        after = alpha_run_repository.get_alpha_run(run["id"])
+        assert after["folds_total"] == 0
+
+
+class TestRestartRecovery:
+    """Fresh process recovers durable status/events/candidates/counters."""
+
+    def test_fresh_repository_recovers_status_events_and_counters(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+        tmp_path: Path,
+    ) -> None:
+        from app.research.run_service import ResearchRunService
+
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-restart-01")
+        service = ResearchRunService(alpha_run_repository)
+        started = service.start_or_resume(
+            run["id"],
+            principal="researcher@example.com",
+            expected_version=run["transition_version"],
+        )
+        service.update_progress(
+            run["id"],
+            principal="researcher@example.com",
+            expected_version=started["transition_version"],
+            attempt_token=started["_attempt_token"],
+            candidate_attempts_total=200,
+            candidate_attempts_completed=100,
+            folds_total=20,
+            folds_completed=10,
+        )
+
+        # Fresh repository = process restart.
+        fresh_repo = ResearchRepository(
+            alpha_run_repository.database_path,
+            clock=deterministic_clock,
+            artifact_root=tmp_path / "alpha_artifacts",
+        )
+        fresh_service = ResearchRunService(fresh_repo)
+        recovered = fresh_service.get(run["id"], principal="researcher@example.com")
+        assert recovered is not None
+        assert recovered["status"] == "running"
+        assert recovered["candidate_attempts_total"] == 200
+        assert recovered["candidate_attempts_completed"] == 100
+        assert recovered["folds_total"] == 20
+        assert recovered["folds_completed"] == 10
+        events = fresh_repo.list_run_events(run["id"])
+        assert len(events) == 2  # run_created + run_started
+
+    def test_restart_does_not_trust_worker_memory(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+        tmp_path: Path,
+    ) -> None:
+        """A vanished JobStore file must not erase durable run facts."""
+        from app.research.run_service import ResearchRunService
+
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-restart-02")
+        service = ResearchRunService(alpha_run_repository)
+        service.start_or_resume(
+            run["id"],
+            principal="researcher@example.com",
+            expected_version=run["transition_version"],
+        )
+        # Simulate process restart with NO worker memory at all.
+        fresh_repo = ResearchRepository(
+            alpha_run_repository.database_path,
+            clock=deterministic_clock,
+            artifact_root=tmp_path / "alpha_artifacts",
+        )
+        fresh_service = ResearchRunService(fresh_repo)
+        replay = fresh_service.replay(run["id"], principal="researcher@example.com")
+        assert replay is not None
+        assert replay["run"]["status"] == "running"
+
+
+class TestWorkerAdapter:
+    """The untrusted worker adapter requests only; it holds no authority."""
+
+    def test_adapter_can_request_transition_with_valid_token(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        from app.research.run_service import ResearchRunService
+        from app.research.run_worker import ResearchRunWorkerAdapter
+
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-wk-01")
+        service = ResearchRunService(alpha_run_repository)
+        started = service.start_or_resume(
+            run["id"],
+            principal="researcher@example.com",
+            expected_version=run["transition_version"],
+        )
+        adapter = ResearchRunWorkerAdapter(service, principal="researcher@example.com")
+        result = adapter.request_transition(
+            run_id=run["id"],
+            expected_version=started["transition_version"],
+            attempt_token=started["_attempt_token"],
+            to_status="completed",
+        )
+        assert result is not None
+        assert result["status"] == "completed"
+
+    def test_adapter_transition_with_stale_token_fails_closed(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        from app.research.run_service import ResearchRunService
+        from app.research.run_worker import ResearchRunWorkerAdapter
+
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-wk-02")
+        service = ResearchRunService(alpha_run_repository)
+        started = service.start_or_resume(
+            run["id"],
+            principal="researcher@example.com",
+            expected_version=run["transition_version"],
+        )
+        adapter = ResearchRunWorkerAdapter(service, principal="researcher@example.com")
+        result = adapter.request_transition(
+            run_id=run["id"],
+            expected_version=started["transition_version"],
+            attempt_token="wrong" + "0" * 59,
+            to_status="completed",
+        )
+        assert result is None
+        after = alpha_run_repository.get_alpha_run(run["id"])
+        assert after["status"] == "running"  # unchanged
+
+    def test_adapter_has_no_authority_collaborators(self) -> None:
+        """The adapter must not import policy, evaluator, provider, broker, etc."""
+        import inspect
+
+        from app.research import run_worker
+
+        source = inspect.getsource(run_worker)
+        # Check import statements only (docstrings legitimately say what's forbidden).
+        import_lines = [
+            line.strip()
+            for line in source.splitlines()
+            if line.strip().startswith(("import ", "from "))
+        ]
+        forbidden_modules = (
+            "broker", "order", "portfolio", "execution", "monitor",
+            "provider", "promote", "factor_dsl", "FactorSignalChain",
+        )
+        for line in import_lines:
+            for module in forbidden_modules:
+                assert module not in line, (
+                    f"adapter must not import authority module '{module}': {line}"
+                )
+        # The adapter must import the service seam (its only collaborator).
+        assert any("run_service" in line for line in import_lines)
+
+
+class TestCommitBeforePublishCrash:
+    """Worker/publisher failure after commit leaves the event replayable."""
+
+    def test_committed_transition_survives_publisher_failure(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        from app.research.run_service import ResearchRunService
+
+        class CrashPublisher:
+            def on_run_created(self, run: Mapping) -> None:
+                raise RuntimeError("publisher crashed")
+
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-crash-01")
+        service = ResearchRunService(alpha_run_repository, publisher=CrashPublisher())
+        # This must NOT raise despite the publisher crashing.
+        result = service.transition(
+            run["id"],
+            principal="researcher@example.com",
+            from_status="queued",
+            to_status="running",
+            expected_version=run["transition_version"],
+        )
+        assert result is not None
+        assert result["status"] == "running"
+        # The event IS durable.
+        events = alpha_run_repository.list_run_events(run["id"])
+        assert any(e["event_type"] == "run_started" for e in events)
+
+    def test_retrying_adapter_returns_existing_event_not_duplicate(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        from app.research.run_service import ResearchRunService
+
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-crash-02")
+        service = ResearchRunService(alpha_run_repository)
+        key = "start-idem-crash"
+        service.start_or_resume(
+            run["id"],
+            principal="researcher@example.com",
+            expected_version=run["transition_version"],
+            idempotency_key=key,
+        )
+        before = len(alpha_run_repository.list_run_events(run["id"]))
+        # Retry with the same key — no duplicate.
+        service.start_or_resume(
+            run["id"],
+            principal="researcher@example.com",
+            expected_version=run["transition_version"],
+            idempotency_key=key,
+        )
+        after = len(alpha_run_repository.list_run_events(run["id"]))
+        assert before == after
