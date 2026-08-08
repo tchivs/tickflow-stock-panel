@@ -239,6 +239,13 @@ def validate_manifest(manifest: Mapping[str, Any]) -> None:
                 raise ValueError(f"manifest field '{label}' must be a bounded non-negative integer")
         elif not isinstance(value, expected_type):
             raise ValueError(f"manifest field '{label}' has the wrong type")
+    # The admission policy fingerprint is server-owned (populated at freeze);
+    # when a client supplies one it must at least be a well-formed digest, and
+    # it is always overwritten server-side (AF-REQ-08 SC4).  ``policy.thresholds``
+    # remains informational provenance and is NOT required.
+    policy_fingerprint = manifest["policy"].get("fingerprint")
+    if policy_fingerprint is not None:
+        validate_sha256(policy_fingerprint, "policy.fingerprint")
     # Additive scoring-stage inputs are required only when a scoring stage is
     # declared; a no-scoring manifest validates byte-for-byte as before (OQ2).
     _validate_scoring_stage(manifest)
@@ -277,6 +284,13 @@ class ResearchInputSnapshot:
             "created_at": self.created_at,
         }
 
+    @property
+    def policy_fingerprint(self) -> str | None:
+        """The frozen admission policy fingerprint (server-populated at freeze)."""
+        policy = self.manifest.get("policy") or {}
+        value = policy.get("fingerprint")
+        return value if isinstance(value, str) else None
+
 
 def _component_digest(manifest: Mapping[str, Any], group: str, *, key: str | None = None) -> str:
     """Derive a lowercase SHA-256 over one manifest group (or a named sub-key)."""
@@ -303,6 +317,15 @@ def freeze_input_snapshot(
     canonical_manifest = json.loads(canonical_json(manifest))
     from app.research.alpha_factory import normalize_manifest_fingerprints
     canonical_manifest = normalize_manifest_fingerprints(canonical_manifest)
+    # The admission policy fingerprint is server-owned (T-47-10): a client
+    # supplied value cannot survive freeze.  Mirrors the 46-01 vocabulary
+    # fingerprint normalization — populated from the live admission constants so
+    # a stored run is bound to the exact thresholds + gate order + policy version
+    # it was frozen under (AF-REQ-08 SC4).
+    from app.research.admission import ADMISSION_POLICY_FINGERPRINT
+    policy = dict(canonical_manifest["policy"])
+    policy["fingerprint"] = ADMISSION_POLICY_FINGERPRINT
+    canonical_manifest["policy"] = policy
     canonical_snapshot = (
         json.loads(canonical_json(snapshot)) if snapshot is not None else canonical_manifest
     )

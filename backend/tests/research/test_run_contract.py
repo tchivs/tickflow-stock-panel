@@ -193,6 +193,51 @@ class TestScoringStageManifest:
         manifest["scoring"] = {}
         with pytest.raises(ValueError, match="scoring"):
             freeze_input_snapshot(manifest=manifest, created_at="2026-08-08T00:00:00+00:00")
+
+
+# ================================================================
+# Admission policy fingerprint (Phase 47-03, AF-REQ-08 SC4)
+# ================================================================
+
+
+class TestAdmissionPolicyFingerprint:
+    def test_freeze_populates_policy_fingerprint_server_side(self) -> None:
+        """A client-supplied policy.fingerprint is overwritten by the server value at freeze."""
+        from app.research.admission import ADMISSION_POLICY_FINGERPRINT
+
+        manifest = _sample_manifest()
+        manifest["policy"]["fingerprint"] = "0" * 64  # client forges a valid-shape fingerprint
+        snapshot = freeze_input_snapshot(manifest=manifest, created_at="2026-08-08T00:00:00+00:00")
+        assert snapshot.manifest["policy"]["fingerprint"] == ADMISSION_POLICY_FINGERPRINT
+        assert snapshot.policy_fingerprint == ADMISSION_POLICY_FINGERPRINT
+        # The forged value did not survive.
+        assert snapshot.manifest["policy"]["fingerprint"] != "0" * 64
+
+    def test_freeze_policy_fingerprint_matches_live_admission_policy(self) -> None:
+        from app.research.admission import admission_policy_fingerprint
+
+        snapshot = freeze_input_snapshot(manifest=_sample_manifest(), created_at="2026-08-08T00:00:00+00:00")
+        assert snapshot.policy_fingerprint == admission_policy_fingerprint()
+
+    def test_freeze_without_client_fingerprint_still_populates_it(self) -> None:
+        from app.research.admission import ADMISSION_POLICY_FINGERPRINT
+
+        snapshot = freeze_input_snapshot(manifest=_sample_manifest(), created_at="2026-08-08T00:00:00+00:00")
+        assert snapshot.policy_fingerprint == ADMISSION_POLICY_FINGERPRINT
+
+    def test_validate_manifest_rejects_malformed_policy_fingerprint(self) -> None:
+        manifest = _sample_manifest()
+        manifest["policy"]["fingerprint"] = "not-a-hex-digest"
+        with pytest.raises(ValueError, match="policy.fingerprint"):
+            freeze_input_snapshot(manifest=manifest, created_at="2026-08-08T00:00:00+00:00")
+
+    def test_policy_thresholds_remain_informational(self) -> None:
+        """``policy.thresholds`` is not required (informational provenance only)."""
+        manifest = _sample_manifest()
+        del manifest["policy"]["thresholds"]
+        snapshot = freeze_input_snapshot(manifest=manifest, created_at="2026-08-08T00:00:00+00:00")
+        assert snapshot.policy_fingerprint  # still populated server-side
+
 # ================================================================
 # Create → durable snapshot/run/event → replay contracts
 # ================================================================

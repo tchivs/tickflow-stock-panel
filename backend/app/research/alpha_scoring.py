@@ -14,6 +14,7 @@ table. No new engine, no forked compute path.
 from __future__ import annotations
 
 import inspect
+import re
 import uuid
 from collections.abc import Mapping
 from typing import Any
@@ -266,6 +267,23 @@ def _json_safe(value: Any) -> Any:
     return value
 
 
+def _frozen_policy_fingerprint(repo: Any, run_id: str) -> str | None:
+    """Return the frozen admission policy fingerprint bound to ``run_id``, or None.
+
+    Reads the persisted input snapshot's manifest ``policy.fingerprint`` (the
+    server-owned value populated at freeze). Returns ``None`` when the run has no
+    frozen snapshot or no policy fingerprint — :func:`verify_admission_policy_fingerprint`
+    treats that as a fail-closed mismatch.
+    """
+    snapshot_record = repo.get_run_snapshot(run_id)
+    if snapshot_record is None:
+        return None
+    manifest = snapshot_record.get("manifest") or {}
+    policy = manifest.get("policy") or {}
+    value = policy.get("fingerprint")
+    return value if isinstance(value, str) else None
+
+
 def record_candidate_admission(
     *,
     repo: Any,
@@ -290,8 +308,10 @@ def record_candidate_admission(
 
     Resolves the exploratory revision's provenance (``run_id`` / ``candidate_id`` /
     ``candidate_digest``, mintered by 47-01) so the verdict row joins the candidate
-    ledger, then runs :func:`run_admission` — passing NO threshold/gate-order
-    kwargs (none exist) — and appends one append-only candidate attempt row
+    ledger.  First verifies the frozen admission policy fingerprint against the
+    live thresholds/gate order (fail-closed before any candidate is scored), then
+    runs :func:`run_admission` — passing NO threshold/gate-order kwargs (none
+    exist) — and appends one append-only candidate attempt row
     carrying the terminal status (``admitted`` / ``rejected`` / ``failed``) and a
     ``reason`` mapping ``{"verdict", "failing_gate", "gate_trail"}``. A clean gate
     failure records ``rejected`` with the failing gate + full gate trail; an
@@ -301,8 +321,15 @@ def record_candidate_admission(
     zero score (AF-REQ-07). The appended terminal status is a distinct append-only
     fact linked to the generation attempt by ``candidate_digest``.
     """
-    from app.research.admission import run_admission
+    from app.research.admission import run_admission, verify_admission_policy_fingerprint
     from app.research.signal_chain import SignalChainError
+
+    # Fail closed BEFORE scoring any candidate (AF-REQ-08 SC4, T-47-08): the
+    # frozen admission policy (server-populated at freeze) must match the live
+    # thresholds + gate order + policy version. A divergent policy — a changed
+    # constant or reordered gate — raises AdmissionPolicyMismatchError rather
+    # than re-scoring a stored run under a different policy.
+    verify_admission_policy_fingerprint(_frozen_policy_fingerprint(repo, attempt.run_id))
 
     # The revision id is the stable join key between the admission verdict row
     # (admission.py) and the candidate ledger (provenance carries run_id +
@@ -389,3 +416,90 @@ def record_candidate_admission(
         reason=reason,
     )
     return {**(recorded or {}), "admission_verdict": verdict}
+
+
+# ----------------------------------------------------------------------
+# Phase 47-03-02 — no-edit hardening guard (AF-REQ-08 SC4, T-47-08)
+# ----------------------------------------------------------------------
+
+# Admission policy parameters that must NEVER appear as ``run_admission`` kwargs.
+_ADMISSION_FORBIDDEN_PARAMS: frozenset[str] = frozenset({
+    "train_min_mean_ic", "val_min_mean_ic", "min_train_observations",
+    "max_similarity_score", "max_ic_correlation", "shifted_label_max_abs_ic",
+    "min_coverage", "admission_policy_version", "gate_order", "thresholds",
+})
+
+# Admission threshold/policy constants a scoring module must NEVER assign to.
+_ADMISSION_POLICY_CONSTANTS: frozenset[str] = frozenset({
+    "TRAIN_MIN_MEAN_IC", "VAL_MIN_MEAN_IC", "MIN_TRAIN_OBSERVATIONS",
+    "MAX_SIMILARITY_SCORE", "MAX_IC_CORRELATION", "SHIFTED_LABEL_MAX_ABS_IC",
+    "MIN_COVERAGE", "ADMISSION_POLICY_VERSION",
+})
+
+
+def _run_admission_signature_clean(func: Any) -> bool:
+    """True if ``func`` exposes no threshold/gate-order parameter.
+
+    Source-level (structural) check (plan-check W3): it inspects the live
+    signature of ``run_admission`` and cannot see dynamic dispatch.
+    """
+    params = {name.lower() for name in inspect.signature(func).parameters}
+    return not (params & _ADMISSION_FORBIDDEN_PARAMS)
+
+
+def _scoring_modules() -> list[Any]:
+    """The factory/Agent scoring modules whose inputs must not reach the policy."""
+    from app.backtest import walkforward
+    from app.research import alpha_factory, evaluation
+
+    return [alpha_factory, evaluation, walkforward]
+
+
+def _source_mutates_policy(module: Any) -> bool:
+    """True if ``module``'s source assigns to an admission threshold constant.
+
+    Matches ``CONST =`` (and ``obj.CONST =``) but not ``==``/comparisons or a
+    read on the right-hand side. Source-level (structural), not behavioral (W3).
+    """
+    names = "|".join(_ADMISSION_POLICY_CONSTANTS)
+    pattern = re.compile(rf"\b({names})\s*=(?!=)")
+    return bool(pattern.search(inspect.getsource(module)))
+
+
+def _source_inserts_verdict(module: Any) -> bool:
+    """True if ``module``'s source calls ``insert_admission_verdict`` directly.
+
+    The only legitimate admission write path is ``run_admission`` →
+    ``_record_verdict``; a scoring module forging a verdict directly is an
+    SC4 violation. Source-level (structural), not behavioral (W3).
+    """
+    return "insert_admission_verdict" in inspect.getsource(module)
+
+
+def assert_admission_no_edit() -> None:
+    """Durable SC4 guard: factory/Agent inputs cannot edit the admission policy.
+
+    Source-level (structural) guard mirroring :func:`assert_all_scoring_through_chain`
+    (plan-check W3): it confirms at the import-graph / call-site level that
+    (1) ``run_admission`` exposes no threshold/gate-order parameters,
+    (2) no scoring module assigns to an admission threshold constant, and
+    (3) no scoring module calls ``insert_admission_verdict`` directly with a
+    hand-crafted verdict. It cannot see dynamic dispatch or runtime monkeypatching,
+    but it durably catches a factory or Agent source edit that rewires the policy.
+    """
+    from app.research.admission import run_admission
+
+    if not _run_admission_signature_clean(run_admission):
+        raise AssertionError(
+            "SC4 violation — run_admission exposes a threshold/gate-order parameter"
+        )
+    for module in _scoring_modules():
+        name = module.__name__
+        if _source_mutates_policy(module):
+            raise AssertionError(
+                f"SC4 violation — scoring module {name} mutates an admission threshold constant"
+            )
+        if _source_inserts_verdict(module):
+            raise AssertionError(
+                f"SC4 violation — scoring module {name} calls insert_admission_verdict directly"
+            )

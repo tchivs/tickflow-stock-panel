@@ -399,3 +399,131 @@ def test_record_candidate_admission_links_verdict_to_candidate_ledger(tmp_path) 
     assert verdict is not None
     assert verdict["verdict"] == "admitted"
     assert [g["gate"] for g in recorded["reason"]["gate_trail"]] == [g["gate"] for g in verdict["gates"]]
+
+
+# ================================================================
+# Phase 47-03-02 — ADMISSION_POLICY_FINGERPRINT + no-edit hardening
+# ================================================================
+
+
+def test_admission_gate_order_matches_live_gate_sequence() -> None:
+    from app.research.admission import ADMISSION_GATE_ORDER
+
+    assert ADMISSION_GATE_ORDER == (
+        "no_lookahead", "coverage", "no_label_leakage", "similarity_dedup", "train_ic", "val_ic",
+    )
+
+
+def test_admission_policy_fingerprint_is_deterministic_64hex() -> None:
+    from app.research.admission import ADMISSION_POLICY_FINGERPRINT, admission_policy_fingerprint
+
+    assert ADMISSION_POLICY_FINGERPRINT == admission_policy_fingerprint()
+    assert len(ADMISSION_POLICY_FINGERPRINT) == 64
+    assert all(char in "0123456789abcdef" for char in ADMISSION_POLICY_FINGERPRINT)
+
+
+def test_admission_policy_fingerprint_changes_when_threshold_changes(monkeypatch) -> None:
+    import app.research.admission as admission
+
+    original = admission.ADMISSION_POLICY_FINGERPRINT
+    monkeypatch.setattr(admission, "TRAIN_MIN_MEAN_IC", 0.05)
+    assert admission.admission_policy_fingerprint() != original
+
+
+def test_admission_policy_fingerprint_changes_when_gate_order_changes(monkeypatch) -> None:
+    import app.research.admission as admission
+
+    original = admission.ADMISSION_POLICY_FINGERPRINT
+    monkeypatch.setattr(admission, "ADMISSION_GATE_ORDER", ("val_ic", "train_ic"))
+    assert admission.admission_policy_fingerprint() != original
+
+
+def test_admission_policy_fingerprint_changes_when_policy_version_changes(monkeypatch) -> None:
+    import app.research.admission as admission
+
+    original = admission.ADMISSION_POLICY_FINGERPRINT
+    monkeypatch.setattr(admission, "ADMISSION_POLICY_VERSION", "admission-policy-v2")
+    assert admission.admission_policy_fingerprint() != original
+
+
+def test_verify_admission_policy_fingerprint_passes_on_match() -> None:
+    from app.research.admission import ADMISSION_POLICY_FINGERPRINT, verify_admission_policy_fingerprint
+
+    verify_admission_policy_fingerprint(ADMISSION_POLICY_FINGERPRINT)  # must not raise
+
+
+def test_verify_admission_policy_fingerprint_fails_closed_on_mismatch() -> None:
+    from app.research.admission import AdmissionPolicyMismatchError, verify_admission_policy_fingerprint
+
+    with pytest.raises(AdmissionPolicyMismatchError):
+        verify_admission_policy_fingerprint("0" * 64)
+
+
+def test_verify_admission_policy_fingerprint_fails_closed_on_missing() -> None:
+    from app.research.admission import AdmissionPolicyMismatchError, verify_admission_policy_fingerprint
+
+    with pytest.raises(AdmissionPolicyMismatchError):
+        verify_admission_policy_fingerprint(None)
+
+
+def test_record_candidate_admission_verifies_frozen_policy_before_scoring(tmp_path) -> None:
+    """A frozen policy that matches the live policy lets scoring proceed."""
+    from app.research.alpha_scoring import record_candidate_admission
+    from app.research.factor_dsl import DSL_VERSION
+    from app.research.run_contract import AlphaCandidateAttempt
+
+    repository = ResearchRepository(tmp_path / "operational.db")
+    repository.migrate()
+    registry = FactorRegistry(repository)
+    engine = StubBacktestEngine(_seed7_panel(60))
+    run_id = _freeze_admission_run(repository, run_id="run-policy-ok")
+    digest = "8" * 64
+    revision = registry.create_exploratory_revision(
+        run_id=run_id, candidate_id="acand_pvok", candidate_digest=digest,
+        canonical_expression="close", dsl_version=DSL_VERSION, fields=("close",), step=0,
+    )
+    attempt = AlphaCandidateAttempt(
+        id="acand_pvok_rec", run_id=run_id, attempt_ordinal=2, candidate_digest=digest,
+        canonical_expression="close", ast_signature="ast", shape_signature="shape",
+        dsl_version=DSL_VERSION, operation="generate", seed=0, step=0,
+        status="generated", reason={}, evidence_artifact_id=None, created_at="2026-08-08T00:00:00Z",
+    )
+    recorded = record_candidate_admission(
+        repo=repository, registry=registry, attempt=attempt, revision=revision,
+        universe="fixture-a-share", start=date(2024, 1, 2), end=date(2024, 1, 2) + timedelta(days=59),
+        horizon=1, asset_type="stock", engine=engine,
+    )
+    assert recorded["status"] == "admitted"
+
+
+def test_record_candidate_admission_fails_closed_on_policy_mismatch(tmp_path, monkeypatch) -> None:
+    """A live policy that diverges from the frozen value fails closed before any candidate is scored."""
+    from app.research import admission
+    from app.research.alpha_scoring import record_candidate_admission
+    from app.research.factor_dsl import DSL_VERSION
+    from app.research.run_contract import AlphaCandidateAttempt
+
+    repository = ResearchRepository(tmp_path / "operational.db")
+    repository.migrate()
+    registry = FactorRegistry(repository)
+    engine = StubBacktestEngine(_seed7_panel(60))
+    run_id = _freeze_admission_run(repository, run_id="run-policy-mismatch")
+    digest = "6" * 64
+    revision = registry.create_exploratory_revision(
+        run_id=run_id, candidate_id="acand_pvm", candidate_digest=digest,
+        canonical_expression="close", dsl_version=DSL_VERSION, fields=("close",), step=0,
+    )
+    attempt = AlphaCandidateAttempt(
+        id="acand_pvm_rec", run_id=run_id, attempt_ordinal=2, candidate_digest=digest,
+        canonical_expression="close", ast_signature="ast", shape_signature="shape",
+        dsl_version=DSL_VERSION, operation="generate", seed=0, step=0,
+        status="generated", reason={}, evidence_artifact_id=None, created_at="2026-08-08T00:00:00Z",
+    )
+    # Simulate a changed threshold: the live recompute now diverges from the frozen value.
+    monkeypatch.setattr(admission, "TRAIN_MIN_MEAN_IC", 0.99)
+    with pytest.raises(admission.AdmissionPolicyMismatchError):
+        record_candidate_admission(
+            repo=repository, registry=registry, attempt=attempt, revision=revision,
+            universe="fixture-a-share", start=date(2024, 1, 2), end=date(2024, 1, 2) + timedelta(days=59),
+            horizon=1, asset_type="stock", engine=engine,
+        )

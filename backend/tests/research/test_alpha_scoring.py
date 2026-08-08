@@ -966,3 +966,53 @@ def test_record_candidate_admission_links_verdict_to_ledger_by_revision(
     assert recorded["run_id"] == run_id
     assert recorded["candidate_digest"] == digest
     assert recorded["reason"]["gate_trail"] == verdict["gates"]
+
+
+# ----------------------------------------------------------------------
+# 47-03-02 — no-edit hardening guard (AF-REQ-08 SC4)
+# ----------------------------------------------------------------------
+
+
+def test_assert_admission_no_edit_passes_today() -> None:
+    from app.research.alpha_scoring import assert_admission_no_edit
+
+    assert_admission_no_edit()  # must not raise against the live source
+
+
+def test_no_edit_signature_helper_detects_threshold_param() -> None:
+    from app.research.alpha_scoring import _run_admission_signature_clean
+
+    def _bad(*, train_min_mean_ic: float = 0.02) -> None:
+        return None
+
+    def _good(*, horizon: int = 1) -> None:
+        return None
+
+    assert not _run_admission_signature_clean(_bad)
+    assert _run_admission_signature_clean(_good)
+
+
+def test_no_edit_guard_detects_threshold_mutation_in_source() -> None:
+    from app.research.alpha_scoring import _source_mutates_policy
+
+    def _mutates() -> None:
+        TRAIN_MIN_MEAN_IC = 0.5  # noqa: F841, N806 — uppercase constant on purpose
+
+    def _clean() -> None:
+        ...
+
+    assert _source_mutates_policy(_mutates)
+    assert not _source_mutates_policy(_clean)
+
+
+def test_no_edit_guard_detects_direct_verdict_insert() -> None:
+    from app.research.alpha_scoring import _source_inserts_verdict
+
+    def _forges(repo) -> None:
+        repo.insert_admission_verdict(verdict="admitted")  # forbidden direct write
+
+    def _clean() -> None:
+        return None  # no direct verdict insert
+
+    assert _source_inserts_verdict(_forges)
+    assert not _source_inserts_verdict(_clean)

@@ -47,6 +47,78 @@ SHIFTED_LABEL_MAX_ABS_IC: float = 0.02
 MIN_COVERAGE: float = 0.50
 TRAIN_FRACTION: float = 0.70
 
+# The ordered gate sequence is part of the policy: reordering the gates changes
+# the admission verdict and must fail closed (AF-REQ-08 SC4).  This declaration
+# mirrors the live gate order in ``run_admission`` (admission.py:187-331).
+ADMISSION_GATE_ORDER: tuple[str, ...] = (
+    "no_lookahead", "coverage", "no_label_leakage", "similarity_dedup", "train_ic", "val_ic",
+)
+
+
+class AdmissionPolicyMismatchError(ValueError):
+    """The frozen admission policy fingerprint does not match the live policy.
+
+    Raised fail-closed before any candidate is scored when a frozen manifest's
+    ``policy.fingerprint`` diverges from the live thresholds / version / gate
+    order (someone changed a constant or reordered the gates), so a stored run
+    can never be re-scored under a different admission policy (T-47-08/T-47-10).
+    The ``frozen``/``live`` attributes carry both digests for diagnostics.
+    """
+
+    def __init__(self, *, frozen: str | None, live: str) -> None:
+        self.frozen = frozen
+        self.live = live
+        super().__init__(
+            "admission policy fingerprint mismatch: the frozen run's policy no "
+            "longer matches the live admission thresholds/gate order; refusing "
+            f"to re-score under a changed policy (frozen={frozen!r}, live={live})"
+        )
+
+
+def admission_policy_fingerprint() -> str:
+    """SHA-256 over the fixed thresholds + policy version + ordered gate names.
+
+    Reads the live module-level constants at call time (not a snapshot) so a
+    mutated constant or reordered gate produces a different digest.  Uses the
+    shared ``run_contract.digest_bytes`` (canonical JSON + finite check) so the
+    fingerprint is byte-identical to the other frozen component digests.
+    """
+    from app.research.run_contract import digest_bytes
+
+    payload = {
+        "policy_version": ADMISSION_POLICY_VERSION,
+        "thresholds": {
+            "TRAIN_MIN_MEAN_IC": TRAIN_MIN_MEAN_IC,
+            "VAL_MIN_MEAN_IC": VAL_MIN_MEAN_IC,
+            "MIN_TRAIN_OBSERVATIONS": MIN_TRAIN_OBSERVATIONS,
+            "MAX_SIMILARITY_SCORE": MAX_SIMILARITY_SCORE,
+            "MAX_IC_CORRELATION": MAX_IC_CORRELATION,
+            "SHIFTED_LABEL_MAX_ABS_IC": SHIFTED_LABEL_MAX_ABS_IC,
+            "MIN_COVERAGE": MIN_COVERAGE,
+        },
+        "gate_order": list(ADMISSION_GATE_ORDER),
+    }
+    return digest_bytes(payload)
+
+
+# Frozen at module load: the canonical admission policy for this build.  A
+# manifest's ``policy.fingerprint`` is populated from this value at freeze and
+# recompared via :func:`verify_admission_policy_fingerprint` at scoring time.
+ADMISSION_POLICY_FINGERPRINT: str = admission_policy_fingerprint()
+
+
+def verify_admission_policy_fingerprint(frozen: str | None) -> None:
+    """Fail closed unless ``frozen`` matches the live admission policy fingerprint.
+
+    Recomputes the fingerprint from the live constants and raises
+    :class:`AdmissionPolicyMismatchError` on any mismatch or missing value, so a
+    stored run can never be re-scored after a threshold/gate-order/policy-version
+    change.  Called before any candidate is scored (AF-REQ-08 SC4, T-47-08).
+    """
+    live = admission_policy_fingerprint()
+    if not isinstance(frozen, str) or frozen != live:
+        raise AdmissionPolicyMismatchError(frozen=frozen, live=live)
+
 
 def temporal_split(per_date_ics: Mapping[str, float]) -> tuple[set[str], set[str]]:
     """Deterministic 70/30 split by date order (never random shuffle)."""
