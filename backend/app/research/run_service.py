@@ -12,13 +12,20 @@ broker, order, portfolio, monitor, or live-execution collaborators.
 """
 from __future__ import annotations
 
+import json
 import secrets
 import uuid
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
-from app.research.repository import AlphaRunConflictError, ResearchRepository
-from app.research.run_contract import freeze_input_snapshot
+from app.research.run_contract import (
+    TERMINAL_STATUSES,
+    attempt_token_digest,
+    canonical_json,
+    freeze_input_snapshot,
+    validate_bounded_json,
+    validate_progress_counters,
+)
 
 if TYPE_CHECKING:
     from app.research.artifacts import AlphaRunArtifactService
@@ -47,6 +54,30 @@ def _generate_attempt_token() -> str:
     (D-10, T-45-08).
     """
     return secrets.token_hex(32)
+
+_SAFE_REASON_CODES = frozenset({
+    "preflight_failed", "worker_failed", "artifact_failed", "checkpoint_invalid",
+    "cancelled", "completed", "failed", "budget_exhausted",
+})
+
+
+def _safe_terminal_reason(reason: str | Mapping[str, Any] | None, *, status: str) -> str | None:
+    """Return bounded machine-readable terminal state, never raw worker text."""
+    if reason is None:
+        return None
+    if isinstance(reason, Mapping):
+        code = reason.get("code")
+        detail = reason.get("detail", "")
+    else:
+        code = None
+        detail = reason
+    code = str(code).strip() if isinstance(code, str) else ""
+    if code not in _SAFE_REASON_CODES:
+        code = "preflight_failed" if status == "preflight_failed" else "worker_failed"
+    detail = " ".join(str(detail).split())
+    # Paths, traceback-like diagnostics, and control characters never cross the boundary.
+    detail = detail.replace("/", " ").replace("\\", " ")[:256]
+    return canonical_json({"code": code, "detail": detail})
 
 
 
@@ -155,17 +186,12 @@ class ResearchRunService:
         key = idempotency_key or f"transition-{from_status}-{to_status}-{expected_version}"
         event_id = "aevt_" + uuid.uuid4().hex
         event_type = _event_type_for(to_status)
+        safe_reason = _safe_terminal_reason(terminal_reason, status=to_status)
         result = self._repository.transition_alpha_run(
-            run_id=run_id,
-            principal=principal,
-            from_status=from_status,
-            to_status=to_status,
-            expected_version=expected_version,
-            event_id=event_id,
-            event_type=event_type,
-            idempotency_key=key,
-            terminal_reason=terminal_reason,
-            extra_payload=extra_payload,
+            run_id=run_id, principal=principal, from_status=from_status,
+            to_status=to_status, expected_version=expected_version,
+            event_id=event_id, event_type=event_type, idempotency_key=key,
+            terminal_reason=safe_reason, extra_payload=extra_payload,
         )
         if result is None:
             # Distinguish unknown/cross-principal (None) from stale version/status.
@@ -222,6 +248,36 @@ class ResearchRunService:
         result["_attempt_token"] = token
         return result
 
+
+    def recover_running_attempt(
+        self,
+        run_id: str,
+        *,
+        principal: str,
+        expected_version: int,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Fence a possibly orphaned running worker and issue a fresh token.
+
+        The old digest is never used to derive plaintext.  Recovery increments
+        the durable transition version and stores only the new digest atomically.
+        """
+        run = self._repository.get_alpha_run(run_id, principal=principal)
+        if run is None:
+            return None
+        if run["status"] != "running":
+            raise ValueError("only a running attempt can be recovered")
+        token = _generate_attempt_token()
+        result = self._repository.recover_alpha_run(
+            run_id=run_id, principal=principal, expected_version=expected_version,
+            event_id="aevt_" + uuid.uuid4().hex,
+            idempotency_key=idempotency_key or f"recover-{expected_version}",
+            token_digest=attempt_token_digest(token),
+        )
+        if result is None:
+            return None
+        result["_attempt_token"] = token
+        return result
     def cancel(
         self,
         run_id: str,
@@ -326,6 +382,18 @@ class ResearchRunService:
                 return stored == candidate_digest
         return False
 
+    def _progress_limits(self, run_id: str) -> tuple[int, int]:
+        snapshot = self._repository.get_run_snapshot(run_id)
+        manifest = snapshot.get("manifest", {}) if snapshot else {}
+        budgets = manifest.get("budgets", {}) if isinstance(manifest, Mapping) else {}
+        geometry = manifest.get("fold_geometry", {}) if isinstance(manifest, Mapping) else {}
+        candidate_limit = budgets.get("max_candidates") if isinstance(budgets, Mapping) else None
+        fold_limit = geometry.get("n_folds") if isinstance(geometry, Mapping) else None
+        return (
+            candidate_limit if isinstance(candidate_limit, int) and candidate_limit >= 0 else (1 << 63) - 1,
+            fold_limit if isinstance(fold_limit, int) and fold_limit >= 0 else (1 << 63) - 1,
+        )
+
     def update_progress(
         self,
         run_id: str,
@@ -338,63 +406,81 @@ class ResearchRunService:
         folds_total: int | None = None,
         folds_completed: int | None = None,
     ) -> dict[str, Any] | None:
-        """Persist bounded server-owned progress counters (D-11).
-
-        Validates the attempt token plus expected version before persisting any
-        counter.  Only non-``None`` counters are updated; each must be a
-        non-negative integer.  This does NOT evaluate folds — it persists
-        declared totals and completed counts reported by a worker.  Returns
-        ``None`` for unknown/cross-principal/stale/token-mismatch (fail closed,
-        T-45-08).
-        """
-        from app.research.run_contract import validate_progress_counters
-
+        """Persist monotonic counters within the frozen run budget."""
         validate_progress_counters(
             candidate_attempts_total=candidate_attempts_total,
             candidate_attempts_completed=candidate_attempts_completed,
-            folds_total=folds_total,
-            folds_completed=folds_completed,
+            folds_total=folds_total, folds_completed=folds_completed,
         )
         if not self._validate_attempt_token(
-            run_id, principal=principal,
-            expected_version=expected_version, attempt_token=attempt_token,
+            run_id, principal=principal, expected_version=expected_version,
+            attempt_token=attempt_token,
         ):
             return None
-        return self._repository.update_progress(
-            run_id=run_id,
-            principal=principal,
-            expected_version=expected_version,
-            candidate_attempts_total=candidate_attempts_total,
-            candidate_attempts_completed=candidate_attempts_completed,
-            folds_total=folds_total,
-            folds_completed=folds_completed,
-        )
-
-    def get(self, run_id: str, *, principal: str) -> dict[str, Any] | None:
-        """Return one principal-scoped run row, or ``None`` for unknown/cross-principal."""
-        return self._repository.get_alpha_run(run_id, principal=principal)
-
-    def replay(
-        self, run_id: str, *, principal: str, include_candidates: bool = False
-    ) -> dict[str, Any] | None:
-        """Read-only replay of the frozen snapshot and committed facts.
-
-        Returns ``None`` for unknown or cross-principal runs (same boundary as
-        ``get``).  Never writes, resolves current data, or executes work (D-08).
-        When ``include_candidates`` is true, the replay also returns the
-        candidate-attempt ledger in ordinal order — deterministic and
-        read-only.
-        """
         run = self._repository.get_alpha_run(run_id, principal=principal)
         if run is None:
             return None
+        candidate_limit, fold_limit = self._progress_limits(run_id)
+        proposed = {
+            "candidate_attempts_total": candidate_attempts_total,
+            "candidate_attempts_completed": candidate_attempts_completed,
+            "folds_total": folds_total, "folds_completed": folds_completed,
+        }
+        limits = {
+            "candidate_attempts_total": candidate_limit,
+            "candidate_attempts_completed": candidate_limit,
+            "folds_total": fold_limit, "folds_completed": fold_limit,
+        }
+        for name, value in proposed.items():
+            if value is not None and value > limits[name]:
+                raise ValueError(f"{name} exceeds the frozen run budget")
+            if value is not None and value < int(run[name]):
+                raise ValueError(f"{name} cannot decrease")
+        candidate_total = candidate_attempts_total if candidate_attempts_total is not None else int(run["candidate_attempts_total"])
+        candidate_completed = candidate_attempts_completed if candidate_attempts_completed is not None else int(run["candidate_attempts_completed"])
+        fold_total = folds_total if folds_total is not None else int(run["folds_total"])
+        fold_completed = folds_completed if folds_completed is not None else int(run["folds_completed"])
+        if candidate_completed > candidate_total or fold_completed > fold_total:
+            raise ValueError("completed progress cannot exceed its total")
+        return self._repository.update_progress(
+            run_id=run_id, principal=principal, expected_version=expected_version,
+            candidate_attempts_total=candidate_attempts_total,
+            candidate_attempts_completed=candidate_attempts_completed,
+            folds_total=folds_total, folds_completed=folds_completed,
+        )
+
+    def get(self, run_id: str, *, principal: str) -> dict[str, Any] | None:
+        """Return one principal-scoped durable run row."""
+        return self._repository.get_alpha_run(run_id, principal=principal)
+    def replay(
+        self,
+        run_id: str,
+        *,
+        principal: str,
+        include_candidates: bool = False,
+        after_seq: int = 0,
+        limit: int = 500,
+    ) -> dict[str, Any] | None:
+        """Read-only replay with explicit continuation markers."""
+        run = self._repository.get_alpha_run(run_id, principal=principal)
+        if run is None:
+            return None
+        if after_seq < 0 or limit < 1 or limit > 5000:
+            raise ValueError("replay pagination bounds are invalid")
         snapshot = self._repository.get_run_snapshot(run_id)
-        events = self._repository.list_run_events(run_id, principal=principal)
-        result: dict[str, Any] = {"run": run, "snapshot": snapshot, "events": events}
+        events = self._repository.list_run_events(
+            run_id, after_seq=after_seq, limit=limit, principal=principal
+        )
+        last_seq = int(events[-1]["seq"]) if events else after_seq
+        truncated = bool(events) and len(events) >= limit and last_seq < int(run["last_event_seq"])
+        result: dict[str, Any] = {
+            "run": run, "snapshot": snapshot, "events": events,
+            "events_after_sequence": after_seq,
+            "next_sequence": last_seq if truncated else None,
+            "truncated": truncated,
+        }
         if include_candidates:
-            result["candidates"] = self._repository.list_candidates(
-                run_id, principal=principal
-            )
+            result["candidates"] = self._repository.list_candidates(run_id, principal=principal)
         return result
 
     def list_events(
@@ -405,12 +491,6 @@ class ResearchRunService:
         after_seq: int = 0,
         limit: int = 500,
     ) -> list[dict[str, Any]]:
-        """Return bounded, ordered event history scoped to ``principal`` (D-09).
-
-        Cross-principal reads return the same empty boundary as an unknown run
-        (T-45-12).  The repository enforces principal-scoped ownership before
-        reading any event row.
-        """
         return self._repository.list_run_events(
             run_id, after_seq=after_seq, limit=limit, principal=principal
         )
@@ -447,34 +527,22 @@ class ResearchRunService:
         payload: Mapping[str, Any],
         artifact_id: str | None = None,
     ) -> dict[str, Any] | None:
-        """Append one principal-scoped lifecycle event with commit-before-publish.
-
-        Returns ``None`` for unknown or cross-principal runs.  The repository
-        allocates a contiguous sequence under ``BEGIN IMMEDIATE`` and commits
-        before this method returns; any optional publisher notification runs
-        only after the transaction succeeds (D-05, T-45-03).
-        """
+        """Append one principal-scoped lifecycle event after validation."""
+        validate_bounded_json(payload, "event payload")
         run = self._repository.get_alpha_run(run_id, principal=principal)
         if run is None:
             return None
-        event_id = "aevt_" + uuid.uuid4().hex
         event = self._repository.append_run_event(
-            run_id=run_id,
-            event_id=event_id,
-            event_type=event_type,
-            entity_kind=entity_kind,
-            entity_id=entity_id,
-            idempotency_key=idempotency_key,
-            actor=actor,
-            source=source,
-            payload=payload,
-            artifact_id=artifact_id,
+            run_id=run_id, event_id="aevt_" + uuid.uuid4().hex,
+            event_type=event_type, entity_kind=entity_kind, entity_id=entity_id,
+            idempotency_key=idempotency_key, actor=actor, source=source,
+            payload=payload, artifact_id=artifact_id,
         )
         if self._publisher is not None:
             try:
                 self._publisher.on_run_created(run)
             except Exception:  # noqa: BLE001
-                pass  # best-effort; committed event is not rolled back
+                pass
         return event
 
     def append_candidate(
@@ -522,6 +590,33 @@ class ResearchRunService:
             reason=reason,
             evidence_artifact_id=evidence_artifact_id,
         )
+    def append_checkpoint(
+        self,
+        *,
+        run_id: str,
+        principal: str,
+        checkpoint: Mapping[str, Any],
+        referenced_candidate_ids: Sequence[str] = (),
+        inline_summary: Mapping[str, Any] | None = None,
+        artifact_service: "AlphaRunArtifactService | None" = None,
+    ) -> dict[str, Any]:
+        """Validate every binding then persist one recovery cursor."""
+        validated = self.validate_checkpoint(
+            run_id=run_id, principal=principal, checkpoint=checkpoint,
+            referenced_candidate_ids=referenced_candidate_ids,
+            inline_summary=inline_summary, artifact_service=artifact_service,
+        )
+        return self._repository.append_checkpoint(
+            run_id=run_id, checkpoint_id=str(validated.get("id", checkpoint.get("id"))),
+            checkpoint_version=int(validated["checkpoint_version"]),
+            committed_event_seq=int(validated["committed_event_seq"]),
+            stage=str(validated["stage"]), snapshot_sha256=str(validated["snapshot_sha256"]),
+            manifest_sha256=str(validated["manifest_sha256"]),
+            state_checksum=str(validated["state_checksum"]),
+            frontier_artifact_id=validated.get("frontier_artifact_id"),
+            principal=principal, referenced_candidate_ids=referenced_candidate_ids,
+            inline_summary=inline_summary,
+        )
 
     def validate_checkpoint(
         self,
@@ -543,71 +638,88 @@ class ResearchRunService:
         mismatched cursors raise ``AlphaCheckpointValidationError`` without
         advancing status, event sequence, or cursor (T-45-05).
         """
-        from app.research.run_contract import checkpoint_state_checksum
-
+        from app.research.run_contract import MAX_INLINE_CHECKPOINT_BYTES, checkpoint_state_checksum
         run = self._repository.get_alpha_run(run_id, principal=principal)
         if run is None:
             raise AlphaCheckpointValidationError("run not found for principal")
-        if checkpoint["snapshot_sha256"] != run["snapshot_sha256"]:
+        try:
+            checkpoint_version = int(checkpoint["checkpoint_version"])
+            committed_seq = int(checkpoint["committed_event_seq"])
+            stage = str(checkpoint["stage"])
+            snapshot_sha256 = str(checkpoint["snapshot_sha256"])
+            manifest_sha256 = str(checkpoint["manifest_sha256"])
+            state_checksum = str(checkpoint["state_checksum"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise AlphaCheckpointValidationError("checkpoint shape is invalid") from error
+        if checkpoint_version <= 0 or committed_seq < 0 or not 1 <= len(stage) <= 128:
+            raise AlphaCheckpointValidationError("checkpoint bounds are invalid")
+        if snapshot_sha256 != run["snapshot_sha256"]:
             raise AlphaCheckpointValidationError("snapshot digest mismatch (stale cursor)")
-        if checkpoint["manifest_sha256"] != run["manifest_sha256"]:
+        if manifest_sha256 != run["manifest_sha256"]:
             raise AlphaCheckpointValidationError("manifest digest mismatch (stale cursor)")
-
-        committed_seq = int(checkpoint["committed_event_seq"])
+        if inline_summary is not None:
+            try:
+                validate_bounded_json(
+                    inline_summary, "inline checkpoint summary",
+                    max_bytes=MAX_INLINE_CHECKPOINT_BYTES,
+                )
+                if not isinstance(inline_summary, Mapping):
+                    raise ValueError("inline checkpoint summary must be an object")
+            except ValueError as error:
+                raise AlphaCheckpointValidationError(str(error)) from error
         if run["last_event_seq"] < committed_seq:
-            raise AlphaCheckpointValidationError(
-                "checkpoint references a future event sequence"
-            )
+            raise AlphaCheckpointValidationError("checkpoint references a future event sequence")
+        if committed_seq > 100_000:
+            raise AlphaCheckpointValidationError("checkpoint event sequence exceeds validation bound")
         events = self._repository.list_run_events(
-            run_id, after_seq=0, limit=committed_seq + 1, principal=principal
+            run_id, after_seq=0, limit=max(1, committed_seq), principal=principal
         )
         actual_seqs = {evt["seq"] for evt in events}
         expected_seqs = set(range(1, committed_seq + 1))
-        if committed_seq > 0 and not expected_seqs.issubset(actual_seqs):
-            raise AlphaCheckpointValidationError(
-                "committed event sequence is not contiguous"
-            )
-
+        if not expected_seqs.issubset(actual_seqs):
+            raise AlphaCheckpointValidationError("committed event sequence is not contiguous")
         candidate_ids = list(referenced_candidate_ids or [])
+        if len(candidate_ids) > 256 or any(not isinstance(cid, str) for cid in candidate_ids):
+            raise AlphaCheckpointValidationError("checkpoint candidate references are invalid")
         if candidate_ids:
             present = {
-                str(c["id"]) for c in self._repository.list_candidates(run_id, principal=principal)
-            }
-            missing = [cid for cid in candidate_ids if cid not in present]
-            if missing:
-                raise AlphaCheckpointValidationError(
-                    "checkpoint references missing candidate(s)"
+                str(c["id"]) for c in self._repository.list_candidates(
+                    run_id, limit=256, principal=principal
                 )
-
+            }
+            if any(cid not in present for cid in candidate_ids):
+                raise AlphaCheckpointValidationError("checkpoint references missing candidate(s)")
         frontier_artifact_id = checkpoint.get("frontier_artifact_id")
-        if frontier_artifact_id is not None and artifact_service is not None:
-            artifact_row = self._get_artifact(frontier_artifact_id, run_id)
+        if frontier_artifact_id is not None:
+            if artifact_service is None:
+                raise AlphaCheckpointValidationError(
+                    "frontier artifact verification service is required"
+                )
+            artifact_row = self._get_artifact(str(frontier_artifact_id), run_id)
             if artifact_row is None:
                 raise AlphaCheckpointValidationError("frontier artifact reference missing")
+            if artifact_row["relative_path"] != (
+                f"research_artifacts/alpha_runs/{run_id}/{artifact_row['checksum_sha256']}.json"
+            ):
+                raise AlphaCheckpointValidationError("frontier artifact managed key mismatch")
             try:
                 artifact_service.verify_artifact(
-                    run_id=run_id,
-                    checksum_sha256=artifact_row["checksum_sha256"],
+                    run_id=run_id, checksum_sha256=artifact_row["checksum_sha256"],
                     expected_byte_size=artifact_row["byte_size"],
                     expected_content_type=artifact_row["content_type"],
                 )
             except Exception as error:
                 raise AlphaCheckpointValidationError(
-                    f"frontier artifact verification failed: {error}"
+                    "frontier artifact verification failed"
                 ) from error
-
         expected_checksum = checkpoint_state_checksum(
-            run_id=run_id,
-            checkpoint_version=int(checkpoint["checkpoint_version"]),
-            committed_event_seq=committed_seq,
-            stage=str(checkpoint["stage"]),
-            snapshot_sha256=checkpoint["snapshot_sha256"],
-            manifest_sha256=checkpoint["manifest_sha256"],
-            referenced_candidate_ids=candidate_ids,
-            inline_summary=inline_summary,
+            run_id=run_id, checkpoint_version=checkpoint_version,
+            committed_event_seq=committed_seq, stage=stage,
+            snapshot_sha256=snapshot_sha256, manifest_sha256=manifest_sha256,
+            referenced_candidate_ids=candidate_ids, inline_summary=inline_summary,
             frontier_artifact_id=frontier_artifact_id,
         )
-        if expected_checksum != checkpoint["state_checksum"]:
+        if expected_checksum != state_checksum:
             raise AlphaCheckpointValidationError("checkpoint state checksum mismatch")
         return dict(checkpoint)
 
@@ -629,19 +741,20 @@ class ResearchRunService:
         Pickle, executable state, raw data frames, and prompts are excluded.
         """
         import json
-
-        from app.research.run_contract import MAX_INLINE_CHECKPOINT_BYTES
-
+        from app.research.run_contract import MAX_INLINE_CHECKPOINT_BYTES, canonical_json
         if not isinstance(payload_bytes, (bytes, bytearray)):
             raise AlphaCheckpointValidationError("inline payload must be bytes")
         if len(payload_bytes) > MAX_INLINE_CHECKPOINT_BYTES:
-            raise AlphaCheckpointValidationError(
-                "inline checkpoint payload exceeds 16 KiB bound"
-            )
+            raise AlphaCheckpointValidationError("inline checkpoint payload exceeds 16 KiB bound")
         try:
-            decoded = payload_bytes.decode("utf-8")
-            json.loads(decoded)
-        except (UnicodeDecodeError, ValueError) as error:
+            decoded = bytes(payload_bytes).decode("utf-8")
+            parsed = json.loads(decoded)
+            if not isinstance(parsed, dict):
+                raise ValueError("inline checkpoint state must be a JSON object")
+            canonical = canonical_json(parsed).encode("utf-8")
+            if canonical != bytes(payload_bytes):
+                raise ValueError("inline checkpoint JSON is not canonical")
+        except (UnicodeDecodeError, ValueError, TypeError) as error:
             raise AlphaCheckpointValidationError(
                 "inline checkpoint payload is not canonical UTF-8 JSON"
             ) from error
