@@ -5,16 +5,16 @@ milestone_name: 可回放 Alpha Factory 与 FactorResearchAgent
 current_phase: 47
 current_phase_name: Governed Scoring, Admission & Selection OOS
 status: planning
-stopped_at: Completed 45-04-PLAN.md
-last_updated: "2026-08-08T18:19:51.056Z"
+stopped_at: Completed Phase 46-04-PLAN.md; ready to plan Phase 47
+last_updated: "2026-08-08T18:28:31Z"
 last_activity: 2026-08-08
-last_activity_desc: Phase 46 complete, transitioned to Phase 47
+last_activity_desc: Phase 45 and Phase 46 complete; transitioned to Phase 47
 progress:
   total_phases: 6
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 9
   completed_plans: 8
-  percent: 17
+  percent: 33
 ---
 
 # Project State
@@ -24,21 +24,21 @@ progress:
 See: .planning/PROJECT.md (updated 2026-08-06)
 
 **Core value:** An investor can turn reliable market data and their own holdings into an auditable, actionable research and monitoring workflow without operating multiple disconnected tools.
-**Current focus:** Phase 45 — Durable Governed Run Contract
+**Current focus:** Phase 47 — Governed Scoring, Admission & Selection OOS
 
 ## Current Position
 
 Phase: 47 — Governed Scoring, Admission & Selection OOS
 Plan: Not started
 Status: Ready to plan
-Last activity: 2026-08-08 — Phase 46 complete, transitioned to Phase 47
+Last activity: 2026-08-08 — Phase 45 and Phase 46 complete; transitioned to Phase 47
 
 ## v3.0 Phase Summary
 
 | Phase | Requirements | Status |
 |-------|-------------|--------|
-| 45 Durable Governed Run Contract | AF-REQ-01, 04, 10, 16 | Not started |
-| 46 Deterministic Alpha Factory Core | AF-REQ-02, 03, 19, 23 | Not started |
+| 45 Durable Governed Run Contract | AF-REQ-01, 04, 10, 16 | Complete |
+| 46 Deterministic Alpha Factory Core | AF-REQ-02, 03, 19, 23 | Complete |
 | 47 Governed Scoring, Admission & Selection OOS | AF-REQ-05..09 | Not started |
 | 48 FactorResearchAgent Two-Stage Workflow | AF-REQ-11..14, 21, 26 | Not started |
 | 49 Research-Only Promotion Ticket | AF-REQ-15, 17 | Not started |
@@ -99,21 +99,19 @@ None.
 
 ### Blockers/Concerns
 
-- [v3.0 / Phase 45]: Event/checkpoint transaction boundaries, sequence/idempotency conflicts, and restart cursor consistency require focused design before schema implementation.
-- [v3.0 / Phase 46]: Narrow grammar legality, diversity/complexity costs, and candidate/resource budgets require calibration against governed A-share panels.
 - [v3.0 / Phase 47]: Alpha fold persistence shape and factor-specific cost/robustness evidence must reuse existing measured-calendar and exactly-once OOS contracts without duplicating gates.
 - [v3.0 / Phase 48]: Provider retry/failure taxonomy, bounded response retention, and strict Stage 1/2 semantic reference rules require fault-injection design.
 - [v3.0 / Phase 49]: Transient candidate to immutable `FactorRevision`/catalog mapping and approval-time refresh conflict behavior require compatibility verification.
 
 ## Session Continuity
 
-Last session: 2026-08-08T15:31:14.982Z
-Stopped at: Completed 45-04-PLAN.md
+Last session: 2026-08-08T18:28:31Z
+Stopped at: Phase 46 complete; ready to plan Phase 47
 Resume file: None
 
 ## Operator Next Steps
 
-- Start planning Phase 45 with `/gsd-plan-phase 45`.
+- Start planning Phase 47 with `/gsd-plan-phase 47`.
 
 ## Deferred Items
 
