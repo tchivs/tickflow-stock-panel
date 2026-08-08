@@ -1177,3 +1177,459 @@ class TestFactoryDiversityAgainstOwnPopulation:
             population.append(vr.features)
         # All distinct single-field seeds -> all generated, no duplicates.
         assert all(s == "generated" for s in statuses)
+
+
+# ================================================================
+# Task 46-04-03: server-side budget guard + token-fenced driver loop
+# ================================================================
+
+from app.research.alpha_factory import (
+    BudgetGuard,
+    BudgetLimits,
+    drive_alpha_generation,
+)
+from app.research.run_contract import freeze_input_snapshot
+from app.research.run_service import ResearchRunService
+from app.research.run_worker import ResearchRunWorkerAdapter
+from tests.research.conftest import DeterministicClock
+from app.research.repository import ResearchRepository
+
+
+class _FakeClock:
+    """A controllable monotonic clock for deterministic wall-clock budget tests."""
+
+    def __init__(self, start: float = 0.0) -> None:
+        self.now = start
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance_to(self, t: float) -> None:
+        self.now = t
+
+
+class TestBudgetLimits:
+    def test_from_manifest_parses_all_budgets(self) -> None:
+        manifest = {
+            "budgets": {"max_candidates": 10, "max_expressions": 5, "max_wallclock_seconds": 30},
+            "grammar": {"max_depth": 4, "max_nodes": 20},
+        }
+        limits = BudgetLimits.from_manifest(manifest)
+        assert limits.max_candidates == 10
+        assert limits.max_expressions == 5
+        assert limits.max_wallclock_seconds == 30.0
+        assert limits.max_depth == 4
+        assert limits.max_nodes == 20
+
+    def test_optional_budgets_default_to_none(self) -> None:
+        limits = BudgetLimits.from_manifest({"budgets": {"max_candidates": 10}})
+        assert limits.max_expressions is None
+        assert limits.max_wallclock_seconds is None
+        assert limits.max_depth == DEFAULT_MAX_DEPTH
+        assert limits.max_nodes == DEFAULT_MAX_NODES
+
+    def test_max_candidates_must_be_positive(self) -> None:
+        with pytest.raises(ValueError, match="max_candidates"):
+            BudgetLimits.from_manifest({"budgets": {"max_candidates": 0}})
+
+    def test_missing_budgets_group_raises(self) -> None:
+        with pytest.raises(ValueError, match="budgets"):
+            BudgetLimits.from_manifest({})
+
+    def test_frozen_dataclass(self) -> None:
+        limits = BudgetLimits(5, None, None, 6, 40)
+        with pytest.raises(AttributeError):
+            limits.max_candidates = 99  # type: ignore[misc]
+
+
+class TestBudgetGuard:
+    def test_candidate_count_not_exhausted_below_limit(self) -> None:
+        guard = BudgetGuard(BudgetLimits(5, None, None, 6, 40))
+        assert guard.exhausted(candidates=4) is None
+
+    def test_candidate_count_exhausted_at_limit(self) -> None:
+        guard = BudgetGuard(BudgetLimits(5, None, None, 6, 40))
+        assert guard.exhausted(candidates=5) == "candidate_count"
+
+    def test_wallclock_exhaustion(self) -> None:
+        clock = _FakeClock(0.0)
+        guard = BudgetGuard(BudgetLimits(100, None, 5.0, 6, 40), monotonic=clock)
+        assert guard.exhausted(candidates=0) is None
+        clock.advance_to(4.9)
+        assert guard.exhausted(candidates=0) is None
+        clock.advance_to(5.0)
+        assert guard.exhausted(candidates=0) == "wallclock"
+
+    def test_expression_count_exhaustion(self) -> None:
+        guard = BudgetGuard(BudgetLimits(100, 3, None, 6, 40))
+        guard.record_expression("a")
+        guard.record_expression("b")
+        assert guard.exhausted(candidates=0) is None
+        guard.record_expression("c")
+        assert guard.exhausted(candidates=0) == "expression_count"
+
+    def test_duplicate_expression_does_not_inflate_unique_count(self) -> None:
+        guard = BudgetGuard(BudgetLimits(100, 2, None, 6, 40))
+        guard.record_expression("a")
+        guard.record_expression("a")
+        assert guard.unique_expression_count == 1
+        assert guard.exhausted(candidates=0) is None
+
+    def test_candidate_count_checked_before_wallclock(self) -> None:
+        clock = _FakeClock(1000.0)
+        guard = BudgetGuard(BudgetLimits(3, None, 0.0, 6, 40), monotonic=clock)
+        # Even with wallclock already exceeded, candidate_count fires first.
+        assert guard.exhausted(candidates=3) == "candidate_count"
+
+    def test_terminal_reason_names_budget(self) -> None:
+        assert BudgetGuard.terminal_reason("wallclock") == "wallclock_budget_exhausted"
+        assert BudgetGuard.terminal_reason("candidate_count") == "candidate_count_budget_exhausted"
+        assert BudgetGuard.terminal_reason("expression_count") == "expression_count_budget_exhausted"
+
+
+def _drive_manifest(*, max_candidates: int = 12, seed: int = 42) -> dict:
+    """A freeze-ready manifest with small, fast budgets for driver-loop tests."""
+    manifest = _sample_manifest(seed=seed)
+    manifest["budgets"] = {"max_candidates": max_candidates, "max_expressions": 1000}
+    return manifest
+
+
+def _start_run(
+    repo: ResearchRepository,
+    clock: DeterministicClock,
+    *,
+    max_candidates: int = 12,
+    seed: int = 42,
+    run_id: str = "run-drive",
+) -> dict:
+    """Create and start a run, returning the started-state dict with the token."""
+    snapshot = freeze_input_snapshot(
+        manifest=_drive_manifest(max_candidates=max_candidates, seed=seed),
+        created_at=clock.now_iso(),
+    )
+    clock.advance()
+    run = repo.create_alpha_run(
+        run_id=run_id, principal="researcher@example.com",
+        idempotency_key=f"idem-{run_id}", snapshot=snapshot, event_id=f"aevt-{run_id}",
+    )
+    service = ResearchRunService(repo)
+    return service.start_or_resume(
+        run_id, principal="researcher@example.com", expected_version=run["transition_version"]
+    )
+
+
+class TestDriveAlphaGenerationCandidateBudget:
+    def test_produces_all_candidates_and_completes(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        max_candidates = 12
+        started = _start_run(
+            alpha_run_repository, deterministic_clock,
+            max_candidates=max_candidates, seed=42, run_id="run-cand-budget",
+        )
+        service = ResearchRunService(alpha_run_repository)
+        adapter = ResearchRunWorkerAdapter(service, principal="researcher@example.com")
+        factory = AlphaFactory(42, max_candidates=max_candidates)
+        limits = BudgetLimits(max_candidates, None, None, DEFAULT_MAX_DEPTH, DEFAULT_MAX_NODES)
+        summary = drive_alpha_generation(
+            factory, limits=limits, adapter=adapter, run_id="run-cand-budget",
+            attempt_token=started["_attempt_token"],
+            expected_version=started["transition_version"],
+        )
+        assert summary["candidates_produced"] == max_candidates
+        assert summary["terminal_reason"] == "candidate_count_budget_exhausted"
+        run = service.get("run-cand-budget", principal="researcher@example.com")
+        assert run["status"] == "completed"
+        assert "candidate_count_budget_exhausted" in run["terminal_reason"]
+
+    def test_candidates_in_ordinal_order_with_valid_statuses(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        started = _start_run(
+            alpha_run_repository, deterministic_clock,
+            max_candidates=10, seed=7, run_id="run-ord",
+        )
+        service = ResearchRunService(alpha_run_repository)
+        adapter = ResearchRunWorkerAdapter(service, principal="researcher@example.com")
+        factory = AlphaFactory(7, max_candidates=10)
+        limits = BudgetLimits(10, None, None, DEFAULT_MAX_DEPTH, DEFAULT_MAX_NODES)
+        drive_alpha_generation(
+            factory, limits=limits, adapter=adapter, run_id="run-ord",
+            attempt_token=started["_attempt_token"],
+            expected_version=started["transition_version"],
+        )
+        candidates = service.list_candidates("run-ord", principal="researcher@example.com")
+        assert len(candidates) == 10
+        assert [c["attempt_ordinal"] for c in candidates] == list(range(1, 11))
+        for c in candidates:
+            assert c["status"] in ALPHA_GENERATION_STATUSES
+            assert len(c["candidate_digest"]) == 64
+
+    def test_progress_counters_updated(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        started = _start_run(
+            alpha_run_repository, deterministic_clock,
+            max_candidates=8, seed=3, run_id="run-prog",
+        )
+        service = ResearchRunService(alpha_run_repository)
+        adapter = ResearchRunWorkerAdapter(service, principal="researcher@example.com")
+        factory = AlphaFactory(3, max_candidates=8)
+        limits = BudgetLimits(8, None, None, DEFAULT_MAX_DEPTH, DEFAULT_MAX_NODES)
+        drive_alpha_generation(
+            factory, limits=limits, adapter=adapter, run_id="run-prog",
+            attempt_token=started["_attempt_token"],
+            expected_version=started["transition_version"],
+        )
+        run = service.get("run-prog", principal="researcher@example.com")
+        assert run["candidate_attempts_total"] == 8
+        assert run["candidate_attempts_completed"] == 8
+
+    def test_lineage_edges_recorded_for_mutations_and_crossovers(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        # Use a budget large enough to reach the mutation/crossover waves.
+        size = AlphaFactory(1, max_candidates=1).seed_pool_size
+        budget = size + 40
+        started = _start_run(
+            alpha_run_repository, deterministic_clock,
+            max_candidates=budget, seed=11, run_id="run-lin",
+        )
+        service = ResearchRunService(alpha_run_repository)
+        adapter = ResearchRunWorkerAdapter(service, principal="researcher@example.com")
+        factory = AlphaFactory(11, max_candidates=budget)
+        limits = BudgetLimits(budget, None, None, DEFAULT_MAX_DEPTH, DEFAULT_MAX_NODES)
+        drive_alpha_generation(
+            factory, limits=limits, adapter=adapter, run_id="run-lin",
+            attempt_token=started["_attempt_token"],
+            expected_version=started["transition_version"],
+        )
+        with alpha_run_repository._connection() as connection:
+            lineage_count = connection.execute(
+                "SELECT COUNT(*) FROM research_alpha_candidate_lineage WHERE run_id = 'run-lin'"
+            ).fetchone()[0]
+        assert lineage_count > 0
+        # Every mutation/crossover candidate should have at least one lineage edge.
+
+
+class TestDriveAlphaGenerationWallclockBudget:
+    def test_wallclock_exhaustion_records_budget_candidate(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        max_candidates = 50
+        started = _start_run(
+            alpha_run_repository, deterministic_clock,
+            max_candidates=max_candidates, seed=5, run_id="run-wc",
+        )
+        service = ResearchRunService(alpha_run_repository)
+        adapter = ResearchRunWorkerAdapter(service, principal="researcher@example.com")
+        factory = AlphaFactory(5, max_candidates=max_candidates)
+        limits = BudgetLimits(max_candidates, None, 0.0, DEFAULT_MAX_DEPTH, DEFAULT_MAX_NODES)
+        # The clock is already past 0.0, so wallclock is immediately exhausted.
+        clock = _FakeClock(100.0)
+        summary = drive_alpha_generation(
+            factory, limits=limits, adapter=adapter, run_id="run-wc",
+            attempt_token=started["_attempt_token"],
+            expected_version=started["transition_version"],
+            _monotonic=clock,
+        )
+        assert summary["candidates_produced"] == 0
+        assert summary["terminal_reason"] == "wallclock_budget_exhausted"
+        run = service.get("run-wc", principal="researcher@example.com")
+        assert run["status"] == "completed"
+        assert "wallclock_budget_exhausted" in run["terminal_reason"]
+        candidates = service.list_candidates("run-wc", principal="researcher@example.com")
+        assert len(candidates) == 1
+        assert candidates[0]["status"] == "budget_exhausted"
+        assert candidates[0]["attempt_ordinal"] == 1
+
+
+class TestWorkerAdapterTokenFencing:
+    def test_append_candidate_fails_closed_on_stale_token(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        started = _start_run(
+            alpha_run_repository, deterministic_clock,
+            max_candidates=10, seed=1, run_id="run-stale",
+        )
+        service = ResearchRunService(alpha_run_repository)
+        adapter = ResearchRunWorkerAdapter(service, principal="researcher@example.com")
+        result = adapter.append_candidate(
+            run_id="run-stale", expected_version=started["transition_version"],
+            attempt_token="deadbeef" + "0" * 56,
+            candidate_id="cand-stale", attempt_ordinal=1,
+            candidate_digest="a" * 64, canonical_expression="close",
+            ast_signature="ast", shape_signature="shape",
+            dsl_version="factor-dsl-v1", operation="seed", seed=1, step=0,
+            status="generated", reason={},
+        )
+        assert result is None
+        assert service.list_candidates("run-stale", principal="researcher@example.com") == []
+
+    def test_append_candidate_requires_token(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        _start_run(
+            alpha_run_repository, deterministic_clock,
+            max_candidates=10, seed=1, run_id="run-notok",
+        )
+        service = ResearchRunService(alpha_run_repository)
+        adapter = ResearchRunWorkerAdapter(service, principal="researcher@example.com")
+        with pytest.raises(ValueError, match="token"):
+            adapter.append_candidate(
+                run_id="run-notok", expected_version=1, attempt_token=None,
+                candidate_id="c", attempt_ordinal=1, candidate_digest="a" * 64,
+                canonical_expression="close", ast_signature="a", shape_signature="b",
+                dsl_version="v", operation="seed", seed=1, step=0,
+                status="generated", reason={},
+            )
+
+    def test_append_candidate_lineage_fails_closed_on_stale_token(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        started = _start_run(
+            alpha_run_repository, deterministic_clock,
+            max_candidates=10, seed=1, run_id="run-lin-stale",
+        )
+        service = ResearchRunService(alpha_run_repository)
+        # First append two real candidates with a valid token.
+        service.append_candidate(
+            run_id="run-lin-stale", principal="researcher@example.com",
+            candidate_id="cand-a", attempt_ordinal=1, candidate_digest="a" * 64,
+            canonical_expression="close", ast_signature="a", shape_signature="b",
+            dsl_version="v", operation="seed", seed=1, step=0,
+            status="generated", reason={},
+        )
+        service.append_candidate(
+            run_id="run-lin-stale", principal="researcher@example.com",
+            candidate_id="cand-b", attempt_ordinal=2, candidate_digest="b" * 64,
+            canonical_expression="open", ast_signature="a", shape_signature="b",
+            dsl_version="v", operation="seed", seed=1, step=1,
+            status="generated", reason={},
+        )
+        adapter = ResearchRunWorkerAdapter(service, principal="researcher@example.com")
+        result = adapter.append_candidate_lineage(
+            run_id="run-lin-stale", expected_version=started["transition_version"],
+            attempt_token="0" * 64,
+            lineage_id="lin-stale", child_attempt_id="cand-b", parent_attempt_id="cand-a",
+            edge_ordinal=0, operation="mutation",
+        )
+        assert result is None
+
+
+class TestParallelInvariance:
+    def test_two_runs_same_seed_produce_identical_candidate_streams(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        max_candidates = 15
+        started_a = _start_run(
+            alpha_run_repository, deterministic_clock,
+            max_candidates=max_candidates, seed=99, run_id="run-inv-a",
+        )
+        started_b = _start_run(
+            alpha_run_repository, deterministic_clock,
+            max_candidates=max_candidates, seed=99, run_id="run-inv-b",
+        )
+        service = ResearchRunService(alpha_run_repository)
+        for run_id, started in [("run-inv-a", started_a), ("run-inv-b", started_b)]:
+            adapter = ResearchRunWorkerAdapter(service, principal="researcher@example.com")
+            factory = AlphaFactory(99, max_candidates=max_candidates)
+            limits = BudgetLimits(max_candidates, None, None, DEFAULT_MAX_DEPTH, DEFAULT_MAX_NODES)
+            drive_alpha_generation(
+                factory, limits=limits, adapter=adapter, run_id=run_id,
+                attempt_token=started["_attempt_token"],
+                expected_version=started["transition_version"],
+            )
+        cands_a = service.list_candidates("run-inv-a", principal="researcher@example.com")
+        cands_b = service.list_candidates("run-inv-b", principal="researcher@example.com")
+        assert len(cands_a) == len(cands_b) == max_candidates
+        for a, b in zip(cands_a, cands_b):
+            assert a["attempt_ordinal"] == b["attempt_ordinal"]
+            assert a["canonical_expression"] == b["canonical_expression"]
+            assert a["candidate_digest"] == b["candidate_digest"]
+            assert a["status"] == b["status"]
+            assert a["operation"] == b["operation"]
+
+    def test_replay_returns_candidates_in_ordinal_order(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        max_candidates = 10
+        started = _start_run(
+            alpha_run_repository, deterministic_clock,
+            max_candidates=max_candidates, seed=77, run_id="run-replay",
+        )
+        service = ResearchRunService(alpha_run_repository)
+        adapter = ResearchRunWorkerAdapter(service, principal="researcher@example.com")
+        factory = AlphaFactory(77, max_candidates=max_candidates)
+        limits = BudgetLimits(max_candidates, None, None, DEFAULT_MAX_DEPTH, DEFAULT_MAX_NODES)
+        drive_alpha_generation(
+            factory, limits=limits, adapter=adapter, run_id="run-replay",
+            attempt_token=started["_attempt_token"],
+            expected_version=started["transition_version"],
+        )
+        replay = service.replay("run-replay", principal="researcher@example.com", include_candidates=True)
+        assert replay is not None
+        candidates = replay["candidates"]
+        assert len(candidates) == max_candidates
+        assert [c["attempt_ordinal"] for c in candidates] == list(range(1, max_candidates + 1))
+        # Every candidate has a diversity payload or diagnostic (never empty for generated).
+        for c in candidates:
+            assert c["status"] in ALPHA_GENERATION_STATUSES
+
+
+class TestDriveAlphaGenerationExpressionBudget:
+    def test_expression_budget_caps_unique_expressions(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        max_candidates = 30
+        max_expressions = 3
+        started = _start_run(
+            alpha_run_repository, deterministic_clock,
+            max_candidates=max_candidates, seed=13, run_id="run-expr",
+        )
+        manifest = _drive_manifest(max_candidates=max_candidates, seed=13)
+        manifest["budgets"]["max_expressions"] = max_expressions
+        # Re-freeze with the expression budget (the run was already created, but
+        # BudgetLimits is parsed independently for the driver).
+        service = ResearchRunService(alpha_run_repository)
+        adapter = ResearchRunWorkerAdapter(service, principal="researcher@example.com")
+        factory = AlphaFactory(13, max_candidates=max_candidates)
+        limits = BudgetLimits(max_candidates, max_expressions, None, DEFAULT_MAX_DEPTH, DEFAULT_MAX_NODES)
+        summary = drive_alpha_generation(
+            factory, limits=limits, adapter=adapter, run_id="run-expr",
+            attempt_token=started["_attempt_token"],
+            expected_version=started["transition_version"],
+        )
+        # The expression budget (3 unique expressions) fires before the candidate
+        # budget (30 candidates). All generated candidates have unique expressions,
+        # so after 3 unique ones are recorded, the next step is expression-exhausted.
+        assert summary["terminal_reason"] == "expression_count_budget_exhausted"
+        assert summary["candidates_produced"] < max_candidates
+        run = service.get("run-expr", principal="researcher@example.com")
+        assert run["status"] == "completed"
+        assert "expression_count_budget_exhausted" in run["terminal_reason"]
+        candidates = service.list_candidates("run-expr", principal="researcher@example.com")
+        # Last candidate is the budget_exhausted marker.
+        assert candidates[-1]["status"] == "budget_exhausted"

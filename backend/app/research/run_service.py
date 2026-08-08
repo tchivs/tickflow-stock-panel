@@ -270,13 +270,12 @@ class ResearchRunService:
         if run["status"] != "running":
             raise ValueError("only a running attempt can be recovered")
         recovery_key = idempotency_key or f"recover-{expected_version}"
-        if idempotency_key:
-            existing = self._repository.get_idempotent_lifecycle_state(
-                run_id, principal=principal, idempotency_key=idempotency_key,
-                event_type="run_recovered",
-            )
-            if existing is not None:
-                return existing
+        existing = self._repository.get_idempotent_lifecycle_state(
+            run_id, principal=principal, idempotency_key=recovery_key,
+            event_type="run_recovered",
+        )
+        if existing is not None:
+            return existing
         token = _generate_attempt_token()
         result = self._repository.recover_alpha_run(
             run_id=run_id, principal=principal, expected_version=expected_version,
@@ -561,6 +560,8 @@ class ResearchRunService:
         *,
         run_id: str,
         principal: str,
+        expected_version: int,
+        attempt_token: str,
         candidate_id: str,
         attempt_ordinal: int,
         candidate_digest: str,
@@ -575,16 +576,9 @@ class ResearchRunService:
         reason: Mapping[str, Any],
         evidence_artifact_id: str | None = None,
     ) -> dict[str, Any] | None:
-        """Append one candidate-attempt fact, principal-scoped.
-
-        Returns ``None`` for unknown or cross-principal runs.  Every outcome
-        (invalid, duplicate, low_coverage, failed, rejected, admitted,
-        cancelled, budget_exhausted) is a durable fact; no expression
-        uniqueness rule erases a duplicate attempt (AF-REQ-04, D-05).
-        """
-        run = self._repository.get_alpha_run(run_id, principal=principal)
-        if run is None:
-            return None
+        """Append a candidate under one atomic running-attempt fence."""
+        if not attempt_token:
+            raise ValueError("attempt_token is required for candidate append")
         if evidence_artifact_id is not None:
             self._verify_artifact_reference(run_id, evidence_artifact_id)
         return self._repository.append_candidate_attempt(
@@ -603,6 +597,37 @@ class ResearchRunService:
             reason=reason,
             evidence_artifact_id=evidence_artifact_id,
             artifact_verified=evidence_artifact_id is not None,
+            principal=principal,
+            expected_version=expected_version,
+            expected_attempt_token_digest=attempt_token_digest(attempt_token),
+        )
+
+    def append_candidate_lineage(
+        self,
+        *,
+        run_id: str,
+        principal: str,
+        expected_version: int,
+        attempt_token: str,
+        lineage_id: str,
+        child_attempt_id: str,
+        parent_attempt_id: str,
+        edge_ordinal: int,
+        operation: str,
+    ) -> dict[str, Any] | None:
+        """Append a lineage edge under one atomic running-attempt fence."""
+        if not attempt_token:
+            raise ValueError("attempt_token is required for lineage append")
+        return self._repository.append_candidate_lineage(
+            run_id=run_id,
+            lineage_id=lineage_id,
+            child_attempt_id=child_attempt_id,
+            parent_attempt_id=parent_attempt_id,
+            edge_ordinal=edge_ordinal,
+            operation=operation,
+            principal=principal,
+            expected_version=expected_version,
+            expected_attempt_token_digest=attempt_token_digest(attempt_token),
         )
 
     def append_artifact(
@@ -738,7 +763,11 @@ class ResearchRunService:
         if committed_seq > 100_000:
             raise AlphaCheckpointValidationError("checkpoint event sequence exceeds validation bound")
         events = self._repository.list_run_events(
-            run_id, after_seq=0, limit=max(1, committed_seq), principal=principal
+            run_id,
+            after_seq=0,
+            limit=max(1, committed_seq),
+            principal=principal,
+            artifact_service=self._artifact_service,
         )
         actual_seqs = {evt["seq"] for evt in events}
         expected_seqs = set(range(1, committed_seq + 1))

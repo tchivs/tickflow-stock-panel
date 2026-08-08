@@ -15,7 +15,8 @@ authority (T-46-03; the static guard is tightened in plan 46-04).
 from __future__ import annotations
 
 import random
-from collections.abc import Iterator, Mapping, Sequence
+import time
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Any, Final, Literal
 
@@ -366,6 +367,11 @@ class AlphaFactory:
     def step(self) -> int:
         """Number of candidates produced so far (next step index)."""
         return self._step
+
+    @property
+    def seed(self) -> int:
+        """The frozen seed this factory is deterministically driven from."""
+        return self._seed
 
     @property
     def seed_pool_size(self) -> int:
@@ -937,3 +943,288 @@ def classify_candidate(
     if diversity.get("exact_structural_match"):
         return "duplicate"
     return "generated"
+
+
+# ---------------------------------------------------------------------------
+# Phase 46 Wave 3 (AF-REQ-23 SC4): server-side budget guard + driver loop
+# ---------------------------------------------------------------------------
+#
+# Candidate-count, expression-count, wall-clock, and (structural) memory budgets
+# are enforced server-side at the top of every step.  Exhausting any budget is a
+# *normal* terminal — the run transitions to ``completed`` (never ``failed``)
+# with a ``terminal_reason`` naming the exhausted budget (research §6).  The
+# loop persists one candidate per step through the token-fenced worker adapter;
+# parallelism cannot change order, winner, or replay (T-46-11, T-46-12).
+
+
+@dataclass(frozen=True, slots=True)
+class BudgetLimits:
+    """Frozen budget envelope parsed from the run manifest (research §6).
+
+    ``max_candidates`` is the hard candidate-count ceiling.  ``max_expressions``
+    caps the unique-expression frontier (``None`` = unbounded).
+    ``max_wallclock_seconds`` caps wall-clock via ``time.monotonic()`` (``None``
+    = unbounded).  ``max_depth``/``max_nodes`` bound memory structurally (O1).
+    """
+
+    max_candidates: int
+    max_expressions: int | None
+    max_wallclock_seconds: float | None
+    max_depth: int
+    max_nodes: int
+
+    @classmethod
+    def from_manifest(cls, manifest: Mapping[str, Any]) -> "BudgetLimits":
+        """Parse the frozen budget envelope from a D-04 manifest."""
+        budgets = manifest.get("budgets") if isinstance(manifest, Mapping) else None
+        if not isinstance(budgets, Mapping):
+            raise ValueError("manifest budgets group is required")
+        max_candidates = budgets.get("max_candidates")
+        if type(max_candidates) is not int or max_candidates < 1:
+            raise ValueError("budgets.max_candidates must be a positive integer")
+        max_expressions = budgets.get("max_expressions")
+        if max_expressions is not None and (
+            type(max_expressions) is not int or max_expressions < 1
+        ):
+            raise ValueError("budgets.max_expressions must be a positive integer or null")
+        max_wallclock = budgets.get("max_wallclock_seconds")
+        if max_wallclock is not None and (
+            type(max_wallclock) not in (int, float) or max_wallclock <= 0
+        ):
+            raise ValueError("budgets.max_wallclock_seconds must be a positive number or null")
+        max_depth = DEFAULT_MAX_DEPTH
+        max_nodes = DEFAULT_MAX_NODES
+        grammar = manifest.get("grammar")
+        if isinstance(grammar, Mapping):
+            gd = grammar.get("max_depth")
+            if gd is not None:
+                if type(gd) is not int or gd < 1:
+                    raise ValueError("grammar.max_depth must be a positive integer")
+                max_depth = gd
+            gn = grammar.get("max_nodes")
+            if gn is not None:
+                if type(gn) is not int or gn < 1:
+                    raise ValueError("grammar.max_nodes must be a positive integer")
+                max_nodes = gn
+        return cls(
+            max_candidates=max_candidates,
+            max_expressions=max_expressions,
+            max_wallclock_seconds=float(max_wallclock) if max_wallclock is not None else None,
+            max_depth=max_depth,
+            max_nodes=max_nodes,
+        )
+
+
+class BudgetGuard:
+    """Server-side budget enforcement checked at the top of each step.
+
+    The guard is checked *before* generating each candidate (research Pitfall 4)
+    so a worker can never run past a budget.  Exhaustion returns the budget
+    name; the driver loop records a ``budget_exhausted`` candidate and requests
+    a normal ``completed`` terminal.
+    """
+
+    def __init__(
+        self, limits: BudgetLimits, *, monotonic: Callable[[], float] = time.monotonic
+    ) -> None:
+        self._limits = limits
+        self._monotonic = monotonic
+        self._start = monotonic()
+        self._unique_expressions: set[str] = set()
+
+    @property
+    def limits(self) -> BudgetLimits:
+        return self._limits
+
+    @property
+    def unique_expression_count(self) -> int:
+        return len(self._unique_expressions)
+
+    def record_expression(self, canonical_expression: str) -> None:
+        """Track one unique canonical expression against the expression budget."""
+        self._unique_expressions.add(canonical_expression)
+
+    def exhausted(self, *, candidates: int) -> str | None:
+        """Return the name of the first exhausted budget, or ``None``.
+
+        Checked at the TOP of each step before generating.  Candidate-count is
+        first (the primary ceiling); wall-clock second; expression-count third.
+        Memory is bounded structurally by depth/node limits + the bounded
+        candidate frontier (no runtime check, research §6).
+        """
+        if candidates >= self._limits.max_candidates:
+            return "candidate_count"
+        if self._limits.max_wallclock_seconds is not None:
+            if self._monotonic() - self._start >= self._limits.max_wallclock_seconds:
+                return "wallclock"
+        if (
+            self._limits.max_expressions is not None
+            and len(self._unique_expressions) >= self._limits.max_expressions
+        ):
+            return "expression_count"
+        return None
+
+    @staticmethod
+    def terminal_reason(budget_name: str) -> str:
+        return f"{budget_name}_budget_exhausted"
+
+
+def _empty_diversity(population_size: int) -> dict[str, Any]:
+    """Diversity summary for a candidate whose features cannot be extracted."""
+    return {
+        "field_overlap": 0.0,
+        "operator_function_overlap": 0.0,
+        "exact_structural_match": False,
+        "shape_match": False,
+        "most_similar_step": None,
+        "population_size": population_size,
+    }
+
+
+def drive_alpha_generation(
+    factory: AlphaFactory,
+    *,
+    limits: BudgetLimits,
+    adapter: Any,
+    run_id: str,
+    attempt_token: str,
+    expected_version: int,
+    _monotonic: Callable[[], float] = time.monotonic,
+) -> dict[str, Any]:
+    """Drive the deterministic factory through the token-fenced worker adapter.
+
+    Runs one candidate per step: generate → validate → record diversity →
+    persist via the token-fenced adapter (candidate + lineage + progress) →
+    repeat until a budget is exhausted.  Each candidate — invalid, duplicate,
+    generated — is retained as its own attempt row.  Budget exhaustion records a
+    final ``budget_exhausted`` candidate and requests a normal ``completed``
+    transition (never ``failed``) with a ``terminal_reason`` naming the budget.
+
+    ``adapter`` is a structural sink exposing ``append_candidate``,
+    ``append_candidate_lineage``, ``report_progress``, and
+    ``request_transition`` (the Phase 45 worker adapter contract).  This module
+    never imports the adapter's concrete type, so no evaluation/provider/
+    admission/broker authority leaks in (T-46-14).
+
+    Returns a summary dict with ``candidates_produced``, ``terminal_reason``,
+    ``unique_expression_count``, and ``population_size``.
+    """
+    guard = BudgetGuard(limits, monotonic=_monotonic)
+    population: list[FactorFeatures] = []
+    produced: list[tuple[GenerationResult, str]] = []
+    terminal_reason = BudgetGuard.terminal_reason("candidate_count")
+    # update_progress increments transition_version on every call, so the
+    # driver tracks the live version for all subsequent token-fenced callbacks
+    # (append_candidate / append_candidate_lineage / request_transition).
+    version = expected_version
+
+    def _report_progress(completed: int) -> None:
+        nonlocal version
+        result = adapter.report_progress(
+            run_id=run_id, expected_version=version,
+            attempt_token=attempt_token,
+            candidate_attempts_total=limits.max_candidates,
+            candidate_attempts_completed=completed,
+        )
+        if result is not None:
+            version = int(result["transition_version"])
+
+    while True:
+        budget_name = guard.exhausted(candidates=len(produced))
+        if budget_name is not None:
+            terminal_reason = BudgetGuard.terminal_reason(budget_name)
+            if budget_name != "candidate_count":
+                marker_ordinal = len(produced) + 1
+                adapter.append_candidate(
+                    run_id=run_id, expected_version=version,
+                    attempt_token=attempt_token,
+                    candidate_id=f"acand_budget_{run_id}",
+                    attempt_ordinal=marker_ordinal,
+                    candidate_digest=digest_bytes(
+                        {"run_id": run_id, "budget": budget_name,
+                         "step": factory.step, "seed": factory.seed}
+                    ),
+                    canonical_expression="",
+                    ast_signature="",
+                    shape_signature="",
+                    dsl_version=factor_dsl.DSL_VERSION,
+                    operation="budget_exhausted",
+                    seed=factory.seed,
+                    step=factory.step,
+                    status="budget_exhausted",
+                    reason={"budget": budget_name, "terminal_reason": terminal_reason},
+                )
+                _report_progress(marker_ordinal)
+            break
+
+        result = factory.generate_next()
+        if result is None:
+            break
+
+        validation = validate_candidate(
+            result.ast, max_depth=limits.max_depth, max_nodes=limits.max_nodes
+        )
+        features = validation.features
+        if features is None:
+            # Complexity-invalid: the AST is valid DSL, just too complex, so
+            # features can be extracted for signatures (no depth/node gate).
+            try:
+                features = factor_dsl.extract_features(result.ast)
+            except factor_dsl.FactorDslError:
+                features = None
+
+        if features is not None:
+            diversity = diversity_summary(features, population)
+        else:
+            diversity = _empty_diversity(len(population))
+
+        status = classify_candidate(validation, diversity)
+        if validation.status == "valid":
+            guard.record_expression(result.canonical_expression)
+
+        candidate_id = f"acand_{run_id}_{result.digest}"
+        if validation.status == "invalid":
+            reason: dict[str, Any] = dict(validation.reason)
+        else:
+            reason = {"diversity": diversity}
+        canonical_expr = validation.canonical_expression or result.canonical_expression
+        ast_sig = features.structural_signature if features is not None else result.digest
+        shape_sig = features.shape_signature if features is not None else result.digest
+
+        adapter.append_candidate(
+            run_id=run_id, expected_version=version,
+            attempt_token=attempt_token,
+            candidate_id=candidate_id, attempt_ordinal=result.attempt_ordinal,
+            candidate_digest=result.digest, canonical_expression=canonical_expr,
+            ast_signature=ast_sig, shape_signature=shape_sig,
+            dsl_version=factor_dsl.DSL_VERSION, operation=result.operation,
+            seed=result.seed, step=result.step, status=status, reason=reason,
+        )
+
+        for edge_ordinal, parent_step in enumerate(result.parent_steps):
+            adapter.append_candidate_lineage(
+                run_id=run_id, expected_version=version,
+                attempt_token=attempt_token,
+                lineage_id=f"alin_{run_id}_{result.digest}_{edge_ordinal}",
+                child_attempt_id=candidate_id,
+                parent_attempt_id=produced[parent_step][1],
+                edge_ordinal=edge_ordinal, operation=result.operation,
+            )
+
+        _report_progress(result.attempt_ordinal)
+
+        if features is not None:
+            population.append(features)
+        produced.append((result, candidate_id))
+
+    adapter.request_transition(
+        run_id=run_id, expected_version=version,
+        attempt_token=attempt_token,
+        to_status="completed", terminal_reason=terminal_reason,
+    )
+    return {
+        "candidates_produced": len(produced),
+        "terminal_reason": terminal_reason,
+        "unique_expression_count": guard.unique_expression_count,
+        "population_size": len(population),
+    }
