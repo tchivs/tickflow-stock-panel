@@ -176,7 +176,7 @@ async def lifespan(app: FastAPI):
 
     app.state.resolve_analysis_subject_scope = resolve_analysis_subject_scope
     from app.backtest.engine import BacktestEngine
-    from app.research.artifacts import EvaluationArtifactService
+    from app.research.artifacts import AlphaRunArtifactService, EvaluationArtifactService
     from app.research.catalog import ExperimentCatalog
     from app.research.evaluation import FactorEvaluationService
     from app.research.factor_dsl import parse_factor
@@ -187,11 +187,14 @@ async def lifespan(app: FastAPI):
 
     research_repository = ResearchRepository(operational.database_path)
     artifact_service = EvaluationArtifactService(store.data_dir)
+    alpha_artifact_service = AlphaRunArtifactService(store.data_dir)
     app.state.portfolio_repository = PortfolioRepository(operational.database_path)
     app.state.research_repository = research_repository
     from app.research.run_service import ResearchRunService
 
-    app.state.research_run_service = ResearchRunService(research_repository)
+    app.state.research_run_service = ResearchRunService(
+        research_repository, artifact_service=alpha_artifact_service
+    )
     app.state.factor_registry = FactorRegistry(research_repository)
     app.state.research_artifact_service = artifact_service
     app.state.experiment_catalog = ExperimentCatalog(research_repository)

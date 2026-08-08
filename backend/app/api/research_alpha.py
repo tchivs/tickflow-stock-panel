@@ -76,7 +76,8 @@ async def create_run(
             status_code=422,
             detail={
                 "status": "preflight_failed",
-                "reason": _bounded_reason(str(error)),
+                "code": "preflight_failed",
+                "reason": "invalid run manifest",
             },
         ) from error
     except AlphaRunConflictError as error:
@@ -124,10 +125,9 @@ async def replay_run(
     )
 
 
-def _bounded_reason(reason: str) -> str:
-    """Keep diagnostic reasons bounded and free of internal paths/secrets."""
-    bounded = reason.strip()
-    return bounded[:500] if len(bounded) > 500 else bounded
+def _bounded_reason(_reason: str) -> str:
+    """Return the fixed public preflight detail; never echo diagnostics."""
+    return "invalid run manifest"
 @router.post("/runs/{run_id}/retry", response_model=AlphaRunReadDTO, status_code=201)
 async def retry_run(
     request: Request,
@@ -153,7 +153,11 @@ async def retry_run(
     except AlphaRunPreflightError as error:
         raise HTTPException(
             status_code=422,
-            detail={"status": "preflight_failed", "reason": _bounded_reason(str(error))},
+            detail={
+                "status": "preflight_failed",
+                "code": "preflight_failed",
+                "reason": "invalid run manifest",
+            },
         ) from error
     except AlphaRunConflictError as error:
         raise HTTPException(status_code=409, detail="idempotency key conflicts with an existing retry") from error
@@ -203,12 +207,14 @@ async def list_events(
     if service.get(run_id, principal=principal) is None:
         raise HTTPException(status_code=404, detail="run not found")
     events = service.list_events(
-        run_id, principal=principal, after_seq=after_sequence, limit=limit
+        run_id, principal=principal, after_seq=after_sequence, limit=limit + 1
     )
-    response.headers["X-History-Truncated"] = str(len(events) >= limit).lower()
-    if len(events) >= limit and events:
-        response.headers["X-Next-Sequence"] = str(events[-1]["seq"])
-    return [AlphaRunEventDTO(**projections.event(evt)) for evt in events]
+    truncated = len(events) > limit
+    page = events[:limit]
+    response.headers["X-History-Truncated"] = str(truncated).lower()
+    if truncated and page:
+        response.headers["X-Next-Sequence"] = str(page[-1]["seq"])
+    return [AlphaRunEventDTO(**projections.event(evt)) for evt in page]
 
 
 @router.get("/runs/{run_id}/candidates", response_model=list[AlphaCandidateDTO])
@@ -224,12 +230,14 @@ async def list_candidates(
     if service.get(run_id, principal=principal) is None:
         raise HTTPException(status_code=404, detail="run not found")
     candidates = service.list_candidates(
-        run_id, principal=principal, after_ordinal=after_ordinal, limit=limit
+        run_id, principal=principal, after_ordinal=after_ordinal, limit=limit + 1
     )
-    response.headers["X-History-Truncated"] = str(len(candidates) >= limit).lower()
-    if len(candidates) >= limit and candidates:
-        response.headers["X-Next-Ordinal"] = str(candidates[-1]["attempt_ordinal"])
-    return [AlphaCandidateDTO(**projections.candidate(c)) for c in candidates]
+    truncated = len(candidates) > limit
+    page = candidates[:limit]
+    response.headers["X-History-Truncated"] = str(truncated).lower()
+    if truncated and page:
+        response.headers["X-Next-Ordinal"] = str(page[-1]["attempt_ordinal"])
+    return [AlphaCandidateDTO(**projections.candidate(c)) for c in page]
 
 
 @router.get("/runs/{run_id}/progress", response_model=AlphaProgressDTO)

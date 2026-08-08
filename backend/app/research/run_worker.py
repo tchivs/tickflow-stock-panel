@@ -130,16 +130,13 @@ class ResearchRunWorkerAdapter:
         checkpoint: dict[str, Any],
         referenced_candidate_ids: list[str] | None = None,
         inline_summary: dict[str, Any] | None = None,
-        artifact_service: Any | None = None,
     ) -> dict[str, Any] | None:
-        """Append only through the service-owned validated seam."""
-        if not self._service._validate_attempt_token(
-            run_id, principal=self._principal, expected_version=expected_version,
-            attempt_token=attempt_token,
-        ):
+        """Append through the service-owned validation and attempt fence."""
+        if not attempt_token:
             return None
         return self._service.append_checkpoint(
             run_id=run_id, principal=self._principal, checkpoint=checkpoint,
             referenced_candidate_ids=referenced_candidate_ids or [],
-            inline_summary=inline_summary, artifact_service=artifact_service,
+            inline_summary=inline_summary, expected_version=expected_version,
+            attempt_token=attempt_token,
         )
