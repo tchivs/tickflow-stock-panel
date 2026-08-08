@@ -28,6 +28,13 @@ def get_custom_data_provider(dataset: str, provider_name: str | None = None):
     name = provider_name or preferences.get_daily_data_provider()
     if name == "tickflow":
         return None
+    # 内置本地源 (stockdb :8000): 走 chain 的单例, 不经过 custom loader
+    # (loader 只注册 YAML 自定义源 + plugins/ 插件)。ETF 日K / A股日K
+    # 主通道据此切到本地数据, 避免 free-api 限额。
+    if name == "local_stockdb":
+        from app.data_providers import chain as provider_chain
+
+        return provider_chain.local_stockdb_provider()
     from app.data_providers import custom as custom_sources
     if not custom_sources.provider_has_dataset(name, dataset):
         return None
