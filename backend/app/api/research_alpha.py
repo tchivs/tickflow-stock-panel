@@ -8,7 +8,7 @@ broker, order, portfolio, monitor, or live-execution collaborators.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 
 from app.research import projections
 from app.research.repository import AlphaRunConflictError
@@ -96,11 +96,18 @@ async def get_run(request: Request, run_id: str) -> AlphaRunReadDTO:
 
 
 @router.get("/runs/{run_id}/replay", response_model=AlphaRunReplayDTO)
-async def replay_run(request: Request, run_id: str) -> AlphaRunReplayDTO:
-    """Read-only replay of the frozen snapshot and committed event history."""
+async def replay_run(
+    request: Request,
+    run_id: str,
+    after_sequence: int = Query(0, ge=0),
+    limit: int = Query(500, ge=1, le=5000),
+) -> AlphaRunReplayDTO:
+    """Read-only replay page with explicit continuation markers."""
     service = _service(request)
     principal = _principal(request)
-    replay_record = service.replay(run_id, principal=principal)
+    replay_record = service.replay(
+        run_id, principal=principal, after_seq=after_sequence, limit=limit
+    )
     if replay_record is None:
         raise HTTPException(status_code=404, detail="run not found")
     projected = projections.replay(replay_record)
@@ -111,6 +118,9 @@ async def replay_run(request: Request, run_id: str) -> AlphaRunReplayDTO:
         run=AlphaRunReadDTO(**projected["run"]),  # type: ignore[arg-type]
         snapshot=snapshot_dto,
         events=[AlphaRunEventDTO(**evt) for evt in projected["events"]],  # type: ignore[arg-type]
+        events_after_sequence=int(projected["events_after_sequence"]),
+        next_sequence=projected["next_sequence"],
+        truncated=bool(projected["truncated"]),
     )
 
 
@@ -170,9 +180,7 @@ async def cancel_run(
         raise HTTPException(status_code=404, detail="run not found")
     try:
         result = service.cancel(
-            run_id,
-            principal=principal,
-            expected_version=body.expected_version,
+            run_id, principal=principal, expected_version=body.expected_version,
             idempotency_key=body.idempotency_key,
         )
     except ValueError as error:
@@ -186,22 +194,20 @@ async def cancel_run(
 async def list_events(
     request: Request,
     run_id: str,
+    response: Response,
     after_sequence: int = Query(0, ge=0),
     limit: int = Query(500, ge=1, le=500),
 ) -> list[AlphaRunEventDTO]:
-    """Return bounded, ordered event history for ``run_id`` (D-09, T-45-11).
-
-    Events are ordered by monotonic server sequence.  Cross-principal or
-    unknown runs return the same 404 boundary (T-45-12).
-    """
     service = _service(request)
     principal = _principal(request)
-    # Verify ownership first so cross-principal/unknown share one 404 boundary.
     if service.get(run_id, principal=principal) is None:
         raise HTTPException(status_code=404, detail="run not found")
     events = service.list_events(
         run_id, principal=principal, after_seq=after_sequence, limit=limit
     )
+    response.headers["X-History-Truncated"] = str(len(events) >= limit).lower()
+    if len(events) >= limit and events:
+        response.headers["X-Next-Sequence"] = str(events[-1]["seq"])
     return [AlphaRunEventDTO(**projections.event(evt)) for evt in events]
 
 
@@ -209,19 +215,20 @@ async def list_events(
 async def list_candidates(
     request: Request,
     run_id: str,
+    response: Response,
+    after_ordinal: int = Query(0, ge=0),
     limit: int = Query(500, ge=1, le=500),
 ) -> list[AlphaCandidateDTO]:
-    """Return bounded, ordered candidate-attempt history for ``run_id`` (AF-REQ-04).
-
-    Every attempted candidate — including invalid, duplicate, failed, and
-    rejected outcomes — is retained in ordinal order.  Cross-principal or
-    unknown runs return the same 404 boundary (T-45-12).
-    """
     service = _service(request)
     principal = _principal(request)
     if service.get(run_id, principal=principal) is None:
         raise HTTPException(status_code=404, detail="run not found")
-    candidates = service.list_candidates(run_id, principal=principal, limit=limit)
+    candidates = service.list_candidates(
+        run_id, principal=principal, after_ordinal=after_ordinal, limit=limit
+    )
+    response.headers["X-History-Truncated"] = str(len(candidates) >= limit).lower()
+    if len(candidates) >= limit and candidates:
+        response.headers["X-Next-Ordinal"] = str(candidates[-1]["attempt_ordinal"])
     return [AlphaCandidateDTO(**projections.candidate(c)) for c in candidates]
 
 
@@ -255,16 +262,16 @@ async def update_progress(
     """
     service = _service(request)
     principal = _principal(request)
-    result = service.update_progress(
-        run_id,
-        principal=principal,
-        expected_version=body.expected_version,
-        attempt_token=body.attempt_token,
-        candidate_attempts_total=body.candidate_attempts_total,
-        candidate_attempts_completed=body.candidate_attempts_completed,
-        folds_total=body.folds_total,
-        folds_completed=body.folds_completed,
-    )
+    try:
+        result = service.update_progress(
+            run_id, principal=principal, expected_version=body.expected_version,
+            attempt_token=body.attempt_token,
+            candidate_attempts_total=body.candidate_attempts_total,
+            candidate_attempts_completed=body.candidate_attempts_completed,
+            folds_total=body.folds_total, folds_completed=body.folds_completed,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail="invalid bounded progress update") from error
     if result is None:
         raise HTTPException(status_code=409, detail="stale version or invalid attempt token")
     return AlphaProgressDTO(**projections.progress(result))
