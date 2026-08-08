@@ -150,6 +150,23 @@ _LOC = factor_dsl.SourceLocation(offset=0, line=1, column=1)
 # rolling_mean seed canonicalizes by construction.
 _SEED_ROLLING_WINDOWS: Final[tuple[int, ...]] = (5, 20, 60)
 
+# Literals and functions used by the evolution phase.  Every safe literal is a
+# positive finite integer inside the legal rolling_mean window range and
+# non-zero, so a mutated/grafted literal canonicalizes except for the rare
+# clip-bound-ordering case, which ``factor_dsl.canonicalize`` rejects (retry).
+_SAFE_LITERALS: Final[tuple[float, ...]] = (1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0)
+_FUNCTION_CHOICES: Final[tuple[str, ...]] = (
+    "abs", "sign", "log1p", "rank", "zscore", "rolling_mean", "clip",
+)
+_MUTATION_KINDS: Final[tuple[str, ...]] = (
+    "point_mutation_field",
+    "point_mutation_operator",
+    "point_mutation_literal",
+    "subtree_replacement",
+)
+# Bounded retry budget before falling back to a guaranteed-valid operation.
+_MAX_EVOLVE_ATTEMPTS: Final[int] = 16
+
 
 def candidate_digest(
     *,
@@ -211,6 +228,58 @@ class GenerationResult:
         return self.step + 1
 
 
+# --- AST traversal / rebuild helpers -----------------------------------------
+# Every Factor DSL node is a frozen dataclass, so mutation / crossover rebuild
+# only the path from the edited position to the root and share unchanged
+# subtrees by reference (no deep copy needed).
+
+
+def _children(node: Expression) -> tuple[Expression, ...]:
+    if isinstance(node, factor_dsl.Unary):
+        return (node.operand,)
+    if isinstance(node, factor_dsl.Binary):
+        return (node.left, node.right)
+    if isinstance(node, factor_dsl.Call):
+        return node.arguments
+    return ()
+
+
+def _all_paths(
+    node: Expression, prefix: tuple[int, ...] = ()
+) -> Iterator[tuple[tuple[int, ...], Expression]]:
+    """Yield ``(path, node)`` for every node; ``path`` is a tuple of child indices."""
+    yield prefix, node
+    for index, child in enumerate(_children(node)):
+        yield from _all_paths(child, prefix + (index,))
+
+
+def _node_at(node: Expression, path: tuple[int, ...]) -> Expression:
+    for index in path:
+        node = _children(node)[index]
+    return node
+
+
+def _replace_child(node: Expression, index: int, new_child: Expression) -> Expression:
+    if isinstance(node, factor_dsl.Unary):
+        return replace(node, operand=new_child)
+    if isinstance(node, factor_dsl.Binary):
+        return replace(node, left=new_child) if index == 0 else replace(node, right=new_child)
+    if isinstance(node, factor_dsl.Call):
+        arguments = list(node.arguments)
+        arguments[index] = new_child
+        return replace(node, arguments=tuple(arguments))
+    raise TypeError("expression node has no replaceable children")
+
+
+def _replace_at(node: Expression, path: tuple[int, ...], new_subtree: Expression) -> Expression:
+    """Return a new AST with ``new_subtree`` substituted at ``path``."""
+    if not path:
+        return new_subtree
+    index = path[0]
+    rebuilt_child = _replace_at(_children(node)[index], path[1:], new_subtree)
+    return _replace_child(node, index, rebuilt_child)
+
+
 class AlphaFactory:
     """Deterministic seeded candidate-generation engine over the Factor DSL.
 
@@ -261,17 +330,16 @@ class AlphaFactory:
     # -- public API -------------------------------------------------------
 
     def generate_next(self) -> GenerationResult | None:
-        """Produce the next seed candidate, or ``None`` once the budget is hit.
+        """Produce the next candidate, or ``None`` once the budget is hit.
 
-        Evolution (mutation / crossover) is added in task 46-02-02; until then
-        generation stops at the seed-pool boundary or the candidate budget,
-        whichever comes first.
+        The stream is: seed pool (frozen enumeration), then a mutation wave,
+        then a crossover wave, each filling the remaining candidate budget.
+        Every output is a legal DSL AST re-canonicalized through
+        ``factor_dsl.canonicalize`` (the single validator).
         """
         if self._step >= self._max_candidates:
             return None
-        if self._step >= len(self._seed_pool):
-            return None
-        result = self._produce_seed(self._step)
+        result = self._produce(self._step)
         self._results.append(result)
         self._step += 1
         return result
@@ -357,3 +425,212 @@ class AlphaFactory:
         yield factor_dsl.Binary("*", factor_dsl.Field(fields[0], _LOC), factor_dsl.Number(2.0, _LOC), _LOC)
         denom_source = fields[1] if count >= 2 else fields[0]
         yield factor_dsl.Binary("/", factor_dsl.Field(denom_source, _LOC), factor_dsl.Number(100.0, _LOC), _LOC)
+
+    # -- evolution: mutation + crossover --------------------------------
+
+    def _produce(self, step: int) -> GenerationResult:
+        """Dispatch one step: seed pool, then mutation wave, then crossover wave.
+
+        After the seed pool the remaining budget is split evenly: the first
+        half is mutation, the second half is crossover.  The split depends on
+        the frozen budget (part of the spec), so ``replay_to`` preserves the
+        budget to reproduce the exact dispatch.
+        """
+        if step < len(self._seed_pool):
+            return self._produce_seed(step)
+        # Mutation needs >= 1 parent; crossover needs >= 2 distinct parents.
+        if len(self._results) < 2:
+            return self._produce_mutation(step)
+        remaining = self._max_candidates - len(self._seed_pool)
+        mutation_budget = max(0, remaining) // 2
+        rel = step - len(self._seed_pool)
+        if rel < mutation_budget:
+            return self._produce_mutation(step)
+        return self._produce_crossover(step)
+
+    def _produce_mutation(self, step: int) -> GenerationResult:
+        for _ in range(_MAX_EVOLVE_ATTEMPTS):
+            parent_step = self._rng.randrange(len(self._results))
+            parent = self._results[parent_step]
+            kind = self._rng.choice(_MUTATION_KINDS)
+            mutated = self._apply_mutation(parent.ast, kind)
+            if mutated is None:
+                continue
+            try:
+                canonical = factor_dsl.canonicalize(mutated)
+            except factor_dsl.FactorDslError:
+                continue
+            return GenerationResult(
+                step=step,
+                operation=kind,
+                ast=mutated,
+                canonical_expression=canonical,
+                parent_steps=(parent.step,),
+                seed=self._seed,
+            )
+        # Guaranteed-valid fallback: swap one field in a field-bearing parent.
+        parent_step, mutated = self._fallback_field_swap()
+        canonical = factor_dsl.canonicalize(mutated)
+        return GenerationResult(
+            step=step,
+            operation="point_mutation_field",
+            ast=mutated,
+            canonical_expression=canonical,
+            parent_steps=(self._results[parent_step].step,),
+            seed=self._seed,
+        )
+
+    def _apply_mutation(self, ast: Expression, kind: str) -> Expression | None:
+        if kind == "point_mutation_field":
+            return self._mutate_field(ast)
+        if kind == "point_mutation_operator":
+            return self._mutate_operator(ast)
+        if kind == "point_mutation_literal":
+            return self._mutate_literal(ast)
+        if kind == "subtree_replacement":
+            return self._mutate_subtree(ast)
+        raise ValueError(f"unknown mutation kind {kind!r}")
+
+    def _mutate_field(self, ast: Expression) -> Expression | None:
+        paths = [path for path, node in _all_paths(ast) if isinstance(node, factor_dsl.Field)]
+        if not paths:
+            return None
+        path = self._rng.choice(paths)
+        current = _node_at(ast, path)
+        others = [name for name in self._fields_sorted if name != current.name]
+        if not others:
+            return None
+        return _replace_at(ast, path, factor_dsl.Field(self._rng.choice(others), _LOC))
+
+    def _mutate_operator(self, ast: Expression) -> Expression | None:
+        paths = [path for path, node in _all_paths(ast) if isinstance(node, factor_dsl.Binary)]
+        if not paths:
+            return None
+        path = self._rng.choice(paths)
+        current = _node_at(ast, path)
+        others = [operator for operator in _BINARY_OPERATORS if operator != current.operator]
+        return _replace_at(ast, path, replace(current, operator=self._rng.choice(others)))
+
+    def _mutate_literal(self, ast: Expression) -> Expression | None:
+        paths = [path for path, node in _all_paths(ast) if isinstance(node, factor_dsl.Number)]
+        if not paths:
+            return None
+        path = self._rng.choice(paths)
+        current = _node_at(ast, path)
+        others = [value for value in _SAFE_LITERALS if value != current.value]
+        new_value = self._rng.choice(others) if others else self._rng.choice(_SAFE_LITERALS)
+        return _replace_at(ast, path, factor_dsl.Number(new_value, _LOC))
+
+    def _mutate_subtree(self, ast: Expression) -> Expression | None:
+        paths = [path for path, _ in _all_paths(ast)]
+        if not paths:
+            return None
+        path = self._rng.choice(paths)
+        depth = min(self._max_depth, 3)
+        return _replace_at(ast, path, self._random_subtree(depth))
+
+    def _fallback_field_swap(self) -> tuple[int, Expression]:
+        """Deterministic, PRNG-free guaranteed-valid mutation (rarely reached)."""
+        for parent_step in range(len(self._results)):
+            ast = self._results[parent_step].ast
+            fields = [(path, node) for path, node in _all_paths(ast) if isinstance(node, factor_dsl.Field)]
+            if not fields:
+                continue
+            path, node = fields[0]
+            position = self._fields_sorted.index(node.name)
+            new_name = self._fields_sorted[(position + 1) % len(self._fields_sorted)]
+            return parent_step, _replace_at(ast, path, factor_dsl.Field(new_name, _LOC))
+        # The frontier always contains step 0 (a single field); unreachable.
+        raise AssertionError("no field-bearing parent in frontier")
+
+    def _produce_crossover(self, step: int) -> GenerationResult:
+        for _ in range(_MAX_EVOLVE_ATTEMPTS):
+            a = self._rng.randrange(len(self._results))
+            b = self._rng.randrange(len(self._results))
+            if a == b:
+                continue
+            parent_a = self._results[a]
+            parent_b = self._results[b]
+            child = self._graft(parent_a.ast, parent_b.ast)
+            if child is None:
+                continue
+            try:
+                canonical = factor_dsl.canonicalize(child)
+            except factor_dsl.FactorDslError:
+                continue
+            return GenerationResult(
+                step=step,
+                operation="crossover",
+                ast=child,
+                canonical_expression=canonical,
+                parent_steps=(parent_a.step, parent_b.step),
+                seed=self._seed,
+            )
+        # Guaranteed-valid fallback: graft a field from parent 1 into parent 0.
+        a, b, child = self._fallback_graft()
+        canonical = factor_dsl.canonicalize(child)
+        return GenerationResult(
+            step=step,
+            operation="crossover",
+            ast=child,
+            canonical_expression=canonical,
+            parent_steps=(self._results[a].step, self._results[b].step),
+            seed=self._seed,
+        )
+
+    def _graft(self, ast_a: Expression, ast_b: Expression) -> Expression | None:
+        a_paths = [path for path, _ in _all_paths(ast_a)]
+        b_nodes = [node for _, node in _all_paths(ast_b)]
+        if not a_paths or not b_nodes:
+            return None
+        a_path = self._rng.choice(a_paths)
+        b_node = self._rng.choice(b_nodes)
+        # Immutable nodes: sharing B's subtree by reference is safe.
+        return _replace_at(ast_a, a_path, b_node)
+
+    def _fallback_graft(self) -> tuple[int, int, Expression]:
+        """Deterministic, PRNG-free guaranteed-valid crossover (rarely reached)."""
+        a, b = 0, 1
+        b_fields = [node for _, node in _all_paths(self._results[b].ast) if isinstance(node, factor_dsl.Field)]
+        graft = b_fields[0] if b_fields else factor_dsl.Field(self._fields_sorted[0], _LOC)
+        return a, b, graft
+
+    def _random_subtree(self, depth: int) -> Expression:
+        """Build a bounded random legal subtree; re-canonicalized by the caller."""
+        if depth <= 0:
+            if self._rng.random() < 0.75:
+                return factor_dsl.Field(self._rng.choice(self._fields_sorted), _LOC)
+            return factor_dsl.Number(self._rng.choice(_SAFE_LITERALS), _LOC)
+        roll = self._rng.random()
+        if roll < 0.4:
+            return factor_dsl.Field(self._rng.choice(self._fields_sorted), _LOC)
+        if roll < 0.5:
+            return factor_dsl.Number(self._rng.choice(_SAFE_LITERALS), _LOC)
+        if roll < 0.6:
+            return factor_dsl.Unary("-", self._random_subtree(depth - 1), _LOC)
+        if roll < 0.85:
+            operator = self._rng.choice(_BINARY_OPERATORS)
+            return factor_dsl.Binary(
+                operator, self._random_subtree(depth - 1), self._random_subtree(depth - 1), _LOC
+            )
+        return self._random_call(self._rng.choice(_FUNCTION_CHOICES), depth)
+
+    def _random_call(self, name: str, depth: int) -> Expression:
+        if name in ("abs", "sign", "log1p", "rank", "zscore"):
+            return factor_dsl.Call(name, (self._random_subtree(depth - 1),), _LOC)
+        if name == "rolling_mean":
+            window = float(self._rng.choice(_SEED_ROLLING_WINDOWS))
+            return factor_dsl.Call(
+                "rolling_mean",
+                (self._random_subtree(depth - 1), factor_dsl.Number(window, _LOC)),
+                _LOC,
+            )
+        # clip(expr, low, high) with low <= high by construction.
+        low = self._rng.choice(_SAFE_LITERALS)
+        highs = [value for value in _SAFE_LITERALS if value >= low]
+        high = self._rng.choice(highs) if highs else low
+        return factor_dsl.Call(
+            "clip",
+            (self._random_subtree(depth - 1), factor_dsl.Number(low, _LOC), factor_dsl.Number(high, _LOC)),
+            _LOC,
+        )

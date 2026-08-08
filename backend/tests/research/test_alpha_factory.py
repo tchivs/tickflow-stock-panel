@@ -478,3 +478,199 @@ class TestWorkerTimingIndependence:
         assert [r.canonical_expression for r in prefix] == [r.canonical_expression for r in produced]
         assert [r.operation for r in prefix] == [r.operation for r in produced]
         assert [r.parent_steps for r in prefix] == [r.parent_steps for r in produced]
+
+
+# ================================================================
+# Task 46-02-02: mutation, crossover, lineage, full replay determinism
+# ================================================================
+
+
+def _drain(factory: AlphaFactory) -> list[GenerationResult]:
+    results: list[GenerationResult] = []
+    while True:
+        result = factory.generate_next()
+        if result is None:
+            return results
+        results.append(result)
+
+
+def _evolution_budget() -> int:
+    """A budget large enough to exhaust the seed pool and run both waves."""
+    return AlphaFactory(1, max_candidates=1).seed_pool_size + 100
+
+
+def _has_node(ast: object, kind: type) -> bool:
+    return any(isinstance(node, kind) for _, node in alpha_factory._all_paths(ast))  # type: ignore[attr-defined]
+
+
+class TestEvolutionRespectsBudget:
+    def test_generate_next_stops_at_max_candidates(self) -> None:
+        budget = _evolution_budget()
+        factory = AlphaFactory(7, max_candidates=budget)
+        results = _drain(factory)
+        assert len(results) == budget
+        assert factory.generate_next() is None
+        assert factory.step == budget
+
+    def test_steps_are_zero_based_and_contiguous(self) -> None:
+        budget = _evolution_budget()
+        factory = AlphaFactory(7, max_candidates=budget)
+        assert [r.step for r in _drain(factory)] == list(range(budget))
+
+
+class TestOperationsAndWaves:
+    def test_operations_are_within_the_allowed_label_set(self) -> None:
+        allowed = {
+            "seed", "point_mutation_field", "point_mutation_operator",
+            "point_mutation_literal", "subtree_replacement", "crossover",
+        }
+        factory = AlphaFactory(11, max_candidates=_evolution_budget())
+        assert {r.operation for r in _drain(factory)} <= allowed
+
+    def test_seed_pool_then_mutation_wave_then_crossover_wave(self) -> None:
+        size = AlphaFactory(1, max_candidates=1).seed_pool_size
+        budget = _evolution_budget()
+        ops = [r.operation for r in _drain(AlphaFactory(11, max_candidates=budget))]
+        assert all(op == "seed" for op in ops[:size])
+        mutation_budget = (budget - size) // 2
+        mutation_block = ops[size:size + mutation_budget]
+        crossover_block = ops[size + mutation_budget:]
+        assert mutation_block and crossover_block
+        assert all(op not in {"seed", "crossover"} for op in mutation_block)
+        assert all(op == "crossover" for op in crossover_block)
+
+
+class TestEvolutionOutputsCanonicalize:
+    def test_every_output_is_a_legal_dsl_ast(self) -> None:
+        factory = AlphaFactory(23, max_candidates=_evolution_budget())
+        for result in _drain(factory):
+            # No second engine: the generator's AST must re-canonicalize and
+            # reference only governed numeric fields.
+            assert factor_dsl.canonicalize(result.ast) == result.canonical_expression
+            assert factor_dsl.extract_features(result.ast).fields <= factor_dsl.ALLOWED_FIELDS
+
+
+class TestMutationKinds:
+    """Deterministic coverage of each mutation operation on applicable parents."""
+
+    def test_point_mutation_field_swaps_a_field(self) -> None:
+        factory = AlphaFactory(3, max_candidates=1)
+        parent = factory._seed_pool[0]  # single field
+        mutated = factory._apply_mutation(parent, "point_mutation_field")
+        assert mutated is not None
+        assert factor_dsl.canonicalize(mutated) != factor_dsl.canonicalize(parent)
+
+    def test_point_mutation_operator_swaps_a_binary_operator(self) -> None:
+        factory = AlphaFactory(3, max_candidates=1)
+        parent = next(ast for ast in factory._seed_pool if _has_node(ast, factor_dsl.Binary))
+        mutated = factory._apply_mutation(parent, "point_mutation_operator")
+        assert mutated is not None
+        factor_dsl.canonicalize(mutated)  # must not raise
+
+    def test_point_mutation_literal_changes_a_number(self) -> None:
+        factory = AlphaFactory(3, max_candidates=1)
+        parent = next(ast for ast in factory._seed_pool if _has_node(ast, factor_dsl.Number))
+        mutated = factory._apply_mutation(parent, "point_mutation_literal")
+        assert mutated is not None
+        factor_dsl.canonicalize(mutated)  # must not raise
+
+    def test_subtree_replacement_replaces_a_node(self) -> None:
+        factory = AlphaFactory(3, max_candidates=1)
+        parent = factory._seed_pool[0]
+        mutated = factory._apply_mutation(parent, "subtree_replacement")
+        assert mutated is not None
+        factor_dsl.canonicalize(mutated)  # must not raise
+
+
+class TestLineageInvariants:
+    def test_seed_candidates_have_no_parents(self) -> None:
+        size = AlphaFactory(1, max_candidates=1).seed_pool_size
+        for result in _drain(AlphaFactory(31, max_candidates=size)):
+            assert result.parent_steps == ()
+            assert result.operation == "seed"
+
+    def test_mutation_has_exactly_one_preceding_parent(self) -> None:
+        factory = AlphaFactory(31, max_candidates=_evolution_budget())
+        for result in _drain(factory):
+            if result.operation in {"seed", "crossover"}:
+                continue
+            assert len(result.parent_steps) == 1
+            assert result.parent_steps[0] < result.step
+
+    def test_crossover_has_two_distinct_preceding_parents(self) -> None:
+        factory = AlphaFactory(31, max_candidates=_evolution_budget())
+        seen_crossover = False
+        for result in _drain(factory):
+            if result.operation != "crossover":
+                continue
+            seen_crossover = True
+            assert len(result.parent_steps) == 2
+            left, right = result.parent_steps
+            assert left != right
+            assert left < result.step
+            assert right < result.step
+        assert seen_crossover
+
+    def test_every_parent_step_was_produced_earlier(self) -> None:
+        factory = AlphaFactory(31, max_candidates=_evolution_budget())
+        results = _drain(factory)
+        produced = {r.step for r in results}
+        for result in results:
+            for parent in result.parent_steps:
+                assert parent in produced
+                assert parent < result.step
+
+
+class TestFullReplayDeterminism:
+    def test_two_instances_produce_byte_identical_full_streams(self) -> None:
+        budget = _evolution_budget()
+        results_a = _drain(AlphaFactory(1234567, max_candidates=budget))
+        results_b = _drain(AlphaFactory(1234567, max_candidates=budget))
+        assert len(results_a) == len(results_b) == budget
+        for x, y in zip(results_a, results_b):
+            assert x.step == y.step
+            assert x.canonical_expression == y.canonical_expression
+            assert x.operation == y.operation
+            assert x.parent_steps == y.parent_steps
+            assert x.digest == y.digest
+
+    def test_distinct_digest_sequence_is_provenance_encoded(self) -> None:
+        budget = _evolution_budget()
+        digests = [r.digest for r in _drain(AlphaFactory(1234567, max_candidates=budget))]
+        assert len(digests) == len(set(digests)) == budget
+
+    def test_different_seeds_produce_different_streams(self) -> None:
+        budget = _evolution_budget()
+        a = [r.canonical_expression for r in _drain(AlphaFactory(1, max_candidates=budget))]
+        b = [r.canonical_expression for r in _drain(AlphaFactory(2, max_candidates=budget))]
+        assert a != b
+
+
+class TestReplayDeterminism:
+    def test_replay_to_reproduces_prefix_into_the_mutation_wave(self) -> None:
+        budget = _evolution_budget()
+        size = AlphaFactory(1, max_candidates=1).seed_pool_size
+        k = size + 30  # well into the mutation wave
+        live = AlphaFactory(555, max_candidates=budget)
+        prefix = live.replay_to(k)
+        produced = _drain(live)[:k]
+        assert len(prefix) == k
+        for x, y in zip(prefix, produced):
+            assert x.canonical_expression == y.canonical_expression
+            assert x.operation == y.operation
+            assert x.parent_steps == y.parent_steps
+            assert x.digest == y.digest
+
+    def test_replay_rebuilds_from_seed_without_serialized_state(self) -> None:
+        # A fully-consumed factory still replays the prefix purely from the seed.
+        budget = _evolution_budget()
+        size = AlphaFactory(1, max_candidates=1).seed_pool_size
+        k = size + 10
+        advanced = AlphaFactory(999, max_candidates=budget)
+        _drain(advanced)
+        prefix_from_advanced = advanced.replay_to(k)
+        fresh = AlphaFactory(999, max_candidates=budget)
+        prefix_fresh = [fresh.generate_next() for _ in range(k)]
+        for x, y in zip(prefix_from_advanced, prefix_fresh):
+            assert x.canonical_expression == y.canonical_expression
+            assert x.parent_steps == y.parent_steps
