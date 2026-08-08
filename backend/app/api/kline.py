@@ -37,6 +37,12 @@ def search_instruments(
 
     repo = request.app.state.repo
     import polars as pl
+    import unicodedata
+
+    def _norm(s: str) -> str:
+        # 数据源名称常见全角/空格格式 (如 "万 科Ａ") — NFKC 转半角后去空白,
+        # 否则 str.contains 对 "万科" 失配。
+        return unicodedata.normalize("NFKC", s).replace(" ", "").replace("\u3000", "")
 
     types = [t.strip() for t in asset_types.split(",") if t.strip()]
     parts: list[pl.DataFrame] = []
@@ -56,8 +62,14 @@ def search_instruments(
     df = pl.concat(parts, how="vertical")
 
     keyword = q.strip().upper()
+    keyword_norm = _norm(keyword)
 
-    # code/symbol 前缀优先，再 name 包含匹配
+    # 归一化名称列仅用于匹配 (不出现在结果里)
+    df = df.with_columns(
+        pl.col("name").map_elements(_norm, return_dtype=pl.Utf8).alias("_name_norm")
+    )
+
+    # code/symbol 前缀优先，再 name 包含匹配 (归一化后)
     prefix_mask = (
         pl.col("code").str.starts_with(keyword)
         | pl.col("symbol").str.to_uppercase().str.starts_with(keyword)
@@ -65,7 +77,7 @@ def search_instruments(
     contains_mask = (
         pl.col("code").str.contains(keyword, literal=True)
         | pl.col("symbol").str.to_uppercase().str.contains(keyword, literal=True)
-        | pl.col("name").str.contains(keyword, literal=True)
+        | pl.col("_name_norm").str.contains(keyword_norm, literal=True)
     )
 
     # 前缀匹配优先，剩余名额用包含匹配补充
