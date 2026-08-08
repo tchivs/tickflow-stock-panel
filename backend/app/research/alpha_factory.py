@@ -17,10 +17,10 @@ from __future__ import annotations
 import random
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, replace
-from typing import Any, Final
+from typing import Any, Final, Literal
 
 from app.research import factor_dsl
-from app.research.factor_dsl import Expression
+from app.research.factor_dsl import Expression, FactorFeatures
 from app.research.run_contract import digest_bytes
 
 # Versioning constants pinned for cross-process replay stability (plan 46-02).
@@ -634,3 +634,220 @@ class AlphaFactory:
             (self._random_subtree(depth - 1), factor_dsl.Number(low, _LOC), factor_dsl.Number(high, _LOC)),
             _LOC,
         )
+
+
+
+# ---------------------------------------------------------------------------
+# Phase 46 Wave 3 (AF-REQ-03 SC3): validate-before-evaluate boundary
+# ---------------------------------------------------------------------------
+#
+# Every candidate AST must pass through the existing factor_dsl parse /
+# canonicalize boundary before it can enter the candidate ledger (T-46-07).
+# This is the single validation surface plan 46-04's worker loop consumes; it
+# reuses parse_factor / canonicalize / extract_features with no second parser,
+# evaluator, or provider (D-01, D-08).  The complexity limits (depth and node
+# count) are the one rejection mode the DSL validator does not raise on its own
+# (research §4), so measure_complexity enforces them here.
+
+
+def measure_complexity(ast: Expression) -> tuple[int, int]:
+    """Return ``(depth, node_count)`` for ``ast`` by a pure structural walk.
+
+    No validation and no Polars: this counts AST nodes and nesting depth so the
+    complexity budget can reject over-deep / over-wide expressions that the DSL
+    validator does not enforce on its own (research §4).  Leaves have depth 1;
+    the root path ``()`` has length 0, so depth is one greater than the longest
+    child path.  The AST is never mutated or re-validated.
+    """
+    paths = list(_all_paths(ast))
+    node_count = len(paths)
+    depth = (max((len(path) for path, _ in paths), default=0)) + 1
+    return depth, node_count
+
+
+@dataclass(frozen=True, slots=True)
+class ValidationResult:
+    """Outcome of ``validate_candidate``: valid, or an explicit invalid record.
+
+    ``reason`` is empty for valid results and carries a structured diagnostic
+    payload (``diagnostic`` / ``location`` / ``dsl_version`` / ``vocab_version`` /
+    ``raw_expression``) for invalid results; the worker loop persists it verbatim
+    as the candidate attempt's ``reason_json`` column.
+    """
+
+    status: Literal["valid", "invalid"]
+    canonical_expression: str
+    features: FactorFeatures | None
+    reason: Mapping[str, Any]
+
+
+def invalid_reason(
+    error: factor_dsl.FactorDslError, raw_expression: str, vocab_version: str
+) -> dict[str, Any]:
+    """Build the structured diagnostic payload for a DSL-rejected expression.
+
+    Maps directly to the ``reason_json`` column (research §4).  The rejected raw
+    expression is intentional provenance for an explicit invalid record, not a
+    principal/secret/path leak (T-46-08).
+    """
+    return {
+        "diagnostic": str(error.diagnostic.message),
+        "location": error.diagnostic.location.display(),
+        "dsl_version": factor_dsl.DSL_VERSION,
+        "vocab_version": vocab_version,
+        "raw_expression": raw_expression,
+    }
+
+
+def _dimension_exceeded_reason(
+    *,
+    measured_name: str,
+    measured: int,
+    limit_name: str,
+    limit: int,
+    raw_expression: str,
+    vocab_version: str,
+) -> dict[str, Any]:
+    """Complexity diagnostic for an AST depth/node count over the frozen limit.
+
+    The DSL validator does not enforce depth or node counts, so this is the one
+    rejection mode raised here rather than by factor_dsl (research §4).
+    """
+    return {
+        "diagnostic": f"expression {measured_name} {measured} exceeds {limit_name} {limit}",
+        "location": f"{measured_name} {measured}",
+        "dsl_version": factor_dsl.DSL_VERSION,
+        "vocab_version": vocab_version,
+        "raw_expression": raw_expression,
+    }
+
+
+def validate_candidate(
+    ast: Expression, *, max_depth: int, max_nodes: int
+) -> ValidationResult:
+    """Validate ``ast`` through the Factor DSL before it can enter the ledger.
+
+    Complexity is the gate: depth/node count over the frozen limits is rejected
+    first (AF-REQ-03), since the DSL validator does not enforce those.  Surviving
+    expressions are canonicalized (which validates semantics) and then re-parsed
+    through ``parse_factor`` so the canonical form round-trips through the single
+    text entry point -- there is no second expression engine (D-01, D-08).
+
+    Invalid candidates are never suppressed (T-46-09): they are explicit records
+    the worker loop persists with ``status="invalid"``, consuming the declared
+    budget.
+    """
+    vocab_version = vocabulary_fingerprint()
+    depth, nodes = measure_complexity(ast)
+    if depth > max_depth:
+        return ValidationResult(
+            status="invalid",
+            canonical_expression="",
+            features=None,
+            reason=_dimension_exceeded_reason(
+                measured_name="depth",
+                measured=depth,
+                limit_name="max_depth",
+                limit=max_depth,
+                raw_expression="",
+                vocab_version=vocab_version,
+            ),
+        )
+    if nodes > max_nodes:
+        return ValidationResult(
+            status="invalid",
+            canonical_expression="",
+            features=None,
+            reason=_dimension_exceeded_reason(
+                measured_name="nodes",
+                measured=nodes,
+                limit_name="max_nodes",
+                limit=max_nodes,
+                raw_expression="",
+                vocab_version=vocab_version,
+            ),
+        )
+    try:
+        canonical_expression = factor_dsl.canonicalize(ast)
+    except factor_dsl.FactorDslError as error:
+        return ValidationResult(
+            status="invalid",
+            canonical_expression="",
+            features=None,
+            reason=invalid_reason(error, "", vocab_version),
+        )
+    # Re-parse the canonical text through the single text entry point so there is
+    # no second expression engine (D-01): the canonical form must round-trip.
+    try:
+        parsed = factor_dsl.parse_factor(canonical_expression)
+    except factor_dsl.FactorDslError as error:
+        return ValidationResult(
+            status="invalid",
+            canonical_expression=canonical_expression,
+            features=None,
+            reason=invalid_reason(error, canonical_expression, vocab_version),
+        )
+    return ValidationResult(
+        status="valid",
+        canonical_expression=parsed.canonical_expression,
+        features=parsed.features,
+        reason={},
+    )
+
+
+def validate_expression_text(
+    source: str, *, max_depth: int, max_nodes: int
+) -> ValidationResult:
+    """Validate arbitrary source text for the per-mode AF-REQ-03 tests.
+
+    Parses ``source`` via ``parse_factor`` (the single text entry point) and
+    returns ``invalid`` through the same ``invalid_reason`` path on
+    ``FactorDslError``, with complexity measured on the parsed AST.  Plan 46-04's
+    worker loop drives ``validate_candidate`` on ASTs; this helper exists so the
+    rejection modes can be exercised from readable expression text.
+    """
+    vocab_version = vocabulary_fingerprint()
+    try:
+        parsed = factor_dsl.parse_factor(source)
+    except factor_dsl.FactorDslError as error:
+        return ValidationResult(
+            status="invalid",
+            canonical_expression=source,
+            features=None,
+            reason=invalid_reason(error, source, vocab_version),
+        )
+    depth, nodes = measure_complexity(parsed.expression)
+    if depth > max_depth:
+        return ValidationResult(
+            status="invalid",
+            canonical_expression=parsed.canonical_expression,
+            features=None,
+            reason=_dimension_exceeded_reason(
+                measured_name="depth",
+                measured=depth,
+                limit_name="max_depth",
+                limit=max_depth,
+                raw_expression=parsed.canonical_expression,
+                vocab_version=vocab_version,
+            ),
+        )
+    if nodes > max_nodes:
+        return ValidationResult(
+            status="invalid",
+            canonical_expression=parsed.canonical_expression,
+            features=None,
+            reason=_dimension_exceeded_reason(
+                measured_name="nodes",
+                measured=nodes,
+                limit_name="max_nodes",
+                limit=max_nodes,
+                raw_expression=parsed.canonical_expression,
+                vocab_version=vocab_version,
+            ),
+        )
+    return ValidationResult(
+        status="valid",
+        canonical_expression=parsed.canonical_expression,
+        features=parsed.features,
+        reason={},
+    )

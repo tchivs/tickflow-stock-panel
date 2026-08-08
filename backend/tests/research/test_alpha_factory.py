@@ -32,6 +32,7 @@ from app.research.alpha_factory import (
 )
 from app.research.run_contract import digest_bytes, freeze_input_snapshot
 from app.research.alpha_factory import AlphaFactory, GenerationResult, candidate_digest
+from app.research.alpha_factory import ValidationResult, measure_complexity, validate_candidate
 
 _HEX64 = re.compile(r"[0-9a-f]{64}\Z")
 
@@ -674,3 +675,180 @@ class TestReplayDeterminism:
         for x, y in zip(prefix_from_advanced, prefix_fresh):
             assert x.canonical_expression == y.canonical_expression
             assert x.parent_steps == y.parent_steps
+
+
+# ================================================================
+# Task 46-03-01: validate every candidate through factor_dsl + complexity
+# ================================================================
+
+_TLOC = factor_dsl.SourceLocation(offset=0, line=1, column=1)
+
+
+def _tfield(name: str) -> factor_dsl.Expression:
+    return factor_dsl.Field(name, _TLOC)
+
+
+def _tnumber(value: float) -> factor_dsl.Expression:
+    return factor_dsl.Number(value, _TLOC)
+
+
+def _nested_binary(depth: int) -> factor_dsl.Expression:
+    """Left-nested ``+`` tree of ``depth`` leaves; depth 1 is a single leaf."""
+    node: factor_dsl.Expression = _tfield("close")
+    for _ in range(depth - 1):
+        node = factor_dsl.Binary("+", node, _tfield("open"), _TLOC)
+    return node
+
+
+def _full_binary(depth: int) -> factor_dsl.Expression:
+    """Balanced ``+`` tree: ``2**depth - 1`` nodes, depth ``depth``."""
+    if depth <= 1:
+        return _tfield("close")
+    return factor_dsl.Binary("+", _full_binary(depth - 1), _full_binary(depth - 1), _TLOC)
+
+
+class TestMeasureComplexity:
+    def test_single_field_is_depth_one_node_one(self) -> None:
+        assert measure_complexity(_tfield("close")) == (1, 1)
+
+    def test_number_literal_is_depth_one_node_one(self) -> None:
+        assert measure_complexity(_tnumber(5.0)) == (1, 1)
+
+    def test_binary_expression(self) -> None:
+        ast = factor_dsl.Binary("+", _tfield("close"), _tfield("open"), _TLOC)
+        assert measure_complexity(ast) == (2, 3)
+
+    def test_unary_expression(self) -> None:
+        ast = factor_dsl.Unary("-", _tfield("close"), _TLOC)
+        assert measure_complexity(ast) == (2, 2)
+
+    def test_rank_call(self) -> None:
+        ast = factor_dsl.Call("rank", (_tfield("close"),), _TLOC)
+        assert measure_complexity(ast) == (2, 2)
+
+    def test_rolling_mean_call_counts_every_argument(self) -> None:
+        ast = factor_dsl.Call("rolling_mean", (_tfield("close"), _tnumber(20.0)), _TLOC)
+        assert measure_complexity(ast) == (2, 3)
+
+    def test_clip_call_counts_three_arguments(self) -> None:
+        ast = factor_dsl.Call("clip", (_tfield("close"), _tnumber(1.0), _tnumber(2.0)), _TLOC)
+        assert measure_complexity(ast) == (2, 4)
+
+    def test_nested_binary_depth_and_node_count(self) -> None:
+        # (close + open) + high  -> depth 3, nodes 5
+        ast = factor_dsl.Binary(
+            "+",
+            factor_dsl.Binary("+", _tfield("close"), _tfield("open"), _TLOC),
+            _tfield("high"),
+            _TLOC,
+        )
+        assert measure_complexity(ast) == (3, 5)
+
+    def test_deeply_nested_trees_count(self) -> None:
+        assert measure_complexity(_nested_binary(7)) == (7, 13)
+        assert measure_complexity(_full_binary(4)) == (4, 15)
+
+    def test_does_not_validate_semantically_invalid_ast(self) -> None:
+        # Division by a literal zero and a denied field are DSL rejections, but
+        # measure_complexity is a pure structural walk and must not raise.
+        div_zero = factor_dsl.Binary("/", _tfield("close"), _tnumber(0.0), _TLOC)
+        denied = _tfield("label")
+        assert measure_complexity(div_zero) == (2, 3)
+        assert measure_complexity(denied) == (1, 1)
+
+    def test_does_not_mutate_ast(self) -> None:
+        ast = _nested_binary(4)
+        before = factor_dsl.canonicalize(ast)
+        measure_complexity(ast)
+        assert factor_dsl.canonicalize(ast) == before
+
+
+class TestValidationResultShape:
+    def test_frozen_with_contract_fields(self) -> None:
+        result = ValidationResult(
+            status="valid",
+            canonical_expression="close",
+            features=factor_dsl.extract_features(factor_dsl.Field("close", _TLOC)),
+            reason={},
+        )
+        assert result.status == "valid"
+        assert result.canonical_expression == "close"
+        assert result.features is not None
+        assert result.reason == {}
+        with pytest.raises(AttributeError):
+            result.status = "invalid"  # type: ignore[misc]
+
+    def test_invalid_result_allows_none_features(self) -> None:
+        result = ValidationResult(status="invalid", canonical_expression="", features=None, reason={"diagnostic": "x"})
+        assert result.features is None
+        assert result.status == "invalid"
+
+
+class TestValidateCandidate:
+    def test_valid_single_field_has_features_and_empty_reason(self) -> None:
+        result = validate_candidate(_tfield("close"), max_depth=6, max_nodes=40)
+        assert result.status == "valid"
+        assert result.canonical_expression == "close"
+        assert result.features is not None
+        assert result.features.fields == frozenset({"close"})
+        assert result.reason == {}
+
+    def test_valid_binary_round_trips_through_parse_factor(self) -> None:
+        ast = factor_dsl.Binary("+", _tfield("close"), _tfield("open"), _TLOC)
+        result = validate_candidate(ast, max_depth=6, max_nodes=40)
+        assert result.status == "valid"
+        assert result.canonical_expression == "close + open"
+        assert result.features.operators == frozenset({"+"})
+
+    def test_invalid_result_carries_no_features(self) -> None:
+        result = validate_candidate(_nested_binary(7), max_depth=6, max_nodes=100)
+        assert result.status == "invalid"
+        assert result.features is None
+
+    def test_excessive_depth_returns_complexity_diagnostic(self) -> None:
+        result = validate_candidate(_nested_binary(7), max_depth=6, max_nodes=100)
+        assert result.status == "invalid"
+        assert result.reason["diagnostic"] == "expression depth 7 exceeds max_depth 6"
+        assert result.reason["location"] == "depth 7"
+        assert result.reason["dsl_version"] == factor_dsl.DSL_VERSION
+        assert result.reason["vocab_version"] == vocabulary_fingerprint()
+        assert "raw_expression" in result.reason
+
+    def test_excessive_nodes_returns_complexity_diagnostic(self) -> None:
+        # depth 4 (<= 10) so only the node count trips; full binary depth 4 = 15 nodes
+        result = validate_candidate(_full_binary(4), max_depth=10, max_nodes=10)
+        assert result.status == "invalid"
+        assert result.reason["diagnostic"] == "expression nodes 15 exceeds max_nodes 10"
+        assert result.reason["location"] == "nodes 15"
+        assert result.reason["dsl_version"] == factor_dsl.DSL_VERSION
+
+    def test_within_limits_complexity_is_valid(self) -> None:
+        result = validate_candidate(_full_binary(3), max_depth=6, max_nodes=40)
+        assert result.status == "valid"
+        assert result.features is not None
+
+    def test_complexity_gate_runs_before_semantic_validation(self) -> None:
+        # Over-deep AND contains a denied field: complexity is reported, not the
+        # DSL error, because measure_complexity is checked first (AF-REQ-03).
+        overdeep_denied = factor_dsl.Binary("+", _nested_binary(7), _tfield("label"), _TLOC)
+        result = validate_candidate(overdeep_denied, max_depth=6, max_nodes=100)
+        assert result.status == "invalid"
+        assert result.reason["diagnostic"].startswith("expression depth")
+
+    def test_dsl_rejection_returns_invalid_reason(self) -> None:
+        # A denied field is rejected by canonicalize before parse_factor.
+        result = validate_candidate(_tfield("label"), max_depth=6, max_nodes=40)
+        assert result.status == "invalid"
+        assert result.features is None
+        assert "label" in result.reason["diagnostic"]
+        assert result.reason["dsl_version"] == factor_dsl.DSL_VERSION
+        assert result.reason["vocab_version"] == vocabulary_fingerprint()
+        assert result.reason["raw_expression"] == ""
+
+    def test_every_factory_output_validates(self) -> None:
+        # The generation engine must only ever emit complexity-valid, DSL-valid ASTs.
+        factory = AlphaFactory(7, max_candidates=120)
+        for result_obj in _drain(factory):
+            vr = validate_candidate(result_obj.ast, max_depth=DEFAULT_MAX_DEPTH, max_nodes=DEFAULT_MAX_NODES)
+            assert vr.status == "valid", (result_obj.canonical_expression, vr.reason)
+            assert vr.features is not None
