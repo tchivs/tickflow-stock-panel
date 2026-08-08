@@ -318,6 +318,7 @@ CANDIDATE_STATUSES: tuple[str, ...] = (
     "invalid",
     "duplicate",
     "low_coverage",
+    "generated",
     "failed",
     "rejected",
     "admitted",

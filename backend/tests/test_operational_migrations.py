@@ -1451,3 +1451,112 @@ def test_phase45_candidate_lineage_same_run_fk_enforced(monkeypatch: pytest.Monk
         "'lin-ok', 'run-a', 'c-a', 'c-a', 0, 'self', '2026-08-08T00:00:00Z')"
     )
     assert connection.execute("SELECT COUNT(*) FROM research_alpha_candidate_lineage").fetchone()[0] == 1
+
+
+def test_phase46_generated_candidate_status_rebuild_preserves_data(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Phase 46 rebuilds research_alpha_candidate_attempts with 'generated' in CHECK."""
+    planned = migrations.MIGRATIONS
+    phase46_indexes = [i for i, s in enumerate(planned) if "'generated'" in s]
+    assert len(phase46_indexes) == 1, "exactly one Phase 46 generated-status migration expected"
+    phase46_index = phase46_indexes[0]
+
+    # Apply up to (but not including) the Phase 46 migration.
+    connection = sqlite3.connect(":memory:")
+    connection.execute("PRAGMA foreign_keys = ON")
+    monkeypatch.setattr(migrations, "MIGRATIONS", planned[:phase46_index])
+    migrations.migrate_operational_db(connection)
+
+    connection.execute(_alpha_snapshot_row(snapshot_id="snap-p46"))
+    connection.execute(_alpha_run_row(run_id="run-p46", snapshot_id="snap-p46"))
+    # Insert one row per pre-existing status before the rebuild.
+    pre_statuses = [
+        "invalid", "duplicate", "low_coverage", "failed",
+        "rejected", "admitted", "cancelled", "budget_exhausted",
+    ]
+    for idx, status in enumerate(pre_statuses, start=1):
+        connection.execute(_alpha_candidate_row(
+            candidate_id=f"cand-old-{idx}", run_id="run-p46", ordinal=idx, status=status,
+        ))
+
+    # Apply the full migration set — the Phase 46 migration runs from phase46_index onward.
+    monkeypatch.setattr(migrations, "MIGRATIONS", planned)
+    migrations.migrate_operational_db(connection)
+
+    # Existing rows survive with ordinals, digests, and statuses unchanged.
+    rows = connection.execute(
+        "SELECT attempt_ordinal, status, candidate_digest FROM "
+        "research_alpha_candidate_attempts WHERE run_id = 'run-p46' "
+        "ORDER BY attempt_ordinal"
+    ).fetchall()
+    assert len(rows) == 8
+    assert [r[0] for r in rows] == list(range(1, 9))
+    assert [r[1] for r in rows] == pre_statuses
+
+    # The rebuilt CHECK accepts the new 'generated' status.
+    connection.execute(_alpha_candidate_row(
+        candidate_id="cand-gen", run_id="run-p46", ordinal=9, status="generated",
+    ))
+
+    # Unknown statuses are still rejected by the CHECK.
+    with pytest.raises(sqlite3.IntegrityError):
+        connection.execute(_alpha_candidate_row(
+            candidate_id="cand-bad", run_id="run-p46", ordinal=10, status="bogus",
+        ))
+
+    # UNIQUE(run_id, attempt_ordinal) is preserved.
+    with pytest.raises(sqlite3.IntegrityError):
+        connection.execute(_alpha_candidate_row(
+            candidate_id="cand-dup-ord", run_id="run-p46", ordinal=1, status="generated",
+        ))
+
+    # The lineage same-run trigger survives the rebuild: a valid lineage edge works.
+    connection.execute(
+        "INSERT INTO research_alpha_candidate_lineage (id, run_id, child_attempt_id, "
+        "parent_attempt_id, edge_ordinal, operation, created_at) VALUES ("
+        "'lin-p46', 'run-p46', 'cand-gen', 'cand-old-1', 0, 'mutation', "
+        "'2026-08-08T00:00:00Z')"
+    )
+    # A lineage edge referencing a non-existent candidate is rejected (FK).
+    with pytest.raises(sqlite3.IntegrityError):
+        connection.execute(
+            "INSERT INTO research_alpha_candidate_lineage (id, run_id, child_attempt_id, "
+            "parent_attempt_id, edge_ordinal, operation, created_at) VALUES ("
+            "'lin-fk', 'run-p46', 'cand-gen', 'no-such-cand', 1, 'mutation', "
+            "'2026-08-08T00:00:00Z')"
+        )
+
+    # The append-only triggers survive the rebuild (UPDATE/DELETE abort).
+    with pytest.raises(sqlite3.IntegrityError):
+        connection.execute(
+            "UPDATE research_alpha_candidate_attempts SET status = 'admitted' "
+            "WHERE id = 'cand-gen'"
+        )
+    with pytest.raises(sqlite3.IntegrityError):
+        connection.execute("DELETE FROM research_alpha_candidate_attempts WHERE id = 'cand-gen'")
+
+    # foreign_keys is restored to ON after the rebuild.
+    assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+
+
+def test_phase46_generated_candidate_status_rebuild_is_idempotent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """migrate_operational_db applies the Phase 46 migration once and is safe to re-run."""
+    connection = sqlite3.connect(":memory:")
+    connection.execute("PRAGMA foreign_keys = ON")
+    migrations.migrate_operational_db(connection)
+    user_version = connection.execute("PRAGMA user_version").fetchone()[0]
+    # Re-running is a no-op (same version, no error).
+    migrations.migrate_operational_db(connection)
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == user_version
+    # The rebuilt table accepts 'generated'.
+    connection.execute(_alpha_snapshot_row(snapshot_id="snap-idem"))
+    connection.execute(_alpha_run_row(run_id="run-idem", snapshot_id="snap-idem"))
+    connection.execute(_alpha_candidate_row(
+        candidate_id="cand-idem", run_id="run-idem", ordinal=1, status="generated",
+    ))
+    assert connection.execute(
+        "SELECT status FROM research_alpha_candidate_attempts WHERE id = 'cand-idem'"
+    ).fetchone()[0] == "generated"
