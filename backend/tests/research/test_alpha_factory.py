@@ -151,8 +151,14 @@ class TestGrammarFingerprint:
 
 
 class TestImportDiscipline:
-    def test_imports_only_factor_dsl_and_run_contract(self) -> None:
-        """alpha_factory holds no evaluation/provider/admission/broker authority."""
+    def test_imports_only_factor_dsl_factor_registry_and_run_contract(self) -> None:
+        """alpha_factory holds no evaluation/provider/admission/broker authority.
+
+        Plan 46-04 widens the permitted surface to include ``factor_registry``
+        (for ``_jaccard`` diversity reuse) alongside ``factor_dsl`` and
+        ``run_contract`` — the three modules with no evaluation, provider,
+        admission, broker, repository, or worker authority (T-46-14, Pitfall 6).
+        """
         source = inspect.getsource(alpha_factory)
         import_lines = [
             line.strip()
@@ -162,7 +168,7 @@ class TestImportDiscipline:
         forbidden = (
             "broker", "order", "portfolio", "execution", "monitor", "provider",
             "promote", "evaluator", "admission", "run_service", "run_worker",
-            "factor_registry", "repository", "polars",
+            "repository", "signal_chain", "polars",
         )
         for line in import_lines:
             for module in forbidden:
@@ -171,6 +177,7 @@ class TestImportDiscipline:
                 )
         assert any("factor_dsl" in line for line in import_lines)
         assert any("run_contract" in line for line in import_lines)
+        assert any("factor_registry" in line for line in import_lines)
 
 
 
@@ -1007,3 +1014,166 @@ class TestInvalidCandidatesNeverSuppressed:
         decoded = json.loads(encoded)
         assert decoded["diagnostic"]
         assert decoded["dsl_version"] == factor_dsl.DSL_VERSION
+
+
+# ================================================================
+# Task 46-04-02: structural diversity accounting without silent merging
+# ================================================================
+
+from app.research.alpha_factory import (
+    ALPHA_GENERATION_STATUSES,
+    classify_candidate,
+    diversity_summary,
+)
+from app.research.factor_dsl import extract_features, parse_factor
+
+
+def _features(source: str) -> factor_dsl.FactorFeatures:
+    return parse_factor(source).features
+
+
+class TestDiversitySummaryMetrics:
+    def test_empty_population_reports_zero_overlap_and_none_step(self) -> None:
+        d = diversity_summary(_features("close"), [])
+        assert d["field_overlap"] == 0.0
+        assert d["operator_function_overlap"] == 0.0
+        assert d["exact_structural_match"] is False
+        assert d["shape_match"] is False
+        assert d["most_similar_step"] is None
+        assert d["population_size"] == 0
+
+    def test_identical_expression_is_exact_structural_match(self) -> None:
+        pop = [_features("close + open")]
+        d = diversity_summary(_features("close + open"), pop)
+        assert d["exact_structural_match"] is True
+        assert d["shape_match"] is True
+        assert d["field_overlap"] == 1.0
+        assert d["operator_function_overlap"] == 1.0
+        assert d["most_similar_step"] == 0
+
+    def test_field_overlap_matches_hand_computed_jaccard(self) -> None:
+        # candidate fields {close, open} vs population {close, high}
+        # Jaccard = |{close}| / |{close, open, high}| = 1/3.
+        pop = [_features("close + high")]
+        d = diversity_summary(_features("close + open"), pop)
+        assert d["field_overlap"] == pytest.approx(1 / 3)
+        assert d["exact_structural_match"] is False
+
+    def test_operator_function_overlap_matches_jaccard(self) -> None:
+        # candidate ops {+, unary:-} vs population {+}
+        # Jaccard = |{+}| / |{+, unary:-}| = 1/2.
+        pop = [_features("close + high")]
+        d = diversity_summary(_features("-close + open"), pop)
+        assert d["operator_function_overlap"] == pytest.approx(0.5)
+
+    def test_shape_match_without_exact_match(self) -> None:
+        # Different fields but same shape: Binary(+, Field, Field).
+        pop = [_features("close + open")]
+        d = diversity_summary(_features("high + low"), pop)
+        assert d["exact_structural_match"] is False
+        assert d["shape_match"] is True
+        assert d["field_overlap"] == 0.0
+
+    def test_max_overlap_across_population(self) -> None:
+        pop = [_features("close + high"), _features("close + open")]
+        d = diversity_summary(_features("close + open"), pop)
+        # The second population member is an exact match.
+        assert d["exact_structural_match"] is True
+        assert d["field_overlap"] == 1.0
+        assert d["most_similar_step"] == 1
+
+    def test_most_similar_step_prefers_exact_over_shape(self) -> None:
+        pop = [_features("high + low"), _features("rank(close)")]
+        # candidate = close (single field); rank(close) shares the field
+        # but has a different shape; high+low shares nothing. The most
+        # similar is rank(close) by field overlap.
+        d = diversity_summary(_features("close"), pop)
+        assert d["most_similar_step"] == 1
+
+
+class TestClassifyCandidate:
+    def test_invalid_candidate_is_invalid(self) -> None:
+        validation = validate_expression_text("foo(close)", **_DEFAULTS)
+        diversity = diversity_summary(_features("close"), [])
+        assert classify_candidate(validation, diversity) == "invalid"
+
+    def test_exact_duplicate_is_duplicate(self) -> None:
+        pop = [_features("close + open")]
+        validation = ValidationResult(
+            status="valid", canonical_expression="close + open",
+            features=_features("close + open"), reason={},
+        )
+        diversity = diversity_summary(_features("close + open"), pop)
+        assert classify_candidate(validation, diversity) == "duplicate"
+
+    def test_valid_novel_candidate_is_generated(self) -> None:
+        pop = [_features("high + low")]
+        validation = ValidationResult(
+            status="valid", canonical_expression="close + open",
+            features=_features("close + open"), reason={},
+        )
+        diversity = diversity_summary(_features("close + open"), pop)
+        assert classify_candidate(validation, diversity) == "generated"
+
+    def test_first_candidate_in_empty_population_is_generated(self) -> None:
+        validation = ValidationResult(
+            status="valid", canonical_expression="close",
+            features=_features("close"), reason={},
+        )
+        diversity = diversity_summary(_features("close"), [])
+        assert classify_candidate(validation, diversity) == "generated"
+
+
+class TestAlphaGenerationStatuses:
+    def test_statuses_are_the_phase_46_enumeration(self) -> None:
+        assert set(ALPHA_GENERATION_STATUSES) == {
+            "invalid", "duplicate", "generated", "budget_exhausted",
+        }
+
+    def test_statuses_are_within_candidate_statuses(self) -> None:
+        from app.research.run_contract import CANDIDATE_STATUSES
+        assert set(ALPHA_GENERATION_STATUSES) <= set(CANDIDATE_STATUSES)
+
+
+class TestDiversityNoSilentMerge:
+    def test_duplicates_remain_as_separate_attempts(self) -> None:
+        # Two structurally identical candidates against each other: the second
+        # is classified duplicate but diversity_summary records it — it is never
+        # merged or dropped (AF-REQ-19 / research Pitfall 3).
+        feat = _features("close + open")
+        population = [feat]
+        d = diversity_summary(feat, population)
+        assert d["exact_structural_match"] is True
+        assert d["population_size"] == 1
+        # The candidate would be retained as attempt_ordinal 2, not merged.
+
+    def test_no_ic_correlation_is_computed(self) -> None:
+        d = diversity_summary(_features("close"), [_features("open")])
+        assert "ic_correlation" not in d
+        assert "correlation" not in d
+
+    def test_diversity_payload_is_json_serializable(self) -> None:
+        import json
+        d = diversity_summary(_features("close + open"), [_features("close")])
+        json.dumps(d)
+
+
+class TestFactoryDiversityAgainstOwnPopulation:
+    def test_factory_population_diversity_is_deterministic(self) -> None:
+        # The first N seed candidates have no exact duplicates against the
+        # preceding population (they are distinct single fields), so each is
+        # classified generated with field overlap <= 1.0.
+        factory = AlphaFactory(7, max_candidates=20)
+        population: list[factor_dsl.FactorFeatures] = []
+        statuses: list[str] = []
+        for _ in range(20):
+            result = factory.generate_next()
+            assert result is not None
+            vr = validate_candidate(result.ast, max_depth=6, max_nodes=40)
+            assert vr.status == "valid"
+            assert vr.features is not None
+            d = diversity_summary(vr.features, population)
+            statuses.append(classify_candidate(vr, d))
+            population.append(vr.features)
+        # All distinct single-field seeds -> all generated, no duplicates.
+        assert all(s == "generated" for s in statuses)

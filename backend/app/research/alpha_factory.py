@@ -15,12 +15,13 @@ authority (T-46-03; the static guard is tightened in plan 46-04).
 from __future__ import annotations
 
 import random
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Any, Final, Literal
 
 from app.research import factor_dsl
 from app.research.factor_dsl import Expression, FactorFeatures
+from app.research.factor_registry import _jaccard
 from app.research.run_contract import digest_bytes
 
 # Versioning constants pinned for cross-process replay stability (plan 46-02).
@@ -851,3 +852,88 @@ def validate_expression_text(
         features=parsed.features,
         reason={},
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 46 Wave 3 (AF-REQ-19 SC4): structural diversity without silent merging
+# ---------------------------------------------------------------------------
+#
+# Diversity is *recorded beside* each candidate — it is never used to silently
+# merge or drop similar expressions (research Pitfall 3).  Exact structural
+# duplicates get a ``duplicate`` status but remain one-row-per-attempt; a valid
+# novel candidate gets ``generated``.  IC-series correlation requires evaluation
+# and is Phase 47's responsibility, so it is never computed here (D-01, D-08).
+
+ALPHA_GENERATION_STATUSES: Final[tuple[str, ...]] = (
+    "invalid", "duplicate", "generated", "budget_exhausted",
+)
+
+
+def diversity_summary(
+    candidate_features: FactorFeatures,
+    population_features: Sequence[FactorFeatures],
+) -> dict[str, Any]:
+    """Record the structural diversity of a candidate against the run population.
+
+    For the new candidate against the already-produced population of the same
+    run, reports the maximum Jaccard field overlap, maximum operator/function
+    overlap, whether any exact AST-signature duplicate exists, and whether any
+    shape-signature match exists — reusing :func:`factor_registry._jaccard` so
+    there is one similarity definition (research §5).
+
+    The ``most_similar_step`` is the 0-based step index of the highest-scoring
+    population member (exact > shape > field/operator overlap), or ``None`` when
+    the population is empty.  Nothing is merged or dropped.
+    """
+    field_overlap = 0.0
+    operator_function_overlap = 0.0
+    exact_structural_match = False
+    shape_match = False
+    most_similar_step: int | None = None
+    best_score = -1.0
+    for step, other in enumerate(population_features):
+        fo = _jaccard(candidate_features.fields, other.fields)
+        ofo = _jaccard(candidate_features.operator_function_set, other.operator_function_set)
+        exact = candidate_features.structural_signature == other.structural_signature
+        shape = candidate_features.shape_signature == other.shape_signature
+        if fo > field_overlap:
+            field_overlap = fo
+        if ofo > operator_function_overlap:
+            operator_function_overlap = ofo
+        if exact:
+            exact_structural_match = True
+        if shape:
+            shape_match = True
+        score = (1.0 if exact else 0.0) + (0.5 if shape else 0.0) + 0.25 * (fo + ofo)
+        if score > best_score:
+            best_score = score
+            most_similar_step = step
+    return {
+        "field_overlap": field_overlap,
+        "operator_function_overlap": operator_function_overlap,
+        "exact_structural_match": exact_structural_match,
+        "shape_match": shape_match,
+        "most_similar_step": most_similar_step,
+        "population_size": len(population_features),
+    }
+
+
+def classify_candidate(
+    validation: ValidationResult, diversity: Mapping[str, Any]
+) -> str:
+    """Classify one candidate into its Phase-46 generation status.
+
+    * ``invalid`` — the candidate failed validation (AF-REQ-03).
+    * ``duplicate`` — an exact structural signature match exists in the
+      population; the candidate is retained as its own attempt row, never
+      silently merged or dropped (AF-REQ-19 / research Pitfall 3).
+    * ``generated`` — a valid novel candidate pending Phase-47 evaluation.
+
+    No IC-series correlation, coverage, or admission verdict is computed — those
+    are Phase 47's responsibility (open-question O4).
+    """
+    if validation.status == "invalid":
+        return "invalid"
+    if diversity.get("exact_structural_match"):
+        return "duplicate"
+    return "generated"
