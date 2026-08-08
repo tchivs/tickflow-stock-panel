@@ -11,9 +11,11 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
+_MANIFEST_SHA256 = r"^[0-9a-f]{64}$"
+
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-_MANIFEST_SHA256 = r"^[0-9a-f]{64}$"
+from app.research.run_contract import MAX_INT64, validate_bounded_json
 
 
 class StrictAlphaModel(BaseModel):
@@ -33,6 +35,7 @@ class AlphaRunCreateRequest(StrictAlphaModel):
     def _manifest_keys_are_bounded(cls, value: dict[str, Any]) -> dict[str, Any]:
         if any(not isinstance(key, str) or not 1 <= len(key) <= 64 for key in value):
             raise ValueError("manifest keys must be bounded strings")
+        validate_bounded_json(value, "manifest")
         return value
 
 
@@ -104,13 +107,15 @@ class AlphaRunEventDTO(StrictAlphaModel):
     producer_version: str
     created_at: str
 
-
 class AlphaRunReplayDTO(StrictAlphaModel):
-    """Safe public replay projection — run + snapshot + ordered events."""
+    """Safe replay page with explicit continuation markers."""
 
     run: AlphaRunReadDTO
     snapshot: AlphaSnapshotDTO | None
     events: list[AlphaRunEventDTO]
+    events_after_sequence: int = 0
+    next_sequence: int | None = None
+    truncated: bool = False
 
 
 class AlphaRunRetryRequest(StrictAlphaModel):
@@ -129,6 +134,7 @@ class AlphaRunRetryRequest(StrictAlphaModel):
     def _manifest_keys_are_bounded(cls, value: dict[str, Any]) -> dict[str, Any]:
         if any(not isinstance(key, str) or not 1 <= len(key) <= 64 for key in value):
             raise ValueError("manifest keys must be bounded strings")
+        validate_bounded_json(value, "manifest")
         return value
 
 
@@ -147,12 +153,12 @@ class AlphaProgressUpdateRequest(StrictAlphaModel):
     never returned in projections.
     """
 
-    expected_version: int = Field(ge=0)
+    expected_version: int = Field(ge=0, le=MAX_INT64)
     attempt_token: str = Field(min_length=16, max_length=256)
-    candidate_attempts_total: int | None = Field(default=None, ge=0)
-    candidate_attempts_completed: int | None = Field(default=None, ge=0)
-    folds_total: int | None = Field(default=None, ge=0)
-    folds_completed: int | None = Field(default=None, ge=0)
+    candidate_attempts_total: int | None = Field(default=None, ge=0, le=MAX_INT64)
+    candidate_attempts_completed: int | None = Field(default=None, ge=0, le=MAX_INT64)
+    folds_total: int | None = Field(default=None, ge=0, le=MAX_INT64)
+    folds_completed: int | None = Field(default=None, ge=0, le=MAX_INT64)
 
 
 class AlphaCandidateDTO(StrictAlphaModel):

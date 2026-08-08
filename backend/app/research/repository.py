@@ -17,7 +17,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from app.operational.migrations import migrate_operational_db
-from app.research.run_contract import PRODUCER_VERSION
+from app.research.run_contract import PRODUCER_VERSION, canonical_bounded_json, event_checksum
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
@@ -29,7 +29,8 @@ def _json(value: object, field: str) -> str:
     except (TypeError, ValueError) as error:
         raise ValueError(f"{field} must be JSON serializable") from error
 
-
+def _bounded_json(value: object, field: str) -> str:
+    return canonical_bounded_json(value, field)
 def _record(row: sqlite3.Row | None) -> dict[str, Any] | None:
     if row is None:
         return None
@@ -80,7 +81,6 @@ class AlphaClock:
 
 class ResearchRepository:
     """Parameterized, short-lived SQLite access for immutable research metadata."""
-
     def __init__(
         self,
         database_path: Path,
@@ -90,7 +90,9 @@ class ResearchRepository:
     ) -> None:
         self.database_path = Path(database_path)
         self._clock = clock
-        self._artifact_root = Path(artifact_root) if artifact_root is not None else None
+        # Kept as a compatibility seam and used for managed-key containment
+        # checks; artifact bytes themselves belong to AlphaRunArtifactService.
+        self._artifact_root = Path(artifact_root).resolve() if artifact_root is not None else None
 
     def _now(self) -> str:
         """Resolve the current timestamp from the injected clock or wall clock."""
@@ -1446,8 +1448,8 @@ class ResearchRepository:
         snapshot_id = "snap_" + snapshot.snapshot_sha256[:24]
         occurred_at = self._now()
         payload = {"status": "queued", "snapshot_sha256": snapshot.snapshot_sha256}
-        payload_json = _json(payload, "run_created payload")
-        payload_checksum = sha256(payload_json.encode("utf-8")).hexdigest()
+        payload_json = _bounded_json(payload, "run_created payload")
+        payload_checksum = event_checksum(payload, idempotency_key, "run_created")
 
         with self._connection() as connection:
             # Idempotency check BEFORE the write transaction.
@@ -1692,6 +1694,73 @@ class ResearchRepository:
                     connection.execute("ROLLBACK")
                 raise
         return self.get_alpha_run(run_id, principal=principal)
+    def recover_alpha_run(
+        self,
+        *,
+        run_id: str,
+        principal: str,
+        expected_version: int,
+        event_id: str,
+        idempotency_key: str,
+        token_digest: str,
+    ) -> dict[str, Any] | None:
+        """Fence an orphaned running attempt and persist only a new digest."""
+        from app.research.run_contract import attempt_token_digest, event_checksum
+        _wf_sha256(token_digest, "token_digest")
+        if attempt_token_digest(token_digest) == token_digest:
+            # This is intentionally unreachable for a normal digest and catches
+            # accidental attempts to pass plaintext as durable token material.
+            raise ValueError("token_digest must not be plaintext")
+        occurred_at = self._now()
+        payload = {"status": "running", "recovered": True, "attempt_token_digest": token_digest}
+        payload_json = _bounded_json(payload, "run recovery payload")
+        checksum = event_checksum(payload, idempotency_key, "run_recovered")
+        with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                existing = connection.execute(
+                    "SELECT * FROM research_alpha_events WHERE run_id = ? AND idempotency_key = ?",
+                    (run_id, idempotency_key),
+                ).fetchone()
+                if existing is not None:
+                    if existing["payload_checksum"] != checksum:
+                        raise AlphaRunConflictError("recovery idempotency key conflict")
+                    connection.execute("COMMIT")
+                    return self._alpha_run_row(connection, run_id)
+                changed = connection.execute(
+                    """UPDATE research_alpha_runs
+                       SET transition_version = transition_version + 1
+                       WHERE id = ? AND principal = ? AND status = 'running'
+                         AND transition_version = ?""",
+                    (run_id, principal, expected_version),
+                ).rowcount
+                if changed != 1:
+                    connection.execute("ROLLBACK")
+                    return None
+                cursor = connection.execute(
+                    "SELECT last_event_seq FROM research_alpha_runs WHERE id = ?", (run_id,)
+                ).fetchone()
+                next_seq = int(cursor["last_event_seq"]) + 1
+                connection.execute(
+                    """INSERT INTO research_alpha_events
+                       (id, run_id, seq, event_type, entity_kind, entity_id,
+                        occurred_at, idempotency_key, actor, source, payload_json,
+                        payload_checksum, artifact_id, producer_version, created_at)
+                       VALUES (?, ?, ?, 'run_recovered', 'run', ?, ?, ?,
+                               'service', 'recovery', ?, ?, NULL, ?, ?)""",
+                    (event_id, run_id, next_seq, run_id, occurred_at, idempotency_key,
+                     payload_json, checksum, PRODUCER_VERSION, occurred_at),
+                )
+                connection.execute(
+                    "UPDATE research_alpha_runs SET last_event_seq = ? WHERE id = ?",
+                    (next_seq, run_id),
+                )
+                connection.execute("COMMIT")
+            except BaseException:
+                if connection.in_transaction:
+                    connection.execute("ROLLBACK")
+                raise
+        return self.get_alpha_run(run_id, principal=principal)
 
     def cancel_alpha_run(
         self,
@@ -1903,7 +1972,7 @@ class ResearchRepository:
             raise ValueError("event_type is required")
         if not isinstance(idempotency_key, str) or not idempotency_key:
             raise ValueError("idempotency_key is required")
-        payload_json = _json(payload, "event payload")
+        payload_json = _bounded_json(payload, "event payload")
         expected_checksum = event_checksum(payload, idempotency_key, event_type)
 
         with self._connection() as connection:
@@ -2014,8 +2083,16 @@ class ResearchRepository:
         _wf_sha256(candidate_digest, "candidate_digest")
         if status not in CANDIDATE_STATUSES:
             raise ValueError(f"status must be one of {CANDIDATE_STATUSES}")
-        reason_json = _json(reason, "candidate reason")
+        reason_json = _bounded_json(reason, "candidate reason")
         occurred_at = self._now()
+        if evidence_artifact_id is not None:
+            with self._connection() as connection:
+                artifact = connection.execute(
+                    "SELECT run_id FROM research_alpha_artifacts WHERE id = ?",
+                    (evidence_artifact_id,),
+                ).fetchone()
+            if artifact is None or artifact["run_id"] != run_id:
+                raise ValueError("candidate artifact must belong to candidate run")
 
         with self._connection() as connection, connection:
             connection.execute(
@@ -2173,8 +2250,13 @@ class ResearchRepository:
             raise ValueError(
                 "relative_path must be the server-derived content-addressed key"
             )
-        if not isinstance(byte_size, int) or byte_size < 0:
+        if not isinstance(byte_size, int) or isinstance(byte_size, bool) or byte_size < 0:
             raise ValueError("byte_size must be a non-negative integer")
+        if self._artifact_root is not None:
+            try:
+                (self._artifact_root / relative_path).resolve().relative_to(self._artifact_root)
+            except ValueError as error:
+                raise ValueError("artifact path escapes the configured managed root") from error
         occurred_at = self._now()
         with self._connection() as connection, connection:
             connection.execute(
@@ -2199,7 +2281,6 @@ class ResearchRepository:
             ).fetchone()
         assert row is not None
         return dict(row)
-
     def append_checkpoint(
         self,
         *,
@@ -2212,15 +2293,27 @@ class ResearchRepository:
         manifest_sha256: str,
         state_checksum: str,
         frontier_artifact_id: str | None = None,
+        principal: str | None = None,
+        referenced_candidate_ids: Sequence[str] = (),
+        inline_summary: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Append one bounded recovery checkpoint cursor fact.
+        """Append only a principal/run-bound, structurally validated cursor.
 
-        The caller (service) must verify all referenced event/candidate/artifact
-        facts and the snapshot/manifest digest binding *before* calling this;
-        the repository enforces FK and uniqueness, but the semantic
-        fail-closed validation lives in the service so the contract is testable
-        independently (D-07, T-45-05).
+        Semantic checksum validation and managed-file verification are owned by
+        ``ResearchRunService.append_checkpoint``; repository checks still make
+        direct misuse fail closed rather than becoming authority.
         """
+        from app.research.run_contract import MAX_INLINE_CHECKPOINT_BYTES, validate_bounded_json
+        if not isinstance(committed_event_seq, int) or committed_event_seq < 0:
+            raise ValueError("committed_event_seq must be a non-negative integer")
+        if not isinstance(stage, str) or not 1 <= len(stage) <= 128:
+            raise ValueError("stage must be a bounded string")
+        if inline_summary is not None:
+            validate_bounded_json(
+                inline_summary, "inline checkpoint summary", max_bytes=MAX_INLINE_CHECKPOINT_BYTES
+            )
+        if any(not isinstance(candidate_id, str) or not candidate_id for candidate_id in referenced_candidate_ids):
+            raise ValueError("referenced_candidate_ids must contain non-empty strings")
         if not isinstance(run_id, str) or not run_id:
             raise ValueError("run_id is required")
         if not isinstance(checkpoint_id, str) or not checkpoint_id:
@@ -2232,6 +2325,36 @@ class ResearchRepository:
         _wf_sha256(state_checksum, "state_checksum")
         occurred_at = self._now()
         with self._connection() as connection, connection:
+            run = connection.execute(
+                "SELECT snapshot_sha256, manifest_sha256, last_event_seq, principal "
+                "FROM research_alpha_runs WHERE id = ?", (run_id,)
+            ).fetchone()
+            if run is None or (principal is not None and run["principal"] != principal):
+                raise ValueError("checkpoint run is not owned by principal")
+            if run["snapshot_sha256"] != snapshot_sha256 or run["manifest_sha256"] != manifest_sha256:
+                raise ValueError("checkpoint snapshot/manifest binding mismatch")
+            if committed_event_seq > int(run["last_event_seq"]):
+                raise ValueError("checkpoint references a future event sequence")
+            event_count = connection.execute(
+                "SELECT COUNT(*) FROM research_alpha_events WHERE run_id = ? AND seq <= ?",
+                (run_id, committed_event_seq),
+            ).fetchone()[0]
+            if int(event_count) != committed_event_seq:
+                raise ValueError("checkpoint event sequence is not contiguous")
+            for candidate_id in referenced_candidate_ids:
+                candidate = connection.execute(
+                    "SELECT 1 FROM research_alpha_candidate_attempts WHERE id = ? AND run_id = ?",
+                    (candidate_id, run_id),
+                ).fetchone()
+                if candidate is None:
+                    raise ValueError("checkpoint references a candidate from another run")
+            if frontier_artifact_id is not None:
+                artifact = connection.execute(
+                    "SELECT 1 FROM research_alpha_artifacts WHERE id = ? AND run_id = ?",
+                    (frontier_artifact_id, run_id),
+                ).fetchone()
+                if artifact is None:
+                    raise ValueError("checkpoint frontier artifact must belong to checkpoint run")
             connection.execute(
                 """INSERT INTO research_alpha_checkpoints (
                        id, run_id, checkpoint_version, committed_event_seq,

@@ -15,11 +15,18 @@ a new linked run, never a mutation of the original.
 from __future__ import annotations
 
 import json
+import math
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from hashlib import sha256
 from typing import Any
+
+MAX_JSON_BYTES = 64 * 1024
+MAX_JSON_DEPTH = 8
+MAX_JSON_STRING_CHARS = 4096
+MAX_JSON_COLLECTION_ITEMS = 256
+MAX_INT64 = (1 << 63) - 1
 
 MANIFEST_SCHEMA_VERSION = "alpha-manifest-v1"
 PRODUCER_VERSION = "research-run-v1"
@@ -59,8 +66,65 @@ REQUIRED_MANIFEST_GROUPS: tuple[str, ...] = (
 
 
 def canonical_json(value: object) -> str:
-    """Serialize to stable UTF-8 JSON bytes with sorted keys and no whitespace."""
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+    """Serialize to stable, finite JSON with sorted keys and no whitespace."""
+    try:
+        return json.dumps(
+            value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+        )
+    except (TypeError, ValueError, OverflowError) as error:
+        raise ValueError("value must be finite JSON") from error
+
+
+def validate_bounded_json(
+    value: object,
+    field: str,
+    *,
+    max_bytes: int = MAX_JSON_BYTES,
+    max_depth: int = MAX_JSON_DEPTH,
+) -> None:
+    """Validate untrusted JSON recursively before it reaches SQLite."""
+    def visit(node: object, depth: int, path: str) -> None:
+        if depth > max_depth:
+            raise ValueError(f"{field} exceeds maximum JSON depth")
+        if node is None or isinstance(node, bool):
+            return
+        if isinstance(node, int):
+            if node < -MAX_INT64 - 1 or node > MAX_INT64:
+                raise ValueError(f"{field} contains an out-of-range integer")
+            return
+        if isinstance(node, float):
+            if not math.isfinite(node):
+                raise ValueError(f"{field} contains a non-finite number")
+            return
+        if isinstance(node, str):
+            if len(node) > MAX_JSON_STRING_CHARS:
+                raise ValueError(f"{field} contains an oversized string at {path}")
+            return
+        if isinstance(node, Mapping):
+            if len(node) > MAX_JSON_COLLECTION_ITEMS:
+                raise ValueError(f"{field} contains too many object members")
+            for key, child in node.items():
+                if not isinstance(key, str) or len(key) > MAX_JSON_STRING_CHARS:
+                    raise ValueError(f"{field} contains an invalid object key at {path}")
+                visit(child, depth + 1, f"{path}.{key}")
+            return
+        if isinstance(node, (list, tuple)):
+            if len(node) > MAX_JSON_COLLECTION_ITEMS:
+                raise ValueError(f"{field} contains too many array items")
+            for index, child in enumerate(node):
+                visit(child, depth + 1, f"{path}[{index}]")
+            return
+        raise ValueError(f"{field} contains unsupported JSON value at {path}")
+
+    visit(value, 0, field)
+    encoded = canonical_bytes(value)
+    if len(encoded) > max_bytes:
+        raise ValueError(f"{field} exceeds the {max_bytes}-byte UTF-8 JSON bound")
+
+
+def canonical_bounded_json(value: object, field: str, *, max_bytes: int = MAX_JSON_BYTES) -> str:
+    validate_bounded_json(value, field, max_bytes=max_bytes)
+    return canonical_json(value)
 
 
 def canonical_bytes(value: object) -> bytes:
@@ -68,31 +132,43 @@ def canonical_bytes(value: object) -> bytes:
 
 
 def digest_bytes(value: object) -> str:
-    """Lowercase SHA-256 hex digest over the canonical JSON of ``value``."""
+    """Lowercase SHA-256 digest over canonical JSON."""
     return sha256(canonical_bytes(value)).hexdigest()
 
 
 def validate_sha256(value: str, field: str) -> None:
-    """Fail closed unless ``value`` is a lowercase 64-hex SHA-256 digest."""
+    """Fail closed unless ``value`` is a lowercase 64-hex digest."""
     if not isinstance(value, str) or not _SHA256_HEX.fullmatch(value):
         raise ValueError(f"{field} must be a lowercase SHA-256 hex digest")
 
 
 def validate_manifest(manifest: Mapping[str, Any]) -> None:
-    """Fail closed if any required D-04 manifest group is missing or empty."""
+    """Fail closed if required groups or nested fields have wrong shapes."""
     if not isinstance(manifest, Mapping):
         raise ValueError("manifest must be a mapping")
+    validate_bounded_json(manifest, "manifest")
     missing = [group for group in REQUIRED_MANIFEST_GROUPS if group not in manifest]
     if missing:
         raise ValueError(f"manifest is missing required groups: {', '.join(missing)}")
     for group in REQUIRED_MANIFEST_GROUPS:
         entry = manifest[group]
-        if entry is None:
-            raise ValueError(f"manifest group '{group}' must not be null")
-        if isinstance(entry, (str, list, dict, tuple)) and len(entry) == 0:
-            raise ValueError(f"manifest group '{group}' must not be empty")
-
-
+        if not isinstance(entry, Mapping) or not entry:
+            raise ValueError(f"manifest group '{group}' must not be empty and must be a mapping")
+    required_types: tuple[tuple[str, str, type], ...] = (
+        ("dsl.version", "dsl", str), ("grammar.fingerprint", "grammar", str),
+        ("vocabulary.fingerprint", "vocabulary", str), ("policy.version", "policy", str),
+        ("universe.name", "universe", str), ("measured_window.start", "measured_window", str),
+        ("measured_window.end", "measured_window", str),
+        ("fold_geometry.train_size", "fold_geometry", int),
+        ("budgets.max_candidates", "budgets", int), ("objective.name", "objective", str),
+        ("code_manifest.fingerprint", "code_manifest", str),
+        ("data_manifest.fingerprint", "data_manifest", str),
+    )
+    for label, group, expected_type in required_types:
+        key = label.split(".", 1)[1]
+        value = manifest[group].get(key)
+        if not isinstance(value, expected_type) or isinstance(value, bool):
+            raise ValueError(f"manifest field '{label}' has the wrong type")
 @dataclass(frozen=True, slots=True)
 class ResearchInputSnapshot:
     """Immutable server-frozen input snapshot bound to its canonical digest."""
@@ -395,5 +471,5 @@ def validate_progress_counters(
         ("folds_completed", folds_completed),
     ):
         if value is not None:
-            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-                raise ValueError(f"{label} must be a non-negative integer")
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0 or value > MAX_INT64:
+                raise ValueError(f"{label} must be a non-negative SQLite int64 integer")
