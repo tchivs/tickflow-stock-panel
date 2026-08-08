@@ -861,6 +861,78 @@ def test_phase13_wf_tables_migrate_with_constraints_and_idempotence(
             connection.execute(f"DELETE FROM {table} WHERE {where}")
 
 
+
+def test_phase47_alpha_fold_evidence_migrate_with_constraints_and_idempotence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """research_alpha_fold_evidence: candidate-keyed UNIQUE + sha256 CHECKs + append-only."""
+    planned = migrations.MIGRATIONS
+    table_index = next(
+        index
+        for index, script in enumerate(planned)
+        if "CREATE TABLE research_alpha_fold_evidence" in script
+    )
+    connection = sqlite3.connect(":memory:")
+    connection.execute("PRAGMA foreign_keys = ON")
+
+    # Forward-only: the typed fold-evidence table is absent before its script.
+    monkeypatch.setattr(migrations, "MIGRATIONS", planned[:table_index])
+    migrations.migrate_operational_db(connection)
+    assert (
+        connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'research_alpha_fold_evidence'"
+        ).fetchone()
+        is None
+    )
+
+    monkeypatch.setattr(migrations, "MIGRATIONS", planned)
+    migrations.migrate_operational_db(connection)
+    assert connection.execute("PRAGMA user_version").fetchone() == (len(planned),)
+    assert (
+        connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'research_alpha_fold_evidence'"
+        ).fetchone()
+        is not None
+    )
+    migrations.migrate_operational_db(connection)  # idempotent no-op
+
+    def _row(
+        fold_id: str = "afe-1",
+        run_id: str = "run-1",
+        digest: str | None = None,
+        fold_index: int = 0,
+        is_oos: int = 0,
+    ) -> str:
+        candidate_digest = digest if digest is not None else "a" * 64
+        return (
+            "INSERT INTO research_alpha_fold_evidence (id, run_id, candidate_digest, fold_index, "
+            "is_oos, revision_id, train_start, train_end, test_start, test_end, "
+            "membership_fingerprint, declared_fingerprints_json, stats_json, created_at) "
+            f"VALUES ('{fold_id}', '{run_id}', '{candidate_digest}', {fold_index}, {is_oos}, "
+            f"'rev-1', '2025-07-29', '2026-01-22', '2026-03-02', '2026-03-27', '{'b' * 64}', "
+            "'{}', '{}', '2026-08-01T00:00:00Z')"
+        )
+
+    connection.execute(_row())
+    with pytest.raises(sqlite3.IntegrityError):  # duplicate (run, digest, fold, is_oos) -> exactly-once
+        connection.execute(_row(fold_id="afe-dup"))
+    # The same key with is_oos=1 is a distinct row (the OOS slot 47-04 writes).
+    connection.execute(_row(fold_id="afe-oos", is_oos=1))
+    with pytest.raises(sqlite3.IntegrityError):  # candidate_digest must be sha256 length
+        connection.execute(_row(fold_id="afe-short", digest="short"))
+    with pytest.raises(sqlite3.IntegrityError):  # membership_fingerprint sha256 length
+        connection.execute(_row(fold_id="afe-mf").replace("b" * 64, "short-mf"))
+    with pytest.raises(sqlite3.IntegrityError):  # is_oos CHECK (0/1 only)
+        connection.execute(_row(fold_id="afe-badoos", is_oos=2))
+    with pytest.raises(sqlite3.IntegrityError):  # fold_index CHECK (>= 0)
+        connection.execute(_row(fold_id="afe-badidx", fold_index=-1))
+
+    # Immutability triggers: UPDATE/DELETE raise (append-only).
+    with pytest.raises(sqlite3.IntegrityError):
+        connection.execute("UPDATE research_alpha_fold_evidence SET created_at = 'x' WHERE id = 'afe-1'")
+    with pytest.raises(sqlite3.IntegrityError):
+        connection.execute("DELETE FROM research_alpha_fold_evidence WHERE id = 'afe-1'")
+
 def test_phase12_rebuild_preserves_phase11_run_rows(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -12,6 +12,8 @@ from datetime import date
 
 import polars as pl
 import pytest
+from typing import Any
+
 
 from app.research.factor_dsl import DSL_VERSION
 from app.research.factor_registry import ALPHA_EXPLORATORY_KIND, FactorRegistry
@@ -592,3 +594,228 @@ def test_evaluate_populates_cost_diagnostics_on_result(tmp_path) -> None:
     assert result.status == "completed"
     assert result.cost_diagnostics["cost_rate"] == pytest.approx(0.0026)
     assert result.cost_diagnostics["cost_drag"] > 0.0
+
+
+# ----------------------------------------------------------------------
+# 47-02-03 — per-candidate immutable evidence binding + typed fold evidence
+# ----------------------------------------------------------------------
+
+
+def _run_manifest(*, seed: int = 42) -> dict:
+    """A complete D-04 manifest for freezing an Alpha run in evidence tests."""
+    return {
+        "dsl": {"version": "factor-dsl-v1"},
+        "grammar": {"fingerprint": "a" * 64, "version": "grammar-v1"},
+        "vocabulary": {"fingerprint": "b" * 64, "size": 64},
+        "policy": {"version": "admission-v1", "thresholds": {"min_ic": 0.02}},
+        "budgets": {"max_expressions": 1000, "max_candidates": 200},
+        "objective": {"name": "sharpe", "direction": "maximize"},
+        "universe": {"name": "cn-a-share", "asset_type": "stock", "membership_fingerprint": "c" * 64},
+        "measured_window": {"start": "2020-01-01", "end": "2023-12-31", "calendar": "SSE"},
+        "fold_geometry": {"train_size": 120, "gap_size": 5, "test_size": 20, "n_folds": 10},
+        "code_manifest": {"fingerprint": "d" * 64, "build_fingerprint": "e" * 64, "dependency_fingerprint": "f" * 64},
+        "data_manifest": {"fingerprint": "g" * 64, "partition_fingerprint": "h" * 64},
+        "seed": seed,
+    }
+
+
+def _make_run(repo, *, run_id: str = "run-evidence") -> str:
+    from app.research.run_contract import freeze_input_snapshot
+
+    snapshot = freeze_input_snapshot(manifest=_run_manifest(), created_at="2026-08-08T00:00:00+00:00")
+    repo.create_alpha_run(
+        run_id=run_id,
+        principal="researcher@example.com",
+        idempotency_key=f"idem-{run_id}",
+        snapshot=snapshot,
+        event_id=f"evt-{run_id}",
+    )
+    return run_id
+
+
+def _attempt(run_id: str = "run-evidence", *, candidate_id: str = "cand-1", ordinal: int = 1, status: str = "generated"):
+    from app.research.run_contract import AlphaCandidateAttempt
+
+    return AlphaCandidateAttempt(
+        id=candidate_id, run_id=run_id, attempt_ordinal=ordinal,
+        candidate_digest="a" * 64, canonical_expression="close",
+        ast_signature="ast-sig", shape_signature="shape-sig",
+        dsl_version=DSL_VERSION, operation="generate", seed=0, step=0,
+        status=status, reason={}, evidence_artifact_id=None, created_at="2026-08-08T00:00:00Z",
+    )
+
+
+def _result(*, status: str = "completed", revision_id: str = "rev-1") -> Any:
+    from app.research.evaluation import FactorEvaluationResult
+
+    diagnostics = ()
+    if status in ("failed", "invalid"):
+        diagnostics = (f"factor computation failed: {status}-boom",)
+    return FactorEvaluationResult(
+        evaluation_run_id="erun-1", status=status,
+        factor_revision={"id": revision_id, "dsl_version": DSL_VERSION},
+        resolved_config={"universe": "fixture-a-share"},
+        cost_diagnostics={"cost_rate": 0.0026, "cost_drag": 0.001},
+        diagnostics=diagnostics,
+    )
+
+
+def test_record_alpha_fold_evidence_inserts_candidate_keyed_row(research_repository) -> None:
+    from app.research.alpha_scoring import record_selection_fold_evidence  # noqa: F401 (import sanity)
+
+    row = research_repository.record_alpha_fold_evidence(
+        run_id="run-x", candidate_digest="a" * 64, fold_index=0, is_oos=False,
+        revision_id="rev-1", train_start=date(2024, 1, 1), train_end=date(2024, 1, 31),
+        test_start=date(2024, 2, 1), test_end=date(2024, 2, 28),
+        membership_fingerprint="b" * 64,
+        declared_fingerprints={"panel": "p" * 64}, stats={"mean_ic": 0.03},
+    )
+    assert row["run_id"] == "run-x"
+    assert row["candidate_digest"] == "a" * 64
+    assert row["is_oos"] == 0
+    assert row["stats"] == {"mean_ic": 0.03}
+    assert row["declared_fingerprints"] == {"panel": "p" * 64}
+
+
+def test_record_alpha_fold_evidence_unique_raises_on_duplicate(research_repository) -> None:
+    kwargs = dict(
+        run_id="run-x", candidate_digest="a" * 64, fold_index=0, is_oos=False,
+        revision_id="rev-1", train_start=date(2024, 1, 1), train_end=date(2024, 1, 31),
+        test_start=date(2024, 2, 1), test_end=date(2024, 2, 28),
+        membership_fingerprint="b" * 64, declared_fingerprints={}, stats={},
+    )
+    research_repository.record_alpha_fold_evidence(**kwargs)
+    with pytest.raises(ValueError, match="already recorded"):
+        research_repository.record_alpha_fold_evidence(**kwargs)
+    # The OOS slot (is_oos=1) is a distinct row under the same key.
+    research_repository.record_alpha_fold_evidence(**{**kwargs, "is_oos": True})
+
+
+def test_find_alpha_fold_evidence_is_idempotent_read(research_repository) -> None:
+    assert research_repository.find_alpha_fold_evidence(
+        run_id="run-x", candidate_digest="a" * 64, fold_index=0, is_oos=False
+    ) is None
+    research_repository.record_alpha_fold_evidence(
+        run_id="run-x", candidate_digest="a" * 64, fold_index=2, is_oos=False,
+        revision_id="rev-1", train_start=date(2024, 1, 1), train_end=date(2024, 1, 31),
+        test_start=date(2024, 2, 1), test_end=date(2024, 2, 28),
+        membership_fingerprint="b" * 64, declared_fingerprints={}, stats={"effective_days": 5},
+    )
+    found = research_repository.find_alpha_fold_evidence(
+        run_id="run-x", candidate_digest="a" * 64, fold_index=2, is_oos=False
+    )
+    assert found is not None
+    assert found["stats"] == {"effective_days": 5}
+    # is_oos=1 for the same fold is a separate (absent) row.
+    assert research_repository.find_alpha_fold_evidence(
+        run_id="run-x", candidate_digest="a" * 64, fold_index=2, is_oos=True
+    ) is None
+
+
+def test_record_selection_fold_evidence_records_is_oos_zero_and_is_idempotent(
+    research_registry, research_repository
+) -> None:
+    from app.research.alpha_scoring import record_selection_fold_evidence
+    from types import SimpleNamespace
+
+    closes = {
+        "000001.SZ": (1.0, 1.5, 2.0), "000002.SZ": (2.0, 2.6, 4.0),
+        "000003.SZ": (3.0, 3.6, 6.0), "000004.SZ": (4.0, 4.4, 8.0),
+    }
+    panel = _dated_panel(
+        dates=[date(2024, 1, 2), date(2024, 1, 3), date(2024, 1, 4)], closes=closes,
+    )
+    rev = research_registry.create_factor(name="CloseSel", expression="close")
+    frame = _compute_with_panel(
+        research_registry, panel, expression="close",
+        start=date(2024, 1, 2), end=date(2024, 1, 3), warmup_days=0, horizon=1,
+    )
+    folds = [
+        (SimpleNamespace(fold_index=0, train_start=date(2024, 1, 1), train_end=date(2024, 1, 1),
+                         test_start=date(2024, 1, 2), test_end=date(2024, 1, 2)), frame, None),
+        (SimpleNamespace(fold_index=1, train_start=date(2024, 1, 1), train_end=date(2024, 1, 1),
+                         test_start=date(2024, 1, 3), test_end=date(2024, 1, 3)), frame, None),
+    ]
+    recorded = record_selection_fold_evidence(
+        repo=research_repository, run_id="run-x", candidate_digest="a" * 64,
+        revision_id=rev.id, folds=folds,
+    )
+    assert len(recorded) == 2
+    assert all(row["is_oos"] == 0 for row in recorded)
+    # Reconnect/retry: a second pass records nothing new (idempotent skip).
+    again = record_selection_fold_evidence(
+        repo=research_repository, run_id="run-x", candidate_digest="a" * 64,
+        revision_id=rev.id, folds=folds,
+    )
+    assert again == []
+
+
+def test_record_candidate_evidence_completed_binds_artifact_and_keeps_status(
+    research_registry, research_repository, tmp_path
+) -> None:
+    from app.research.alpha_scoring import record_candidate_evidence
+    from app.research.artifacts import AlphaRunArtifactService
+
+    run_id = _make_run(research_repository)
+    revision = research_registry.create_factor(name="CloseEv", expression="close")
+    artifact_service = AlphaRunArtifactService(tmp_path / "app-data")
+    attempt = _attempt(run_id=run_id)
+    result = _result(status="completed", revision_id=revision.id)
+
+    recorded = record_candidate_evidence(
+        repo=research_repository, artifact_service=artifact_service,
+        attempt=attempt, revision=revision, result=result,
+        declared_fingerprints={"panel": "p" * 64, "membership": "m" * 64},
+        costs={"commission_pct": 0.0003, "stamp_tax_pct": 0.001, "slippage_bps": 5.0},
+    )
+    # A completed evaluation preserves the candidate's prior status (pending admission).
+    assert recorded["status"] == "generated"
+    assert recorded["evidence_artifact_id"] is not None
+    # The evidence artifact is durably bound to the candidate's run.
+    assert recorded["reason"]["evaluation"] == "completed"
+    # The evidence artifact is durably bound to the candidate's run and verifies.
+    rows = research_repository.list_candidates(run_id, artifact_service=artifact_service)
+    assert any(r["evidence_artifact_id"] == recorded["evidence_artifact_id"] for r in rows)
+
+
+def test_record_candidate_evidence_failed_records_terminal_reason(
+    research_registry, research_repository, tmp_path
+) -> None:
+    from app.research.alpha_scoring import record_candidate_evidence
+    from app.research.artifacts import AlphaRunArtifactService
+
+    run_id = _make_run(research_repository, run_id="run-failed")
+    revision = research_registry.create_factor(name="CloseFail", expression="close")
+    artifact_service = AlphaRunArtifactService(tmp_path / "app-data")
+    attempt = _attempt(run_id=run_id, candidate_id="cand-fail")
+    result = _result(status="failed", revision_id=revision.id)
+
+    recorded = record_candidate_evidence(
+        repo=research_repository, artifact_service=artifact_service,
+        attempt=attempt, revision=revision, result=result,
+        declared_fingerprints={"panel": "p" * 64}, costs={},
+    )
+    assert recorded["status"] == "failed"
+    assert "failed-boom" in recorded["reason"]["reason"]
+    assert recorded["evidence_artifact_id"] is not None
+
+
+def test_record_candidate_evidence_invalid_becomes_failed(
+    research_registry, research_repository, tmp_path
+) -> None:
+    from app.research.alpha_scoring import record_candidate_evidence
+    from app.research.artifacts import AlphaRunArtifactService
+
+    run_id = _make_run(research_repository, run_id="run-invalid")
+    revision = research_registry.create_factor(name="CloseInv", expression="close")
+    artifact_service = AlphaRunArtifactService(tmp_path / "app-data")
+    attempt = _attempt(run_id=run_id, candidate_id="cand-inv")
+    result = _result(status="invalid", revision_id=revision.id)
+
+    recorded = record_candidate_evidence(
+        repo=research_repository, artifact_service=artifact_service,
+        attempt=attempt, revision=revision, result=result,
+        declared_fingerprints={"panel": "p" * 64}, costs={},
+    )
+    assert recorded["status"] == "failed"
+    assert recorded["reason"]["evaluation"] == "invalid"

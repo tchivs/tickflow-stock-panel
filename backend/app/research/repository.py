@@ -1166,6 +1166,101 @@ class ResearchRepository:
             for row in rows
         ]  # type: ignore[list-item]
 
+    def record_alpha_fold_evidence(
+        self,
+        *,
+        run_id: str,
+        candidate_digest: str,
+        fold_index: int,
+        is_oos: bool,
+        revision_id: str,
+        train_start: Any,
+        train_end: Any,
+        test_start: Any,
+        test_end: Any,
+        membership_fingerprint: str,
+        declared_fingerprints: Mapping[str, Any],
+        stats: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Append one candidate-keyed fold evidence row (INSERT-only, AF-REQ-07 SC3).
+
+        The ``UNIQUE (run_id, candidate_digest, fold_index, is_oos)`` makes the
+        selection-OOS exactly-once: a second write of the same candidate/fold
+        raises ``ValueError`` (the table's ``no_update``/``no_delete`` triggers
+        keep every row append-only). The candidate fold evidence is typed and
+        candidate-keyed (47-02 research-flag verdict); ``wf_folds`` and
+        ``wf_validated_strategies`` are untouched.
+        """
+        if not isinstance(run_id, str) or not run_id:
+            raise ValueError("run_id is required")
+        _wf_sha256(candidate_digest, "candidate_digest")
+        _wf_sha256(membership_fingerprint, "membership_fingerprint")
+        if not isinstance(revision_id, str) or not revision_id:
+            raise ValueError("revision_id is required")
+        fold_id = uuid.uuid4().hex
+        now = _now()
+        with self._connection() as connection, connection:
+            try:
+                connection.execute(
+                    """INSERT INTO research_alpha_fold_evidence (
+                           id, run_id, candidate_digest, fold_index, is_oos,
+                           revision_id, train_start, train_end, test_start,
+                           test_end, membership_fingerprint,
+                           declared_fingerprints_json, stats_json, created_at
+                       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        fold_id, run_id, candidate_digest, int(fold_index),
+                        int(bool(is_oos)), revision_id,
+                        _as_iso(train_start), _as_iso(train_end),
+                        _as_iso(test_start), _as_iso(test_end),
+                        membership_fingerprint,
+                        _json(dict(declared_fingerprints), "declared fingerprints"),
+                        _json(dict(stats), "fold stats"),
+                        now,
+                    ),
+                )
+            except sqlite3.IntegrityError as error:
+                message = str(error)
+                if "UNIQUE constraint failed" in message:
+                    raise ValueError("alpha fold evidence already recorded") from error
+                raise ValueError(
+                    f"alpha fold evidence row rejected by the database: {message}"
+                ) from error
+            row = connection.execute(
+                "SELECT * FROM research_alpha_fold_evidence WHERE id = ?", (fold_id,)
+            ).fetchone()
+        assert row is not None
+        return _unpack_json(
+            row,
+            {"declared_fingerprints_json": "declared_fingerprints", "stats_json": "stats"},
+        )  # type: ignore[return-value]
+
+    def find_alpha_fold_evidence(
+        self,
+        *,
+        run_id: str,
+        candidate_digest: str,
+        fold_index: int,
+        is_oos: bool,
+    ) -> dict[str, Any] | None:
+        """Idempotent read of one candidate-keyed fold evidence row (reconnect/retry).
+
+        A re-score of the same candidate/fold returns the existing row rather
+        than raising or duplicating (mirrors ``walkforward._find_existing_fold``).
+        """
+        _wf_sha256(candidate_digest, "candidate_digest")
+        with self._connection() as connection:
+            row = connection.execute(
+                """SELECT * FROM research_alpha_fold_evidence
+                   WHERE run_id = ? AND candidate_digest = ?
+                     AND fold_index = ? AND is_oos = ?""",
+                (run_id, candidate_digest, int(fold_index), int(bool(is_oos))),
+            ).fetchone()
+        return _unpack_json(
+            row,
+            {"declared_fingerprints_json": "declared_fingerprints", "stats_json": "stats"},
+        )  # type: ignore[return-value]
+
     def record_wf_search(self, **fields: Any) -> dict[str, Any]:
         """Append one OOS-scored search run with multiple-comparison bookkeeping.
 

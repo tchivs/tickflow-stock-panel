@@ -2183,6 +2183,43 @@ MIGRATIONS: tuple[str, ...] = (
         BEGIN SELECT RAISE(ABORT, 'candidate lineage references must share a run'); END;
     PRAGMA foreign_keys = ON;
     """,
+    """
+    -- Phase 47-02: typed Alpha candidate-keyed fold evidence (AF-REQ-07 SC3,
+    -- research-flag verdict). wf_folds is UNIQUE (plan_id, fold_index, is_oos,
+    -- strategy_id, params_sha256) — strategy/params-shaped — and cannot carry
+    -- candidate identity (a factor candidate has no params_sha256). This table
+    -- mirrors wf_folds' INSERT-only discipline but is keyed
+    -- UNIQUE (run_id, candidate_digest, fold_index, is_oos): the selection-OOS
+    -- exactly-once becomes a UNIQUE over the candidate-keyed row (47-04 writes
+    -- the is_oos=1 row). walkforward.build_plan / trading_calendar /
+    -- _resolve_fold_membership are reused unchanged; only the persistence target
+    -- is new. wf_folds and wf_validated_strategies are untouched.
+    CREATE TABLE research_alpha_fold_evidence (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        candidate_digest TEXT NOT NULL CHECK (length(candidate_digest) = 64),
+        fold_index INTEGER NOT NULL CHECK (fold_index >= 0),
+        is_oos INTEGER NOT NULL CHECK (is_oos IN (0,1)),
+        revision_id TEXT NOT NULL,
+        train_start TEXT NOT NULL,
+        train_end TEXT NOT NULL,
+        test_start TEXT NOT NULL,
+        test_end TEXT NOT NULL,
+        membership_fingerprint TEXT NOT NULL CHECK (length(membership_fingerprint) = 64),
+        declared_fingerprints_json TEXT NOT NULL,
+        stats_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE (run_id, candidate_digest, fold_index, is_oos)
+    );
+    CREATE INDEX idx_research_alpha_fold_evidence
+        ON research_alpha_fold_evidence(run_id, candidate_digest, fold_index);
+    CREATE TRIGGER research_alpha_fold_evidence_no_update
+        BEFORE UPDATE ON research_alpha_fold_evidence
+        BEGIN SELECT RAISE(ABORT, 'alpha fold evidence is append-only'); END;
+    CREATE TRIGGER research_alpha_fold_evidence_no_delete
+        BEFORE DELETE ON research_alpha_fold_evidence
+        BEGIN SELECT RAISE(ABORT, 'alpha fold evidence is append-only'); END;
+    """,
 )
 
 
