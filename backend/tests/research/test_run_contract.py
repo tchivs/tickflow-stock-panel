@@ -1613,7 +1613,8 @@ class TestLifecycleTransitions:
             terminal_reason="missing vocabulary",
         )
         assert result["status"] == "preflight_failed"
-        assert result["terminal_reason"] == "missing vocabulary"
+        import json
+        assert json.loads(result["terminal_reason"])["code"] == "preflight_failed"
         assert result["finished_at"] is not None
 
     def test_cross_principal_transition_returns_none(
@@ -2114,8 +2115,8 @@ class TestRestartRecovery:
             attempt_token=started["_attempt_token"],
             candidate_attempts_total=200,
             candidate_attempts_completed=100,
-            folds_total=20,
-            folds_completed=10,
+            folds_total=10,
+            folds_completed=5,
         )
 
         # Fresh repository = process restart.
@@ -2130,8 +2131,8 @@ class TestRestartRecovery:
         assert recovered["status"] == "running"
         assert recovered["candidate_attempts_total"] == 200
         assert recovered["candidate_attempts_completed"] == 100
-        assert recovered["folds_total"] == 20
-        assert recovered["folds_completed"] == 10
+        assert recovered["folds_total"] == 10
+        assert recovered["folds_completed"] == 5
         events = fresh_repo.list_run_events(run["id"])
         assert len(events) == 2  # run_created + run_started
 
@@ -2299,3 +2300,154 @@ class TestCommitBeforePublishCrash:
         )
         after = len(alpha_run_repository.list_run_events(run["id"]))
         assert before == after
+
+
+class TestReviewFixInvariants:
+    def test_running_recovery_issues_new_digest_and_fences_old_token(
+        self, alpha_run_repository: ResearchRepository, deterministic_clock: DeterministicClock
+    ) -> None:
+        from app.research.run_service import ResearchRunService
+
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-recover-01")
+        service = ResearchRunService(alpha_run_repository)
+        started = service.start_or_resume(
+            run["id"], principal="researcher@example.com", expected_version=run["transition_version"]
+        )
+        recovered = service.recover_running_attempt(
+            run["id"], principal="researcher@example.com",
+            expected_version=started["transition_version"], idempotency_key="recover-once",
+        )
+        assert recovered is not None
+        assert recovered["transition_version"] == started["transition_version"] + 1
+        assert recovered["_attempt_token"] != started["_attempt_token"]
+        payloads = [event["payload"] for event in alpha_run_repository.list_run_events(run["id"])]
+        assert all(started["_attempt_token"] not in str(payload) for payload in payloads)
+        assert service.update_progress(
+            run["id"], principal="researcher@example.com",
+            expected_version=started["transition_version"], attempt_token=started["_attempt_token"],
+            candidate_attempts_total=1,
+        ) is None
+
+    def test_frontier_reference_requires_verifier(self, alpha_run_repository: ResearchRepository, deterministic_clock: DeterministicClock, tmp_path: Path) -> None:
+        from app.research.artifacts import AlphaRunArtifactService
+        from app.research.run_contract import checkpoint_state_checksum
+        from app.research.run_service import AlphaCheckpointValidationError, ResearchRunService
+
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-frontier-req")
+        artifact_service = AlphaRunArtifactService(tmp_path)
+        descriptor = artifact_service.write(run_id=run["id"], payload={"frontier": [1]})
+        artifact = alpha_run_repository.append_artifact(
+            run_id=run["id"], artifact_id="frontier-req-1", logical_kind="frontier",
+            relative_path=descriptor["relative_path"], content_type=descriptor["content_type"],
+            byte_size=descriptor["byte_size"], checksum_sha256=descriptor["checksum_sha256"],
+        )
+        params = {
+            "id": "checkpoint-frontier-req", "checkpoint_version": 1, "committed_event_seq": 1,
+            "stage": "search", "snapshot_sha256": run["snapshot_sha256"],
+            "manifest_sha256": run["manifest_sha256"], "frontier_artifact_id": artifact["id"],
+        }
+        params["state_checksum"] = checkpoint_state_checksum(
+            run_id=run["id"], checkpoint_version=1, committed_event_seq=1, stage="search",
+            snapshot_sha256=run["snapshot_sha256"], manifest_sha256=run["manifest_sha256"],
+            referenced_candidate_ids=[], inline_summary=None, frontier_artifact_id=artifact["id"],
+        )
+        with pytest.raises(AlphaCheckpointValidationError, match="verification service is required"):
+            ResearchRunService(alpha_run_repository).validate_checkpoint(
+                run_id=run["id"], principal="researcher@example.com", checkpoint=params
+            )
+
+    def test_artifact_reference_cannot_cross_bind_runs(
+        self, alpha_run_repository: ResearchRepository, deterministic_clock: DeterministicClock, tmp_path: Path
+    ) -> None:
+        from app.research.artifacts import AlphaRunArtifactService
+
+        first = _make_run(alpha_run_repository, deterministic_clock, run_id="run-bind-a", idempotency_key="bind-key-a-000000")
+        second = _make_run(alpha_run_repository, deterministic_clock, run_id="run-bind-b", idempotency_key="bind-key-b-000000")
+        descriptor = AlphaRunArtifactService(tmp_path).write(run_id=second["id"], payload={"x": 1})
+        artifact = alpha_run_repository.append_artifact(
+            run_id=second["id"], artifact_id="artifact-bind-b", logical_kind="evidence",
+            relative_path=descriptor["relative_path"], content_type="application/json",
+            byte_size=descriptor["byte_size"], checksum_sha256=descriptor["checksum_sha256"],
+        )
+        with pytest.raises(Exception, match="artifact|run"):
+            alpha_run_repository.append_candidate_attempt(
+                run_id=first["id"], candidate_id="candidate-bind-a", attempt_ordinal=1,
+                candidate_digest="a" * 64, canonical_expression="close", ast_signature="ast",
+                shape_signature="shape", dsl_version="v1", operation="generate", seed=1, step=1,
+                status="failed", reason={"code": "failed"}, evidence_artifact_id=artifact["id"],
+            )
+
+    def test_checkpoint_inline_state_is_canonical_object(self) -> None:
+        from app.research.run_service import AlphaCheckpointValidationError, ResearchRunService
+
+        service = ResearchRunService(ResearchRepository(Path(":memory:")))
+        with pytest.raises(AlphaCheckpointValidationError, match="canonical"):
+            service.validate_inline_checkpoint_payload(b'{"x": 1}')
+        with pytest.raises(AlphaCheckpointValidationError, match="canonical"):
+            service.validate_inline_checkpoint_payload(b"1")
+
+    def test_progress_rejects_completed_over_total(self, alpha_run_repository: ResearchRepository, deterministic_clock: DeterministicClock) -> None:
+        from app.research.run_service import ResearchRunService
+
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-progress-bound")
+        service = ResearchRunService(alpha_run_repository)
+        started = service.start_or_resume(run["id"], principal="researcher@example.com", expected_version=run["transition_version"])
+        with pytest.raises(ValueError, match="completed"):
+            service.update_progress(
+                run["id"], principal="researcher@example.com", expected_version=started["transition_version"],
+                attempt_token=started["_attempt_token"], candidate_attempts_total=2, candidate_attempts_completed=3,
+            )
+
+    def test_wrong_typed_manifest_group_fails_preflight(self) -> None:
+        manifest = _sample_manifest()
+        manifest["dsl"] = 7
+        with pytest.raises(ValueError, match="mapping"):
+            freeze_input_snapshot(manifest=manifest, created_at="2026-08-08T00:00:00+00:00")
+
+    def test_event_and_candidate_diagnostics_are_bounded(self, alpha_run_repository: ResearchRepository, deterministic_clock: DeterministicClock) -> None:
+        from app.research.run_service import ResearchRunService
+
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-json-bound")
+        service = ResearchRunService(alpha_run_repository)
+        with pytest.raises(ValueError, match="oversized|string|bound"):
+            service.append_candidate(
+                run_id=run["id"], principal="researcher@example.com", candidate_id="cand-json-bound",
+                attempt_ordinal=1, candidate_digest="b" * 64, canonical_expression="close", ast_signature="ast",
+                shape_signature="shape", dsl_version="v1", operation="generate", seed=1, step=1,
+                status="failed", reason={"detail": "x" * 5000},
+            )
+
+    def test_safe_projection_allowlists_reason_and_snapshot_nested_fields(self) -> None:
+        from app.research import projections
+
+        projected = projections.run({"id": "run", "status": "failed", "transition_version": 1, "last_event_seq": 1,
+            "candidate_attempts_total": 0, "candidate_attempts_completed": 0, "folds_total": 0, "folds_completed": 0,
+            "snapshot_sha256": "a" * 64, "manifest_sha256": "b" * 64,
+            "terminal_reason": '{"code":"worker_failed","detail":"/secret/path"}', "retry_attempt": 0,
+            "created_at": "now"})
+        assert projected["terminal_reason"] == "worker_failed"
+        snap = projections.snapshot({"schema_version": "v1", "snapshot_sha256": "a" * 64, "manifest_sha256": "b" * 64,
+            "grammar_fingerprint": "c" * 64, "vocabulary_fingerprint": "d" * 64, "policy_digest": "e" * 64,
+            "data_fingerprint": "f" * 64, "partition_fingerprint": "0" * 64, "membership_fingerprint": "1" * 64,
+            "code_fingerprint": "2" * 64, "build_fingerprint": "3" * 64, "dependency_fingerprint": "4" * 64,
+            "manifest": {"universe": {"name": "u", "secret": "x"}, "policy": {"version": "v", "thresholds": {"x": 1}}}})
+        assert "secret" not in str(snap)
+        assert "thresholds" not in str(snap)
+
+    def test_run_created_uses_semantic_event_checksum(self, alpha_run_repository: ResearchRepository, deterministic_clock: DeterministicClock) -> None:
+        from app.research.run_contract import event_checksum
+
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-checksum")
+        event = alpha_run_repository.list_run_events(run["id"])[0]
+        assert event["payload_checksum"] == event_checksum(
+            event["payload"], event["idempotency_key"], event["event_type"]
+        )
+
+    def test_replay_and_candidate_history_mark_continuation(self, alpha_run_repository: ResearchRepository, deterministic_clock: DeterministicClock) -> None:
+        from app.research.run_service import ResearchRunService
+
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-page")
+        service = ResearchRunService(alpha_run_repository)
+        service.append_event(run_id=run["id"], principal="researcher@example.com", event_type="stage", entity_kind="run", entity_id=run["id"], idempotency_key="page-event", actor="worker", source="worker", payload={"ok": True})
+        page = service.replay(run["id"], principal="researcher@example.com", after_seq=0, limit=1)
+        assert page is not None and page["truncated"] is True and page["next_sequence"] == 1

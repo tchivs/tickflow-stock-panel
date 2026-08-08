@@ -507,8 +507,10 @@ class TestTokenAndCheckpointBoundary:
         )
         repo.migrate()
         service = ResearchRunService(repo)
-        at_bound = json.dumps({"x": "a" * (MAX_INLINE_CHECKPOINT_BYTES - 12)})
-        service.validate_inline_checkpoint_payload(at_bound.encode("utf-8"))
+        prefix = b'{"x":"'
+        suffix = b'"}'
+        at_bound = prefix + (b"a" * (MAX_INLINE_CHECKPOINT_BYTES - len(prefix) - len(suffix))) + suffix
+        service.validate_inline_checkpoint_payload(at_bound)
         over_bound = b"x" * (MAX_INLINE_CHECKPOINT_BYTES + 1)
         with pytest.raises(AlphaCheckpointValidationError, match="exceeds 16 KiB"):
             service.validate_inline_checkpoint_payload(over_bound)
