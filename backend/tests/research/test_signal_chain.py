@@ -145,7 +145,15 @@ def test_cross_consumer_equality_with_frozen_expected_frame(
     # pre-filter finite share excludes it — coverage measures the usable
     # cross-section (IN-01).
     assert frame.resolved_universe["pre_filter_counts"] == {
-        "2024-01-02": {"total": 4, "finite": 4},
+        "2024-01-02": {
+            "total": 4,
+            "finite": 4,
+            "non_finite": 0,
+            "suspended": 0,
+            "stale": 0,
+            "source_quality_excluded": 0,
+            "warmup_excluded": 0,
+        },
     }
     assert frame.required_source_fields == ("symbol", "date", "close")
 

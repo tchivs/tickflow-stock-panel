@@ -141,11 +141,14 @@ class FactorSignalChain:
                 .alias("_forward_return")
             )
 
-        # Pre-filter finite counts over the evaluation window: coverage measures the
-        # resolved cross-section, never the post-filter frame (pitfall 5).  The
-        # last ``horizon`` days have a null forward return and are dropped from the
-        # evaluated frame; excluding them from the finite share makes coverage
-        # measure the usable cross-section (IN-01).
+        # Per-state exclusion counts over the loaded frame (47-02 OQ3). Coverage
+        # measures the resolved cross-section, never the post-filter frame
+        # (pitfall 5); the last ``horizon`` days have a null forward return and are
+        # dropped from the evaluated frame, so excluding them from the finite share
+        # makes coverage measure the usable cross-section (IN-01). Each date's
+        # counts partition the cross-section so the missing-data fingerprint names
+        # WHY a row was excluded (finite/non_finite/suspended/stale/
+        # source_quality_excluded/warmup_excluded), not just that it dropped.
         windowed = frame.filter((pl.col("date") >= config.start) & (pl.col("date") <= config.end))
         if horizon is not None:
             windowed = windowed.filter(pl.col("_forward_return").is_finite())
@@ -155,10 +158,45 @@ class FactorSignalChain:
             .agg(pl.len().alias("total"), pl.col("_finite").sum().alias("finite"))
             .sort("date")
         )
-        pre_filter_counts = {
-            str(row["date"]): {"total": int(row["total"]), "finite": int(row["finite"])}
-            for row in finite_counts.iter_rows(named=True)
-        }
+        pre_filter_counts: dict[str, dict[str, int]] = {}
+        for row in finite_counts.iter_rows(named=True):
+            total = int(row["total"])
+            finite = int(row["finite"])
+            pre_filter_counts[str(row["date"])] = {
+                "total": total,
+                "finite": finite,
+                "non_finite": total - finite,
+                # The current chain resolves membership via an inner join then a
+                # single finite filter; it does not yet declare separate
+                # suspended/stale/source-quality rules, so those buckets are
+                # structurally zero until a rule is declared (audit surface only).
+                "suspended": 0,
+                "stale": 0,
+                "source_quality_excluded": 0,
+                "warmup_excluded": 0,
+            }
+        # Warmup rows (< config.start) are excluded from the evaluation window;
+        # name them so the missing-data fingerprint records the warmup policy
+        # (47-02 OQ3). They carry warmup_excluded == total and are skipped by the
+        # coverage diagnostic (coverage is measured over the evaluation window).
+        if config.warmup_days:
+            warmup_counts = (
+                frame.filter(pl.col("date") < config.start)
+                .group_by("date")
+                .agg(pl.len().alias("total"))
+                .sort("date")
+            )
+            for row in warmup_counts.iter_rows(named=True):
+                total = int(row["total"])
+                pre_filter_counts[str(row["date"])] = {
+                    "total": total,
+                    "finite": 0,
+                    "non_finite": 0,
+                    "suspended": 0,
+                    "stale": 0,
+                    "source_quality_excluded": 0,
+                    "warmup_excluded": total,
+                }
 
         frame = frame.filter((pl.col("date") >= config.start) & (pl.col("date") <= config.end))
         finite_condition = pl.col("_factor").is_finite() & pl.col("close").is_finite() & (pl.col("close") > 0)
@@ -327,12 +365,9 @@ class FactorSignalChain:
         fingerprints (no recomputation); ``source_field`` captures the
         expression's read set; ``warmup`` captures the warmup window and
         exclusion policy; ``missing_data`` captures the missing-data policy and
-        per-date finite/total counts; ``signal`` captures the canonical
-        expression, DSL version, and rebalance cadence.
-
-        Note (W4): the ``missing_data`` shape is ``{total, finite}`` per date in
-        wave 1; Phase 47-02 enriches ``pre_filter_counts`` with named per-state
-        counts, which intentionally changes this digest.
+        the per-date per-state exclusion counts (47-02: total/finite/non_finite/
+        suspended/stale/source_quality_excluded/warmup_excluded); ``signal``
+        captures the canonical expression, DSL version, and rebalance cadence.
         """
         return {
             "panel": panel_fingerprint,

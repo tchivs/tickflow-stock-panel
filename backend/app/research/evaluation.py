@@ -52,6 +52,7 @@ class ResolvedEvaluationConfig:
     weight: Literal["equal", "factor_weight"]
     fees_pct: float
     slippage_bps: float
+    costs: Mapping[str, float] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
         value = asdict(self)
@@ -86,6 +87,88 @@ def _per_date_correlation_series(
         if row["rank_ic"] is not None and np.isfinite(float(row["rank_ic"])):
             rank_ic_series.append({"date": date_text, "rank_ic": float(row["rank_ic"])})
     return ic_series, rank_ic_series
+
+
+def _cost_rate(costs: Mapping[str, Any]) -> float:
+    """Round-trip cost rate per unit of one-way turnover from the declared costs.
+
+    ``commission`` is double-sided, ``stamp_tax`` is sell-only (A-share 1‰),
+    and ``slippage_bps`` (basis points) is double-sided — mirroring the
+    ``BacktestConfig.buy_cost_pct``/``sell_cost_pct`` formulas (engine.py:69-76).
+    """
+    commission = float(costs.get("commission_pct", 0.0) or 0.0)
+    stamp = float(costs.get("stamp_tax_pct", 0.0) or 0.0)
+    slippage = float(costs.get("slippage_bps", 0.0) or 0.0)
+    return commission * 2.0 + stamp + slippage * 2.0 / 1e4
+
+
+def cost_diagnostics(
+    frame: pl.DataFrame,
+    *,
+    costs: Mapping[str, Any],
+    rebalance: RebalanceCadence,
+) -> dict[str, Any]:
+    """Factor-scoped turnover x cost DIAGNOSTIC (NOT execution P&L).
+
+    Computed in one pass over the rebalance-dated chain frame. Equal-weight
+    long-short weights are the cross-sectional ``_zscore`` per rebalance date
+    (dollar-neutral by construction). Turnover at each rebalance is
+    ``0.5 * sum_sym |w_t - w_{t-1}|`` (one-way; ``w_{t-1}=0`` on the first
+    date, i.e. initial deployment). ``cost_drag = total_turnover * cost_rate``
+    and ``net_long_short_return = raw_long_short_return - cost_drag``.
+
+    This is a turnover x cost approximation derived from the same frame the
+    chain already computes — it is NOT execution P&L and does not invoke the
+    strategy backtest. Admission's group-NAV still uses ``fees_pct=0``; this
+    diagnostic is additive (OQ4, no-execution boundary REQUIREMENTS.md:69,78).
+    A zero cost rate degrades gracefully: ``cost_drag=0`` and the net return
+    equals the raw long-short return.
+    """
+    cost_rate = _cost_rate(costs)
+    empty: dict[str, Any] = {
+        "turnover_per_rebalance": [],
+        "total_turnover": 0.0,
+        "cost_rate": cost_rate,
+        "cost_drag": 0.0,
+        "raw_long_short_return": 0.0,
+        "net_long_short_return": 0.0,
+    }
+    if "_zscore" not in frame.columns or "_forward_return" not in frame.columns:
+        return empty
+    weights = frame.select("symbol", "date", "_zscore", "_forward_return").filter(
+        pl.col("_zscore").is_not_null() & pl.col("_zscore").is_finite()
+    )
+    if weights.is_empty():
+        return empty
+    weights = weights.sort(["symbol", "date"]).with_columns(
+        pl.col("_zscore").shift(1).over("symbol").fill_null(0.0).alias("_prev_w")
+    )
+    weights = weights.with_columns((pl.col("_zscore") - pl.col("_prev_w")).abs().alias("_dw"))
+    per_date = (
+        weights.group_by("date")
+        .agg(
+            (0.5 * pl.col("_dw").sum()).alias("turnover"),
+            (pl.col("_zscore") * pl.col("_forward_return")).sum().alias("ls_return"),
+        )
+        .sort("date")
+    )
+    turnover_per_rebalance: list[dict[str, Any]] = []
+    total_turnover = 0.0
+    raw_ls = 0.0
+    for row in per_date.iter_rows(named=True):
+        turnover = float(row["turnover"] or 0.0)
+        turnover_per_rebalance.append({"date": str(row["date"]), "turnover": turnover})
+        total_turnover += turnover
+        raw_ls += float(row["ls_return"] or 0.0)
+    cost_drag = total_turnover * cost_rate
+    return {
+        "turnover_per_rebalance": turnover_per_rebalance,
+        "total_turnover": total_turnover,
+        "cost_rate": cost_rate,
+        "cost_drag": cost_drag,
+        "raw_long_short_return": raw_ls,
+        "net_long_short_return": raw_ls - cost_drag,
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,6 +206,7 @@ class FactorEvaluationResult:
     long_short_nav: tuple[Mapping[str, Any], ...] = ()
     artifacts: tuple[ArtifactDescriptor, ...] = ()
     diagnostics: tuple[str, ...] = ()
+    cost_diagnostics: Mapping[str, Any] = field(default_factory=dict)
 
     @property
     def completed(self) -> bool:
@@ -149,6 +233,7 @@ class FactorEvaluationResult:
             "long_short_nav": [dict(item) for item in self.long_short_nav],
             "artifacts": [artifact.as_dict() for artifact in self.artifacts],
             "diagnostics": list(self.diagnostics),
+            "cost_diagnostics": dict(self.cost_diagnostics),
         }
 
 
@@ -224,6 +309,7 @@ class FactorEvaluationService:
         monthly = self._monthly_evidence(ic_series, rank_ic_series)
         coverage = self._coverage(signal.resolved_universe)
         supplemental = self._supplemental_evidence(evaluated, config)
+        costs_diag = cost_diagnostics(evaluated, costs=config.costs, rebalance=config.rebalance)
         ic_summary = self._summary(ic_series, "ic")
         rank_ic_summary = self._summary(rank_ic_series, "rank_ic")
         compact_result = {
@@ -239,6 +325,7 @@ class FactorEvaluationService:
             "monthly_ic_series": [dict(row) for row in monthly["monthly_ic_series"]],
             "group_stats": supplemental["group_stats"],
             "long_short_stats": supplemental["long_short_stats"],
+            "cost_diagnostics": costs_diag,
         }
         try:
             artifacts = self.artifact_service.write_bundle(
@@ -275,6 +362,7 @@ class FactorEvaluationService:
             group_nav=tuple(supplemental["group_nav"]),
             long_short_stats=supplemental["long_short_stats"],
             long_short_nav=tuple(supplemental["long_short_nav"]),
+            cost_diagnostics=costs_diag,
             artifacts=tuple(artifacts),
         )
 
@@ -379,8 +467,13 @@ class FactorEvaluationService:
         pre_filter = resolved_universe.get("pre_filter_counts", {})
         series: list[dict[str, Any]] = []
         for date_text in sorted(pre_filter):
-            total = int(pre_filter[date_text]["total"])
-            finite = int(pre_filter[date_text]["finite"])
+            entry = pre_filter[date_text]
+            # Coverage is measured over the evaluation window only: warmup dates
+            # (warmup_excluded > 0) are excluded from the usable cross-section.
+            if int(entry.get("warmup_excluded", 0)) > 0:
+                continue
+            total = int(entry["total"])
+            finite = int(entry["finite"])
             if total > 0:
                 series.append({"date": date_text, "coverage": float(finite / total)})
         mean = float(np.mean([entry["coverage"] for entry in series])) if series else None

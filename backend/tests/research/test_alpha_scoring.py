@@ -352,3 +352,243 @@ def test_routes_through_chain_detects_bypass() -> None:
 
     assert not _routes_through_chain(_bypassed)
     assert _routes_through_chain(_routed)
+
+
+# ----------------------------------------------------------------------
+# 47-02-02 — per-state exclusion counts + cost/turnover diagnostic
+# ----------------------------------------------------------------------
+
+
+def _dated_panel(*, dates, closes, volumes=None, expression_fields=("close",)):
+    """Build a governed panel over ``dates`` x ``_FIXTURE_SYMBOLS``.
+
+    ``closes``/``volumes`` map symbol -> tuple of per-date values (None = absent).
+    """
+    rows: list[dict[str, object]] = []
+    for si, symbol in enumerate(_FIXTURE_SYMBOLS):
+        for di, day in enumerate(dates):
+            close = closes[symbol][di]
+            if close is None:
+                continue
+            row: dict[str, object] = {"symbol": symbol, "date": day, "close": float(close)}
+            if volumes is not None:
+                vol = volumes[symbol][di]
+                row["volume"] = float(vol) if vol is not None else 0.0
+            rows.append(row)
+    return pl.DataFrame(rows)
+
+
+def _compute_with_panel(registry, panel, *, expression, start, end, warmup_days, horizon=1, rebalance="daily"):
+    rev = registry.create_factor(name=f"p47-{expression}-{start}-{end}-{warmup_days}-{horizon}", expression=expression)
+    chain = FactorSignalChain(_PanelEngine(panel), registry, universe_resolver=None)
+    config = SignalChainConfig(
+        universe="fixture-a-share",
+        symbols=_FIXTURE_SYMBOLS,
+        asset_type="stock",
+        start=start,
+        end=end,
+        warmup_days=warmup_days,
+        forward_return_horizon=horizon,
+        rebalance=rebalance,  # type: ignore[arg-type]
+    )
+    return chain.compute(revision_id=rev.id, config=config)
+
+
+_PRE_FILTER_KEYS = (
+    "total", "finite", "non_finite", "suspended", "stale", "source_quality_excluded", "warmup_excluded",
+)
+
+
+def test_pre_filter_counts_carry_named_per_state_buckets(research_registry) -> None:
+    """Each date's counts partition the cross-section: the five states sum to total."""
+    panel = _dated_panel(
+        dates=[date(2024, 1, 2), date(2024, 1, 3), date(2024, 1, 4)],
+        closes={s: (10.0, 11.0, 12.0) for s in _FIXTURE_SYMBOLS},
+    )
+    # start=2024-01-03, warmup_days=1 -> load_start=2024-01-02 is a warmup date;
+    # horizon=1 drops 2024-01-04 (null forward return) from the finite window.
+    frame = _compute_with_panel(
+        research_registry, panel, expression="close",
+        start=date(2024, 1, 3), end=date(2024, 1, 4), warmup_days=1, horizon=1,
+    )
+    counts = frame.resolved_universe["pre_filter_counts"]
+    # Evaluation window keeps 2024-01-03 (forward-return finite); 2024-01-02 is warmup.
+    assert set(counts) == {"2024-01-02", "2024-01-03"}
+    for entry in counts.values():
+        assert set(entry) == set(_PRE_FILTER_KEYS)
+        assert (
+            entry["finite"] + entry["non_finite"] + entry["suspended"]
+            + entry["stale"] + entry["source_quality_excluded"] + entry["warmup_excluded"]
+            == entry["total"]
+        )
+    assert counts["2024-01-03"] == {
+        "total": 4, "finite": 4, "non_finite": 0, "suspended": 0,
+        "stale": 0, "source_quality_excluded": 0, "warmup_excluded": 0,
+    }
+    assert counts["2024-01-02"]["warmup_excluded"] == 4
+    assert counts["2024-01-02"]["finite"] == 0
+
+
+def test_pre_filter_counts_name_non_finite_drops(research_registry) -> None:
+    """A non-finite factor value (close/volume with volume=0) is named non_finite."""
+    closes = {s: (10.0, 11.0, 12.0) for s in _FIXTURE_SYMBOLS}
+    volumes = {s: (1.0, 1.0, 1.0) for s in _FIXTURE_SYMBOLS}
+    volumes["000003.SZ"] = (1.0, 0.0, 1.0)  # volume=0 on the eval date -> _factor = inf
+    panel = _dated_panel(
+        dates=[date(2024, 1, 2), date(2024, 1, 3), date(2024, 1, 4)],
+        closes=closes, volumes=volumes,
+    )
+    frame = _compute_with_panel(
+        research_registry, panel, expression="close / volume",
+        start=date(2024, 1, 3), end=date(2024, 1, 4), warmup_days=0, horizon=1,
+    )
+    counts = frame.resolved_universe["pre_filter_counts"]
+    entry = counts["2024-01-03"]
+    assert entry["total"] == 4
+    assert entry["finite"] == 3
+    assert entry["non_finite"] == 1
+    assert entry["finite"] + entry["non_finite"] == entry["total"]
+
+
+def test_coverage_skips_warmup_dates(research_registry) -> None:
+    """Coverage is measured over the evaluation window only (warmup excluded)."""
+    from app.research.evaluation import FactorEvaluationService
+
+    resolved = {"pre_filter_counts": {
+        "2024-01-02": {"total": 4, "finite": 0, "non_finite": 0, "suspended": 0,
+                       "stale": 0, "source_quality_excluded": 0, "warmup_excluded": 4},
+        "2024-01-03": {"total": 4, "finite": 4, "non_finite": 0, "suspended": 0,
+                       "stale": 0, "source_quality_excluded": 0, "warmup_excluded": 0},
+    }}
+    coverage = FactorEvaluationService._coverage(resolved)
+    assert [row["date"] for row in coverage["coverage_series"]] == ["2024-01-03"]
+    assert coverage["mean"] == 1.0
+
+
+def test_missing_data_fingerprint_reflects_per_state_counts(research_registry) -> None:
+    """The missing_data digest changes when the non_finite count changes (47-01 W4 resolved)."""
+    base_closes = {s: (10.0, 11.0, 12.0) for s in _FIXTURE_SYMBOLS}
+    clean_volumes = {s: (1.0, 1.0, 1.0) for s in _FIXTURE_SYMBOLS}
+    clean = _dated_panel(
+        dates=[date(2024, 1, 2), date(2024, 1, 3), date(2024, 1, 4)],
+        closes=base_closes, volumes=clean_volumes,
+    )
+    clean_frame = _compute_with_panel(
+        research_registry, clean, expression="close / volume",
+        start=date(2024, 1, 3), end=date(2024, 1, 4), warmup_days=0, horizon=1,
+    )
+    dirty_volumes = {s: (1.0, 1.0, 1.0) for s in _FIXTURE_SYMBOLS}
+    dirty_volumes["000003.SZ"] = (1.0, 0.0, 1.0)
+    dirty = _dated_panel(
+        dates=[date(2024, 1, 2), date(2024, 1, 3), date(2024, 1, 4)],
+        closes=base_closes, volumes=dirty_volumes,
+    )
+    dirty_frame = _compute_with_panel(
+        research_registry, dirty, expression="close / volume",
+        start=date(2024, 1, 3), end=date(2024, 1, 4), warmup_days=0, horizon=1,
+    )
+    assert clean_frame.declared_fingerprints["source_field"] == dirty_frame.declared_fingerprints["source_field"]
+    assert clean_frame.declared_fingerprints["missing_data"] != dirty_frame.declared_fingerprints["missing_data"]
+
+
+# -- cost / turnover diagnostic (47-02 OQ4) --
+
+
+def _long_short_frame() -> pl.DataFrame:
+    """Two-date, four-symbol rebalance-dated frame with cross-sectional zscore."""
+    z = {"000001.SZ": -1.161895003862225, "000002.SZ": -0.3872983346207417,
+         "000003.SZ": 0.3872983346207417, "000004.SZ": 1.161895003862225}
+    rows: list[dict[str, object]] = []
+    for day in (date(2024, 1, 2), date(2024, 1, 3)):
+        for symbol in _FIXTURE_SYMBOLS:
+            rows.append({
+                "symbol": symbol, "date": day,
+                "_zscore": z[symbol], "_forward_return": 0.01 * z[symbol],
+            })
+    return pl.DataFrame(rows)
+
+
+def test_cost_diagnostics_zero_cost_rate_yields_zero_drag() -> None:
+    from app.research.evaluation import cost_diagnostics
+
+    diag = cost_diagnostics(_long_short_frame(), costs={}, rebalance="daily")
+    assert diag["cost_rate"] == 0.0
+    assert diag["cost_drag"] == 0.0
+    assert diag["net_long_short_return"] == pytest.approx(diag["raw_long_short_return"])
+    assert diag["total_turnover"] > 0.0
+
+
+def test_cost_diagnostics_positive_cost_reduces_net_return() -> None:
+    from app.research.evaluation import cost_diagnostics
+
+    costs = {"commission_pct": 0.0003, "stamp_tax_pct": 0.001, "slippage_bps": 5.0}
+    diag = cost_diagnostics(_long_short_frame(), costs=costs, rebalance="daily")
+    # commission*2 + stamp + slippage*2/1e4 = 0.0006 + 0.001 + 0.001 = 0.0026
+    assert diag["cost_rate"] == pytest.approx(0.0026)
+    assert diag["cost_drag"] > 0.0
+    assert diag["net_long_short_return"] < diag["raw_long_short_return"]
+    assert diag["net_long_short_return"] == pytest.approx(
+        diag["raw_long_short_return"] - diag["cost_drag"]
+    )
+    assert {r["date"] for r in diag["turnover_per_rebalance"]} == {"2024-01-02", "2024-01-03"}
+
+
+def test_cost_diagnostics_empty_frame_returns_empty_diagnostic() -> None:
+    from app.research.evaluation import cost_diagnostics
+
+    empty = pl.DataFrame({"symbol": [], "date": [], "_zscore": [], "_forward_return": []})
+    diag = cost_diagnostics(empty, costs={"commission_pct": 0.0003}, rebalance="daily")
+    assert diag["total_turnover"] == 0.0
+    assert diag["cost_drag"] == 0.0
+    assert diag["cost_rate"] == pytest.approx(0.0006)
+    assert diag["turnover_per_rebalance"] == []
+
+
+def test_cost_diagnostics_docstring_states_diagnostic_not_pnl() -> None:
+    from app.research.evaluation import cost_diagnostics
+
+    assert "DIAGNOSTIC" in cost_diagnostics.__doc__
+    assert "NOT execution P&L" in cost_diagnostics.__doc__
+
+
+def test_evaluate_populates_cost_diagnostics_on_result(tmp_path) -> None:
+    """evaluate() wires the declared costs into the result's cost_diagnostics."""
+    from app.research.artifacts import EvaluationArtifactService
+    from app.research.evaluation import FactorEvaluationService, ResolvedEvaluationConfig
+    from app.research.repository import ResearchRepository
+
+    repository = ResearchRepository(tmp_path / "operational.db")
+    repository.migrate()
+    registry = FactorRegistry(repository)
+    revision = registry.create_factor(name="Close", expression="close")
+    closes = {
+        "000001.SZ": (1.0, 1.5, 2.0), "000002.SZ": (2.0, 2.6, 4.0),
+        "000003.SZ": (3.0, 3.6, 6.0), "000004.SZ": (4.0, 4.4, 8.0),
+    }
+    panel = _dated_panel(
+        dates=[date(2024, 1, 2), date(2024, 1, 3), date(2024, 1, 4)],
+        closes=closes,
+    )
+    service = FactorEvaluationService(_PanelEngine(panel), registry, EvaluationArtifactService(tmp_path / "app-data"))
+    config = ResolvedEvaluationConfig(
+        factor_revision_id=revision.id,
+        universe="fixture-a-share",
+        symbols=_FIXTURE_SYMBOLS,
+        asset_type="stock",
+        start=date(2024, 1, 2),
+        end=date(2024, 1, 3),
+        forward_return_horizon=1,
+        rebalance="daily",
+        missing_data_treatment="drop",
+        warmup_treatment="exclude",
+        warmup_days=0,
+        n_groups=2,
+        weight="equal",
+        fees_pct=0.0002,
+        slippage_bps=5.0,
+        costs={"commission_pct": 0.0003, "stamp_tax_pct": 0.001, "slippage_bps": 5.0},
+    )
+    result = service.evaluate(config)
+    assert result.status == "completed"
+    assert result.cost_diagnostics["cost_rate"] == pytest.approx(0.0026)
+    assert result.cost_diagnostics["cost_drag"] > 0.0
