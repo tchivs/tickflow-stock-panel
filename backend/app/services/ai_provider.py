@@ -157,7 +157,13 @@ async def _run_openai_once(
             model=current_ai_model(),
             messages=list(messages),
             temperature=temperature,
-            max_tokens=max_tokens,
+            # max_completion_tokens = 总输出预算(含推理),由模型自分配思考/回答。
+            # 对推理模型(deepseek-v4 等)传 max_tokens 会把全部预算留给思考,
+            # content 恒为空(vfing/one-api 类网关与 OpenAI 新语义一致)。
+            max_completion_tokens=max_tokens,
+            # 推理模型默认思考过久(vfing 网关 60s 上游超时 → 504)。
+            # low 档实测 22s 完成且 code 完整;非推理模型会忽略该参数。
+            reasoning_effort="low",
         )
     except Exception as exc:
         if _is_openai_transport_error(exc):
@@ -187,7 +193,9 @@ async def _stream_openai(
             model=current_ai_model(),
             messages=list(messages),
             temperature=temperature,
-            max_tokens=max_tokens,
+            # 同 _run_openai_once:推理模型需 max_completion_tokens 语义
+            max_completion_tokens=max_tokens,
+            reasoning_effort="low",
             stream=True,
         )
 

@@ -72,7 +72,7 @@ class AIStrategyGenerator:
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0.3,
-            max_tokens=3000,
+            max_tokens=5000,
         ):
             yield chunk
 
@@ -103,7 +103,7 @@ class AIStrategyGenerator:
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0.3,
-            max_tokens=3000,
+            max_tokens=5000,
         )
         return self._extract_code_block(content)
 
