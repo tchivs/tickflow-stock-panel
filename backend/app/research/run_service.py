@@ -233,6 +233,10 @@ class ResearchRunService:
             raise AlphaCheckpointValidationError("manifest digest mismatch (stale cursor)")
 
         committed_seq = int(checkpoint["committed_event_seq"])
+        if run["last_event_seq"] < committed_seq:
+            raise AlphaCheckpointValidationError(
+                "checkpoint references a future event sequence"
+            )
         events = self._repository.list_run_events(
             run_id, after_seq=0, limit=committed_seq + 1, principal=principal
         )
@@ -241,10 +245,6 @@ class ResearchRunService:
         if committed_seq > 0 and not expected_seqs.issubset(actual_seqs):
             raise AlphaCheckpointValidationError(
                 "committed event sequence is not contiguous"
-            )
-        if run["last_event_seq"] < committed_seq:
-            raise AlphaCheckpointValidationError(
-                "checkpoint references a future event sequence"
             )
 
         candidate_ids = list(referenced_candidate_ids or [])
@@ -263,12 +263,17 @@ class ResearchRunService:
             artifact_row = self._get_artifact(frontier_artifact_id, run_id)
             if artifact_row is None:
                 raise AlphaCheckpointValidationError("frontier artifact reference missing")
-            artifact_service.verify_artifact(
-                run_id=run_id,
-                checksum_sha256=artifact_row["checksum_sha256"],
-                expected_byte_size=artifact_row["byte_size"],
-                expected_content_type=artifact_row["content_type"],
-            )
+            try:
+                artifact_service.verify_artifact(
+                    run_id=run_id,
+                    checksum_sha256=artifact_row["checksum_sha256"],
+                    expected_byte_size=artifact_row["byte_size"],
+                    expected_content_type=artifact_row["content_type"],
+                )
+            except Exception as error:
+                raise AlphaCheckpointValidationError(
+                    f"frontier artifact verification failed: {error}"
+                ) from error
 
         expected_checksum = checkpoint_state_checksum(
             run_id=run_id,

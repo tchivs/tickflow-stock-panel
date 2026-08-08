@@ -929,3 +929,562 @@ class TestCommitBeforePublish:
         events = alpha_run_repository.list_run_events(run["id"])
         ids = [e["id"] for e in events]
         assert event["id"] in ids
+
+
+# ================================================================
+# Task 45-02-02: Verified artifacts and bounded checkpoint replay
+# ================================================================
+
+
+class TestAlphaRunArtifacts:
+    def test_server_derives_exact_content_addressed_path(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+        alpha_artifact_root: Path,
+    ) -> None:
+        from app.research.artifacts import AlphaRunArtifactService
+
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-art-path")
+        service = AlphaRunArtifactService(alpha_artifact_root.parent)
+        descriptor = service.write(
+            run_id=run["id"], payload={"evidence": "metrics", "n": 1}
+        )
+        expected_digest = descriptor["checksum_sha256"]
+        expected_path = f"research_artifacts/alpha_runs/{run['id']}/{expected_digest}.json"
+        assert descriptor["relative_path"] == expected_path
+        # The file physically exists at exactly that key.
+        assert (alpha_artifact_root.parent / expected_path).is_file()
+
+    def test_client_supplied_path_rejected_by_repository(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-art-rej")
+        with pytest.raises(ValueError, match="server-derived content-addressed key"):
+            alpha_run_repository.append_artifact(
+                run_id=run["id"],
+                artifact_id="art-bad-path",
+                logical_kind="evidence",
+                relative_path="arbitrary/client/path.json",
+                content_type="application/json",
+                byte_size=10,
+                checksum_sha256="a" * 64,
+            )
+
+    def test_verify_artifact_rejects_missing(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+        alpha_artifact_root: Path,
+    ) -> None:
+        from app.research.artifacts import (
+            AlphaArtifactVerificationError,
+            AlphaRunArtifactService,
+        )
+
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-art-miss")
+        service = AlphaRunArtifactService(alpha_artifact_root.parent)
+        with pytest.raises(AlphaArtifactVerificationError, match="not found"):
+            service.verify_artifact(run_id=run["id"], checksum_sha256="a" * 64)
+
+    def test_verify_artifact_rejects_changed_bytes(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+        alpha_artifact_root: Path,
+    ) -> None:
+        from app.research.artifacts import (
+            AlphaArtifactVerificationError,
+            AlphaRunArtifactService,
+        )
+
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-art-chg")
+        service = AlphaRunArtifactService(alpha_artifact_root.parent)
+        descriptor = service.write(run_id=run["id"], payload={"v": 1})
+        # Tamper with the bytes on disk.
+        path = alpha_artifact_root.parent / descriptor["relative_path"]
+        path.write_bytes(b'{"tampered": true}')
+        with pytest.raises(AlphaArtifactVerificationError, match="do not match"):
+            service.verify_artifact(
+                run_id=run["id"], checksum_sha256=descriptor["checksum_sha256"]
+            )
+
+    def test_verify_artifact_rejects_bad_size(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+        alpha_artifact_root: Path,
+    ) -> None:
+        from app.research.artifacts import (
+            AlphaArtifactVerificationError,
+            AlphaRunArtifactService,
+        )
+
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-art-size")
+        service = AlphaRunArtifactService(alpha_artifact_root.parent)
+        descriptor = service.write(run_id=run["id"], payload={"v": 1})
+        with pytest.raises(AlphaArtifactVerificationError, match="byte size"):
+            service.verify_artifact(
+                run_id=run["id"],
+                checksum_sha256=descriptor["checksum_sha256"],
+                expected_byte_size=descriptor["byte_size"] + 999,
+            )
+
+    def test_verify_artifact_rejects_path_traversal_run_id(
+        self,
+        alpha_artifact_root: Path,
+    ) -> None:
+        from app.research.artifacts import (
+            AlphaArtifactVerificationError,
+            AlphaRunArtifactService,
+        )
+
+        service = AlphaRunArtifactService(alpha_artifact_root.parent)
+        with pytest.raises(AlphaArtifactVerificationError, match="invalid path characters"):
+            service.verify_artifact(run_id="../escape", checksum_sha256="a" * 64)
+
+    def test_artifact_reference_value_object_has_expected_relative_path(
+        self,
+    ) -> None:
+        from app.research.run_contract import AlphaArtifactReference
+
+        ref = AlphaArtifactReference(
+            artifact_id="art-1",
+            run_id="arun_abc123",
+            logical_kind="evidence",
+            relative_path="research_artifacts/alpha_runs/arun_abc123/aaaa.json",
+            content_type="application/json",
+            byte_size=42,
+            checksum_sha256="a" * 64,
+            schema_version="alpha-artifact-v1",
+            created_at="2026-08-08T00:00:00Z",
+        )
+        assert ref.expected_relative_path == (
+            "research_artifacts/alpha_runs/arun_abc123/" + "a" * 64 + ".json"
+        )
+
+
+class TestInlineCheckpointBound:
+    def test_inline_payload_at_exactly_16kib_accepted(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        from app.research.run_service import ResearchRunService
+
+        service = ResearchRunService(alpha_run_repository)
+        # Build a canonical JSON payload of exactly 16384 bytes.
+        import json
+
+        # Build canonical JSON of exactly MAX_INLINE_CHECKPOINT_BYTES (16384).
+        from app.research.run_contract import MAX_INLINE_CHECKPOINT_BYTES
+
+        # Pad a string value to hit the exact byte bound.
+        base = json.dumps({"x": ""}, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        payload = {"x": "a" * (MAX_INLINE_CHECKPOINT_BYTES - len(base))}
+        payload_bytes = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        assert len(payload_bytes) == MAX_INLINE_CHECKPOINT_BYTES
+        # Should not raise.
+        service.validate_inline_checkpoint_payload(payload_bytes)
+
+    def test_oversized_inline_payload_rejected(
+        self,
+        alpha_run_repository: ResearchRepository,
+    ) -> None:
+        from app.research.run_service import (
+            AlphaCheckpointValidationError,
+            ResearchRunService,
+        )
+
+        service = ResearchRunService(alpha_run_repository)
+        with pytest.raises(AlphaCheckpointValidationError, match="exceeds 16 KiB"):
+            service.validate_inline_checkpoint_payload(b"x" * 16385)
+
+    def test_non_utf8_inline_payload_rejected(
+        self,
+        alpha_run_repository: ResearchRepository,
+    ) -> None:
+        from app.research.run_service import (
+            AlphaCheckpointValidationError,
+            ResearchRunService,
+        )
+
+        service = ResearchRunService(alpha_run_repository)
+        with pytest.raises(AlphaCheckpointValidationError, match="canonical UTF-8 JSON"):
+            service.validate_inline_checkpoint_payload(b"\xff\xfe\x00")
+
+    def test_non_json_inline_payload_rejected(
+        self,
+        alpha_run_repository: ResearchRepository,
+    ) -> None:
+        from app.research.run_service import (
+            AlphaCheckpointValidationError,
+            ResearchRunService,
+        )
+
+        service = ResearchRunService(alpha_run_repository)
+        with pytest.raises(AlphaCheckpointValidationError, match="canonical UTF-8 JSON"):
+            service.validate_inline_checkpoint_payload(b"not json at all")
+
+
+class TestCheckpointValidation:
+    def _make_checkpoint_params(
+        self, run: dict, *, event_seq: int, version: int = 1, **overrides
+    ) -> dict:
+        """Build checkpoint parameters matching the run's digests."""
+        from app.research.run_contract import checkpoint_state_checksum
+
+        params = {
+            "checkpoint_version": version,
+            "committed_event_seq": event_seq,
+            "stage": "search",
+            "snapshot_sha256": run["snapshot_sha256"],
+            "manifest_sha256": run["manifest_sha256"],
+        }
+        params.update(overrides)
+        state_checksum = checkpoint_state_checksum(
+            run_id=run["id"],
+            checkpoint_version=params["checkpoint_version"],
+            committed_event_seq=params["committed_event_seq"],
+            stage=params["stage"],
+            snapshot_sha256=params["snapshot_sha256"],
+            manifest_sha256=params["manifest_sha256"],
+            referenced_candidate_ids=[],
+            inline_summary=None,
+            frontier_artifact_id=None,
+        )
+        params["state_checksum"] = state_checksum
+        return params
+
+    def test_valid_checkpoint_written_and_recovered_after_restart(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+        tmp_path: Path,
+    ) -> None:
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-chk-ok")
+        params = self._make_checkpoint_params(run, event_seq=1)
+        alpha_run_repository.append_checkpoint(
+            run_id=run["id"],
+            checkpoint_id="chk-ok-1",
+            **params,
+        )
+        # Simulate restart with a fresh repository.
+        fresh = ResearchRepository(
+            alpha_run_repository.database_path,
+            clock=deterministic_clock,
+            artifact_root=tmp_path / "alpha_artifacts",
+        )
+        recovered = fresh.get_latest_valid_checkpoint(run["id"])
+        assert recovered is not None
+        assert recovered["checkpoint_version"] == 1
+        assert recovered["committed_event_seq"] == 1
+
+    def test_stale_snapshot_digest_rejected(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        from app.research.run_service import (
+            AlphaCheckpointValidationError,
+            ResearchRunService,
+        )
+
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-chk-stale")
+        service = ResearchRunService(alpha_run_repository)
+        params = self._make_checkpoint_params(
+            run, event_seq=1, snapshot_sha256="z" * 64
+        )
+        with pytest.raises(AlphaCheckpointValidationError, match="snapshot digest mismatch"):
+            service.validate_checkpoint(
+                run_id=run["id"],
+                principal="researcher@example.com",
+                checkpoint=params,
+            )
+
+    def test_stale_manifest_digest_rejected(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        from app.research.run_service import (
+            AlphaCheckpointValidationError,
+            ResearchRunService,
+        )
+
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-chk-manifest")
+        service = ResearchRunService(alpha_run_repository)
+        params = self._make_checkpoint_params(
+            run, event_seq=1, manifest_sha256="z" * 64
+        )
+        with pytest.raises(AlphaCheckpointValidationError, match="manifest digest mismatch"):
+            service.validate_checkpoint(
+                run_id=run["id"],
+                principal="researcher@example.com",
+                checkpoint=params,
+            )
+
+    def test_future_event_sequence_rejected(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        from app.research.run_service import (
+            AlphaCheckpointValidationError,
+            ResearchRunService,
+        )
+
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-chk-future")
+        service = ResearchRunService(alpha_run_repository)
+        # The run has last_event_seq = 1; claim committed_event_seq = 99.
+        params = self._make_checkpoint_params(run, event_seq=99)
+        with pytest.raises(AlphaCheckpointValidationError, match="future event sequence"):
+            service.validate_checkpoint(
+                run_id=run["id"],
+                principal="researcher@example.com",
+                checkpoint=params,
+            )
+
+    def test_missing_referenced_candidate_rejected(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        from app.research.run_service import (
+            AlphaCheckpointValidationError,
+            ResearchRunService,
+        )
+
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-chk-cand")
+        service = ResearchRunService(alpha_run_repository)
+        params = self._make_checkpoint_params(run, event_seq=1)
+        with pytest.raises(AlphaCheckpointValidationError, match="missing candidate"):
+            service.validate_checkpoint(
+                run_id=run["id"],
+                principal="researcher@example.com",
+                checkpoint=params,
+                referenced_candidate_ids=["cand-nonexistent"],
+            )
+
+    def test_bad_cursor_checksum_rejected(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        from app.research.run_service import (
+            AlphaCheckpointValidationError,
+            ResearchRunService,
+        )
+
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-chk-bad")
+        service = ResearchRunService(alpha_run_repository)
+        params = self._make_checkpoint_params(run, event_seq=1)
+        params["state_checksum"] = "0" * 64  # wrong checksum
+        with pytest.raises(AlphaCheckpointValidationError, match="state checksum mismatch"):
+            service.validate_checkpoint(
+                run_id=run["id"],
+                principal="researcher@example.com",
+                checkpoint=params,
+            )
+
+    def test_cross_principal_checkpoint_rejected(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        from app.research.run_service import (
+            AlphaCheckpointValidationError,
+            ResearchRunService,
+        )
+
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-chk-xp")
+        params = self._make_checkpoint_params(run, event_seq=1)
+        alpha_run_repository.append_checkpoint(
+            run_id=run["id"], checkpoint_id="chk-xp-1", **params
+        )
+        # Cross-principal: same None boundary as unknown run.
+        assert alpha_run_repository.get_latest_valid_checkpoint(
+            run["id"], principal="other@example.com"
+        ) is None
+        service = ResearchRunService(alpha_run_repository)
+        with pytest.raises(AlphaCheckpointValidationError, match="run not found for principal"):
+            service.validate_checkpoint(
+                run_id=run["id"],
+                principal="other@example.com",
+                checkpoint=params,
+            )
+
+    def test_checkpoint_with_frontier_artifact_verified(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+        alpha_artifact_root: Path,
+    ) -> None:
+        from app.research.artifacts import AlphaRunArtifactService
+        from app.research.run_contract import checkpoint_state_checksum
+        from app.research.run_service import ResearchRunService
+
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-chk-art")
+        art_service = AlphaRunArtifactService(alpha_artifact_root.parent)
+        descriptor = art_service.write(run_id=run["id"], payload={"frontier": [1, 2, 3]})
+        artifact_ref = alpha_run_repository.append_artifact(
+            run_id=run["id"],
+            artifact_id="art-frontier-1",
+            logical_kind="frontier",
+            relative_path=descriptor["relative_path"],
+            content_type=descriptor["content_type"],
+            byte_size=descriptor["byte_size"],
+            checksum_sha256=descriptor["checksum_sha256"],
+        )
+        state_checksum = checkpoint_state_checksum(
+            run_id=run["id"],
+            checkpoint_version=1,
+            committed_event_seq=1,
+            stage="search",
+            snapshot_sha256=run["snapshot_sha256"],
+            manifest_sha256=run["manifest_sha256"],
+            referenced_candidate_ids=[],
+            inline_summary=None,
+            frontier_artifact_id=artifact_ref["id"],
+        )
+        params = {
+            "checkpoint_version": 1,
+            "committed_event_seq": 1,
+            "stage": "search",
+            "snapshot_sha256": run["snapshot_sha256"],
+            "manifest_sha256": run["manifest_sha256"],
+            "state_checksum": state_checksum,
+            "frontier_artifact_id": artifact_ref["id"],
+        }
+        service = ResearchRunService(alpha_run_repository)
+        # Should succeed — artifact exists, size/digest match.
+        result = service.validate_checkpoint(
+            run_id=run["id"],
+            principal="researcher@example.com",
+            checkpoint=params,
+            artifact_service=art_service,
+        )
+        assert result["frontier_artifact_id"] == artifact_ref["id"]
+
+    def test_checkpoint_frontier_artifact_tampered_rejected(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+        alpha_artifact_root: Path,
+    ) -> None:
+        from app.research.artifacts import AlphaRunArtifactService
+        from app.research.run_contract import checkpoint_state_checksum
+        from app.research.run_service import (
+            AlphaCheckpointValidationError,
+            ResearchRunService,
+        )
+
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-chk-tamp")
+        art_service = AlphaRunArtifactService(alpha_artifact_root.parent)
+        descriptor = art_service.write(run_id=run["id"], payload={"frontier": [1, 2]})
+        artifact_ref = alpha_run_repository.append_artifact(
+            run_id=run["id"],
+            artifact_id="art-frontier-tamp",
+            logical_kind="frontier",
+            relative_path=descriptor["relative_path"],
+            content_type=descriptor["content_type"],
+            byte_size=descriptor["byte_size"],
+            checksum_sha256=descriptor["checksum_sha256"],
+        )
+        # Tamper with artifact bytes.
+        path = alpha_artifact_root.parent / descriptor["relative_path"]
+        path.write_bytes(b'{"tampered": true}')
+        state_checksum = checkpoint_state_checksum(
+            run_id=run["id"],
+            checkpoint_version=1,
+            committed_event_seq=1,
+            stage="search",
+            snapshot_sha256=run["snapshot_sha256"],
+            manifest_sha256=run["manifest_sha256"],
+            referenced_candidate_ids=[],
+            inline_summary=None,
+            frontier_artifact_id=artifact_ref["id"],
+        )
+        params = {
+            "checkpoint_version": 1,
+            "committed_event_seq": 1,
+            "stage": "search",
+            "snapshot_sha256": run["snapshot_sha256"],
+            "manifest_sha256": run["manifest_sha256"],
+            "state_checksum": state_checksum,
+            "frontier_artifact_id": artifact_ref["id"],
+        }
+        service = ResearchRunService(alpha_run_repository)
+        with pytest.raises(AlphaCheckpointValidationError):
+            service.validate_checkpoint(
+                run_id=run["id"],
+                principal="researcher@example.com",
+                checkpoint=params,
+                artifact_service=art_service,
+            )
+
+
+class TestReplayReadOnly:
+    def test_replay_with_candidates_is_deterministic_and_read_only(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+        tmp_path: Path,
+    ) -> None:
+        from app.research.run_service import ResearchRunService
+
+        service = ResearchRunService(alpha_run_repository)
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-replay")
+        for i in range(1, 4):
+            alpha_run_repository.append_candidate_attempt(
+                **_candidate_params(
+                    run_id=run["id"], candidate_id=f"cand-r-{i}", ordinal=i,
+                )
+            )
+        first = service.replay(
+            run["id"], principal="researcher@example.com", include_candidates=True
+        )
+        # Fresh repository = process restart; replay must be identical.
+        fresh_repo = ResearchRepository(
+            alpha_run_repository.database_path,
+            clock=deterministic_clock,
+            artifact_root=tmp_path / "alpha_artifacts",
+        )
+        fresh_service = ResearchRunService(fresh_repo)
+        second = fresh_service.replay(
+            run["id"], principal="researcher@example.com", include_candidates=True
+        )
+        assert first is not None and second is not None
+        assert [c["id"] for c in first["candidates"]] == [c["id"] for c in second["candidates"]]
+        assert len(first["candidates"]) == 3
+        # Replay does not resolve current constituents, policy, code, or OOS.
+        assert "manifest" in first["snapshot"]
+        assert first["run"]["status"] == "queued"
+
+    def test_replay_cross_principal_returns_none(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        from app.research.run_service import ResearchRunService
+
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-replay-xp")
+        service = ResearchRunService(alpha_run_repository)
+        result = service.replay(run["id"], principal="other@example.com")
+        assert result is None
+
+    def test_checkpoint_does_not_accept_pickle_or_executable_state(
+        self,
+        alpha_run_repository: ResearchRepository,
+    ) -> None:
+        from app.research.run_service import (
+            AlphaCheckpointValidationError,
+            ResearchRunService,
+        )
+
+        service = ResearchRunService(alpha_run_repository)
+        # Pickle bytes (0x80 = protocol marker) are not valid UTF-8 JSON.
+        with pytest.raises(AlphaCheckpointValidationError):
+            service.validate_inline_checkpoint_payload(b"\x80\x04\x95")
