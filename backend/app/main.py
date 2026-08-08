@@ -47,6 +47,7 @@ from app.api import (
     watchlist,
 )
 from app.api import research_alpha
+from app.api import portfolio_panels
 from app.api import research_panels
 from app.api import walkforward_sse
 from app.api import analysis as analysis_menus
@@ -885,10 +886,11 @@ app.include_router(market_recap.router)
 app.include_router(market_recap_auction.router)
 app.include_router(settings_api.router)
 app.include_router(strategy.router)
-app.include_router(research_alpha.router)
-app.include_router(research_panels.router)
+app.include_router(signals.router)
+app.include_router(monitor_rules.router)
 app.include_router(portfolio.router)
 app.include_router(decision.router)
+app.include_router(research_alpha.router)
 app.include_router(research_panels.router)
 app.include_router(portfolio_panels.router)
 app.include_router(walkforward_sse.router)
