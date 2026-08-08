@@ -2048,6 +2048,66 @@ MIGRATIONS: tuple[str, ...] = (
     CREATE TRIGGER research_alpha_artifacts_no_delete BEFORE DELETE ON research_alpha_artifacts
     BEGIN SELECT RAISE(ABORT, 'alpha artifacts are append-only'); END;
     """,
+    """
+    -- Phase 45 review hardening: direct SQL must preserve same-run provenance
+    -- and SQLite signed-int64 progress invariants (CR-03, WR-02).
+    CREATE TRIGGER research_alpha_candidates_artifact_same_run
+    BEFORE INSERT ON research_alpha_candidate_attempts
+    FOR EACH ROW WHEN NEW.evidence_artifact_id IS NOT NULL AND NOT EXISTS (
+        SELECT 1 FROM research_alpha_artifacts
+        WHERE id = NEW.evidence_artifact_id AND run_id = NEW.run_id
+    )
+    BEGIN SELECT RAISE(ABORT, 'candidate artifact must belong to candidate run'); END;
+
+    CREATE TRIGGER research_alpha_events_artifact_same_run
+    BEFORE INSERT ON research_alpha_events
+    FOR EACH ROW WHEN NEW.artifact_id IS NOT NULL AND NOT EXISTS (
+        SELECT 1 FROM research_alpha_artifacts
+        WHERE id = NEW.artifact_id AND run_id = NEW.run_id
+    )
+    BEGIN SELECT RAISE(ABORT, 'event artifact must belong to event run'); END;
+
+    CREATE TRIGGER research_alpha_checkpoints_artifact_same_run
+    BEFORE INSERT ON research_alpha_checkpoints
+    FOR EACH ROW WHEN NEW.frontier_artifact_id IS NOT NULL AND NOT EXISTS (
+        SELECT 1 FROM research_alpha_artifacts
+        WHERE id = NEW.frontier_artifact_id AND run_id = NEW.run_id
+    )
+    BEGIN SELECT RAISE(ABORT, 'checkpoint artifact must belong to checkpoint run'); END;
+
+    CREATE TRIGGER research_alpha_lineage_same_run
+    BEFORE INSERT ON research_alpha_candidate_lineage
+    FOR EACH ROW WHEN NOT EXISTS (
+        SELECT 1 FROM research_alpha_candidate_attempts AS child
+        JOIN research_alpha_candidate_attempts AS parent
+          ON parent.id = NEW.parent_attempt_id
+        WHERE child.id = NEW.child_attempt_id
+          AND child.run_id = NEW.run_id
+          AND parent.run_id = NEW.run_id
+    )
+    BEGIN SELECT RAISE(ABORT, 'candidate lineage references must share a run'); END;
+
+    CREATE TRIGGER research_alpha_runs_progress_bounds_insert
+    BEFORE INSERT ON research_alpha_runs
+    FOR EACH ROW WHEN NEW.candidate_attempts_total > 9223372036854775807
+        OR NEW.candidate_attempts_completed > 9223372036854775807
+        OR NEW.folds_total > 9223372036854775807
+        OR NEW.folds_completed > 9223372036854775807
+        OR NEW.candidate_attempts_completed > NEW.candidate_attempts_total
+        OR NEW.folds_completed > NEW.folds_total
+    BEGIN SELECT RAISE(ABORT, 'alpha progress counters exceed bounded totals'); END;
+
+    CREATE TRIGGER research_alpha_runs_progress_bounds_update
+    BEFORE UPDATE OF candidate_attempts_total, candidate_attempts_completed,
+        folds_total, folds_completed ON research_alpha_runs
+    FOR EACH ROW WHEN NEW.candidate_attempts_total > 9223372036854775807
+        OR NEW.candidate_attempts_completed > 9223372036854775807
+        OR NEW.folds_total > 9223372036854775807
+        OR NEW.folds_completed > 9223372036854775807
+        OR NEW.candidate_attempts_completed > NEW.candidate_attempts_total
+        OR NEW.folds_completed > NEW.folds_total
+    BEGIN SELECT RAISE(ABORT, 'alpha progress counters exceed bounded totals'); END;
+    """,
 )
 
 
