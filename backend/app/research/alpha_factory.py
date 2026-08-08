@@ -14,10 +14,13 @@ authority (T-46-03; the static guard is tightened in plan 46-04).
 """
 from __future__ import annotations
 
-from collections.abc import Mapping
+import random
+from collections.abc import Iterator, Mapping
+from dataclasses import dataclass, replace
 from typing import Any, Final
 
 from app.research import factor_dsl
+from app.research.factor_dsl import Expression
 from app.research.run_contract import digest_bytes
 
 # Versioning constants pinned for cross-process replay stability (plan 46-02).
@@ -131,3 +134,226 @@ def verify_vocabulary_fingerprint(frozen: str | None) -> None:
     live = vocabulary_fingerprint()
     if not isinstance(frozen, str) or frozen != live:
         raise VocabularyMismatchError(frozen=frozen, live=live)
+
+
+# ---------------------------------------------------------------------------
+# Phase 46 Wave 2 (AF-REQ-02 SC2): deterministic seeded generation engine
+# ---------------------------------------------------------------------------
+
+# Shared, immutable source location for every generator-built node.  The
+# canonical serializer only reads locations for diagnostics, so a single
+# sentinel is safe and keeps generated nodes allocation-light.
+_LOC = factor_dsl.SourceLocation(offset=0, line=1, column=1)
+
+# Frozen rolling windows used by the seed-pool enumeration (O3).  Every value is
+# a positive integer inside the legal ``rolling_mean`` window range, so a
+# rolling_mean seed canonicalizes by construction.
+_SEED_ROLLING_WINDOWS: Final[tuple[int, ...]] = (5, 20, 60)
+
+
+def candidate_digest(
+    *,
+    canonical_expression: str,
+    seed: int,
+    step: int,
+    operation: str,
+    vocab_version: str,
+) -> str:
+    """Provenance-encoding lowercase SHA-256 over one candidate's identity.
+
+    The digest folds in ``step`` and ``operation`` so two structurally
+    identical expressions emitted at different steps (or via different
+    operations) get distinct digests, while the same frozen inputs always
+    reproduce the same digest sequence (AF-REQ-02 SC2; matches the
+    one-row-per-attempt model in ``repository.append_candidate_attempt``).
+    """
+    return digest_bytes(
+        {
+            "expression": canonical_expression,
+            "vocab_version": vocab_version,
+            "seed": seed,
+            "step": step,
+            "operation": operation,
+        }
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class GenerationResult:
+    """One deterministic candidate: AST plus provenance, reproducible from the seed.
+
+    ``step`` is the 0-based attempt ordinal (``attempt_ordinal == step + 1``).
+    ``parent_steps`` is empty for seed candidates, a single preceding step for
+    mutations, and two distinct preceding steps for crossovers.
+    """
+
+    step: int
+    operation: str
+    ast: Expression
+    canonical_expression: str
+    parent_steps: tuple[int, ...]
+    seed: int
+
+    @property
+    def digest(self) -> str:
+        """Stable SHA-256 over this candidate's full provenance identity."""
+        return candidate_digest(
+            canonical_expression=self.canonical_expression,
+            seed=self.seed,
+            step=self.step,
+            operation=self.operation,
+            vocab_version=vocabulary_fingerprint(),
+        )
+
+    @property
+    def attempt_ordinal(self) -> int:
+        """1-based ordinal matching ``repository.append_candidate_attempt``."""
+        return self.step + 1
+
+
+class AlphaFactory:
+    """Deterministic seeded candidate-generation engine over the Factor DSL.
+
+    Given a frozen seed and complexity limits, the factory emits a bounded,
+    canonical candidate stream whose expressions, digests, operation labels,
+    parent/child lineage, and ordering are reproducible from the seed alone
+    (AF-REQ-02 SC2).
+
+    All nondeterministic draws come from a single instance-local
+    ``random.Random(seed)``; the global :mod:`random` module is never drawn
+    from, so worker timing cannot perturb the sequence (T-46-04 / T-46-05).
+
+    The factory builds legal Factor DSL AST nodes and feeds every output
+    through ``factor_dsl.canonicalize`` (the single validator / serializer —
+    no second expression engine). Validation-as-rejection (plan 46-03) and
+    diversity/budget/worker persistence (plan 46-04) layer on top.
+    """
+
+    def __init__(
+        self,
+        seed: int,
+        *,
+        max_depth: int = DEFAULT_MAX_DEPTH,
+        max_nodes: int = DEFAULT_MAX_NODES,
+        max_candidates: int = 256,
+    ) -> None:
+        if max_depth < 1:
+            raise ValueError("max_depth must be >= 1")
+        if max_nodes < 1:
+            raise ValueError("max_nodes must be >= 1")
+        if max_candidates < 1:
+            raise ValueError("max_candidates must be >= 1")
+        self._seed = int(seed)
+        self._max_depth = int(max_depth)
+        self._max_nodes = int(max_nodes)
+        self._max_candidates = int(max_candidates)
+        # Single instance-local PRNG (T-46-04): the global random module is
+        # never drawn from, so the whole stream is reproducible from the seed.
+        self._rng = random.Random(self._seed)
+        self._fields_sorted: list[str] = sorted(factor_dsl.ALLOWED_FIELDS)
+        # The seed pool is a pure deterministic enumeration that consumes NO
+        # PRNG draws, so the mutation/crossover draw sequence (task 46-02-02)
+        # is independent of the seed-pool size.
+        self._seed_pool: list[Expression] = list(self._iter_seed_pool())
+        self._results: list[GenerationResult] = []
+        self._step = 0
+
+    # -- public API -------------------------------------------------------
+
+    def generate_next(self) -> GenerationResult | None:
+        """Produce the next seed candidate, or ``None`` once the budget is hit.
+
+        Evolution (mutation / crossover) is added in task 46-02-02; until then
+        generation stops at the seed-pool boundary or the candidate budget,
+        whichever comes first.
+        """
+        if self._step >= self._max_candidates:
+            return None
+        if self._step >= len(self._seed_pool):
+            return None
+        result = self._produce_seed(self._step)
+        self._results.append(result)
+        self._step += 1
+        return result
+
+    def replay_to(self, k: int) -> list[GenerationResult]:
+        """Re-derive the first ``k`` candidates from the frozen seed.
+
+        No PRNG state is serialized: a fresh factory is rebuilt from the seed
+        and replayed, so the result equals the live stream's prefix for any
+        ``k`` regardless of how far this instance has advanced (O2).
+        """
+        if k < 0:
+            raise ValueError("k must be non-negative")
+        replay = AlphaFactory(
+            self._seed,
+            max_depth=self._max_depth,
+            max_nodes=self._max_nodes,
+            max_candidates=self._max_candidates,
+        )
+        return [replay.generate_next() for _ in range(min(k, self._max_candidates))]
+
+    @property
+    def step(self) -> int:
+        """Number of candidates produced so far (next step index)."""
+        return self._step
+
+    @property
+    def seed_pool_size(self) -> int:
+        """Size of the deterministic seed-pool enumeration (vocab-derived)."""
+        return len(self._seed_pool)
+
+    # -- seed-pool generation --------------------------------------------
+
+    def _produce_seed(self, step: int) -> GenerationResult:
+        ast = self._seed_pool[step]
+        canonical = factor_dsl.canonicalize(ast)
+        return GenerationResult(
+            step=step,
+            operation="seed",
+            ast=ast,
+            canonical_expression=canonical,
+            parent_steps=(),
+            seed=self._seed,
+        )
+
+    def _iter_seed_pool(self) -> Iterator[Expression]:
+        """Frozen seed-pool enumeration order (O3); consumes NO PRNG draws.
+
+        Order: (1) single allowed fields, (2) unary negation of fields,
+        (3) ``rank``/``zscore`` of single fields, (4) ``rolling_mean`` variants
+        over a field with legal windows, (5) small binary trees over
+        field/field and field/literal.  Every emitted node is a legal DSL AST,
+        so each canonicalizes without raising.
+        """
+        fields = self._fields_sorted
+        count = len(fields)
+        # (1) single allowed fields
+        for name in fields:
+            yield factor_dsl.Field(name, _LOC)
+        # (2) unary negation of fields
+        for name in fields:
+            yield factor_dsl.Unary("-", factor_dsl.Field(name, _LOC), _LOC)
+        # (3) rank / zscore of single fields
+        for name in fields:
+            yield factor_dsl.Call("rank", (factor_dsl.Field(name, _LOC),), _LOC)
+        for name in fields:
+            yield factor_dsl.Call("zscore", (factor_dsl.Field(name, _LOC),), _LOC)
+        # (4) rolling_mean variants over a field with legal windows
+        for name in fields:
+            for window in _SEED_ROLLING_WINDOWS:
+                yield factor_dsl.Call(
+                    "rolling_mean",
+                    (factor_dsl.Field(name, _LOC), factor_dsl.Number(float(window), _LOC)),
+                    _LOC,
+                )
+        # (5) small binary trees over field/field and field/literal
+        if count >= 2:
+            yield factor_dsl.Binary("+", factor_dsl.Field(fields[0], _LOC), factor_dsl.Field(fields[1], _LOC), _LOC)
+        if count >= 4:
+            yield factor_dsl.Binary("-", factor_dsl.Field(fields[2], _LOC), factor_dsl.Field(fields[3], _LOC), _LOC)
+        if count >= 6:
+            yield factor_dsl.Binary("*", factor_dsl.Field(fields[4], _LOC), factor_dsl.Field(fields[5], _LOC), _LOC)
+        yield factor_dsl.Binary("*", factor_dsl.Field(fields[0], _LOC), factor_dsl.Number(2.0, _LOC), _LOC)
+        denom_source = fields[1] if count >= 2 else fields[0]
+        yield factor_dsl.Binary("/", factor_dsl.Field(denom_source, _LOC), factor_dsl.Number(100.0, _LOC), _LOC)
