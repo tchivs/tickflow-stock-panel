@@ -1932,11 +1932,14 @@ class ResearchRepository:
                     expected_path = f"research_artifacts/alpha_runs/{run_id}/{descriptor['checksum_sha256']}.json"
                     if descriptor["relative_path"] != expected_path:
                         raise ValueError("event artifact managed key mismatch")
-                    artifact_service.verify_artifact(
-                        run_id=run_id, checksum_sha256=descriptor["checksum_sha256"],
-                        expected_byte_size=descriptor["byte_size"],
-                        expected_content_type=descriptor["content_type"],
-                    )
+                    try:
+                        artifact_service.verify_artifact(
+                            run_id=run_id, checksum_sha256=descriptor["checksum_sha256"],
+                            expected_byte_size=descriptor["byte_size"],
+                            expected_content_type=descriptor["content_type"],
+                        )
+                    except Exception as error:
+                        raise ValueError("event artifact verification failed") from error
         return events
 
     def get_run_snapshot(self, run_id: str) -> dict[str, Any] | None:
