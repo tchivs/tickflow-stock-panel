@@ -1751,7 +1751,7 @@ class ResearchRepository:
                     (run_id, idempotency_key),
                 ).fetchone()
                 if existing is not None:
-                    if event_type == "run_started":
+                    if event_type == "run_started" and existing["event_type"] == "run_started":
                         try:
                             existing_payload = json.loads(existing["payload_json"])
                         except (TypeError, ValueError):

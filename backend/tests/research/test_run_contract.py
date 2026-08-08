@@ -331,6 +331,27 @@ class TestIdempotency:
         assert sum("_attempt_token" in result for result in recovered) <= 1
         events = alpha_run_repository.list_run_events(run["id"])
         assert [event["event_type"] for event in events].count("run_recovered") == 1
+    def test_start_replay_requires_an_existing_run_started_event(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-start-event-type")
+        key = "idem-start-event-type-0001"
+        alpha_run_repository.append_run_event(
+            run_id=run["id"], event_id="evt-non-start", event_type="candidate_appended",
+            entity_kind="candidate", entity_id="candidate-1", idempotency_key=key,
+            actor="service", source="test",
+            payload={"from": "queued", "to": "running", "attempt_token_digest": "a" * 64},
+        )
+        with pytest.raises(AlphaRunConflictError):
+            alpha_run_repository.transition_alpha_run(
+                run_id=run["id"], principal="researcher@example.com",
+                from_status="queued", to_status="running", expected_version=run["transition_version"],
+                event_id="evt-start-collision", event_type="run_started", idempotency_key=key,
+                extra_payload={"attempt_token_digest": "b" * 64},
+            )
+        assert alpha_run_repository.get_alpha_run(run["id"])["status"] == "queued"
 
 
 # ================================================================
