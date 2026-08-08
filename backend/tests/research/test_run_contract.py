@@ -315,3 +315,135 @@ class TestImmutabilityGuards:
                 connection.execute(
                     "UPDATE research_alpha_runs SET snapshot_sha256 = 'z' * 64 WHERE id = 'run-006'"
                 )
+
+
+
+# ================================================================
+# Schema and projection hardening (Task 45-01-02)
+# ================================================================
+
+
+class TestSchemaHardening:
+    def test_non_lowercase_digest_fails_closed_in_validation(self) -> None:
+        from app.research.run_contract import validate_sha256
+
+        with pytest.raises(ValueError):
+            validate_sha256("A" * 64, "digest")  # uppercase rejected
+        with pytest.raises(ValueError):
+            validate_sha256("short", "digest")  # wrong length rejected
+
+    def test_manifest_semantically_equivalent_fields_have_stable_digest(
+        self, deterministic_clock: DeterministicClock
+    ) -> None:
+        # Reordered keys in a sub-mapping should not change the digest
+        # because canonical JSON sorts keys.
+        manifest_a = _sample_manifest()
+        manifest_b = _sample_manifest()
+        manifest_b["policy"] = {"thresholds": {"min_ic": 0.02}, "version": "admission-v1"}
+        now = deterministic_clock.now_iso()
+        snap_a = freeze_input_snapshot(manifest=manifest_a, created_at=now)
+        snap_b = freeze_input_snapshot(manifest=manifest_b, created_at=now)
+        assert snap_a.manifest_sha256 == snap_b.manifest_sha256
+
+
+class TestProjectionSafety:
+    def test_run_projection_omits_principal_and_paths(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        from app.research import projections
+
+        snapshot = freeze_input_snapshot(
+            manifest=_sample_manifest(), created_at=deterministic_clock.now_iso()
+        )
+        run = alpha_run_repository.create_alpha_run(
+            run_id="run-proj-1",
+            principal="secret_user@example.com",
+            idempotency_key="idem-00000000000000p1",
+            snapshot=snapshot,
+            event_id="evt-proj-1",
+        )
+        projected = projections.run(run)
+        assert "principal" not in projected
+        assert "idempotency_key" not in projected
+
+    def test_snapshot_projection_exposes_every_d04_group_without_internals(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        from app.research import projections
+
+        snapshot = freeze_input_snapshot(
+            manifest=_sample_manifest(), created_at=deterministic_clock.now_iso()
+        )
+        alpha_run_repository.create_alpha_run(
+            run_id="run-proj-2",
+            principal="researcher@example.com",
+            idempotency_key="idem-00000000000000p2",
+            snapshot=snapshot,
+            event_id="evt-proj-2",
+        )
+        persisted = alpha_run_repository.get_run_snapshot("run-proj-2")
+        assert persisted is not None
+        projected = projections.snapshot(persisted)
+        # Every required D-04 group is present in bounded form.
+        for field in (
+            "dsl_version", "grammar_fingerprint", "vocabulary_fingerprint",
+            "policy_version", "policy_digest", "data_fingerprint",
+            "partition_fingerprint", "membership_fingerprint", "code_fingerprint",
+            "build_fingerprint", "dependency_fingerprint", "universe",
+            "measured_window", "fold_geometry", "budgets", "objective",
+        ):
+            assert field in projected
+        # No raw policy internals (thresholds) leak.
+        assert "thresholds" not in str(projected)
+
+    def test_event_projection_omits_raw_payload(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        from app.research import projections
+
+        snapshot = freeze_input_snapshot(
+            manifest=_sample_manifest(), created_at=deterministic_clock.now_iso()
+        )
+        alpha_run_repository.create_alpha_run(
+            run_id="run-proj-3",
+            principal="researcher@example.com",
+            idempotency_key="idem-00000000000000p3",
+            snapshot=snapshot,
+            event_id="evt-proj-3",
+        )
+        events = alpha_run_repository.list_run_events("run-proj-3")
+        projected = projections.event(events[0])
+        assert "payload" not in projected
+        assert "idempotency_key" not in projected
+        assert "actor" not in projected
+        assert "artifact_id" not in projected
+        assert "payload_checksum" not in projected
+
+
+class TestPreflightFailure:
+    def test_service_preflight_failure_produces_no_queued_row(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        from app.research.run_service import AlphaRunPreflightError, ResearchRunService
+
+        service = ResearchRunService(alpha_run_repository)
+        manifest = _sample_manifest()
+        del manifest["universe"]
+        with pytest.raises(AlphaRunPreflightError):
+            service.create(
+                principal="researcher@example.com",
+                idempotency_key="idem-00000000000000pf",
+                manifest=manifest,
+            )
+        assert alpha_run_repository.get_alpha_run("arun_nonexistent") is None
+        # No event was appended for the failed preflight.
+        events = alpha_run_repository.list_run_events("arun_nonexistent")
+        assert events == []
