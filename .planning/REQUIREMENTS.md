@@ -34,7 +34,7 @@ Locked boundaries:
 - [ ] **AF-REQ-07**: For every evaluated candidate, a researcher can inspect resolved configuration and immutable evidence including per-date IC/RankIC, summaries, ICIR, positive rate, coverage, monthly robustness, group/long-short evidence, costs, and diagnostics; evaluation failure is a terminal reason, not a zero score.
 - [ ] **AF-REQ-08**: Candidate status is produced by the existing deterministic admission policy with each gate's observed value, threshold, and reason visible; the Factory and Agent cannot edit thresholds, reorder gates, or convert rejection into admission.
 - [ ] **AF-REQ-09**: Search and Agent review never consume the reserved OOS fold; the UI distinguishes selection-fold evidence, selection OOS, and any future final-blind holdout, and never labels selection OOS as blind final validation.
-- [ ] **AF-REQ-10**: A run can be replayed from stored data/partition, universe, factor/DSL, grammar/vocabulary, seed, configuration, code/build, provider/model, candidate-order, and artifact checksums; missing required manifest fields fail closed.
+- [x] **AF-REQ-10**: A run can be replayed from stored data/partition, universe, factor/DSL, grammar/vocabulary, seed, configuration, code/build, provider/model, candidate-order, and artifact checksums; missing required manifest fields fail closed.
 
 ### FactorResearchAgent
 
@@ -46,7 +46,7 @@ Locked boundaries:
 ### Human Review and Research-only Delivery
 
 - [ ] **AF-REQ-15**: A researcher can compare a proposal's expression, assumptions, evidence, gate trail, and provenance, then explicitly save a new immutable `FactorRevision`; changed expression/explanation/provenance that no longer matches the issued draft is rejected, and unreviewed output is absent from the formal catalog.
-- [ ] **AF-REQ-16**: The workbench exposes queued/running/completed/failed/cancelled states, candidate/fold progress, cooperative cancellation, idempotent retry, and checkpointed resume; retry resumes or creates a linked run and never overwrites an earlier run or repeats a committed OOS/promotion side effect.
+- [x] **AF-REQ-16**: The workbench exposes queued/running/completed/failed/cancelled states, candidate/fold progress, cooperative cancellation, idempotent retry, and checkpointed resume; retry resumes or creates a linked run and never overwrites an earlier run or repeats a committed OOS/promotion side effect.
 - [ ] **AF-REQ-17**: Alpha Factory and Agent runs expose only inspect, compare, retain, and research-only promotion actions; no route, collaborator, UI action, or model output can place broker orders, mutate positions/portfolios, activate monitors, or enable live execution.
 
 ### Research Workbench and Differentiators
@@ -91,13 +91,13 @@ Locked boundaries:
 | AF-REQ-07 | Phase 47 | Pending |
 | AF-REQ-08 | Phase 47 | Pending |
 | AF-REQ-09 | Phase 47 | Pending |
-| AF-REQ-10 | Phase 45 | Pending |
+| AF-REQ-10 | Phase 45 | Complete |
 | AF-REQ-11 | Phase 48 | Pending |
 | AF-REQ-12 | Phase 48 | Pending |
 | AF-REQ-13 | Phase 48 | Pending |
 | AF-REQ-14 | Phase 48 | Pending |
 | AF-REQ-15 | Phase 49 | Pending |
-| AF-REQ-16 | Phase 45 | Pending |
+| AF-REQ-16 | Phase 45 | Complete |
 | AF-REQ-17 | Phase 49 | Pending |
 | AF-REQ-18 | Phase 50 | Pending |
 | AF-REQ-19 | Phase 46 | Pending |

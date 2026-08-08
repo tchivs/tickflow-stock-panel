@@ -4,17 +4,17 @@ milestone: v3.0
 milestone_name: 可回放 Alpha Factory 与 FactorResearchAgent
 current_phase: 45
 current_phase_name: Durable Governed Run Contract
-status: planning
-stopped_at: Phase 45 execution plans and validation completed
-last_updated: "2026-08-08T11:45:32Z"
+status: verifying
+stopped_at: Completed 45-04-PLAN.md
+last_updated: "2026-08-08T15:31:44.336Z"
 last_activity: 2026-08-08
-last_activity_desc: Phase 45 plans verified with 4 waves, 8 tasks, and complete requirement coverage
+last_activity_desc: Phase 45 execution started
 progress:
   total_phases: 6
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 4
-  completed_plans: 0
-  percent: 0
+  completed_plans: 4
+  percent: 17
 ---
 
 # Project State
@@ -24,14 +24,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-08-06)
 
 **Core value:** An investor can turn reliable market data and their own holdings into an auditable, actionable research and monitoring workflow without operating multiple disconnected tools.
-**Current focus:** Milestone v3.0 — 可回放 Alpha Factory 与 FactorResearchAgent
+**Current focus:** Phase 45 — Durable Governed Run Contract
 
 ## Current Position
 
-Phase: 45 (Durable Governed Run Contract)
-Plan: 4 plans ready (8 tasks, 4 waves)
-Status: Ready to execute
-Last activity: 2026-08-08 — Phase 45 plans verified; all AF-REQ-01/04/10/16 requirements covered
+Phase: 45 (Durable Governed Run Contract) — EXECUTING
+Plan: 4 of 4
+Status: Phase complete — ready for verification
+Last activity: 2026-08-08 — Phase 45 execution started
 
 ## v3.0 Phase Summary
 
@@ -107,8 +107,8 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-08-08T10:47:21Z
-Stopped at: v3.0 roadmap and traceability artifacts created
+Last session: 2026-08-08T15:31:14.982Z
+Stopped at: Completed 45-04-PLAN.md
 Resume file: None
 
 ## Operator Next Steps
@@ -188,6 +188,8 @@ Resume file: None
 - [Phase ?]: 调度默认 15:40 (竞价同步 15:30 + 股池持久化 15:35 后三块全亮); 已存偏好保留; 15:00 下限不动; Review.tsx:105 兜底字面量同步
 - [Phase ?]: REV-05 guest DTO 锁死: 身份键 (symbol/name/code) MASKED_IDENTITY + 敏感值键 (auction_*/open_gap/量比) 剥离, 聚合统计与状态标注保留, probe 剥离, guest 视图无 markdown; 空态与 vip 同形 (available:false + blocks:{})
 - [Phase ?]: 31-03 守卫白名单以实际 shipped imports 为准: 服务 import app.market_time + app.services.preferences (懒 import get_pipeline_schedule) + auction_columns/probe/validation/premarket_snapshot/screener — 全部落入 REV 白名单; 禁 import token 收窄 auction_sync|pool_snapshot|pool_backfill, 禁调用扩展 save_report
+- [Phase ?]: Phase 45-04 reuses the shared app.state.research_run_service and preserves one 404 boundary for unknown/cross-principal IDs while mapping stale lifecycle conflicts to HTTP 409.
+- [Phase ?]: Phase 45-04 keeps the optional publisher as a post-commit wake-up seam and guards execution collaborators through AST/import/call scans and raising fakes.
 
 ### v1.3 Decisions (carried)
 
@@ -244,3 +246,4 @@ Resume file: None
 | Phase 30-premarket-monitor P3 | 36 | 2 tasks | 5 files |
 | Phase 31 P2 | 9 | 3 tasks | 5 files |
 | Phase 31 P3 | 20 | 3 tasks | 5 files |
+| Phase 45 P04 | 6 | 2 tasks | 6 files |

@@ -45,24 +45,24 @@
 
 **Explicit non-goals**: No factory grammar/evolution search, fold scoring, Agent provider call, promotion, UI workbench, broker/order path, or strategy-specific `advanced_*` tables in this phase.
 
-**Plans:** 4 plans
+**Plans:** 4/4 plans executed
 
 Plans:
 **Wave 1**
 
-- [ ] 45-01-PLAN.md — create-to-replay durable tracer and frozen manifest contract
+- [x] 45-01-PLAN.md — create-to-replay durable tracer and frozen manifest contract
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 45-02-PLAN.md — append-only candidate/event ledger and fail-closed checkpoint recovery
+- [x] 45-02-PLAN.md — append-only candidate/event ledger and fail-closed checkpoint recovery
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 45-03-PLAN.md — guarded lifecycle, idempotent retry/cancel, restart, and worker adapter
+- [x] 45-03-PLAN.md — guarded lifecycle, idempotent retry/cancel, restart, and worker adapter
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 45-04-PLAN.md — typed API/history seam and research-only no-execution guard
+- [x] 45-04-PLAN.md — typed API/history seam and research-only no-execution guard
 
 ### Phase 46: Deterministic Alpha Factory Core
 
@@ -177,7 +177,7 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 45. Durable Governed Run Contract | 0/TBD | Not started | - |
+| 45. Durable Governed Run Contract | 4/4 | In Progress|  |
 | 46. Deterministic Alpha Factory Core | 0/TBD | Not started | - |
 | 47. Governed Scoring, Admission & Selection OOS | 0/TBD | Not started | - |
 | 48. FactorResearchAgent Two-Stage Workflow | 0/TBD | Not started | - |
