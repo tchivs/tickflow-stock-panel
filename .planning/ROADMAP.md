@@ -48,9 +48,20 @@
 **Plans:** 4 plans
 
 Plans:
+**Wave 1**
+
 - [ ] 45-01-PLAN.md — create-to-replay durable tracer and frozen manifest contract
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 45-02-PLAN.md — append-only candidate/event ledger and fail-closed checkpoint recovery
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
 - [ ] 45-03-PLAN.md — guarded lifecycle, idempotent retry/cancel, restart, and worker adapter
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
 - [ ] 45-04-PLAN.md — typed API/history seam and research-only no-execution guard
 
 ### Phase 46: Deterministic Alpha Factory Core
