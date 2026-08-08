@@ -1511,6 +1511,7 @@ class TestWorkerAdapterTokenFencing:
         # First append two real candidates with a valid token.
         service.append_candidate(
             run_id="run-lin-stale", principal="researcher@example.com",
+            expected_version=started["transition_version"], attempt_token=started["_attempt_token"],
             candidate_id="cand-a", attempt_ordinal=1, candidate_digest="a" * 64,
             canonical_expression="close", ast_signature="a", shape_signature="b",
             dsl_version="v", operation="seed", seed=1, step=0,
@@ -1518,6 +1519,7 @@ class TestWorkerAdapterTokenFencing:
         )
         service.append_candidate(
             run_id="run-lin-stale", principal="researcher@example.com",
+            expected_version=started["transition_version"], attempt_token=started["_attempt_token"],
             candidate_id="cand-b", attempt_ordinal=2, candidate_digest="b" * 64,
             canonical_expression="open", ast_signature="a", shape_signature="b",
             dsl_version="v", operation="seed", seed=1, step=1,

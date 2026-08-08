@@ -270,13 +270,12 @@ class ResearchRunService:
         if run["status"] != "running":
             raise ValueError("only a running attempt can be recovered")
         recovery_key = idempotency_key or f"recover-{expected_version}"
-        if idempotency_key:
-            existing = self._repository.get_idempotent_lifecycle_state(
-                run_id, principal=principal, idempotency_key=idempotency_key,
-                event_type="run_recovered",
-            )
-            if existing is not None:
-                return existing
+        existing = self._repository.get_idempotent_lifecycle_state(
+            run_id, principal=principal, idempotency_key=recovery_key,
+            event_type="run_recovered",
+        )
+        if existing is not None:
+            return existing
         token = _generate_attempt_token()
         result = self._repository.recover_alpha_run(
             run_id=run_id, principal=principal, expected_version=expected_version,
@@ -561,6 +560,8 @@ class ResearchRunService:
         *,
         run_id: str,
         principal: str,
+        expected_version: int,
+        attempt_token: str,
         candidate_id: str,
         attempt_ordinal: int,
         candidate_digest: str,
@@ -588,7 +589,9 @@ class ResearchRunService:
             ast_signature=ast_signature, shape_signature=shape_signature,
             dsl_version=dsl_version, operation=operation, seed=seed, step=step,
             status=status, reason=reason, evidence_artifact_id=evidence_artifact_id,
-            artifact_verified=evidence_artifact_id is not None,
+            artifact_verified=evidence_artifact_id is not None, principal=principal,
+            expected_version=expected_version,
+            expected_attempt_token_digest=attempt_token_digest(attempt_token),
         )
 
     def append_candidate_lineage(
@@ -596,6 +599,8 @@ class ResearchRunService:
         *,
         run_id: str,
         principal: str,
+        expected_version: int,
+        attempt_token: str,
         lineage_id: str,
         child_attempt_id: str,
         parent_attempt_id: str,
