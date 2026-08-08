@@ -269,3 +269,86 @@ def test_empty_frame_records_full_declared_fingerprints_block(research_registry)
     assert set(frame.declared_fingerprints) == set(_DECLARED_KEYS)
     for key in _DECLARED_KEYS:
         assert frame.declared_fingerprints[key]  # present, non-empty
+
+
+
+# ----------------------------------------------------------------------
+# 47-01-03 — factory factor fold scorer + chain-routing guard
+# ----------------------------------------------------------------------
+
+from types import SimpleNamespace
+
+
+def _compute_rich_frame(research_registry, *, expression="close", end=date(2024, 1, 5)):
+    engine = _PanelEngine(_rich_panel())
+    rev = research_registry.create_factor(
+        name=f"scorer-{expression}-{end}", expression=expression
+    )
+    chain = FactorSignalChain(engine, research_registry, universe_resolver=None)
+    config = SignalChainConfig(
+        universe="fixture-a-share",
+        symbols=_FIXTURE_SYMBOLS,
+        asset_type="stock",
+        start=date(2024, 1, 2),
+        end=end,
+        warmup_days=3,
+        forward_return_horizon=1,
+    )
+    return chain.compute(revision_id=rev.id, config=config)
+
+
+def test_factor_fold_scorer_produces_per_fold_ic_coverage_from_frame(research_registry) -> None:
+    """The scorer yields factor-shaped per-fold stats from a chain frame, no backtest."""
+    import inspect
+
+    from app.research.alpha_scoring import factor_fold_scorer
+
+    frame = _compute_rich_frame(research_registry)
+    fold = SimpleNamespace(test_start=date(2024, 1, 2), test_end=date(2024, 1, 4), is_oos=False, fold_index=0)
+    result = factor_fold_scorer(fold, frame=frame, membership=None)
+    assert set(result) == {"test_stats", "membership_fingerprint", "declared_fingerprints"}
+    test_stats = result["test_stats"]
+    assert {"mean_ic", "rank_ic", "coverage", "effective_days"} <= set(test_stats)
+    assert test_stats["effective_days"] == 3  # Jan 2/3/4 carry finite IC (Jan 5 label is null)
+    assert test_stats["mean_ic"] is not None
+    assert result["membership_fingerprint"] == frame.resolved_universe["membership_fingerprint"]
+    assert result["declared_fingerprints"] == dict(frame.declared_fingerprints)
+    # The scorer never references the reserved OOS fold (only selection folds score).
+    assert "oos_fold" not in inspect.getsource(factor_fold_scorer)
+
+
+def test_factor_fold_scorer_respects_test_window(research_registry) -> None:
+    """A narrower test window yields fewer effective days."""
+    from app.research.alpha_scoring import factor_fold_scorer
+
+    frame = _compute_rich_frame(research_registry)
+    full = factor_fold_scorer(
+        SimpleNamespace(test_start=date(2024, 1, 2), test_end=date(2024, 1, 4)),
+        frame=frame,
+        membership=None,
+    )
+    narrow = factor_fold_scorer(
+        SimpleNamespace(test_start=date(2024, 1, 2), test_end=date(2024, 1, 2)),
+        frame=frame,
+        membership=None,
+    )
+    assert narrow["test_stats"]["effective_days"] < full["test_stats"]["effective_days"]
+
+
+def test_assert_all_scoring_through_chain_passes_today() -> None:
+    from app.research.alpha_scoring import assert_all_scoring_through_chain
+
+    assert_all_scoring_through_chain()  # must not raise against the live source
+
+
+def test_routes_through_chain_detects_bypass() -> None:
+    from app.research.alpha_scoring import _routes_through_chain
+
+    def _bypassed() -> int:
+        return 1
+
+    def _routed() -> None:
+        chain.compute(revision_id="r", config=None)  # type: ignore[arg-type]
+
+    assert not _routes_through_chain(_bypassed)
+    assert _routes_through_chain(_routed)
