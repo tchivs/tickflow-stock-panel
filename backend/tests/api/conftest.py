@@ -16,6 +16,9 @@ from fastapi.testclient import TestClient
 from app.api import portfolio_panels, research_alpha, research_panels, walkforward_sse
 from app.research.repository import ResearchRepository
 from app.research.run_service import ResearchRunService
+from app.portfolio.repository import PortfolioRepository
+
+
 @pytest.fixture
 def panel_db(tmp_path: Path) -> Path:
     """A fresh migrated operational.db path for panel tests."""
