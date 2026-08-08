@@ -270,12 +270,13 @@ class ResearchRunService:
         if run["status"] != "running":
             raise ValueError("only a running attempt can be recovered")
         recovery_key = idempotency_key or f"recover-{expected_version}"
-        existing = self._repository.get_idempotent_lifecycle_state(
-            run_id, principal=principal, idempotency_key=recovery_key,
-            event_type="run_recovered",
-        )
-        if existing is not None:
-            return existing
+        if idempotency_key:
+            existing = self._repository.get_idempotent_lifecycle_state(
+                run_id, principal=principal, idempotency_key=idempotency_key,
+                event_type="run_recovered",
+            )
+            if existing is not None:
+                return existing
         token = _generate_attempt_token()
         result = self._repository.recover_alpha_run(
             run_id=run_id, principal=principal, expected_version=expected_version,
@@ -574,33 +575,19 @@ class ResearchRunService:
         reason: Mapping[str, Any],
         evidence_artifact_id: str | None = None,
     ) -> dict[str, Any] | None:
-        """Append one candidate-attempt fact, principal-scoped.
-
-        Returns ``None`` for unknown or cross-principal runs.  Every outcome
-        (invalid, duplicate, low_coverage, generated, failed, rejected,
-        admitted, cancelled, budget_exhausted) is a durable fact; no expression
-        uniqueness rule erases a duplicate attempt (AF-REQ-04, D-05).
-        """
-        run = self._repository.get_alpha_run(run_id, principal=principal)
-        if run is None:
-            return None
+        """Append a candidate under one atomic running-attempt fence."""
+        if type(expected_version) is not int or expected_version < 0:
+            raise ValueError("expected_version is required for candidate append")
+        if type(attempt_token) is not str or not attempt_token:
+            raise ValueError("attempt_token is required for candidate append")
         if evidence_artifact_id is not None:
             self._verify_artifact_reference(run_id, evidence_artifact_id)
         return self._repository.append_candidate_attempt(
-            run_id=run_id,
-            candidate_id=candidate_id,
-            attempt_ordinal=attempt_ordinal,
-            candidate_digest=candidate_digest,
-            canonical_expression=canonical_expression,
-            ast_signature=ast_signature,
-            shape_signature=shape_signature,
-            dsl_version=dsl_version,
-            operation=operation,
-            seed=seed,
-            step=step,
-            status=status,
-            reason=reason,
-            evidence_artifact_id=evidence_artifact_id,
+            run_id=run_id, candidate_id=candidate_id, attempt_ordinal=attempt_ordinal,
+            candidate_digest=candidate_digest, canonical_expression=canonical_expression,
+            ast_signature=ast_signature, shape_signature=shape_signature,
+            dsl_version=dsl_version, operation=operation, seed=seed, step=step,
+            status=status, reason=reason, evidence_artifact_id=evidence_artifact_id,
             artifact_verified=evidence_artifact_id is not None,
         )
 
@@ -615,21 +602,16 @@ class ResearchRunService:
         edge_ordinal: int,
         operation: str,
     ) -> dict[str, Any] | None:
-        """Append one lineage edge, principal-scoped.
-
-        Returns ``None`` for unknown or cross-principal runs.  Both the child
-        and parent attempts must belong to ``run_id`` (same-run FK validation
-        is enforced by the repository, T-45-02).
-        """
-        if self._repository.get_alpha_run(run_id, principal=principal) is None:
-            return None
+        """Append lineage under one atomic running-attempt fence."""
+        if type(expected_version) is not int or expected_version < 0:
+            raise ValueError("expected_version is required for lineage append")
+        if type(attempt_token) is not str or not attempt_token:
+            raise ValueError("attempt_token is required for lineage append")
         return self._repository.append_candidate_lineage(
-            run_id=run_id,
-            lineage_id=lineage_id,
-            child_attempt_id=child_attempt_id,
-            parent_attempt_id=parent_attempt_id,
-            edge_ordinal=edge_ordinal,
-            operation=operation,
+            run_id=run_id, lineage_id=lineage_id, child_attempt_id=child_attempt_id,
+            parent_attempt_id=parent_attempt_id, edge_ordinal=edge_ordinal,
+            operation=operation, principal=principal, expected_version=expected_version,
+            expected_attempt_token_digest=attempt_token_digest(attempt_token),
         )
 
     def append_artifact(
