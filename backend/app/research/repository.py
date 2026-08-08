@@ -1562,6 +1562,86 @@ class ResearchRepository:
         assert row is not None
         return row
 
+    def get_current_attempt_digest(
+        self,
+        run_id: str,
+        *,
+        principal: str,
+        expected_version: int,
+    ) -> str | None:
+        """Return the newest running-attempt digest under one ownership fence."""
+        with self._connection() as connection:
+            run = connection.execute(
+                """SELECT transition_version FROM research_alpha_runs
+                   WHERE id = ? AND principal = ? AND status = 'running'""",
+                (run_id, principal),
+            ).fetchone()
+            if run is None or int(run["transition_version"]) != expected_version:
+                return None
+            event = connection.execute(
+                """SELECT payload_json FROM research_alpha_events
+                   WHERE run_id = ? AND event_type IN ('run_started', 'run_recovered')
+                   ORDER BY seq DESC LIMIT 1""",
+                (run_id,),
+            ).fetchone()
+        if event is None:
+            return None
+        payload = json.loads(event["payload_json"])
+        digest = payload.get("attempt_token_digest")
+        return digest if isinstance(digest, str) else None
+
+    def candidate_ids_for_run(
+        self,
+        run_id: str,
+        candidate_ids: Sequence[str],
+        *,
+        principal: str,
+    ) -> set[str]:
+        """Resolve exactly the supplied candidate IDs for an owned run."""
+        if not candidate_ids:
+            return set()
+        if len(candidate_ids) > 256:
+            raise ValueError("candidate_ids exceeds the bounded lookup limit")
+        with self._connection() as connection:
+            owned = connection.execute(
+                "SELECT 1 FROM research_alpha_runs WHERE id = ? AND principal = ?",
+                (run_id, principal),
+            ).fetchone()
+            if owned is None:
+                return set()
+            placeholders = ",".join("?" for _ in candidate_ids)
+            rows = connection.execute(
+                f"SELECT id FROM research_alpha_candidate_attempts "
+                f"WHERE run_id = ? AND id IN ({placeholders})",
+                (run_id, *candidate_ids),
+            ).fetchall()
+        return {str(row["id"]) for row in rows}
+
+    def get_idempotent_lifecycle_state(
+        self,
+        run_id: str,
+        *,
+        principal: str,
+        idempotency_key: str,
+        event_type: str,
+    ) -> dict[str, Any] | None:
+        """Return an owned existing lifecycle state before minting new secrets."""
+        with self._connection() as connection:
+            owned = connection.execute(
+                "SELECT 1 FROM research_alpha_runs WHERE id = ? AND principal = ?",
+                (run_id, principal),
+            ).fetchone()
+            if owned is None:
+                return None
+            event = connection.execute(
+                """SELECT 1 FROM research_alpha_events
+                   WHERE run_id = ? AND idempotency_key = ? AND event_type = ?""",
+                (run_id, idempotency_key, event_type),
+            ).fetchone()
+            if event is None:
+                return None
+            return self._alpha_run_row(connection, run_id)
+
     def get_alpha_run(self, run_id: str, *, principal: str | None = None) -> dict[str, Any] | None:
         """Return one run row scoped to ``principal`` (or unscoped when None).
 
@@ -1625,7 +1705,13 @@ class ResearchRepository:
         with self._connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
             try:
-                # Idempotency: same key + same checksum returns the original event.
+                owned = connection.execute(
+                    "SELECT 1 FROM research_alpha_runs WHERE id = ? AND principal = ?",
+                    (run_id, principal),
+                ).fetchone()
+                if owned is None:
+                    connection.execute("ROLLBACK")
+                    return None
                 existing = connection.execute(
                     "SELECT * FROM research_alpha_events "
                     "WHERE run_id = ? AND idempotency_key = ?",
@@ -1639,7 +1725,6 @@ class ResearchRepository:
                     connection.execute("COMMIT")
                     return self._alpha_run_row(connection, run_id)
 
-                # Guarded cursor update: principal + status + expected version.
                 changed = connection.execute(
                     """UPDATE research_alpha_runs
                           SET status = ?,
@@ -1654,14 +1739,10 @@ class ResearchRepository:
                     ),
                 ).rowcount
                 if changed != 1:
-                    # Either illegal/stale/cross-principal — no event, no cursor.
                     connection.execute("ROLLBACK")
                     return None
-
-                # Read the new cursor to get the next event sequence.
                 run = connection.execute(
-                    "SELECT last_event_seq, transition_version FROM research_alpha_runs WHERE id = ?",
-                    (run_id,),
+                    "SELECT last_event_seq FROM research_alpha_runs WHERE id = ?", (run_id,)
                 ).fetchone()
                 next_seq = int(run["last_event_seq"]) + 1
                 try:
@@ -1718,6 +1799,13 @@ class ResearchRepository:
         with self._connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
             try:
+                owned = connection.execute(
+                    "SELECT 1 FROM research_alpha_runs WHERE id = ? AND principal = ?",
+                    (run_id, principal),
+                ).fetchone()
+                if owned is None:
+                    connection.execute("ROLLBACK")
+                    return None
                 existing = connection.execute(
                     "SELECT * FROM research_alpha_events WHERE run_id = ? AND idempotency_key = ?",
                     (run_id, idempotency_key),
@@ -1726,7 +1814,10 @@ class ResearchRepository:
                     if existing["payload_checksum"] != checksum:
                         raise AlphaRunConflictError("recovery idempotency key conflict")
                     connection.execute("COMMIT")
-                    return self._alpha_run_row(connection, run_id)
+                    result = self._alpha_run_row(connection, run_id)
+                    assert result is not None
+                    result["_recovery_idempotent_replay"] = True
+                    return result
                 changed = connection.execute(
                     """UPDATE research_alpha_runs
                        SET transition_version = transition_version + 1
@@ -2222,12 +2313,9 @@ class ResearchRepository:
         after_ordinal: int = 0,
         limit: int = 500,
         principal: str | None = None,
+        artifact_service: Any | None = None,
     ) -> list[dict[str, Any]]:
-        """Return candidate attempts for ``run_id`` in ordinal order.
-
-        Principal-scoped: a non-matching principal returns the same empty
-        boundary as an unknown run (T-45-12).
-        """
+        """Return candidate history, verifying every referenced artifact."""
         if not isinstance(after_ordinal, int) or after_ordinal < 0:
             raise ValueError("after_ordinal must be a non-negative integer")
         if not isinstance(limit, int) or limit < 1:
@@ -2246,7 +2334,30 @@ class ResearchRepository:
                     ORDER BY attempt_ordinal, id LIMIT ?""",
                 (run_id, after_ordinal, limit),
             ).fetchall()
-        return [self._candidate_dict(row) for row in rows]
+            candidates = [self._candidate_dict(row) for row in rows]
+            for candidate in candidates:
+                artifact_id = candidate.get("evidence_artifact_id")
+                if artifact_id is None:
+                    continue
+                artifact = connection.execute(
+                    "SELECT * FROM research_alpha_artifacts WHERE id = ? AND run_id = ?",
+                    (artifact_id, run_id),
+                ).fetchone()
+                if artifact is None or artifact_service is None:
+                    raise ValueError("candidate evidence artifact is missing or verifier is required")
+                descriptor = dict(artifact)
+                expected_path = f"research_artifacts/alpha_runs/{run_id}/{descriptor['checksum_sha256']}.json"
+                if descriptor["relative_path"] != expected_path:
+                    raise ValueError("candidate evidence artifact managed key mismatch")
+                try:
+                    artifact_service.verify_artifact(
+                        run_id=run_id, checksum_sha256=descriptor["checksum_sha256"],
+                        expected_byte_size=descriptor["byte_size"],
+                        expected_content_type=descriptor["content_type"],
+                    )
+                except Exception as error:
+                    raise ValueError("candidate evidence artifact verification failed") from error
+        return candidates
 
     def append_artifact(
         self,
@@ -2324,18 +2435,13 @@ class ResearchRepository:
         manifest_sha256: str,
         state_checksum: str,
         frontier_artifact_id: str | None = None,
-        principal: str | None = None,
+        principal: str,
         referenced_candidate_ids: Sequence[str] = (),
         inline_summary: Mapping[str, Any] | None = None,
-        expected_version: int | None = None,
-        expected_attempt_token_digest: str | None = None,
+        expected_version: int,
+        expected_attempt_token_digest: str,
     ) -> dict[str, Any] | None:
-        """Append a structurally checked cursor under an optional running-attempt fence.
-
-        The expected version/digest guard is evaluated in the same write
-        transaction as validation and insertion.  A terminal/cancelled or
-        superseded attempt therefore produces no checkpoint side effect.
-        """
+        """Append a cursor only inside the live running-attempt fence."""
         from app.research.run_contract import MAX_INLINE_CHECKPOINT_BYTES, validate_bounded_json
         if type(committed_event_seq) is not int or committed_event_seq < 0:
             raise ValueError("committed_event_seq must be a non-negative integer")
@@ -2360,6 +2466,11 @@ class ResearchRepository:
         _wf_sha256(state_checksum, "state_checksum")
         referenced_json = _bounded_json(list(referenced_candidate_ids), "checkpoint candidate references")
         summary_json = _bounded_json(dict(inline_summary) if inline_summary is not None else {}, "inline checkpoint summary")
+        if type(expected_version) is not int or expected_version < 0:
+            raise ValueError("expected_version is required")
+        _wf_sha256(expected_attempt_token_digest, "expected_attempt_token_digest")
+        if not isinstance(principal, str) or not principal:
+            raise ValueError("principal is required")
         occurred_at = self._now()
         with self._connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -2368,24 +2479,21 @@ class ResearchRepository:
                     "SELECT snapshot_sha256, manifest_sha256, last_event_seq, principal, status, transition_version "
                     "FROM research_alpha_runs WHERE id = ?", (run_id,)
                 ).fetchone()
-                if run is None or (principal is not None and run["principal"] != principal):
+                if run is None or run["principal"] != principal:
                     connection.execute("ROLLBACK")
                     return None
-                if expected_version is not None and (
-                    run["status"] != "running" or run["transition_version"] != expected_version
-                ):
+                if run["status"] != "running" or run["transition_version"] != expected_version:
                     connection.execute("ROLLBACK")
                     return None
-                if expected_attempt_token_digest is not None:
-                    latest = connection.execute(
-                        "SELECT event_type, payload_json FROM research_alpha_events "
-                        "WHERE run_id = ? AND event_type IN ('run_started', 'run_recovered') "
-                        "ORDER BY seq DESC LIMIT 1", (run_id,)
-                    ).fetchone()
-                    current_digest = None if latest is None else json.loads(latest["payload_json"]).get("attempt_token_digest")
-                    if current_digest != expected_attempt_token_digest:
-                        connection.execute("ROLLBACK")
-                        return None
+                latest = connection.execute(
+                    "SELECT payload_json FROM research_alpha_events "
+                    "WHERE run_id = ? AND event_type IN ('run_started', 'run_recovered') "
+                    "ORDER BY seq DESC LIMIT 1", (run_id,)
+                ).fetchone()
+                current_digest = None if latest is None else json.loads(latest["payload_json"]).get("attempt_token_digest")
+                if current_digest != expected_attempt_token_digest:
+                    connection.execute("ROLLBACK")
+                    return None
                 if run["snapshot_sha256"] != snapshot_sha256 or run["manifest_sha256"] != manifest_sha256:
                     raise ValueError("checkpoint snapshot/manifest binding mismatch")
                 if committed_event_seq > int(run["last_event_seq"]):

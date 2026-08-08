@@ -269,15 +269,25 @@ class ResearchRunService:
             return None
         if run["status"] != "running":
             raise ValueError("only a running attempt can be recovered")
+        recovery_key = idempotency_key or f"recover-{expected_version}"
+        if idempotency_key:
+            existing = self._repository.get_idempotent_lifecycle_state(
+                run_id, principal=principal, idempotency_key=idempotency_key,
+                event_type="run_recovered",
+            )
+            if existing is not None:
+                return existing
         token = _generate_attempt_token()
         result = self._repository.recover_alpha_run(
             run_id=run_id, principal=principal, expected_version=expected_version,
             event_id="aevt_" + uuid.uuid4().hex,
-            idempotency_key=idempotency_key or f"recover-{expected_version}",
+            idempotency_key=recovery_key,
             token_digest=attempt_token_digest(token),
         )
         if result is None:
             return None
+        if result.pop("_recovery_idempotent_replay", False):
+            return result
         result["_attempt_token"] = token
         return result
     def cancel(
@@ -368,21 +378,11 @@ class ResearchRunService:
 
         if not attempt_token:
             return False
-        run = self._repository.get_alpha_run(run_id, principal=principal)
-        if run is None or run["status"] != "running":
-            return False
-        if run["transition_version"] != expected_version:
-            return False
-        # The newest attempt event is authoritative after restart recovery.
-        events = self._repository.list_run_events(
-            run_id, after_seq=0, limit=500, principal=principal
-        )
         candidate_digest = attempt_token_digest(attempt_token)
-        for event in reversed(events):
-            if event["event_type"] in {"run_started", "run_recovered"}:
-                stored = event["payload"].get("attempt_token_digest")
-                return stored == candidate_digest
-        return False
+        stored = self._repository.get_current_attempt_digest(
+            run_id, principal=principal, expected_version=expected_version
+        )
+        return stored == candidate_digest
 
     def _progress_limits(self, run_id: str) -> tuple[int, int]:
         snapshot = self._repository.get_run_snapshot(run_id)
@@ -484,7 +484,9 @@ class ResearchRunService:
             "truncated": truncated,
         }
         if include_candidates:
-            result["candidates"] = self._repository.list_candidates(run_id, principal=principal)
+            result["candidates"] = self._repository.list_candidates(
+                run_id, principal=principal, artifact_service=self._artifact_service
+            )
         return result
 
     def list_events(
@@ -515,7 +517,8 @@ class ResearchRunService:
         Cross-principal reads return the same empty boundary as an unknown run.
         """
         return self._repository.list_candidates(
-            run_id, after_ordinal=after_ordinal, limit=limit, principal=principal
+            run_id, after_ordinal=after_ordinal, limit=limit, principal=principal,
+            artifact_service=self._artifact_service,
         )
 
     def append_event(
@@ -643,16 +646,20 @@ class ResearchRunService:
         checkpoint: Mapping[str, Any],
         referenced_candidate_ids: Sequence[str] = (),
         inline_summary: Mapping[str, Any] | None = None,
-        expected_version: int | None = None,
-        attempt_token: str | None = None,
+        expected_version: int,
+        attempt_token: str,
     ) -> dict[str, Any] | None:
-        """Validate and persist one recovery cursor through the owned seam."""
+        """Validate and atomically persist a live-attempt recovery cursor."""
+        if type(expected_version) is not int or expected_version < 0:
+            raise ValueError("expected_version is required for checkpoint append")
+        if type(attempt_token) is not str or not attempt_token:
+            raise ValueError("attempt_token is required for checkpoint append")
         validated = self.validate_checkpoint(
             run_id=run_id, principal=principal, checkpoint=checkpoint,
             referenced_candidate_ids=referenced_candidate_ids,
             inline_summary=inline_summary,
         )
-        expected_digest = attempt_token_digest(attempt_token) if attempt_token else None
+        expected_digest = attempt_token_digest(attempt_token)
         return self._repository.append_checkpoint(
             run_id=run_id, checkpoint_id=str(validated.get("id", checkpoint.get("id"))),
             checkpoint_version=validated["checkpoint_version"],
@@ -672,7 +679,6 @@ class ResearchRunService:
         checkpoint: Mapping[str, Any],
         referenced_candidate_ids: Sequence[str] | None = None,
         inline_summary: Mapping[str, Any] | None = None,
-        artifact_service: "AlphaRunArtifactService | None" = None,
     ) -> dict[str, Any]:
         """Fail-closed validation of a recovery checkpoint cursor (D-07).
 
@@ -688,6 +694,13 @@ class ResearchRunService:
         run = self._repository.get_alpha_run(run_id, principal=principal)
         if run is None:
             raise AlphaCheckpointValidationError("run not found for principal")
+        normalized_checkpoint = dict(checkpoint)
+        checkpoint_id = normalized_checkpoint.get("id")
+        if checkpoint_id is None:
+            normalized_checkpoint["id"] = "chk_" + uuid.uuid4().hex
+        elif type(checkpoint_id) is not str or not checkpoint_id:
+            raise AlphaCheckpointValidationError("checkpoint id must be a non-empty string")
+        checkpoint = normalized_checkpoint
         try:
             raw_version = checkpoint["checkpoint_version"]
             raw_seq = checkpoint["committed_event_seq"]
@@ -737,18 +750,16 @@ class ResearchRunService:
         if len(set(candidate_ids)) != len(candidate_ids):
             raise AlphaCheckpointValidationError("checkpoint candidate references must be ordered and unique")
         if candidate_ids:
-            present = {
-                str(c["id"]) for c in self._repository.list_candidates(
-                    run_id, limit=256, principal=principal
-                )
-            }
+            present = self._repository.candidate_ids_for_run(
+                run_id, candidate_ids, principal=principal
+            )
             if any(cid not in present for cid in candidate_ids):
                 raise AlphaCheckpointValidationError("checkpoint references missing candidate(s)")
         frontier_artifact_id = checkpoint.get("frontier_artifact_id")
         if frontier_artifact_id is not None:
             if type(frontier_artifact_id) is not str or not frontier_artifact_id:
                 raise AlphaCheckpointValidationError("frontier artifact reference is invalid")
-            verifier = self._artifact_service or artifact_service
+            verifier = self._artifact_service
             if verifier is None:
                 raise AlphaCheckpointValidationError("frontier artifact verification service is required")
             artifact_row = self._get_artifact(frontier_artifact_id, run_id)

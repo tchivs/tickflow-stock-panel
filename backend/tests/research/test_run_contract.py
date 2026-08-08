@@ -1164,12 +1164,17 @@ class TestCheckpointValidation:
         deterministic_clock: DeterministicClock,
         tmp_path: Path,
     ) -> None:
+        from app.research.run_contract import attempt_token_digest
+        from app.research.run_service import ResearchRunService
         run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-chk-ok")
+        started = ResearchRunService(alpha_run_repository).start_or_resume(
+            run["id"], principal="researcher@example.com", expected_version=run["transition_version"]
+        )
         params = self._make_checkpoint_params(run, event_seq=1)
         alpha_run_repository.append_checkpoint(
-            run_id=run["id"],
-            checkpoint_id="chk-ok-1",
-            **params,
+            run_id=run["id"], checkpoint_id="chk-ok-1", principal="researcher@example.com",
+            expected_version=started["transition_version"],
+            expected_attempt_token_digest=attempt_token_digest(started["_attempt_token"]), **params,
         )
         # Simulate restart with a fresh repository.
         fresh = ResearchRepository(
@@ -1294,15 +1299,21 @@ class TestCheckpointValidation:
         alpha_run_repository: ResearchRepository,
         deterministic_clock: DeterministicClock,
     ) -> None:
+        from app.research.run_contract import attempt_token_digest
         from app.research.run_service import (
             AlphaCheckpointValidationError,
             ResearchRunService,
         )
 
         run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-chk-xp")
+        started = ResearchRunService(alpha_run_repository).start_or_resume(
+            run["id"], principal="researcher@example.com", expected_version=run["transition_version"]
+        )
         params = self._make_checkpoint_params(run, event_seq=1)
         alpha_run_repository.append_checkpoint(
-            run_id=run["id"], checkpoint_id="chk-xp-1", **params
+            run_id=run["id"], checkpoint_id="chk-xp-1", principal="researcher@example.com",
+            expected_version=started["transition_version"],
+            expected_attempt_token_digest=attempt_token_digest(started["_attempt_token"]), **params,
         )
         # Cross-principal: same None boundary as unknown run.
         assert alpha_run_repository.get_latest_valid_checkpoint(
@@ -1358,16 +1369,12 @@ class TestCheckpointValidation:
             "state_checksum": state_checksum,
             "frontier_artifact_id": artifact_ref["id"],
         }
-        service = ResearchRunService(alpha_run_repository)
+        service = ResearchRunService(alpha_run_repository, artifact_service=art_service)
         # Should succeed — artifact exists, size/digest match.
         result = service.validate_checkpoint(
-            run_id=run["id"],
-            principal="researcher@example.com",
-            checkpoint=params,
-            artifact_service=art_service,
+            run_id=run["id"], principal="researcher@example.com", checkpoint=params
         )
         assert result["frontier_artifact_id"] == artifact_ref["id"]
-
     def test_checkpoint_frontier_artifact_tampered_rejected(
         self,
         alpha_run_repository: ResearchRepository,
@@ -1397,32 +1404,21 @@ class TestCheckpointValidation:
         path = alpha_artifact_root.parent / descriptor["relative_path"]
         path.write_bytes(b'{"tampered": true}')
         state_checksum = checkpoint_state_checksum(
-            run_id=run["id"],
-            checkpoint_version=1,
-            committed_event_seq=1,
-            stage="search",
-            snapshot_sha256=run["snapshot_sha256"],
-            manifest_sha256=run["manifest_sha256"],
-            referenced_candidate_ids=[],
-            inline_summary=None,
-            frontier_artifact_id=artifact_ref["id"],
+            run_id=run["id"], checkpoint_version=1, committed_event_seq=1,
+            stage="search", snapshot_sha256=run["snapshot_sha256"],
+            manifest_sha256=run["manifest_sha256"], referenced_candidate_ids=[],
+            inline_summary=None, frontier_artifact_id=artifact_ref["id"],
         )
         params = {
-            "checkpoint_version": 1,
-            "committed_event_seq": 1,
-            "stage": "search",
+            "checkpoint_version": 1, "committed_event_seq": 1, "stage": "search",
             "snapshot_sha256": run["snapshot_sha256"],
-            "manifest_sha256": run["manifest_sha256"],
-            "state_checksum": state_checksum,
+            "manifest_sha256": run["manifest_sha256"], "state_checksum": state_checksum,
             "frontier_artifact_id": artifact_ref["id"],
         }
-        service = ResearchRunService(alpha_run_repository)
+        service = ResearchRunService(alpha_run_repository, artifact_service=art_service)
         with pytest.raises(AlphaCheckpointValidationError):
             service.validate_checkpoint(
-                run_id=run["id"],
-                principal="researcher@example.com",
-                checkpoint=params,
-                artifact_service=art_service,
+                run_id=run["id"], principal="researcher@example.com", checkpoint=params
             )
 
 
@@ -2459,6 +2455,10 @@ class TestReviewFixInvariants:
         from app.research.run_service import ResearchRunService
 
         run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-checkpoint-seam")
+        service = ResearchRunService(alpha_run_repository)
+        started = service.start_or_resume(
+            run["id"], principal="researcher@example.com", expected_version=run["transition_version"]
+        )
         checkpoint = {
             "id": "checkpoint-seam-1", "checkpoint_version": 1, "committed_event_seq": 1,
             "stage": "search", "snapshot_sha256": run["snapshot_sha256"],
@@ -2469,10 +2469,11 @@ class TestReviewFixInvariants:
             snapshot_sha256=run["snapshot_sha256"], manifest_sha256=run["manifest_sha256"],
             referenced_candidate_ids=[], inline_summary=None, frontier_artifact_id=None,
         )
-        persisted = ResearchRunService(alpha_run_repository).append_checkpoint(
-            run_id=run["id"], principal="researcher@example.com", checkpoint=checkpoint
+        persisted = service.append_checkpoint(
+            run_id=run["id"], principal="researcher@example.com", checkpoint=checkpoint,
+            expected_version=started["transition_version"], attempt_token=started["_attempt_token"],
         )
-        assert persisted["id"] == checkpoint["id"]
+        assert persisted is not None and persisted["id"] == checkpoint["id"]
 
     def test_event_diagnostics_and_candidate_cursor_are_bounded(
         self, alpha_run_repository: ResearchRepository, deterministic_clock: DeterministicClock
@@ -2534,12 +2535,14 @@ class TestReviewFixInvariants:
             frontier_artifact_id=None,
         )
         service = ResearchRunService(alpha_run_repository)
+        started = service.start_or_resume(run["id"], principal="researcher@example.com", expected_version=run["transition_version"])
         service.append_checkpoint(
             run_id=run["id"], principal="researcher@example.com",
             checkpoint={"id": "checkpoint-restart", "checkpoint_version": 1, "committed_event_seq": 1,
                         "stage": "search", "snapshot_sha256": run["snapshot_sha256"],
                         "manifest_sha256": run["manifest_sha256"], "state_checksum": checksum},
             referenced_candidate_ids=["checkpoint-candidate"], inline_summary=summary,
+            expected_version=started["transition_version"], attempt_token=started["_attempt_token"],
         )
         recovered = ResearchRunService(alpha_run_repository).get_latest_valid_checkpoint(
             run["id"], principal="researcher@example.com"
@@ -2565,3 +2568,137 @@ class TestReviewFixInvariants:
         manifest["budgets"]["max_candidates"] = -1
         with pytest.raises(ValueError, match="bounded|non-negative"):
             freeze_input_snapshot(manifest=manifest, created_at="2026-08-08T00:00:00+00:00")
+    def test_recovered_token_survives_more_than_first_event_page(self, alpha_run_repository: ResearchRepository, deterministic_clock: DeterministicClock) -> None:
+        from app.research.run_service import ResearchRunService
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-token-page")
+        service = ResearchRunService(alpha_run_repository)
+        started = service.start_or_resume(run["id"], principal="researcher@example.com", expected_version=run["transition_version"])
+        recovered = service.recover_running_attempt(run["id"], principal="researcher@example.com", expected_version=started["transition_version"])
+        assert recovered is not None
+        for index in range(501):
+            alpha_run_repository.append_run_event(
+                run_id=run["id"], event_id=f"noise-{index}", event_type="worker_noise",
+                entity_kind="run", entity_id=run["id"], idempotency_key=f"noise-key-{index}",
+                actor="worker", source="worker", payload={"index": index},
+            )
+        assert service.update_progress(
+            run["id"], principal="researcher@example.com", expected_version=recovered["transition_version"],
+            attempt_token=recovered["_attempt_token"], folds_total=1,
+        ) is not None
+
+    def test_checkpoint_resolves_candidate_ids_beyond_history_page(self, alpha_run_repository: ResearchRepository, deterministic_clock: DeterministicClock) -> None:
+        from app.research.run_contract import checkpoint_state_checksum
+        from app.research.run_service import ResearchRunService
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-candidate-page")
+        for ordinal in range(1, 258):
+            alpha_run_repository.append_candidate_attempt(
+                run_id=run["id"], candidate_id=f"candidate-page-{ordinal}", attempt_ordinal=ordinal,
+                candidate_digest=(f"{ordinal:064x}")[-64:], canonical_expression="close", ast_signature="ast",
+                shape_signature="shape", dsl_version="v1", operation="generate", seed=1, step=ordinal,
+                status="failed", reason={"code": "failed"},
+            )
+        candidate_id = "candidate-page-257"
+        checksum = checkpoint_state_checksum(
+            run_id=run["id"], checkpoint_version=1, committed_event_seq=1, stage="search",
+            snapshot_sha256=run["snapshot_sha256"], manifest_sha256=run["manifest_sha256"],
+            referenced_candidate_ids=[candidate_id], inline_summary=None, frontier_artifact_id=None,
+        )
+        checkpoint = {"id": "checkpoint-page", "checkpoint_version": 1, "committed_event_seq": 1,
+                      "stage": "search", "snapshot_sha256": run["snapshot_sha256"],
+                      "manifest_sha256": run["manifest_sha256"], "state_checksum": checksum}
+        assert ResearchRunService(alpha_run_repository).validate_checkpoint(
+            run_id=run["id"], principal="researcher@example.com", checkpoint=checkpoint,
+            referenced_candidate_ids=[candidate_id],
+        )["id"] == "checkpoint-page"
+
+    def test_lifecycle_idempotency_does_not_cross_principal(self, alpha_run_repository: ResearchRepository, deterministic_clock: DeterministicClock) -> None:
+        from app.research.run_service import ResearchRunService
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-idem-owner")
+        service = ResearchRunService(alpha_run_repository)
+        service.start_or_resume(run["id"], principal="researcher@example.com", expected_version=run["transition_version"], idempotency_key="owned-key")
+        owner_event = alpha_run_repository.list_run_events(run["id"])[1]
+        assert alpha_run_repository.transition_alpha_run(
+            run_id=run["id"], principal="attacker@example.com", from_status="queued", to_status="running",
+            expected_version=run["transition_version"], event_id="attacker-event", event_type="run_started",
+            idempotency_key="owned-key", extra_payload={"attempt_token_digest": owner_event["payload"]["attempt_token_digest"]},
+        ) is None
+    def test_candidate_history_fails_closed_on_tampered_evidence(self, alpha_run_repository: ResearchRepository, deterministic_clock: DeterministicClock, alpha_artifact_root: Path) -> None:
+        from app.research.artifacts import AlphaRunArtifactService
+        from app.research.run_service import ResearchRunService
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-candidate-evidence")
+        artifacts = AlphaRunArtifactService(alpha_artifact_root.parent)
+        descriptor = artifacts.write(run_id=run["id"], payload={"evidence": 1})
+        artifact = alpha_run_repository.append_artifact(
+            run_id=run["id"], artifact_id="evidence-artifact", logical_kind="evidence",
+            relative_path=descriptor["relative_path"], content_type=descriptor["content_type"],
+            byte_size=descriptor["byte_size"], checksum_sha256=descriptor["checksum_sha256"],
+        )
+        service = ResearchRunService(alpha_run_repository, artifact_service=artifacts)
+        service.append_candidate(
+            run_id=run["id"], principal="researcher@example.com", candidate_id="candidate-evidence",
+            attempt_ordinal=1, candidate_digest="b" * 64, canonical_expression="close", ast_signature="ast",
+            shape_signature="shape", dsl_version="v1", operation="generate", seed=1, step=1,
+            status="admitted", reason={"code": "ok"}, evidence_artifact_id=artifact["id"],
+        )
+        (alpha_artifact_root.parent / descriptor["relative_path"]).write_bytes(b"tampered")
+        with pytest.raises(ValueError, match="evidence artifact"):
+            service.list_candidates(run["id"], principal="researcher@example.com")
+
+    def test_checkpoint_append_requires_live_attempt_fence(self, alpha_run_repository: ResearchRepository, deterministic_clock: DeterministicClock) -> None:
+        from app.research.run_contract import checkpoint_state_checksum
+        from app.research.run_service import ResearchRunService
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-checkpoint-fence")
+        checkpoint = {"id": "checkpoint-fence", "checkpoint_version": 1, "committed_event_seq": 1,
+                      "stage": "search", "snapshot_sha256": run["snapshot_sha256"],
+                      "manifest_sha256": run["manifest_sha256"]}
+        checkpoint["state_checksum"] = checkpoint_state_checksum(
+            run_id=run["id"], checkpoint_version=1, committed_event_seq=1, stage="search",
+            snapshot_sha256=run["snapshot_sha256"], manifest_sha256=run["manifest_sha256"],
+            referenced_candidate_ids=[], inline_summary=None, frontier_artifact_id=None,
+        )
+        with pytest.raises(ValueError, match="attempt_token"):
+            ResearchRunService(alpha_run_repository).append_checkpoint(
+                run_id=run["id"], principal="researcher@example.com", checkpoint=checkpoint,
+                expected_version=run["transition_version"], attempt_token="",
+            )
+
+    def test_recovery_idempotency_returns_existing_state_without_token(self, alpha_run_repository: ResearchRepository, deterministic_clock: DeterministicClock) -> None:
+        from app.research.run_service import ResearchRunService
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-recovery-idem")
+        service = ResearchRunService(alpha_run_repository)
+        started = service.start_or_resume(run["id"], principal="researcher@example.com", expected_version=run["transition_version"])
+        first = service.recover_running_attempt(run["id"], principal="researcher@example.com", expected_version=started["transition_version"], idempotency_key="recovery-key")
+        second = service.recover_running_attempt(run["id"], principal="researcher@example.com", expected_version=started["transition_version"], idempotency_key="recovery-key")
+        assert first is not None and second is not None
+        assert "_attempt_token" in first and "_attempt_token" not in second
+        assert second["transition_version"] == first["transition_version"]
+
+    def test_worker_exposes_no_unfenced_recovery_callback(self) -> None:
+        from app.research.run_worker import ResearchRunWorkerAdapter
+        assert not hasattr(ResearchRunWorkerAdapter, "recover_running")
+
+    def test_checkpoint_missing_id_is_server_generated(self, alpha_run_repository: ResearchRepository, deterministic_clock: DeterministicClock) -> None:
+        from app.research.run_contract import checkpoint_state_checksum
+        from app.research.run_service import ResearchRunService
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-checkpoint-id")
+        service = ResearchRunService(alpha_run_repository)
+        started = service.start_or_resume(run["id"], principal="researcher@example.com", expected_version=run["transition_version"])
+        checkpoint = {"checkpoint_version": 1, "committed_event_seq": 1, "stage": "search",
+                      "snapshot_sha256": run["snapshot_sha256"], "manifest_sha256": run["manifest_sha256"]}
+        checkpoint["state_checksum"] = checkpoint_state_checksum(
+            run_id=run["id"], checkpoint_version=1, committed_event_seq=1, stage="search",
+            snapshot_sha256=run["snapshot_sha256"], manifest_sha256=run["manifest_sha256"],
+            referenced_candidate_ids=[], inline_summary=None, frontier_artifact_id=None,
+        )
+        persisted = service.append_checkpoint(
+            run_id=run["id"], principal="researcher@example.com", checkpoint=checkpoint,
+            expected_version=started["transition_version"], attempt_token=started["_attempt_token"],
+        )
+        assert persisted is not None and persisted["id"].startswith("chk_")
+    def test_checkpoint_validation_rejects_caller_verifier_override(self, alpha_run_repository: ResearchRepository, deterministic_clock: DeterministicClock) -> None:
+        from app.research.run_service import ResearchRunService
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-verifier-override")
+        with pytest.raises(TypeError):
+            ResearchRunService(alpha_run_repository).validate_checkpoint(
+                run_id=run["id"], principal="researcher@example.com", checkpoint={}, artifact_service=object()
+            )
