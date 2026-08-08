@@ -1858,6 +1858,196 @@ MIGRATIONS: tuple[str, ...] = (
     CREATE TRIGGER paper_rebalance_transitions_no_delete BEFORE DELETE ON paper_rebalance_transitions
     BEGIN SELECT RAISE(ABORT, 'paper rebalance transitions are append-only'); END;
     """,
+    """
+    -- Phase 45 durable governed Alpha run contract (AF-REQ-01/04/10/16).
+    -- Seven append-only/immutable fact tables plus one guarded run lifecycle
+    -- cursor: server-frozen input snapshots, immutable run identity with a
+    -- narrowly mutable status/progress cursor, append-only candidate attempts
+    -- and lineage edges, append-only lifecycle events with run-scoped monotonic
+    -- sequence and durable idempotency, append-only recovery checkpoints bound
+    -- to snapshot+manifest digests, and content-addressed artifact references.
+    -- Identity and outcome facts are INSERT-only; only the run cursor's narrow
+    -- lifecycle/progress columns may UPDATE, and a trigger guards every
+    -- identity column against mutation (D-01, D-02, D-04..D-07).
+    CREATE TABLE research_alpha_input_snapshots (
+        id TEXT PRIMARY KEY,
+        schema_version TEXT NOT NULL,
+        snapshot_json TEXT NOT NULL,
+        snapshot_sha256 TEXT NOT NULL CHECK (length(snapshot_sha256) = 64),
+        manifest_json TEXT NOT NULL,
+        manifest_sha256 TEXT NOT NULL CHECK (length(manifest_sha256) = 64),
+        dsl_version TEXT NOT NULL,
+        grammar_fingerprint TEXT NOT NULL CHECK (length(grammar_fingerprint) = 64),
+        vocabulary_fingerprint TEXT NOT NULL CHECK (length(vocabulary_fingerprint) = 64),
+        policy_version TEXT NOT NULL,
+        policy_digest TEXT NOT NULL CHECK (length(policy_digest) = 64),
+        data_fingerprint TEXT NOT NULL CHECK (length(data_fingerprint) = 64),
+        partition_fingerprint TEXT NOT NULL CHECK (length(partition_fingerprint) = 64),
+        membership_fingerprint TEXT NOT NULL CHECK (length(membership_fingerprint) = 64),
+        code_fingerprint TEXT NOT NULL CHECK (length(code_fingerprint) = 64),
+        build_fingerprint TEXT NOT NULL CHECK (length(build_fingerprint) = 64),
+        dependency_fingerprint TEXT NOT NULL CHECK (length(dependency_fingerprint) = 64),
+        created_at TEXT NOT NULL,
+        UNIQUE (snapshot_sha256)
+    );
+    CREATE TRIGGER research_alpha_input_snapshots_no_update BEFORE UPDATE ON research_alpha_input_snapshots
+    BEGIN SELECT RAISE(ABORT, 'alpha input snapshots are append-only'); END;
+    CREATE TRIGGER research_alpha_input_snapshots_no_delete BEFORE DELETE ON research_alpha_input_snapshots
+    BEGIN SELECT RAISE(ABORT, 'alpha input snapshots are append-only'); END;
+
+    CREATE TABLE research_alpha_runs (
+        id TEXT PRIMARY KEY,
+        principal TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL,
+        snapshot_id TEXT NOT NULL REFERENCES research_alpha_input_snapshots(id) ON DELETE RESTRICT,
+        snapshot_sha256 TEXT NOT NULL CHECK (length(snapshot_sha256) = 64),
+        manifest_sha256 TEXT NOT NULL CHECK (length(manifest_sha256) = 64),
+        status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN (
+            'queued', 'preflight_failed', 'running', 'cancel_requested',
+            'cancelled', 'completed', 'failed'
+        )),
+        transition_version INTEGER NOT NULL DEFAULT 0 CHECK (transition_version >= 0),
+        last_event_seq INTEGER NOT NULL DEFAULT 0 CHECK (last_event_seq >= 0),
+        candidate_attempts_total INTEGER NOT NULL DEFAULT 0 CHECK (candidate_attempts_total >= 0),
+        candidate_attempts_completed INTEGER NOT NULL DEFAULT 0 CHECK (candidate_attempts_completed >= 0),
+        folds_total INTEGER NOT NULL DEFAULT 0 CHECK (folds_total >= 0),
+        folds_completed INTEGER NOT NULL DEFAULT 0 CHECK (folds_completed >= 0),
+        started_at TEXT,
+        finished_at TEXT,
+        terminal_reason TEXT,
+        retry_of_run_id TEXT,
+        retry_attempt INTEGER NOT NULL DEFAULT 0 CHECK (retry_attempt >= 0),
+        created_at TEXT NOT NULL,
+        UNIQUE (principal, idempotency_key)
+    );
+    CREATE INDEX idx_research_alpha_runs_status ON research_alpha_runs(status, created_at);
+    CREATE INDEX idx_research_alpha_runs_principal ON research_alpha_runs(principal, created_at);
+    -- The run cursor trigger allows only the narrow lifecycle/progress columns
+    -- to change; every identity column (id, principal, idempotency_key,
+    -- snapshot binding, manifest digest, retry linkage, creation time) is
+    -- guarded against mutation. The trigger fires per-row and aborts if any
+    -- protected column differs between OLD and NEW.
+    CREATE TRIGGER research_alpha_runs_guard_cursor BEFORE UPDATE ON research_alpha_runs
+    FOR EACH ROW WHEN
+        OLD.id IS NOT NEW.id
+        OR OLD.principal IS NOT NEW.principal
+        OR OLD.idempotency_key IS NOT NEW.idempotency_key
+        OR OLD.snapshot_id IS NOT NEW.snapshot_id
+        OR OLD.snapshot_sha256 IS NOT NEW.snapshot_sha256
+        OR OLD.manifest_sha256 IS NOT NEW.manifest_sha256
+        OR OLD.retry_of_run_id IS NOT NEW.retry_of_run_id
+        OR OLD.retry_attempt IS NOT NEW.retry_attempt
+        OR OLD.created_at IS NOT NEW.created_at
+    BEGIN SELECT RAISE(ABORT, 'alpha run identity columns are immutable'); END;
+    CREATE TRIGGER research_alpha_runs_no_delete BEFORE DELETE ON research_alpha_runs
+    BEGIN SELECT RAISE(ABORT, 'alpha runs are append-only'); END;
+
+    CREATE TABLE research_alpha_candidate_attempts (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL REFERENCES research_alpha_runs(id) ON DELETE RESTRICT,
+        attempt_ordinal INTEGER NOT NULL CHECK (attempt_ordinal > 0),
+        candidate_digest TEXT NOT NULL CHECK (length(candidate_digest) = 64),
+        canonical_expression TEXT NOT NULL,
+        ast_signature TEXT NOT NULL,
+        shape_signature TEXT NOT NULL,
+        dsl_version TEXT NOT NULL,
+        operation TEXT NOT NULL,
+        seed INTEGER NOT NULL CHECK (seed >= 0),
+        step INTEGER NOT NULL CHECK (step >= 0),
+        status TEXT NOT NULL CHECK (status IN (
+            'invalid', 'duplicate', 'low_coverage', 'failed', 'rejected',
+            'admitted', 'cancelled', 'budget_exhausted'
+        )),
+        reason_json TEXT NOT NULL,
+        evidence_artifact_id TEXT REFERENCES research_alpha_artifacts(id) ON DELETE RESTRICT,
+        created_at TEXT NOT NULL,
+        UNIQUE (run_id, attempt_ordinal)
+    );
+    CREATE INDEX idx_research_alpha_candidates_run ON research_alpha_candidate_attempts(run_id, attempt_ordinal);
+    CREATE TRIGGER research_alpha_candidates_no_update BEFORE UPDATE ON research_alpha_candidate_attempts
+    BEGIN SELECT RAISE(ABORT, 'alpha candidate attempts are append-only'); END;
+    CREATE TRIGGER research_alpha_candidates_no_delete BEFORE DELETE ON research_alpha_candidate_attempts
+    BEGIN SELECT RAISE(ABORT, 'alpha candidate attempts are append-only'); END;
+
+    CREATE TABLE research_alpha_candidate_lineage (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL REFERENCES research_alpha_runs(id) ON DELETE RESTRICT,
+        child_attempt_id TEXT NOT NULL REFERENCES research_alpha_candidate_attempts(id) ON DELETE RESTRICT,
+        parent_attempt_id TEXT NOT NULL REFERENCES research_alpha_candidate_attempts(id) ON DELETE RESTRICT,
+        edge_ordinal INTEGER NOT NULL CHECK (edge_ordinal >= 0),
+        operation TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE (child_attempt_id, parent_attempt_id)
+    );
+    CREATE INDEX idx_research_alpha_lineage_child ON research_alpha_candidate_lineage(child_attempt_id);
+    CREATE INDEX idx_research_alpha_lineage_parent ON research_alpha_candidate_lineage(parent_attempt_id);
+    CREATE TRIGGER research_alpha_lineage_no_update BEFORE UPDATE ON research_alpha_candidate_lineage
+    BEGIN SELECT RAISE(ABORT, 'alpha candidate lineage is append-only'); END;
+    CREATE TRIGGER research_alpha_lineage_no_delete BEFORE DELETE ON research_alpha_candidate_lineage
+    BEGIN SELECT RAISE(ABORT, 'alpha candidate lineage is append-only'); END;
+
+    CREATE TABLE research_alpha_events (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL REFERENCES research_alpha_runs(id) ON DELETE RESTRICT,
+        seq INTEGER NOT NULL CHECK (seq > 0),
+        event_type TEXT NOT NULL,
+        entity_kind TEXT NOT NULL,
+        entity_id TEXT NOT NULL,
+        occurred_at TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL,
+        actor TEXT NOT NULL,
+        source TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        payload_checksum TEXT NOT NULL CHECK (length(payload_checksum) = 64),
+        artifact_id TEXT REFERENCES research_alpha_artifacts(id) ON DELETE RESTRICT,
+        producer_version TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE (run_id, seq),
+        UNIQUE (run_id, idempotency_key)
+    );
+    CREATE INDEX idx_research_alpha_events_run ON research_alpha_events(run_id, seq);
+    CREATE TRIGGER research_alpha_events_no_update BEFORE UPDATE ON research_alpha_events
+    BEGIN SELECT RAISE(ABORT, 'alpha events are append-only'); END;
+    CREATE TRIGGER research_alpha_events_no_delete BEFORE DELETE ON research_alpha_events
+    BEGIN SELECT RAISE(ABORT, 'alpha events are append-only'); END;
+
+    CREATE TABLE research_alpha_checkpoints (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL REFERENCES research_alpha_runs(id) ON DELETE RESTRICT,
+        checkpoint_version INTEGER NOT NULL CHECK (checkpoint_version > 0),
+        committed_event_seq INTEGER NOT NULL CHECK (committed_event_seq >= 0),
+        stage TEXT NOT NULL,
+        snapshot_sha256 TEXT NOT NULL CHECK (length(snapshot_sha256) = 64),
+        manifest_sha256 TEXT NOT NULL CHECK (length(manifest_sha256) = 64),
+        state_checksum TEXT NOT NULL CHECK (length(state_checksum) = 64),
+        frontier_artifact_id TEXT REFERENCES research_alpha_artifacts(id) ON DELETE RESTRICT,
+        created_at TEXT NOT NULL,
+        UNIQUE (run_id, checkpoint_version)
+    );
+    CREATE INDEX idx_research_alpha_checkpoints_run ON research_alpha_checkpoints(run_id, committed_event_seq DESC);
+    CREATE TRIGGER research_alpha_checkpoints_no_update BEFORE UPDATE ON research_alpha_checkpoints
+    BEGIN SELECT RAISE(ABORT, 'alpha checkpoints are append-only'); END;
+    CREATE TRIGGER research_alpha_checkpoints_no_delete BEFORE DELETE ON research_alpha_checkpoints
+    BEGIN SELECT RAISE(ABORT, 'alpha checkpoints are append-only'); END;
+
+    CREATE TABLE research_alpha_artifacts (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL REFERENCES research_alpha_runs(id) ON DELETE RESTRICT,
+        logical_kind TEXT NOT NULL,
+        relative_path TEXT NOT NULL,
+        content_type TEXT NOT NULL,
+        byte_size INTEGER NOT NULL CHECK (byte_size >= 0),
+        checksum_sha256 TEXT NOT NULL CHECK (length(checksum_sha256) = 64),
+        schema_version TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE (run_id, checksum_sha256, logical_kind)
+    );
+    CREATE INDEX idx_research_alpha_artifacts_run ON research_alpha_artifacts(run_id, logical_kind);
+    CREATE TRIGGER research_alpha_artifacts_no_update BEFORE UPDATE ON research_alpha_artifacts
+    BEGIN SELECT RAISE(ABORT, 'alpha artifacts are append-only'); END;
+    CREATE TRIGGER research_alpha_artifacts_no_delete BEFORE DELETE ON research_alpha_artifacts
+    BEGIN SELECT RAISE(ABORT, 'alpha artifacts are append-only'); END;
+    """,
 )
 
 

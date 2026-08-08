@@ -1041,3 +1041,225 @@ def test_phase14_rebalance_tables_migrate_with_constraints_and_idempotence(
             connection.execute(f"UPDATE {table} SET created_at = 'x' WHERE {where}")
         with pytest.raises(sqlite3.IntegrityError):
             connection.execute(f"DELETE FROM {table} WHERE {where}")
+
+
+
+def _alpha_snapshot_row(
+    snapshot_id: str = "alpha-snap-1",
+    *,
+    snapshot_sha256: str | None = None,
+    manifest_sha256: str | None = None,
+    schema_version: str = "alpha-manifest-v1",
+) -> str:
+    """Build a valid research_alpha_input_snapshots INSERT statement."""
+    digest = snapshot_sha256 if snapshot_sha256 is not None else "a" * 64
+    manifest = manifest_sha256 if manifest_sha256 is not None else "b" * 64
+    return (
+        "INSERT INTO research_alpha_input_snapshots (id, schema_version, snapshot_json, "
+        "snapshot_sha256, manifest_json, manifest_sha256, dsl_version, grammar_fingerprint, "
+        "vocabulary_fingerprint, policy_version, policy_digest, data_fingerprint, "
+        "partition_fingerprint, membership_fingerprint, code_fingerprint, build_fingerprint, "
+        "dependency_fingerprint, created_at) VALUES ("
+        f"'{snapshot_id}', '{schema_version}', '{{}}', '{digest}', '{{}}', '{manifest}', "
+        f"'1.0', '{'c' * 64}', '{'d' * 64}', 'policy-v1', '{'e' * 64}', '{'f' * 64}', "
+        f"'{'g' * 64}', '{'h' * 64}', '{'i' * 64}', '{'j' * 64}', '{'k' * 64}', "
+        "'2026-08-08T00:00:00Z')"
+    )
+
+
+def _alpha_run_row(
+    run_id: str = "alpha-run-1",
+    *,
+    snapshot_id: str = "alpha-snap-1",
+    principal: str = "researcher@example.com",
+    idempotency_key: str = "idem-key-0000000000000001",
+    status: str = "queued",
+    snapshot_sha256: str | None = None,
+    manifest_sha256: str | None = None,
+) -> str:
+    """Build a valid research_alpha_runs INSERT statement (snapshot FK must exist)."""
+    snap = snapshot_sha256 if snapshot_sha256 is not None else "a" * 64
+    manifest = manifest_sha256 if manifest_sha256 is not None else "b" * 64
+    return (
+        "INSERT INTO research_alpha_runs (id, principal, idempotency_key, snapshot_id, "
+        "snapshot_sha256, manifest_sha256, status, transition_version, last_event_seq, "
+        "candidate_attempts_total, candidate_attempts_completed, folds_total, folds_completed, "
+        "started_at, finished_at, terminal_reason, retry_of_run_id, retry_attempt, created_at) "
+        "VALUES ("
+        f"'{run_id}', '{principal}', '{idempotency_key}', '{snapshot_id}', '{snap}', "
+        f"'{manifest}', '{status}', 0, 0, 0, 0, 0, 0, NULL, NULL, NULL, NULL, 0, "
+        "'2026-08-08T00:00:00Z')"
+    )
+
+
+def _alpha_event_row(
+    event_id: str = "alpha-evt-1",
+    *,
+    run_id: str = "alpha-run-1",
+    seq: int = 1,
+    event_type: str = "run_created",
+    idempotency_key: str = "evt-key-0000000000000001",
+    payload_checksum: str | None = None,
+) -> str:
+    """Build a valid research_alpha_events INSERT statement (run FK must exist)."""
+    checksum = payload_checksum if payload_checksum is not None else "f" * 64
+    return (
+        "INSERT INTO research_alpha_events (id, run_id, seq, event_type, entity_kind, "
+        "entity_id, occurred_at, idempotency_key, actor, source, payload_json, "
+        "payload_checksum, artifact_id, producer_version, created_at) VALUES ("
+        f"'{event_id}', '{run_id}', {seq}, '{event_type}', 'run', '{run_id}', "
+        f"'2026-08-08T00:00:00Z', '{idempotency_key}', 'service', 'api', '{{}}', "
+        f"'{checksum}', NULL, 'research-run-v1', '2026-08-08T00:00:00Z')"
+    )
+
+
+def test_phase45_alpha_tables_migrate_with_constraints_and_idempotence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Seven Phase 45 tables: CHECKs + sha256 + FK graph + immutability + guarded cursor."""
+    planned = migrations.MIGRATIONS
+    p45_index = next(
+        index for index, script in enumerate(planned) if "CREATE TABLE research_alpha_runs" in script
+    )
+    connection = sqlite3.connect(":memory:")
+    connection.execute("PRAGMA foreign_keys = ON")
+
+    # Forward-only: alpha tables absent before the Phase 45 script, present after.
+    monkeypatch.setattr(migrations, "MIGRATIONS", planned[:p45_index])
+    migrations.migrate_operational_db(connection)
+    assert connection.execute("PRAGMA user_version").fetchone() == (p45_index,)
+    assert (
+        connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'research_alpha_runs'"
+        ).fetchone()
+        is None
+    )
+
+    monkeypatch.setattr(migrations, "MIGRATIONS", planned)
+    migrations.migrate_operational_db(connection)
+    assert connection.execute("PRAGMA user_version").fetchone() == (len(planned),)
+    for table in (
+        "research_alpha_input_snapshots",
+        "research_alpha_runs",
+        "research_alpha_candidate_attempts",
+        "research_alpha_candidate_lineage",
+        "research_alpha_events",
+        "research_alpha_checkpoints",
+        "research_alpha_artifacts",
+    ):
+        assert (
+            connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
+            ).fetchone()
+            is not None
+        )
+    migrations.migrate_operational_db(connection)  # idempotent no-op
+    assert connection.execute("PRAGMA user_version").fetchone() == (len(planned),)
+
+    # --- snapshots: valid row + sha256 length CHECK + UNIQUE digest + immutability. ---
+    connection.execute(_alpha_snapshot_row())
+    with pytest.raises(sqlite3.IntegrityError):  # bad snapshot_sha256 length
+        connection.execute(
+            _alpha_snapshot_row(snapshot_id="snap-bad").replace("'" + "a" * 64 + "'", "'short'")
+        )
+    with pytest.raises(sqlite3.IntegrityError):  # duplicate snapshot_sha256
+        connection.execute(_alpha_snapshot_row(snapshot_id="snap-dup"))
+    with pytest.raises(sqlite3.IntegrityError):  # UPDATE blocked
+        connection.execute("UPDATE research_alpha_input_snapshots SET dsl_version = 'x' WHERE id = 'alpha-snap-1'")
+    with pytest.raises(sqlite3.IntegrityError):  # DELETE blocked
+        connection.execute("DELETE FROM research_alpha_input_snapshots WHERE id = 'alpha-snap-1'")
+
+    # --- runs: status CHECK + sha256 CHECK + FK RESTRICT + UNIQUE(principal,key). ---
+    with pytest.raises(sqlite3.IntegrityError):  # FK: snapshot_id must exist
+        connection.execute(_alpha_run_row(snapshot_id="missing-snap"))
+    connection.execute(_alpha_run_row())
+    with pytest.raises(sqlite3.IntegrityError):  # bad status enum
+        connection.execute(
+            _alpha_run_row(run_id="alpha-run-bad").replace("'queued'", "'pending'")
+        )
+    with pytest.raises(sqlite3.IntegrityError):  # duplicate (principal, idempotency_key)
+        connection.execute(_alpha_run_row(run_id="alpha-run-dup"))
+    with pytest.raises(sqlite3.IntegrityError):  # bad snapshot_sha256 length
+        connection.execute(
+            _alpha_run_row(run_id="alpha-run-short").replace("'" + "a" * 64 + "'", "'short'")
+        )
+    # run row is mutable only on lifecycle cursor columns.
+    connection.execute(
+        "UPDATE research_alpha_runs SET status = 'running', transition_version = 1, "
+        "last_event_seq = 1, started_at = '2026-08-08T00:00:00Z' WHERE id = 'alpha-run-1'"
+    )
+    # identity columns are guarded.
+    for col, value in (
+        ("principal", "'other'"),
+        ("idempotency_key", "'changed'"),
+        ("snapshot_id", "'x'"),
+        ("snapshot_sha256", "'z' * 64"),
+        ("manifest_sha256", "'y' * 64"),
+        ("created_at", "'mutated'"),
+    ):
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                f"UPDATE research_alpha_runs SET {col} = {value} WHERE id = 'alpha-run-1'"
+            )
+    with pytest.raises(sqlite3.IntegrityError):  # DELETE blocked
+        connection.execute("DELETE FROM research_alpha_runs WHERE id = 'alpha-run-1'")
+
+    # --- events: FK + UNIQUE(run_id,seq) + UNIQUE(run_id,idempotency_key) + immutability. ---
+    connection.execute(_alpha_event_row())
+    with pytest.raises(sqlite3.IntegrityError):  # FK: run_id must exist
+        connection.execute(_alpha_event_row(event_id="evt-missing", run_id="missing-run"))
+    with pytest.raises(sqlite3.IntegrityError):  # duplicate (run_id, seq)
+        connection.execute(_alpha_event_row(event_id="evt-dup-seq"))
+    with pytest.raises(sqlite3.IntegrityError):  # duplicate (run_id, idempotency_key)
+        connection.execute(
+            _alpha_event_row(event_id="evt-dup-key", seq=2, idempotency_key="evt-key-0000000000000001")
+        )
+    with pytest.raises(sqlite3.IntegrityError):  # bad payload_checksum length
+        connection.execute(
+            _alpha_event_row(event_id="evt-short", seq=3, payload_checksum="short")
+        )
+    with pytest.raises(sqlite3.IntegrityError):  # UPDATE blocked
+        connection.execute("UPDATE research_alpha_events SET event_type = 'x' WHERE id = 'alpha-evt-1'")
+    with pytest.raises(sqlite3.IntegrityError):  # DELETE blocked
+        connection.execute("DELETE FROM research_alpha_events WHERE id = 'alpha-evt-1'")
+
+
+def test_phase45_migration_is_atomic_and_rerunnable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failing Phase 45 script rolls back all objects and user_version; rerun succeeds."""
+    planned = migrations.MIGRATIONS
+    p45_index = next(
+        index for index, script in enumerate(planned) if "CREATE TABLE research_alpha_runs" in script
+    )
+    p45_script = planned[p45_index]
+    connection = sqlite3.connect(":memory:")
+    connection.execute("PRAGMA foreign_keys = ON")
+    monkeypatch.setattr(migrations, "MIGRATIONS", planned[:p45_index])
+    migrations.migrate_operational_db(connection)
+    pre_version = p45_index
+
+    failing = planned[:p45_index] + (
+        p45_script + "INSERT INTO injected_phase45_failure(value) VALUES ('boom');",
+    )
+    monkeypatch.setattr(migrations, "MIGRATIONS", failing)
+    with pytest.raises(sqlite3.OperationalError):
+        migrations.migrate_operational_db(connection)
+    # No Phase 45 table survived the rollback.
+    assert (
+        connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'research_alpha_runs'"
+        ).fetchone()
+        is None
+    )
+    assert connection.execute("PRAGMA user_version").fetchone() == (pre_version,)
+    assert connection.execute("PRAGMA foreign_keys").fetchone() == (1,)
+
+    # Clean rerun applies everything.
+    monkeypatch.setattr(migrations, "MIGRATIONS", planned)
+    migrations.migrate_operational_db(connection)
+    assert connection.execute("PRAGMA user_version").fetchone() == (len(planned),)
+    assert (
+        connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'research_alpha_runs'"
+        ).fetchone()
+        is not None
+    )
