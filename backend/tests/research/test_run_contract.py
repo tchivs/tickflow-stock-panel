@@ -12,6 +12,7 @@ artifact-root fixtures so timestamps and paths are reproducible.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -253,6 +254,83 @@ class TestIdempotency:
         assert run is not None
         assert run["snapshot_sha256"] == snapshot_a.snapshot_sha256
         assert run["last_event_seq"] == 1
+    def test_concurrent_create_same_key_returns_one_durable_run(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        from threading import Barrier
+
+        snapshot = freeze_input_snapshot(
+            manifest=_sample_manifest(), created_at=deterministic_clock.now_iso()
+        )
+        barrier = Barrier(2)
+
+        def create(index: int) -> dict[str, object]:
+            barrier.wait()
+            return alpha_run_repository.create_alpha_run(
+                run_id=f"run-race-{index}", principal="researcher@example.com",
+                idempotency_key="idem-race-create-0001", snapshot=snapshot,
+                event_id=f"evt-race-{index}",
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(executor.map(create, (1, 2)))
+        assert {result["id"] for result in results} == {results[0]["id"]}
+        assert len(alpha_run_repository.list_run_events(results[0]["id"])) == 1
+
+    def test_concurrent_start_and_recovery_return_durable_winners(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        from threading import Barrier
+
+        from app.research.run_service import ResearchRunService
+
+        snapshot = freeze_input_snapshot(
+            manifest=_sample_manifest(seed=73), created_at=deterministic_clock.now_iso()
+        )
+        run = alpha_run_repository.create_alpha_run(
+            run_id="run-race-lifecycle", principal="researcher@example.com",
+            idempotency_key="idem-race-lifecycle-0001", snapshot=snapshot,
+            event_id="evt-race-lifecycle",
+        )
+
+        start_barrier = Barrier(2)
+
+        def start(_: int) -> dict[str, object]:
+            start_barrier.wait()
+            return ResearchRunService(alpha_run_repository).start_or_resume(
+                run["id"], principal="researcher@example.com",
+                expected_version=run["transition_version"],
+                idempotency_key="idem-race-start-0001",
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            started = list(executor.map(start, (1, 2)))
+        assert {result["status"] for result in started} == {"running"}
+        assert sum("_attempt_token" in result for result in started) <= 1
+        events = alpha_run_repository.list_run_events(run["id"])
+        assert [event["event_type"] for event in events].count("run_started") == 1
+
+        recovery_barrier = Barrier(2)
+        started_version = started[0]["transition_version"]
+
+        def recover(_: int) -> dict[str, object]:
+            recovery_barrier.wait()
+            return ResearchRunService(alpha_run_repository).recover_running_attempt(
+                run["id"], principal="researcher@example.com",
+                expected_version=started_version,
+                idempotency_key="idem-race-recovery-0001",
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            recovered = list(executor.map(recover, (1, 2)))
+        assert {result["transition_version"] for result in recovered} == {started_version + 1}
+        assert sum("_attempt_token" in result for result in recovered) <= 1
+        events = alpha_run_repository.list_run_events(run["id"])
+        assert [event["event_type"] for event in events].count("run_recovered") == 1
 
 
 # ================================================================

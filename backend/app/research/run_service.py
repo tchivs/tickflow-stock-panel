@@ -247,6 +247,8 @@ class ResearchRunService:
         )
         if result is None:
             return None
+        if result.pop("_start_idempotent_replay", False):
+            return result
         result["_attempt_token"] = token
         return result
 

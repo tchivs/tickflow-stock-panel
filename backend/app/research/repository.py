@@ -106,6 +106,7 @@ class ResearchRepository:
         connection = sqlite3.connect(self.database_path)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute("PRAGMA busy_timeout = 5000")
         try:
             yield connection
         finally:
@@ -1450,9 +1451,8 @@ class ResearchRepository:
         payload = {"status": "queued", "snapshot_sha256": snapshot.snapshot_sha256}
         payload_json = _bounded_json(payload, "run_created payload")
         payload_checksum = event_checksum(payload, idempotency_key, "run_created")
-
         with self._connection() as connection:
-            # Idempotency check BEFORE the write transaction.
+            connection.execute("BEGIN IMMEDIATE")
             existing = connection.execute(
                 "SELECT id, snapshot_sha256 FROM research_alpha_runs "
                 "WHERE principal = ? AND idempotency_key = ?",
@@ -1460,11 +1460,14 @@ class ResearchRepository:
             ).fetchone()
             if existing is not None:
                 if existing["snapshot_sha256"] != snapshot.snapshot_sha256:
+                    connection.execute("ROLLBACK")
                     raise AlphaRunConflictError(
                         "idempotency key reused with a different canonical input"
                     )
                 # Same key + same digest: return the original run (no second event).
-                return self._alpha_run_row(connection, existing["id"])  # type: ignore[return-value]
+                row = self._alpha_run_row(connection, existing["id"])
+                connection.execute("COMMIT")
+                return row  # type: ignore[return-value]
 
             with connection:
                 # Insert snapshot if new (UNIQUE snapshot_sha256).
@@ -1748,6 +1751,22 @@ class ResearchRepository:
                     (run_id, idempotency_key),
                 ).fetchone()
                 if existing is not None:
+                    if event_type == "run_started":
+                        try:
+                            existing_payload = json.loads(existing["payload_json"])
+                        except (TypeError, ValueError):
+                            existing_payload = None
+                        if isinstance(existing_payload, dict):
+                            existing_intent = dict(existing_payload)
+                            requested_intent = dict(payload)
+                            existing_intent.pop("attempt_token_digest", None)
+                            requested_intent.pop("attempt_token_digest", None)
+                            if existing_intent == requested_intent:
+                                connection.execute("COMMIT")
+                                result = self._alpha_run_row(connection, run_id)
+                                assert result is not None
+                                result["_start_idempotent_replay"] = True
+                                return result
                     if existing["payload_checksum"] != expected_checksum:
                         raise AlphaRunConflictError(
                             "lifecycle idempotency key reused with a different event"
@@ -1837,12 +1856,18 @@ class ResearchRepository:
                     connection.execute("ROLLBACK")
                     return None
                 existing = connection.execute(
-                    "SELECT * FROM research_alpha_events WHERE run_id = ? AND idempotency_key = ?",
+                    "SELECT * FROM research_alpha_events "
+                    "WHERE run_id = ? AND idempotency_key = ?",
                     (run_id, idempotency_key),
                 ).fetchone()
                 if existing is not None:
-                    if existing["payload_checksum"] != checksum:
-                        raise AlphaRunConflictError("recovery idempotency key conflict")
+                    if existing["event_type"] != "run_recovered":
+                        raise AlphaRunConflictError(
+                            "recovery idempotency key reused for a different event"
+                        )
+                    # Recovery tokens are server-generated; the retry carries no
+                    # caller-controlled payload whose digest could legitimately
+                    # differ. Return the durable winner without minting a token.
                     connection.execute("COMMIT")
                     result = self._alpha_run_row(connection, run_id)
                     assert result is not None
