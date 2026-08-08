@@ -582,22 +582,12 @@ class ResearchRunService:
         if evidence_artifact_id is not None:
             self._verify_artifact_reference(run_id, evidence_artifact_id)
         return self._repository.append_candidate_attempt(
-            run_id=run_id,
-            candidate_id=candidate_id,
-            attempt_ordinal=attempt_ordinal,
-            candidate_digest=candidate_digest,
-            canonical_expression=canonical_expression,
-            ast_signature=ast_signature,
-            shape_signature=shape_signature,
-            dsl_version=dsl_version,
-            operation=operation,
-            seed=seed,
-            step=step,
-            status=status,
-            reason=reason,
-            evidence_artifact_id=evidence_artifact_id,
-            artifact_verified=evidence_artifact_id is not None,
-            principal=principal,
+            run_id=run_id, candidate_id=candidate_id, attempt_ordinal=attempt_ordinal,
+            candidate_digest=candidate_digest, canonical_expression=canonical_expression,
+            ast_signature=ast_signature, shape_signature=shape_signature,
+            dsl_version=dsl_version, operation=operation, seed=seed, step=step,
+            status=status, reason=reason, evidence_artifact_id=evidence_artifact_id,
+            artifact_verified=evidence_artifact_id is not None, principal=principal,
             expected_version=expected_version,
             expected_attempt_token_digest=attempt_token_digest(attempt_token),
         )
@@ -615,18 +605,13 @@ class ResearchRunService:
         edge_ordinal: int,
         operation: str,
     ) -> dict[str, Any] | None:
-        """Append a lineage edge under one atomic running-attempt fence."""
+        """Append lineage under one atomic running-attempt fence."""
         if not attempt_token:
             raise ValueError("attempt_token is required for lineage append")
         return self._repository.append_candidate_lineage(
-            run_id=run_id,
-            lineage_id=lineage_id,
-            child_attempt_id=child_attempt_id,
-            parent_attempt_id=parent_attempt_id,
-            edge_ordinal=edge_ordinal,
-            operation=operation,
-            principal=principal,
-            expected_version=expected_version,
+            run_id=run_id, lineage_id=lineage_id, child_attempt_id=child_attempt_id,
+            parent_attempt_id=parent_attempt_id, edge_ordinal=edge_ordinal,
+            operation=operation, principal=principal, expected_version=expected_version,
             expected_attempt_token_digest=attempt_token_digest(attempt_token),
         )
 

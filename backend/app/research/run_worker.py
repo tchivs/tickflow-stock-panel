@@ -131,23 +131,13 @@ class ResearchRunWorkerAdapter:
         if not attempt_token:
             raise ValueError("attempt_token is required for worker callbacks")
         return self._service.append_candidate(
-            run_id=run_id,
-            principal=self._principal,
-            expected_version=expected_version,
-            attempt_token=attempt_token,
-            candidate_id=candidate_id,
-            attempt_ordinal=attempt_ordinal,
-            candidate_digest=candidate_digest,
-            canonical_expression=canonical_expression,
-            ast_signature=ast_signature,
-            shape_signature=shape_signature,
-            dsl_version=dsl_version,
-            operation=operation,
-            seed=seed,
-            step=step,
-            status=status,
-            reason=reason,
-            evidence_artifact_id=evidence_artifact_id,
+            run_id=run_id, principal=self._principal,
+            expected_version=expected_version, attempt_token=attempt_token,
+            candidate_id=candidate_id, attempt_ordinal=attempt_ordinal,
+            candidate_digest=candidate_digest, canonical_expression=canonical_expression,
+            ast_signature=ast_signature, shape_signature=shape_signature,
+            dsl_version=dsl_version, operation=operation, seed=seed, step=step,
+            status=status, reason=reason, evidence_artifact_id=evidence_artifact_id,
         )
 
     def append_candidate_lineage(
@@ -166,14 +156,10 @@ class ResearchRunWorkerAdapter:
         if not attempt_token:
             raise ValueError("attempt_token is required for worker callbacks")
         return self._service.append_candidate_lineage(
-            run_id=run_id,
-            principal=self._principal,
-            expected_version=expected_version,
-            attempt_token=attempt_token,
-            lineage_id=lineage_id,
-            child_attempt_id=child_attempt_id,
-            parent_attempt_id=parent_attempt_id,
-            edge_ordinal=edge_ordinal,
+            run_id=run_id, principal=self._principal,
+            expected_version=expected_version, attempt_token=attempt_token,
+            lineage_id=lineage_id, child_attempt_id=child_attempt_id,
+            parent_attempt_id=parent_attempt_id, edge_ordinal=edge_ordinal,
             operation=operation,
         )
 
