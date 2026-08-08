@@ -45,7 +45,13 @@
 
 **Explicit non-goals**: No factory grammar/evolution search, fold scoring, Agent provider call, promotion, UI workbench, broker/order path, or strategy-specific `advanced_*` tables in this phase.
 
-**Plans**: TBD
+**Plans:** 4 plans
+
+Plans:
+- [ ] 45-01-PLAN.md — create-to-replay durable tracer and frozen manifest contract
+- [ ] 45-02-PLAN.md — append-only candidate/event ledger and fail-closed checkpoint recovery
+- [ ] 45-03-PLAN.md — guarded lifecycle, idempotent retry/cancel, restart, and worker adapter
+- [ ] 45-04-PLAN.md — typed API/history seam and research-only no-execution guard
 
 ### Phase 46: Deterministic Alpha Factory Core
 
