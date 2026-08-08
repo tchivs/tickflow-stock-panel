@@ -330,3 +330,72 @@ def test_ic_correlation_dedup_aligns_sparse_admitted_dates(tmp_path) -> None:
     # The gate's signed worst is anti-correlated, NOT the spurious +1.0 the
     # positional truncation produced.
     assert observed < 0.0
+
+
+
+# ================================================================
+# Phase 47-03-01 — candidate-ledger linkage (AF-REQ-08 SC4)
+# ================================================================
+
+
+def _freeze_admission_run(repo, *, run_id: str) -> str:
+    from app.research.run_contract import freeze_input_snapshot
+
+    manifest = {
+        "dsl": {"version": "factor-dsl-v1"},
+        "grammar": {"fingerprint": "a" * 64, "version": "grammar-v1"},
+        "vocabulary": {"fingerprint": "b" * 64, "size": 64},
+        "policy": {"version": "admission-v1", "thresholds": {"min_ic": 0.02}},
+        "budgets": {"max_expressions": 1000, "max_candidates": 200},
+        "objective": {"name": "sharpe", "direction": "maximize"},
+        "universe": {"name": "cn-a-share", "asset_type": "stock", "membership_fingerprint": "c" * 64},
+        "measured_window": {"start": "2020-01-01", "end": "2023-12-31", "calendar": "SSE"},
+        "fold_geometry": {"train_size": 120, "gap_size": 5, "test_size": 20, "n_folds": 10},
+        "code_manifest": {"fingerprint": "d" * 64, "build_fingerprint": "e" * 64, "dependency_fingerprint": "f" * 64},
+        "data_manifest": {"fingerprint": "g" * 64, "partition_fingerprint": "h" * 64},
+        "seed": 42,
+    }
+    snapshot = freeze_input_snapshot(manifest=manifest, created_at="2026-08-08T00:00:00+00:00")
+    repo.create_alpha_run(
+        run_id=run_id, principal="researcher@example.com",
+        idempotency_key=f"idem-{run_id}", snapshot=snapshot, event_id=f"evt-{run_id}",
+    )
+    return run_id
+
+
+def test_record_candidate_admission_links_verdict_to_candidate_ledger(tmp_path) -> None:
+    """An admission verdict is durably linked to the candidate ledger via the revision id."""
+    from app.research.alpha_scoring import record_candidate_admission
+    from app.research.run_contract import AlphaCandidateAttempt
+    from app.research.factor_dsl import DSL_VERSION
+
+    repository = ResearchRepository(tmp_path / "operational.db")
+    repository.migrate()
+    registry = FactorRegistry(repository)
+    engine = StubBacktestEngine(_seed7_panel(60))
+    run_id = _freeze_admission_run(repository, run_id="run-ledger")
+    digest = "9" * 64
+    revision = registry.create_exploratory_revision(
+        run_id=run_id, candidate_id="acand_ledger", candidate_digest=digest,
+        canonical_expression="close", dsl_version=DSL_VERSION, fields=("close",), step=0,
+    )
+    attempt = AlphaCandidateAttempt(
+        id="acand_ledger_rec", run_id=run_id, attempt_ordinal=2, candidate_digest=digest,
+        canonical_expression="close", ast_signature="ast", shape_signature="shape",
+        dsl_version=DSL_VERSION, operation="generate", seed=0, step=0,
+        status="generated", reason={}, evidence_artifact_id=None, created_at="2026-08-08T00:00:00Z",
+    )
+    recorded = record_candidate_admission(
+        repo=repository, registry=registry, attempt=attempt, revision=revision,
+        universe="fixture-a-share", start=date(2024, 1, 2), end=date(2024, 1, 2) + timedelta(days=59),
+        horizon=1, asset_type="stock", engine=engine,
+    )
+    # The terminal status is an append-only candidate attempt fact linked by candidate_digest.
+    assert recorded["status"] == "admitted"
+    assert recorded["run_id"] == run_id
+    assert recorded["candidate_digest"] == digest
+    # The verdict row joins the candidate ledger via the exploratory revision id.
+    verdict = repository.get_admission_verdict(revision.id, "admission-policy-v1")
+    assert verdict is not None
+    assert verdict["verdict"] == "admitted"
+    assert [g["gate"] for g in recorded["reason"]["gate_trail"]] == [g["gate"] for g in verdict["gates"]]

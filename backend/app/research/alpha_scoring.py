@@ -15,12 +15,13 @@ from __future__ import annotations
 
 import inspect
 import uuid
+from collections.abc import Mapping
 from typing import Any
 
 import polars as pl
 
 from app.research.evaluation import FactorEvaluationResult, FactorEvaluationService, _per_date_correlation_series
-from app.research.factor_registry import FactorRevision
+from app.research.factor_registry import FactorRegistry, FactorRevision
 from app.research.run_contract import AlphaCandidateAttempt
 from app.research.signal_chain import FactorSignalFrame
 
@@ -237,3 +238,154 @@ def record_selection_fold_evidence(
             )
         )
     return recorded
+
+
+# ----------------------------------------------------------------------
+# Phase 47-03 — candidate-ledger-linked admission verdict (AF-REQ-08 SC4)
+# ----------------------------------------------------------------------
+
+
+def _json_safe(value: Any) -> Any:
+    """Recursively replace non-finite floats with ``None`` for bounded-JSON storage.
+
+    Admission gate ``observed`` values can be non-finite for a degenerate panel
+    (e.g. an undefined shifted-label IC over two dates). The verdict row stores
+    the authoritative ``gates_json`` via the repository's tolerant serializer,
+    but the candidate-ledger ``reason`` is validated by ``validate_bounded_json``
+    which rejects non-finite numbers — so the embedded gate trail is sanitized
+    (non-finite → ``null``) without dropping the trail structure.
+    """
+    import math
+
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {key: _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    return value
+
+
+def record_candidate_admission(
+    *,
+    repo: Any,
+    registry: FactorRegistry,
+    attempt: AlphaCandidateAttempt,
+    revision: FactorRevision,
+    universe: str,
+    start: Any,
+    end: Any,
+    horizon: int,
+    asset_type: str,
+    engine: Any,
+    admitted_ic_series: Mapping[str, Mapping[str, float]] | None = None,
+    universe_resolver: object | None = None,
+    rebalance: str = "daily",
+    warmup_days: int = 0,
+    n_groups: int = 2,
+    catalog: Any | None = None,
+    artifact_service: Any | None = None,
+) -> dict[str, Any]:
+    """Run admission for one candidate and record the terminal verdict on the ledger.
+
+    Resolves the exploratory revision's provenance (``run_id`` / ``candidate_id`` /
+    ``candidate_digest``, mintered by 47-01) so the verdict row joins the candidate
+    ledger, then runs :func:`run_admission` — passing NO threshold/gate-order
+    kwargs (none exist) — and appends one append-only candidate attempt row
+    carrying the terminal status (``admitted`` / ``rejected`` / ``failed``) and a
+    ``reason`` mapping ``{"verdict", "failing_gate", "gate_trail"}``. A clean gate
+    failure records ``rejected`` with the failing gate + full gate trail; an
+    evaluation/chain failure (``run_admission`` raising ``ValueError`` /
+    ``SignalChainError``) is caught and recorded as ``failed`` with the terminal
+    diagnostic — rejection is never converted to admission and failure is never a
+    zero score (AF-REQ-07). The appended terminal status is a distinct append-only
+    fact linked to the generation attempt by ``candidate_digest``.
+    """
+    from app.research.admission import run_admission
+    from app.research.signal_chain import SignalChainError
+
+    # The revision id is the stable join key between the admission verdict row
+    # (admission.py) and the candidate ledger (provenance carries run_id +
+    # candidate_id). Provenance is recovered but never trusted to override the
+    # attempt identity; the append uses the attempt's own ledger fields.
+    provenance = dict(revision.provenance or {})
+    run_id = provenance.get("run_id") or attempt.run_id
+    candidate_id = provenance.get("candidate_id") or attempt.id
+    candidate_digest = provenance.get("candidate_digest") or attempt.candidate_digest
+    ledger_reason = {
+        "candidate_run_id": run_id,
+        "candidate_id": candidate_id,
+        "candidate_digest": candidate_digest,
+    }
+
+    try:
+        verdict = run_admission(
+            repo,
+            engine=engine,
+            registry=registry,
+            revision_id=revision.id,
+            universe=universe,
+            start=start,
+            end=end,
+            horizon=horizon,
+            asset_type=asset_type,
+            admitted_ic_series=admitted_ic_series,
+            universe_resolver=universe_resolver,
+            rebalance=rebalance,
+            warmup_days=warmup_days,
+            n_groups=n_groups,
+            catalog=catalog,
+            artifact_service=artifact_service,
+        )
+    except (SignalChainError, ValueError) as error:
+        # An evaluation/chain failure is a terminal `failed` outcome — never a
+        # zero score, never a clean rejection (AF-REQ-07). The status is sourced
+        # verbatim from the failure; rejection cannot be synthesized here.
+        reason = {
+            **ledger_reason,
+            "verdict": "failed",
+            "failing_gate": None,
+            "gate_trail": [],
+            "error": str(error),
+        }
+        recorded = repo.append_candidate_attempt(
+            run_id=attempt.run_id,
+            candidate_id=attempt.id,
+            attempt_ordinal=attempt.attempt_ordinal,
+            candidate_digest=attempt.candidate_digest,
+            canonical_expression=attempt.canonical_expression,
+            ast_signature=attempt.ast_signature,
+            shape_signature=attempt.shape_signature,
+            dsl_version=attempt.dsl_version,
+            operation=attempt.operation,
+            seed=attempt.seed,
+            step=attempt.step,
+            status="failed",
+            reason=reason,
+        )
+        return {**(recorded or {}), "admission_verdict": None}
+
+    # Status sourced verbatim from the verdict — never overridden, never converted.
+    status = verdict["verdict"]
+    reason = {
+        **ledger_reason,
+        "verdict": status,
+        "failing_gate": verdict["reason"] if status == "rejected" else None,
+        "gate_trail": _json_safe(verdict["gates_json"]),
+    }
+    recorded = repo.append_candidate_attempt(
+        run_id=attempt.run_id,
+        candidate_id=attempt.id,
+        attempt_ordinal=attempt.attempt_ordinal,
+        candidate_digest=attempt.candidate_digest,
+        canonical_expression=attempt.canonical_expression,
+        ast_signature=attempt.ast_signature,
+        shape_signature=attempt.shape_signature,
+        dsl_version=attempt.dsl_version,
+        operation=attempt.operation,
+        seed=attempt.seed,
+        step=attempt.step,
+        status=status,
+        reason=reason,
+    )
+    return {**(recorded or {}), "admission_verdict": verdict}

@@ -633,12 +633,12 @@ def _make_run(repo, *, run_id: str = "run-evidence") -> str:
     return run_id
 
 
-def _attempt(run_id: str = "run-evidence", *, candidate_id: str = "cand-1", ordinal: int = 1, status: str = "generated"):
+def _attempt(run_id: str = "run-evidence", *, candidate_id: str = "cand-1", ordinal: int = 1, status: str = "generated", candidate_digest: str = "a" * 64):
     from app.research.run_contract import AlphaCandidateAttempt
 
     return AlphaCandidateAttempt(
         id=candidate_id, run_id=run_id, attempt_ordinal=ordinal,
-        candidate_digest="a" * 64, canonical_expression="close",
+        candidate_digest=candidate_digest, canonical_expression="close",
         ast_signature="ast-sig", shape_signature="shape-sig",
         dsl_version=DSL_VERSION, operation="generate", seed=0, step=0,
         status=status, reason={}, evidence_artifact_id=None, created_at="2026-08-08T00:00:00Z",
@@ -819,3 +819,150 @@ def test_record_candidate_evidence_invalid_becomes_failed(
     )
     assert recorded["status"] == "failed"
     assert recorded["reason"]["evaluation"] == "invalid"
+
+
+# ----------------------------------------------------------------------
+# 47-03-01 — candidate-ledger-linked admission verdict (AF-REQ-08 SC4)
+# ----------------------------------------------------------------------
+
+
+def _seed7_panel(n_dates: int, *, seed: int = 7) -> pl.DataFrame:
+    """Deterministic 8-symbol panel whose ``close`` factor clears every gate."""
+    import numpy as np
+    from datetime import timedelta
+
+    rng = np.random.default_rng(seed)
+    n_syms = 8
+    prices = np.empty((n_dates, n_syms))
+    for i in range(n_syms):
+        walk = rng.normal(0, 0.02, n_dates)
+        prices[:, i] = np.exp(np.cumsum(walk) + 0.001 * np.arange(n_dates))
+    start = date(2024, 1, 2)
+    rows = []
+    for day_idx in range(n_dates):
+        day = start + timedelta(days=day_idx)
+        for symbol_idx in range(n_syms):
+            rows.append({"symbol": f"S{symbol_idx:02d}", "date": day, "close": float(prices[day_idx, symbol_idx])})
+    return pl.DataFrame(rows)
+
+
+def test_record_candidate_admission_admitted_records_terminal_status_and_gate_trail(
+    research_registry, research_repository
+) -> None:
+    from app.research.alpha_scoring import record_candidate_admission
+    from tests.research.conftest import StubBacktestEngine
+    from datetime import timedelta
+
+    digest = "d" * 64
+    run_id = _make_run(research_repository, run_id="run-admit")
+    revision = research_registry.create_exploratory_revision(
+        run_id=run_id, candidate_id="acand_admit", candidate_digest=digest,
+        canonical_expression="close", dsl_version=DSL_VERSION, fields=("close",), step=0,
+    )
+    engine = StubBacktestEngine(_seed7_panel(60))
+    attempt = _attempt(run_id=run_id, candidate_id="acand_admit_rec", candidate_digest=digest, ordinal=2)
+
+    recorded = record_candidate_admission(
+        repo=research_repository, registry=research_registry,
+        attempt=attempt, revision=revision,
+        universe="fixture-a-share", start=date(2024, 1, 2), end=date(2024, 1, 2) + timedelta(days=59),
+        horizon=1, asset_type="stock", engine=engine,
+    )
+    assert recorded["status"] == "admitted"
+    assert recorded["reason"]["verdict"] == "admitted"
+    assert recorded["reason"]["failing_gate"] is None
+    assert [g["gate"] for g in recorded["reason"]["gate_trail"]] == [
+        "no_lookahead", "coverage", "no_label_leakage", "similarity_dedup", "train_ic", "val_ic",
+    ]
+    assert recorded["admission_verdict"]["verdict"] == "admitted"
+
+
+def test_record_candidate_admission_rejected_records_failing_gate_and_trail(
+    research_registry, research_repository
+) -> None:
+    from app.research.alpha_scoring import record_candidate_admission
+    from tests.research.conftest import StubBacktestEngine
+
+    digest = "e" * 64
+    run_id = _make_run(research_repository, run_id="run-reject")
+    revision = research_registry.create_exploratory_revision(
+        run_id=run_id, candidate_id="acand_reject", candidate_digest=digest,
+        canonical_expression="close", dsl_version=DSL_VERSION, fields=("close",), step=0,
+    )
+    # The 2-date fixture panel cannot clear the train_ic observation floor → clean rejection.
+    engine = StubBacktestEngine(_seed7_panel(2))
+    attempt = _attempt(run_id=run_id, candidate_id="acand_reject_rec", candidate_digest=digest, ordinal=2)
+
+    recorded = record_candidate_admission(
+        repo=research_repository, registry=research_registry,
+        attempt=attempt, revision=revision,
+        universe="fixture-a-share", start=date(2024, 1, 2), end=date(2024, 1, 3),
+        horizon=1, asset_type="stock", engine=engine,
+    )
+    assert recorded["status"] == "rejected"
+    assert recorded["reason"]["verdict"] == "rejected"
+    assert recorded["reason"]["failing_gate"]  # names the gate that rejected
+    assert recorded["reason"]["gate_trail"]  # full trail up to the failing gate
+
+
+def test_record_candidate_admission_chain_failure_records_failed_not_rejection(
+    research_registry, research_repository
+) -> None:
+    from app.research.alpha_scoring import record_candidate_admission
+    from tests.research.conftest import StubBacktestEngine
+
+    digest = "f" * 64
+    run_id = _make_run(research_repository, run_id="run-fail-chain")
+    revision = research_registry.create_exploratory_revision(
+        run_id=run_id, candidate_id="acand_fail", candidate_digest=digest,
+        canonical_expression="close", dsl_version=DSL_VERSION, fields=("close",), step=0,
+    )
+    # An empty governed panel → run_admission raises ValueError (no valid observations),
+    # which is a terminal `failed` outcome, never a clean rejection or a zero score.
+    engine = StubBacktestEngine(pl.DataFrame({"symbol": [], "date": [], "close": []}))
+    attempt = _attempt(run_id=run_id, candidate_id="acand_fail_rec", candidate_digest=digest, ordinal=2)
+
+    recorded = record_candidate_admission(
+        repo=research_repository, registry=research_registry,
+        attempt=attempt, revision=revision,
+        universe="fixture-a-share", start=date(2024, 1, 2), end=date(2024, 1, 3),
+        horizon=1, asset_type="stock", engine=engine,
+    )
+    assert recorded["status"] == "failed"
+    assert recorded["reason"]["verdict"] == "failed"
+    assert recorded["admission_verdict"] is None
+    assert recorded["reason"]["error"]
+
+
+def test_record_candidate_admission_links_verdict_to_ledger_by_revision(
+    research_registry, research_repository
+) -> None:
+    from app.research.admission import get_verdict
+    from app.research.alpha_scoring import record_candidate_admission
+    from tests.research.conftest import StubBacktestEngine
+    from datetime import timedelta
+
+    digest = "1" * 64
+    run_id = _make_run(research_repository, run_id="run-link")
+    revision = research_registry.create_exploratory_revision(
+        run_id=run_id, candidate_id="acand_link", candidate_digest=digest,
+        canonical_expression="close", dsl_version=DSL_VERSION, fields=("close",), step=0,
+    )
+    engine = StubBacktestEngine(_seed7_panel(60))
+    attempt = _attempt(run_id=run_id, candidate_id="acand_link_rec", candidate_digest=digest, ordinal=2)
+
+    recorded = record_candidate_admission(
+        repo=research_repository, registry=research_registry,
+        attempt=attempt, revision=revision,
+        universe="fixture-a-share", start=date(2024, 1, 2), end=date(2024, 1, 2) + timedelta(days=59),
+        horizon=1, asset_type="stock", engine=engine,
+    )
+    # The verdict row joins the candidate ledger via the exploratory revision id.
+    verdict = get_verdict(research_repository, revision.id)
+    assert verdict is not None
+    assert verdict["revision_id"] == revision.id
+    assert verdict["verdict"] == "admitted"
+    # The candidate attempt reason carries the same gate trail (the ledger side of the join).
+    assert recorded["run_id"] == run_id
+    assert recorded["candidate_digest"] == digest
+    assert recorded["reason"]["gate_trail"] == verdict["gates"]
