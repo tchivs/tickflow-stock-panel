@@ -147,33 +147,18 @@ async def _run_openai_once(
     max_tokens: int,
     timeout: float,
 ) -> str:
-    ai_key = secrets_store.get_ai_key()
-    if not ai_key:
-        raise RuntimeError("AI API Key 未配置, 请在设置页配置")
-
-    client = _openai_client(ai_key, timeout)
-    try:
-        resp = await client.chat.completions.create(
-            model=current_ai_model(),
-            messages=list(messages),
-            temperature=temperature,
-            # max_completion_tokens = 总输出预算(含推理),由模型自分配思考/回答。
-            # 对推理模型(deepseek-v4 等)传 max_tokens 会把全部预算留给思考,
-            # content 恒为空(vfing/one-api 类网关与 OpenAI 新语义一致)。
-            max_completion_tokens=max_tokens,
-            # 推理模型默认思考过久(vfing 网关 60s 上游超时 → 504)。
-            # low 档实测 22s 完成且 code 完整;非推理模型会忽略该参数。
-            reasoning_effort="low",
-        )
-    except Exception as exc:
-        if _is_openai_transport_error(exc):
-            raise RuntimeError(_format_openai_error(exc)) from exc
-        raise
-    finally:
-        await client.close()
-    if not resp.choices:
-        return ""
-    return (resp.choices[0].message.content or "").strip()
+    # 一律走流式:vfing 网关对非流式请求有 60s 上游硬超时,
+    # 推理模型(reasoning_effort=max)实测需 60~110s,非流式必 504;
+    # 流式模式下网关无此限制(实测 108s 完整返回)。
+    parts: list[str] = []
+    async for chunk in _stream_openai(
+        messages,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        timeout=timeout,
+    ):
+        parts.append(chunk)
+    return "".join(parts).strip()
 
 
 async def _stream_openai(
@@ -193,9 +178,13 @@ async def _stream_openai(
             model=current_ai_model(),
             messages=list(messages),
             temperature=temperature,
-            # 同 _run_openai_once:推理模型需 max_completion_tokens 语义
+            # max_completion_tokens = 总输出预算(含推理),由模型自分配思考/回答。
+            # 对推理模型(deepseek-v4 等)传 max_tokens 会把全部预算留给思考,
+            # content 恒为空(vfing/one-api 类网关与 OpenAI 新语义一致)。
             max_completion_tokens=max_tokens,
-            reasoning_effort="low",
+            # 思考等级 max:非流式下 60s 网关超时必 504,故上层全部流式化;
+            # max 档实测 108s 完整返回(代码不截断)。非推理模型忽略该参数。
+            reasoning_effort="max",
             stream=True,
         )
 

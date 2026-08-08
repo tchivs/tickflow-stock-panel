@@ -155,7 +155,7 @@ class ConfiguredFactorHypothesisGateway:
         if self.provider != ai_provider.OPENAI_COMPAT_PROVIDER or not self.model:
             raise HypothesisUnavailableError("configured hypothesis provider is unavailable")
         try:
-            return await self._generate_text(_messages(hypothesis, options), temperature=0, max_tokens=600, timeout=30)
+            return await self._generate_text(_messages(hypothesis, options), temperature=0, max_tokens=600, timeout=120)
         except Exception as error:  # Provider failures are an availability boundary, never a fallback draft.
             raise HypothesisUnavailableError("configured hypothesis provider is unavailable") from error
 

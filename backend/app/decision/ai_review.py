@@ -104,7 +104,7 @@ class ConfiguredAIReviewGateway:
     async def propose(self, baseline: dict[str, Any]) -> dict[str, Any]:
         if self.provider != ai_provider.OPENAI_COMPAT_PROVIDER or not self.model:
             raise RuntimeError("configured review provider is unavailable")
-        raw = await self._generate_text(_review_messages(baseline), temperature=0, max_tokens=600, timeout=30)
+        raw = await self._generate_text(_review_messages(baseline), temperature=0, max_tokens=600, timeout=120)
         try:
             return _typed_proposal(json.loads(raw))
         except (TypeError, ValueError, json.JSONDecodeError) as error:

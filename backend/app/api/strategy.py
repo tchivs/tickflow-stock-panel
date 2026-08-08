@@ -559,8 +559,8 @@ async def ai_test(request: Request):
         text = await generate_ai_text(
             [{"role": "user", "content": "Reply exactly: OK"}],
             temperature=0,
-            max_tokens=8,
-            timeout=15,
+            max_tokens=200,
+            timeout=120,
         )
         return {"ok": True, "model": current_ai_model() or current_ai_provider(), "response": text[:80]}
     except Exception as e:
