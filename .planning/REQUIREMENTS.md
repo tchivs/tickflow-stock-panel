@@ -23,8 +23,8 @@ Locked boundaries:
 ### Alpha Factory Contract and Determinism
 
 - [x] **AF-REQ-01**: A researcher can create an immutable factory run specification containing DSL/grammar/vocabulary versions, seed, expression limits, candidate budget, objective policy, universe, measured date range, fold geometry, costs, and code/data manifest; changing inputs creates a new run instead of mutating the original.
-- [ ] **AF-REQ-02**: Given the same frozen specification, seed, and governed input manifest, a replay produces the same canonical candidate expressions, candidate IDs/digests, order, statuses, and checksums.
-- [ ] **AF-REQ-03**: Every generated expression is parsed and validated before evaluation; unsupported fields/functions/operators, invalid arity or partition semantics, excessive depth/window, non-finite literals, and malformed expressions become explicit invalid candidate records with diagnostics.
+- [x] **AF-REQ-02**: Given the same frozen specification, seed, and governed input manifest, a replay produces the same canonical candidate expressions, candidate IDs/digests, order, statuses, and checksums.
+- [x] **AF-REQ-03**: Every generated expression is parsed and validated before evaluation; unsupported fields/functions/operators, invalid arity or partition semantics, excessive depth/window, non-finite literals, and malformed expressions become explicit invalid candidate records with diagnostics.
 - [x] **AF-REQ-04**: The run retains every attempted candidate, including invalid, duplicate, low-coverage, failed, rejected, and admitted outcomes, with parent/mutation lineage, seed/step, status, reason, and evidence references; the system never retains only the champion.
 - [ ] **AF-REQ-05**: Factory scoring, Agent-requested evaluation, admission, composite use, walk-forward folds, and later as-of serving all compute factor values through the existing governed `FactorSignalChain` and expose the panel/universe/source/warmup fingerprints used.
 - [ ] **AF-REQ-06**: A replay uses measured A-share trading dates and point-in-time membership; missing, suspended, non-finite, warmup, and source-quality states follow the declared policy, and current-constituent/full-lake substitution fails closed.
@@ -52,11 +52,11 @@ Locked boundaries:
 ### Research Workbench and Differentiators
 
 - [ ] **AF-REQ-18**: A researcher can inspect parent-to-child mutation/crossover lineage, canonical expression diffs, seed/step, and branch termination reasons, then replay one branch under the same frozen inputs.
-- [ ] **AF-REQ-19**: Search results show objective score together with structural similarity, field/operator overlap, factor-output/IC-series correlation, coverage, and fixed-policy diversity/redundancy outcomes; similar candidates remain inspectable rather than being silently merged.
+- [x] **AF-REQ-19**: Search results show objective score together with structural similarity, field/operator overlap, factor-output/IC-series correlation, coverage, and fixed-policy diversity/redundancy outcomes; similar candidates remain inspectable rather than being silently merged.
 - [ ] **AF-REQ-20**: A candidate family can be evaluated across declared rebalance, fee/slippage, calendar-regime, coverage, and symbol-subset stress cases, with the exact trial matrix and evidence recorded without changing primary admission thresholds.
 - [ ] **AF-REQ-21**: Stage 2 can identify missing assumptions, contradictory metrics, gate failures, narrow coverage, or redundancy and link each claim to candidate/evaluation/gate/artifact IDs; follow-up work is a bounded new run, never an unbounded autonomous loop.
 - [ ] **AF-REQ-22**: A completed run can be cloned into a new immutable specification while changing only declared dimensions; the UI shows field-level differences and parent/child links, and unchanged inputs retain their hashes.
-- [ ] **AF-REQ-23**: Candidate, wall-clock, memory, provider-call, retry, artifact, and worker budgets are enforced server-side; parallel workers may improve throughput but cannot change candidate order, score reduction, winner, or replay result.
+- [x] **AF-REQ-23**: Candidate, wall-clock, memory, provider-call, retry, artifact, and worker budgets are enforced server-side; parallel workers may improve throughput but cannot change candidate order, score reduction, winner, or replay result.
 - [ ] **AF-REQ-24**: Researchers can compare explicitly retained experiment snapshots and candidate families side by side, including configuration, evidence, provenance, gate status, and artifacts without an opaque hidden winner score.
 - [ ] **AF-REQ-25**: The workbench displays data date, provider/source, cache/degradation state, missing fields, membership coverage, and whether evidence is exploratory, selection-fold, selection-OOS, or final-blind; degraded results cannot look equivalent to clean completed results.
 - [ ] **AF-REQ-26**: Tests and operators can run an explicitly declared offline Agent fixture with known proposal and validation trace when no provider is configured; production paths never silently switch to the fixture, and the UI labels fixture evidence as non-production.
@@ -83,8 +83,8 @@ Locked boundaries:
 | REQ-ID | Phase | Status |
 |---|---:|---|
 | AF-REQ-01 | Phase 45 | Complete |
-| AF-REQ-02 | Phase 46 | Pending |
-| AF-REQ-03 | Phase 46 | Pending |
+| AF-REQ-02 | Phase 46 | Complete |
+| AF-REQ-03 | Phase 46 | Complete |
 | AF-REQ-04 | Phase 45 | Complete |
 | AF-REQ-05 | Phase 47 | Pending |
 | AF-REQ-06 | Phase 47 | Pending |
@@ -100,11 +100,11 @@ Locked boundaries:
 | AF-REQ-16 | Phase 45 | Complete |
 | AF-REQ-17 | Phase 49 | Pending |
 | AF-REQ-18 | Phase 50 | Pending |
-| AF-REQ-19 | Phase 46 | Pending |
+| AF-REQ-19 | Phase 46 | Complete |
 | AF-REQ-20 | Phase 50 | Pending |
 | AF-REQ-21 | Phase 48 | Pending |
 | AF-REQ-22 | Phase 50 | Pending |
-| AF-REQ-23 | Phase 46 | Pending |
+| AF-REQ-23 | Phase 46 | Complete |
 | AF-REQ-24 | Phase 50 | Pending |
 | AF-REQ-25 | Phase 50 | Pending |
 | AF-REQ-26 | Phase 48 | Pending |

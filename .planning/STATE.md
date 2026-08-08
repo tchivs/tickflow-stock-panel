@@ -2,18 +2,18 @@
 gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: 可回放 Alpha Factory 与 FactorResearchAgent
-current_phase: 46
-current_phase_name: Deterministic Alpha Factory Core
+current_phase: 47
+current_phase_name: Governed Scoring, Admission & Selection OOS
 status: planning
 stopped_at: Completed 45-04-PLAN.md
-last_updated: "2026-08-08T16:04:51.392Z"
+last_updated: "2026-08-08T18:19:51.056Z"
 last_activity: 2026-08-08
-last_activity_desc: Phase 45 complete, transitioned to Phase 46
+last_activity_desc: Phase 46 complete, transitioned to Phase 47
 progress:
   total_phases: 6
   completed_phases: 1
-  total_plans: 4
-  completed_plans: 4
+  total_plans: 9
+  completed_plans: 8
   percent: 17
 ---
 
@@ -28,10 +28,10 @@ See: .planning/PROJECT.md (updated 2026-08-06)
 
 ## Current Position
 
-Phase: 46 — Deterministic Alpha Factory Core
+Phase: 47 — Governed Scoring, Admission & Selection OOS
 Plan: Not started
 Status: Ready to plan
-Last activity: 2026-08-08 — Phase 45 complete, transitioned to Phase 46
+Last activity: 2026-08-08 — Phase 46 complete, transitioned to Phase 47
 
 ## v3.0 Phase Summary
 
