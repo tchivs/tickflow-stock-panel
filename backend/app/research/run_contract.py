@@ -16,8 +16,8 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Mapping
-from dataclasses import dataclass, field
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from hashlib import sha256
 from typing import Any
 
@@ -223,3 +223,132 @@ class AlphaRunEvent:
     artifact_id: str | None
     producer_version: str
     created_at: str
+
+MAX_INLINE_CHECKPOINT_BYTES = 16 * 1024
+CHECKPOINT_SCHEMA_VERSION = "alpha-checkpoint-v1"
+ARTIFACT_SCHEMA_VERSION = "alpha-artifact-v1"
+CANDIDATE_STATUSES: tuple[str, ...] = (
+    "invalid",
+    "duplicate",
+    "low_coverage",
+    "failed",
+    "rejected",
+    "admitted",
+    "cancelled",
+    "budget_exhausted",
+)
+
+
+def event_checksum(payload: object, idempotency_key: str, event_type: str) -> str:
+    """Lowercase SHA-256 over the canonical semantic identity of an event.
+
+    The checksum covers the canonical payload JSON, idempotency key, and event
+    type so that a repeated delivery of the *same* fact yields the same digest
+    while a key reused with a *different* fact conflicts (D-05, T-45-03).
+    """
+    return digest_bytes(
+        {"payload": payload, "idempotency_key": idempotency_key, "event_type": event_type}
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class AlphaArtifactReference:
+    """A content-addressed reference to one managed Alpha run artifact."""
+
+    artifact_id: str
+    run_id: str
+    logical_kind: str
+    relative_path: str
+    content_type: str
+    byte_size: int
+    checksum_sha256: str
+    schema_version: str
+    created_at: str
+
+    @property
+    def expected_relative_path(self) -> str:
+        """The exact server-derived content-addressed key for this artifact."""
+        return f"research_artifacts/alpha_runs/{self.run_id}/{self.checksum_sha256}.json"
+
+
+@dataclass(frozen=True, slots=True)
+class AlphaCandidateAttempt:
+    """Immutable projection of one append-only candidate attempt fact."""
+
+    id: str
+    run_id: str
+    attempt_ordinal: int
+    candidate_digest: str
+    canonical_expression: str
+    ast_signature: str
+    shape_signature: str
+    dsl_version: str
+    operation: str
+    seed: int
+    step: int
+    status: str
+    reason: Mapping[str, Any]
+    evidence_artifact_id: str | None
+    created_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class AlphaCandidateLineage:
+    """Immutable projection of one append-only parent/child lineage edge."""
+
+    id: str
+    run_id: str
+    child_attempt_id: str
+    parent_attempt_id: str
+    edge_ordinal: int
+    operation: str
+    created_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class AlphaRunCheckpoint:
+    """Immutable projection of one append-only recovery cursor fact."""
+
+    id: str
+    run_id: str
+    checkpoint_version: int
+    committed_event_seq: int
+    stage: str
+    snapshot_sha256: str
+    manifest_sha256: str
+    state_checksum: str
+    frontier_artifact_id: str | None
+    created_at: str
+
+
+def checkpoint_state_checksum(
+    *,
+    run_id: str,
+    checkpoint_version: int,
+    committed_event_seq: int,
+    stage: str,
+    snapshot_sha256: str,
+    manifest_sha256: str,
+    referenced_candidate_ids: Sequence[str],
+    inline_summary: Mapping[str, Any] | None,
+    frontier_artifact_id: str | None,
+) -> str:
+    """Lowercase SHA-256 over the canonical checkpoint cursor identity (D-07).
+
+    The checksum covers the run, version, committed sequence, stage, both
+    digests, the ordered referenced candidate IDs, the bounded inline summary,
+    and the optional frontier artifact reference.  A stale or tampered cursor
+    recomputes to a different digest and is rejected on recovery.
+    """
+    payload = {
+        "run_id": run_id,
+        "checkpoint_version": checkpoint_version,
+        "committed_event_seq": committed_event_seq,
+        "stage": stage,
+        "snapshot_sha256": snapshot_sha256,
+        "manifest_sha256": manifest_sha256,
+        "referenced_candidate_ids": list(referenced_candidate_ids),
+        "inline_summary": dict(inline_summary) if inline_summary is not None else {},
+        "frontier_artifact_id": frontier_artifact_id,
+    }
+    return digest_bytes(payload)

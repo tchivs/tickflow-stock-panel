@@ -11,6 +11,7 @@ artifact-root fixtures so timestamps and paths are reproducible.
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
@@ -447,3 +448,484 @@ class TestPreflightFailure:
         # No event was appended for the failed preflight.
         events = alpha_run_repository.list_run_events("arun_nonexistent")
         assert events == []
+
+
+# ================================================================
+# Task 45-02-01: Candidate attempts, lineage, event sequencing
+# ================================================================
+
+
+def _make_run(
+    repo: ResearchRepository,
+    clock: DeterministicClock,
+    *,
+    run_id: str = "run-cand-0",
+    idempotency_key: str = "idem-cand-0000000001",
+) -> dict:
+    """Create a queued run for candidate/event tests."""
+    snapshot = freeze_input_snapshot(
+        manifest=_sample_manifest(), created_at=clock.now_iso()
+    )
+    clock.advance()
+    return repo.create_alpha_run(
+        run_id=run_id,
+        principal="researcher@example.com",
+        idempotency_key=idempotency_key,
+        snapshot=snapshot,
+        event_id="aevt-" + run_id,
+    )
+
+
+def _candidate_params(
+    *,
+    run_id: str,
+    candidate_id: str,
+    ordinal: int,
+    status: str = "admitted",
+    digest: str | None = None,
+    seed: int = 42,
+    step: int = 1,
+) -> dict:
+    """Build valid candidate-attempt parameters."""
+    return {
+        "run_id": run_id,
+        "candidate_id": candidate_id,
+        "attempt_ordinal": ordinal,
+        "candidate_digest": digest or ("a" * 60 + f"{ordinal:04d}"),
+        "canonical_expression": f"rank(close) + {ordinal}",
+        "ast_signature": f"ast-{ordinal}",
+        "shape_signature": f"shape-{ordinal}",
+        "dsl_version": "factor-dsl-v1",
+        "operation": "generate",
+        "seed": seed,
+        "step": step,
+        "status": status,
+        "reason": {"note": f"candidate {ordinal}"},
+    }
+
+
+class TestCandidateAppendAndReadback:
+    def test_all_eight_outcomes_persist_with_ordinal_reason_and_lineage(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-8-out")
+        statuses = [
+            "invalid", "duplicate", "low_coverage", "failed",
+            "rejected", "admitted", "cancelled", "budget_exhausted",
+        ]
+        for idx, status in enumerate(statuses, start=1):
+            alpha_run_repository.append_candidate_attempt(
+                **_candidate_params(
+                    run_id=run["id"],
+                    candidate_id=f"cand-{idx}",
+                    ordinal=idx,
+                    status=status,
+                )
+            )
+        candidates = alpha_run_repository.list_candidates(run["id"])
+        assert len(candidates) == 8
+        assert [c["status"] for c in candidates] == statuses
+        assert [c["attempt_ordinal"] for c in candidates] == list(range(1, 9))
+        for c in candidates:
+            assert c["reason"] == {"note": f"candidate {c['attempt_ordinal']}"}
+            assert len(c["candidate_digest"]) == 64
+
+    def test_duplicate_expression_remains_two_rows_when_attempt_identity_differs(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-dup-expr")
+        same_digest = "d" * 64
+        alpha_run_repository.append_candidate_attempt(
+            **_candidate_params(
+                run_id=run["id"], candidate_id="cand-dup-1", ordinal=1,
+                status="admitted", digest=same_digest,
+            )
+        )
+        alpha_run_repository.append_candidate_attempt(
+            **_candidate_params(
+                run_id=run["id"], candidate_id="cand-dup-2", ordinal=2,
+                status="duplicate", digest=same_digest,
+            )
+        )
+        candidates = alpha_run_repository.list_candidates(run["id"])
+        assert len(candidates) == 2
+        # Same canonical digest, different attempt identity and status.
+        assert candidates[0]["candidate_digest"] == candidates[1]["candidate_digest"]
+        assert candidates[0]["id"] != candidates[1]["id"]
+        assert candidates[1]["status"] == "duplicate"
+
+    def test_invalid_candidate_does_not_change_run_status(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-inv")
+        alpha_run_repository.append_candidate_attempt(
+            **_candidate_params(
+                run_id=run["id"], candidate_id="cand-inv-1", ordinal=1,
+                status="invalid",
+            )
+        )
+        refreshed = alpha_run_repository.get_alpha_run(run["id"])
+        assert refreshed is not None
+        # An invalid candidate is distinct from run-level preflight_failed.
+        assert refreshed["status"] == "queued"
+
+    def test_duplicate_ordinal_rejected(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-ord")
+        alpha_run_repository.append_candidate_attempt(
+            **_candidate_params(
+                run_id=run["id"], candidate_id="cand-ord-1", ordinal=1,
+            )
+        )
+        import sqlite3
+        with pytest.raises(sqlite3.IntegrityError):
+            alpha_run_repository.append_candidate_attempt(
+                **_candidate_params(
+                    run_id=run["id"], candidate_id="cand-ord-1b", ordinal=1,
+                )
+            )
+
+    def test_bad_status_rejected(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-bad-st")
+        with pytest.raises(ValueError, match="status must be one of"):
+            alpha_run_repository.append_candidate_attempt(
+                **{
+                    **_candidate_params(
+                        run_id=run["id"], candidate_id="cand-bad", ordinal=1,
+                    ),
+                    "status": "champion",
+                }
+            )
+
+
+class TestCandidateLineage:
+    def test_lineage_edge_persists_same_run(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-lin")
+        alpha_run_repository.append_candidate_attempt(
+            **_candidate_params(run_id=run["id"], candidate_id="cand-par", ordinal=1)
+        )
+        alpha_run_repository.append_candidate_attempt(
+            **_candidate_params(run_id=run["id"], candidate_id="cand-chi", ordinal=2)
+        )
+        edge = alpha_run_repository.append_candidate_lineage(
+            run_id=run["id"],
+            lineage_id="lin-1",
+            child_attempt_id="cand-chi",
+            parent_attempt_id="cand-par",
+            edge_ordinal=0,
+            operation="mutation",
+        )
+        assert edge["child_attempt_id"] == "cand-chi"
+        assert edge["parent_attempt_id"] == "cand-par"
+
+    def test_cross_run_parent_rejected(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        run_a = _make_run(
+            alpha_run_repository, deterministic_clock,
+            run_id="run-lin-a", idempotency_key="idem-lin-a",
+        )
+        run_b = _make_run(
+            alpha_run_repository, deterministic_clock,
+            run_id="run-lin-b", idempotency_key="idem-lin-b",
+        )
+        alpha_run_repository.append_candidate_attempt(
+            **_candidate_params(run_id=run_a["id"], candidate_id="cand-a1", ordinal=1)
+        )
+        alpha_run_repository.append_candidate_attempt(
+            **_candidate_params(run_id=run_b["id"], candidate_id="cand-b1", ordinal=1)
+        )
+        with pytest.raises(ValueError, match="parent attempt does not belong to this run"):
+            alpha_run_repository.append_candidate_lineage(
+                run_id=run_a["id"],
+                lineage_id="lin-x",
+                child_attempt_id="cand-a1",
+                parent_attempt_id="cand-b1",
+                edge_ordinal=0,
+                operation="crossover",
+            )
+
+    def test_self_lineage_rejected(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-self")
+        alpha_run_repository.append_candidate_attempt(
+            **_candidate_params(run_id=run["id"], candidate_id="cand-self", ordinal=1)
+        )
+        with pytest.raises(ValueError, match="child and parent attempts must differ"):
+            alpha_run_repository.append_candidate_lineage(
+                run_id=run["id"],
+                lineage_id="lin-self",
+                child_attempt_id="cand-self",
+                parent_attempt_id="cand-self",
+                edge_ordinal=0,
+                operation="clone",
+            )
+
+
+class TestEventSequencingAndIdempotency:
+    def test_committed_sequences_are_contiguous(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-seq")
+        for i in range(1, 4):
+            alpha_run_repository.append_run_event(
+                run_id=run["id"],
+                event_id=f"evt-seq-{i}",
+                event_type="candidate_appended",
+                entity_kind="candidate",
+                entity_id=f"cand-{i}",
+                idempotency_key=f"evt-key-seq-{i}",
+                actor="service",
+                source="api",
+                payload={"ordinal": i},
+            )
+        events = alpha_run_repository.list_run_events(run["id"])
+        # run_created is seq 1, then 3 appends → seqs 2, 3, 4
+        seqs = [e["seq"] for e in events]
+        assert seqs == [1, 2, 3, 4]
+
+    def test_repeated_event_key_same_payload_returns_original_no_new_sequence(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-idem")
+        first = alpha_run_repository.append_run_event(
+            run_id=run["id"],
+            event_id="evt-idem-1",
+            event_type="candidate_appended",
+            entity_kind="candidate",
+            entity_id="cand-1",
+            idempotency_key="evt-key-idem",
+            actor="service",
+            source="api",
+            payload={"ordinal": 1},
+        )
+        second = alpha_run_repository.append_run_event(
+            run_id=run["id"],
+            event_id="evt-idem-1-dup",
+            event_type="candidate_appended",
+            entity_kind="candidate",
+            entity_id="cand-1",
+            idempotency_key="evt-key-idem",
+            actor="service",
+            source="api",
+            payload={"ordinal": 1},
+        )
+        assert first["id"] == second["id"] == "evt-idem-1"
+        events = alpha_run_repository.list_run_events(run["id"])
+        # Only one event for this key (plus run_created).
+        assert len(events) == 2
+
+    def test_repeated_event_key_changed_payload_raises_conflict(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-conf")
+        alpha_run_repository.append_run_event(
+            run_id=run["id"],
+            event_id="evt-conf-1",
+            event_type="candidate_appended",
+            entity_kind="candidate",
+            entity_id="cand-1",
+            idempotency_key="evt-key-conf",
+            actor="service",
+            source="api",
+            payload={"ordinal": 1},
+        )
+        original_events = alpha_run_repository.list_run_events(run["id"])
+        with pytest.raises(AlphaRunConflictError):
+            alpha_run_repository.append_run_event(
+                run_id=run["id"],
+                event_id="evt-conf-2",
+                event_type="candidate_appended",
+                entity_kind="candidate",
+                entity_id="cand-1",
+                idempotency_key="evt-key-conf",
+                actor="service",
+                source="api",
+                payload={"ordinal": 999},
+            )
+        # No row or cursor changed.
+        after_events = alpha_run_repository.list_run_events(run["id"])
+        assert len(after_events) == len(original_events)
+
+    def test_event_envelope_contains_all_d05_fields(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-env")
+        alpha_run_repository.append_run_event(
+            run_id=run["id"],
+            event_id="evt-env-1",
+            event_type="candidate_appended",
+            entity_kind="candidate",
+            entity_id="cand-env",
+            idempotency_key="evt-key-env",
+            actor="worker",
+            source="adapter",
+            payload={"bounded": "summary"},
+        )
+        events = alpha_run_repository.list_run_events(run["id"])
+        evt = next(e for e in events if e["id"] == "evt-env-1")
+        for field in (
+            "occurred_at", "event_type", "entity_kind", "entity_id",
+            "actor", "source", "payload", "payload_checksum",
+            "producer_version", "seq", "idempotency_key",
+        ):
+            assert field in evt
+        assert evt["producer_version"] == PRODUCER_VERSION
+        assert evt["actor"] == "worker"
+        assert evt["source"] == "adapter"
+        assert evt["payload"] == {"bounded": "summary"}
+
+
+class TestAppendOnlyImmutability:
+    def test_candidate_attempt_update_and_delete_blocked(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        import sqlite3
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-immut")
+        alpha_run_repository.append_candidate_attempt(
+            **_candidate_params(run_id=run["id"], candidate_id="cand-immut", ordinal=1)
+        )
+        with alpha_run_repository._connection() as connection:
+            with pytest.raises(sqlite3.IntegrityError):
+                connection.execute(
+                    "UPDATE research_alpha_candidate_attempts SET status = 'admitted' "
+                    "WHERE id = 'cand-immut'"
+                )
+            with pytest.raises(sqlite3.IntegrityError):
+                connection.execute(
+                    "DELETE FROM research_alpha_candidate_attempts WHERE id = 'cand-immut'"
+                )
+
+    def test_lineage_update_and_delete_blocked(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        import sqlite3
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-immut-l")
+        alpha_run_repository.append_candidate_attempt(
+            **_candidate_params(run_id=run["id"], candidate_id="cand-lp", ordinal=1)
+        )
+        alpha_run_repository.append_candidate_attempt(
+            **_candidate_params(run_id=run["id"], candidate_id="cand-lc", ordinal=2)
+        )
+        alpha_run_repository.append_candidate_lineage(
+            run_id=run["id"], lineage_id="lin-immut",
+            child_attempt_id="cand-lc", parent_attempt_id="cand-lp",
+            edge_ordinal=0, operation="mutation",
+        )
+        with alpha_run_repository._connection() as connection:
+            with pytest.raises(sqlite3.IntegrityError):
+                connection.execute(
+                    "UPDATE research_alpha_candidate_lineage SET operation = 'x' "
+                    "WHERE id = 'lin-immut'"
+                )
+            with pytest.raises(sqlite3.IntegrityError):
+                connection.execute(
+                    "DELETE FROM research_alpha_candidate_lineage WHERE id = 'lin-immut'"
+                )
+
+
+class TestPrincipalScoping:
+    def test_candidate_read_cross_principal_returns_empty(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-pc")
+        alpha_run_repository.append_candidate_attempt(
+            **_candidate_params(run_id=run["id"], candidate_id="cand-pc", ordinal=1)
+        )
+        # Cross-principal read: same empty boundary as unknown run.
+        cross = alpha_run_repository.list_candidates(
+            run["id"], principal="other@example.com"
+        )
+        assert cross == []
+        unknown = alpha_run_repository.list_candidates("run-nonexistent")
+        assert unknown == []
+
+    def test_event_read_cross_principal_returns_empty(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-pc-evt")
+        # Cross-principal: no event existence leak.
+        cross = alpha_run_repository.list_run_events(
+            run["id"], principal="other@example.com"
+        )
+        assert cross == []
+
+    def test_no_event_existence_leak_for_unknown_run(
+        self,
+        alpha_run_repository: ResearchRepository,
+    ) -> None:
+        # An unknown run and a cross-principal run both return [] — no leak.
+        assert alpha_run_repository.list_run_events("no-such-run", principal="x") == []
+
+
+class TestCommitBeforePublish:
+    def test_publisher_exception_does_not_erase_committed_event(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        from app.research.run_service import ResearchRunService, RunEventPublisher
+
+        class FailingPublisher:
+            def on_run_created(self, run: Mapping[str, object]) -> None:
+                raise RuntimeError("publisher exploded")
+
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-pub")
+        service = ResearchRunService(
+            alpha_run_repository, publisher=FailingPublisher()
+        )
+        # The append succeeds; publisher failure is swallowed.
+        event = service.append_event(
+            run_id=run["id"],
+            principal="researcher@example.com",
+            event_type="candidate_appended",
+            entity_kind="candidate",
+            entity_id="cand-pub",
+            idempotency_key="evt-pub-1",
+            actor="service",
+            source="api",
+            payload={"ordinal": 1},
+        )
+        assert event is not None
+        # The event is durable despite the publisher exception.
+        events = alpha_run_repository.list_run_events(run["id"])
+        ids = [e["id"] for e in events]
+        assert event["id"] in ids

@@ -1581,14 +1581,31 @@ class ResearchRepository:
             return self._alpha_run_row(connection, run_id)
 
     def list_run_events(
-        self, run_id: str, *, after_seq: int = 0, limit: int = 500
+        self,
+        run_id: str,
+        *,
+        after_seq: int = 0,
+        limit: int = 500,
+        principal: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Return append-only events for ``run_id`` in sequence order."""
+        """Return append-only events for ``run_id`` in sequence order.
+
+        When ``principal`` is supplied, the run is first scoped to that
+        principal so cross-principal reads return the same empty boundary as an
+        unknown run (T-45-12).
+        """
         if not isinstance(after_seq, int) or after_seq < 0:
             raise ValueError("after_seq must be a non-negative integer")
         if not isinstance(limit, int) or limit < 1:
             raise ValueError("limit must be a positive integer")
         with self._connection() as connection:
+            if principal is not None:
+                owned = connection.execute(
+                    "SELECT 1 FROM research_alpha_runs WHERE id = ? AND principal = ?",
+                    (run_id, principal),
+                ).fetchone()
+                if owned is None:
+                    return []
             rows = connection.execute(
                 """SELECT * FROM research_alpha_events
                     WHERE run_id = ? AND seq > ?
@@ -1611,6 +1628,434 @@ class ResearchRepository:
         record = dict(row)
         record["snapshot"] = json.loads(record.pop("snapshot_json"))
         record["manifest"] = json.loads(record.pop("manifest_json"))
+        return record
+
+    # ----------------------------------------------------------------
+    # Append-only candidate / lineage / event / artifact / checkpoint
+    # ----------------------------------------------------------------
+
+    def append_run_event(
+        self,
+        *,
+        run_id: str,
+        event_id: str,
+        event_type: str,
+        entity_kind: str,
+        entity_id: str,
+        idempotency_key: str,
+        actor: str,
+        source: str,
+        payload: Mapping[str, Any],
+        artifact_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Append one lifecycle event with a server-allocated contiguous sequence.
+
+        Sequence allocation uses ``BEGIN IMMEDIATE`` over the run cursor's
+        ``last_event_seq + 1`` (not an unlocked ``MAX(seq)``) so concurrent
+        appends cannot create a gap or duplicate sequence (D-05, T-45-03).
+        Idempotency is enforced on ``(run_id, idempotency_key)``: a repeat with
+        the same semantic checksum returns the original event; a repeat with a
+        changed checksum raises ``AlphaRunConflictError``.
+        """
+        from app.research.run_contract import event_checksum
+
+        if not isinstance(run_id, str) or not run_id:
+            raise ValueError("run_id is required")
+        if not isinstance(event_id, str) or not event_id:
+            raise ValueError("event_id is required")
+        if not isinstance(event_type, str) or not event_type:
+            raise ValueError("event_type is required")
+        if not isinstance(idempotency_key, str) or not idempotency_key:
+            raise ValueError("idempotency_key is required")
+        payload_json = _json(payload, "event payload")
+        expected_checksum = event_checksum(payload, idempotency_key, event_type)
+
+        with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                existing = connection.execute(
+                    "SELECT * FROM research_alpha_events "
+                    "WHERE run_id = ? AND idempotency_key = ?",
+                    (run_id, idempotency_key),
+                ).fetchone()
+                if existing is not None:
+                    if existing["payload_checksum"] != expected_checksum:
+                        raise AlphaRunConflictError(
+                            "event idempotency key reused with a different canonical payload"
+                        )
+                    return self._alpha_event_dict(existing)
+
+                run = connection.execute(
+                    "SELECT last_event_seq FROM research_alpha_runs WHERE id = ?",
+                    (run_id,),
+                ).fetchone()
+                if run is None:
+                    raise ValueError("run does not exist")
+                next_seq = int(run["last_event_seq"]) + 1
+                occurred_at = self._now()
+                try:
+                    connection.execute(
+                        """INSERT INTO research_alpha_events (
+                               id, run_id, seq, event_type, entity_kind, entity_id,
+                               occurred_at, idempotency_key, actor, source,
+                               payload_json, payload_checksum, artifact_id,
+                               producer_version, created_at
+                           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (
+                            event_id,
+                            run_id,
+                            next_seq,
+                            event_type,
+                            entity_kind,
+                            entity_id,
+                            occurred_at,
+                            idempotency_key,
+                            actor,
+                            source,
+                            payload_json,
+                            expected_checksum,
+                            artifact_id,
+                            PRODUCER_VERSION,
+                            occurred_at,
+                        ),
+                    )
+                except sqlite3.IntegrityError as error:
+                    if "UNIQUE" in str(error).upper():
+                        # A competing append won the sequence or key; fail closed.
+                        raise AlphaRunConflictError(
+                            "concurrent event append conflict"
+                        ) from error
+                    raise
+                connection.execute(
+                    "UPDATE research_alpha_runs SET last_event_seq = ? WHERE id = ?",
+                    (next_seq, run_id),
+                )
+                row = connection.execute(
+                    "SELECT * FROM research_alpha_events WHERE id = ?", (event_id,)
+                ).fetchone()
+                connection.execute("COMMIT")
+            except BaseException:
+                if connection.in_transaction:
+                    connection.execute("ROLLBACK")
+                raise
+        assert row is not None
+        return self._alpha_event_dict(row)
+
+    def append_candidate_attempt(
+        self,
+        *,
+        run_id: str,
+        candidate_id: str,
+        attempt_ordinal: int,
+        candidate_digest: str,
+        canonical_expression: str,
+        ast_signature: str,
+        shape_signature: str,
+        dsl_version: str,
+        operation: str,
+        seed: int,
+        step: int,
+        status: str,
+        reason: Mapping[str, Any],
+        evidence_artifact_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Append one candidate-attempt fact (one row per attempt, never deduped).
+
+        Every outcome — invalid, duplicate, low_coverage, failed, rejected,
+        admitted, cancelled, budget_exhausted — is a durable fact with its own
+        ordinal.  No ``INSERT OR IGNORE`` or expression-uniqueness rule erases a
+        duplicate attempt (AF-REQ-04, D-05).  An ``invalid`` candidate is
+        distinct from run-level ``preflight_failed``.
+        """
+        from app.research.run_contract import CANDIDATE_STATUSES
+
+        if not isinstance(run_id, str) or not run_id:
+            raise ValueError("run_id is required")
+        if not isinstance(candidate_id, str) or not candidate_id:
+            raise ValueError("candidate_id is required")
+        if not isinstance(attempt_ordinal, int) or attempt_ordinal <= 0:
+            raise ValueError("attempt_ordinal must be a positive integer")
+        _wf_sha256(candidate_digest, "candidate_digest")
+        if status not in CANDIDATE_STATUSES:
+            raise ValueError(f"status must be one of {CANDIDATE_STATUSES}")
+        reason_json = _json(reason, "candidate reason")
+        occurred_at = self._now()
+
+        with self._connection() as connection, connection:
+            connection.execute(
+                """INSERT INTO research_alpha_candidate_attempts (
+                       id, run_id, attempt_ordinal, candidate_digest,
+                       canonical_expression, ast_signature, shape_signature,
+                       dsl_version, operation, seed, step, status, reason_json,
+                       evidence_artifact_id, created_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    candidate_id,
+                    run_id,
+                    attempt_ordinal,
+                    candidate_digest,
+                    canonical_expression,
+                    ast_signature,
+                    shape_signature,
+                    dsl_version,
+                    operation,
+                    seed,
+                    step,
+                    status,
+                    reason_json,
+                    evidence_artifact_id,
+                    occurred_at,
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM research_alpha_candidate_attempts WHERE id = ?",
+                (candidate_id,),
+            ).fetchone()
+        assert row is not None
+        return self._candidate_dict(row)
+
+    def append_candidate_lineage(
+        self,
+        *,
+        run_id: str,
+        lineage_id: str,
+        child_attempt_id: str,
+        parent_attempt_id: str,
+        edge_ordinal: int,
+        operation: str,
+    ) -> dict[str, Any]:
+        """Append one parent/child lineage edge, FK-bound and same-run validated.
+
+        Both the child and parent attempts must belong to ``run_id``; a
+        cross-run parent is rejected (T-45-02).
+        """
+        if not isinstance(run_id, str) or not run_id:
+            raise ValueError("run_id is required")
+        if not isinstance(lineage_id, str) or not lineage_id:
+            raise ValueError("lineage_id is required")
+        if child_attempt_id == parent_attempt_id:
+            raise ValueError("child and parent attempts must differ")
+        if not isinstance(edge_ordinal, int) or edge_ordinal < 0:
+            raise ValueError("edge_ordinal must be a non-negative integer")
+        occurred_at = self._now()
+        with self._connection() as connection, connection:
+            child = connection.execute(
+                "SELECT run_id FROM research_alpha_candidate_attempts WHERE id = ?",
+                (child_attempt_id,),
+            ).fetchone()
+            if child is None or child["run_id"] != run_id:
+                raise ValueError("child attempt does not belong to this run")
+            parent = connection.execute(
+                "SELECT run_id FROM research_alpha_candidate_attempts WHERE id = ?",
+                (parent_attempt_id,),
+            ).fetchone()
+            if parent is None or parent["run_id"] != run_id:
+                raise ValueError("parent attempt does not belong to this run")
+            connection.execute(
+                """INSERT INTO research_alpha_candidate_lineage (
+                       id, run_id, child_attempt_id, parent_attempt_id,
+                       edge_ordinal, operation, created_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    lineage_id,
+                    run_id,
+                    child_attempt_id,
+                    parent_attempt_id,
+                    edge_ordinal,
+                    operation,
+                    occurred_at,
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM research_alpha_candidate_lineage WHERE id = ?",
+                (lineage_id,),
+            ).fetchone()
+        assert row is not None
+        return dict(row)
+
+    def list_candidates(
+        self,
+        run_id: str,
+        *,
+        after_ordinal: int = 0,
+        limit: int = 500,
+        principal: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return candidate attempts for ``run_id`` in ordinal order.
+
+        Principal-scoped: a non-matching principal returns the same empty
+        boundary as an unknown run (T-45-12).
+        """
+        if not isinstance(after_ordinal, int) or after_ordinal < 0:
+            raise ValueError("after_ordinal must be a non-negative integer")
+        if not isinstance(limit, int) or limit < 1:
+            raise ValueError("limit must be a positive integer")
+        with self._connection() as connection:
+            if principal is not None:
+                owned = connection.execute(
+                    "SELECT 1 FROM research_alpha_runs WHERE id = ? AND principal = ?",
+                    (run_id, principal),
+                ).fetchone()
+                if owned is None:
+                    return []
+            rows = connection.execute(
+                """SELECT * FROM research_alpha_candidate_attempts
+                    WHERE run_id = ? AND attempt_ordinal > ?
+                    ORDER BY attempt_ordinal, id LIMIT ?""",
+                (run_id, after_ordinal, limit),
+            ).fetchall()
+        return [self._candidate_dict(row) for row in rows]
+
+    def append_artifact(
+        self,
+        *,
+        run_id: str,
+        artifact_id: str,
+        logical_kind: str,
+        relative_path: str,
+        content_type: str,
+        byte_size: int,
+        checksum_sha256: str,
+    ) -> dict[str, Any]:
+        """Append one content-addressed artifact reference fact.
+
+        The ``relative_path`` must exactly match the server-derived key
+        ``research_artifacts/alpha_runs/{run_id}/{checksum_sha256}.json``;
+        clients cannot supply or alter the path (D-03, T-45-04).
+        """
+        from app.research.run_contract import ARTIFACT_SCHEMA_VERSION
+
+        if not isinstance(run_id, str) or not run_id:
+            raise ValueError("run_id is required")
+        if not isinstance(artifact_id, str) or not artifact_id:
+            raise ValueError("artifact_id is required")
+        if not isinstance(logical_kind, str) or not logical_kind:
+            raise ValueError("logical_kind is required")
+        _wf_sha256(checksum_sha256, "checksum_sha256")
+        expected_path = f"research_artifacts/alpha_runs/{run_id}/{checksum_sha256}.json"
+        if relative_path != expected_path:
+            raise ValueError(
+                "relative_path must be the server-derived content-addressed key"
+            )
+        if not isinstance(byte_size, int) or byte_size < 0:
+            raise ValueError("byte_size must be a non-negative integer")
+        occurred_at = self._now()
+        with self._connection() as connection, connection:
+            connection.execute(
+                """INSERT INTO research_alpha_artifacts (
+                       id, run_id, logical_kind, relative_path, content_type,
+                       byte_size, checksum_sha256, schema_version, created_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    artifact_id,
+                    run_id,
+                    logical_kind,
+                    relative_path,
+                    content_type,
+                    byte_size,
+                    checksum_sha256,
+                    ARTIFACT_SCHEMA_VERSION,
+                    occurred_at,
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM research_alpha_artifacts WHERE id = ?", (artifact_id,)
+            ).fetchone()
+        assert row is not None
+        return dict(row)
+
+    def append_checkpoint(
+        self,
+        *,
+        run_id: str,
+        checkpoint_id: str,
+        checkpoint_version: int,
+        committed_event_seq: int,
+        stage: str,
+        snapshot_sha256: str,
+        manifest_sha256: str,
+        state_checksum: str,
+        frontier_artifact_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Append one bounded recovery checkpoint cursor fact.
+
+        The caller (service) must verify all referenced event/candidate/artifact
+        facts and the snapshot/manifest digest binding *before* calling this;
+        the repository enforces FK and uniqueness, but the semantic
+        fail-closed validation lives in the service so the contract is testable
+        independently (D-07, T-45-05).
+        """
+        if not isinstance(run_id, str) or not run_id:
+            raise ValueError("run_id is required")
+        if not isinstance(checkpoint_id, str) or not checkpoint_id:
+            raise ValueError("checkpoint_id is required")
+        if not isinstance(checkpoint_version, int) or checkpoint_version <= 0:
+            raise ValueError("checkpoint_version must be a positive integer")
+        _wf_sha256(snapshot_sha256, "snapshot_sha256")
+        _wf_sha256(manifest_sha256, "manifest_sha256")
+        _wf_sha256(state_checksum, "state_checksum")
+        occurred_at = self._now()
+        with self._connection() as connection, connection:
+            connection.execute(
+                """INSERT INTO research_alpha_checkpoints (
+                       id, run_id, checkpoint_version, committed_event_seq,
+                       stage, snapshot_sha256, manifest_sha256, state_checksum,
+                       frontier_artifact_id, created_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    checkpoint_id,
+                    run_id,
+                    checkpoint_version,
+                    committed_event_seq,
+                    stage,
+                    snapshot_sha256,
+                    manifest_sha256,
+                    state_checksum,
+                    frontier_artifact_id,
+                    occurred_at,
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM research_alpha_checkpoints WHERE id = ?",
+                (checkpoint_id,),
+            ).fetchone()
+        assert row is not None
+        return dict(row)
+
+    def get_latest_valid_checkpoint(
+        self,
+        run_id: str,
+        *,
+        principal: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Return the highest-version checkpoint for ``run_id`` (read-only).
+
+        Principal-scoped: a non-matching principal returns ``None``, the same
+        boundary as an unknown run (T-45-12).  Semantic validation (snapshot /
+        manifest digest match, contiguous event sequence, referenced candidate
+        existence, artifact verification, cursor checksum) is performed by the
+        service before advancing work; this read returns the raw cursor row.
+        """
+        with self._connection() as connection:
+            if principal is not None:
+                owned = connection.execute(
+                    "SELECT 1 FROM research_alpha_runs WHERE id = ? AND principal = ?",
+                    (run_id, principal),
+                ).fetchone()
+                if owned is None:
+                    return None
+            row = connection.execute(
+                """SELECT * FROM research_alpha_checkpoints
+                    WHERE run_id = ?
+                    ORDER BY checkpoint_version DESC LIMIT 1""",
+                (run_id,),
+            ).fetchone()
+        return None if row is None else dict(row)
+
+    @staticmethod
+    def _candidate_dict(row: sqlite3.Row) -> dict[str, Any]:
+        record = dict(row)
+        record["reason"] = json.loads(record.pop("reason_json"))
         return record
 
     @staticmethod
