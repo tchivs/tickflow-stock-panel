@@ -17,7 +17,7 @@
 
 ## Phases
 
-- [ ] **Phase 45: Durable Governed Run Contract** - Freeze immutable run/input snapshots and establish the append-only candidate, event, checkpoint, lifecycle, and idempotency foundation.
+- [x] **Phase 45: Durable Governed Run Contract** - Freeze immutable run/input snapshots and establish the append-only candidate, event, checkpoint, lifecycle, and idempotency foundation. (completed 2026-08-08)
 - [ ] **Phase 46: Deterministic Alpha Factory Core** - Generate only restricted canonical candidates with versioned vocabulary, lineage, bounded budgets, and stable replay order.
 - [ ] **Phase 47: Governed Scoring, Admission & Selection OOS** - Score candidates through the shared chain, retain evidence and gate trails, stress cost/robustness, and consume reserved selection OOS exactly once.
 - [ ] **Phase 48: FactorResearchAgent Two-Stage Workflow** - Add deterministic preflight, strict Stage 1/Stage 2 contracts, provider failure traces, bounded retry, cancellation, and checkpointed orchestration.
@@ -45,7 +45,7 @@
 
 **Explicit non-goals**: No factory grammar/evolution search, fold scoring, Agent provider call, promotion, UI workbench, broker/order path, or strategy-specific `advanced_*` tables in this phase.
 
-**Plans:** 4/4 plans executed
+**Plans:** 4/4 plans complete
 
 Plans:
 **Wave 1**
@@ -177,7 +177,7 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 45. Durable Governed Run Contract | 4/4 | In Progress|  |
+| 45. Durable Governed Run Contract | 4/4 | Complete    | 2026-08-08 |
 | 46. Deterministic Alpha Factory Core | 0/TBD | Not started | - |
 | 47. Governed Scoring, Admission & Selection OOS | 0/TBD | Not started | - |
 | 48. FactorResearchAgent Two-Stage Workflow | 0/TBD | Not started | - |

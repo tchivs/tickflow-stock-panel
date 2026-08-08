@@ -22,10 +22,10 @@ Locked boundaries:
 
 ### Alpha Factory Contract and Determinism
 
-- [ ] **AF-REQ-01**: A researcher can create an immutable factory run specification containing DSL/grammar/vocabulary versions, seed, expression limits, candidate budget, objective policy, universe, measured date range, fold geometry, costs, and code/data manifest; changing inputs creates a new run instead of mutating the original.
+- [x] **AF-REQ-01**: A researcher can create an immutable factory run specification containing DSL/grammar/vocabulary versions, seed, expression limits, candidate budget, objective policy, universe, measured date range, fold geometry, costs, and code/data manifest; changing inputs creates a new run instead of mutating the original.
 - [ ] **AF-REQ-02**: Given the same frozen specification, seed, and governed input manifest, a replay produces the same canonical candidate expressions, candidate IDs/digests, order, statuses, and checksums.
 - [ ] **AF-REQ-03**: Every generated expression is parsed and validated before evaluation; unsupported fields/functions/operators, invalid arity or partition semantics, excessive depth/window, non-finite literals, and malformed expressions become explicit invalid candidate records with diagnostics.
-- [ ] **AF-REQ-04**: The run retains every attempted candidate, including invalid, duplicate, low-coverage, failed, rejected, and admitted outcomes, with parent/mutation lineage, seed/step, status, reason, and evidence references; the system never retains only the champion.
+- [x] **AF-REQ-04**: The run retains every attempted candidate, including invalid, duplicate, low-coverage, failed, rejected, and admitted outcomes, with parent/mutation lineage, seed/step, status, reason, and evidence references; the system never retains only the champion.
 - [ ] **AF-REQ-05**: Factory scoring, Agent-requested evaluation, admission, composite use, walk-forward folds, and later as-of serving all compute factor values through the existing governed `FactorSignalChain` and expose the panel/universe/source/warmup fingerprints used.
 - [ ] **AF-REQ-06**: A replay uses measured A-share trading dates and point-in-time membership; missing, suspended, non-finite, warmup, and source-quality states follow the declared policy, and current-constituent/full-lake substitution fails closed.
 
@@ -82,10 +82,10 @@ Locked boundaries:
 
 | REQ-ID | Phase | Status |
 |---|---:|---|
-| AF-REQ-01 | Phase 45 | Pending |
+| AF-REQ-01 | Phase 45 | Complete |
 | AF-REQ-02 | Phase 46 | Pending |
 | AF-REQ-03 | Phase 46 | Pending |
-| AF-REQ-04 | Phase 45 | Pending |
+| AF-REQ-04 | Phase 45 | Complete |
 | AF-REQ-05 | Phase 47 | Pending |
 | AF-REQ-06 | Phase 47 | Pending |
 | AF-REQ-07 | Phase 47 | Pending |

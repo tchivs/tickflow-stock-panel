@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: 可回放 Alpha Factory 与 FactorResearchAgent
-current_phase: 45
-current_phase_name: Durable Governed Run Contract
-status: verifying
+current_phase: 46
+current_phase_name: Deterministic Alpha Factory Core
+status: planning
 stopped_at: Completed 45-04-PLAN.md
-last_updated: "2026-08-08T15:31:44.336Z"
+last_updated: "2026-08-08T16:04:51.392Z"
 last_activity: 2026-08-08
-last_activity_desc: Phase 45 execution started
+last_activity_desc: Phase 45 complete, transitioned to Phase 46
 progress:
   total_phases: 6
   completed_phases: 1
@@ -28,10 +28,10 @@ See: .planning/PROJECT.md (updated 2026-08-06)
 
 ## Current Position
 
-Phase: 45 (Durable Governed Run Contract) — EXECUTING
-Plan: 4 of 4
-Status: Phase complete — ready for verification
-Last activity: 2026-08-08 — Phase 45 execution started
+Phase: 46 — Deterministic Alpha Factory Core
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-08-08 — Phase 45 complete, transitioned to Phase 46
 
 ## v3.0 Phase Summary
 
