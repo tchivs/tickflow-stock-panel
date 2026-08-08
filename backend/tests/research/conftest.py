@@ -114,3 +114,61 @@ def research_repository(tmp_path: Path) -> ResearchRepository:
 @pytest.fixture
 def research_registry(research_repository: ResearchRepository) -> FactorRegistry:
     return FactorRegistry(research_repository)
+
+
+class DeterministicClock:
+    """A controllable monotonic clock for reproducible Alpha run timestamps.
+
+    Phase 45 run/event rows carry ``occurred_at`` / ``created_at`` timestamps.
+    Using a deterministic clock makes snapshot/event ordering and digest
+    assertions reproducible across runs.
+    """
+
+    def __init__(self, start: str = "2026-08-08T00:00:00+00:00") -> None:
+        from datetime import datetime
+
+        self._moment = datetime.fromisoformat(start)
+
+    def now_iso(self) -> str:
+        return self._moment.isoformat()
+
+    def advance(self, *, seconds: int = 0) -> str:
+        from datetime import timedelta
+
+        self._moment = self._moment + timedelta(seconds=seconds if seconds > 0 else 1)
+        return self.now_iso()
+
+
+@pytest.fixture
+def deterministic_clock() -> DeterministicClock:
+    """A reproducible clock injected into the Phase 45 repository/service seam."""
+    return DeterministicClock()
+
+
+@pytest.fixture
+def alpha_artifact_root(tmp_path: Path) -> Path:
+    """A temporary application-owned artifact root for ``research_artifacts/alpha_runs``.
+
+    The run service writes content-addressed evidence below this root only; the
+    fixture guarantees the path is clean per test and rejects paths outside the
+    ``alpha_runs/{run_id}/`` namespace.
+    """
+    root = tmp_path / "alpha_artifacts"
+    root.mkdir(parents=True, exist_ok=False)
+    return root
+
+
+@pytest.fixture
+def alpha_run_repository(
+    tmp_path: Path,
+    deterministic_clock: DeterministicClock,
+    alpha_artifact_root: Path,
+) -> ResearchRepository:
+    """A migrated ResearchRepository wired with a deterministic clock and artifact root."""
+    repository = ResearchRepository(
+        tmp_path / "operational.db",
+        clock=deterministic_clock,
+        artifact_root=alpha_artifact_root,
+    )
+    repository.migrate()
+    return repository

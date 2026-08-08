@@ -12,11 +12,12 @@ import uuid
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime
+from hashlib import sha256
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 from app.operational.migrations import migrate_operational_db
-
+from app.research.run_contract import PRODUCER_VERSION
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
@@ -71,11 +72,31 @@ def _as_iso(value: object) -> str:
     return iso[:10] if len(iso) > 10 else iso
 
 
+class AlphaClock:
+    """Minimal protocol for an injectable deterministic clock."""
+
+    def now_iso(self) -> str: ...
+
+
 class ResearchRepository:
     """Parameterized, short-lived SQLite access for immutable research metadata."""
 
-    def __init__(self, database_path: Path) -> None:
+    def __init__(
+        self,
+        database_path: Path,
+        *,
+        clock: "AlphaClock | None" = None,
+        artifact_root: Path | None = None,
+    ) -> None:
         self.database_path = Path(database_path)
+        self._clock = clock
+        self._artifact_root = Path(artifact_root) if artifact_root is not None else None
+
+    def _now(self) -> str:
+        """Resolve the current timestamp from the injected clock or wall clock."""
+        if self._clock is not None:
+            return self._clock.now_iso()
+        return _now()
 
     @contextmanager
     def _connection(self) -> Iterator[sqlite3.Connection]:
@@ -1384,3 +1405,226 @@ class ResearchRepository:
             )
             for row in rows
         ]  # type: ignore[list-item]
+
+    # ================================================================
+    # Phase 45: durable governed Alpha run contract
+    # ================================================================
+
+    def create_alpha_run(
+        self,
+        *,
+        run_id: str,
+        principal: str,
+        idempotency_key: str,
+        snapshot: "ResearchInputSnapshot",
+        event_id: str,
+        retry_of_run_id: str | None = None,
+        retry_attempt: int = 0,
+    ) -> dict[str, Any]:
+        """Atomically insert the frozen snapshot, run row, and ``run_created`` event.
+
+        This is the single create transaction: the snapshot (if new), the run
+        row with ``queued`` status, and sequence-1 ``run_created`` event commit
+        together.  Idempotency is enforced on ``(principal, idempotency_key)``:
+        a repeat with the same snapshot digest returns the original run; a
+        repeat with a different digest raises ``AlphaRunConflictError``.
+        """
+        from app.research.run_contract import ResearchInputSnapshot, validate_sha256
+
+        if not isinstance(snapshot, ResearchInputSnapshot):
+            raise ValueError("snapshot must be a frozen ResearchInputSnapshot")
+        if not isinstance(run_id, str) or not run_id:
+            raise ValueError("run_id is required")
+        if not isinstance(principal, str) or not principal:
+            raise ValueError("principal is required")
+        if not isinstance(idempotency_key, str) or not idempotency_key:
+            raise ValueError("idempotency_key is required")
+        validate_sha256(snapshot.snapshot_sha256, "snapshot snapshot_sha256")
+        validate_sha256(snapshot.manifest_sha256, "snapshot manifest_sha256")
+
+        storage = snapshot.as_storage_record()
+        snapshot_id = "snap_" + snapshot.snapshot_sha256[:24]
+        occurred_at = self._now()
+        payload = {"status": "queued", "snapshot_sha256": snapshot.snapshot_sha256}
+        payload_json = _json(payload, "run_created payload")
+        payload_checksum = sha256(payload_json.encode("utf-8")).hexdigest()
+
+        with self._connection() as connection:
+            # Idempotency check BEFORE the write transaction.
+            existing = connection.execute(
+                "SELECT id, snapshot_sha256 FROM research_alpha_runs "
+                "WHERE principal = ? AND idempotency_key = ?",
+                (principal, idempotency_key),
+            ).fetchone()
+            if existing is not None:
+                if existing["snapshot_sha256"] != snapshot.snapshot_sha256:
+                    raise AlphaRunConflictError(
+                        "idempotency key reused with a different canonical input"
+                    )
+                # Same key + same digest: return the original run (no second event).
+                return self._alpha_run_row(connection, existing["id"])  # type: ignore[return-value]
+
+            with connection:
+                # Insert snapshot if new (UNIQUE snapshot_sha256).
+                try:
+                    connection.execute(
+                        """INSERT INTO research_alpha_input_snapshots (
+                               id, schema_version, snapshot_json, snapshot_sha256,
+                               manifest_json, manifest_sha256, dsl_version,
+                               grammar_fingerprint, vocabulary_fingerprint,
+                               policy_version, policy_digest, data_fingerprint,
+                               partition_fingerprint, membership_fingerprint,
+                               code_fingerprint, build_fingerprint,
+                               dependency_fingerprint, created_at
+                           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (
+                            snapshot_id,
+                            storage["schema_version"],
+                            storage["snapshot_json"],
+                            storage["snapshot_sha256"],
+                            storage["manifest_json"],
+                            storage["manifest_sha256"],
+                            storage["dsl_version"],
+                            storage["grammar_fingerprint"],
+                            storage["vocabulary_fingerprint"],
+                            storage["policy_version"],
+                            storage["policy_digest"],
+                            storage["data_fingerprint"],
+                            storage["partition_fingerprint"],
+                            storage["membership_fingerprint"],
+                            storage["code_fingerprint"],
+                            storage["build_fingerprint"],
+                            storage["dependency_fingerprint"],
+                            storage["created_at"],
+                        ),
+                    )
+                except sqlite3.IntegrityError as error:
+                    if "UNIQUE" not in str(error).upper() and "snapshot_sha256" not in str(error):
+                        raise
+                    # Snapshot digest already exists — reuse it (immutable fact).
+
+                try:
+                    connection.execute(
+                        """INSERT INTO research_alpha_runs (
+                               id, principal, idempotency_key, snapshot_id,
+                               snapshot_sha256, manifest_sha256, status,
+                               transition_version, last_event_seq,
+                               candidate_attempts_total, candidate_attempts_completed,
+                               folds_total, folds_completed, started_at, finished_at,
+                               terminal_reason, retry_of_run_id, retry_attempt, created_at
+                           ) VALUES (?, ?, ?, ?, ?, ?, 'queued', 0, 0, 0, 0, 0, 0, NULL, NULL, NULL, ?, ?, ?)""",
+                        (
+                            run_id,
+                            principal,
+                            idempotency_key,
+                            snapshot_id,
+                            snapshot.snapshot_sha256,
+                            snapshot.manifest_sha256,
+                            retry_of_run_id,
+                            retry_attempt,
+                            occurred_at,
+                        ),
+                    )
+                except sqlite3.IntegrityError as error:
+                    raise AlphaRunConflictError(
+                        "a run already exists for this principal and idempotency key"
+                    ) from error
+
+                connection.execute(
+                    """INSERT INTO research_alpha_events (
+                           id, run_id, seq, event_type, entity_kind, entity_id,
+                           occurred_at, idempotency_key, actor, source,
+                           payload_json, payload_checksum, artifact_id,
+                           producer_version, created_at
+                       ) VALUES (?, ?, 1, 'run_created', 'run', ?, ?, ?, 'service', 'api', ?, ?, NULL, ?, ?)""",
+                    (
+                        event_id,
+                        run_id,
+                        run_id,
+                        occurred_at,
+                        idempotency_key,
+                        payload_json,
+                        payload_checksum,
+                        PRODUCER_VERSION,
+                        occurred_at,
+                    ),
+                )
+                # Advance the guarded cursor: last_event_seq = 1.
+                connection.execute(
+                    """UPDATE research_alpha_runs
+                          SET last_event_seq = 1, transition_version = 1
+                        WHERE id = ?""",
+                    (run_id,),
+                )
+                row = self._alpha_run_row(connection, run_id)
+        assert row is not None
+        return row
+
+    def get_alpha_run(self, run_id: str, *, principal: str | None = None) -> dict[str, Any] | None:
+        """Return one run row scoped to ``principal`` (or unscoped when None).
+
+        Principal scoping is applied as a predicate so cross-principal reads
+        return the same ``None`` boundary as an unknown run (T-45-12).
+        """
+        with self._connection() as connection:
+            if principal is not None:
+                row = connection.execute(
+                    "SELECT * FROM research_alpha_runs WHERE id = ? AND principal = ?",
+                    (run_id, principal),
+                ).fetchone()
+            else:
+                row = connection.execute(
+                    "SELECT * FROM research_alpha_runs WHERE id = ?", (run_id,)
+                ).fetchone()
+            if row is None:
+                return None
+            return self._alpha_run_row(connection, run_id)
+
+    def list_run_events(
+        self, run_id: str, *, after_seq: int = 0, limit: int = 500
+    ) -> list[dict[str, Any]]:
+        """Return append-only events for ``run_id`` in sequence order."""
+        if not isinstance(after_seq, int) or after_seq < 0:
+            raise ValueError("after_seq must be a non-negative integer")
+        if not isinstance(limit, int) or limit < 1:
+            raise ValueError("limit must be a positive integer")
+        with self._connection() as connection:
+            rows = connection.execute(
+                """SELECT * FROM research_alpha_events
+                    WHERE run_id = ? AND seq > ?
+                    ORDER BY seq, id LIMIT ?""",
+                (run_id, after_seq, limit),
+            ).fetchall()
+        return [self._alpha_event_dict(row) for row in rows]
+
+    def get_run_snapshot(self, run_id: str) -> dict[str, Any] | None:
+        """Return the frozen input snapshot bound to ``run_id`` (read-only)."""
+        with self._connection() as connection:
+            row = connection.execute(
+                """SELECT snap.* FROM research_alpha_input_snapshots AS snap
+                     JOIN research_alpha_runs AS run ON run.snapshot_id = snap.id
+                    WHERE run.id = ?""",
+                (run_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        record = dict(row)
+        record["snapshot"] = json.loads(record.pop("snapshot_json"))
+        record["manifest"] = json.loads(record.pop("manifest_json"))
+        return record
+
+    @staticmethod
+    def _alpha_event_dict(row: sqlite3.Row) -> dict[str, Any]:
+        record = dict(row)
+        record["payload"] = json.loads(record.pop("payload_json"))
+        return record
+
+    def _alpha_run_row(self, connection: sqlite3.Connection, run_id: str) -> dict[str, Any] | None:
+        row = connection.execute(
+            "SELECT * FROM research_alpha_runs WHERE id = ?", (run_id,)
+        ).fetchone()
+        return None if row is None else dict(row)
+
+
+class AlphaRunConflictError(ValueError):
+    """A create/retry idempotency key conflicts with a different canonical input."""
