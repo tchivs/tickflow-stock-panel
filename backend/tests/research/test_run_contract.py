@@ -2451,3 +2451,49 @@ class TestReviewFixInvariants:
         service.append_event(run_id=run["id"], principal="researcher@example.com", event_type="stage", entity_kind="run", entity_id=run["id"], idempotency_key="page-event", actor="worker", source="worker", payload={"ok": True})
         page = service.replay(run["id"], principal="researcher@example.com", after_seq=0, limit=1)
         assert page is not None and page["truncated"] is True and page["next_sequence"] == 1
+
+    def test_service_checkpoint_append_is_the_validated_write_path(
+        self, alpha_run_repository: ResearchRepository, deterministic_clock: DeterministicClock
+    ) -> None:
+        from app.research.run_contract import checkpoint_state_checksum
+        from app.research.run_service import ResearchRunService
+
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-checkpoint-seam")
+        checkpoint = {
+            "id": "checkpoint-seam-1", "checkpoint_version": 1, "committed_event_seq": 1,
+            "stage": "search", "snapshot_sha256": run["snapshot_sha256"],
+            "manifest_sha256": run["manifest_sha256"], "frontier_artifact_id": None,
+        }
+        checkpoint["state_checksum"] = checkpoint_state_checksum(
+            run_id=run["id"], checkpoint_version=1, committed_event_seq=1, stage="search",
+            snapshot_sha256=run["snapshot_sha256"], manifest_sha256=run["manifest_sha256"],
+            referenced_candidate_ids=[], inline_summary=None, frontier_artifact_id=None,
+        )
+        persisted = ResearchRunService(alpha_run_repository).append_checkpoint(
+            run_id=run["id"], principal="researcher@example.com", checkpoint=checkpoint
+        )
+        assert persisted["id"] == checkpoint["id"]
+
+    def test_event_diagnostics_and_candidate_cursor_are_bounded(
+        self, alpha_run_repository: ResearchRepository, deterministic_clock: DeterministicClock
+    ) -> None:
+        from app.research.run_service import ResearchRunService
+
+        run = _make_run(alpha_run_repository, deterministic_clock, run_id="run-event-bound")
+        service = ResearchRunService(alpha_run_repository)
+        with pytest.raises(ValueError, match="oversized|string|bound"):
+            service.append_event(
+                run_id=run["id"], principal="researcher@example.com", event_type="diagnostic",
+                entity_kind="run", entity_id=run["id"], idempotency_key="event-bound-000000",
+                actor="worker", source="worker", payload={"detail": "x" * 5000},
+            )
+        for ordinal in (1, 2):
+            alpha_run_repository.append_candidate_attempt(
+                run_id=run["id"], candidate_id=f"cursor-candidate-{ordinal}", attempt_ordinal=ordinal,
+                candidate_digest=("a" * 63) + str(ordinal), canonical_expression="close",
+                ast_signature="ast", shape_signature="shape", dsl_version="v1", operation="generate",
+                seed=1, step=ordinal, status="failed", reason={"code": "failed"},
+            )
+        assert [row["attempt_ordinal"] for row in service.list_candidates(
+            run["id"], principal="researcher@example.com", after_ordinal=1
+        )] == [2]
