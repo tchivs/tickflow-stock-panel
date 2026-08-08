@@ -111,3 +111,78 @@ class AlphaRunReplayDTO(StrictAlphaModel):
     run: AlphaRunReadDTO
     snapshot: AlphaSnapshotDTO | None
     events: list[AlphaRunEventDTO]
+
+
+class AlphaRunRetryRequest(StrictAlphaModel):
+    """Bounded retry intent — server creates a linked child run (D-07).
+
+    The client supplies intent only; the server freezes a fresh snapshot and
+    derives the child run ID.  ``snapshot_sha256`` and other authority fields
+    are rejected (T-45-10).
+    """
+
+    idempotency_key: str = Field(min_length=16, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
+    manifest: dict[str, Any] = Field(min_length=1, max_length=64)
+
+    @field_validator("manifest")
+    @classmethod
+    def _manifest_keys_are_bounded(cls, value: dict[str, Any]) -> dict[str, Any]:
+        if any(not isinstance(key, str) or not 1 <= len(key) <= 64 for key in value):
+            raise ValueError("manifest keys must be bounded strings")
+        return value
+
+
+class AlphaRunCancelRequest(StrictAlphaModel):
+    """Bounded cancel intent — server owns status and event sequence (D-07)."""
+
+    expected_version: int = Field(ge=0)
+    idempotency_key: str | None = Field(default=None, min_length=16, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
+
+
+class AlphaProgressUpdateRequest(StrictAlphaModel):
+    """Bounded worker progress update — token/version fenced (D-10, D-11).
+
+    Every counter is optional and must be a non-negative integer.  The attempt
+    token is required; it is validated against the persisted SHA-256 digest and
+    never returned in projections.
+    """
+
+    expected_version: int = Field(ge=0)
+    attempt_token: str = Field(min_length=16, max_length=256)
+    candidate_attempts_total: int | None = Field(default=None, ge=0)
+    candidate_attempts_completed: int | None = Field(default=None, ge=0)
+    folds_total: int | None = Field(default=None, ge=0)
+    folds_completed: int | None = Field(default=None, ge=0)
+
+
+class AlphaCandidateDTO(StrictAlphaModel):
+    """Safe public candidate-attempt projection — no reason internals or paths."""
+
+    id: str
+    attempt_ordinal: int
+    candidate_digest: str = Field(pattern=_MANIFEST_SHA256)
+    canonical_expression: str
+    dsl_version: str
+    operation: str
+    seed: int
+    step: int
+    status: Literal[
+        "invalid",
+        "duplicate",
+        "low_coverage",
+        "failed",
+        "rejected",
+        "admitted",
+        "cancelled",
+        "budget_exhausted",
+    ]
+    created_at: str
+
+
+class AlphaProgressDTO(StrictAlphaModel):
+    """Safe public progress projection — four bounded counters, no token/principal."""
+
+    candidate_attempts_total: int
+    candidate_attempts_completed: int
+    folds_total: int
+    folds_completed: int

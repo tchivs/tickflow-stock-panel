@@ -392,6 +392,42 @@ class ResearchRunService:
             )
         return result
 
+    def list_events(
+        self,
+        run_id: str,
+        *,
+        principal: str,
+        after_seq: int = 0,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        """Return bounded, ordered event history scoped to ``principal`` (D-09).
+
+        Cross-principal reads return the same empty boundary as an unknown run
+        (T-45-12).  The repository enforces principal-scoped ownership before
+        reading any event row.
+        """
+        return self._repository.list_run_events(
+            run_id, after_seq=after_seq, limit=limit, principal=principal
+        )
+
+    def list_candidates(
+        self,
+        run_id: str,
+        *,
+        principal: str,
+        after_ordinal: int = 0,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        """Return bounded, ordered candidate-attempt history scoped to ``principal``.
+
+        Every attempted candidate — including invalid, duplicate, failed, and
+        rejected outcomes — is retained in ordinal order (AF-REQ-04).
+        Cross-principal reads return the same empty boundary as an unknown run.
+        """
+        return self._repository.list_candidates(
+            run_id, after_ordinal=after_ordinal, limit=limit, principal=principal
+        )
+
     def append_event(
         self,
         *,

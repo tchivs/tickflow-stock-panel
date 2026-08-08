@@ -85,6 +85,31 @@ def replay(record: Mapping[str, Any]) -> dict[str, object]:
         "events": [event(evt) for evt in record.get("events", [])],
     }
 
+def candidate(record: Mapping[str, Any]) -> dict[str, object]:
+    """Expose one candidate-attempt without reason internals or evidence paths."""
+    return {
+        "id": str(record["id"]),
+        "attempt_ordinal": int(record["attempt_ordinal"]),
+        "candidate_digest": str(record["candidate_digest"]),
+        "canonical_expression": str(record["canonical_expression"]),
+        "dsl_version": str(record["dsl_version"]),
+        "operation": str(record["operation"]),
+        "seed": int(record["seed"]),
+        "step": int(record["step"]),
+        "status": str(record["status"]),
+        "created_at": str(record["created_at"]),
+    }
+
+
+def progress(record: Mapping[str, Any]) -> dict[str, object]:
+    """Expose the four bounded progress counters without token or principal."""
+    return {
+        "candidate_attempts_total": int(record["candidate_attempts_total"]),
+        "candidate_attempts_completed": int(record["candidate_attempts_completed"]),
+        "folds_total": int(record["folds_total"]),
+        "folds_completed": int(record["folds_completed"]),
+    }
+
 
 def _optional_text(value: object) -> str | None:
     if value is None:
