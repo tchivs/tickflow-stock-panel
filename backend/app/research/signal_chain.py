@@ -25,6 +25,7 @@ import polars as pl
 from app.backtest.engine import BacktestEngine, PanelCache
 from app.research.factor_dsl import parse_factor
 from app.research.factor_registry import FactorRegistry
+from app.research.run_contract import digest_bytes
 
 RebalanceCadence: TypeAlias = Literal["daily", "weekly", "monthly"]
 MissingDataTreatment: TypeAlias = Literal["drop"]
@@ -62,6 +63,7 @@ class FactorSignalFrame:
     frame: pl.DataFrame
     loaded_panel: pl.DataFrame
     required_source_fields: tuple[str, ...]
+    declared_fingerprints: Mapping[str, str]
 
 
 def _symbols_fingerprint(symbols: frozenset[str]) -> str:
@@ -173,14 +175,23 @@ class FactorSignalChain:
         frame = frame.select(["symbol", "date", "_factor", "_forward_return", "_rank", "_zscore"])
 
         resolved_universe = self._resolved_universe(config, membership, pre_filter_counts)
+        panel_fingerprint = self._panel_fingerprint(loaded)
         return FactorSignalFrame(
             revision_id=revision.id,
             dsl_version=revision.dsl_version,
-            panel_fingerprint=self._panel_fingerprint(loaded),
+            panel_fingerprint=panel_fingerprint,
             resolved_universe=resolved_universe,
             frame=frame,
             loaded_panel=loaded,
             required_source_fields=tuple(required),
+            declared_fingerprints=self._declared_fingerprints(
+                panel_fingerprint=panel_fingerprint,
+                resolved_universe=resolved_universe,
+                config=config,
+                required=required,
+                pre_filter_counts=pre_filter_counts,
+                revision=revision,
+            ),
         )
 
     @staticmethod
@@ -299,6 +310,56 @@ class FactorSignalChain:
         ).encode("utf-8")
         return sha256(payload).hexdigest()
 
+    @staticmethod
+    def _declared_fingerprints(
+        *,
+        panel_fingerprint: str,
+        resolved_universe: Mapping[str, Any],
+        config: SignalChainConfig,
+        required: list[str],
+        pre_filter_counts: Mapping[str, Mapping[str, int]],
+        revision: Any,
+    ) -> dict[str, str]:
+        """Consolidated declared-fingerprint block (AF-REQ-05 SC1).
+
+        Six deterministic lowercase SHA-256 digests over stable sorted-key
+        canonical payloads: ``panel`` and ``membership`` reuse the existing
+        fingerprints (no recomputation); ``source_field`` captures the
+        expression's read set; ``warmup`` captures the warmup window and
+        exclusion policy; ``missing_data`` captures the missing-data policy and
+        per-date finite/total counts; ``signal`` captures the canonical
+        expression, DSL version, and rebalance cadence.
+
+        Note (W4): the ``missing_data`` shape is ``{total, finite}`` per date in
+        wave 1; Phase 47-02 enriches ``pre_filter_counts`` with named per-state
+        counts, which intentionally changes this digest.
+        """
+        return {
+            "panel": panel_fingerprint,
+            "membership": str(resolved_universe.get("membership_fingerprint", "")),
+            "source_field": digest_bytes({"required_source_fields": sorted(required)}),
+            "warmup": digest_bytes(
+                {
+                    "warmup_days": config.warmup_days,
+                    "warmup_treatment": config.warmup_treatment,
+                    "load_start_delta_days": config.warmup_days,
+                }
+            ),
+            "missing_data": digest_bytes(
+                {
+                    "missing_data_treatment": config.missing_data_treatment,
+                    "pre_filter_counts": dict(pre_filter_counts),
+                }
+            ),
+            "signal": digest_bytes(
+                {
+                    "canonical_expression": revision.canonical_expression,
+                    "dsl_version": revision.dsl_version,
+                    "rebalance": config.rebalance,
+                }
+            ),
+        }
+
     def _resolved_universe(
         self,
         config: SignalChainConfig,
@@ -344,14 +405,24 @@ class FactorSignalChain:
                 pl.lit(None, dtype=pl.Float64).alias("_zscore"),
             ]
         )
+        resolved_universe = self._resolved_universe(config, membership, {})
+        panel_fingerprint = self._panel_fingerprint(panel)
         return FactorSignalFrame(
             revision_id=revision.id,
             dsl_version=revision.dsl_version,
-            panel_fingerprint=self._panel_fingerprint(panel),
+            panel_fingerprint=panel_fingerprint,
             # IN-08: preserve the resolved membership (and an empty pre-filter
             # count map — no rows survived) instead of discarding it.
-            resolved_universe=self._resolved_universe(config, membership, {}),
+            resolved_universe=resolved_universe,
             frame=frame,
             loaded_panel=panel,
             required_source_fields=tuple(required),
+            declared_fingerprints=self._declared_fingerprints(
+                panel_fingerprint=panel_fingerprint,
+                resolved_universe=resolved_universe,
+                config=config,
+                required=required,
+                pre_filter_counts={},
+                revision=revision,
+            ),
         )
