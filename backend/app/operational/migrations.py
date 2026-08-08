@@ -2220,6 +2220,80 @@ MIGRATIONS: tuple[str, ...] = (
         BEFORE DELETE ON research_alpha_fold_evidence
         BEGIN SELECT RAISE(ABORT, 'alpha fold evidence is append-only'); END;
     """,
+    """
+    -- Phase 47-04: selection_oos candidate-status rebuild (AF-REQ-09 SC5). The
+    -- reserved fold receives exactly one selection-OOS evaluation for the
+    -- deterministically selected winner; that outcome is labeled
+    -- 'selection_oos' (the explicit non-goal rules out a separate
+    -- blind-final holdout, ROADMAP.md:106). SQLite CHECK constraints
+    -- are immutable, so the candidate table is rebuilt with the expanded status
+    -- enum following the Phase 46 rebuild pattern (CREATE _v2 -> INSERT -> DROP
+    -- -> RENAME). Every row, ordinal, digest, and status survives unchanged;
+    -- the two append-only triggers, the same-run artifact guard, and the
+    -- cross-table lineage same-run trigger (which references this table in its
+    -- WHEN clause) are all recreated on the rebuilt table. The lineage trigger
+    -- must be dropped before the table rebuild because SQLite eagerly recompiles
+    -- dependent triggers on schema change and aborts when the referenced table
+    -- is transiently absent.
+    PRAGMA foreign_keys = OFF;
+    DROP TRIGGER IF EXISTS research_alpha_lineage_same_run;
+    CREATE TABLE research_alpha_candidate_attempts_v2 (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL REFERENCES research_alpha_runs(id) ON DELETE RESTRICT,
+        attempt_ordinal INTEGER NOT NULL CHECK (attempt_ordinal > 0),
+        candidate_digest TEXT NOT NULL CHECK (length(candidate_digest) = 64),
+        canonical_expression TEXT NOT NULL,
+        ast_signature TEXT NOT NULL,
+        shape_signature TEXT NOT NULL,
+        dsl_version TEXT NOT NULL,
+        operation TEXT NOT NULL,
+        seed INTEGER NOT NULL CHECK (seed >= 0),
+        step INTEGER NOT NULL CHECK (step >= 0),
+        status TEXT NOT NULL CHECK (status IN (
+            'invalid', 'duplicate', 'low_coverage', 'generated', 'failed',
+            'rejected', 'admitted', 'cancelled', 'budget_exhausted',
+            'selection_oos'
+        )),
+        reason_json TEXT NOT NULL,
+        evidence_artifact_id TEXT REFERENCES research_alpha_artifacts(id) ON DELETE RESTRICT,
+        created_at TEXT NOT NULL,
+        UNIQUE (run_id, attempt_ordinal)
+    );
+    INSERT INTO research_alpha_candidate_attempts_v2
+        (id, run_id, attempt_ordinal, candidate_digest, canonical_expression,
+         ast_signature, shape_signature, dsl_version, operation, seed, step,
+         status, reason_json, evidence_artifact_id, created_at)
+    SELECT id, run_id, attempt_ordinal, candidate_digest, canonical_expression,
+         ast_signature, shape_signature, dsl_version, operation, seed, step,
+         status, reason_json, evidence_artifact_id, created_at
+    FROM research_alpha_candidate_attempts;
+    DROP TABLE research_alpha_candidate_attempts;
+    ALTER TABLE research_alpha_candidate_attempts_v2 RENAME TO research_alpha_candidate_attempts;
+    CREATE INDEX idx_research_alpha_candidates_run ON research_alpha_candidate_attempts(run_id, attempt_ordinal);
+    CREATE TRIGGER research_alpha_candidates_no_update BEFORE UPDATE ON research_alpha_candidate_attempts
+        BEGIN SELECT RAISE(ABORT, 'alpha candidate attempts are append-only'); END;
+    CREATE TRIGGER research_alpha_candidates_no_delete BEFORE DELETE ON research_alpha_candidate_attempts
+        BEGIN SELECT RAISE(ABORT, 'alpha candidate attempts are append-only'); END;
+    CREATE TRIGGER research_alpha_candidates_artifact_same_run
+        BEFORE INSERT ON research_alpha_candidate_attempts
+        FOR EACH ROW WHEN NEW.evidence_artifact_id IS NOT NULL AND NOT EXISTS (
+            SELECT 1 FROM research_alpha_artifacts
+            WHERE id = NEW.evidence_artifact_id AND run_id = NEW.run_id
+        )
+        BEGIN SELECT RAISE(ABORT, 'candidate artifact must belong to candidate run'); END;
+    CREATE TRIGGER research_alpha_lineage_same_run
+        BEFORE INSERT ON research_alpha_candidate_lineage
+        FOR EACH ROW WHEN NOT EXISTS (
+            SELECT 1 FROM research_alpha_candidate_attempts AS child
+            JOIN research_alpha_candidate_attempts AS parent
+              ON parent.id = NEW.parent_attempt_id
+            WHERE child.id = NEW.child_attempt_id
+              AND child.run_id = NEW.run_id
+              AND parent.run_id = NEW.run_id
+        )
+        BEGIN SELECT RAISE(ABORT, 'candidate lineage references must share a run'); END;
+    PRAGMA foreign_keys = ON;
+    """,
 )
 
 

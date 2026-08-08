@@ -411,6 +411,7 @@ CANDIDATE_STATUSES: tuple[str, ...] = (
     "admitted",
     "cancelled",
     "budget_exhausted",
+    "selection_oos",
 )
 
 

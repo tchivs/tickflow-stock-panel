@@ -1261,6 +1261,50 @@ class ResearchRepository:
             {"declared_fingerprints_json": "declared_fingerprints", "stats_json": "stats"},
         )  # type: ignore[return-value]
 
+    def list_alpha_fold_evidence(
+        self,
+        *,
+        run_id: str,
+        candidate_digest: str | None = None,
+        is_oos: bool | None = None,
+        limit: int = 100_000,
+    ) -> list[dict[str, Any]]:
+        """Return candidate-keyed fold evidence rows for a run (selection + audit).
+
+        ``select_winner`` (47-04) loads every selection-fold (``is_oos=0``) row for
+        a run to reduce each candidate to its objective score. Optional filters
+        narrow by candidate and OOS flag. Rows are append-only facts; this is a
+        cache-only read, mirroring ``list_wf_folds`` (no re-validation).
+        """
+        if not isinstance(run_id, str) or not run_id:
+            raise ValueError("run_id is required")
+        if not isinstance(limit, int) or limit < 1:
+            raise ValueError("limit must be a positive integer")
+        clauses = ["run_id = ?"]
+        params: list[Any] = [run_id]
+        if candidate_digest is not None:
+            _wf_sha256(candidate_digest, "candidate_digest")
+            clauses.append("candidate_digest = ?")
+            params.append(candidate_digest)
+        if is_oos is not None:
+            clauses.append("is_oos = ?")
+            params.append(int(bool(is_oos)))
+        params.append(limit)
+        with self._connection() as connection:
+            rows = connection.execute(
+                f"""SELECT * FROM research_alpha_fold_evidence
+                    WHERE {' AND '.join(clauses)}
+                    ORDER BY candidate_digest, fold_index LIMIT ?""",
+                params,
+            ).fetchall()
+        return [
+            _unpack_json(
+                row,
+                {"declared_fingerprints_json": "declared_fingerprints", "stats_json": "stats"},
+            )
+            for row in rows
+        ]  # type: ignore[list-item]
+
     def record_wf_search(self, **fields: Any) -> dict[str, Any]:
         """Append one OOS-scored search run with multiple-comparison bookkeeping.
 

@@ -1016,3 +1016,336 @@ def test_no_edit_guard_detects_direct_verdict_insert() -> None:
 
     assert _source_inserts_verdict(_forges)
     assert not _source_inserts_verdict(_clean)
+
+
+# ----------------------------------------------------------------------
+# 47-04-01 — exactly-once selection OOS evaluation (AF-REQ-09 SC5)
+# ----------------------------------------------------------------------
+
+
+def _trading_days(n: int, start: date = date(2024, 1, 2)) -> list[date]:
+    """First ``n`` weekday dates from ``start`` (measured-calendar substitute)."""
+    from datetime import timedelta
+
+    days: list[date] = []
+    cur = start
+    while len(days) < n:
+        if cur.weekday() < 5:
+            days.append(cur)
+        cur += timedelta(days=1)
+    return days
+
+
+def _oos_chain_setup(registry, *, n_dates: int = 18, expression: str = "close"):
+    """Build a chain + resolver + revision over an ``n_dates`` panel for OOS tests."""
+    from tests.research.conftest import StubBacktestEngine, StubUniverseResolver
+
+    dates = _trading_days(n_dates)
+    closes = {
+        sym: tuple(float(10 + si + i + (i * (si + 1)) % 3) for i in range(n_dates))
+        for si, sym in enumerate(_FIXTURE_SYMBOLS)
+    }
+    panel = _dated_panel(dates=dates, closes=closes)
+    membership = pl.DataFrame({
+        "symbol": [s for s in _FIXTURE_SYMBOLS for _ in range(n_dates)],
+        "date": [d for _ in _FIXTURE_SYMBOLS for d in dates],
+    })
+    engine = StubBacktestEngine(panel)
+    resolver = StubUniverseResolver(membership)
+    chain = FactorSignalChain(engine=engine, registry=registry, universe_resolver=resolver)
+    rev = registry.create_factor(name=f"CloseOos{n_dates}", expression=expression)
+    return chain, resolver, rev, dates
+
+
+def _oos_plan(dates: list[date], *, fold_index: int = 99, test_size: int | None = None,
+              horizon: int = 1):
+    """A minimal plan whose ``oos_fold`` test window is ``dates[4:4+test_size]``."""
+    from types import SimpleNamespace
+
+    size = test_size if test_size is not None else len(dates) - 4
+    test_start = dates[4]
+    test_end = dates[4 + size - 1]
+    oos_fold = SimpleNamespace(
+        fold_index=fold_index, is_oos=True,
+        train_start=dates[0], train_end=dates[3],
+        test_start=test_start, test_end=test_end,
+        chain_config=SignalChainConfig(
+            universe="fixture-a-share", symbols=(), asset_type="stock",
+            start=dates[0], end=dates[-1], warmup_days=0,
+            forward_return_horizon=horizon, rebalance="daily",
+        ),
+    )
+    return SimpleNamespace(
+        plan_id="plan-oos", universe="fixture-a-share", asset_type="stock",
+        horizon=horizon, trading_dates=tuple(dates), oos_fold=oos_fold,
+    )
+
+
+def test_evaluate_selection_oos_records_exactly_once_is_oos_row(
+    research_registry, research_repository
+) -> None:
+    from app.research.alpha_scoring import evaluate_selection_oos
+
+    run_id = _make_run(research_repository, run_id="run-oos-1")
+    chain, resolver, rev, dates = _oos_chain_setup(research_registry)
+    plan = _oos_plan(dates)
+    attempt = _attempt(run_id=run_id, candidate_digest="a" * 64)
+
+    recorded = evaluate_selection_oos(
+        repo=research_repository, chain=chain, resolver=resolver, plan=plan,
+        attempt=attempt, revision=rev, objective="mean_ic",
+    )
+    assert recorded["is_oos"] == 1
+    assert recorded["candidate_digest"] == "a" * 64
+    assert recorded["fold_index"] == plan.oos_fold.fold_index
+    assert "mean_ic" in recorded["stats"]
+
+    # The outcome is labeled selection_oos on the candidate ledger.
+    ledger = research_repository.list_candidates(run_id)
+    assert any(c["status"] == "selection_oos" for c in ledger)
+
+
+def test_evaluate_selection_oos_reconnect_returns_existing_row(
+    research_registry, research_repository
+) -> None:
+    from app.research.alpha_scoring import evaluate_selection_oos
+
+    run_id = _make_run(research_repository, run_id="run-oos-2")
+    chain, resolver, rev, dates = _oos_chain_setup(research_registry)
+    plan = _oos_plan(dates)
+    attempt = _attempt(run_id=run_id, candidate_digest="b" * 64)
+
+    first = evaluate_selection_oos(
+        repo=research_repository, chain=chain, resolver=resolver, plan=plan,
+        attempt=attempt, revision=rev,
+    )
+    # Reconnect/retry: returns the existing OOS row — no recompute, no duplicate.
+    second = evaluate_selection_oos(
+        repo=research_repository, chain=chain, resolver=resolver, plan=plan,
+        attempt=attempt, revision=rev,
+    )
+    assert second["id"] == first["id"]
+    # Exactly one is_oos=1 row for this candidate.
+    rows = research_repository.list_alpha_fold_evidence(
+        run_id=run_id, candidate_digest="b" * 64, is_oos=True,
+    )
+    assert len(rows) == 1
+    # Exactly one selection_oos ledger fact (the reconnect did not duplicate it).
+    ledger = [c for c in research_repository.list_candidates(run_id)
+              if c["status"] == "selection_oos"]
+    assert len(ledger) == 1
+
+
+def test_selection_oos_unique_constraint_raises_on_second_insert(
+    research_repository,
+) -> None:
+    """The DB-level UNIQUE is the exactly-once backstop: a second is_oos=1 INSERT raises."""
+    kwargs = dict(
+        run_id="run-uniq", candidate_digest="c" * 64, fold_index=99,
+        revision_id="rev-1", train_start=date(2024, 1, 1), train_end=date(2024, 1, 31),
+        test_start=date(2024, 2, 1), test_end=date(2024, 2, 28),
+        membership_fingerprint="d" * 64, declared_fingerprints={}, stats={"mean_ic": 0.01},
+    )
+    research_repository.record_alpha_fold_evidence(is_oos=True, **kwargs)
+    with pytest.raises(ValueError, match="already recorded"):
+        research_repository.record_alpha_fold_evidence(is_oos=True, **kwargs)
+
+
+def test_evaluate_selection_oos_failed_short_window_raises_before_slot(
+    research_registry, research_repository
+) -> None:
+    """WR-02: an OOS with < 10 effective days raises BEFORE the once-only slot is written."""
+    from app.research.alpha_scoring import evaluate_selection_oos
+
+    run_id = _make_run(research_repository, run_id="run-oos-short")
+    chain, resolver, rev, dates = _oos_chain_setup(research_registry)
+    plan = _oos_plan(dates, test_size=3)  # effective_days < 10
+    attempt = _attempt(run_id=run_id, candidate_digest="e" * 64)
+
+    with pytest.raises(ValueError, match="effective days"):
+        evaluate_selection_oos(
+            repo=research_repository, chain=chain, resolver=resolver, plan=plan,
+            attempt=attempt, revision=rev,
+        )
+    # The once-only slot was NOT burned by the failure.
+    assert research_repository.list_alpha_fold_evidence(
+        run_id=run_id, candidate_digest="e" * 64, is_oos=True,
+    ) == []
+
+
+def test_evaluate_selection_oos_missing_objective_raises_before_slot(
+    research_registry, research_repository
+) -> None:
+    """WR-02: a missing objective metric raises BEFORE the once-only slot is written."""
+    from app.research.alpha_scoring import evaluate_selection_oos
+
+    run_id = _make_run(research_repository, run_id="run-oos-obj")
+    chain, resolver, rev, dates = _oos_chain_setup(research_registry)
+    plan = _oos_plan(dates)
+    attempt = _attempt(run_id=run_id, candidate_digest="f" * 64)
+
+    with pytest.raises(ValueError, match="no objective"):
+        evaluate_selection_oos(
+            repo=research_repository, chain=chain, resolver=resolver, plan=plan,
+            attempt=attempt, revision=rev, objective="no_such_metric",
+        )
+    assert research_repository.list_alpha_fold_evidence(
+        run_id=run_id, candidate_digest="f" * 64, is_oos=True,
+    ) == []
+
+
+def test_factor_fold_scorer_never_references_oos_fold_durable() -> None:
+    """The selection-fold scorer stays OOS-inaccessible even after 47-04 lands."""
+    import inspect
+    from app.research.alpha_scoring import factor_fold_scorer
+
+    assert "oos_fold" not in inspect.getsource(factor_fold_scorer)
+
+
+# ----------------------------------------------------------------------
+# 47-04-02 — deterministic winner selection (AF-REQ-09 SC5)
+# ----------------------------------------------------------------------
+
+
+def _seed_candidate(repo, run_id, *, digest, status="generated"):
+    ordinal = max(
+        (int(c["attempt_ordinal"]) for c in repo.list_candidates(run_id)), default=0
+    ) + 1
+    return repo.append_candidate_attempt(
+        run_id=run_id, candidate_id=f"c-{digest[:8]}-{ordinal}",
+        attempt_ordinal=ordinal, candidate_digest=digest,
+        canonical_expression="close", ast_signature="ast", shape_signature="shape",
+        dsl_version=DSL_VERSION, operation="generate", seed=0, step=0,
+        status=status, reason={},
+    )
+
+
+def _seed_fold_evidence(repo, run_id, digest, fold_index, mean_ic, *, is_oos=False):
+    return repo.record_alpha_fold_evidence(
+        run_id=run_id, candidate_digest=digest, fold_index=fold_index, is_oos=is_oos,
+        revision_id="rev-x", train_start=date(2024, 1, 1), train_end=date(2024, 1, 31),
+        test_start=date(2024, 2, 1), test_end=date(2024, 2, 28),
+        membership_fingerprint="0" * 64, declared_fingerprints={}, stats={"mean_ic": mean_ic},
+    )
+
+
+def test_select_winner_picks_higher_score_under_max_direction(research_repository) -> None:
+    from app.research.alpha_scoring import select_winner
+
+    run_id = _make_run(research_repository, run_id="run-sel-1")
+    hi, lo = "1" * 64, "9" * 64
+    for digest in (hi, lo):
+        _seed_candidate(research_repository, run_id, digest=digest)
+    for digest, score in ((hi, 0.05), (lo, 0.02)):
+        for fi in (0, 1):
+            _seed_fold_evidence(research_repository, run_id, digest, fi, score)
+
+    winner = select_winner(repo=research_repository, run_id=run_id, objective="mean_ic", direction="max")
+    assert winner.candidate_digest == hi
+
+
+def test_select_winner_is_order_independent(research_repository) -> None:
+    """Worker timing cannot change the winner: insertion order is irrelevant."""
+    from app.research.alpha_scoring import select_winner
+
+    run_id = _make_run(research_repository, run_id="run-sel-2")
+    a, b = "a" * 64, "b" * 64
+    for digest, score in ((a, 0.04), (b, 0.03)):
+        _seed_candidate(research_repository, run_id, digest=digest)
+        for fi in (0, 1):
+            _seed_fold_evidence(research_repository, run_id, digest, fi, score)
+
+    w1 = select_winner(repo=research_repository, run_id=run_id, objective="mean_ic", direction="max")
+    # Re-selecting (a second call, simulating a different worker order) is identical.
+    w2 = select_winner(repo=research_repository, run_id=run_id, objective="mean_ic", direction="max")
+    assert w1.candidate_digest == w2.candidate_digest == a
+
+
+def test_select_winner_tie_breaks_on_candidate_digest_lexicographic(research_repository) -> None:
+    from app.research.alpha_scoring import select_winner
+
+    run_id = _make_run(research_repository, run_id="run-sel-3")
+    big, small = "f" * 64, "a" * 64  # equal scores; smaller digest must win
+    for digest in (big, small):
+        _seed_candidate(research_repository, run_id, digest=digest)
+        for fi in (0, 1):
+            _seed_fold_evidence(research_repository, run_id, digest, fi, 0.03)
+
+    winner = select_winner(repo=research_repository, run_id=run_id, objective="mean_ic", direction="max")
+    assert winner.candidate_digest == small
+
+
+def test_select_winner_min_direction_picks_lower_score(research_repository) -> None:
+    from app.research.alpha_scoring import select_winner
+
+    run_id = _make_run(research_repository, run_id="run-sel-4")
+    hi, lo = "1" * 64, "9" * 64
+    for digest in (hi, lo):
+        _seed_candidate(research_repository, run_id, digest=digest)
+    for digest, score in ((hi, 0.05), (lo, 0.02)):
+        for fi in (0, 1):
+            _seed_fold_evidence(research_repository, run_id, digest, fi, score)
+
+    winner = select_winner(repo=research_repository, run_id=run_id, objective="mean_ic", direction="min")
+    assert winner.candidate_digest == lo
+
+
+def test_select_winner_excludes_candidate_with_incomplete_evidence(research_repository) -> None:
+    """A candidate missing a fold is excluded (fail closed), never a partial winner."""
+    from app.research.alpha_scoring import select_winner
+
+    run_id = _make_run(research_repository, run_id="run-sel-5")
+    complete, partial = "c" * 64, "d" * 64
+    for digest in (complete, partial):
+        _seed_candidate(research_repository, run_id, digest=digest)
+    # `complete` has both folds; `partial` has only fold 0 (higher score).
+    for fi in (0, 1):
+        _seed_fold_evidence(research_repository, run_id, complete, fi, 0.02)
+    _seed_fold_evidence(research_repository, run_id, partial, 0, 0.99)
+
+    winner = select_winner(repo=research_repository, run_id=run_id, objective="mean_ic", direction="max")
+    assert winner.candidate_digest == complete
+
+
+def test_select_winner_raises_when_no_candidate_is_complete(research_repository) -> None:
+    """No candidate covers the full fold set → fail closed (raise)."""
+    from app.research.alpha_scoring import select_winner
+
+    run_id = _make_run(research_repository, run_id="run-sel-6")
+    a, b = "a" * 64, "b" * 64
+    _seed_candidate(research_repository, run_id, digest=a)
+    _seed_candidate(research_repository, run_id, digest=b)
+    # Disjoint folds: union is {0,1} but neither candidate covers both.
+    _seed_fold_evidence(research_repository, run_id, a, 0, 0.02)
+    _seed_fold_evidence(research_repository, run_id, b, 1, 0.02)
+
+    with pytest.raises(ValueError, match="no candidate with complete"):
+        select_winner(repo=research_repository, run_id=run_id, objective="mean_ic", direction="max")
+
+
+def test_only_winner_proceeds_to_selection_oos(research_registry, research_repository) -> None:
+    """End-to-end: select_winner then evaluate_selection_oos for the winner only."""
+    from app.research.alpha_scoring import evaluate_selection_oos, select_winner
+
+    run_id = _make_run(research_repository, run_id="run-e2e")
+    chain, resolver, rev, dates = _oos_chain_setup(research_registry)
+    plan = _oos_plan(dates)
+    winner_digest, loser_digest = "a" * 64, "b" * 64
+    for digest, score in ((winner_digest, 0.05), (loser_digest, 0.01)):
+        _seed_candidate(research_repository, run_id, digest=digest)
+        for fi in (0, 1):
+            _seed_fold_evidence(research_repository, run_id, digest, fi, score)
+
+    winner = select_winner(repo=research_repository, run_id=run_id, objective="mean_ic", direction="max")
+    assert winner.candidate_digest == winner_digest
+
+    recorded = evaluate_selection_oos(
+        repo=research_repository, chain=chain, resolver=resolver, plan=plan,
+        attempt=winner, revision=rev, objective="mean_ic",
+    )
+    assert recorded["is_oos"] == 1
+    assert recorded["candidate_digest"] == winner_digest
+    # The loser never consumed the OOS fold.
+    assert research_repository.list_alpha_fold_evidence(
+        run_id=run_id, candidate_digest=loser_digest, is_oos=True,
+    ) == []

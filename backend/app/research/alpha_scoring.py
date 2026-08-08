@@ -503,3 +503,232 @@ def assert_admission_no_edit() -> None:
             raise AssertionError(
                 f"SC4 violation — scoring module {name} calls insert_admission_verdict directly"
             )
+
+
+# ----------------------------------------------------------------------
+# Phase 47-04 — deterministic selection + exactly-once selection OOS
+# (AF-REQ-09 SC5)
+# ----------------------------------------------------------------------
+
+
+def _attempt_from_dict(record: Mapping[str, Any]) -> AlphaCandidateAttempt:
+    """Project a candidate ledger dict onto the immutable ``AlphaCandidateAttempt``."""
+    return AlphaCandidateAttempt(
+        id=record["id"],
+        run_id=record["run_id"],
+        attempt_ordinal=int(record["attempt_ordinal"]),
+        candidate_digest=record["candidate_digest"],
+        canonical_expression=record["canonical_expression"],
+        ast_signature=record["ast_signature"],
+        shape_signature=record["shape_signature"],
+        dsl_version=record["dsl_version"],
+        operation=record["operation"],
+        seed=int(record["seed"]),
+        step=int(record["step"]),
+        status=record["status"],
+        reason=record["reason"],
+        evidence_artifact_id=record["evidence_artifact_id"],
+        created_at=record["created_at"],
+    )
+
+
+def select_winner(
+    *,
+    repo: Any,
+    run_id: str,
+    objective: str,
+    direction: str,
+) -> AlphaCandidateAttempt:
+    """Choose the winner deterministically by the frozen objective + tie-break.
+
+    Loads every selection-fold (``is_oos=0``) evidence row for the run, reduces
+    each candidate to its objective score by aggregating across folds (mean over
+    folds, matching the frozen objective), and chooses the winner by
+    ``(score in the frozen direction, candidate_digest lexicographic)`` so worker
+    timing cannot change the winner (AF-REQ-23 precedent, already satisfied for
+    generation). A candidate with incomplete selection-fold evidence (missing
+    folds) is excluded (fail closed), never averaged as a partial winner. Only
+    the winner proceeds to :func:`evaluate_selection_oos`.
+
+    ``direction`` is the frozen objective direction in optimizer form
+    (``"max"``/``"min"``, from ``default_direction``): ``"max"`` for
+    ic/sharpe-like objectives, ``"min"`` for loss-like objectives.
+    """
+    rows = repo.list_alpha_fold_evidence(run_id=run_id, is_oos=False)
+    if not rows:
+        raise ValueError(f"no selection-fold evidence for run {run_id}")
+
+    by_candidate: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        by_candidate.setdefault(row["candidate_digest"], []).append(row)
+
+    # The complete fold set is the union of fold indices across all candidates;
+    # a candidate missing any fold is incomplete and excluded (fail closed).
+    all_fold_indices: set[int] = set()
+    for evidence in by_candidate.values():
+        for row in evidence:
+            all_fold_indices.add(int(row["fold_index"]))
+    if not all_fold_indices:
+        raise ValueError(f"no selection-fold indices for run {run_id}")
+
+    scored: list[tuple[str, float]] = []
+    for candidate_digest, evidence in by_candidate.items():
+        fold_indices = {int(row["fold_index"]) for row in evidence}
+        if fold_indices != all_fold_indices:
+            continue  # incomplete evidence — excluded, never a partial winner
+        values: list[float] = []
+        complete = True
+        for row in sorted(evidence, key=lambda r: int(r["fold_index"])):
+            raw = (row.get("stats") or {}).get(objective)
+            if raw is None:
+                complete = False
+                break
+            try:
+                values.append(float(raw))
+            except (TypeError, ValueError):
+                complete = False
+                break
+        if not complete or not values:
+            continue
+        scored.append((candidate_digest, sum(values) / len(values)))
+
+    if not scored:
+        raise ValueError(
+            f"no candidate with complete selection-fold evidence for objective "
+            f"'{objective}' in run {run_id}"
+        )
+
+    # Deterministic ordering: direction-aware score primary, candidate_digest
+    # lexicographic ascending as the declared tie-break.
+    scored.sort(key=lambda item: item[0])
+    reverse = direction != "min"
+    scored.sort(key=lambda item: item[1], reverse=reverse)
+    winner_digest = scored[0][0]
+
+    candidates = repo.list_candidates(run_id)
+    matching = [c for c in candidates if c["candidate_digest"] == winner_digest]
+    if not matching:
+        raise ValueError(
+            f"selection winner digest {winner_digest} not found in candidate "
+            f"ledger for run {run_id}"
+        )
+    # The most recent terminal fact for the winning candidate (deterministic).
+    winner = max(matching, key=lambda c: int(c["attempt_ordinal"]))
+    return _attempt_from_dict(winner)
+
+
+def evaluate_selection_oos(
+    *,
+    repo: Any,
+    chain: FactorSignalChain,
+    resolver: Any,
+    plan: Any,
+    attempt: AlphaCandidateAttempt,
+    revision: FactorRevision,
+    objective: str = "mean_ic",
+) -> dict[str, Any]:
+    """Evaluate the winner on the reserved OOS fold exactly once (AF-REQ-09 SC5).
+
+    Mirrors ``walkforward.evaluate_best_params``' confirm-objective-before-slot +
+    exactly-once + idempotent-reconnect pattern, adapted to candidate identity
+    (no ``params_sha256``; identity is ``(run_id, candidate_digest)``):
+
+    1. Idempotent reconnect — a retry of the same ``(run_id, candidate_digest)``
+       returns the existing ``is_oos=1`` fold row without recomputing (mirrors
+       ``walkforward._find_existing_fold``); search and Agent review never reach
+       here.
+    2. The OOS frame is computed once over ``plan.oos_fold`` (the only place
+       that touches the reserved fold).
+    3. WR-02: effective days and the objective metric are confirmed BEFORE the
+       OOS fold row is written, so a failed OOS never burns the once-only slot.
+    4. The ``is_oos=1`` fold row is recorded; the
+       ``UNIQUE (run_id, candidate_digest, fold_index, is_oos=1)`` makes a second
+       evaluation raise.
+    5. The outcome is labeled ``selection_oos`` on the candidate ledger (never a
+       blind final validation). Only the deterministically selected winner
+       reaches here; non-winners never consume the OOS fold.
+    """
+    from app.backtest.walkforward import _effective_test_days, _resolve_fold_membership
+
+    oos_fold = plan.oos_fold
+    # 1. Idempotent reconnect: a retry returns the existing OOS row (cache-only).
+    existing = repo.find_alpha_fold_evidence(
+        run_id=attempt.run_id,
+        candidate_digest=attempt.candidate_digest,
+        fold_index=oos_fold.fold_index,
+        is_oos=True,
+    )
+    if existing is not None:
+        return existing
+
+    # 2. The reserved OOS fold is computed once here — the selection-fold scorer
+    #    never references plan.oos_fold.
+    memberships = _resolve_fold_membership(plan, oos_fold, resolver)
+    frame = chain.compute(revision_id=revision.id, config=oos_fold.chain_config)
+    effective_days = _effective_test_days(
+        plan.trading_dates,
+        oos_fold.test_start,
+        oos_fold.test_end,
+        oos_fold.chain_config.end,
+        plan.horizon,
+    )
+    # 3. WR-02: confirm effective days before the OOS slot is consumed.
+    if effective_days < 10:
+        raise ValueError(
+            f"selection OOS fold has {effective_days} effective days (< 10)"
+        )
+
+    scored = factor_fold_scorer(oos_fold, frame=frame, membership=memberships)
+    # 3. WR-02: the objective metric must exist BEFORE the OOS row is written.
+    test_stats = dict(scored.get("test_stats") or {})
+    raw = test_stats.get(objective)
+    if raw is None:
+        raise ValueError(
+            f"selection OOS fold has no objective '{objective}' in its test stats"
+        )
+
+    # 4. Record the exactly-once is_oos=1 fold row (UNIQUE raises on a second).
+    resolved = getattr(frame, "resolved_universe", None) or {}
+    fingerprint = str(resolved.get("membership_fingerprint") or ("0" * 64))
+    recorded = repo.record_alpha_fold_evidence(
+        run_id=attempt.run_id,
+        candidate_digest=attempt.candidate_digest,
+        fold_index=oos_fold.fold_index,
+        is_oos=True,
+        revision_id=revision.id,
+        train_start=oos_fold.train_start,
+        train_end=oos_fold.train_end,
+        test_start=oos_fold.test_start,
+        test_end=oos_fold.test_end,
+        membership_fingerprint=fingerprint,
+        declared_fingerprints=scored["declared_fingerprints"],
+        stats=test_stats,
+    )
+
+    # 5. Label the outcome selection_oos on the candidate ledger — never a blind
+    #    final validation. A distinct append-only fact (fresh id/ordinal) linked
+    #    to the candidate by candidate_digest.
+    existing_ordinals = [int(c["attempt_ordinal"]) for c in repo.list_candidates(attempt.run_id)]
+    next_ordinal = max(existing_ordinals, default=0) + 1
+    repo.append_candidate_attempt(
+        run_id=attempt.run_id,
+        candidate_id=uuid.uuid4().hex,
+        attempt_ordinal=next_ordinal,
+        candidate_digest=attempt.candidate_digest,
+        canonical_expression=attempt.canonical_expression,
+        ast_signature=attempt.ast_signature,
+        shape_signature=attempt.shape_signature,
+        dsl_version=attempt.dsl_version,
+        operation=attempt.operation,
+        seed=attempt.seed,
+        step=attempt.step,
+        status="selection_oos",
+        reason={
+            "selection_oos": True,
+            "fold_index": int(oos_fold.fold_index),
+            "objective": objective,
+            "validation_score": float(raw),
+            "fold_evidence_id": recorded["id"],
+        },
+    )
+    return recorded
