@@ -22,7 +22,7 @@ status: all_fixed
 
 ## Verification
 
-All verification ran in the main checkout (`workflow.use_worktrees=false`); no broad project-wide suite was run.
+The fix-report commands below are focused; the final session also ran the backend-wide suite with the repository's expected local stockdb defaults.
 
 ```text
 cd backend && .venv/bin/pytest tests/research/test_run_contract.py tests/research/test_alpha_factory.py tests/api/test_run_api.py tests/test_phase45_guard.py -q
@@ -33,6 +33,12 @@ cd backend && .venv/bin/pytest tests/test_operational_migrations.py -q -k 'phase
 
 cd backend && .venv/bin/python -m compileall -q app/research app/api/research_alpha.py app/main.py app/operational/migrations.py
 → passed
+
+Final session backend-wide verification (run with the repository's expected local stockdb defaults):
+
+```text
+cd backend && LOCAL_STOCKDB_URL=http://127.0.0.1:8000 LOCAL_STOCKDB_API_KEY= ./.venv/bin/pytest -q
+→ 2296 passed, 4 skipped, 10 warnings
 ```
 
 ## Fixed Issues
