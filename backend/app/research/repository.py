@@ -2514,6 +2514,63 @@ class ResearchRepository:
         assert row is not None
         return dict(row)
 
+    def list_run_lineage(
+        self,
+        run_id: str,
+        *,
+        principal: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return ordered parent→child lineage edges joined to candidate rows.
+
+        Read-only counterpart to ``append_candidate_lineage``: a plain SELECT
+        over the append-only ``research_alpha_candidate_lineage`` table
+        (no UPDATE/DELETE triggers fire) joined to child + parent candidate
+        rows.  Principal scoping mirrors ``list_run_events``: a cross-principal
+        read returns the same empty boundary as an unknown run (T-45-12).
+        """
+        if not isinstance(run_id, str) or not run_id:
+            raise ValueError("run_id is required")
+        with self._connection() as connection:
+            if principal is not None:
+                owned = connection.execute(
+                    "SELECT 1 FROM research_alpha_runs WHERE id = ? AND principal = ?",
+                    (run_id, principal),
+                ).fetchone()
+                if owned is None:
+                    return []
+            rows = connection.execute(
+                """SELECT * FROM research_alpha_candidate_lineage
+                    WHERE run_id = ? ORDER BY edge_ordinal, id""",
+                (run_id,),
+            ).fetchall()
+            if not rows:
+                return []
+            attempt_ids: set[str] = set()
+            for row in rows:
+                attempt_ids.add(row["child_attempt_id"])
+                attempt_ids.add(row["parent_attempt_id"])
+            placeholders = ",".join("?" for _ in attempt_ids)
+            candidate_rows = connection.execute(
+                f"""SELECT * FROM research_alpha_candidate_attempts
+                    WHERE id IN ({placeholders})""",
+                tuple(attempt_ids),
+            ).fetchall()
+            candidates = {r["id"]: self._candidate_dict(r) for r in candidate_rows}
+        return [
+            {
+                "lineage_id": row["id"],
+                "run_id": row["run_id"],
+                "child_attempt_id": row["child_attempt_id"],
+                "parent_attempt_id": row["parent_attempt_id"],
+                "edge_ordinal": int(row["edge_ordinal"]),
+                "operation": row["operation"],
+                "created_at": row["created_at"],
+                "child": candidates[row["child_attempt_id"]],
+                "parent": candidates[row["parent_attempt_id"]],
+            }
+            for row in rows
+        ]
+
     def list_candidates(
         self,
         run_id: str,

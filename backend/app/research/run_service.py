@@ -522,6 +522,19 @@ class ResearchRunService:
             artifact_service=self._artifact_service,
         )
 
+    def list_lineage(
+        self,
+        run_id: str,
+        *,
+        principal: str,
+    ) -> list[dict[str, Any]]:
+        """Return ordered parent→child lineage edges scoped to ``principal``.
+
+        Read-only delegate over ``repository.list_run_lineage``; cross-principal
+        reads return the same empty boundary as an unknown run (SC2 read half).
+        """
+        return self._repository.list_run_lineage(run_id, principal=principal)
+
     def append_event(
         self,
         *,
