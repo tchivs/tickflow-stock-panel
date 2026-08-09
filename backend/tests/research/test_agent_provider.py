@@ -9,6 +9,7 @@ Phase 48-01. Covers:
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import date
 
@@ -205,3 +206,134 @@ class TestAnalysisAttemptsTable:
         # A second run is a no-op.
         migrations.migrate_operational_db(conn)
         assert conn.execute("PRAGMA user_version").fetchone()[0] == version
+
+
+
+# ==================================================================
+# 48-01-03 — ProviderFailure taxonomy + retry policy
+# ==================================================================
+
+
+class _StatusError(Exception):
+    """A transport-shaped error carrying an HTTP status_code attribute."""
+
+    def __init__(self, status_code: int) -> None:
+        self.status_code = status_code
+        super().__init__(f"http {status_code}")
+
+
+class _APITimeoutError(Exception):
+    pass
+
+
+class _APIConnectionError(Exception):
+    pass
+
+
+class TestProviderFailureTaxonomy:
+    def test_taxonomy_failure_classes_complete(self) -> None:
+        from app.research.agent_provider import FAILURE_CLASSES
+
+        assert FAILURE_CLASSES == frozenset({
+            "malformed_json", "schema_violation", "parse_failure", "timeout",
+            "rate_limited", "unavailable", "refused", "partial", "cancelled",
+        })
+
+    @pytest.mark.parametrize("status, expected", [
+        (408, "timeout"), (504, "timeout"),
+        (429, "rate_limited"),
+        (500, "unavailable"), (502, "unavailable"), (503, "unavailable"),
+        (400, "refused"), (401, "refused"), (403, "refused"), (404, "refused"),
+    ])
+    def test_classify_http_status_to_class(self, status: int, expected: str) -> None:
+        from app.research.agent_provider import classify_provider_failure
+
+        failure = classify_provider_failure(_StatusError(status))
+        assert failure.klass == expected
+        assert failure.http_status == status
+
+    def test_classify_timeout_by_class_name(self) -> None:
+        from app.research.agent_provider import classify_provider_failure
+
+        failure = classify_provider_failure(_APITimeoutError())
+        assert failure.klass == "timeout"
+        assert failure.transient is True
+        assert failure.terminal is False
+
+    def test_classify_connection_error_by_class_name(self) -> None:
+        from app.research.agent_provider import classify_provider_failure
+
+        failure = classify_provider_failure(_APIConnectionError())
+        assert failure.klass == "unavailable"
+        assert failure.transient is True
+
+    def test_classify_malformed_json(self) -> None:
+        from app.research.agent_provider import classify_provider_failure
+
+        failure = classify_provider_failure(json.JSONDecodeError("bad", "doc", 0))
+        assert failure.klass == "malformed_json"
+        assert failure.transient is False
+        assert failure.terminal is True
+
+    def test_classify_schema_violation(self) -> None:
+        from app.research.agent_provider import classify_provider_failure
+
+        failure = classify_provider_failure(ValueError("provider draft has unsupported field(s): foo"))
+        assert failure.klass == "schema_violation"
+        assert failure.terminal is True
+
+    def test_classify_parse_failure(self) -> None:
+        from app.research.agent_provider import classify_provider_failure
+        from app.research.factor_dsl import parse_factor
+
+        with pytest.raises(Exception):
+            parse_factor("@@@not a factor@@@")
+        try:
+            parse_factor("@@@not a factor@@@")
+        except Exception as exc:
+            failure = classify_provider_failure(exc)
+        assert failure.klass == "parse_failure"
+        assert failure.terminal is True
+
+    def test_classify_partial(self) -> None:
+        from app.research.agent_provider import classify_provider_failure
+
+        exc = ValueError("downstream validation")
+        exc.partial_failure = True  # type: ignore[attr-defined]
+        failure = classify_provider_failure(exc, raw_response="{\"partial\": true}")
+        assert failure.klass == "partial"
+        assert failure.transient is False
+        assert failure.terminal is False
+
+    def test_classify_is_pure(self) -> None:
+        from app.research.agent_provider import classify_provider_failure
+
+        first = classify_provider_failure(_StatusError(503))
+        second = classify_provider_failure(_StatusError(503))
+        assert first == second
+
+    @pytest.mark.parametrize("klass, expected_retry", [
+        ("timeout", True), ("rate_limited", True), ("unavailable", True),
+        ("malformed_json", False), ("schema_violation", False), ("parse_failure", False),
+        ("refused", False), ("partial", False), ("cancelled", False),
+    ])
+    def test_retry_policy(self, klass: str, expected_retry: bool) -> None:
+        from app.research.agent_provider import ProviderFailure, retry_policy
+
+        transient, terminal = {
+            "malformed_json": (False, True), "schema_violation": (False, True),
+            "parse_failure": (False, True), "timeout": (True, False),
+            "rate_limited": (True, False), "unavailable": (True, False),
+            "refused": (False, True), "partial": (False, False), "cancelled": (False, True),
+        }[klass]
+        failure = ProviderFailure(
+            klass=klass, transient=transient, terminal=terminal,
+            reason={"class": klass}, http_status=None,
+        )
+        decision = retry_policy(failure)
+        assert decision.should_retry is expected_retry
+        if expected_retry:
+            assert decision.max_retries == 3
+            assert decision.base_delay == 1.0
+            assert decision.factor == 2.0
+            assert decision.cap == 30.0
