@@ -535,6 +535,60 @@ class ResearchRunService:
         """
         return self._repository.list_run_lineage(run_id, principal=principal)
 
+    def candidate_evidence_classification(
+        self,
+        run_id: str,
+        candidate_id: str,
+        *,
+        principal: str,
+    ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any] | None, bool] | None:
+        """Load the SC4 classification inputs for one candidate (read-only).
+
+        Returns ``(snapshot, candidate, fold_evidence, fixture_flag)`` or ``None``
+        when the run or candidate is unknown / cross-principal.  The caller
+        (API layer) applies ``projections.evidence_classification``; this method
+        only loads existing declared fingerprints — no new collection.
+        """
+        run = self._repository.get_alpha_run(run_id, principal=principal)
+        if run is None:
+            return None
+        snapshot = self._repository.get_run_snapshot(run_id) or {}
+        candidates = self._repository.list_candidates(
+            run_id, principal=principal, artifact_service=self._artifact_service,
+        )
+        candidate = next((c for c in candidates if c["id"] == candidate_id), None)
+        if candidate is None:
+            return None
+        fold_rows = self._repository.list_alpha_fold_evidence(
+            run_id=run_id, candidate_digest=candidate["candidate_digest"],
+        )
+        fold_evidence = self._select_fold_evidence(fold_rows)
+        fixture_flag = self._resolve_fixture_flag(snapshot)
+        return snapshot, candidate, fold_evidence, fixture_flag
+
+    @staticmethod
+    def _select_fold_evidence(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+        """Prefer the reserved OOS fold; otherwise the highest-index selection fold."""
+        if not rows:
+            return None
+        oos = [r for r in rows if int(r.get("is_oos", 0))]
+        if oos:
+            return max(oos, key=lambda r: int(r.get("fold_index", 0)))
+        return max(rows, key=lambda r: int(r.get("fold_index", 0)))
+
+    @staticmethod
+    def _resolve_fixture_flag(snapshot: Mapping[str, Any]) -> bool:
+        """Resolve the fixture flag from the frozen manifest's optional agent group.
+
+        Deny-by-default: a production run with no explicit ``agent.fixture_mode``
+        declaration is never a fixture (AF-REQ-26 SC4 invariant).
+        """
+        manifest = snapshot.get("manifest") if isinstance(snapshot, Mapping) else {}
+        if not isinstance(manifest, Mapping):
+            return False
+        agent = manifest.get("agent")
+        return bool(isinstance(agent, Mapping) and agent.get("fixture_mode"))
+
     def append_event(
         self,
         *,

@@ -353,3 +353,147 @@ class TestEvidenceClassification:
             _fold_evidence(coverage=1.5), fixture_flag=False,
         )
         assert result["membership_coverage"] == 1.0
+
+
+# ================================================================
+# Task 50-01-03: GET /runs/{id}/lineage + evidence-classification endpoints
+# ================================================================
+
+
+@pytest.fixture
+def lineage_client(
+    tmp_path: Path, deterministic_clock: DeterministicClock,
+) -> TestClient:
+    """Minimal FastAPI app with the Alpha router + service (principal via header)."""
+    repository = ResearchRepository(
+        tmp_path / "op.db", clock=deterministic_clock, artifact_root=tmp_path / "art",
+    )
+    repository.migrate()
+    app = FastAPI()
+
+    @app.middleware("http")
+    async def inject_test_principal(request, call_next):
+        principal = request.headers.get("X-Test-Principal")
+        if principal:
+            request.state.reviewer_principal = principal
+        return await call_next(request)
+
+    app.state.research_run_service = ResearchRunService(repository)
+    app.state.research_repository = repository
+    app.include_router(research_alpha.router)
+    client = TestClient(app)
+    client._repo = repository  # type: ignore[attr-defined]
+    client._clock = deterministic_clock  # type: ignore[attr-defined]
+    return client
+
+
+def _seed_run_with_candidate_and_evidence(
+    client: TestClient, *, run_id: str = "run-api", candidate_id: str = "cand-api"
+) -> str:
+    repo: ResearchRepository = client._repo  # type: ignore[attr-defined]
+    clock: DeterministicClock = client._clock  # type: ignore[attr-defined]
+    run = _make_run(repo, clock, run_id=run_id)
+    repo.append_candidate_attempt(**_candidate_params(
+        run_id=run["id"], candidate_id=candidate_id, ordinal=1,
+    ))
+    repo.record_alpha_fold_evidence(
+        run_id=run["id"], candidate_digest="a" * 60 + "0001",
+        fold_index=0, is_oos=False, revision_id="rev-1",
+        train_start="2020-01-01", train_end="2020-06-30",
+        test_start="2020-07-01", test_end="2020-12-31",
+        membership_fingerprint="a" * 64,
+        declared_fingerprints={
+            "panel": "p" * 64, "membership": "m" * 64,
+            "source_field": "s" * 64, "warmup": "w" * 64,
+            "missing_data": "d" * 64, "signal": "g" * 64,
+        },
+        stats={"coverage": 0.95, "mean_ic": 0.03},
+    )
+    return run["id"]
+
+
+class TestLineageEndpoint:
+    def test_lineage_endpoint_returns_ordered_edges(self, lineage_client: TestClient) -> None:
+        repo: ResearchRepository = lineage_client._repo  # type: ignore[attr-defined]
+        clock: DeterministicClock = lineage_client._clock  # type: ignore[attr-defined]
+        run = _seed_lineage(repo, clock, run_id="run-ep")
+        resp = lineage_client.get(
+            f"/api/research/alpha/runs/{run['id']}/lineage",
+            headers={"X-Test-Principal": _PRINCIPAL},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["run_id"] == run["id"]
+        assert len(body["edges"]) == 1
+        edge = body["edges"][0]
+        assert edge["operation"] == "mutation"
+        assert edge["child"]["canonical_expression"].startswith("rank(close)")
+        assert edge["parent"]["canonical_expression"].startswith("rank(close)")
+
+    def test_lineage_endpoint_unknown_run_404(self, lineage_client: TestClient) -> None:
+        resp = lineage_client.get(
+            "/api/research/alpha/runs/no-such-run/lineage",
+            headers={"X-Test-Principal": _PRINCIPAL},
+        )
+        assert resp.status_code == 404
+
+    def test_lineage_endpoint_cross_principal_empty_not_403(
+        self, lineage_client: TestClient
+    ) -> None:
+        repo: ResearchRepository = lineage_client._repo  # type: ignore[attr-defined]
+        clock: DeterministicClock = lineage_client._clock  # type: ignore[attr-defined]
+        run = _seed_lineage(repo, clock, run_id="run-xp")
+        # Cross-principal: same 404 boundary as an unknown run — never a 403 leak
+        # (mirrors list_events/list_candidates: service.get returns None for both).
+        resp = lineage_client.get(
+            f"/api/research/alpha/runs/{run['id']}/lineage",
+            headers={"X-Test-Principal": "attacker@example.com"},
+        )
+        assert resp.status_code == 404
+        assert resp.json()["detail"] != "forbidden"
+
+
+class TestEvidenceClassificationEndpoint:
+    def test_evidence_classification_returns_clean_flag(
+        self, lineage_client: TestClient
+    ) -> None:
+        run_id = _seed_run_with_candidate_and_evidence(lineage_client)
+        resp = lineage_client.get(
+            f"/api/research/alpha/runs/{run_id}/candidates/cand-api/evidence-classification",
+            headers={"X-Test-Principal": _PRINCIPAL},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["cache_state"] == "fresh"
+        assert body["membership_coverage"] == 0.95
+        assert body["evidence_role"] == "selection_fold"
+        assert body["fixture"] is False
+        assert body["clean"] is True
+        assert body["data_date"] == "2020-01-01/2023-12-31"
+
+    def test_evidence_classification_unknown_run_404(self, lineage_client: TestClient) -> None:
+        resp = lineage_client.get(
+            "/api/research/alpha/runs/no-such-run/candidates/x/evidence-classification",
+            headers={"X-Test-Principal": _PRINCIPAL},
+        )
+        assert resp.status_code == 404
+
+    def test_evidence_classification_unknown_candidate_404(
+        self, lineage_client: TestClient
+    ) -> None:
+        run_id = _seed_run_with_candidate_and_evidence(lineage_client)
+        resp = lineage_client.get(
+            f"/api/research/alpha/runs/{run_id}/candidates/no-such-candidate/evidence-classification",
+            headers={"X-Test-Principal": _PRINCIPAL},
+        )
+        assert resp.status_code == 404
+
+    def test_evidence_classification_cross_principal_404(
+        self, lineage_client: TestClient
+    ) -> None:
+        run_id = _seed_run_with_candidate_and_evidence(lineage_client)
+        resp = lineage_client.get(
+            f"/api/research/alpha/runs/{run_id}/candidates/cand-api/evidence-classification",
+            headers={"X-Test-Principal": "attacker@example.com"},
+        )
+        assert resp.status_code == 404

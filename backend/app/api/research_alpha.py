@@ -18,6 +18,8 @@ from app.research.run_service import (
 )
 from app.research.run_schemas import (
     AlphaCandidateDTO,
+    AlphaLineageDTO,
+    AlphaLineageEdgeDTO,
     AlphaProgressDTO,
     AlphaProgressUpdateRequest,
     AlphaRunCancelRequest,
@@ -27,6 +29,7 @@ from app.research.run_schemas import (
     AlphaRunReplayDTO,
     AlphaRunRetryRequest,
     AlphaSnapshotDTO,
+    EvidenceClassificationDTO,
 )
 
 router = APIRouter(prefix="/api/research/alpha", tags=["research-alpha"])
@@ -284,3 +287,50 @@ async def update_progress(
         raise HTTPException(status_code=409, detail="stale version or invalid attempt token")
     return AlphaProgressDTO(**projections.progress(result))
 
+
+
+@router.get("/runs/{run_id}/lineage", response_model=AlphaLineageDTO)
+async def get_lineage(request: Request, run_id: str) -> AlphaLineageDTO:
+    """Return ordered parent→child lineage edges for one run (SC2 read half).
+
+    Principal-scoped read-only projection over the append-only lineage table.
+    Cross-principal reads return the same empty boundary as an unknown run
+    (T-45-12: never a 403 leak).
+    """
+    service = _service(request)
+    principal = _principal(request)
+    if service.get(run_id, principal=principal) is None:
+        raise HTTPException(status_code=404, detail="run not found")
+    edges = service.list_lineage(run_id, principal=principal)
+    return AlphaLineageDTO(
+        run_id=run_id,
+        edges=[AlphaLineageEdgeDTO(**projections.lineage(edge)) for edge in edges],
+    )
+
+
+@router.get(
+    "/runs/{run_id}/candidates/{candidate_id}/evidence-classification",
+    response_model=EvidenceClassificationDTO,
+)
+async def get_evidence_classification(
+    request: Request, run_id: str, candidate_id: str,
+) -> EvidenceClassificationDTO:
+    """Return the SC4 temporal/degradation classification + clean flag.
+
+    Sources every value from existing declared fingerprints on the frozen
+    snapshot / fold evidence — no new data collection.  The ``clean`` flag is
+    deny-by-default: stale/partial/blocked/fixture results can never look like
+    clean production (AF-REQ-24).
+    """
+    service = _service(request)
+    principal = _principal(request)
+    inputs = service.candidate_evidence_classification(
+        run_id, candidate_id, principal=principal,
+    )
+    if inputs is None:
+        raise HTTPException(status_code=404, detail="run or candidate not found")
+    snapshot, candidate, fold_evidence, fixture_flag = inputs
+    classification = projections.evidence_classification(
+        snapshot, candidate, fold_evidence, fixture_flag,
+    )
+    return EvidenceClassificationDTO(**classification)
