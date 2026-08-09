@@ -1,0 +1,8 @@
+name: tushare
+display_name: "Tushare Pro"
+runtime: none
+entry: app.plugins.tushare.provider:TushareProvider
+check: app.plugins.tushare.provider:availability
+datasets: [daily, adj_factor, financial]
+description: "Linux 原生 Tushare Pro 数据源，覆盖日K、复权因子、财务和 A 股标的维表。"
+install_hint: "设置环境变量 TUSHARE_TOKEN 后重新加载数据源"

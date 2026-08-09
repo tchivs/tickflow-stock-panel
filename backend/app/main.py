@@ -60,6 +60,7 @@ from app.config import settings
 from app.jobs import daily_pipeline
 from app.operational.repository import OperationalRepository
 from app.optional_modules import install_optional_module_routes
+from app.api import phase5_real_host
 from app.portfolio.service import PortfolioService
 from app.portfolio.repository import PortfolioRepository
 from app.services.quote_service import QuoteService
@@ -903,6 +904,9 @@ app.include_router(portfolio_panels.router)
 app.include_router(walkforward_sse.router)
 app.include_router(alerts.router)
 app.include_router(rps.router)
+
+if phase5_real_host.telemetry_enabled():
+    app.include_router(phase5_real_host.router)
 
 install_optional_module_routes(app)
 
