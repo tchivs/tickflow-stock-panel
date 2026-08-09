@@ -2348,6 +2348,48 @@ MIGRATIONS: tuple[str, ...] = (
         )
         BEGIN SELECT RAISE(ABORT, 'analysis artifact must belong to analysis run'); END;
     """,
+    """
+    -- Phase 48 (AF-REQ-12): append-only research_alpha_proposals. A Stage 1
+    -- result is transient: stored only here (exploratory) and the
+    -- AnalysisRecord, NEVER written to factor_registry/catalog. Promotion to an
+    -- admitted/catalog factor is Phase 49 (AF-REQ-15). Stage 2 (48-03) and
+    -- resume (48-04) read this table after a crash, so it is durable, not
+    -- in-memory. Mirrors the 47-01 exploratory-revision non-leakage guarantee:
+    -- a catalog lookup by canonical_expression returns nothing for any row here.
+    CREATE TABLE research_alpha_proposals (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL REFERENCES research_alpha_runs(id) ON DELETE RESTRICT,
+        stage TEXT NOT NULL CHECK (stage = 'stage1'),
+        attempt_ordinal INTEGER NOT NULL CHECK (attempt_ordinal > 0),
+        hypothesis_ordinal INTEGER NOT NULL CHECK (hypothesis_ordinal > 0),
+        raw_expression TEXT NOT NULL,
+        canonical_expression TEXT NOT NULL,
+        explanation TEXT NOT NULL,
+        assumptions_json TEXT NOT NULL,
+        scope TEXT NOT NULL,
+        uncertainty TEXT NOT NULL CHECK (uncertainty IN ('low', 'medium', 'high')),
+        evidence_refs_json TEXT NOT NULL,
+        schema_version TEXT NOT NULL,
+        template_version TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        model TEXT NOT NULL,
+        model_version TEXT,
+        proposal_digest TEXT NOT NULL CHECK (length(proposal_digest) = 64),
+        status TEXT NOT NULL CHECK (status IN ('proposed', 'partial', 'dropped')),
+        partial INTEGER NOT NULL DEFAULT 0 CHECK (partial IN (0, 1)),
+        validation_error_json TEXT,
+        created_at TEXT NOT NULL,
+        UNIQUE (run_id, stage, attempt_ordinal, hypothesis_ordinal)
+    );
+    CREATE INDEX idx_research_alpha_proposals_run
+        ON research_alpha_proposals(run_id, stage, attempt_ordinal);
+    CREATE TRIGGER research_alpha_proposals_no_update
+        BEFORE UPDATE ON research_alpha_proposals
+        BEGIN SELECT RAISE(ABORT, 'alpha stage1 proposals are append-only'); END;
+    CREATE TRIGGER research_alpha_proposals_no_delete
+        BEFORE DELETE ON research_alpha_proposals
+        BEGIN SELECT RAISE(ABORT, 'alpha stage1 proposals are append-only'); END;
+    """,
 )
 
 

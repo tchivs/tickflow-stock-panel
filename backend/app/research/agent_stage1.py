@@ -228,3 +228,128 @@ def decode_stage1_payload(raw: str) -> tuple[StageOneHypothesis, ...]:
             f"stage1 hypotheses exceed the maximum of {MAX_STAGE1_EXPRESSIONS}"
         )
     return tuple(_decode_hypothesis(item, index) for index, item in enumerate(hypotheses))
+
+# ------------------------------------------------------------------
+# Server parse_factor confirmation + transient exploratory proposal store
+# ------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class Stage1Confirmed:
+    """Server-confirmed Stage 1 hypotheses with distinct partial labeling (R2)."""
+
+    kept: tuple[StageOneHypothesis, ...]
+    dropped: tuple[StageOneHypothesis, ...]
+    validation_errors: tuple[Mapping[str, Any], ...]
+    all_dropped: bool
+    partial: bool
+
+
+def confirm_stage1_hypotheses(
+    hypotheses: Sequence[StageOneHypothesis],
+    *,
+    repo: Any,
+    run_id: str,
+    attempt_ordinal: int,
+    provenance: Mapping[str, Any],
+) -> Stage1Confirmed:
+    """Server-confirm every expression and persist transient proposals.
+
+    Mirrors ``FactorHypothesisService.draft`` (hypotheses.py:202-225): for each
+    decoded hypothesis run ``parse_factor(expression)``; on success persist the
+    server-canonical form (raw retained as provenance only); on ``FactorDslError``
+    record a ``status='dropped'`` row + validation error and do NOT abort. The
+    valid subset is salvaged but labeled distinctly: when some (not all)
+    hypotheses fail, every row carries the distinct ``partial`` flag so a
+    degraded response cannot masquerade as a clean complete one (R2). Only when
+    ALL hypotheses fail does the caller escalate to permanent failure.
+    """
+    from app.research.factor_dsl import FactorDslError, parse_factor
+
+    # First pass: parse every expression (no writes) so the partial flag is known
+    # before any row is persisted (append-only rows cannot be amended later).
+    results: list[tuple[int, StageOneHypothesis, str | None, Mapping[str, Any] | None]] = []
+    for ordinal, hypothesis in enumerate(hypotheses, start=1):
+        try:
+            canonical = parse_factor(hypothesis.expression).canonical_expression
+        except FactorDslError as error:
+            results.append((
+                ordinal,
+                hypothesis,
+                None,
+                {
+                    "hypothesis_ordinal": ordinal,
+                    "code": "parse_failure",
+                    "raw_expression": hypothesis.expression,
+                    "detail": str(error),
+                },
+            ))
+        else:
+            results.append((ordinal, hypothesis, canonical, None))
+
+    kept = tuple(h for _, h, canonical, _ in results if canonical is not None)
+    dropped = tuple(h for _, h, canonical, _ in results if canonical is None)
+    errors = tuple(
+        error for _, _, _, error in results if error is not None  # type: ignore[misc]
+    )
+    all_dropped = len(kept) == 0
+    partial = (not all_dropped) and len(dropped) > 0
+    partial_flag = 1 if partial else 0
+
+    provider = provenance["provider"]
+    model = provenance["model"]
+    model_version = provenance.get("model_version")
+
+    # Second pass: persist every row with the correct partial flag.
+    for ordinal, hypothesis, canonical, error in results:
+        if canonical is not None:
+            repo.record_stage1_proposal(
+                run_id=run_id,
+                attempt_ordinal=attempt_ordinal,
+                hypothesis_ordinal=ordinal,
+                raw_expression=hypothesis.expression,
+                canonical_expression=canonical,
+                explanation=hypothesis.explanation,
+                assumptions=hypothesis.assumptions,
+                scope=hypothesis.scope,
+                uncertainty=hypothesis.uncertainty,
+                evidence_refs=hypothesis.evidence_refs,
+                schema_version=STAGE_ONE_SCHEMA_VERSION,
+                template_version=STAGE_ONE_PROMPT_TEMPLATE_VERSION,
+                provider=provider,
+                model=model,
+                model_version=model_version,
+                status="proposed",
+                partial=partial_flag,
+            )
+        else:
+            repo.record_stage1_proposal(
+                run_id=run_id,
+                attempt_ordinal=attempt_ordinal,
+                hypothesis_ordinal=ordinal,
+                raw_expression=hypothesis.expression,
+                # No canonical form exists for a parse failure; the offending raw
+                # text is retained as provenance, status='dropped' discriminates.
+                canonical_expression="",
+                explanation=hypothesis.explanation,
+                assumptions=hypothesis.assumptions,
+                scope=hypothesis.scope,
+                uncertainty=hypothesis.uncertainty,
+                evidence_refs=hypothesis.evidence_refs,
+                schema_version=STAGE_ONE_SCHEMA_VERSION,
+                template_version=STAGE_ONE_PROMPT_TEMPLATE_VERSION,
+                provider=provider,
+                model=model,
+                model_version=model_version,
+                status="dropped",
+                partial=partial_flag,
+                validation_error=error,
+            )
+
+    return Stage1Confirmed(
+        kept=kept,
+        dropped=dropped,
+        validation_errors=errors,
+        all_dropped=all_dropped,
+        partial=partial,
+    )

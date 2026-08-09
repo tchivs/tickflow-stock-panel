@@ -2804,6 +2804,172 @@ class ResearchRepository:
         reason = record.pop("failure_reason_json", None)
         record["failure_reason"] = json.loads(reason) if reason else None
         return record
+    # ----------------------------------------------------------------
+    # Transient exploratory proposal store (Phase 48, AF-REQ-12)
+    # ----------------------------------------------------------------
+
+    _STAGE1_PROPOSAL_STATUSES: tuple[str, ...] = ("proposed", "partial", "dropped")
+
+    def record_stage1_proposal(
+        self,
+        *,
+        run_id: str,
+        attempt_ordinal: int,
+        hypothesis_ordinal: int,
+        raw_expression: str,
+        canonical_expression: str,
+        explanation: str,
+        assumptions: Sequence[str],
+        scope: str,
+        uncertainty: str,
+        evidence_refs: Sequence[str],
+        schema_version: str,
+        template_version: str,
+        provider: str,
+        model: str,
+        model_version: str | None,
+        status: str,
+        partial: int,
+        validation_error: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Append one transient exploratory Stage 1 proposal row.
+
+        Exploratory only — never written to ``factor_registry``/catalog
+        (promotion is Phase 49, AF-REQ-15). The persisted ``canonical_expression``
+        is the server-confirmed form; ``raw_expression`` is provenance only. A
+        duplicate ``(run_id, stage, attempt_ordinal, hypothesis_ordinal)`` raises
+        ``AlphaRunConflictError``.
+        """
+        if not isinstance(run_id, str) or not run_id:
+            raise ValueError("run_id is required")
+        if not isinstance(attempt_ordinal, int) or attempt_ordinal <= 0:
+            raise ValueError("attempt_ordinal must be a positive integer")
+        if not isinstance(hypothesis_ordinal, int) or hypothesis_ordinal <= 0:
+            raise ValueError("hypothesis_ordinal must be a positive integer")
+        for label, value in (
+            ("raw_expression", raw_expression),
+            ("explanation", explanation),
+            ("scope", scope),
+            ("schema_version", schema_version),
+            ("template_version", template_version),
+            ("provider", provider),
+            ("model", model),
+        ):
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"{label} is required")
+        # canonical_expression may be empty for a dropped hypothesis (parse
+        # failure leaves no canonical form; status='dropped' discriminates).
+        if not isinstance(canonical_expression, str):
+            raise ValueError("canonical_expression must be text")
+        if uncertainty not in ("low", "medium", "high"):
+            raise ValueError("uncertainty must be one of low, medium, high")
+        if status not in self._STAGE1_PROPOSAL_STATUSES:
+            raise ValueError(f"status must be one of {self._STAGE1_PROPOSAL_STATUSES}")
+        if partial not in (0, 1):
+            raise ValueError("partial must be 0 or 1")
+        assumptions = tuple(assumptions)
+        evidence_refs = tuple(evidence_refs)
+        if any(not isinstance(item, str) for item in assumptions):
+            raise ValueError("assumptions must be a sequence of text")
+        if any(not isinstance(item, str) for item in evidence_refs):
+            raise ValueError("evidence_refs must be a sequence of text")
+        proposal_payload = {
+            "raw_expression": raw_expression,
+            "canonical_expression": canonical_expression,
+            "explanation": explanation,
+            "assumptions": list(assumptions),
+            "scope": scope,
+            "uncertainty": uncertainty,
+            "evidence_refs": list(evidence_refs),
+            "status": status,
+            "partial": partial,
+        }
+        proposal_digest = sha256(canonical_bounded_json(proposal_payload, "stage1 proposal").encode("utf-8")).hexdigest()
+        proposal_id = "aprp_" + uuid.uuid4().hex
+        occurred_at = self._now()
+        assumptions_json = _json(list(assumptions), "stage1 assumptions")
+        evidence_refs_json = _json(list(evidence_refs), "stage1 evidence_refs")
+        validation_error_json = (
+            _bounded_json(validation_error, "stage1 validation_error") if validation_error is not None else None
+        )
+        with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                run = connection.execute(
+                    "SELECT 1 FROM research_alpha_runs WHERE id = ?", (run_id,)
+                ).fetchone()
+                if run is None:
+                    raise ValueError("run does not exist")
+                try:
+                    connection.execute(
+                        """INSERT INTO research_alpha_proposals (
+                               id, run_id, stage, attempt_ordinal, hypothesis_ordinal,
+                               raw_expression, canonical_expression, explanation,
+                               assumptions_json, scope, uncertainty, evidence_refs_json,
+                               schema_version, template_version, provider, model,
+                               model_version, proposal_digest, status, partial,
+                               validation_error_json, created_at
+                           ) VALUES (?, ?, 'stage1', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (
+                            proposal_id, run_id, attempt_ordinal, hypothesis_ordinal,
+                            raw_expression, canonical_expression, explanation,
+                            assumptions_json, scope, uncertainty, evidence_refs_json,
+                            schema_version, template_version, provider, model,
+                            model_version, proposal_digest, status, partial,
+                            validation_error_json, occurred_at,
+                        ),
+                    )
+                except sqlite3.IntegrityError as error:
+                    if "UNIQUE" in str(error).upper():
+                        raise AlphaRunConflictError(
+                            "stage1 proposal ordinal already exists for this attempt"
+                        ) from error
+                    raise
+                row = connection.execute(
+                    "SELECT * FROM research_alpha_proposals WHERE id = ?", (proposal_id,)
+                ).fetchone()
+                connection.execute("COMMIT")
+            except BaseException:
+                if connection.in_transaction:
+                    connection.execute("ROLLBACK")
+                raise
+        assert row is not None
+        return self._stage1_proposal_dict(row)
+
+    def list_stage1_proposals(
+        self, run_id: str, *, attempt_ordinal: int | None = None, status: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Return transient Stage 1 proposals in ``(attempt, hypothesis)`` order."""
+        if status is not None and status not in self._STAGE1_PROPOSAL_STATUSES:
+            raise ValueError(f"status must be one of {self._STAGE1_PROPOSAL_STATUSES}")
+        clauses = ["run_id = ?"]
+        params: list[Any] = [run_id]
+        if attempt_ordinal is not None:
+            if not isinstance(attempt_ordinal, int) or attempt_ordinal <= 0:
+                raise ValueError("attempt_ordinal must be a positive integer")
+            clauses.append("attempt_ordinal = ?")
+            params.append(attempt_ordinal)
+        if status is not None:
+            clauses.append("status = ?")
+            params.append(status)
+        where = " AND ".join(clauses)
+        with self._connection() as connection:
+            rows = connection.execute(
+                f"""SELECT * FROM research_alpha_proposals
+                    WHERE {where}
+                    ORDER BY attempt_ordinal, hypothesis_ordinal, id""",
+                params,
+            ).fetchall()
+        return [self._stage1_proposal_dict(row) for row in rows]
+
+    @staticmethod
+    def _stage1_proposal_dict(row: sqlite3.Row) -> dict[str, Any]:
+        record = dict(row)
+        record["assumptions"] = tuple(json.loads(record.pop("assumptions_json")))
+        record["evidence_refs"] = tuple(json.loads(record.pop("evidence_refs_json")))
+        error = record.pop("validation_error_json", None)
+        record["validation_error"] = json.loads(error) if error else None
+        return record
     def append_checkpoint(
         self,
         *,
