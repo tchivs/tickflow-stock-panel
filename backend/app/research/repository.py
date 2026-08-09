@@ -18,6 +18,7 @@ from typing import Any
 
 from app.operational.migrations import migrate_operational_db
 from app.research.run_contract import PRODUCER_VERSION, canonical_bounded_json, event_checksum
+from app.research.promotion_service import PromotionTicket
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
@@ -3031,7 +3032,8 @@ class ResearchRepository:
         """
         with self._connection() as connection:
             rows = connection.execute(
-                "SELECT id, revision_id, verdict, reason, gates_json, candidate_trail_json "
+                "SELECT id, revision_id, policy_version, verdict, reason, "
+                "gates_json, candidate_trail_json "
                 "FROM factor_admission_verdicts ORDER BY created_at, id"
             ).fetchall()
         results: list[dict[str, Any]] = []
@@ -3047,6 +3049,7 @@ class ResearchRepository:
                 {
                     "id": row["id"],
                     "revision_id": row["revision_id"],
+                    "policy_version": row["policy_version"],
                     "verdict": row["verdict"],
                     "reason": row["reason"],
                     "gates": json.loads(row["gates_json"]),
@@ -3064,6 +3067,216 @@ class ResearchRepository:
                 (artifact_id, run_id),
             ).fetchone()
         return row is not None
+
+    # ----------------------------------------------------------------
+    # Phase 49 — promotion ticket (append-only write/read/status fence)
+    # ----------------------------------------------------------------
+
+    def get_candidate_attempt(
+        self, run_id: str, candidate_id: str
+    ) -> dict[str, Any] | None:
+        """Read one candidate attempt row by ``(run_id, candidate_id)``."""
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM research_alpha_candidate_attempts "
+                "WHERE id = ? AND run_id = ?",
+                (candidate_id, run_id),
+            ).fetchone()
+        return None if row is None else self._candidate_dict(row)
+
+    def get_promotion_ticket(self, ticket_id: str) -> PromotionTicket | None:
+        """Read one promotion ticket by id (frozen value object)."""
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM research_alpha_promotion_tickets WHERE id = ?",
+                (ticket_id,),
+            ).fetchone()
+        return None if row is None else PromotionTicket.from_record(row)
+
+    def get_promotion_ticket_by_key(self, idempotency_key: str) -> PromotionTicket | None:
+        """Read one promotion ticket by its UNIQUE idempotency key."""
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM research_alpha_promotion_tickets WHERE idempotency_key = ?",
+                (idempotency_key,),
+            ).fetchone()
+        return None if row is None else PromotionTicket.from_record(row)
+
+    def issue_promotion_ticket(
+        self,
+        *,
+        ticket_id: str,
+        run_id: str,
+        candidate_id: str,
+        candidate_digest: str,
+        canonical_expression: str,
+        ast_signature: str,
+        shape_signature: str,
+        dsl_version: str,
+        stage1_proposal_digest: str | None,
+        stage2_review_digest: str | None,
+        snapshot_sha256: str,
+        manifest_sha256: str,
+        vocabulary_fingerprint: str,
+        grammar_fingerprint: str,
+        membership_fingerprint: str,
+        data_fingerprint: str,
+        admission_verdict_id: str | None,
+        admission_verdict: str,
+        policy_version: str,
+        policy_fingerprint: str,
+        gate_trail_digest: str | None,
+        selection_oos_status: str,
+        selection_oos_fold_evidence_id: str | None,
+        reviewer: str,
+        issued_at: str,
+        expires_at: str,
+        idempotency_key: str,
+    ) -> PromotionTicket:
+        """Append one promotion ticket row under ``BEGIN IMMEDIATE``.
+
+        Exactly-once issue: a repeat with the same ``idempotency_key`` returns
+        the existing issued ticket (mirrors ``append_run_event`` idempotency).
+        The write is fenced so concurrent issues cannot interleave; the
+        ``UNIQUE(idempotency_key)`` constraint is the backstop.
+        """
+        for label, value in (
+            ("ticket_id", ticket_id),
+            ("run_id", run_id),
+            ("candidate_id", candidate_id),
+            ("candidate_digest", candidate_digest),
+            ("canonical_expression", canonical_expression),
+            ("ast_signature", ast_signature),
+            ("shape_signature", shape_signature),
+            ("dsl_version", dsl_version),
+            ("snapshot_sha256", snapshot_sha256),
+            ("manifest_sha256", manifest_sha256),
+            ("vocabulary_fingerprint", vocabulary_fingerprint),
+            ("grammar_fingerprint", grammar_fingerprint),
+            ("membership_fingerprint", membership_fingerprint),
+            ("data_fingerprint", data_fingerprint),
+            ("admission_verdict", admission_verdict),
+            ("policy_version", policy_version),
+            ("policy_fingerprint", policy_fingerprint),
+            ("selection_oos_status", selection_oos_status),
+            ("reviewer", reviewer),
+            ("issued_at", issued_at),
+            ("expires_at", expires_at),
+            ("idempotency_key", idempotency_key),
+        ):
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"{label} is required")
+        conflict_json = _bounded_json({}, "promotion conflict reason")
+        with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                existing = connection.execute(
+                    "SELECT * FROM research_alpha_promotion_tickets "
+                    "WHERE idempotency_key = ?",
+                    (idempotency_key,),
+                ).fetchone()
+                if existing is not None:
+                    ticket = PromotionTicket.from_record(existing)
+                    connection.execute("COMMIT")
+                    return ticket
+                try:
+                    connection.execute(
+                        """INSERT INTO research_alpha_promotion_tickets (
+                               id, run_id, candidate_id, candidate_digest,
+                               canonical_expression, ast_signature, shape_signature,
+                               dsl_version, stage1_proposal_digest,
+                               stage2_review_digest, snapshot_sha256, manifest_sha256,
+                               vocabulary_fingerprint, grammar_fingerprint,
+                               membership_fingerprint, data_fingerprint,
+                               admission_verdict_id, admission_verdict, policy_version,
+                               policy_fingerprint, gate_trail_digest,
+                               selection_oos_status, selection_oos_fold_evidence_id,
+                               reviewer, issued_at, expires_at, idempotency_key, status,
+                               conflict_reason_json, consumed_at,
+                               produced_factor_revision_id, created_at
+                           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (
+                            ticket_id, run_id, candidate_id, candidate_digest,
+                            canonical_expression, ast_signature, shape_signature,
+                            dsl_version, stage1_proposal_digest, stage2_review_digest,
+                            snapshot_sha256, manifest_sha256, vocabulary_fingerprint,
+                            grammar_fingerprint, membership_fingerprint, data_fingerprint,
+                            admission_verdict_id, admission_verdict, policy_version,
+                            policy_fingerprint, gate_trail_digest, selection_oos_status,
+                            selection_oos_fold_evidence_id, reviewer, issued_at, expires_at,
+                            idempotency_key, "issued", conflict_json, None, None, issued_at,
+                        ),
+                    )
+                except sqlite3.IntegrityError as error:
+                    if "UNIQUE" in str(error).upper():
+                        connection.execute("ROLLBACK")
+                        existing = self.get_promotion_ticket_by_key(idempotency_key)
+                        assert existing is not None
+                        return existing
+                    raise
+                row = connection.execute(
+                    "SELECT * FROM research_alpha_promotion_tickets WHERE id = ?",
+                    (ticket_id,),
+                ).fetchone()
+                connection.execute("COMMIT")
+            except BaseException:
+                if connection.in_transaction:
+                    connection.execute("ROLLBACK")
+                raise
+        assert row is not None
+        return PromotionTicket.from_record(row)
+
+    def set_promotion_ticket_status(
+        self,
+        *,
+        ticket_id: str,
+        status: str,
+        conflict_reason_json: Mapping[str, Any] | None = None,
+        consumed_at: str | None = None,
+        produced_factor_revision_id: str | None = None,
+    ) -> PromotionTicket:
+        """Flip a ticket's status to a terminal state under ``BEGIN IMMEDIATE``.
+
+        Restricted to the four guard-transition columns (status,
+        conflict_reason_json, consumed_at, produced_factor_revision_id); the
+        ``research_alpha_promotion_tickets_guard_transition`` trigger backstops
+        immutability for every identity/binding column.
+        """
+        if status not in ("issued", "expired", "conflicted", "consumed"):
+            raise ValueError("status must be one of issued/expired/conflicted/consumed")
+        reason_json = (
+            _bounded_json({}, "promotion conflict reason")
+            if conflict_reason_json is None
+            else _bounded_json(dict(conflict_reason_json), "promotion conflict reason")
+        )
+        with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                existing = connection.execute(
+                    "SELECT 1 FROM research_alpha_promotion_tickets WHERE id = ?",
+                    (ticket_id,),
+                ).fetchone()
+                if existing is None:
+                    connection.execute("ROLLBACK")
+                    raise ValueError("promotion ticket does not exist")
+                connection.execute(
+                    """UPDATE research_alpha_promotion_tickets
+                           SET status = ?, conflict_reason_json = ?,
+                               consumed_at = ?, produced_factor_revision_id = ?
+                       WHERE id = ?""",
+                    (status, reason_json, consumed_at, produced_factor_revision_id, ticket_id),
+                )
+                row = connection.execute(
+                    "SELECT * FROM research_alpha_promotion_tickets WHERE id = ?",
+                    (ticket_id,),
+                ).fetchone()
+                connection.execute("COMMIT")
+            except BaseException:
+                if connection.in_transaction:
+                    connection.execute("ROLLBACK")
+                raise
+        assert row is not None
+        return PromotionTicket.from_record(row)
 
     def next_checkpoint_version(self, run_id: str) -> int:
         """Return the next checkpoint version (``MAX(checkpoint_version) + 1``).
