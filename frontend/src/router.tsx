@@ -21,6 +21,7 @@ const RiskAttribution = lazy(() => import('./pages/portfolio/RiskAttribution').t
 const RebalancePlan = lazy(() => import('./pages/portfolio/RebalancePlan').then(m => ({ default: m.RebalancePlan })))
 const ModelLibrary = lazy(() => import('./pages/backtest/ModelLibrary').then(m => ({ default: m.ModelLibrary })))
 const WalkForward = lazy(() => import('./pages/backtest/WalkForward').then(m => ({ default: m.WalkForward })))
+const AlphaWorkbench = lazy(() => import('./pages/backtest/AlphaWorkbench').then(m => ({ default: m.AlphaWorkbench })))
 const Monitor = lazy(() => import('./pages/Monitor').then(m => ({ default: m.Monitor })))
 const Trading = lazy(() => import('./pages/Trading').then(m => ({ default: m.Trading })))
 const Dashboard = lazy(() => import('./pages/Dashboard').then(m => ({ default: m.Dashboard })))
@@ -89,6 +90,7 @@ export const router = createBrowserRouter([
       { path: 'backtest', element: <Backtest /> },
       { path: 'backtest/model-library', element: <ModelLibrary /> },
       { path: 'backtest/walk-forward', element: <WalkForward /> },
+      { path: 'backtest/alpha-workbench', element: <AlphaWorkbench /> },
       { path: 'financials', element: <Financials /> },
       { path: 'data', element: <Data /> },
       { path: 'portfolio', element: <Portfolio /> },
