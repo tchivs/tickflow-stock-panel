@@ -337,3 +337,248 @@ class TestProviderFailureTaxonomy:
             assert decision.base_delay == 1.0
             assert decision.factor == 2.0
             assert decision.cap == 30.0
+
+
+# ==================================================================
+# 48-01-04 — AgentProviderSeam: retry/backoff/cancel + no fallback (SC4)
+# ==================================================================
+
+
+class _FakeRecorder:
+    """Captures every record_analysis_attempt call as a dict."""
+
+    def __init__(self, real_repo: ResearchRepository) -> None:
+        self._repo = real_repo
+        self.calls: list[dict] = []
+
+    def __call__(self, **kwargs) -> dict:
+        self.calls.append(dict(kwargs))
+        return self._repo.record_analysis_attempt(**kwargs)
+
+def _seam_kwargs(repo: ResearchRepository, run_id: str, **overrides) -> dict:
+    base = dict(
+        stage="stage1",
+        messages=[{"role": "user", "content": "hi"}],
+        request_payload={"thesis": "momentum"},
+        repo=repo,
+        run_id=run_id,
+        schema_version="factor-stage1-v1",
+        template_version="factor-stage1-v1",
+        provider="openai_compat",
+        model="test-model",
+        model_version="test-v1",
+    )
+    base.update(overrides)
+    return base
+
+
+def _raising_generate(factory):
+    async def _generate(*args, **kwargs):
+        raise factory()
+    return _generate
+
+
+class TestAgentProviderSeamNoFallback:
+    """SC4: every failure class records a failed row and raises — no fallback draft."""
+
+    @pytest.mark.parametrize("factory, expected_rows", [
+        (lambda: json.JSONDecodeError("bad", "doc", 0), 1),
+        (lambda: ValueError("provider draft has unsupported field(s): x"), 1),
+        (lambda: _make_parse_error(), 1),
+        (lambda: _StatusError(400), 1),
+        (lambda: _StatusError(408), 4),
+        (lambda: _StatusError(429), 4),
+        (lambda: _StatusError(503), 4),
+    ])
+    async def test_seam_no_fallback_per_failure_class(
+        self, tmp_path, factory, expected_rows: int
+    ) -> None:
+        from app.research.agent_provider import AgentProviderSeam, ProviderCallError
+
+        repo = ResearchRepository(tmp_path / "operational.db")
+        repo.migrate()
+        run_id = _make_run(repo)
+        recorder = _FakeRecorder(repo)
+        seam = AgentProviderSeam(
+            generate_text=_raising_generate(factory),
+            record_analysis_attempt=recorder,
+        )
+
+        sleeps: list[float] = []
+
+        async def _sleep(delay: float) -> None:
+            sleeps.append(delay)
+
+        with pytest.raises(ProviderCallError):
+            await seam.request(
+                **_seam_kwargs(repo, run_id, sleep=_sleep),
+            )
+        rows = repo.list_analysis_attempts(run_id, stage="stage1")
+        assert len(rows) == expected_rows
+        # Zero success rows — no fabricated fallback draft.
+        assert all(r["outcome"] == "failed" for r in rows)
+        assert not any(r["outcome"] in ("proposed", "validated") for r in rows)
+        # Each row shares one request scope.
+        assert len({r["request_scope_sha256"] for r in rows}) == 1
+        # attempt_ordinal is contiguous from 1.
+        assert [r["attempt_ordinal"] for r in rows] == list(range(1, expected_rows + 1))
+
+
+def _make_parse_error() -> Exception:
+    from app.research.factor_dsl import parse_factor
+
+    try:
+        parse_factor("@@@bogus@@@")
+    except Exception as exc:
+        return exc
+    raise AssertionError("expected a parse error")
+
+
+class TestAgentProviderSeamRetryBackoff:
+    async def test_transient_retries_with_exponential_backoff_then_raises(
+        self, tmp_path
+    ) -> None:
+        from app.research.agent_provider import AgentProviderSeam, ProviderCallError
+
+        repo = ResearchRepository(tmp_path / "operational.db")
+        repo.migrate()
+        run_id = _make_run(repo)
+        recorder = _FakeRecorder(repo)
+        seam = AgentProviderSeam(
+            generate_text=_raising_generate(lambda: _StatusError(503)),
+            record_analysis_attempt=recorder,
+        )
+        sleeps: list[float] = []
+
+        async def _sleep(delay: float) -> None:
+            sleeps.append(delay)
+
+        with pytest.raises(ProviderCallError):
+            await seam.request(**_seam_kwargs(repo, run_id, sleep=_sleep))
+        # 1 initial attempt + 3 retries = 4 attempts, 3 sleeps.
+        assert len(sleeps) == 3
+        bases = [1.0, 2.0, 4.0]
+        for delay, base in zip(sleeps, bases):
+            # jitter = (0.5 + random()) ∈ [0.5, 1.5)
+            assert base * 0.5 <= delay < base * 1.5
+        # Cap is never exceeded.
+        assert all(d <= 30.0 for d in sleeps)
+
+    async def test_permanent_failure_records_and_raises_with_zero_retries(
+        self, tmp_path
+    ) -> None:
+        from app.research.agent_provider import AgentProviderSeam, ProviderCallError
+
+        repo = ResearchRepository(tmp_path / "operational.db")
+        repo.migrate()
+        run_id = _make_run(repo)
+        recorder = _FakeRecorder(repo)
+        seam = AgentProviderSeam(
+            generate_text=_raising_generate(lambda: json.JSONDecodeError("bad", "doc", 0)),
+            record_analysis_attempt=recorder,
+        )
+        slept: list[float] = []
+
+        async def _sleep(delay: float) -> None:
+            slept.append(delay)
+
+        with pytest.raises(ProviderCallError):
+            await seam.request(**_seam_kwargs(repo, run_id, sleep=_sleep))
+        assert slept == []  # no retry on a permanent failure
+        rows = repo.list_analysis_attempts(run_id, stage="stage1")
+        assert len(rows) == 1
+        assert rows[0]["retries"] == 0
+        assert rows[0]["failure_class"] == "malformed_json"
+
+
+class TestAgentProviderSeamCancel:
+    async def test_cancel_check_mid_loop_records_cancelled_row(self, tmp_path) -> None:
+        from app.research.agent_provider import AgentProviderSeam, ProviderCallError
+
+        repo = ResearchRepository(tmp_path / "operational.db")
+        repo.migrate()
+        run_id = _make_run(repo)
+        recorder = _FakeRecorder(repo)
+        seam = AgentProviderSeam(
+            generate_text=_raising_generate(lambda: _StatusError(503)),
+            record_analysis_attempt=recorder,
+        )
+
+        async def _sleep(delay: float) -> None:
+            return None
+
+        with pytest.raises(ProviderCallError):
+            await seam.request(
+                **_seam_kwargs(repo, run_id, sleep=_sleep, cancel_check=lambda: True),
+            )
+        rows = repo.list_analysis_attempts(run_id, stage="stage1")
+        assert len(rows) == 1
+        assert rows[0]["outcome"] == "cancelled"
+        assert rows[0]["failure_class"] == "cancelled"
+        assert rows[0]["cancelled"] == 1
+
+
+class TestAgentProviderSeamSuccess:
+    async def test_success_records_response_checksum_and_latency(self, tmp_path) -> None:
+        from app.research.agent_provider import AgentProviderSeam
+
+        repo = ResearchRepository(tmp_path / "operational.db")
+        repo.migrate()
+        run_id = _make_run(repo)
+        raw = '{"hypotheses": []}'
+
+        async def _generate(*args, **kwargs):
+            return raw
+
+        seam = AgentProviderSeam(generate_text=_generate, record_analysis_attempt=_FakeRecorder(repo))
+        result = await seam.request(**_seam_kwargs(repo, run_id))
+        assert result.raw == raw
+        assert result.attempt_ordinal == 1
+        rows = repo.list_analysis_attempts(run_id, stage="stage1")
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["outcome"] == "proposed"
+        assert row["response_sha256"] is not None and len(row["response_sha256"]) == 64
+        assert row["response_byte_size"] == len(raw.encode("utf-8"))
+        assert row["latency_ms"] >= 0
+        assert row["response_artifact_id"] is None  # checksum-by-default
+        assert row["retries"] == 0
+
+    async def test_retain_raw_artifact_service_stores_full_response(self, tmp_path) -> None:
+        from app.research.agent_provider import AgentProviderSeam
+
+        repo = ResearchRepository(tmp_path / "operational.db")
+        repo.migrate()
+        run_id = _make_run(repo)
+        raw = '{"hypotheses": []}'
+
+        async def _generate(*args, **kwargs):
+            return raw
+
+        class _ArtifactService:
+            def __init__(self, repo):
+                self._repo = repo
+
+            def store(self, *, run_id, stage, raw, checksum_sha256, byte_size):
+                artifact_id = "aart_" + checksum_sha256[:16]
+                with self._repo._connection() as connection, connection:
+                    connection.execute(
+                        """INSERT INTO research_alpha_artifacts
+                           (id, run_id, logical_kind, relative_path, content_type,
+                            byte_size, checksum_sha256, schema_version, created_at)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (
+                            artifact_id, run_id, "response",
+                            f"research_artifacts/alpha_runs/{run_id}/{checksum_sha256}.json",
+                            "application/json", byte_size, checksum_sha256,
+                            "alpha-artifact-v1", "2026-08-09T00:00:00+00:00",
+                        ),
+                    )
+                return artifact_id
+
+        seam = AgentProviderSeam(generate_text=_generate, record_analysis_attempt=_FakeRecorder(repo))
+        await seam.request(
+            **_seam_kwargs(repo, run_id, retain_raw_artifact_service=_ArtifactService(repo))
+        )
+        rows = repo.list_analysis_attempts(run_id, stage="stage1")
+        assert rows[0]["response_artifact_id"].startswith("aart_")
