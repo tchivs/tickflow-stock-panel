@@ -2390,6 +2390,104 @@ MIGRATIONS: tuple[str, ...] = (
         BEFORE DELETE ON research_alpha_proposals
         BEGIN SELECT RAISE(ABORT, 'alpha stage1 proposals are append-only'); END;
     """,
+    """
+    -- Phase 49 (AF-REQ-15): append-only research_alpha_promotion_tickets. A
+    -- ticket binds the COMPLETE frozen evidence triple at issue time (candidate
+    -- identity, issued draft, frozen context, admission/OOS evidence, live
+    -- admission policy fingerprint, reviewer + expiry + idempotency key). The
+    -- guard-transition trigger mirrors research_alpha_runs_guard_cursor: only
+    -- the four consume-transition columns (status, conflict_reason_json,
+    -- consumed_at, produced_factor_revision_id) may change post-issue; every
+    -- identity/binding column is immutable. A PARTIAL UNIQUE INDEX over
+    -- (run_id, candidate_digest) WHERE status='consumed' enforces at most one
+    -- consumed revision per candidate even across distinct tickets (research
+    -- §3.2). UNIQUE(idempotency_key) gives exactly-once issue. Refresh/consume
+    -- (49-01-04 / 49-02) re-read and re-verify these frozen facts; they never
+    -- re-compute (R2). Shares the same SQLite DB as the run ledger so the
+    -- consume transaction (49-02) flips status + writes the formal revision in
+    -- one BEGIN IMMEDIATE atomic (OQ-1 resolved).
+    CREATE TABLE research_alpha_promotion_tickets (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL REFERENCES research_alpha_runs(id) ON DELETE RESTRICT,
+        candidate_id TEXT NOT NULL,
+        candidate_digest TEXT NOT NULL CHECK (length(candidate_digest) = 64),
+        canonical_expression TEXT NOT NULL,
+        ast_signature TEXT NOT NULL,
+        shape_signature TEXT NOT NULL,
+        dsl_version TEXT NOT NULL,
+        stage1_proposal_digest TEXT CHECK (length(stage1_proposal_digest) = 64),
+        stage2_review_digest TEXT CHECK (length(stage2_review_digest) = 64),
+        snapshot_sha256 TEXT NOT NULL CHECK (length(snapshot_sha256) = 64),
+        manifest_sha256 TEXT NOT NULL CHECK (length(manifest_sha256) = 64),
+        vocabulary_fingerprint TEXT NOT NULL CHECK (length(vocabulary_fingerprint) = 64),
+        grammar_fingerprint TEXT NOT NULL CHECK (length(grammar_fingerprint) = 64),
+        membership_fingerprint TEXT NOT NULL CHECK (length(membership_fingerprint) = 64),
+        data_fingerprint TEXT NOT NULL CHECK (length(data_fingerprint) = 64),
+        admission_verdict_id TEXT,
+        admission_verdict TEXT NOT NULL CHECK (admission_verdict = 'admitted'),
+        policy_version TEXT NOT NULL,
+        policy_fingerprint TEXT NOT NULL CHECK (length(policy_fingerprint) = 64),
+        gate_trail_digest TEXT,
+        selection_oos_status TEXT NOT NULL,
+        selection_oos_fold_evidence_id TEXT,
+        reviewer TEXT NOT NULL,
+        issued_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'issued' CHECK (status IN (
+            'issued', 'expired', 'conflicted', 'consumed'
+        )),
+        conflict_reason_json TEXT,
+        consumed_at TEXT,
+        produced_factor_revision_id TEXT,
+        created_at TEXT NOT NULL,
+        UNIQUE (idempotency_key)
+    );
+    CREATE INDEX idx_promotion_tickets_run
+        ON research_alpha_promotion_tickets(run_id, candidate_digest);
+    -- At-most-one consumed revision per candidate, even across distinct tickets.
+    CREATE UNIQUE INDEX ux_promotion_tickets_consumed_candidate
+        ON research_alpha_promotion_tickets(run_id, candidate_digest)
+        WHERE status = 'consumed';
+    CREATE TRIGGER research_alpha_promotion_tickets_no_delete
+        BEFORE DELETE ON research_alpha_promotion_tickets
+        BEGIN SELECT RAISE(ABORT, 'alpha promotion tickets are append-only'); END;
+    -- Only the consume-transition columns may change post-issue. Every
+    -- identity/binding column is immutable (mirrors
+    -- research_alpha_runs_guard_cursor). The IS NOT form is NULL-safe.
+    CREATE TRIGGER research_alpha_promotion_tickets_guard_transition
+        BEFORE UPDATE ON research_alpha_promotion_tickets
+    FOR EACH ROW WHEN
+        OLD.id IS NOT NEW.id
+        OR OLD.run_id IS NOT NEW.run_id
+        OR OLD.candidate_id IS NOT NEW.candidate_id
+        OR OLD.candidate_digest IS NOT NEW.candidate_digest
+        OR OLD.canonical_expression IS NOT NEW.canonical_expression
+        OR OLD.ast_signature IS NOT NEW.ast_signature
+        OR OLD.shape_signature IS NOT NEW.shape_signature
+        OR OLD.dsl_version IS NOT NEW.dsl_version
+        OR OLD.stage1_proposal_digest IS NOT NEW.stage1_proposal_digest
+        OR OLD.stage2_review_digest IS NOT NEW.stage2_review_digest
+        OR OLD.snapshot_sha256 IS NOT NEW.snapshot_sha256
+        OR OLD.manifest_sha256 IS NOT NEW.manifest_sha256
+        OR OLD.vocabulary_fingerprint IS NOT NEW.vocabulary_fingerprint
+        OR OLD.grammar_fingerprint IS NOT NEW.grammar_fingerprint
+        OR OLD.membership_fingerprint IS NOT NEW.membership_fingerprint
+        OR OLD.data_fingerprint IS NOT NEW.data_fingerprint
+        OR OLD.admission_verdict_id IS NOT NEW.admission_verdict_id
+        OR OLD.admission_verdict IS NOT NEW.admission_verdict
+        OR OLD.policy_version IS NOT NEW.policy_version
+        OR OLD.policy_fingerprint IS NOT NEW.policy_fingerprint
+        OR OLD.gate_trail_digest IS NOT NEW.gate_trail_digest
+        OR OLD.selection_oos_status IS NOT NEW.selection_oos_status
+        OR OLD.selection_oos_fold_evidence_id IS NOT NEW.selection_oos_fold_evidence_id
+        OR OLD.reviewer IS NOT NEW.reviewer
+        OR OLD.issued_at IS NOT NEW.issued_at
+        OR OLD.expires_at IS NOT NEW.expires_at
+        OR OLD.idempotency_key IS NOT NEW.idempotency_key
+        OR OLD.created_at IS NOT NEW.created_at
+    BEGIN SELECT RAISE(ABORT, 'alpha promotion ticket identity columns are immutable'); END;
+    """,
 )
 
 

@@ -1752,3 +1752,148 @@ def test_phase47_selection_oos_status_rebuild_is_idempotent(
     assert connection.execute(
         "SELECT status FROM research_alpha_candidate_attempts WHERE id = 'cand-idem47'"
     ).fetchone()[0] == "selection_oos"
+
+
+def _promotion_ticket_row(
+    *,
+    ticket_id: str = "promo-tk-1",
+    run_id: str = "alpha-run-1",
+    idempotency_key: str = "idem-promo-00000000000001",
+    candidate_digest: str = "9" * 64,
+    status: str = "issued",
+) -> str:
+    """Build a valid research_alpha_promotion_tickets INSERT statement."""
+    return (
+        "INSERT INTO research_alpha_promotion_tickets ("
+        "id, run_id, candidate_id, candidate_digest, canonical_expression, "
+        "ast_signature, shape_signature, dsl_version, snapshot_sha256, "
+        "manifest_sha256, vocabulary_fingerprint, grammar_fingerprint, "
+        "membership_fingerprint, data_fingerprint, admission_verdict_id, "
+        "admission_verdict, policy_version, policy_fingerprint, "
+        "gate_trail_digest, selection_oos_status, selection_oos_fold_evidence_id, "
+        "reviewer, issued_at, expires_at, idempotency_key, status, "
+        "conflict_reason_json, consumed_at, produced_factor_revision_id, created_at"
+        ") VALUES ("
+        f"'{ticket_id}', '{run_id}', 'acand-1', '{candidate_digest}', 'close', "
+        "'ast', 'shape', 'factor-dsl-v1', '" + "a" * 64 + "', '" + "b" * 64 + "', "
+        "'" + "v" * 64 + "', '" + "g" * 64 + "', '" + "m" * 64 + "', '" + "d" * 64 + "', "
+        "'verd-1', 'admitted', 'admission-policy-v1', '" + "p" * 64 + "', "
+        "'" + "t" * 64 + "', 'evaluated', 'oos-1', "
+        "'researcher@example.com', '2026-08-08T00:00:00Z', '2026-08-09T00:00:00Z', "
+        f"'{idempotency_key}', '{status}', NULL, NULL, NULL, '2026-08-08T00:00:00Z')"
+    )
+
+
+def test_phase49_promotion_tickets_migrate_with_constraints_and_idempotence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """research_alpha_promotion_tickets: CHECKs + sha256 + FK + guard + partial index."""
+    planned = migrations.MIGRATIONS
+    p49_index = next(
+        index
+        for index, script in enumerate(planned)
+        if "CREATE TABLE research_alpha_promotion_tickets" in script
+    )
+    connection = sqlite3.connect(":memory:")
+    connection.execute("PRAGMA foreign_keys = ON")
+
+    # Forward-only: promotion table absent before the Phase 49 script.
+    monkeypatch.setattr(migrations, "MIGRATIONS", planned[:p49_index])
+    migrations.migrate_operational_db(connection)
+    assert connection.execute("PRAGMA user_version").fetchone() == (p49_index,)
+    assert (
+        connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+            "AND name = 'research_alpha_promotion_tickets'"
+        ).fetchone()
+        is None
+    )
+
+    monkeypatch.setattr(migrations, "MIGRATIONS", planned)
+    migrations.migrate_operational_db(connection)
+    assert connection.execute("PRAGMA user_version").fetchone() == (len(planned),)
+    # Idempotent re-run.
+    migrations.migrate_operational_db(connection)
+    assert connection.execute("PRAGMA user_version").fetchone() == (len(planned),)
+
+    # FK chain: snapshot -> run (promotion ticket references the run).
+    connection.execute(_alpha_snapshot_row())
+    connection.execute(_alpha_run_row())
+
+    # FK: run_id must exist.
+    with pytest.raises(sqlite3.IntegrityError):
+        connection.execute(_promotion_ticket_row(run_id="missing-run"))
+
+    # Valid issued row.
+    connection.execute(_promotion_ticket_row())
+    # candidate_digest length CHECK.
+    with pytest.raises(sqlite3.IntegrityError):
+        connection.execute(
+            _promotion_ticket_row(ticket_id="tk-short").replace("9" * 64, "short")
+        )
+    # admission_verdict CHECK = 'admitted'.
+    with pytest.raises(sqlite3.IntegrityError):
+        connection.execute(
+            _promotion_ticket_row(ticket_id="tk-rej").replace("'admitted'", "'rejected'")
+        )
+    # UNIQUE(idempotency_key).
+    with pytest.raises(sqlite3.IntegrityError):
+        connection.execute(
+            _promotion_ticket_row(ticket_id="tk-dup")
+        )
+    # DELETE blocked.
+    with pytest.raises(sqlite3.IntegrityError):
+        connection.execute("DELETE FROM research_alpha_promotion_tickets WHERE id = 'promo-tk-1'")
+
+    # Guard-transition: the four consume columns may change.
+    connection.execute(
+        "UPDATE research_alpha_promotion_tickets SET status = 'consumed', "
+        "consumed_at = '2026-08-08T01:00:00Z', produced_factor_revision_id = 'fr-1' "
+        "WHERE id = 'promo-tk-1'"
+    )
+    connection.execute(
+        "UPDATE research_alpha_promotion_tickets SET status = 'issued', "
+        "conflict_reason_json = NULL, consumed_at = NULL, "
+        "produced_factor_revision_id = NULL WHERE id = 'promo-tk-1'"
+    )
+    # Identity/binding columns are immutable.
+    for col, value in (
+        ("canonical_expression", "'other'"),
+        ("candidate_digest", "'" + "0" * 64 + "'"),
+        ("policy_fingerprint", "'" + "0" * 64 + "'"),
+        ("admission_verdict", "'rejected'"),
+        ("idempotency_key", "'changed'"),
+    ):
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                f"UPDATE research_alpha_promotion_tickets SET {col} = {value} "
+                "WHERE id = 'promo-tk-1'"
+            )
+
+    # Partial consumed-candidate unique index: a second consumed row for the
+    # same (run_id, candidate_digest) collides.
+    connection.execute(
+        _promotion_ticket_row(
+            ticket_id="tk-consumed-1",
+            idempotency_key="idem-promo-00000000000010",
+            status="consumed",
+        )
+    )
+    with pytest.raises(sqlite3.IntegrityError):
+        connection.execute(
+            _promotion_ticket_row(
+                ticket_id="tk-consumed-2",
+                idempotency_key="idem-promo-00000000000011",
+                status="consumed",
+            )
+        )
+    # Two issued rows for the same candidate are allowed (partial index scopes
+    # only to consumed).
+    connection.execute(
+        _promotion_ticket_row(
+            ticket_id="tk-issued-2",
+            idempotency_key="idem-promo-00000000000012",
+            status="issued",
+        )
+    )
+    assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
