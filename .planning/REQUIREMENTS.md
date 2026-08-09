@@ -45,9 +45,9 @@ Locked boundaries:
 
 ### Human Review and Research-only Delivery
 
-- [ ] **AF-REQ-15**: A researcher can compare a proposal's expression, assumptions, evidence, gate trail, and provenance, then explicitly save a new immutable `FactorRevision`; changed expression/explanation/provenance that no longer matches the issued draft is rejected, and unreviewed output is absent from the formal catalog.
+- [x] **AF-REQ-15**: A researcher can compare a proposal's expression, assumptions, evidence, gate trail, and provenance, then explicitly save a new immutable `FactorRevision`; changed expression/explanation/provenance that no longer matches the issued draft is rejected, and unreviewed output is absent from the formal catalog.
 - [x] **AF-REQ-16**: The workbench exposes queued/running/completed/failed/cancelled states, candidate/fold progress, cooperative cancellation, idempotent retry, and checkpointed resume; retry resumes or creates a linked run and never overwrites an earlier run or repeats a committed OOS/promotion side effect.
-- [ ] **AF-REQ-17**: Alpha Factory and Agent runs expose only inspect, compare, retain, and research-only promotion actions; no route, collaborator, UI action, or model output can place broker orders, mutate positions/portfolios, activate monitors, or enable live execution.
+- [x] **AF-REQ-17**: Alpha Factory and Agent runs expose only inspect, compare, retain, and research-only promotion actions; no route, collaborator, UI action, or model output can place broker orders, mutate positions/portfolios, activate monitors, or enable live execution.
 
 ### Research Workbench and Differentiators
 
@@ -96,9 +96,9 @@ Locked boundaries:
 | AF-REQ-12 | Phase 48 | Complete |
 | AF-REQ-13 | Phase 48 | Complete |
 | AF-REQ-14 | Phase 48 | Complete |
-| AF-REQ-15 | Phase 49 | Pending |
+| AF-REQ-15 | Phase 49 | Complete |
 | AF-REQ-16 | Phase 45 | Complete |
-| AF-REQ-17 | Phase 49 | Pending |
+| AF-REQ-17 | Phase 49 | Complete |
 | AF-REQ-18 | Phase 50 | Pending |
 | AF-REQ-19 | Phase 46 | Complete |
 | AF-REQ-20 | Phase 50 | Pending |
