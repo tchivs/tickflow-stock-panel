@@ -184,3 +184,172 @@ class TestListLineageService:
         assert service.list_lineage(run["id"], principal="other@example.com") == []
         # Unknown run: empty.
         assert service.list_lineage("no-such-run", principal=_PRINCIPAL) == []
+
+
+# ================================================================
+# Task 50-01-02: projections.lineage + projections.evidence_classification
+# ================================================================
+
+_DECLARED_KEYS = ("panel", "membership", "source_field", "warmup", "missing_data", "signal")
+
+
+def _full_declared_fingerprints() -> dict[str, str]:
+    return {k: "a" * 64 for k in _DECLARED_KEYS}
+
+
+def _snapshot_record(*, measured_window: dict | None = None) -> dict[str, Any]:
+    return {
+        "manifest": {
+            "measured_window": measured_window or {"start": "2020-01-01", "end": "2023-12-31", "calendar": "SSE"},
+        },
+    }
+
+
+def _fold_evidence(
+    *,
+    coverage: float | None = 0.95,
+    declared: dict[str, str] | None = None,
+    is_oos: bool = False,
+) -> dict[str, Any]:
+    stats: dict[str, Any] = {}
+    if coverage is not None:
+        stats["coverage"] = coverage
+    return {
+        "declared_fingerprints": declared if declared is not None else _full_declared_fingerprints(),
+        "stats": stats,
+        "is_oos": int(is_oos),
+        "fold_index": 0,
+    }
+
+
+def _candidate(*, status: str = "admitted") -> dict[str, Any]:
+    return {
+        "id": "cand-1",
+        "attempt_ordinal": 1,
+        "candidate_digest": "d" * 64,
+        "canonical_expression": "rank(close)",
+        "dsl_version": "factor-dsl-v1",
+        "operation": "generate",
+        "seed": 42,
+        "step": 1,
+        "status": status,
+        "created_at": "2026-08-09T00:00:00+00:00",
+    }
+
+
+class TestLineageProjection:
+    def test_lineage_exposes_bounded_fields_only(self) -> None:
+        edge = {
+            "lineage_id": "lin-1",
+            "edge_ordinal": 0,
+            "operation": "mutation",
+            "created_at": "2026-08-09T00:00:00+00:00",
+            "child": _candidate(status="admitted"),
+            "parent": _candidate(status="admitted"),
+        }
+        projected = projections.lineage(edge)
+        assert projected["lineage_id"] == "lin-1"
+        assert projected["edge_ordinal"] == 0
+        assert projected["operation"] == "mutation"
+        assert projected["child"]["canonical_expression"] == "rank(close)"
+        assert projected["parent"]["canonical_expression"] == "rank(close)"
+        # Deny-by-default: no raw reason/payload internals leak.
+        assert "reason" not in projected["child"]
+        assert "reason_json" not in projected["child"]
+
+
+class TestEvidenceClassification:
+    def test_clean_when_all_signals_clear(self) -> None:
+        result = projections.evidence_classification(
+            _snapshot_record(), _candidate(status="admitted"),
+            _fold_evidence(coverage=0.95), fixture_flag=False,
+        )
+        assert result["cache_state"] == "fresh"
+        assert result["missing_fields"] == []
+        assert result["membership_coverage"] == 0.95
+        assert result["evidence_role"] == "selection_fold"
+        assert result["fixture"] is False
+        assert result["clean"] is True
+        assert result["data_date"] == "2020-01-01/2023-12-31"
+        assert result["source_label"] == "a" * 64
+
+    def test_stale_cache_when_partial_fingerprints(self) -> None:
+        partial = {k: "a" * 64 for k in _DECLARED_KEYS[:3]}  # only 3 of 6
+        result = projections.evidence_classification(
+            _snapshot_record(), _candidate(),
+            _fold_evidence(coverage=0.95, declared=partial), fixture_flag=False,
+        )
+        assert result["cache_state"] == "stale"
+        assert result["clean"] is False
+
+    def test_degraded_cache_when_no_fold_evidence(self) -> None:
+        result = projections.evidence_classification(
+            _snapshot_record(), _candidate(), None, fixture_flag=False,
+        )
+        assert result["cache_state"] == "degraded"
+        assert result["membership_coverage"] == 0.0
+        assert result["clean"] is False
+
+    def test_non_empty_missing_fields_flips_clean(self) -> None:
+        declared = {**_full_declared_fingerprints(), "missing_fields": ["close", "volume"]}
+        result = projections.evidence_classification(
+            _snapshot_record(), _candidate(),
+            _fold_evidence(coverage=0.95, declared=declared), fixture_flag=False,
+        )
+        assert result["missing_fields"] == ["close", "volume"]
+        assert result["clean"] is False
+
+    def test_low_coverage_flips_clean(self) -> None:
+        result = projections.evidence_classification(
+            _snapshot_record(), _candidate(),
+            _fold_evidence(coverage=0.4), fixture_flag=False,
+        )
+        assert result["membership_coverage"] < 0.9
+        assert result["clean"] is False
+
+    def test_fixture_flag_flips_clean(self) -> None:
+        result = projections.evidence_classification(
+            _snapshot_record(), _candidate(),
+            _fold_evidence(coverage=0.95), fixture_flag=True,
+        )
+        assert result["fixture"] is True
+        assert result["clean"] is False
+
+    def test_final_blind_unavailable_for_blocked_candidate(self) -> None:
+        result = projections.evidence_classification(
+            _snapshot_record(), _candidate(status="rejected"),
+            _fold_evidence(coverage=0.95), fixture_flag=False,
+        )
+        assert result["evidence_role"] == "final_blind_unavailable"
+        assert result["clean"] is False
+
+    def test_selection_oos_role(self) -> None:
+        result = projections.evidence_classification(
+            _snapshot_record(), _candidate(status="selection_oos"),
+            _fold_evidence(coverage=0.95, is_oos=True), fixture_flag=False,
+        )
+        assert result["evidence_role"] == "selection_oos"
+        # selection_oos with all signals clear is clean.
+        assert result["clean"] is True
+
+    def test_exploratory_role_when_no_fold_evidence(self) -> None:
+        # No fold evidence + admitted candidate (not blocked) → exploratory.
+        result = projections.evidence_classification(
+            _snapshot_record(), _candidate(status="admitted"), None, fixture_flag=False,
+        )
+        assert result["evidence_role"] == "exploratory"
+
+    def test_deterministic_output_for_known_fingerprints(self) -> None:
+        snap = _snapshot_record()
+        cand = _candidate()
+        fe = _fold_evidence(coverage=0.92)
+        first = projections.evidence_classification(snap, cand, fe, fixture_flag=False)
+        second = projections.evidence_classification(snap, cand, fe, fixture_flag=False)
+        assert first == second
+
+    def test_coverage_clamped_to_unit_interval(self) -> None:
+        result = projections.evidence_classification(
+            _snapshot_record(), _candidate(),
+            _fold_evidence(coverage=1.5), fixture_flag=False,
+        )
+        assert result["membership_coverage"] == 1.0

@@ -193,3 +193,40 @@ class AlphaProgressDTO(StrictAlphaModel):
     candidate_attempts_completed: int
     folds_total: int
     folds_completed: int
+
+
+
+class AlphaLineageEdgeDTO(StrictAlphaModel):
+    """One parent→child lineage edge with bounded child/parent candidates (SC2)."""
+
+    lineage_id: str
+    edge_ordinal: int = Field(ge=0)
+    operation: str
+    created_at: str
+    child: AlphaCandidateDTO
+    parent: AlphaCandidateDTO
+
+
+class AlphaLineageDTO(StrictAlphaModel):
+    """Ordered lineage edges for one run (SC2 read half)."""
+
+    run_id: str
+    edges: list[AlphaLineageEdgeDTO] = Field(default_factory=list)
+
+
+class EvidenceClassificationDTO(StrictAlphaModel):
+    """SC4 temporal/degradation classification — clean flag binds the data-quality banner."""
+
+    data_date: str | None = None
+    source_label: str | None = None
+    cache_state: Literal["fresh", "stale", "degraded"]
+    missing_fields: list[str] = Field(default_factory=list)
+    membership_coverage: float = Field(ge=0.0, le=1.0)
+    evidence_role: Literal[
+        "exploratory",
+        "selection_fold",
+        "selection_oos",
+        "final_blind_unavailable",
+    ]
+    fixture: bool
+    clean: bool

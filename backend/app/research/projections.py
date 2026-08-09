@@ -104,6 +104,138 @@ def candidate(record: Mapping[str, Any]) -> dict[str, object]:
     }
 
 
+# SC4: the declared-fingerprint keys whose completeness drives cache_state, and
+# the coverage floor above which evidence may be considered clean production.
+_DECLARED_FINGERPRINT_KEYS: tuple[str, ...] = (
+    "panel", "membership", "source_field", "warmup", "missing_data", "signal",
+)
+_COVERAGE_CLEAN_THRESHOLD: float = 0.9
+# Candidate statuses that terminally block the reserved final-blind evaluation
+# (the candidate can never reach the OOS fold — its blind is unavailable).
+_BLOCKED_BLIND_STATUSES: frozenset[str] = frozenset({
+    "invalid", "duplicate", "low_coverage", "failed",
+    "rejected", "cancelled", "budget_exhausted",
+})
+
+
+def lineage(edge: Mapping[str, Any]) -> dict[str, object]:
+    """Expose one parent→child lineage edge with bounded candidate fields.
+
+    Deny-by-default: only the edge identity + child/parent ``candidate``
+    projections surface — never raw reason/payload internals (SC2 read half).
+    """
+    return {
+        "lineage_id": str(edge["lineage_id"]),
+        "edge_ordinal": int(edge["edge_ordinal"]),
+        "operation": str(edge["operation"]),
+        "created_at": str(edge["created_at"]),
+        "child": candidate(edge["child"]),
+        "parent": candidate(edge["parent"]),
+    }
+
+
+def evidence_classification(
+    snapshot: Mapping[str, Any],
+    candidate_record: Mapping[str, Any],
+    fold_evidence: Mapping[str, Any] | None,
+    fixture_flag: bool,
+) -> dict[str, object]:
+    """Deny-by-default SC4 classification of one candidate's evidence health.
+
+    Every value is sourced from an EXISTING declared fingerprint on the frozen
+    snapshot or fold evidence — no new data collection.  ``clean`` is False
+    unless the cache is fresh, no declared fields are missing, coverage is at
+    or above the clean threshold, the evidence is not a fixture, and the
+    final-blind role is available.  Stale / partial / blocked / fixture
+    results can therefore never look like clean production (SC4 invariant).
+    """
+    manifest = snapshot.get("manifest") if isinstance(snapshot, Mapping) else {}
+    if not isinstance(manifest, Mapping):
+        manifest = {}
+    window = manifest.get("measured_window")
+    if not isinstance(window, Mapping):
+        window = {}
+
+    # data_date ← declared measured window (start/end).
+    start = window.get("start")
+    end = window.get("end")
+    if start and end:
+        data_date: str | None = f"{start}/{end}"
+    elif start:
+        data_date = str(start)
+    else:
+        data_date = None
+
+    # Source declared fingerprints + stats from the frozen fold evidence.
+    declared: Mapping[str, Any] = {}
+    stats: Mapping[str, Any] = {}
+    if isinstance(fold_evidence, Mapping):
+        raw_declared = fold_evidence.get("declared_fingerprints")
+        if isinstance(raw_declared, Mapping):
+            declared = raw_declared
+        raw_stats = fold_evidence.get("stats")
+        if isinstance(raw_stats, Mapping):
+            stats = raw_stats
+
+    # source_label ← declared source_field fingerprint.
+    source_field = declared.get("source_field")
+    source_label = str(source_field) if source_field else None
+
+    # missing_fields ← explicitly declared missing-field list (if any).
+    raw_missing = declared.get("missing_fields")
+    if isinstance(raw_missing, (list, tuple)):
+        missing_fields = [str(field) for field in raw_missing if field]
+    else:
+        missing_fields = []
+
+    # cache_state ← declared-fingerprint block completeness.
+    present = sum(1 for key in _DECLARED_FINGERPRINT_KEYS if str(declared.get(key, "")))
+    if present == len(_DECLARED_FINGERPRINT_KEYS):
+        cache_state = "fresh"
+    elif present > 0:
+        cache_state = "stale"
+    else:
+        cache_state = "degraded"
+
+    # membership_coverage ← measured fold coverage (0..1).
+    coverage_raw = stats.get("coverage")
+    try:
+        membership_coverage = float(coverage_raw) if coverage_raw is not None else 0.0
+    except (TypeError, ValueError):
+        membership_coverage = 0.0
+    membership_coverage = max(0.0, min(1.0, membership_coverage))
+
+    # evidence_role ← candidate status + fold-evidence presence.
+    status = str(candidate_record.get("status", "")) if isinstance(candidate_record, Mapping) else ""
+    if status == "selection_oos":
+        evidence_role = "selection_oos"
+    elif status in _BLOCKED_BLIND_STATUSES:
+        evidence_role = "final_blind_unavailable"
+    elif fold_evidence:
+        evidence_role = "selection_fold"
+    else:
+        evidence_role = "exploratory"
+
+    clean = (
+        cache_state == "fresh"
+        and not missing_fields
+        and membership_coverage >= _COVERAGE_CLEAN_THRESHOLD
+        and not bool(fixture_flag)
+        and evidence_role != "final_blind_unavailable"
+    )
+
+    return {
+        "data_date": data_date,
+        "source_label": source_label,
+        "cache_state": cache_state,
+        "missing_fields": missing_fields,
+        "membership_coverage": membership_coverage,
+        "evidence_role": evidence_role,
+        "fixture": bool(fixture_flag),
+        "clean": clean,
+    }
+
+
 def progress(record: Mapping[str, Any]) -> dict[str, object]:
     """Expose the four bounded progress counters without token or principal."""
     return {
