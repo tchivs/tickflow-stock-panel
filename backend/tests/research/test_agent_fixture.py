@@ -481,7 +481,8 @@ async def _run_fixture(
     from app.research.run_service import ResearchRunService
 
     service = ResearchRunService(repo)
-    return await service.run_fixture_mode(
+    from app.research.agent_orchestrator import run_fixture_mode as _rfm
+    return await _rfm(service,
         run_id,
         principal="researcher@example.com",
         snapshot=_snapshot(),
@@ -662,7 +663,8 @@ class TestFixtureModeRunE2E:
         run_id = started["id"]
         service = ResearchRunService(repo)
         with pytest.raises(ValueError, match="explicit"):
-            await service.run_fixture_mode(
+            from app.research.agent_orchestrator import run_fixture_mode as _rfm2
+            await _rfm2(service,
                 run_id,
                 principal="researcher@example.com",
                 snapshot=_snapshot(),
