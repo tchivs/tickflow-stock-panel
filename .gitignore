@@ -94,6 +94,8 @@ backend._recheck*.py
 backend/_verify*.py
 backend/_desktop_run.log
 .codegraph/
+.codebase-memory/
+frontend/e2e/__debug-trap.spec.ts-snapshots/
 .tmp/
 frontend/test-results/
 .planning/.omp-*.json
