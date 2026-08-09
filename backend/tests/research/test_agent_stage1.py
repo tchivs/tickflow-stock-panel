@@ -499,3 +499,171 @@ class TestConfirmStage1Hypotheses:
         )
         # The proposal must not have leaked into the factor catalog/registry.
         assert _catalog_lookup(repo, "close") is None
+
+
+# ==================================================================
+# 48-02-03 — Stage1Service over the Agent seam + partial labeling (R2)
+# ==================================================================
+
+
+class _FakeRecorder:
+    """Captures every seam record_analysis_attempt call, delegating to the real repo."""
+
+    def __init__(self, repo: ResearchRepository) -> None:
+        self._repo = repo
+        self.calls: list[dict] = []
+
+    def __call__(self, **kwargs):
+        self.calls.append(dict(kwargs))
+        return self._repo.record_analysis_attempt(**kwargs)
+
+
+def _generate_returning(raw: str):
+    async def _generate(*_args, **_kwargs) -> str:
+        return raw
+
+    return _generate
+
+
+def _generate_raising(error: BaseException):
+    async def _generate(*_args, **_kwargs) -> str:
+        raise error
+
+    return _generate
+
+
+def _seam(repo: ResearchRepository, generate_text):
+    from app.research.agent_provider import AgentProviderSeam
+
+    return AgentProviderSeam(generate_text=generate_text, record_analysis_attempt=_FakeRecorder(repo))
+
+
+def _stage1_service():
+    from app.research.agent_stage1 import Stage1Service
+
+    return Stage1Service(
+        provider="offline_fake", model="offline-fixture", model_version="offline-v1"
+    )
+
+
+def _stage1_request():
+    from app.research.agent_stage1 import StageOneRequest
+
+    return StageOneRequest(**_request_kwargs())
+
+
+class TestStage1Service:
+    async def test_stage1_service_clean_run(self, tmp_path) -> None:
+        from app.research.agent_stage1 import Stage1Result
+
+        repo = ResearchRepository(tmp_path / "operational.db")
+        repo.migrate()
+        run_id = _make_run(repo)
+        raw = json.dumps(_stage1_payload([
+            _hypothesis_dict(expression="close"),
+            _hypothesis_dict(expression="volume"),
+        ]))
+        result = await _stage1_service().run(
+            request=_stage1_request(), seam=_seam(repo, _generate_returning(raw)),
+            repo=repo, run_id=run_id,
+        )
+        assert isinstance(result, Stage1Result)
+        assert result.partial is False
+        assert result.attempt_ordinal == 1
+        rows = repo.list_stage1_proposals(run_id)
+        assert len(rows) == 2
+        assert all(r["status"] == "proposed" for r in rows)
+
+    async def test_stage1_service_partial_keeps_valid_and_labels_distinct(self, tmp_path) -> None:
+        repo = ResearchRepository(tmp_path / "operational.db")
+        repo.migrate()
+        run_id = _make_run(repo)
+        raw = json.dumps(_stage1_payload([
+            _hypothesis_dict(expression="close"),
+            _hypothesis_dict(expression="volume"),
+            _hypothesis_dict(expression="bogus_field"),
+        ]))
+        result = await _stage1_service().run(
+            request=_stage1_request(), seam=_seam(repo, _generate_returning(raw)),
+            repo=repo, run_id=run_id,
+        )
+        # The 2 valid proposals are kept; the degraded result is distinctly labeled.
+        assert result.partial is True
+        rows = repo.list_stage1_proposals(run_id)
+        assert sum(1 for r in rows if r["status"] == "proposed") == 2
+        assert sum(1 for r in rows if r["status"] == "dropped") == 1
+        assert all(r["partial"] == 1 for r in rows)
+
+    async def test_stage1_service_no_fallback_provider_exception(self, tmp_path) -> None:
+        from app.research.agent_provider import ProviderCallError
+
+        repo = ResearchRepository(tmp_path / "operational.db")
+        repo.migrate()
+        run_id = _make_run(repo)
+        with pytest.raises(ProviderCallError):
+            await _stage1_service().run(
+                request=_stage1_request(),
+                seam=_seam(repo, _generate_raising(json.JSONDecodeError("bad", "doc", 0))),
+                repo=repo, run_id=run_id,
+            )
+        # A provider exception yields ZERO proposal rows and a failed attempt row.
+        assert repo.list_stage1_proposals(run_id) == []
+        attempts = repo.list_analysis_attempts(run_id, stage="stage1")
+        assert any(r["outcome"] == "failed" for r in attempts)
+
+    async def test_stage1_service_all_dropped_permanent_failure(self, tmp_path) -> None:
+        from app.research.agent_provider import ProviderCallError
+
+        repo = ResearchRepository(tmp_path / "operational.db")
+        repo.migrate()
+        run_id = _make_run(repo)
+        raw = json.dumps(_stage1_payload([
+            _hypothesis_dict(expression="bogus_field"),
+            _hypothesis_dict(expression="also_bogus"),
+        ]))
+        with pytest.raises(ProviderCallError):
+            await _stage1_service().run(
+                request=_stage1_request(), seam=_seam(repo, _generate_returning(raw)),
+                repo=repo, run_id=run_id,
+            )
+        # All-dropped escalates to permanent failure: no proposed rows, no fallback.
+        assert repo.list_stage1_proposals(run_id, status="proposed") == []
+        attempts = repo.list_analysis_attempts(run_id, stage="stage1")
+        assert any(r["outcome"] == "failed" and r["failure_class"] == "parse_failure" for r in attempts)
+        # The dropped hypotheses are still recorded as audit evidence.
+        assert len(repo.list_stage1_proposals(run_id, status="dropped")) == 2
+
+    async def test_stage1_service_decode_failure_permanent(self, tmp_path) -> None:
+        from app.research.agent_provider import ProviderCallError
+
+        repo = ResearchRepository(tmp_path / "operational.db")
+        repo.migrate()
+        run_id = _make_run(repo)
+        # Transport succeeds but the payload is malformed JSON.
+        with pytest.raises(ProviderCallError):
+            await _stage1_service().run(
+                request=_stage1_request(),
+                seam=_seam(repo, _generate_returning("not json at all")),
+                repo=repo, run_id=run_id,
+            )
+        assert repo.list_stage1_proposals(run_id) == []
+        attempts = repo.list_analysis_attempts(run_id, stage="stage1")
+        assert any(r["outcome"] == "failed" and r["failure_class"] == "malformed_json" for r in attempts)
+
+    async def test_stage1_service_records_template_and_schema_versions(self, tmp_path) -> None:
+        repo = ResearchRepository(tmp_path / "operational.db")
+        repo.migrate()
+        run_id = _make_run(repo)
+        raw = json.dumps(_stage1_payload([_hypothesis_dict(expression="close")]))
+        await _stage1_service().run(
+            request=_stage1_request(), seam=_seam(repo, _generate_returning(raw)),
+            repo=repo, run_id=run_id,
+        )
+        proposals = repo.list_stage1_proposals(run_id)
+        assert proposals
+        assert all(r["schema_version"] == "factor-stage1-v1" for r in proposals)
+        assert all(r["template_version"] == "factor-stage1-v1" for r in proposals)
+        attempts = repo.list_analysis_attempts(run_id, stage="stage1")
+        assert attempts
+        assert all(r["schema_version"] == "factor-stage1-v1" for r in attempts)
+        assert all(r["template_version"] == "factor-stage1-v1" for r in attempts)

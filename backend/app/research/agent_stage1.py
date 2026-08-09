@@ -25,11 +25,13 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from hashlib import sha256
 from typing import Any, Literal
 
 from app.research import factor_dsl
 from app.research.run_contract import (
     MAX_JSON_STRING_CHARS,
+    canonical_bounded_json,
     validate_bounded_json,
 )
 
@@ -40,6 +42,10 @@ STAGE_ONE_PROMPT_TEMPLATE_VERSION = "factor-stage1-v1"
 MAX_STAGE1_EXPRESSIONS = 3
 MAX_STAGE1_EXPLANATION_CHARS = 2000
 MAX_STAGE1_ASSUMPTIONS = 8
+
+
+def _sha256_hex(value: str) -> str:
+    return sha256(value.encode("utf-8")).hexdigest()
 
 _UNCERTAINTY_VALUES: frozenset[str] = frozenset({"low", "medium", "high"})
 _TOP_ALLOWED: frozenset[str] = frozenset({"schema_version", "hypotheses"})
@@ -353,3 +359,179 @@ def confirm_stage1_hypotheses(
         all_dropped=all_dropped,
         partial=partial,
     )
+
+# ------------------------------------------------------------------
+# Stage1Service — runs over the Agent seam (no fallback, R2 partial labeling)
+# ------------------------------------------------------------------
+
+_STAGE1_SYSTEM_PROMPT = (
+    "Return JSON only. The object must contain exactly schema_version and hypotheses. "
+    "schema_version must be 'factor-stage1-v1'. hypotheses is a non-empty array (max 3) "
+    "of objects with exactly expression, explanation, assumptions, scope, uncertainty, "
+    "evidence_refs. expression must use only the supplied restricted factor DSL. "
+    "uncertainty must be one of low, medium, high. Do not include markdown, code, or "
+    "any other keys."
+)
+
+
+@dataclass(frozen=True, slots=True)
+class Stage1Result:
+    """The outcome of one Stage 1 run over the Agent seam."""
+
+    confirmed: Stage1Confirmed
+    attempt_ordinal: int
+    partial: bool
+    provenance: Mapping[str, Any]
+
+
+def _stage1_messages(request: StageOneRequest) -> list[dict[str, str]]:
+    return [
+        {"role": "system", "content": _STAGE1_SYSTEM_PROMPT},
+        {
+            "role": "user",
+            "content": canonical_bounded_json(request.as_request_scope(), "stage1 request"),
+        },
+    ]
+
+
+def _stage1_failure(
+    klass: str, detail: str, *, http_status: int | None = None
+) -> "ProviderCallError":  # type: ignore[name-defined]
+    from app.research.agent_provider import ProviderCallError, ProviderFailure
+
+    # Every Stage 1 service failure (decode / all-dropped) is permanent: no
+    # fallback, no retry (research §7.1; malformed_json/schema_violation/
+    # parse_failure are all terminal).
+    return ProviderCallError(
+        ProviderFailure(
+            klass=klass,
+            transient=False,
+            terminal=True,
+            reason={"code": klass, "detail": detail[:200]},
+            http_status=http_status,
+        )
+    )
+
+
+class Stage1Service:
+    """Run Stage 1 over the Wave 1 provider seam (AF-REQ-12).
+
+    The service owns the request scope + prompt, hands the transport to the
+    :class:`AgentProviderSeam` (one ``research_alpha_analysis_attempts`` row per
+    transport try), then decodes + server-confirms the response. There is NO
+    branch that synthesizes a payload on failure: a provider exception
+    propagates with zero proposal rows, and an all-dropped parse escalates to a
+    permanent failure (hypotheses.py:157-160 pattern). Partial results are
+    distinctly labeled via :class:`Stage1Result.partial` and the persisted
+    proposal flag (R2).
+    """
+
+    def __init__(
+        self,
+        *,
+        provider: str,
+        model: str,
+        model_version: str | None = None,
+        experience_context: Any | None = None,
+    ) -> None:
+        self.provider = provider
+        self.model = model
+        self.model_version = model_version
+        # Experience-library hook: a no-op here, wired in plan 48-04. It never
+        # becomes a fallback response (would violate SC4).
+        self._experience_context = experience_context
+
+    async def run(
+        self,
+        *,
+        request: StageOneRequest,
+        seam: Any,
+        repo: Any,
+        run_id: str,
+    ) -> Stage1Result:
+        request_scope_sha256 = _sha256_hex(
+            canonical_bounded_json(request.as_request_scope(), "stage1 request")
+        )
+        messages = _stage1_messages(request)
+        # Transport via the seam — the only path to the provider. On a provider
+        # exception the seam records a failed attempt row and raises; we
+        # propagate with zero proposal rows (no fallback, SC4).
+        attempt = await seam.request(
+            stage="stage1",
+            messages=messages,
+            request_payload=request.as_request_scope(),
+            repo=repo,
+            run_id=run_id,
+            schema_version=STAGE_ONE_SCHEMA_VERSION,
+            template_version=STAGE_ONE_PROMPT_TEMPLATE_VERSION,
+            provider=self.provider,
+            model=self.model,
+            model_version=self.model_version,
+        )
+
+        provenance = {
+            "provider": self.provider,
+            "model": self.model,
+            "model_version": self.model_version,
+            "template_version": STAGE_ONE_PROMPT_TEMPLATE_VERSION,
+            "schema_version": STAGE_ONE_SCHEMA_VERSION,
+        }
+
+        # Strict decode — a failure is permanent (schema_violation/malformed_json).
+        # The seam already recorded the transport attempt; the decode failure is
+        # recorded as a distinct failed attempt row and re-raised (NO proposal row).
+        try:
+            hypotheses = decode_stage1_payload(attempt.raw)
+        except ValueError as error:
+            klass = "malformed_json" if "malformed JSON" in str(error) else "schema_violation"
+            repo.record_analysis_attempt(
+                run_id=run_id,
+                stage="stage1",
+                attempt_ordinal=attempt.attempt_ordinal + 1,
+                template_version=STAGE_ONE_PROMPT_TEMPLATE_VERSION,
+                schema_version=STAGE_ONE_SCHEMA_VERSION,
+                provider=self.provider,
+                model=self.model,
+                model_version=self.model_version,
+                request_scope_sha256=request_scope_sha256,
+                validation_errors=[{"code": klass, "detail": str(error)[:200]}],
+                failure_class=klass,
+                outcome="failed",
+            )
+            raise _stage1_failure(klass, str(error)) from error
+
+        # Server-confirm every expression + persist transient proposals.
+        confirmed = confirm_stage1_hypotheses(
+            hypotheses,
+            repo=repo,
+            run_id=run_id,
+            attempt_ordinal=attempt.attempt_ordinal,
+            provenance=provenance,
+        )
+
+        if confirmed.all_dropped:
+            # Permanent failure — every hypothesis failed parse. No fallback draft.
+            repo.record_analysis_attempt(
+                run_id=run_id,
+                stage="stage1",
+                attempt_ordinal=attempt.attempt_ordinal + 1,
+                template_version=STAGE_ONE_PROMPT_TEMPLATE_VERSION,
+                schema_version=STAGE_ONE_SCHEMA_VERSION,
+                provider=self.provider,
+                model=self.model,
+                model_version=self.model_version,
+                request_scope_sha256=request_scope_sha256,
+                validation_errors=list(confirmed.validation_errors),
+                failure_class="parse_failure",
+                outcome="failed",
+            )
+            raise _stage1_failure(
+                "parse_failure", "all Stage 1 hypotheses failed server confirmation"
+            )
+
+        return Stage1Result(
+            confirmed=confirmed,
+            attempt_ordinal=attempt.attempt_ordinal,
+            partial=confirmed.partial,
+            provenance=provenance,
+        )
