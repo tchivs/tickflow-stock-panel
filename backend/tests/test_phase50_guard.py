@@ -637,3 +637,48 @@ class TestNoAgplDerivedSource:
             assert token not in text.lower(), (
                 f"LICENSE: AGPL/provenance string '{token}' detected"
             )
+
+
+# ================================================================
+# Release-evidence document (SC5) — documented smoke evidence
+# ================================================================
+
+
+class TestReleaseEvidenceDocument:
+    """docs/phase50_release_evidence.md records the SC5 documented smoke evidence."""
+
+    def test_release_evidence_document_records_smoke_facts(self) -> None:
+        doc = _BACKEND.parent / "docs" / "phase50_release_evidence.md"
+        assert doc.exists(), "docs/phase50_release_evidence.md not found"
+        text = doc.read_text(encoding="utf-8")
+
+        # (1) The guard pass — references the Phase-50 guard test node.
+        assert "test_phase50_guard.py" in text, (
+            "release evidence must reference the Phase-50 guard (test_phase50_guard.py)"
+        )
+        assert "guard" in text.lower(), "release evidence must record the guard pass"
+
+        # (2) The dependency manifest diff — empty, sse-starlette pre-existing.
+        assert "sse-starlette" in text.lower(), (
+            "release evidence must record sse-starlette as the pre-existing SSE dep"
+        )
+        assert "zero new" in text.lower() or "no new base" in text.lower(), (
+            "release evidence must record the empty dependency diff (zero new deps)"
+        )
+
+        # (3) The no-execution runtime proof (_RaisingFake across the handlers).
+        assert "RaisingFake" in text or "raising fake" in text.lower(), (
+            "release evidence must record the runtime no-execution proof"
+        )
+
+        # (4) The research-only action surface.
+        for action in ("inspect", "compare", "replay", "clone", "promote"):
+            assert action in text.lower(), (
+                f"release evidence must list the research-only action '{action}'"
+            )
+        # The forbidden execution actions are explicitly named as absent.
+        for forbidden in ("order", "position", "portfolio"):
+            assert forbidden in text.lower(), (
+                f"release evidence must explicitly exclude '{forbidden}' "
+                "(no order/position/portfolio)"
+            )
