@@ -638,8 +638,15 @@ def consume_promotion_ticket(
         return PromotionTicketConsumed(
             revision=revision, ticket_id=ticket.id, experiment_id=None
         )
-    if ticket.status != "issued":
-        raise PromotionTicketUnavailable(f"promotion ticket is {ticket.status}")
+    if ticket.status == "expired":
+        # A prior refresh/consume already terminalized the ticket.
+        raise PromotionTicketExpired(
+            dict(ticket.conflict_reason_json or {"kind": "expired", "binding": "prior_state"})
+        )
+    if ticket.status == "conflicted":
+        raise PromotionTicketConflict(
+            dict(ticket.conflict_reason_json or {"kind": "conflict", "binding": "prior_state"})
+        )
 
     # (5a) Expiry — re-issueable (wall clock past expires_at).
     if repo._now() > ticket.expires_at:

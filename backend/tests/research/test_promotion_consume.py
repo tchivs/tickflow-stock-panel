@@ -374,6 +374,23 @@ def test_consume_idempotent_reconnect_returns_same_revision_no_second_mint(
     assert len(_formal_revisions(repo)) == 1
 
 
+def test_consume_already_conflicted_ticket_raises_conflict_and_produces_no_revision(
+    repo: ResearchRepository, registry: FactorRegistry, catalog: ExperimentCatalog
+) -> None:
+    _seed_full_evidence(repo, registry)
+    ticket = _issue(
+        repo, run_id="run-consume", candidate_id="acand_consume", key="idem-conf"
+    )
+    repo.set_promotion_ticket_status(
+        ticket_id=ticket.id, status="conflicted", conflict_reason_json={"kind": "conflict"}
+    )
+
+    with pytest.raises(PromotionTicketConflict):
+        consume_promotion_ticket(repo, registry, catalog, idempotency_key="idem-conf")
+
+    assert _formal_revisions(repo) == []
+
+
 def test_consume_atomic_reconnect_under_lock_returns_existing_revision(
     repo: ResearchRepository, registry: FactorRegistry, catalog: ExperimentCatalog
 ) -> None:
@@ -433,21 +450,6 @@ def test_consume_expired_ticket_raises_and_produces_no_revision(
     assert _formal_revisions(repo) == []
 
 
-def test_consume_conflicted_ticket_raises_unavailable_and_produces_no_revision(
-    repo: ResearchRepository, registry: FactorRegistry, catalog: ExperimentCatalog
-) -> None:
-    _seed_full_evidence(repo, registry)
-    ticket = _issue(
-        repo, run_id="run-consume", candidate_id="acand_consume", key="idem-conf"
-    )
-    repo.set_promotion_ticket_status(
-        ticket_id=ticket.id, status="conflicted", conflict_reason_json={"kind": "conflict"}
-    )
-
-    with pytest.raises(PromotionTicketUnavailable):
-        consume_promotion_ticket(repo, registry, catalog, idempotency_key="idem-conf")
-
-    assert _formal_revisions(repo) == []
 
 
 def test_consume_missing_ticket_raises_unavailable(
