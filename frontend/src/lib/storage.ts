@@ -108,7 +108,7 @@ export const storage = {
     holdingDays: string
     params?: Record<string, any>
     overrides?: Record<string, any>
-    result: any
+    strategyConfigSignature?: string
   } | null>('strategy-backtest-last'),
 
   /** 概念分析页面字段配置 */

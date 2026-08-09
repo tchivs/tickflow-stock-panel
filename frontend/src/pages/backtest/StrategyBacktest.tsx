@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useRef, type FocusEvent, type KeyboardEvent, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Play, FlaskConical, Clock, Loader2, Square, Search, Plus, X, SlidersHorizontal, BarChart3, Gauge, Zap, ListPlus, HelpCircle, AlertTriangle } from 'lucide-react'
+import { Play, FlaskConical, Clock, Loader2, Square, Search, Plus, X, SlidersHorizontal, BarChart3, Gauge, ListPlus, HelpCircle, AlertTriangle } from 'lucide-react'
 import {
   api,
   type StrategyBacktestResult,
@@ -10,12 +10,14 @@ import {
   type StrategyParamDef,
   type ResearchExperiment,
 } from '@/lib/api'
+import { useModalA11y } from '@/lib/useModalA11y'
 import { QK } from '@/lib/queryKeys'
 import { tierRank } from '@/lib/capability-labels'
 import { storage } from '@/lib/storage'
 import { fmtPct, fmtPrice, priceColorClass } from '@/lib/format'
 import { boardTag } from '@/lib/board'
 import { BUILTIN_COLUMNS } from '@/lib/watchlist-columns'
+import { cnSignal } from '@/lib/signals'
 import { SignalPicker } from '@/components/screener/SignalPicker'
 import { startBacktest, stopBacktest, tryReconnect, useBacktestTask } from '@/lib/backtestTask'
 import { useDataStatus, useCapabilities } from '@/lib/useSharedQueries'
@@ -220,6 +222,23 @@ const buildDefaultOverrides = (detail: StrategyDetail) => ({
   max_hold_days: detail.max_hold_days,
 })
 
+// 策略配置指纹: 任一风控/信号/打分参数变化都会改变指纹, 用于判定
+// localStorage 里的回测参数快照是否仍属于当前策略配置 (防止恢复旧缓存)。
+const strategyBacktestConfigSignature = (detail: StrategyDetail) => JSON.stringify({
+  basic_filter: detail.basic_filter,
+  params: detail.params,
+  params_defaults: detail.params_defaults,
+  scoring: detail.scoring,
+  entry_signals: detail.entry_signals,
+  exit_signals: detail.exit_signals,
+  stop_loss: detail.stop_loss,
+  take_profit: detail.take_profit,
+  trailing_stop: detail.trailing_stop,
+  trailing_take_profit_activate: detail.trailing_take_profit_activate,
+  trailing_take_profit_drawdown: detail.trailing_take_profit_drawdown,
+  max_hold_days: detail.max_hold_days,
+})
+
 const fmtMoney = (v: number | null | undefined) => {
   if (v == null || Number.isNaN(v)) return '—'
   return v.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -247,7 +266,17 @@ const statValueColor = (v: number | null | undefined) => {
   return v < 0 ? 'text-danger' : 'text-foreground'
 }
 
-function ExitReasonBadge({ reason }: { reason: string }) {
+/** 信号 ID → 可读名称映射 (内置 + 自定义), 供交易记录显示具体触发信号。 */
+function useSignalNames(): Record<string, string> {
+  const customQ = useQuery({ queryKey: QK.customSignals, queryFn: api.customSignalsList })
+  return useMemo(() => {
+    const names: Record<string, string> = {}
+    for (const cs of customQ.data?.signals ?? []) names[`csg_${cs.id}`] = cs.name
+    return names
+  }, [customQ.data])
+}
+
+function ExitReasonBadge({ reason, signalId, signalNames }: { reason: string; signalId?: string | null; signalNames?: Record<string, string> }) {
   const config: Record<string, { label: string; cls: string }> = {
     signal: { label: '信号', cls: 'bg-accent/10 text-accent border-accent/30' },
     stop_loss: { label: '止损', cls: 'bg-red-500/10 text-red-400 border-red-500/30' },
@@ -259,8 +288,12 @@ function ExitReasonBadge({ reason }: { reason: string }) {
     end: { label: '期末', cls: 'bg-secondary/10 text-secondary border-border' },
   }
   const c = config[reason] ?? { label: reason, cls: 'bg-elevated text-muted border-border' }
+  // 信号类退出且能解析出具体信号名时, 显示具体信号而非笼统的"信号"
+  const specific = reason === 'signal' && signalId ? cnSignal(signalId, signalNames) : null
   return (
-    <span className={`text-[10px] px-1.5 py-0.5 rounded border ${c.cls}`}>{c.label}</span>
+    <span className={`text-[10px] px-1.5 py-0.5 rounded border ${c.cls} ${specific ? 'max-w-[7rem] truncate' : ''}`} title={specific ?? c.label}>
+      {specific ?? c.label}
+    </span>
   )
 }
 
@@ -284,14 +317,14 @@ function fmtScore(v: number | null | undefined): string {
   return Number(v).toFixed(1)
 }
 
-function DailyTradeChip({ trade, side, strategyName, onClick }: { trade: StrategyBacktestTrade; side: 'buy' | 'sell'; strategyName?: string; onClick?: () => void }) {
+function DailyTradeChip({ trade, side, strategyName, onClick, showPosition = true, signalNames }: { trade: StrategyBacktestTrade; side: 'buy' | 'sell'; strategyName?: string; onClick?: () => void; showPosition?: boolean; signalNames?: Record<string, string> }) {
   const isBuy = side === 'buy'
   const tag = boardTag(trade.symbol)
   const price = isBuy ? trade.entry_price : trade.exit_price
   const amount = isBuy ? trade.entry_value : trade.exit_value
   const pnlColor = priceColorClass(trade.pnl_amount ?? trade.pnl_pct)
   const footerColor = isBuy ? 'text-secondary' : pnlColor
-  const footerText = `仓位 ${fmtPositionPct(trade.position_pct, 2)}`
+  const footerText = showPosition ? `仓位 ${fmtPositionPct(trade.position_pct, 2)}` : '仓位 —'
   const scoreText = fmtScore(trade.entry_score)
   const buyStrategy = strategyName || '策略'
 
@@ -319,7 +352,7 @@ function DailyTradeChip({ trade, side, strategyName, onClick }: { trade: Strateg
         ) : (
           <span className="flex shrink-0 items-center gap-1.5">
             <span className="num text-secondary">{fmtPrice(price)}</span>
-            <ExitReasonBadge reason={trade.exit_reason} />
+            <ExitReasonBadge reason={trade.exit_reason} signalId={trade.exit_signal_id} signalNames={signalNames} />
           </span>
         )}
       </span>
@@ -356,12 +389,14 @@ function DailyTradeChip({ trade, side, strategyName, onClick }: { trade: Strateg
   )
 }
 
-function TradeLegCell({ trade, side }: { trade: StrategyBacktestTrade; side: 'buy' | 'sell' }) {
+function TradeLegCell({ trade, side, signalNames }: { trade: StrategyBacktestTrade; side: 'buy' | 'sell'; signalNames?: Record<string, string> }) {
   const isBuy = side === 'buy'
   const date = String(isBuy ? trade.entry_date : trade.exit_date).slice(0, 10)
   const signalDate = String(isBuy ? trade.entry_signal_date ?? '' : trade.exit_signal_date ?? '').slice(0, 10)
   const price = isBuy ? trade.entry_price : trade.exit_price
   const amount = isBuy ? trade.entry_value : trade.exit_value
+  const signalId = isBuy ? trade.entry_signal_id : trade.exit_signal_id
+  const signalLabel = signalId ? cnSignal(signalId, signalNames) : null
 
   return (
     <div className="min-w-[8.25rem] rounded-btn border border-border/60 bg-base/35 px-2 py-1 text-xs leading-4">
@@ -377,7 +412,10 @@ function TradeLegCell({ trade, side }: { trade: StrategyBacktestTrade; side: 'bu
         <span className="num text-foreground">{fmtPrice(price)}</span>
         <span className="num font-medium text-foreground">{fmtMoney(amount)}</span>
       </div>
-      {signalDate && signalDate !== date && (
+      {signalLabel && (
+        <div className="mt-0.5 text-[10px] text-accent/80 truncate" title={signalLabel}>{signalLabel}</div>
+      )}
+      {!signalLabel && signalDate && signalDate !== date && (
         <div className="mt-0.5 text-[10px] text-muted">信号 {signalDate}</div>
       )}
     </div>
@@ -566,17 +604,23 @@ function StrategyParamInput({ param, value, onChange }: {
 function StockPoolPicker({ value, onChange, assetType = 'stock' }: { value: string; onChange: (value: string) => void; assetType?: 'stock' | 'etf' }) {
   const symbols = useMemo(() => value.split(',').map(s => s.trim()).filter(Boolean), [value])
   const [query, setQuery] = useState('')
+  // 搜索防抖: 每次按键都触发 instrumentSearch 会刷爆请求, 300ms 静默后再查。
+  const [debouncedQuery, setDebouncedQuery] = useState('')
   const [open, setOpen] = useState(false)
   const [symbolNames, setSymbolNames] = useState<Record<string, string>>({})
   const ref = useRef<HTMLDivElement>(null)
   const searchAssetTypes = assetType === 'etf' ? 'stock,etf' : 'stock'
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedQuery(query), 300)
+    return () => clearTimeout(timer)
+  }, [query])
   const search = useQuery({
-    queryKey: QK.instrumentSearch(query, searchAssetTypes),
-    queryFn: () => api.instrumentSearch(query, 20, searchAssetTypes),
-    enabled: query.trim().length > 0,
+    queryKey: QK.instrumentSearch(debouncedQuery, searchAssetTypes),
+    queryFn: () => api.instrumentSearch(debouncedQuery, 20, searchAssetTypes),
+    enabled: debouncedQuery.trim().length > 0,
     staleTime: 30_000,
   })
-  const results = search.data?.results ?? []
+  const results = useMemo(() => search.data?.results ?? [], [search.data])
   // 自选列表 — 供「从自选导入」一键填入回测范围
   const watchlist = useQuery({
     queryKey: QK.watchlist,
@@ -637,7 +681,7 @@ function StockPoolPicker({ value, onChange, assetType = 'stock' }: { value: stri
             placeholder="搜索股票名称/代码添加股票池"
             className="w-full rounded-input border border-border bg-surface py-1.5 pl-8 pr-2.5 text-xs focus:border-accent focus:outline-none"
           />
-          {open && results.length > 0 && (
+          {open && query.trim().length > 0 && results.length > 0 && (
             <div className="absolute left-0 right-0 top-full z-50 mt-1 max-h-56 overflow-y-auto rounded-card border border-border bg-base shadow-xl">
               {results.map(r => {
                 const added = symbols.includes(r.symbol)
@@ -707,7 +751,19 @@ function StockPoolPicker({ value, onChange, assetType = 'stock' }: { value: stri
 }
 
 export function StrategyBacktest({ onStrategyChange }: { onStrategyChange?: (strategyId: string | null) => void }) {
-  const [saved] = useState(() => storage.strategyBacktestLast.get(null))
+  const signalNames = useSignalNames()
+  // 迁移: 旧版本把完整运行结果写进 localStorage (可达 ~1MB, 触发配额/主线程卡顿)。
+  // result 从不用于恢复, 首次加载时剥离旧 key, 重写为纯配置的小对象。
+  const [saved] = useState(() => {
+    const raw = storage.strategyBacktestLast.get(null)
+    if (raw && 'result' in (raw as object)) {
+      const legacy = raw as typeof raw & { result?: unknown }
+      const { result: _legacy, ...rest } = legacy
+      storage.strategyBacktestLast.set(rest)
+      return rest
+    }
+    return raw
+  })
   const [selectedStrategy, setSelectedStrategy] = useState<string | null>(saved?.selectedStrategy ?? null)
   const [strategyGroup, setStrategyGroup] = useState<StrategyGroup>('all')
   const [symbols, setSymbols] = useState(saved?.symbols ?? '')
@@ -728,8 +784,12 @@ export function StrategyBacktest({ onStrategyChange }: { onStrategyChange?: (str
   const [simMode, setSimMode] = useState<'position' | 'full'>(saved?.mode ?? 'position')
   const [holdingDays, setHoldingDays] = useState(saved?.holdingDays ?? '5')
   const [settingsOpen, setSettingsOpen] = useState(false)
-  // 高颗粒回测（分钟K精确回测）— 开发中，Starter+ 功能
-  const [highGranularity, setHighGranularity] = useState(false)
+  // 高级策略设置抽屉 — 焦点捕获 + Tab 陷阱 + ESC 关闭 + 卸载还原 (WCAG 2.1.2/2.1.1)。
+  // 抽屉内联在常驻组件 → active=settingsOpen 让 effect 在打开时重跑 (面板才挂载)。
+  const settingsPanelRef = useRef<HTMLElement>(null)
+  useModalA11y(settingsPanelRef, { onClose: () => setSettingsOpen(false), active: settingsOpen })
+  // 高颗粒回测（分钟K精确回测）— 开发中，暂未接入请求参数
+  const highGranularity = false
   const { data: caps } = useCapabilities()
   const isFreeTier = tierRank(caps?.label ?? '') < 1
   const [rangeSettingsOpen, setRangeSettingsOpen] = useState(false)
@@ -748,6 +808,7 @@ export function StrategyBacktest({ onStrategyChange }: { onStrategyChange?: (str
   const [dailyPage, setDailyPage] = useState(0)
   const [tradePage, setTradePage] = useState(0)
   const [resultTaskId, setResultTaskId] = useState<number | null>(null)
+  const [resultConfigKey, setResultConfigKey] = useState<string | null>(null)
   const [retainedExperiment, setRetainedExperiment] = useState<{ taskId: number; experiment: ResearchExperiment } | null>(null)
   const resultTabRefs = useRef<Record<'daily' | 'trades' | 'picks', HTMLButtonElement | null>>({ daily: null, trades: null, picks: null })
   const queryClient = useQueryClient()
@@ -765,6 +826,9 @@ export function StrategyBacktest({ onStrategyChange }: { onStrategyChange?: (str
     strategyGroup === 'all' ? strategyList : strategyList.filter(st => st.source === strategyGroup)
   ), [strategyGroup, strategyList])
 
+  const backtestTask = useBacktestTask()
+  const isPending = backtestTask?.isPending ?? false
+
   // 校验 localStorage 里保存的上次选中策略是否仍存在(本地开发残留的自定义策略
   // 拉新代码后会失效,导致 strategyGet 一直 404/加载中)。列表就绪后若失效,
   // 连带清除其专属的 params/overrides/result(这些是该策略的运行配置/产物,
@@ -772,12 +836,18 @@ export function StrategyBacktest({ onStrategyChange }: { onStrategyChange?: (str
   useEffect(() => {
     if (strategies.isLoading || strategyList.length === 0) return
     if (selectedStrategy && !strategyList.some(st => st.id === selectedStrategy)) {
+      if (isPending) void stopBacktest()
       setSelectedStrategy(null)
       setStrategyParams({})
       setOverrides({})
       setResult(null)
+      setResultTaskId(null)
+      setResultConfigKey(null)
+      setRetainedExperiment(null)
+      setDailyPage(0)
+      setTradePage(0)
     }
-  }, [strategies.isLoading, strategyList, selectedStrategy])
+  }, [strategies.isLoading, strategyList, selectedStrategy, isPending])
 
   const strategyDetail = useQuery({
     queryKey: QK.strategyDetail(selectedStrategy ?? ''),
@@ -787,8 +857,21 @@ export function StrategyBacktest({ onStrategyChange }: { onStrategyChange?: (str
 
   useEffect(() => { onStrategyChange?.(selectedStrategy) }, [onStrategyChange, selectedStrategy])
 
-  const backtestTask = useBacktestTask()
-  const isPending = backtestTask?.isPending ?? false
+  const handleStrategySelect = (nextStrategy: string | null) => {
+    if (nextStrategy === selectedStrategy) return
+    if (isPending) void stopBacktest()
+    setSelectedStrategy(nextStrategy)
+    setStrategyParams({})
+    setOverrides({})
+    setResult(null)
+    setResultTaskId(null)
+    setResultConfigKey(null)
+    setRetainedExperiment(null)
+    setResultTab('daily')
+    setDailyPage(0)
+    setTradePage(0)
+    setMobilePanel('config')
+  }
 
   const retainCompletedStrategy = useMutation({
     mutationFn: ({ handle }: { taskId: number; handle: string }) => api.retainStrategyResearchExecution(handle),
@@ -817,20 +900,49 @@ export function StrategyBacktest({ onStrategyChange }: { onStrategyChange?: (str
 
   useEffect(() => {
     const detail = strategyDetail.data
-    if (!detail || loadedStrategyRef.current === detail.id) return
-    loadedStrategyRef.current = detail.id
-    if (saved?.selectedStrategy === detail.id && (saved.params || saved.overrides)) {
-      setStrategyParams(mergeStrategyParams(detail, saved.params))
-      setOverrides(saved.overrides ?? buildDefaultOverrides(detail))
+    if (!detail) return
+    const configSignature = strategyBacktestConfigSignature(detail)
+    const configKey = `${assetType}:${detail.id}:${configSignature}`
+    if (loadedStrategyRef.current === configKey) return
+    loadedStrategyRef.current = configKey
+    // 读 localStorage 最新快照 (而非挂载时的 saved 引用): 一次运行成功后
+    // completion effect 已把最新参数写进 storage, 切走再切回必须恢复最新值,
+    // 否则回退到挂载时刻的旧参数 (会话内编辑+运行后丢失)。
+    // 且仅当快照指纹与当前策略配置一致时恢复 — 策略风控/信号参数被修改后,
+    // 旧快照的 params/overrides 已失效, 直接丢弃回到默认值。
+    const latest = storage.strategyBacktestLast.get(null)
+    if (
+      latest?.assetType === assetType
+      && latest.selectedStrategy === detail.id
+      && latest.strategyConfigSignature === configSignature
+      && (latest.params || latest.overrides)
+    ) {
+      setStrategyParams(mergeStrategyParams(detail, latest.params))
+      setOverrides(latest.overrides ?? buildDefaultOverrides(detail))
       return
     }
     resetConfigFromDetail(detail)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [strategyDetail.data])
+  }, [assetType, strategyDetail.data])
+
+  // The completion effect is intentionally keyed only to the task. Capture
+  // the submitted form values so edits made while it runs cannot be persisted
+  // as if they belonged to the completed result.
+  const submittedConfigRef = useRef({
+    symbols, assetType, start, end, matching, entryFill, exitFill, fees, stampTax,
+    slippage, maxPositions, maxExposure, initialCapital, positionSizing, simMode,
+    holdingDays, strategyParams, overrides,
+  })
 
   // 当全局回测任务完成时, 把结果写入组件 (切页回来也能恢复)
   useEffect(() => {
     if (backtestTask && !backtestTask.isPending && backtestTask.result) {
+      const taskStrategyId = typeof backtestTask.result.config?.strategy_id === 'string'
+        ? backtestTask.result.config.strategy_id
+        : null
+      // A task can finish after the user selected another strategy. Do not
+      // let that late result overwrite the new strategy's empty result pane.
+      if (taskStrategyId && taskStrategyId !== selectedStrategy) return
       setResult(backtestTask.result)
       setResultTaskId(backtestTask.id)
       setRetainedExperiment(null)
@@ -838,30 +950,33 @@ export function StrategyBacktest({ onStrategyChange }: { onStrategyChange?: (str
       setMobilePanel('result')
       setDailyPage(0)
       setTradePage(0)
+      const config = submittedConfigRef.current
       storage.strategyBacktestLast.set({
-        selectedStrategy,
-        symbols,
-        assetType,
-        start,
-        end,
-        matching,
-        entryFill,
-        exitFill,
-        fees,
-        stampTax,
-        slippage,
-        maxPositions,
-        maxExposure,
-        initialCapital,
-        positionSizing,
-        mode: simMode,
-        holdingDays,
-        params: strategyParams,
-        overrides,
-        result: backtestTask.result,
+        selectedStrategy: taskStrategyId ?? selectedStrategy,
+        symbols: config.symbols,
+        assetType: config.assetType,
+        start: config.start,
+        end: config.end,
+        matching: config.matching,
+        entryFill: config.entryFill,
+        exitFill: config.exitFill,
+        fees: config.fees,
+        stampTax: config.stampTax,
+        slippage: config.slippage,
+        maxPositions: config.maxPositions,
+        maxExposure: config.maxExposure,
+        initialCapital: config.initialCapital,
+        positionSizing: config.positionSizing,
+        mode: config.simMode,
+        holdingDays: config.holdingDays,
+        params: config.strategyParams,
+        overrides: config.overrides,
+        strategyConfigSignature: strategyDetail.data
+          ? strategyBacktestConfigSignature(strategyDetail.data)
+          : undefined,
       })
     }
-  }, [backtestTask])
+  }, [backtestTask, selectedStrategy])
 
   const currentCompletedResult = backtestTask?.id === resultTaskId
     && !backtestTask.isPending
@@ -922,8 +1037,72 @@ export function StrategyBacktest({ onStrategyChange }: { onStrategyChange?: (str
     event.currentTarget.scrollLeft = 0
   }
 
+  const currentConfigKey = useMemo(() => JSON.stringify({
+    selectedStrategy,
+    assetType,
+    symbols,
+    start,
+    end,
+    matching,
+    entryFill,
+    exitFill,
+    fees,
+    stampTax,
+    slippage,
+    maxPositions,
+    maxExposure,
+    initialCapital,
+    positionSizing,
+    simMode,
+    holdingDays,
+    strategyParams,
+    overrides,
+  }), [
+    selectedStrategy, assetType, symbols, start, end, matching, entryFill, exitFill,
+    fees, stampTax, slippage, maxPositions, maxExposure, initialCapital,
+    positionSizing, simMode, holdingDays, strategyParams, overrides,
+  ])
+
+  const configErrors = useMemo(() => {
+    const errors: string[] = []
+    const numberValue = (value: string) => Number(value)
+    const requirePositive = (value: string, label: string) => {
+      const number = numberValue(value)
+      if (!value.trim() || !Number.isFinite(number) || number <= 0) errors.push(`${label}必须大于 0。`)
+    }
+    const requireNonNegative = (value: string, label: string) => {
+      const number = numberValue(value)
+      if (!value.trim() || !Number.isFinite(number) || number < 0) errors.push(`${label}不能小于 0。`)
+    }
+
+    if (start && end && start > end) errors.push('开始日期不能晚于结束日期。')
+    requirePositive(initialCapital, '初始资金')
+    requirePositive(maxPositions, '最大持仓数')
+    if (!Number.isInteger(numberValue(maxPositions))) errors.push('最大持仓数必须是整数。')
+    requirePositive(maxExposure, '最大总仓位')
+    if (numberValue(maxExposure) > 100) errors.push('最大总仓位不能超过 100%。')
+    requireNonNegative(fees, '佣金')
+    requireNonNegative(stampTax, '印花税')
+    requireNonNegative(slippage, '滑点')
+    if (simMode === 'full' && holdingDays.trim()) {
+      requirePositive(holdingDays, '兜底持有天数')
+      if (!Number.isInteger(numberValue(holdingDays))) errors.push('兜底持有天数必须是整数。')
+    }
+    return errors
+  }, [
+    start, end, initialCapital, maxPositions, maxExposure, fees, stampTax, slippage,
+    simMode, holdingDays,
+  ])
+
+  const resultIsStale = Boolean(result && !isPending && !result.error && resultConfigKey && resultConfigKey !== currentConfigKey)
+
   const handleRun = () => {
-    if (!selectedStrategy) return
+    if (!selectedStrategy || configErrors.length > 0) return
+    submittedConfigRef.current = {
+      symbols, assetType, start, end, matching, entryFill, exitFill, fees, stampTax,
+      slippage, maxPositions, maxExposure, initialCapital, positionSizing, simMode,
+      holdingDays, strategyParams, overrides,
+    }
     startBacktest({
       strategy_id: selectedStrategy,
       asset_type: assetType,
@@ -945,6 +1124,7 @@ export function StrategyBacktest({ onStrategyChange }: { onStrategyChange?: (str
       mode: simMode,
       holding_days: Number(holdingDays) || 5,
     })
+    setResultConfigKey(currentConfigKey)
     setRetainedExperiment(null)
     setResultTaskId(null)
     setMobilePanel('result')
@@ -1182,12 +1362,12 @@ export function StrategyBacktest({ onStrategyChange }: { onStrategyChange?: (str
   return (
     <>
       <div className="mb-2 grid grid-cols-2 gap-1 rounded-btn border border-border bg-surface/70 p-1 xl:hidden" role="tablist" aria-label="回测面板">
-        <button type="button" role="tab" aria-selected={mobilePanel === 'config'} onClick={() => setMobilePanel('config')} className={`min-h-11 rounded-btn px-3 text-xs font-medium ${mobilePanel === 'config' ? 'bg-accent/15 text-accent' : 'text-muted'}`}>回测配置</button>
-        <button type="button" role="tab" aria-selected={mobilePanel === 'result'} onClick={() => setMobilePanel('result')} className={`min-h-11 rounded-btn px-3 text-xs font-medium ${mobilePanel === 'result' ? 'bg-accent/15 text-accent' : 'text-muted'}`}>回测结果</button>
+        <button id="backtest-mobile-tab-config" type="button" role="tab" aria-selected={mobilePanel === 'config'} aria-controls="backtest-config-panel" onClick={() => setMobilePanel('config')} className={`min-h-11 rounded-btn px-3 text-xs font-medium ${mobilePanel === 'config' ? 'bg-accent/15 text-accent' : 'text-muted'}`}>回测配置</button>
+        <button id="backtest-mobile-tab-result" type="button" role="tab" aria-selected={mobilePanel === 'result'} aria-controls="backtest-result-panel" onClick={() => setMobilePanel('result')} className={`min-h-11 rounded-btn px-3 text-xs font-medium ${mobilePanel === 'result' ? 'bg-accent/15 text-accent' : 'text-muted'}`}>回测结果</button>
       </div>
       <div className="h-full min-h-0 overflow-hidden rounded-card border border-border bg-surface/80 grid grid-cols-1 xl:grid-cols-[18rem_minmax(0,1fr)]">
       {/* 配置面板 */}
-      <section className={`${mobilePanel === 'config' ? 'flex flex-col' : 'hidden'} xl:flex space-y-3 border-b xl:border-b-0 xl:border-r border-border bg-base/25 px-3 py-3 xl:overflow-y-auto`}>
+      <section id="backtest-config-panel" role="tabpanel" aria-labelledby="backtest-mobile-tab-config" className={`${mobilePanel === 'config' ? 'flex flex-col' : 'hidden'} xl:flex xl:flex-col space-y-3 border-b xl:border-b-0 xl:border-r border-border bg-base/25 px-3 py-3 xl:overflow-y-auto`}>
         <div>
           <div className="flex items-center justify-between mb-1.5">
             <label className="text-xs font-medium text-secondary">选择策略</label>
@@ -1195,43 +1375,26 @@ export function StrategyBacktest({ onStrategyChange }: { onStrategyChange?: (str
             <div className="flex items-center gap-1">
               <Gauge className={`h-3 w-3 ${highGranularity ? 'text-amber-400' : 'text-muted/50'}`} />
               <button
-                onClick={() => {
-                  if (isFreeTier) return
-                  // 功能开发中，暂不实际启用
-                  setHighGranularity(v => !v)
-                }}
-                disabled={isFreeTier}
+                type="button"
+                disabled
                 title={isFreeTier
                   ? '高颗粒回测（分钟K精确回测）：需 Starter+ 档位'
-                  : '高颗粒回测（分钟K精确回测）：切换后结合每日分钟K更精确回测。开发中，且会显著影响性能、回测很慢。'
+                  : '高颗粒回测（分钟K精确回测）正在开发中，暂未开放。'
                 }
-                className={`group relative inline-flex h-3.5 w-6 items-center rounded-full shrink-0 transition-colors duration-200 ${
-                  isFreeTier ? 'bg-elevated opacity-50 cursor-not-allowed'
-                  : highGranularity ? 'bg-amber-500 cursor-pointer'
-                  : 'bg-elevated cursor-pointer'
-                }`}
+                className="group relative inline-flex h-3.5 w-6 shrink-0 cursor-not-allowed items-center rounded-full bg-elevated opacity-50 transition-colors duration-200"
               >
                 <span className={`inline-block h-2.5 w-2.5 rounded-full bg-white shadow-sm transition-transform duration-200 ${
                   highGranularity ? 'translate-x-[13px]' : 'translate-x-0.5'
                 }`} />
               </button>
               <span className={`text-[9px] font-medium ${highGranularity ? 'text-amber-400' : 'text-muted/50'}`}>分钟K</span>
-              {isFreeTier && (
+              {isFreeTier ? (
                 <span className="text-[8px] text-accent/70 font-medium bg-accent/10 px-1 py-px rounded">Starter+</span>
+              ) : (
+                <span className="text-[8px] text-muted font-medium bg-elevated px-1 py-px rounded">开发中</span>
               )}
             </div>
           </div>
-          {/* 高颗粒开启时的警告条 */}
-          {highGranularity && !isFreeTier && (
-            <div className="mb-2 flex items-start gap-1.5 rounded-btn border border-amber-400/30 bg-amber-400/5 px-2 py-1.5">
-              <Zap className="h-3 w-3 text-amber-400 shrink-0 mt-px" />
-              <div className="text-[10px] leading-snug text-amber-400/90">
-                <span className="font-medium">高颗粒回测（开发中）</span>
-                ：将结合每日分钟K进行更精确的回测。
-                <span className="text-amber-400/70"><AlertTriangle className="mr-1 inline-block h-3 w-3" aria-hidden="true" />此功能尚未完成，且开启后会显著拖慢回测速度、占用大量资源。</span>
-              </div>
-            </div>
-          )}
           <div className="overflow-hidden rounded-input border border-border bg-surface">
             <div className="flex border-b border-border/60 bg-base/30 p-0.5">
               {STRATEGY_GROUPS.map(group => (
@@ -1258,7 +1421,8 @@ export function StrategyBacktest({ onStrategyChange }: { onStrategyChange?: (str
             {filteredStrategyList.map(st => (
               <button
                 key={st.id}
-                onClick={() => setSelectedStrategy(st.id)}
+                type="button"
+                onClick={() => handleStrategySelect(st.id)}
                 className={`px-2 py-1 rounded-btn text-[11px] border transition-all duration-150 ease-smooth cursor-pointer
                   ${selectedStrategy === st.id
                     ? 'border-accent/50 bg-accent/10 text-accent'
@@ -1438,7 +1602,7 @@ export function StrategyBacktest({ onStrategyChange }: { onStrategyChange?: (str
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           <div>
             <label className="text-xs font-medium text-secondary block mb-1.5">初始资金</label>
-            <input type="number" value={initialCapital} onChange={e => setInitialCapital(e.target.value)}
+            <input aria-label="初始资金" type="number" value={initialCapital} onChange={e => setInitialCapital(e.target.value)}
               className={INPUT_CLS} />
           </div>
           <div>
@@ -1450,12 +1614,12 @@ export function StrategyBacktest({ onStrategyChange }: { onStrategyChange?: (str
           </div>
           <div>
             <label className="text-xs font-medium text-secondary block mb-1.5">最大持仓数</label>
-            <input type="number" value={maxPositions} onChange={e => setMaxPositions(e.target.value)}
+            <input aria-label="最大持仓数" type="number" value={maxPositions} onChange={e => setMaxPositions(e.target.value)}
               className={INPUT_CLS} />
           </div>
           <div>
             <label className="text-xs font-medium text-secondary block mb-1.5">最大总仓位(%)</label>
-            <input type="number" min={0} max={100} value={maxExposure} onChange={e => setMaxExposure(e.target.value)}
+            <input aria-label="最大总仓位" type="number" min={0} max={100} value={maxExposure} onChange={e => setMaxExposure(e.target.value)}
               className={INPUT_CLS} />
           </div>
         </div>
@@ -1464,15 +1628,15 @@ export function StrategyBacktest({ onStrategyChange }: { onStrategyChange?: (str
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
           <div>
             <label className="text-[10px] font-medium text-secondary block mb-1">佣金 ‱</label>
-            <input type="number" min={0} value={fees} onChange={e => setFees(e.target.value)} className={INPUT_CLS} />
+            <input aria-label="佣金" type="number" min={0} value={fees} onChange={e => setFees(e.target.value)} className={INPUT_CLS} />
           </div>
           <div>
             <label className="text-[10px] font-medium text-secondary block mb-1">印花税 ‰</label>
-            <input type="number" min={0} value={stampTax} onChange={e => setStampTax(e.target.value)} className={INPUT_CLS} />
+            <input aria-label="印花税" type="number" min={0} value={stampTax} onChange={e => setStampTax(e.target.value)} className={INPUT_CLS} />
           </div>
           <div>
             <label className="text-[10px] font-medium text-secondary block mb-1">滑点 ‱</label>
-            <input type="number" min={0} value={slippage} onChange={e => setSlippage(e.target.value)} className={INPUT_CLS} />
+            <input aria-label="滑点" type="number" min={0} value={slippage} onChange={e => setSlippage(e.target.value)} className={INPUT_CLS} />
           </div>
         </div>
         )}
@@ -1485,6 +1649,13 @@ export function StrategyBacktest({ onStrategyChange }: { onStrategyChange?: (str
         <div className="rounded-btn border border-accent/20 bg-accent/5 px-3 py-2.5 text-[11px] leading-relaxed text-secondary">
           <span className="font-medium text-foreground">全量模拟</span>：每日将策略选出的全部候选独立买入，不受资金/最大持仓数限制；每一笔仍按策略卖点、止损、移动止盈/止损和最长持仓执行，用于评估策略本身的选股 + 交易规则质量。
         </div>
+        )}
+
+        {selectedStrategy && configErrors.length > 0 && (
+          <div role="alert" className="flex items-start gap-2 rounded-btn border border-warning/35 bg-warning/10 px-2.5 py-2 text-[11px] leading-4 text-warning">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            <span>请先修正配置：{configErrors[0]}{configErrors.length > 1 ? `（还有 ${configErrors.length - 1} 项）` : ''}</span>
+          </div>
         )}
 
         {isPending ? (
@@ -1500,8 +1671,9 @@ export function StrategyBacktest({ onStrategyChange }: { onStrategyChange?: (str
         ) : (
           <button
             onClick={handleRun}
-            disabled={!selectedStrategy || strategyDetail.isLoading}
-            className="group w-full inline-flex items-center justify-center gap-2.5 rounded-btn bg-accent px-3 py-2.5 text-white transition-colors duration-150 ease-smooth hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={!selectedStrategy || strategyDetail.isLoading || configErrors.length > 0}
+            title={configErrors.length > 0 ? configErrors[0] : undefined}
+            className="group w-full inline-flex items-center justify-center gap-2.5 rounded-btn bg-accent-solid px-3 py-2.5 text-white transition-colors duration-150 ease-smooth hover:bg-accent-solid/90 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <span className="flex h-6 w-6 items-center justify-center rounded-full bg-white/18 ring-1 ring-white/25 transition-transform group-hover:scale-105">
               <Play className="h-3.5 w-3.5 translate-x-px fill-current" />
@@ -1512,17 +1684,19 @@ export function StrategyBacktest({ onStrategyChange }: { onStrategyChange?: (str
       </section>
 
       {/* 结果面板 */}
-      <section className={`${mobilePanel === 'result' ? 'block' : 'hidden'} xl:block min-w-0 space-y-3 bg-base/15 px-3 py-3 xl:overflow-y-auto`}>
+      <section id="backtest-result-panel" role="tabpanel" aria-labelledby="backtest-mobile-tab-result" className={`${mobilePanel === 'result' ? 'block' : 'hidden'} xl:block min-w-0 space-y-3 bg-base/15 px-3 py-3 xl:overflow-y-auto`}>
         {/* 模式切换: 仓位模拟 / 全量模拟 */}
         <div className="flex items-center justify-between gap-2">
           <div className="inline-flex rounded-btn border border-border bg-surface/80 p-0.5 shadow-sm">
             {([['position', '仓位模拟'], ['full', '全量模拟']] as const).map(([val, label]) => (
               <button
                 key={val}
+                type="button"
+                aria-pressed={simMode === val}
                 onClick={() => setSimMode(val)}
                 className={`inline-flex items-center gap-1.5 rounded-[5px] px-3 py-1.5 text-xs font-medium transition-colors cursor-pointer ${
                   simMode === val
-                    ? 'bg-accent text-white shadow-sm'
+                    ? 'bg-accent-solid text-white shadow-sm'
                     : 'text-secondary hover:bg-elevated hover:text-foreground'
                 }`}
                 title={val === 'position' ? '受仓位/资金约束的真实账户模拟' : '全部候选独立执行，不受资金和持仓数量约束'}
@@ -1569,6 +1743,14 @@ export function StrategyBacktest({ onStrategyChange }: { onStrategyChange?: (str
         {backtestTask?.error && (
           <div className="text-sm text-danger bg-danger/10 border border-danger/30 rounded-btn px-3 py-2">
             {backtestTask.error}
+          </div>
+        )}
+
+        {resultIsStale && (
+          <div role="status" className="flex items-start gap-2 rounded-btn border border-warning/35 bg-warning/10 px-3 py-2.5 text-xs text-warning">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            <span className="min-w-0 flex-1 leading-5">当前配置已修改，下面仍是上一次回测结果。请点击“运行回测”刷新结果。</span>
+            <button type="button" onClick={() => setMobilePanel('config')} className="shrink-0 font-medium text-warning underline underline-offset-2 xl:hidden">查看配置</button>
           </div>
         )}
 
@@ -1862,7 +2044,7 @@ export function StrategyBacktest({ onStrategyChange }: { onStrategyChange?: (str
                               ) : (
                                 <div className="flex flex-wrap gap-1.5">
                                   {row.buys.map((t, i) => (
-                                    <DailyTradeChip key={`buy-${t.symbol}-${t.entry_date}-${t.exit_date}-${i}`} trade={t} side="buy" strategyName={result?.strategy_info?.name ?? selectedStrategyName} onClick={() => setSelectedTrade(t)} />
+                                    <DailyTradeChip key={`buy-${t.symbol}-${t.entry_date}-${t.exit_date}-${i}`} trade={t} side="buy" strategyName={result?.strategy_info?.name ?? selectedStrategyName} showPosition={result?.stats?.full_kind !== 'candidate_execution'} onClick={() => setSelectedTrade(t)} signalNames={signalNames} />
                                   ))}
                                 </div>
                               )}
@@ -1873,7 +2055,7 @@ export function StrategyBacktest({ onStrategyChange }: { onStrategyChange?: (str
                               ) : (
                                 <div className="flex flex-wrap gap-1.5">
                                   {row.sells.map((t, i) => (
-                                    <DailyTradeChip key={`sell-${t.symbol}-${t.entry_date}-${t.exit_date}-${i}`} trade={t} side="sell" onClick={() => setSelectedTrade(t)} />
+                                    <DailyTradeChip key={`sell-${t.symbol}-${t.entry_date}-${t.exit_date}-${i}`} trade={t} side="sell" onClick={() => setSelectedTrade(t)} signalNames={signalNames} />
                                   ))}
                                 </div>
                               )}
@@ -1947,10 +2129,10 @@ export function StrategyBacktest({ onStrategyChange }: { onStrategyChange?: (str
                               <div className="mt-0.5 font-mono text-[11px] text-muted">{t.symbol}</div>
                             </td>
                             <td className="px-4 py-2.5">
-                              <TradeLegCell trade={t} side="buy" />
+                              <TradeLegCell trade={t} side="buy" signalNames={signalNames} />
                             </td>
                             <td className="px-4 py-2.5">
-                              <TradeLegCell trade={t} side="sell" />
+                              <TradeLegCell trade={t} side="sell" signalNames={signalNames} />
                             </td>
                             <td className="px-4 py-2.5 text-right">
                               <div className="num text-foreground">{fmtPct(t.position_pct, 2)}</div>
@@ -1967,7 +2149,7 @@ export function StrategyBacktest({ onStrategyChange }: { onStrategyChange?: (str
                               <div>{t.duration} 天</div>
                               {!!t.blocked_exit_days && <div className="mt-0.5 text-[11px] text-amber-400">阻塞 {t.blocked_exit_days} 天</div>}
                             </td>
-                            <td className="px-4 py-2.5"><ExitReasonBadge reason={t.exit_reason} /></td>
+                            <td className="px-4 py-2.5"><ExitReasonBadge reason={t.exit_reason} signalId={t.exit_signal_id} signalNames={signalNames} /></td>
                           </tr>
                         ))}
                       </tbody>
@@ -2076,13 +2258,15 @@ export function StrategyBacktest({ onStrategyChange }: { onStrategyChange?: (str
             className="fixed inset-0 z-50 bg-black/45 backdrop-blur-[1px]"
           />
           <motion.aside
+            ref={settingsPanelRef}
             role="dialog"
             aria-modal="true"
             aria-label="高级策略设置"
+            tabIndex={-1}
             initial={{ x: 32, opacity: 0 }}
             animate={{ x: 0, opacity: 1 }}
             transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
-            className="fixed inset-y-0 right-0 z-[60] flex w-full max-w-3xl flex-col border-l border-border bg-base shadow-2xl"
+            className="fixed inset-y-0 right-0 z-[60] flex w-full max-w-3xl flex-col border-l border-border bg-base shadow-2xl focus:outline-none"
           >
             <div className="border-b border-border px-4 py-3">
               <div className="flex items-start gap-3">
@@ -2098,6 +2282,7 @@ export function StrategyBacktest({ onStrategyChange }: { onStrategyChange?: (str
                 </div>
                 <button
                   type="button"
+                  aria-label="关闭高级策略设置"
                   onClick={() => setSettingsOpen(false)}
                   className="rounded-btn border border-border bg-surface p-1.5 text-muted transition-colors hover:border-accent/40 hover:text-foreground"
                 >
@@ -2139,7 +2324,11 @@ export function StrategyBacktest({ onStrategyChange }: { onStrategyChange?: (str
                         <button
                           key={t}
                           type="button"
-                          onClick={() => { setAssetType(t); setSelectedStrategy(null); setSymbols('') }}
+                          onClick={() => {
+                            if (assetType !== t) handleStrategySelect(null)
+                            setAssetType(t)
+                            setSymbols('')
+                          }}
                           className={`h-full px-3 text-xs font-medium transition-colors cursor-pointer
                             ${assetType === t ? 'bg-accent/10 text-accent' : 'text-muted hover:text-foreground'}`}
                         >
@@ -2467,7 +2656,7 @@ export function StrategyBacktest({ onStrategyChange }: { onStrategyChange?: (str
               <button
                 type="button"
                 onClick={() => setSettingsOpen(false)}
-                className="rounded-btn bg-accent px-4 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent/90"
+                className="rounded-btn bg-accent-solid px-4 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent-solid/90"
               >
                 完成
               </button>
