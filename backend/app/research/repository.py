@@ -22,6 +22,9 @@ from app.research.run_contract import PRODUCER_VERSION, canonical_bounded_json, 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
 
+ANALYSIS_STAGES: tuple[str, ...] = ("preflight", "stage1", "stage2")
+ANALYSIS_OUTCOMES: tuple[str, ...] = ("proposed", "validated", "failed", "cancelled")
+
 
 def _json(value: object, field: str) -> str:
     try:
@@ -2627,6 +2630,180 @@ class ResearchRepository:
             ).fetchone()
         assert row is not None
         return dict(row)
+
+    # ----------------------------------------------------------------
+    # Append-only AnalysisRecord (Phase 48, AF-REQ-14)
+    # ----------------------------------------------------------------
+
+    def record_analysis_attempt(
+        self,
+        *,
+        run_id: str,
+        stage: str,
+        attempt_ordinal: int,
+        template_version: str,
+        schema_version: str,
+        provider: str,
+        model: str,
+        model_version: str | None,
+        request_scope_sha256: str,
+        response_sha256: str | None = None,
+        response_byte_size: int | None = None,
+        response_artifact_id: str | None = None,
+        parsed_output_sha256: str | None = None,
+        validation_errors: object = None,
+        failure_class: str | None = None,
+        failure_reason: Mapping[str, Any] | None = None,
+        retries: int = 0,
+        cancelled: int = 0,
+        latency_ms: int = 0,
+        outcome: str,
+    ) -> dict[str, Any]:
+        """Append one immutable AnalysisRecord row for a Stage attempt.
+
+        OQ-1 resolved: same SQLite DB as the run ledger so a row written with a
+        stage-boundary checkpoint commits in one atomic transaction. The row is
+        INSERT-only; ``response_artifact_id`` (when set) must already be a
+        verified same-run managed artifact (checksum-by-default otherwise,
+        research §5.3). A duplicate ``(run_id, stage, attempt_ordinal)`` raises
+        ``AlphaRunConflictError``.
+        """
+        if not isinstance(run_id, str) or not run_id:
+            raise ValueError("run_id is required")
+        if stage not in ANALYSIS_STAGES:
+            raise ValueError(f"stage must be one of {ANALYSIS_STAGES}")
+        if outcome not in ANALYSIS_OUTCOMES:
+            raise ValueError(f"outcome must be one of {ANALYSIS_OUTCOMES}")
+        if not isinstance(attempt_ordinal, int) or attempt_ordinal <= 0:
+            raise ValueError("attempt_ordinal must be a positive integer")
+        for label, value in (
+            ("template_version", template_version),
+            ("schema_version", schema_version),
+            ("provider", provider),
+            ("model", model),
+        ):
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"{label} is required")
+        _wf_sha256(request_scope_sha256, "request_scope_sha256")
+        if response_sha256 is not None:
+            _wf_sha256(response_sha256, "response_sha256")
+        if parsed_output_sha256 is not None:
+            _wf_sha256(parsed_output_sha256, "parsed_output_sha256")
+        if response_byte_size is not None and (
+            type(response_byte_size) is not int or response_byte_size < 0
+        ):
+            raise ValueError("response_byte_size must be a non-negative integer")
+        if type(retries) is not int or retries < 0:
+            raise ValueError("retries must be a non-negative integer")
+        if type(cancelled) is not int or cancelled < 0:
+            raise ValueError("cancelled must be a non-negative integer")
+        if type(latency_ms) is not int or latency_ms < 0:
+            raise ValueError("latency_ms must be a non-negative integer")
+        validation_errors_json = (
+            _bounded_json(validation_errors, "validation_errors") if validation_errors is not None else None
+        )
+        failure_reason_json = (
+            _bounded_json(failure_reason, "failure_reason") if failure_reason is not None else None
+        )
+        attempt_id = "aan_" + uuid.uuid4().hex
+        occurred_at = self._now()
+        with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                run = connection.execute(
+                    "SELECT 1 FROM research_alpha_runs WHERE id = ?", (run_id,)
+                ).fetchone()
+                if run is None:
+                    raise ValueError("run does not exist")
+                if response_artifact_id is not None:
+                    artifact = connection.execute(
+                        "SELECT run_id FROM research_alpha_artifacts WHERE id = ?",
+                        (response_artifact_id,),
+                    ).fetchone()
+                    if artifact is None or artifact["run_id"] != run_id:
+                        raise ValueError("analysis artifact must belong to analysis run")
+                try:
+                    connection.execute(
+                        """INSERT INTO research_alpha_analysis_attempts (
+                               id, run_id, attempt_ordinal, stage, template_version,
+                               schema_version, provider, model, model_version,
+                               request_scope_sha256, response_sha256, response_byte_size,
+                               response_artifact_id, parsed_output_sha256,
+                               validation_errors_json, failure_class, failure_reason_json,
+                               retries, cancelled, latency_ms, outcome, created_at
+                           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (
+                            attempt_id, run_id, attempt_ordinal, stage, template_version,
+                            schema_version, provider, model, model_version,
+                            request_scope_sha256, response_sha256, response_byte_size,
+                            response_artifact_id, parsed_output_sha256,
+                            validation_errors_json, failure_class, failure_reason_json,
+                            retries, cancelled, latency_ms, outcome, occurred_at,
+                        ),
+                    )
+                except sqlite3.IntegrityError as error:
+                    if "UNIQUE" in str(error).upper():
+                        raise AlphaRunConflictError(
+                            "analysis attempt ordinal already exists for this stage"
+                        ) from error
+                    raise
+                row = connection.execute(
+                    "SELECT * FROM research_alpha_analysis_attempts WHERE id = ?",
+                    (attempt_id,),
+                ).fetchone()
+                connection.execute("COMMIT")
+            except BaseException:
+                if connection.in_transaction:
+                    connection.execute("ROLLBACK")
+                raise
+        assert row is not None
+        return self._analysis_attempt_dict(row)
+
+    def get_analysis_attempt(
+        self, run_id: str, *, stage: str, attempt_ordinal: int
+    ) -> dict[str, Any] | None:
+        """Return one AnalysisRecord row, or ``None`` if absent."""
+        if stage not in ANALYSIS_STAGES:
+            raise ValueError(f"stage must be one of {ANALYSIS_STAGES}")
+        if not isinstance(attempt_ordinal, int) or attempt_ordinal <= 0:
+            raise ValueError("attempt_ordinal must be a positive integer")
+        with self._connection() as connection:
+            row = connection.execute(
+                """SELECT * FROM research_alpha_analysis_attempts
+                   WHERE run_id = ? AND stage = ? AND attempt_ordinal = ?""",
+                (run_id, stage, attempt_ordinal),
+            ).fetchone()
+        return None if row is None else self._analysis_attempt_dict(row)
+
+    def list_analysis_attempts(
+        self, run_id: str, *, stage: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Return AnalysisRecord rows in ``attempt_ordinal`` order, scoped to run/stage."""
+        if stage is not None and stage not in ANALYSIS_STAGES:
+            raise ValueError(f"stage must be one of {ANALYSIS_STAGES}")
+        with self._connection() as connection:
+            if stage is None:
+                rows = connection.execute(
+                    """SELECT * FROM research_alpha_analysis_attempts
+                       WHERE run_id = ? ORDER BY attempt_ordinal, stage""",
+                    (run_id,),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    """SELECT * FROM research_alpha_analysis_attempts
+                       WHERE run_id = ? AND stage = ? ORDER BY attempt_ordinal""",
+                    (run_id, stage),
+                ).fetchall()
+        return [self._analysis_attempt_dict(row) for row in rows]
+
+    @staticmethod
+    def _analysis_attempt_dict(row: sqlite3.Row) -> dict[str, Any]:
+        record = dict(row)
+        errors = record.pop("validation_errors_json", None)
+        record["validation_errors"] = json.loads(errors) if errors else None
+        reason = record.pop("failure_reason_json", None)
+        record["failure_reason"] = json.loads(reason) if reason else None
+        return record
     def append_checkpoint(
         self,
         *,

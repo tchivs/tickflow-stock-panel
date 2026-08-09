@@ -2294,6 +2294,60 @@ MIGRATIONS: tuple[str, ...] = (
         BEGIN SELECT RAISE(ABORT, 'candidate lineage references must share a run'); END;
     PRAGMA foreign_keys = ON;
     """,
+    """
+    -- Phase 48 (AF-REQ-14): append-only research_alpha_analysis_attempts. One
+    -- row per Stage attempt (preflight/stage1/stage2) recording full provider
+    -- provenance, a bounded raw-response checksum (or a verified managed
+    -- artifact reference), parsed-output digest, validation errors, the failure
+    -- taxonomy columns, retries, cancellation, and latency. Shares the same
+    -- SQLite DB as the run ledger so a row written with a stage-boundary
+    -- checkpoint commits in one atomic transaction (OQ-1 resolved).
+    CREATE TABLE research_alpha_analysis_attempts (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL REFERENCES research_alpha_runs(id) ON DELETE RESTRICT,
+        attempt_ordinal INTEGER NOT NULL CHECK (attempt_ordinal > 0),
+        stage TEXT NOT NULL CHECK (stage IN ('preflight', 'stage1', 'stage2')),
+        template_version TEXT NOT NULL,
+        schema_version TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        model TEXT NOT NULL,
+        model_version TEXT,
+        request_scope_sha256 TEXT NOT NULL CHECK (length(request_scope_sha256) = 64),
+        response_sha256 TEXT CHECK (length(response_sha256) = 64),
+        response_byte_size INTEGER CHECK (response_byte_size >= 0),
+        response_artifact_id TEXT REFERENCES research_alpha_artifacts(id) ON DELETE RESTRICT,
+        parsed_output_sha256 TEXT CHECK (length(parsed_output_sha256) = 64),
+        validation_errors_json TEXT,
+        failure_class TEXT CHECK (failure_class IN (
+            'malformed_json', 'schema_violation', 'parse_failure', 'timeout',
+            'rate_limited', 'unavailable', 'refused', 'partial', 'cancelled'
+        )),
+        failure_reason_json TEXT,
+        retries INTEGER NOT NULL DEFAULT 0 CHECK (retries >= 0),
+        cancelled INTEGER NOT NULL DEFAULT 0 CHECK (cancelled >= 0),
+        latency_ms INTEGER NOT NULL DEFAULT 0 CHECK (latency_ms >= 0),
+        outcome TEXT NOT NULL CHECK (outcome IN (
+            'proposed', 'validated', 'failed', 'cancelled'
+        )),
+        created_at TEXT NOT NULL,
+        UNIQUE (run_id, stage, attempt_ordinal)
+    );
+    CREATE INDEX idx_research_alpha_analysis_run
+        ON research_alpha_analysis_attempts(run_id, stage, attempt_ordinal);
+    CREATE TRIGGER research_alpha_analysis_no_update
+        BEFORE UPDATE ON research_alpha_analysis_attempts
+        BEGIN SELECT RAISE(ABORT, 'alpha analysis attempts are append-only'); END;
+    CREATE TRIGGER research_alpha_analysis_no_delete
+        BEFORE DELETE ON research_alpha_analysis_attempts
+        BEGIN SELECT RAISE(ABORT, 'alpha analysis attempts are append-only'); END;
+    CREATE TRIGGER research_alpha_analysis_artifact_same_run
+        BEFORE INSERT ON research_alpha_analysis_attempts
+        FOR EACH ROW WHEN NEW.response_artifact_id IS NOT NULL AND NOT EXISTS (
+            SELECT 1 FROM research_alpha_artifacts
+            WHERE id = NEW.response_artifact_id AND run_id = NEW.run_id
+        )
+        BEGIN SELECT RAISE(ABORT, 'analysis artifact must belong to analysis run'); END;
+    """,
 )
 
 
