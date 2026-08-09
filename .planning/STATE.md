@@ -2,19 +2,19 @@
 gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: 可回放 Alpha Factory 与 FactorResearchAgent
-current_phase: 48
-current_phase_name: FactorResearchAgent Two-Stage Workflow
+current_phase: 49
+current_phase_name: Research-Only Promotion Ticket
 status: planning
-stopped_at: Completed Phase 47-04-PLAN.md; ready to plan Phase 48
-last_updated: "2026-08-09T02:51:13Z"
+stopped_at: Phase 47 complete; ready to plan Phase 48
+last_updated: "2026-08-09T04:48:53.685Z"
 last_activity: 2026-08-09
-last_activity_desc: Phase 47 complete, transitioned to Phase 48
+last_activity_desc: Phase 48 complete, transitioned to Phase 49
 progress:
   total_phases: 6
-  completed_phases: 3
-  total_plans: 14
-  completed_plans: 12
-  percent: 50
+  completed_phases: 1
+  total_plans: 19
+  completed_plans: 16
+  percent: 17
 ---
 
 # Project State
@@ -28,10 +28,10 @@ See: .planning/PROJECT.md (updated 2026-08-06)
 
 ## Current Position
 
-Phase: 48 — FactorResearchAgent Two-Stage Workflow
+Phase: 49 — Research-Only Promotion Ticket
 Plan: Not started
 Status: Ready to plan
-Last activity: 2026-08-09 — Phase 47 complete, transitioned to Phase 48
+Last activity: 2026-08-09 — Phase 48 complete, transitioned to Phase 49
 
 ## v3.0 Phase Summary
 
