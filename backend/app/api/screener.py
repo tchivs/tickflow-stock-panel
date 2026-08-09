@@ -14,6 +14,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
+from app.db_safe import is_valid_ext_ident, quote_ident
 from app.services.screener import PRESET_STRATEGIES, ScreenerService, strategy_supports_asset
 from app.services import pool_snapshot, strategy_cache
 from app.strategy import config as strategy_config
@@ -51,7 +52,20 @@ def _safe(result_dict: dict) -> dict:
     return result_dict
 
 
-_EXT_IDENT_RE = re.compile(r"^[A-Za-z0-9_]+$")
+def _one_word_limit_expr(status_main: str, columns: list[str]) -> Any:
+    required = {"open", "high", "low", "close", "status"}
+    if not required.issubset(columns):
+        import polars as pl
+        return pl.lit(False)
+
+    import polars as pl
+    return (
+        (pl.col("status") == status_main)
+        & (pl.col("close") > 0)
+        & (pl.col("open") == pl.col("high"))
+        & (pl.col("high") == pl.col("low"))
+        & (pl.col("low") == pl.col("close"))
+    ).fill_null(False)
 
 
 def _safe_ext_value(value: Any) -> Any:
@@ -62,8 +76,7 @@ def _safe_ext_value(value: Any) -> Any:
     return value
 
 
-def _quote_ident(name: str) -> str:
-    return '"' + name.replace('"', '""') + '"'
+# 标识符安全原语 (转义 + 白名单) 集中在 app.db_safe, 见 Issue #150 注入防护。
 
 
 # ── 扩展列 value_map 缓存 ────────────────────────────────────────────
@@ -126,7 +139,7 @@ def _load_ext_value_maps(repo, ext_columns: Optional[str]) -> dict[str, dict[str
             else:
                 view_name = f"ext_{config_id}"
                 ext_df = pl.from_arrow(db.query(
-                    f"SELECT symbol, {_quote_ident(field_name)} FROM {view_name}"
+                    f"SELECT symbol, {quote_ident(field_name)} FROM {view_name}"
                 ).arrow())
 
             if ext_df.is_empty() or "symbol" not in ext_df.columns or field_name not in ext_df.columns:
@@ -655,7 +668,7 @@ def limit_ladder(
             ext_col_name = f"{config_id}__{field_name}"
             try:
                 ext_df = pl.from_arrow(db.query(
-                    f"SELECT symbol, \"{field_name}\" FROM {view_name}"
+                    f"SELECT symbol, {quote_ident(field_name)} FROM {view_name}"
                 ).arrow())
                 if not ext_df.is_empty() and "symbol" in ext_df.columns:
                     ext_df = ext_df.rename({field_name: ext_col_name})
@@ -730,7 +743,7 @@ def _parse_ext_columns(ext_columns: str) -> list[tuple[str, str]]:
         field_name = field_name.strip()
         if not config_id or not field_name:
             continue
-        if not _EXT_IDENT_RE.match(config_id) or "\x00" in field_name:
+        if not is_valid_ext_ident(config_id) or "\x00" in field_name:
             continue
         result.append((config_id, field_name))
     return result
