@@ -114,7 +114,7 @@ export function EndpointTestDialog({ hasKey, tierLabel, currentEndpoint, onClose
                 {anyTesting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Play className="h-3 w-3" />}
                 全部测速
               </button>
-              <button onClick={onClose} className="p-1 rounded text-secondary hover:text-foreground transition-colors">
+              <button onClick={onClose} className="p-1 rounded text-secondary hover:text-foreground transition-colors max-md:min-h-11 max-md:min-w-11">
                 <X className="h-4 w-4" />
               </button>
             </div>

@@ -173,7 +173,7 @@ export function StrategyPoolDialog({ pool, onConfirm, onClose }: Props) {
                 {importing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
                 导入策略
               </button>
-              <button onClick={onClose} className="p-1 rounded hover:bg-elevated transition-colors cursor-pointer">
+              <button onClick={onClose} className="p-1 rounded hover:bg-elevated transition-colors cursor-pointer max-md:min-h-11 max-md:min-w-11">
                 <X className="h-4 w-4 text-muted" />
               </button>
             </div>

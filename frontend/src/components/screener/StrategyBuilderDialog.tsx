@@ -337,7 +337,7 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
                   <span className={'w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ' + (step === 2 ? 'bg-amber-400/20 text-amber-400' : 'bg-border/50 text-muted')}>2</span>
                 </div>
               )}
-              <button aria-label="关闭" onClick={handleClose} className="p-1.5 rounded-lg hover:bg-elevated"><X className="h-4 w-4 text-muted" /></button>
+              <button aria-label="关闭" onClick={handleClose} className="p-1.5 rounded-lg hover:bg-elevated max-md:min-h-11 max-md:min-w-11"><X className="h-4 w-4 text-muted" /></button>
             </div>
           </div>
 

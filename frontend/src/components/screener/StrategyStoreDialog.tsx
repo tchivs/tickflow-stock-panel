@@ -34,7 +34,7 @@ export function StrategyStoreDialog({ open, onClose }: Props) {
                 <Store className="h-4 w-4 text-accent" />
                 获取策略
               </span>
-              <button type="button" onClick={onClose} aria-label="关闭" className="p-1 rounded hover:bg-elevated transition-colors cursor-pointer">
+              <button type="button" onClick={onClose} aria-label="关闭" className="p-1 rounded hover:bg-elevated transition-colors cursor-pointer max-md:min-h-11 max-md:min-w-11">
                 <X className="h-4 w-4 text-muted" />
               </button>
             </div>

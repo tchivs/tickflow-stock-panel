@@ -92,7 +92,7 @@ export function CustomSignalDialog({ open, signal, defaultKind = 'exit', onClose
                 <h3 className="text-sm font-semibold text-foreground">{editing ? '编辑自定义信号' : '新建自定义信号'}</h3>
                 <p className="mt-1 text-[11px] text-muted">标识保存后不可修改，如需更换请新建。自定义信号保存为 csg_* 列。</p>
               </div>
-              <button type="button" onClick={onClose} aria-label="关闭" className="rounded-lg p-1.5 text-muted transition-colors hover:bg-elevated hover:text-foreground">
+              <button type="button" onClick={onClose} aria-label="关闭" className="rounded-lg p-1.5 text-muted transition-colors hover:bg-elevated hover:text-foreground max-md:min-h-11 max-md:min-w-11">
                 <X className="h-4 w-4" />
               </button>
             </div>

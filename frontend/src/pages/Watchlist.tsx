@@ -19,6 +19,7 @@ import { boardTag, renderBuiltinDataCell } from '@/components/stock-table/primit
 import { getSignals, signalCls, getSortValue, UNSORTABLE_KEYS } from '@/lib/stock-table'
 import { resolveCandleConfig, resolveIntradayConfig } from '@/lib/list-columns'
 import { useQuoteStatus, useCapabilities, usePreferences } from '@/lib/useSharedQueries'
+import { useModalA11y } from '@/lib/useModalA11y'
 import {
   type ColumnConfig,
   BUILTIN_COLUMNS,
@@ -272,7 +273,7 @@ function StockSearchBox({
           onChange={(e) => { setQuery(e.target.value); setOpen(true); setActiveIdx(-1) }}
           onFocus={() => { if (query.trim()) setOpen(true) }}
           onKeyDown={handleKeyDown}
-          className="w-44 h-8 pl-8 pr-2.5 rounded-btn bg-elevated border border-border text-xs text-foreground placeholder:text-muted focus:outline-none focus:border-accent/50 focus:w-56 transition-all duration-200"
+          className="w-44 h-8 max-md:h-11 pl-8 pr-2.5 rounded-btn bg-elevated border border-border text-xs text-foreground placeholder:text-muted focus:outline-none focus:border-accent/50 focus:w-56 transition-all duration-200"
         />
       </div>
 
@@ -318,6 +319,7 @@ function StockSearchBox({
                           : 'text-muted hover:text-accent hover:bg-accent/10'
                       }`}
                       title={inWatchlist ? '已加自选' : '加入自选'}
+                      aria-label={inWatchlist ? '已加自选' : '加入自选'}
                     >
                       {inWatchlist ? <Check className="h-3.5 w-3.5" /> : <Plus className="h-3.5 w-3.5" />}
                     </button>
@@ -723,6 +725,8 @@ export function Watchlist() {
   // 二次确认状态
   const [confirmClear, setConfirmClear] = useState(false)
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null)
+  const confirmClearRef = useRef<HTMLDivElement>(null)
+  useModalA11y(confirmClearRef, { onClose: () => setConfirmClear(false), active: confirmClear })
 
   // 稳定的 per-symbol 回调 (供 memo 化的 StockCard 使用, 避免每次渲染都传新引用)
   const handleCardPreview = useCallback((sym: string, name: string) => {
@@ -919,6 +923,8 @@ export function Watchlist() {
                   : 'bg-elevated text-secondary hover:bg-elevated/80'
               }`}
               title={`筛选${activeFilterCount > 0 ? ` (${activeFilterCount})` : ''}`}
+              aria-label="筛选"
+              aria-expanded={filterOpen}
             >
               <Filter className="h-4 w-4" />
             </button>
@@ -943,6 +949,7 @@ export function Watchlist() {
               onClick={toggleView}
               className="inline-flex items-center justify-center h-8 w-8 rounded-btn bg-elevated hover:bg-elevated/80 text-secondary hover:text-foreground transition-colors duration-150 ease-smooth"
               title={viewMode === 'table' ? '卡片视图' : '列表视图'}
+              aria-label={viewMode === 'table' ? '卡片视图' : '列表视图'}
             >
               {viewMode === 'table' ? <LayoutGrid className="h-4 w-4" /> : <List className="h-4 w-4" />}
             </button>
@@ -952,6 +959,7 @@ export function Watchlist() {
               onClick={() => setCustomizerOpen(true)}
               className="inline-flex items-center justify-center h-8 w-8 rounded-btn bg-elevated hover:bg-elevated/80 text-secondary hover:text-foreground transition-colors duration-150 ease-smooth"
               title="自定义列"
+              aria-label="自定义列"
             >
               <Settings2 className="h-4 w-4" />
             </button>
@@ -960,6 +968,7 @@ export function Watchlist() {
               disabled={enriched.isFetching}
               className="inline-flex items-center justify-center h-8 w-8 rounded-btn bg-elevated hover:bg-elevated/80 text-secondary hover:text-foreground transition-colors duration-150 ease-smooth disabled:opacity-50"
               title="刷新"
+              aria-label="刷新"
             >
               <RefreshCw className={`h-4 w-4 ${enriched.isFetching ? 'animate-spin' : ''}`} />
             </button>
@@ -970,6 +979,7 @@ export function Watchlist() {
                   onClick={() => setConfirmClear(true)}
                   className="inline-flex items-center justify-center h-8 w-8 rounded-btn bg-danger/10 text-danger hover:bg-danger/20 transition-colors duration-150 ease-smooth"
                   title="清空自选"
+                  aria-label="清空自选"
                 >
                   <Trash2 className="h-4 w-4" />
                 </button>
@@ -992,6 +1002,7 @@ export function Watchlist() {
                   <button
                     key={board}
                     onClick={() => toggleBoard(board)}
+                    aria-pressed={active}
                     className={`px-2 py-0.5 rounded text-[11px] transition-colors ${
                       active
                         ? 'bg-accent/15 text-accent'
@@ -1288,7 +1299,7 @@ export function Watchlist() {
       {/* 清空确认弹窗 */}
       <AnimatePresence>
         {confirmClear && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div role="dialog" aria-modal="true" aria-label="清空自选确认" className="fixed inset-0 z-50 flex items-center justify-center">
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -1298,6 +1309,8 @@ export function Watchlist() {
               onClick={() => setConfirmClear(false)}
             />
             <motion.div
+              ref={confirmClearRef}
+              tabIndex={-1}
               initial={{ opacity: 0, scale: 0.95, y: 12 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.97, y: 8 }}
@@ -1311,14 +1324,14 @@ export function Watchlist() {
               <div className="flex items-center justify-end gap-2">
                 <button
                   onClick={() => setConfirmClear(false)}
-                  className="px-3 py-1.5 rounded-btn bg-elevated text-secondary hover:bg-elevated/80 text-sm transition-colors"
+                  className="px-3 py-1.5 max-md:min-h-11 rounded-btn bg-elevated text-secondary hover:bg-elevated/80 text-sm transition-colors"
                 >
                   取消
                 </button>
                 <button
                   onClick={() => clearAll.mutate()}
                   disabled={clearAll.isPending}
-                  className="px-3 py-1.5 rounded-btn bg-danger/15 text-danger hover:bg-danger/25 text-sm font-medium transition-colors disabled:opacity-50"
+                  className="px-3 py-1.5 max-md:min-h-11 rounded-btn bg-danger/15 text-danger hover:bg-danger/25 text-sm font-medium transition-colors disabled:opacity-50"
                 >
                   {clearAll.isPending ? '清除中...' : '确认清空'}
                 </button>

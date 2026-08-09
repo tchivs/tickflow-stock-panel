@@ -194,7 +194,7 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
       <div className="rounded-card border border-border bg-surface p-5 space-y-4">
         <div className="flex items-center justify-between gap-3">
           <h3 className="text-sm font-medium text-foreground">{editing ? '编辑监控' : '加入监控'}</h3>
-          <button onClick={onClose} className="rounded p-1 text-muted hover:bg-elevated hover:text-foreground cursor-pointer">
+          <button onClick={onClose} className="rounded p-1 text-muted hover:bg-elevated hover:text-foreground cursor-pointer max-md:min-h-11 max-md:min-w-11">
             <X className="h-4 w-4" />
           </button>
         </div>
@@ -269,7 +269,7 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
           <h3 className="text-sm font-medium text-foreground">{editing ? '编辑监控规则' : '新建监控规则'}</h3>
           <p className="mt-1 text-[11px] text-muted">规则标识自动生成,描述为可选。</p>
         </div>
-        <button onClick={onClose} className="rounded p-1 text-muted hover:bg-elevated hover:text-foreground cursor-pointer">
+        <button onClick={onClose} className="rounded p-1 text-muted hover:bg-elevated hover:text-foreground cursor-pointer max-md:min-h-11 max-md:min-w-11">
           <X className="h-4 w-4" />
         </button>
       </div>

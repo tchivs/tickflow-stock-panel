@@ -332,7 +332,7 @@ export function CreateExtDialog({ onClose }: { onClose: () => void }) {
                 接入自有数据，与标的自动关联（第三方接口或 CSV/Excel），支持概念、人气、资金流、舆情、研报评分标签等场景
               </p>
             </div>
-            <button onClick={onClose} className="p-1 rounded-lg hover:bg-elevated text-secondary transition-colors">
+            <button onClick={onClose} className="p-1 rounded-lg hover:bg-elevated text-secondary transition-colors max-md:min-h-11 max-md:min-w-11">
               <X className="h-4 w-4" />
             </button>
           </div>

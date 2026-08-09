@@ -490,7 +490,7 @@ function MonitorMenu({ stock, direction, sealMode, monitorRule, anchorRect, hasD
             <Bell className="h-3.5 w-3.5 text-amber-400 shrink-0" />
             <span className="font-medium text-foreground truncate">{stock.name ?? stock.symbol}</span>
           </div>
-          <button onClick={onClose} aria-label="关闭" className="text-muted hover:text-foreground shrink-0"><X className="h-3.5 w-3.5" /></button>
+          <button onClick={onClose} aria-label="关闭" className="text-muted hover:text-foreground shrink-0 max-md:min-h-11 max-md:min-w-11 max-md:inline-flex max-md:items-center max-md:justify-center"><X className="h-3.5 w-3.5" /></button>
         </div>
 
         <div className="px-3 py-2.5 space-y-2.5">
@@ -1357,7 +1357,7 @@ function ExtConfigDialog({ fields, onSave, onClose }: {
         {/* 头部 */}
         <div className="flex items-center justify-between px-4 pt-3 pb-1">
           <span className="text-sm font-medium">配置</span>
-          <button onClick={onClose} aria-label="关闭" className="p-0.5 text-muted hover:text-foreground"><X className="h-4 w-4" /></button>
+          <button onClick={onClose} aria-label="关闭" className="p-0.5 text-muted hover:text-foreground max-md:min-h-11 max-md:min-w-11"><X className="h-4 w-4" /></button>
         </div>
         {/* 三列平铺 */}
         <div className="grid grid-cols-1 gap-0 border-b border-border px-2 sm:grid-cols-3">

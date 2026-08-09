@@ -1841,5 +1841,13 @@ test.describe('Phase 18 mobile contracts @320', () => {
     expect(box!.height, 'touch target ≈ 44px (subpixel)').toBeGreaterThanOrEqual(43.5)
     const minH = await picker.evaluate(el => getComputedStyle(el).minHeight)
     expect(minH).toBe('44px')
+
+    // 对话框关闭按钮 (移动端 max-md:min-h-11 max-md:min-w-11) — 触控目标 ≥ 44×44
+    const dialog = page.getByRole('dialog', { name: /个股详情 300750\.SZ/ })
+    const closeBtn = dialog.getByRole('button', { name: '关闭', exact: true })
+    const closeBox = await closeBtn.boundingBox()
+    expect(closeBox, 'close button must be visible').not.toBeNull()
+    expect(closeBox!.width, 'close touch width ≥ 44 (subpixel)').toBeGreaterThanOrEqual(43.5)
+    expect(closeBox!.height, 'close touch height ≥ 44 (subpixel)').toBeGreaterThanOrEqual(43.5)
   })
 })

@@ -1,4 +1,4 @@
-﻿import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { X, Settings2, RotateCcw, Save, ChevronDown, Filter, Star, TrendingUp, Sparkles, Download } from 'lucide-react'
 import { api, type StrategyDetail, type StrategyParamDef } from '@/lib/api'
@@ -361,7 +361,7 @@ export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModif
                   下载策略
                 </button>
               )}
-              <button aria-label="关闭" onClick={onClose} className="p-1.5 rounded-lg hover:bg-elevated transition-colors cursor-pointer"><X className="h-4 w-4 text-muted" /></button>
+              <button aria-label="关闭" onClick={onClose} className="p-1.5 rounded-lg hover:bg-elevated transition-colors cursor-pointer max-md:min-h-11 max-md:min-w-11"><X className="h-4 w-4 text-muted" /></button>
             </div>
           </div>
 

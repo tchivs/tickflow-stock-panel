@@ -223,7 +223,7 @@ export function RpsRotationDialog({ onClose }: Props) {
                 {conceptCount > 0 ? `${dates.length} 天 · ${conceptCount} 个概念` : '暂无数据'}
               </span>
             </div>
-            <button aria-label="关闭" onClick={onClose} className="p-1 rounded hover:bg-elevated transition-colors cursor-pointer">
+            <button aria-label="关闭" onClick={onClose} className="p-1 rounded hover:bg-elevated transition-colors cursor-pointer max-md:min-h-11 max-md:min-w-11">
               <X className="h-4 w-4 text-muted" />
             </button>
           </div>

@@ -111,7 +111,7 @@ export function AnalysisConfigDialog({
       >
         <div className="flex items-center justify-between px-4 pt-3 pb-2">
           <span className="text-sm font-medium">配置数据源</span>
-          <button onClick={onClose} aria-label="关闭" className="p-0.5 text-muted hover:text-foreground">
+          <button onClick={onClose} aria-label="关闭" className="p-0.5 text-muted hover:text-foreground max-md:min-h-11 max-md:min-w-11">
             <X className="h-4 w-4" />
           </button>
         </div>

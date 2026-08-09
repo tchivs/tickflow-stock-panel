@@ -92,7 +92,7 @@ export function EnrichedSchemaModal({ table, onClose }: { table: string | null; 
                   type="button"
                   onClick={onClose}
                   aria-label="关闭"
-                  className="p-1 rounded-btn text-muted hover:text-foreground hover:bg-elevated transition-colors"
+                  className="p-1 rounded-btn text-muted hover:text-foreground hover:bg-elevated transition-colors max-md:min-h-11 max-md:min-w-11"
                 >
                   <X className="h-4 w-4" />
                 </button>

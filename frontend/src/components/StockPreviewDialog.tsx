@@ -250,7 +250,7 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props
                 {/* 刷新 */}
                 <button
                   onClick={handleRefresh}
-                  className="p-1 max-md:h-9 max-md:w-9 rounded-btn text-secondary hover:text-foreground hover:bg-elevated transition-colors"
+                  className="p-1 max-md:min-h-11 max-md:min-w-11 rounded-btn text-secondary hover:text-foreground hover:bg-elevated transition-colors"
                   aria-label="刷新"
                   title="刷新"
                 >
@@ -261,7 +261,7 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props
                 <button
                   ref={closeBtnRef}
                   onClick={onClose}
-                  className="p-1 max-md:h-9 max-md:w-9 rounded-btn text-secondary hover:text-foreground hover:bg-elevated transition-colors"
+                  className="p-1 max-md:min-h-11 max-md:min-w-11 rounded-btn text-secondary hover:text-foreground hover:bg-elevated transition-colors"
                   aria-label="关闭"
                 >
                   <X className="h-4 w-4" />

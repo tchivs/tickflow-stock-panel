@@ -679,7 +679,7 @@ export function ListColumnCustomizer({
           >
             <div className="flex items-center justify-between px-4 py-3 border-b border-border">
               <h3 className="text-sm font-medium text-foreground">{title}</h3>
-              <button onClick={onClose} aria-label="关闭" className="p-1 rounded hover:bg-elevated text-muted hover:text-foreground transition-colors">
+              <button onClick={onClose} aria-label="关闭" className="p-1 rounded hover:bg-elevated text-muted hover:text-foreground transition-colors max-md:min-h-11 max-md:min-w-11">
                 <X className="h-4 w-4" />
               </button>
             </div>
