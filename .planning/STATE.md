@@ -5,16 +5,16 @@ milestone_name: 可回放 Alpha Factory 与 FactorResearchAgent
 current_phase: 50
 current_phase_name: Replay Workbench & Release Hardening
 status: planning
-stopped_at: Phase 47 complete; ready to plan Phase 48
-last_updated: "2026-08-09T07:34:26.163Z"
+stopped_at: Completed Phase 49-02-PLAN.md; ready to plan Phase 50
+last_updated: "2026-08-09T08:40:50Z"
 last_activity: 2026-08-09
 last_activity_desc: Phase 49 complete, transitioned to Phase 50
 progress:
   total_phases: 6
-  completed_phases: 1
+  completed_phases: 5
   total_plans: 22
   completed_plans: 18
-  percent: 17
+  percent: 83
 ---
 
 # Project State
@@ -24,7 +24,7 @@ progress:
 See: .planning/PROJECT.md (updated 2026-08-06)
 
 **Core value:** An investor can turn reliable market data and their own holdings into an auditable, actionable research and monitoring workflow without operating multiple disconnected tools.
-**Current focus:** Phase 48 — FactorResearchAgent Two-Stage Workflow
+**Current focus:** Phase 50 — Replay Workbench & Release Hardening
 
 ## Current Position
 
@@ -40,8 +40,8 @@ Last activity: 2026-08-09 — Phase 49 complete, transitioned to Phase 50
 | 45 Durable Governed Run Contract | AF-REQ-01, 04, 10, 16 | Complete |
 | 46 Deterministic Alpha Factory Core | AF-REQ-02, 03, 19, 23 | Complete |
 | 47 Governed Scoring, Admission & Selection OOS | AF-REQ-05..09 | Complete |
-| 48 FactorResearchAgent Two-Stage Workflow | AF-REQ-11..14, 21, 26 | Not started |
-| 49 Research-Only Promotion Ticket | AF-REQ-15, 17 | Not started |
+| 48 FactorResearchAgent Two-Stage Workflow | AF-REQ-11..14, 21, 26 | Complete |
+| 49 Research-Only Promotion Ticket | AF-REQ-15, 17 | Complete |
 | 50 Replay Workbench & Release Hardening | AF-REQ-18, 20, 22, 24, 25 | Not started |
 
 ## v2.5 Phase Summary
@@ -99,18 +99,17 @@ None.
 
 ### Blockers/Concerns
 
-- [v3.0 / Phase 48]: Provider retry/failure taxonomy, bounded response retention, and strict Stage 1/2 semantic reference rules require fault-injection design.
-- [v3.0 / Phase 49]: Transient candidate to immutable `FactorRevision`/catalog mapping and approval-time refresh conflict behavior require compatibility verification.
+- [v3.0 / Phase 50]: Reconnect cursors, degraded-data labels, lineage comparison, release/license scans, and research-only UI actions require focused browser and API verification.
 
 ## Session Continuity
 
-Last session: 2026-08-09T02:51:13Z
-Stopped at: Phase 47 complete; ready to plan Phase 48
+Last session: 2026-08-09T08:40:50Z
+Stopped at: Phase 49 complete; ready to plan Phase 50
 Resume file: None
 
 ## Operator Next Steps
 
-- Start planning Phase 48 with `/gsd-plan-phase 48`.
+- Start planning Phase 50 with `/gsd-plan-phase 50`.
 
 ## Deferred Items
 
