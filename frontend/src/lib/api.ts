@@ -19,13 +19,15 @@ export class ApiRequestError extends Error {
   }
 }
 
-export async function request<T>(path: string, init?: RequestInit): Promise<T> {
+export async function request<T>(path: string, init?: RequestInit & { silent?: boolean }): Promise<T> {
   const isFormData = init?.body instanceof FormData
   const headers: Record<string, string> = {}
   if (!isFormData) headers['Content-Type'] = 'application/json'
   // 合并调用方传入的 headers (此前会被整体覆盖丢弃)
   Object.assign(headers, init?.headers as Record<string, string> | undefined)
-  const res = await fetch(`${BASE}${path}`, { ...init, headers })
+  // silent: 调用方自行处理错误响应 (如 404 属正常状态), 不弹全局错误 toast。
+  const { silent, ...fetchInit } = init ?? {}
+  const res = await fetch(`${BASE}${path}`, { ...fetchInit, headers })
   if (!res.ok) {
     let detail: unknown = ''
     let message = ''
@@ -45,7 +47,7 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
     } catch { /* ignore */ }
     const safeMessage = message || `${res.status} ${res.statusText}`
     // 401 (未登录/会话过期) 不弹 toast — 由全局认证拦截器统一跳登录页, 避免刷屏
-    if (res.status !== 401) toast(safeMessage, 'error')
+    if (res.status !== 401 && !silent) toast(safeMessage, 'error')
     throw new ApiRequestError(res.status, safeMessage, detail)
   }
   return res.json() as Promise<T>
@@ -2872,8 +2874,16 @@ export const api = {
     request<{ job: AdvancedJob }>(`/api/advanced/jobs/${encodeURIComponent(jobId)}`),
   advancedAudit: (auditReference: string) =>
     request<{ audit: AdvancedAudit }>(`/api/advanced/audits/${encodeURIComponent(auditReference)}`),
-  advancedResearchAssetBinding: (strategyId: string) =>
-    request<{ binding: AdvancedResearchAssetBinding }>(`/api/advanced/research-assets/strategies/${encodeURIComponent(strategyId)}`),
+  advancedResearchAssetBinding: async (strategyId: string) => {
+    // 内置/未绑定研究资产的策略返回 404 属正常, 不应弹全局错误 toast。
+    // silent=true: request() 不再为 404 弹 toast, 由这里静默降级。
+    try {
+      return await request<{ binding: AdvancedResearchAssetBinding }>(`/api/advanced/research-assets/strategies/${encodeURIComponent(strategyId)}`, { silent: true })
+    } catch (err) {
+      if (err instanceof ApiRequestError && err.status === 404) return { binding: null }
+      throw err
+    }
+  },
   advancedExperiments: () =>
     request<{ specifications: AdvancedExperimentSpecification[]; runs: AdvancedExperimentRun[]; feedback: AdvancedExperimentFeedback[] }>('/api/advanced/experiments'),
   advancedCreateExperiment: (payload: AdvancedExperimentInput) =>
@@ -3161,6 +3171,277 @@ export const api = {
     qs.set('limit', String(params?.limit ?? 200))
     return request<WfEnsembleDTO[]>(`/api/research/wf/ensembles?${qs}`)
   },
+}
+
+// ===== Phase 50: Replay Workbench (AF-REQ-18/20/22/24) =====
+// Typed fetchers + shared interfaces mirroring the backend DTOs from 50-01/02.
+// Each fetcher wraps the existing request<T> transport (api.ts:22-52); the live
+// progress stream uses native EventSource over alphaRunStreamUrl (no new
+// transport/dependency — WalkForward.tsx native-EventSource precedent).
+
+export type AlphaRunStatus =
+  | 'queued'
+  | 'preflight_failed'
+  | 'running'
+  | 'cancel_requested'
+  | 'cancelled'
+  | 'completed'
+  | 'failed'
+
+/** Safe public run projection — mirrors AlphaRunReadDTO (no principal/internals). */
+export interface AlphaRunRead {
+  id: string
+  status: AlphaRunStatus
+  transition_version: number
+  last_event_seq: number
+  candidate_attempts_total: number
+  candidate_attempts_completed: number
+  folds_total: number
+  folds_completed: number
+  snapshot_sha256: string
+  manifest_sha256: string
+  started_at: string | null
+  finished_at: string | null
+  terminal_reason: string | null
+  retry_of_run_id: string | null
+  retry_attempt: number
+  created_at: string
+}
+
+/** One append-only ledger event — mirrors AlphaRunEventDTO. */
+export interface AlphaRunEvent {
+  id: string
+  seq: number
+  event_type: string
+  entity_kind: string
+  entity_id: string
+  occurred_at: string
+  source: string
+  producer_version: string
+  created_at: string
+}
+
+/** The four bounded progress counters — mirrors AlphaProgressDTO. */
+export interface AlphaProgress {
+  candidate_attempts_total: number
+  candidate_attempts_completed: number
+  folds_total: number
+  folds_completed: number
+}
+
+/** One candidate-attempt projection — mirrors AlphaCandidateDTO. */
+export interface AlphaCandidate {
+  id: string
+  attempt_ordinal: number
+  candidate_digest: string
+  canonical_expression: string
+  dsl_version: string
+  operation: string
+  seed: number
+  step: number
+  status: string
+  created_at: string
+}
+
+/** One parent→child lineage edge — mirrors AlphaLineageEdgeDTO (SC2). */
+export interface AlphaLineageEdge {
+  lineage_id: string
+  edge_ordinal: number
+  operation: string
+  created_at: string
+  child: AlphaCandidate
+  parent: AlphaCandidate
+}
+
+/** Ordered lineage edges for one run — mirrors AlphaLineageDTO (SC2 read half). */
+export interface AlphaLineage {
+  run_id: string
+  edges: AlphaLineageEdge[]
+}
+
+/** SC4 temporal/degradation classification — the clean flag binds the data-quality banner. */
+export interface EvidenceClassification {
+  data_date: string | null
+  source_label: string | null
+  cache_state: 'fresh' | 'stale' | 'degraded'
+  missing_fields: string[]
+  membership_coverage: number
+  evidence_role: 'exploratory' | 'selection_fold' | 'selection_oos' | 'final_blind_unavailable'
+  fixture: boolean
+  clean: boolean
+}
+
+/**
+ * One candidate's side-by-side comparison record (SC3, AF-REQ-22).
+ * Every requested candidate is exposed equally — there is NEVER an opaque
+ * aggregate winner/rank/score field (the backend omits it, deny-by-default).
+ */
+export interface AlphaCandidateComparison {
+  candidate_id: string
+  candidate_digest: string
+  config: Record<string, unknown>
+  fold_evidence: Record<string, unknown>[]
+  admission_verdict: string | null
+  gate_trail_digest: string | null
+  policy_version: string | null
+  artifact_refs: Record<string, unknown>[]
+  diversity: Record<string, unknown> | null
+}
+
+/** Side-by-side comparison page — all candidates, no opaque winner (SC3). */
+export interface AlphaCompare {
+  run_id: string
+  candidates: AlphaCandidateComparison[]
+}
+
+/** The frozen cost-diagnostics baseline row (zero recomputation). */
+export interface StressMatrixBaseline {
+  total_turnover: number
+  cost_rate: number
+  cost_drag: number
+  raw_long_short_return: number
+  net_long_short_return: number
+}
+
+/** One Tier-1 stress row — pure arithmetic over stored turnover (AF-REQ-20). */
+export interface StressMatrixRow {
+  axis: 'fee_bps' | 'slippage_bps' | 'rebalance'
+  value: number | string
+  total_turnover: number
+  cost_rate: number
+  cost_drag: number
+  net_long_short_return: number
+}
+
+/** Tier-1 stress matrix — fee/slippage/rebalance re-projection (AF-REQ-20). */
+export interface StressMatrix {
+  candidate_id: string
+  baseline: StressMatrixBaseline
+  matrix: StressMatrixRow[]
+}
+
+/** Branch-replay result — new child run sharing the parent's frozen inputs (SC2). */
+export interface ReplayBranchResult {
+  parent_run_id: string
+  child_run_id: string
+  parent_step: number
+  shared_snapshot_sha256: string
+  shared_manifest_sha256: string
+  replayed_prefix_digests: string[]
+}
+
+/** Clone result — new/parent run id + field-level diff (SC2 clone half). */
+export interface CloneResult {
+  parent_run_id: string
+  clone_run_id: string
+  parent_manifest_sha256: string
+  clone_manifest_sha256: string
+  changed_dimensions: string[]
+  no_op: boolean
+}
+
+/** Bounded branch-replay intent body (POST /replay-branch). */
+export interface ReplayBranchBody {
+  idempotency_key: string
+  parent_step: number
+  max_candidates?: number
+}
+
+/** Bounded clone intent body (POST /clone). */
+export interface CloneBody {
+  idempotency_key: string
+  overrides?: Record<string, unknown>
+}
+
+/** Declared Tier-1 stress axes (fee/slippage/rebalance). */
+export interface StressAxes {
+  fee_bps?: number[]
+  slippage_bps?: number[]
+  rebalance?: string[]
+}
+
+/**
+ * The durable Last-Event-ID SSE stream URL for native EventSource (SC1 UI half).
+ * The browser auto-sends Last-Event-ID on every reconnect; the server honors it
+ * durably (50-01-04), so reconnect resumes from the acknowledged seq losslessly.
+ */
+export function alphaRunStreamUrl(runId: string): string {
+  return `/api/research/alpha/runs/${encodeURIComponent(runId)}/stream`
+}
+
+/** List the principal's runs (runs-list selector). */
+export function fetchAlphaRuns(): Promise<AlphaRunRead[]> {
+  return request<AlphaRunRead[]>('/api/research/alpha/runs')
+}
+
+/** Bounded-polling fallback: the four progress counters (SC1 'SSE or bounded polling'). */
+export function fetchAlphaProgress(runId: string): Promise<AlphaProgress> {
+  return request<AlphaProgress>(`/api/research/alpha/runs/${encodeURIComponent(runId)}/progress`)
+}
+
+/** One principal-scoped run projection (selected-run panel + polling terminal check). */
+export function fetchAlphaRun(runId: string): Promise<AlphaRunRead> {
+  return request<AlphaRunRead>(`/api/research/alpha/runs/${encodeURIComponent(runId)}`)
+}
+
+/** A run's candidate attempts (compare/stress/quality candidate selectors). */
+export function fetchAlphaCandidates(runId: string): Promise<AlphaCandidate[]> {
+  return request<AlphaCandidate[]>(`/api/research/alpha/runs/${encodeURIComponent(runId)}/candidates`)
+}
+
+/** Ordered parent→child lineage edges for one run (SC2 read half). */
+export function fetchAlphaLineage(runId: string): Promise<AlphaLineage> {
+  return request<AlphaLineage>(`/api/research/alpha/runs/${encodeURIComponent(runId)}/lineage`)
+}
+
+/** SC4 temporal/degradation classification + clean flag for one candidate. */
+export function fetchEvidenceClassification(
+  runId: string,
+  candidateId: string,
+): Promise<EvidenceClassification> {
+  return request<EvidenceClassification>(
+    `/api/research/alpha/runs/${encodeURIComponent(runId)}/candidates/${encodeURIComponent(candidateId)}/evidence-classification`,
+  )
+}
+
+/** Side-by-side comparison of every requested candidate (SC3, no opaque winner). */
+export function fetchAlphaCompare(runId: string, candidateIds: string[]): Promise<AlphaCompare> {
+  const candidates = candidateIds.map(encodeURIComponent).join(',')
+  return request<AlphaCompare>(
+    `/api/research/alpha/runs/${encodeURIComponent(runId)}/compare?candidates=${candidates}`,
+  )
+}
+
+/** Tier-1 stress matrix — pure arithmetic over stored turnover (AF-REQ-20). */
+export function fetchStressMatrix(
+  runId: string,
+  candidateId: string,
+  axes: StressAxes,
+): Promise<StressMatrix> {
+  const qs = new URLSearchParams()
+  qs.set('candidate_id', candidateId)
+  for (const v of axes.fee_bps ?? []) qs.append('fee_bps', String(v))
+  for (const v of axes.slippage_bps ?? []) qs.append('slippage_bps', String(v))
+  for (const v of axes.rebalance ?? []) qs.append('rebalance', String(v))
+  return request<StressMatrix>(
+    `/api/research/alpha/runs/${encodeURIComponent(runId)}/stress-matrix?${qs}`,
+  )
+}
+
+/** Replay one branch into a NEW child run sharing the parent's inputs (SC2). */
+export function postReplayBranch(runId: string, body: ReplayBranchBody): Promise<ReplayBranchResult> {
+  return request<ReplayBranchResult>(
+    `/api/research/alpha/runs/${encodeURIComponent(runId)}/replay-branch`,
+    { method: 'POST', body: JSON.stringify(body) },
+  )
+}
+
+/** Clone a run overriding declared scoring/costs/budgets only (SC2). */
+export function postClone(runId: string, body: CloneBody): Promise<CloneResult> {
+  return request<CloneResult>(
+    `/api/research/alpha/runs/${encodeURIComponent(runId)}/clone`,
+    { method: 'POST', body: JSON.stringify(body) },
+  )
 }
 
 // ===== Pipeline =====
