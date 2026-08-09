@@ -333,3 +333,137 @@ class TestFixtureNeverImplicitFallback:
 
 async def _raise_network_call(*_args, **_kwargs):
     raise AssertionError("fixture/experience seam must not perform provider I/O")
+
+
+# ==================================================================
+# 48-04-02 -- ExperienceLibrary seam (AF-REQ-26 §8.2-8.3)
+# ==================================================================
+
+
+class TestDeriveFactorFamily:
+    @pytest.mark.parametrize(
+        "fields,expected",
+        [
+            ({"momentum_20d", "close"}, "momentum"),
+            ({"momentum_5d", "momentum_60d"}, "momentum"),
+            ({"rsi_14", "boll_upper"}, "mean-reversion"),
+            ({"annual_vol_20d", "atr_14"}, "volatility"),
+            ({"turnover_rate", "amount"}, "quality"),
+        ],
+    )
+    def test_family_derived_from_permitted_fields(self, fields, expected) -> None:
+        from app.research.agent_experience import derive_factor_family
+
+        assert derive_factor_family(fields) == expected
+
+    def test_empty_or_unknown_fields_default_momentum(self) -> None:
+        from app.research.agent_experience import derive_factor_family
+
+        assert derive_factor_family([]) == "momentum"
+        assert derive_factor_family({"not_a_real_field"}) == "momentum"
+
+    def test_dominant_family_wins_on_tie_break(self) -> None:
+        from app.research.agent_experience import derive_factor_family
+
+        # Two momentum + one volatility -> momentum dominates.
+        assert derive_factor_family({"momentum_20d", "close", "atr_14"}) == "momentum"
+
+
+class TestEmptyExperienceLibrary:
+    def test_empty_lookup_yields_nothing(self) -> None:
+        from app.research.agent_experience import EmptyExperienceLibrary
+
+        lib = EmptyExperienceLibrary()
+        assert lib.lookup(factor_family="momentum", objective="sharpe") == ()
+
+    def test_empty_library_makes_no_provider_call(self, monkeypatch) -> None:
+        from app.services import ai_provider
+
+        monkeypatch.setattr(ai_provider, "generate_ai_text", _raise_network_call)
+        from app.research.agent_experience import EmptyExperienceLibrary
+
+        lib = EmptyExperienceLibrary()
+        # Lookup completes without invoking the provider (read-only seam).
+        assert lib.lookup(factor_family="momentum", objective="sharpe") == ()
+
+
+class TestOfflineFixtureExperienceLibrary:
+    def test_matching_key_returns_canned_entry(self) -> None:
+        from app.research.agent_experience import (
+            ExperienceEntry,
+            OfflineFixtureExperienceLibrary,
+        )
+
+        lib = OfflineFixtureExperienceLibrary()
+        entries = lib.lookup(factor_family="momentum", objective="sharpe")
+        assert entries
+        assert isinstance(entries[0], ExperienceEntry)
+        assert entries[0].factor_family == "momentum"
+        assert entries[0].objective == "sharpe"
+        assert entries[0].provider == "offline_fixture"
+
+    def test_non_matching_key_returns_nothing(self) -> None:
+        from app.research.agent_experience import OfflineFixtureExperienceLibrary
+
+        lib = OfflineFixtureExperienceLibrary()
+        assert lib.lookup(factor_family="volatility", objective="sharpe") == ()
+        assert lib.lookup(factor_family="momentum", objective="max_drawdown") == ()
+
+    def test_offline_library_makes_no_provider_call(self, monkeypatch) -> None:
+        from app.services import ai_provider
+
+        monkeypatch.setattr(ai_provider, "generate_ai_text", _raise_network_call)
+        from app.research.agent_experience import OfflineFixtureExperienceLibrary
+
+        lib = OfflineFixtureExperienceLibrary()
+        assert lib.lookup(factor_family="momentum", objective="sharpe")
+
+
+class TestExperienceLibraryNoFallback:
+    async def test_populated_library_is_not_a_fallback_response(self, tmp_path) -> None:
+        # SC4: a provider failure still yields ZERO proposals even when the
+        # library is populated. The library only AUGMENTS prompt context.
+        from app.research.agent_provider import AgentProviderSeam, ProviderCallError
+        from app.research.agent_experience import OfflineFixtureExperienceLibrary
+        from app.research.agent_stage1 import Stage1Service
+
+        async def _boom(*_args, **_kwargs) -> str:
+            raise RuntimeError("upstream error")
+
+        repo = ResearchRepository(tmp_path / "operational.db")
+        repo.migrate()
+        run_id = _make_run(repo)
+        lib = OfflineFixtureExperienceLibrary()  # populated
+        seam = AgentProviderSeam(generate_text=_boom)
+        # The library is wired as experience context, but the provider still fails.
+        service = Stage1Service(
+            provider="openai", model="gpt-x", model_version="v1",
+            experience_context=lib,
+        )
+        with pytest.raises(ProviderCallError):
+            await service.run(
+                request=_stage1_request(), seam=seam, repo=repo, run_id=run_id
+            )
+        assert repo.list_stage1_proposals(run_id) == []
+
+    def test_protocol_contract_allows_later_implementation(self) -> None:
+        # The protocol is the only contract; a later phase can add a populated
+        # implementation without touching agent_stage1/stage2.
+        from app.research.agent_experience import (
+            ExperienceEntry,
+            ExperienceLibrary,
+        )
+
+        class _Custom(ExperienceLibrary):
+            def lookup(self, *, factor_family, objective):
+                return (
+                    ExperienceEntry(
+                        factor_family=factor_family,
+                        objective=objective,
+                        summary="custom",
+                        provider="custom",
+                        model="custom-v1",
+                    ),
+                )
+
+        assert _Custom().lookup(factor_family="x", objective="y")
