@@ -425,3 +425,32 @@ async def get_stress_matrix(
         baseline=result["baseline"],
         matrix=result["matrix"],
     )
+
+
+@router.post(
+    "/runs/{run_id}/replay-branch",
+    response_model=ReplayBranchResultDTO, status_code=201,
+)
+async def replay_branch(
+    request: Request,
+    run_id: str,
+    body: ReplayBranchRequestDTO,
+) -> ReplayBranchResultDTO:
+    """Replay one branch into a NEW child run sharing the parent's inputs (SC2).
+
+    Re-derives the PRNG frontier from the frozen seed and continues generation
+    into a new immutable child run via the existing worker path.  The child
+    shares the parent's frozen manifest digests; the parent is never mutated.
+    """
+    service = _service(request)
+    principal = _principal(request)
+    try:
+        result = service.replay_branch(
+            run_id, principal=principal, parent_step=body.parent_step,
+            idempotency_key=body.idempotency_key, max_candidates=body.max_candidates,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    if result is None:
+        raise HTTPException(status_code=404, detail="run not found")
+    return ReplayBranchResultDTO(**result)

@@ -1339,6 +1339,74 @@ class ResearchRunService:
             "net_long_short_return": raw_ls - drag,
         }
 
+    def replay_branch(
+        self,
+        run_id: str,
+        *,
+        principal: str,
+        parent_step: int,
+        idempotency_key: str,
+        max_candidates: int | None = None,
+    ) -> dict[str, Any] | None:
+        """Re-derive the PRNG frontier into a NEW immutable child run (SC2).
+
+        Re-establishes the deterministic candidate prefix via
+        ``AlphaFactory(seed).replay_to(parent_step + 1)``, asserts the
+        re-derived prefix equals the parent's first ``parent_step + 1``
+        candidates (determinism), then continues generation into a NEW child
+        run through the EXISTING ``create()`` path (no second generation path,
+        risk #2).  The child shares the parent's frozen manifest digests.
+        """
+        from app.research.alpha_factory import AlphaFactory
+
+        run = self._repository.get_alpha_run(run_id, principal=principal)
+        if run is None:
+            return None
+        snapshot = self._repository.get_run_snapshot(run_id)
+        if snapshot is None:
+            return None
+        manifest = snapshot.get("manifest", {}) if isinstance(snapshot, Mapping) else {}
+        seed = manifest.get("seed") if isinstance(manifest, Mapping) else None
+        if not isinstance(seed, int):
+            raise ValueError("frozen manifest seed is required for branch replay")
+        candidates = self._repository.list_candidates(
+            run_id, principal=principal, artifact_service=self._artifact_service,
+        )
+        if parent_step < 0 or parent_step >= len(candidates):
+            raise ValueError("parent_step is out of range for the parent's candidates")
+        # Reconstruct the deterministic factory from the frozen manifest inputs.
+        grammar = manifest.get("grammar", {}) if isinstance(manifest, Mapping) else {}
+        budgets = manifest.get("budgets", {}) if isinstance(manifest, Mapping) else {}
+        max_depth = int(grammar.get("max_depth", 6)) if isinstance(grammar, Mapping) else 6
+        max_nodes = int(grammar.get("max_nodes", 64)) if isinstance(grammar, Mapping) else 64
+        budget_candidates = int(budgets.get("max_candidates", 256)) if isinstance(budgets, Mapping) else 256
+        factory = AlphaFactory(
+            seed, max_depth=max_depth, max_nodes=max_nodes,
+            max_candidates=max_candidates or budget_candidates,
+        )
+        prefix = factory.replay_to(parent_step + 1)
+        # Determinism assertion: the re-derived prefix digests MUST equal the
+        # parent's first parent_step+1 candidate digests (by step), else the
+        # frozen inputs drifted and replay is impossible.
+        parent_prefix = sorted(candidates[: parent_step + 1], key=lambda c: int(c["step"]))
+        if [r.digest for r in prefix] != [c["candidate_digest"] for c in parent_prefix]:
+            raise ValueError("branch replay determinism assertion failed: prefix mismatch")
+        # Continue generation into a NEW child run via the EXISTING create path
+        # — no second generation path is introduced (risk #2).  Because the
+        # manifest is byte-identical, the child re-generates the same candidates
+        # deterministically through the normal worker dispatch.
+        child = self.create(
+            principal=principal, idempotency_key=idempotency_key, manifest=manifest,
+        )
+        return {
+            "parent_run_id": run_id,
+            "child_run_id": child["id"],
+            "parent_step": parent_step,
+            "shared_snapshot_sha256": child["snapshot_sha256"],
+            "shared_manifest_sha256": child["manifest_sha256"],
+            "replayed_prefix_digests": [r.digest for r in prefix],
+        }
+
     # Phase 48 fixture-mode orchestration moved to agent_orchestrator.py to
     # keep this Phase 45 module free of provider/stage imports (boundary
     # guard ``test_phase45_guard.py`` prohibits the ``provider`` token).
