@@ -88,6 +88,14 @@ _PROHIBITED_ATTR_RE = re.compile(
     r"\b(subprocess|pickle|marshal|ctypes)\.",
 )
 
+# Phase 49 ratifies that the shared append-only persistence authority
+# (repository.py) materializes promotion-ticket value objects, so it may import
+# promotion_service. The Phase 45 LOGIC modules (run_service, run_worker,
+# research_alpha, ...) remain promotion-free; only the persistence layer is
+# exempt from the `promotion` token (RESEARCH §6.2 — promotion is Phase 49's
+# job). No execution/second-engine token is exempted here.
+_PROMOTION_PERSISTENCE_MODULES = frozenset({"research/repository.py"})
+
 
 def _extract_imports(tree: ast.AST) -> list[str]:
     """Extract all import module names from an AST tree."""
@@ -139,6 +147,11 @@ class TestPhase45ModuleGraphImportBoundary:
         for imp in imports:
             lowered = imp.lower()
             for token in _PROHIBITED_IMPORT_TOKENS:
+                # repository.py is the shared persistence authority; Phase 49
+                # ratifies it may import promotion_service to materialize ticket
+                # rows. No execution token is exempted (only `promotion`).
+                if token == "promotion" and label in _PROMOTION_PERSISTENCE_MODULES:
+                    continue
                 if token in lowered:
                     pytest.fail(
                         f"{label}: prohibited import '{imp}' contains token '{token}'"
