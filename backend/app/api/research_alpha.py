@@ -454,3 +454,35 @@ async def replay_branch(
     if result is None:
         raise HTTPException(status_code=404, detail="run not found")
     return ReplayBranchResultDTO(**result)
+
+
+@router.post("/runs/{run_id}/clone", response_model=CloneResultDTO, status_code=201)
+async def clone_run(
+    request: Request,
+    run_id: str,
+    body: CloneRequestDTO,
+) -> CloneResultDTO:
+    """Clone a run overriding declared scoring/costs/budgets only (SC2).
+
+    Deep-merges only declared override dimensions into the existing immutable
+    ``create()``.  ``seed``/``universe`` are rejected (422).  An unchanged
+    manifest hashes identically and returns the parent id (unchanged-inputs-
+    keep-their-hashes); a changed digested dimension produces a new run id.
+    """
+    service = _service(request)
+    principal = _principal(request)
+    try:
+        result = service.clone_run(
+            run_id, principal=principal, overrides=body.overrides,
+            idempotency_key=body.idempotency_key,
+        )
+    except CloneOverrideForbidden as error:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "CloneOverrideForbidden", "reason": str(error)},
+        ) from error
+    except AlphaRunPreflightError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    if result is None:
+        raise HTTPException(status_code=404, detail="run not found")
+    return CloneResultDTO(**result)

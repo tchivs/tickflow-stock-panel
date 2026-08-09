@@ -1407,6 +1407,85 @@ class ResearchRunService:
             "replayed_prefix_digests": [r.digest for r in prefix],
         }
 
+    def clone_run(
+        self,
+        run_id: str,
+        *,
+        principal: str,
+        overrides: Mapping[str, Any],
+        idempotency_key: str,
+    ) -> dict[str, Any] | None:
+        """Clone overridable manifest dimensions into a new immutable run (SC2).
+
+        Deep-merges ONLY declared ``scoring`` / ``costs`` / ``budgets``
+        overrides over the parent's frozen manifest; ``seed`` / ``universe``
+        are rejected (digest-change guarantee — those are not clone-overridable).
+        Delegates to the EXISTING immutable ``create()``.  An unchanged manifest
+        (no-op overrides) hashes identically and returns the parent run id
+        verbatim (unchanged-inputs-keep-their-hashes); a changed digested
+        dimension produces a new run id.
+        """
+        run = self._repository.get_alpha_run(run_id, principal=principal)
+        if run is None:
+            return None
+        snapshot = self._repository.get_run_snapshot(run_id)
+        if snapshot is None:
+            return None
+        parent_manifest = snapshot.get("manifest", {}) if isinstance(snapshot, Mapping) else {}
+        parent_manifest_sha = run["manifest_sha256"]
+        # Reject forbidden override dimensions (seed/universe are not clone-overridable).
+        forbidden = [k for k in overrides if k in self._CLONE_FORBIDDEN]
+        if forbidden:
+            raise CloneOverrideForbidden(
+                f"override dimensions are not clone-overridable: {sorted(forbidden)}"
+            )
+        merged, changed = self._deep_merge_overrides(parent_manifest, overrides)
+        # Unchanged-inputs-keep-their-hashes: a no-op clone (no dimension actually
+        # changed) returns the parent run id verbatim — no new run is created.
+        if not changed:
+            return {
+                "parent_run_id": run_id,
+                "clone_run_id": run_id,
+                "parent_manifest_sha256": parent_manifest_sha,
+                "clone_manifest_sha256": parent_manifest_sha,
+                "changed_dimensions": [],
+                "no_op": True,
+            }
+        clone = self.create(
+            principal=principal, idempotency_key=idempotency_key, manifest=merged,
+        )
+        return {
+            "parent_run_id": run_id,
+            "clone_run_id": clone["id"],
+            "parent_manifest_sha256": parent_manifest_sha,
+            "clone_manifest_sha256": clone["manifest_sha256"],
+            "changed_dimensions": changed,
+            "no_op": clone["manifest_sha256"] == parent_manifest_sha,
+        }
+
+    def _deep_merge_overrides(
+        self, parent: Mapping[str, Any], overrides: Mapping[str, Any],
+    ) -> tuple[dict[str, Any], list[str]]:
+        """Deep-merge only declared overridable dimensions; report changed paths."""
+        import copy
+
+        merged = copy.deepcopy(dict(parent))
+        changed: list[str] = []
+        for group, group_overrides in overrides.items():
+            if group not in self._CLONE_OVERRIDABLE:
+                continue  # silently drop unknown / non-overridable top-level groups
+            if not isinstance(group_overrides, Mapping):
+                continue
+            target = merged.setdefault(group, {})
+            if not isinstance(target, dict):
+                target = {}
+                merged[group] = target
+            for key, value in group_overrides.items():
+                if target.get(key) != value:
+                    target[key] = value
+                    changed.append(f"{group}.{key}")
+        return merged, changed
+
     # Phase 48 fixture-mode orchestration moved to agent_orchestrator.py to
     # keep this Phase 45 module free of provider/stage imports (boundary
     # guard ``test_phase45_guard.py`` prohibits the ``provider`` token).

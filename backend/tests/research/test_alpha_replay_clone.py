@@ -330,3 +330,265 @@ class TestReplayBranchEndpoint:
             headers={"X-Test-Principal": _PRINCIPAL},
         )
         assert resp.status_code == 422
+
+
+# ================================================================
+# Task 50-02-04: service.clone_run + projections.clone_diff (SC2 clone)
+# ================================================================
+
+
+class TestCloneRunService:
+    def test_clone_overriding_cost_produces_new_run_with_diff(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        run = _make_run(
+            alpha_run_repository, deterministic_clock, run_id="run-cl-1",
+            manifest=_sample_manifest(seed=7, scoring=True),
+        )
+        service = ResearchRunService(alpha_run_repository)
+        result = service.clone_run(
+            run["id"], principal=_PRINCIPAL,
+            overrides={"costs": {"commission_pct": 0.0005}},
+            idempotency_key="idem-clone-cost-000001",
+        )
+        assert result is not None
+        # A changed digested dimension produces a NEW run id + a field-level diff.
+        assert result["clone_run_id"] != run["id"]
+        assert result["changed_dimensions"] == ["costs.commission_pct"]
+        assert result["no_op"] is False
+        # The override perturbs the canonical digest (risk #5).
+        assert result["clone_manifest_sha256"] != result["parent_manifest_sha256"]
+        assert result["parent_manifest_sha256"] == run["manifest_sha256"]
+
+    def test_clone_overriding_scoring_produces_new_run(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        run = _make_run(
+            alpha_run_repository, deterministic_clock, run_id="run-cl-sc",
+            manifest=_sample_manifest(seed=7, scoring=True),
+        )
+        service = ResearchRunService(alpha_run_repository)
+        result = service.clone_run(
+            run["id"], principal=_PRINCIPAL,
+            overrides={"scoring": {"n_groups": 10}},
+            idempotency_key="idem-clone-scoring-001",
+        )
+        assert result is not None
+        assert result["clone_run_id"] != run["id"]
+        assert result["changed_dimensions"] == ["scoring.n_groups"]
+        assert result["clone_manifest_sha256"] != result["parent_manifest_sha256"]
+
+    def test_no_op_clone_returns_parent_id(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        run = _make_run(
+            alpha_run_repository, deterministic_clock, run_id="run-cl-noop",
+            manifest=_sample_manifest(seed=7, scoring=True),
+        )
+        service = ResearchRunService(alpha_run_repository)
+        # Empty overrides → unchanged-inputs-keep-their-hashes → parent id.
+        result = service.clone_run(
+            run["id"], principal=_PRINCIPAL, overrides={},
+            idempotency_key="idem-clone-noop-00001",
+        )
+        assert result is not None
+        assert result["clone_run_id"] == run["id"]
+        assert result["changed_dimensions"] == []
+        assert result["no_op"] is True
+        assert result["clone_manifest_sha256"] == result["parent_manifest_sha256"]
+
+    def test_no_op_clone_with_same_value_returns_parent_id(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        run = _make_run(
+            alpha_run_repository, deterministic_clock, run_id="run-cl-sv",
+            manifest=_sample_manifest(seed=7, scoring=True),
+        )
+        service = ResearchRunService(alpha_run_repository)
+        # Override to the SAME value → no actual change → parent id.
+        result = service.clone_run(
+            run["id"], principal=_PRINCIPAL,
+            overrides={"costs": {"commission_pct": 0.0003}},
+            idempotency_key="idem-clone-sameval-001",
+        )
+        assert result is not None
+        assert result["clone_run_id"] == run["id"]
+        assert result["changed_dimensions"] == []
+        assert result["no_op"] is True
+
+    def test_seed_override_forbidden(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        run = _make_run(
+            alpha_run_repository, deterministic_clock, run_id="run-cl-seed",
+            manifest=_sample_manifest(seed=7, scoring=True),
+        )
+        service = ResearchRunService(alpha_run_repository)
+        with pytest.raises(CloneOverrideForbidden):
+            service.clone_run(
+                run["id"], principal=_PRINCIPAL,
+                overrides={"seed": 999},
+                idempotency_key="idem-clone-seed-0001",
+            )
+
+    def test_universe_override_forbidden(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        run = _make_run(
+            alpha_run_repository, deterministic_clock, run_id="run-cl-uni",
+            manifest=_sample_manifest(seed=7, scoring=True),
+        )
+        service = ResearchRunService(alpha_run_repository)
+        with pytest.raises(CloneOverrideForbidden):
+            service.clone_run(
+                run["id"], principal=_PRINCIPAL,
+                overrides={"universe": {"name": "other"}},
+                idempotency_key="idem-clone-uni-000001",
+            )
+
+    def test_clone_parent_never_mutated(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        run = _make_run(
+            alpha_run_repository, deterministic_clock, run_id="run-cl-pm",
+            manifest=_sample_manifest(seed=7, scoring=True),
+        )
+        before_snapshot = alpha_run_repository.get_run_snapshot(run["id"])
+        service = ResearchRunService(alpha_run_repository)
+        service.clone_run(
+            run["id"], principal=_PRINCIPAL,
+            overrides={"budgets": {"max_candidates": 100}},
+            idempotency_key="idem-clone-pm-000001",
+        )
+        after_snapshot = alpha_run_repository.get_run_snapshot(run["id"])
+        # The parent's frozen snapshot/manifest is byte-identical before/after.
+        assert before_snapshot == after_snapshot
+
+    def test_clone_idempotent_same_key_same_clone(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        run = _make_run(
+            alpha_run_repository, deterministic_clock, run_id="run-cl-idem",
+            manifest=_sample_manifest(seed=7, scoring=True),
+        )
+        service = ResearchRunService(alpha_run_repository)
+        key = "idem-clone-idemp-00001"
+        first = service.clone_run(
+            run["id"], principal=_PRINCIPAL,
+            overrides={"costs": {"slippage_bps": 10.0}},
+            idempotency_key=key,
+        )
+        second = service.clone_run(
+            run["id"], principal=_PRINCIPAL,
+            overrides={"costs": {"slippage_bps": 10.0}},
+            idempotency_key=key,
+        )
+        assert first is not None and second is not None
+        assert first["clone_run_id"] == second["clone_run_id"]
+
+    def test_clone_cross_principal_returns_none(
+        self,
+        alpha_run_repository: ResearchRepository,
+        deterministic_clock: DeterministicClock,
+    ) -> None:
+        run = _make_run(
+            alpha_run_repository, deterministic_clock, run_id="run-cl-xp",
+            manifest=_sample_manifest(seed=7, scoring=True),
+        )
+        service = ResearchRunService(alpha_run_repository)
+        assert service.clone_run(
+            run["id"], principal="attacker@example.com",
+            overrides={"costs": {"commission_pct": 0.0005}},
+            idempotency_key="idem-clone-xp-000001",
+        ) is None
+
+
+class TestCloneDiffProjection:
+    def test_clone_diff_exposes_bounded_fields(self) -> None:
+        record = {
+            "parent_run_id": "arun-parent", "clone_run_id": "arun-clone",
+            "parent_manifest_sha256": "a" * 64, "clone_manifest_sha256": "b" * 64,
+            "changed_dimensions": ["costs.commission_pct"], "no_op": False,
+            "secret_internal": "should-not-leak",
+        }
+        projected = projections.clone_diff(record)
+        assert projected["parent_run_id"] == "arun-parent"
+        assert projected["clone_run_id"] == "arun-clone"
+        assert projected["changed_dimensions"] == ["costs.commission_pct"]
+        assert projected["no_op"] is False
+        assert "secret_internal" not in projected
+
+
+class TestCloneEndpoint:
+    def test_clone_returns_new_run_with_diff(self, replay_client: TestClient) -> None:
+        repo: ResearchRepository = replay_client._repo  # type: ignore[attr-defined]
+        clock: DeterministicClock = replay_client._clock  # type: ignore[attr-defined]
+        run = _make_run(
+            repo, clock, run_id="run-cl-api", manifest=_sample_manifest(seed=7, scoring=True),
+        )
+        resp = replay_client.post(
+            f"/api/research/alpha/runs/{run['id']}/clone",
+            json={"idempotency_key": "idem-clone-api-000001",
+                  "overrides": {"costs": {"commission_pct": 0.0005}}},
+            headers={"X-Test-Principal": _PRINCIPAL},
+        )
+        assert resp.status_code == 201
+        body = resp.json()
+        assert body["clone_run_id"] != run["id"]
+        assert body["changed_dimensions"] == ["costs.commission_pct"]
+        assert body["no_op"] is False
+
+    def test_clone_no_op_returns_parent_id(self, replay_client: TestClient) -> None:
+        repo: ResearchRepository = replay_client._repo  # type: ignore[attr-defined]
+        clock: DeterministicClock = replay_client._clock  # type: ignore[attr-defined]
+        run = _make_run(
+            repo, clock, run_id="run-cl-api-noop", manifest=_sample_manifest(seed=7, scoring=True),
+        )
+        resp = replay_client.post(
+            f"/api/research/alpha/runs/{run['id']}/clone",
+            json={"idempotency_key": "idem-clone-api-noop1", "overrides": {}},
+            headers={"X-Test-Principal": _PRINCIPAL},
+        )
+        assert resp.status_code == 201
+        body = resp.json()
+        assert body["clone_run_id"] == run["id"]
+        assert body["no_op"] is True
+
+    def test_clone_seed_override_422(self, replay_client: TestClient) -> None:
+        repo: ResearchRepository = replay_client._repo  # type: ignore[attr-defined]
+        clock: DeterministicClock = replay_client._clock  # type: ignore[attr-defined]
+        run = _make_run(
+            repo, clock, run_id="run-cl-api-seed", manifest=_sample_manifest(seed=7, scoring=True),
+        )
+        resp = replay_client.post(
+            f"/api/research/alpha/runs/{run['id']}/clone",
+            json={"idempotency_key": "idem-clone-api-seed1",
+                  "overrides": {"seed": 999}},
+            headers={"X-Test-Principal": _PRINCIPAL},
+        )
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["code"] == "CloneOverrideForbidden"
+
+    def test_clone_unknown_run_404(self, replay_client: TestClient) -> None:
+        resp = replay_client.post(
+            "/api/research/alpha/runs/no-such-run/clone",
+            json={"idempotency_key": "idem-clone-api-unk001", "overrides": {}},
+            headers={"X-Test-Principal": _PRINCIPAL},
+        )
+        assert resp.status_code == 404
