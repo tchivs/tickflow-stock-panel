@@ -159,6 +159,41 @@ def test_trailing_stop_uses_high_water_mark():
     assert trade.exit_price == 11.4
 
 
+def test_close_t_entry_trailing_stop_ignores_pre_entry_high():
+    """close_t 建仓: 信号日收盘成交, 当日盘中高点发生在建仓之前,
+    不应计入移损峰值。否则移损线按虚假峰值 12 计算 (12*0.95=11.4),
+    次日开盘 11 即被触发; 正确口径按建仓价 11 计算 (11*0.95=10.45)。"""
+    panel = _panel(
+        ["A"],
+        days=4,
+        overrides={
+            ("A", 0): {"open": 10, "high": 12, "low": 9.8, "close": 11},
+            ("A", 1): {"open": 11, "high": 11, "low": 10.4, "close": 10.4},
+        },
+    )
+    entries = _mask(panel, {("A", 0)})
+    exits = _mask(panel, set())
+
+    result = _engine().simulate_portfolio(
+        panel,
+        entries,
+        exits,
+        MatcherConfig(
+            matching="close_t",
+            fees_pct=0,
+            slippage_bps=0,
+            max_positions=1,
+            initial_capital=100_000,
+            trailing_stop_pct=0.05,
+        ),
+    )
+
+    assert len(result.trades) == 1
+    trade = result.trades[0]
+    assert trade.exit_reason == "trailing_stop"
+    assert trade.exit_price == 10.45
+
+
 def test_trailing_take_profit_requires_activation():
     panel = _panel(
         ["A"],
@@ -421,3 +456,116 @@ def test_default_fill_is_buy_open_sell_close():
     assert trade.entry_price == 10.0   # 次日开盘
     assert trade.exit_price == 10.8    # 到期日收盘
     assert trade.exit_reason == "max_hold"
+
+
+def test_pending_signal_exit_does_not_bypass_stop_loss():
+    """挂单待执行 (pending_exit) 不清空风控: 信号离场被跌停挡住后,
+    次日若开盘跌破止损线, 应以止损价(开盘)成交, 而不是按挂单等到收盘。"""
+    panel = _panel(
+        ["A"],
+        days=4,
+        overrides={
+            ("A", 1): {"signal_limit_down": True},   # 信号日一价跌停 → 收盘离场被挡, 挂单
+            ("A", 2): {"open": 8.5, "high": 8.7, "low": 8.4, "close": 8.0},  # 跳空跌破止损线 9.0
+            ("A", 3): {"open": 8.0, "high": 8.0, "low": 8.0, "close": 8.0},
+        },
+    )
+    entries = _mask(panel, {("A", 0)})
+    exits = _mask(panel, {("A", 1)})
+
+    result = _engine().simulate_portfolio(
+        panel,
+        entries,
+        exits,
+        MatcherConfig(
+            matching="close_t",
+            fees_pct=0,
+            slippage_bps=0,
+            stop_loss_pct=0.1,
+            max_positions=1,
+            initial_capital=100_000,
+        ),
+    )
+
+    assert len(result.trades) == 1
+    trade = result.trades[0]
+    assert trade.exit_reason == "stop_loss"
+    assert trade.exit_price == 8.5            # 开盘价成交, 而非收盘 8.0
+    assert trade.blocked_exit_days == 1
+
+
+def test_risk_exit_blocked_by_limit_down_counts_once():
+    """组合模式风控触发当日被跌停挡住: blocked_exit_days 与 sell_limit_down 只计一次,
+    不应再被随后的挂单出场重复计数。"""
+    panel = _panel(
+        ["A"],
+        days=4,
+        overrides={
+            ("A", 1): {"open": 8.9, "high": 8.9, "low": 8.9, "close": 8.9, "signal_limit_down": True},  # 一价跌停, 跌破止损 9.0
+            ("A", 2): {"open": 8.5, "high": 8.6, "low": 8.4, "close": 8.4},
+            ("A", 3): {"open": 8.4, "high": 8.4, "low": 8.4, "close": 8.4},
+        },
+    )
+    entries = _mask(panel, {("A", 0)})
+    exits = _mask(panel, set())
+
+    result = _engine().simulate_portfolio(
+        panel,
+        entries,
+        exits,
+        MatcherConfig(
+            matching="close_t",
+            fees_pct=0,
+            slippage_bps=0,
+            stop_loss_pct=0.1,
+            max_positions=1,
+            initial_capital=100_000,
+        ),
+    )
+
+    assert len(result.trades) == 1
+    trade = result.trades[0]
+    assert trade.exit_reason == "stop_loss"
+    assert trade.blocked_exit_days == 1
+    assert result.stats["execution"]["sell_limit_down"] == 1
+
+
+def test_portfolio_trigger_signal_ids_resolve_at_signal_row():
+    """账户级组合 open_t+1: 具体触发信号在信号行解析 (numpy idx + 行偏移回归)。"""
+    start = date(2024, 1, 1)
+    rows = []
+    for i in range(6):
+        px = 10.0 + i
+        rows.append({
+            "symbol": "A",
+            "name": "A",
+            "date": start + timedelta(days=i),
+            "open": px, "high": px, "low": px, "close": px,
+            "volume": 100_000,
+            "score": 4,
+            "signal_limit_up": False,
+            "signal_limit_down": False,
+            "signal_buy": i == 0,
+            "signal_sell": i == 2,
+        })
+    panel = pl.DataFrame(rows)
+
+    entry_mask = pl.Series(panel["signal_buy"], dtype=pl.Boolean)
+    exit_mask = pl.Series(panel["signal_sell"], dtype=pl.Boolean)
+
+    result = BacktestEngine(repo=None).simulate_portfolio(  # type: ignore[arg-type]
+        panel,
+        entry_mask,
+        exit_mask,
+        MatcherConfig(matching="open_t+1", fees_pct=0, slippage_bps=0, initial_capital=100_000, max_positions=5),
+        entry_signal_ids=["signal_buy"],
+        exit_signal_ids=["signal_sell"],
+    )
+
+    assert len(result.trades) == 1
+    trade = result.trades[0]
+    assert trade.entry_signal_id == "signal_buy", trade
+    assert trade.exit_reason == "signal"
+    assert trade.exit_signal_id == "signal_sell", trade
+    assert str(trade.entry_date) == str(start + timedelta(days=1))
+    assert str(trade.exit_date) == str(start + timedelta(days=3))

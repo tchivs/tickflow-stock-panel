@@ -18,7 +18,8 @@ from app.data_providers.stockdb_provider import StockDBProvider, StockDBAuthErro
 
 def test_config_defaults():
     """config 两键默认值: url=http://127.0.0.1:8000, api_key=""。"""
-    s = Settings()
+    # Ignore the repository deployment .env so this test checks class defaults.
+    s = Settings(_env_file=None)
     assert s.local_stockdb_url == "http://127.0.0.1:8000"
     assert s.local_stockdb_api_key == ""
 

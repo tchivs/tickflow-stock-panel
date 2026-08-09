@@ -24,8 +24,8 @@ from app.services.backtest import (
 
 router = APIRouter(prefix="/api/backtest", tags=["backtest"])
 
-FACTOR_DEFAULT_DAYS = 180
-STRATEGY_DEFAULT_DAYS = 365 * 3
+FACTOR_DEFAULT_DAYS = 365 * 3
+STRATEGY_DEFAULT_DAYS = 180
 BACKTEST_MAX_SERVER_DAYS = 186
 FACTOR_MAX_SYMBOLS = 1000
 BACKTEST_SERVER_GUARD_MESSAGE = (

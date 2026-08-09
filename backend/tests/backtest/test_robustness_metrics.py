@@ -8,7 +8,7 @@
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 import numpy as np
 
@@ -172,3 +172,41 @@ def test_calc_stats_all_wins_reports_sortino_none():
     trades = _trades([0.10, 0.05, 0.08], [3, 2, 4])
     stats = BacktestEngine._calc_stats(trades, 100_000, date(2024, 1, 1), date(2024, 6, 1))
     assert stats["sortino"] is None
+
+
+def test_independent_candidate_sharpe_annualizes_by_exit_day_frequency():
+    """full 模式 Sharpe/Sortino 必须按实际采样频率 (平仓日数/日历跨度年数) 年化,
+    而非 sqrt(252) —— 零收益日被丢弃时 252 会系统性虚增指标。"""
+    # 20 笔交易, 退出日按月铺开, 跨 ~1.585 年 → periods_per_year = 20/1.585 ≈ 12.62
+    exits = [date(2024, 1, 1) + timedelta(days=30 * i) for i in range(20)]
+    trades = []
+    for i, ex in enumerate(exits):
+        pnl = 0.02 if i % 2 == 0 else -0.01
+        trades.append(TradeRecord(
+            symbol="A", entry_date=ex - timedelta(days=3), exit_date=ex,
+            entry_price=10.0, exit_price=10.0 * (1 + pnl), pnl_pct=pnl,
+            duration=3, exit_reason="signal",
+        ))
+    result = BacktestEngine._calc_independent_candidate_result(
+        trades, n_candidates=20, execution_stats={},
+    )
+    sharpe = result.stats["sharpe"]
+    sortino = result.stats["sortino"]
+    assert sharpe is not None and sortino is not None
+
+    # 按退出日聚合 (与引擎同口径)
+    by_day: dict[str, list[float]] = {}
+    for t in trades:
+        by_day.setdefault(str(t.exit_date), []).append(float(t.pnl_pct))
+    vals = [float(np.mean(v)) for v in by_day.values()]
+    d = np.array(vals, dtype=float)
+    span_days = (exits[-1] - exits[0]).days + 1
+    years = span_days / 365.25
+    periods_per_year = len(d) / years
+    exp = float(np.mean(d) / np.std(d) * np.sqrt(periods_per_year))
+    assert sharpe == round(exp, 2)
+    # 关键: 远小于 sqrt(252) 版本 (252 口径会虚增)
+    assert abs(sharpe) < abs(float(np.mean(d) / np.std(d) * np.sqrt(252))) * 0.9
+    # sortino 同样按采样频率年化
+    exp_sortino = BacktestEngine._sortino_ratio(d, periods_per_year=periods_per_year)
+    assert sortino == round(float(exp_sortino), 2)

@@ -170,7 +170,21 @@ def health_check(name: str) -> str:
             # 本机 stockdb 服务端 schemas.py:25 要求前缀形态符号 (SH600519),
             # 裸 "000001" 会 400 → 误报 error。
             probe_symbol = "SH600519" if name == "local_stockdb" else "000001"
-            probe = provider.get_daily([probe_symbol]) if hasattr(provider, "get_daily") else None
+            # local_stockdb 服务端对空 start/end 直接 400 ('' 无法按 %Y-%m-%d 解析),
+            # 探测必须带明确日期窗口 → 否则每次探测都误报 error 并刷警告日志。
+            if name == "local_stockdb":
+                end = _dt.date.today()
+                start = end - _dt.timedelta(days=7)
+                try:
+                    probe = provider.get_daily([probe_symbol], start_time=start, end_time=end)
+                except TypeError as exc:
+                    # Keep compatibility with lightweight provider adapters that still
+                    # expose the older get_daily(symbols) surface.
+                    if "unexpected keyword argument" not in str(exc):
+                        raise
+                    probe = provider.get_daily([probe_symbol])
+            else:
+                probe = provider.get_daily([probe_symbol]) if hasattr(provider, "get_daily") else None
             return "ok" if probe is not None and not probe.is_empty() else "warn"
         except Exception as e:
             logger.warning("health[%s]: %s", name, e)
