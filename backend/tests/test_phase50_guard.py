@@ -526,3 +526,114 @@ class TestRuntimeNoExecutionCollaborator:
             "execution collaborator invoked during SSE stream: "
             + ", ".join(f"{f.name}={f.calls}" for f in fakes if f.calls)
         )
+
+# ================================================================
+# Dependency-manifest diff (SC5b) — zero new base runtime deps
+# ================================================================
+
+# The Phase-50 base dependency baseline, frozen from pyproject.toml
+# [project.dependencies].  ``sse-starlette>=2.0`` is PRE-EXISTING (the SSE
+# transport dep), NOT new (ROADMAP.md:12 zero-new-base-dep constraint).
+# Adding or removing a dependency fails the test until this baseline is
+# deliberately updated in lockstep with this guard.
+_DEPENDENCY_BASELINE: frozenset[str] = frozenset({
+    "apscheduler>=3.10",
+    "cvxpy==1.9.2",
+    "duckdb>=1.0",
+    "fastapi>=0.115",
+    "fastexcel>=0.10",
+    "httpx>=0.27",
+    "langgraph-checkpoint-sqlite==3.1.0",
+    "langgraph==1.2.9",
+    "openai>=1.40",
+    "pandas>=2.2",
+    "platformdirs>=4.0",
+    "plyer>=2.1",
+    "polars>=1.0",
+    "pyarrow>=16.0",
+    "pydantic-settings>=2.4",
+    "pydantic>=2.7",
+    "python-dotenv>=1.0",
+    "python-multipart>=0.0.6",
+    "pyyaml>=6.0",
+    "scipy>=1.17.1,<1.18",
+    "sse-starlette>=2.0",
+    "tickflow[all]>=0.1.23",
+    "uvicorn[standard]>=0.30",
+    "winotify>=1.1",
+})
+
+
+def _normalize_dependency(raw: str) -> str:
+    """Normalize one PEP 508 dependency line for the baseline diff.
+
+    Drops inline comments and environment markers, collapses whitespace, and
+    lowercases — the name+extras+specifier must match the baseline exactly.
+    """
+    line = raw.split("#", 1)[0].strip()
+    line = line.split(";", 1)[0].strip()
+    return " ".join(line.split()).lower()
+
+
+class TestNoNewBaseDependency:
+    """The base dependency set must equal the Phase-50 baseline (SC5b)."""
+
+    def test_no_new_base_dependency_manifest_unchanged(self) -> None:
+        import tomllib
+
+        pyproject = _BACKEND / "pyproject.toml"
+        assert pyproject.exists(), "backend/pyproject.toml not found"
+        with pyproject.open("rb") as handle:
+            data = tomllib.load(handle)
+        deps = data["project"]["dependencies"]
+        actual = frozenset(_normalize_dependency(dep) for dep in deps)
+        # sse-starlette is the pre-existing SSE dep, deliberately in the baseline.
+        assert "sse-starlette>=2.0" in actual, (
+            "sse-starlette (the pre-existing SSE transport dep) is missing"
+        )
+        added = actual - _DEPENDENCY_BASELINE
+        removed = _DEPENDENCY_BASELINE - actual
+        assert not added and not removed, (
+            "base dependency set changed — update _DEPENDENCY_BASELINE in "
+            "lockstep with this guard if the change is deliberate.\n"
+            f"  added:   {sorted(added)}\n"
+            f"  removed: {sorted(removed)}"
+        )
+
+
+# ================================================================
+# AGPL-derived-source content scan (SC5a) — MIT only
+# ================================================================
+
+# Provenance strings that indicate AGPL-derived / copied source (AlphaMaster /
+# PA_Agent are the source patterns; REQUIREMENTS.md:16,76 — patterns only, no
+# source copying).  MIT headers only.
+_AGPL_PROVENANCE_TOKENS: tuple[str, ...] = ("agpl", "alphamaster", "pa_agent", "affero")
+
+
+class TestNoAgplDerivedSource:
+    """No Phase 50 module carries AGPL/AlphaMaster/PA_Agent provenance; MIT only."""
+
+    @pytest.mark.parametrize("label,path", list(PHASE50_MODULES.items()))
+    def test_no_agpl_derived_source_in_module_set(
+        self, label: str, path: Path,
+    ) -> None:
+        """No Phase-50-owned/extended module header/body carries AGPL provenance."""
+        _module_exists(label, path)
+        source = path.read_text(encoding="utf-8").lower()
+        for token in _AGPL_PROVENANCE_TOKENS:
+            assert token not in source, (
+                f"{label}: AGPL/provenance string '{token}' detected "
+                "(REQUIREMENTS.md:16,76 — patterns only, no source copying)"
+            )
+
+    def test_license_is_mit(self) -> None:
+        """The project LICENSE must be MIT (no AGPL/copyleft license)."""
+        license_path = _BACKEND.parent / "LICENSE"
+        assert license_path.exists(), "LICENSE not found at repo root"
+        text = license_path.read_text(encoding="utf-8")
+        assert "MIT License" in text, "LICENSE is not an MIT license"
+        for token in _AGPL_PROVENANCE_TOKENS:
+            assert token not in text.lower(), (
+                f"LICENSE: AGPL/provenance string '{token}' detected"
+            )
