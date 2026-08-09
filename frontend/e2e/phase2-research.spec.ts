@@ -223,6 +223,10 @@ async function runKeyboardScenario(page: Page, viewport: { width: number; height
     expect(box?.height).toBeGreaterThanOrEqual(44)
   }
   await expect(retain).toBeVisible()
+  // 净值图读屏可达: 容器 role=img + 数据摘要 aria-label (useECharts ariaDescription)
+  if (viewport.width !== 375) {
+    await expect(page.getByRole('img', { name: /策略净值曲线，共 2 个交易日/ })).toBeVisible()
+  }
   await activateWithKeyboard(page, retain)
   await expect(page.getByText('已保留：此完成快照现在可在比较中选择。')).toBeVisible()
   await expect(page.getByText('实验 ID：')).toBeVisible()

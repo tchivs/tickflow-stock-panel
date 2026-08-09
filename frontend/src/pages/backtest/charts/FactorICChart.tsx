@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import { useECharts } from './useECharts'
 import type { FactorBacktestResult } from '@/lib/api'
-import { useChartTheme } from '@/lib/theme'
+import { useChartTheme, chartColor, CHART_BULL, CHART_BEAR } from '@/lib/theme'
 
 interface Props {
   result: FactorBacktestResult
@@ -65,8 +65,8 @@ export function FactorICChart({ result }: Props) {
             value: v,
             itemStyle: {
               color: v >= 0
-                ? 'rgba(240,68,56,0.6)'
-                : 'rgba(18,183,106,0.6)',
+                ? chartColor(CHART_BULL, 0.6)
+                : chartColor(CHART_BEAR, 0.6),
             },
           })),
           barMaxWidth: 6,
@@ -84,7 +84,11 @@ export function FactorICChart({ result }: Props) {
     } as any
   }, [result.ic_series, ct])
 
-  const chartRef = useECharts(option, [result.run_id, ct])
+  const chartRef = useECharts(option, [result.run_id, ct], useMemo(() => {
+    if (!result.ic_series.length) return undefined
+    const lastIc = result.ic_series[result.ic_series.length - 1].ic
+    return `因子IC走势，共 ${result.ic_series.length} 期，最新IC ${(lastIc * 100).toFixed(2)}%，柱为正负IC、线为12期移动平均。`
+  }, [result]))
 
   return <div ref={chartRef} className="h-[200px]" />
 }

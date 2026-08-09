@@ -634,7 +634,7 @@ export function ThesisPanel({ instrument, title }: ThesisPanelProps) {
     {!versionsQuery.isLoading && versions.length === 0 && !editing ? <div className="rounded-card border border-border bg-elevated p-4">
       <h3 className="text-base font-semibold">尚无投资论点</h3>
       <p className="mt-2 max-w-[72ch] text-secondary">为当前标的记录核心判断、带假设的估值区间和可定期检查的失效条件。</p>
-      <button type="button" onClick={() => beginDraft()} className={`${BUTTON} mt-4 bg-accent font-semibold text-white`}>创建第一版投资论点</button>
+      <button type="button" onClick={() => beginDraft()} className={`${BUTTON} mt-4 bg-accent-solid font-semibold text-white`}>创建第一版投资论点</button>
     </div> : null}
 
     {selectedVersion && <article className="space-y-4" aria-labelledby={`${headingId}-current`}>
@@ -669,7 +669,7 @@ export function ThesisPanel({ instrument, title }: ThesisPanelProps) {
     {creationConfirmOpen && createPortal(<FocusDialog title="创建不可变论点版本" initialFocus="cancel" onClose={() => setCreationConfirmOpen(false)}>
       <p>创建后，旧版本及其检查历史会继续保留；新版本条件从各自 cadence 开始。该记录不能被覆盖或删除。</p>
       {createVersion.isError && <div role="alert" className="mt-4 rounded-input bg-danger/10 p-4 text-danger"><strong>无法创建不可变论点版本</strong><p>无法创建不可变论点版本：{errorReason(createVersion.error)}。</p><p>已填写的表单和审阅内容保留；既有版本与当前官方状态保持不变。本次未创建新版本；失败提交不作为论点版本写入，也不改写任何既有只读版本。</p></div>}
-      <div className="mt-4 flex flex-wrap justify-end gap-2"><button type="button" data-dialog-cancel onClick={() => setCreationConfirmOpen(false)} className={`${BUTTON} border border-border`}>返回审阅</button><button type="button" onClick={() => createVersion.mutate()} disabled={createVersion.isPending} className={`${BUTTON} bg-accent font-semibold text-white disabled:opacity-60`}>{createVersion.isPending ? '正在创建不可变版本…' : '创建不可变论点版本'}</button></div>
+      <div className="mt-4 flex flex-wrap justify-end gap-2"><button type="button" data-dialog-cancel onClick={() => setCreationConfirmOpen(false)} className={`${BUTTON} border border-border`}>返回审阅</button><button type="button" onClick={() => createVersion.mutate()} disabled={createVersion.isPending} className={`${BUTTON} bg-accent-solid font-semibold text-white disabled:opacity-60`}>{createVersion.isPending ? '正在创建不可变版本…' : '创建不可变论点版本'}</button></div>
     </FocusDialog>, document.body)}
 
     {reviewTarget && createPortal(<ReviewDialog target={reviewTarget} instrumentTitle={title} versions={versions} rationale={rationale} setRationale={setRationale} mutation={reviewMutation} onClose={() => setReviewTarget(null)} />, document.body)}
@@ -807,7 +807,7 @@ function VersionForm({ draft, setDraft, error, errorTarget, reviewing, lowRef, f
     })}</fieldset>
     <label htmlFor="thesis-change-reason">版本变更理由<textarea {...fieldProps('thesis-change-reason')} value={draft.changeReason} onChange={event => setDraft(current => ({ ...current, changeReason: event.target.value }))} className={`${INPUT} mt-1 min-h-20`} /></label>
     {reviewing && <div className="rounded-card border border-accent/40 bg-accent/5 p-4"><h4 className="font-semibold">创建前审阅摘要</h4><p className="mt-1">核心判断、{draft.anchors.length} 个估值区间、{draft.conditions.length} 个结构化条件与各自检查周期将写入新版本；旧版本和检查历史保持不变。</p></div>}
-    <div className="flex flex-wrap justify-end gap-2"><button type="button" onClick={onCancel} className={`${BUTTON} border border-border`}>暂不处理</button>{reviewing ? <button type="button" onClick={onConfirm} className={`${BUTTON} bg-accent font-semibold text-white`}>创建不可变论点版本</button> : <button type="button" onClick={onReview} className={`${BUTTON} bg-accent font-semibold text-white`}>进入审阅</button>}</div>
+    <div className="flex flex-wrap justify-end gap-2"><button type="button" onClick={onCancel} className={`${BUTTON} border border-border`}>暂不处理</button>{reviewing ? <button type="button" onClick={onConfirm} className={`${BUTTON} bg-accent-solid font-semibold text-white`}>创建不可变论点版本</button> : <button type="button" onClick={onReview} className={`${BUTTON} bg-accent-solid font-semibold text-white`}>进入审阅</button>}</div>
   </section>
 }
 
@@ -819,7 +819,7 @@ function ReviewDialog({ target, instrumentTitle, versions, rationale, setRationa
     <p>{target.action === 'confirm' ? `确认将 ${normalizedTitle}的论点版本 ${version?.version ?? target.pending.version ?? target.pending.version_id} 记录为已失效？命中条件与证据会永久保留；此操作不会执行交易或修改其他研究对象。` : '驳回后，当前官方状态保持不变；条件、检查记录和证据仍会永久保留。'}</p>
     <label className="mt-4 block">{target.action === 'confirm' ? '确认理由（至少 10 个字符）' : '驳回理由（至少 10 个字符）'}<textarea data-dialog-textarea value={rationale} onChange={event => setRationale(event.target.value)} className={`${INPUT} mt-1 min-h-28`} /></label>
     {mutation.isError && !(mutation.error instanceof ApiRequestError && mutation.error.status === 409) && <div role="alert" className="mt-4 rounded-input bg-danger/10 p-4 text-danger"><strong>无法确认论点操作结果</strong><p>确认或驳回请求的传输状态不确定：{errorReason(mutation.error)}。已填写的理由保留。</p><p>不得假定服务端未处理本次请求；重试前必须重新读取当前论点及待确认结论，并以服务端当前记录为准。</p></div>}
-    <div className="mt-4 flex flex-wrap justify-end gap-2"><button type="button" onClick={onClose} className={`${BUTTON} border border-border`}>暂不处理</button><button type="button" onClick={() => mutation.mutate(target)} disabled={rationale.trim().length < 10 || mutation.isPending} className={`${BUTTON} ${target.action === 'confirm' ? 'bg-danger text-white' : 'bg-accent text-white'} font-semibold disabled:opacity-50`}>{mutation.isPending ? '正在记录人工决定…' : title}</button></div>
+    <div className="mt-4 flex flex-wrap justify-end gap-2"><button type="button" onClick={onClose} className={`${BUTTON} border border-border`}>暂不处理</button><button type="button" onClick={() => mutation.mutate(target)} disabled={rationale.trim().length < 10 || mutation.isPending} className={`${BUTTON} ${target.action === 'confirm' ? 'bg-danger text-white' : 'bg-accent-solid text-white'} font-semibold disabled:opacity-50`}>{mutation.isPending ? '正在记录人工决定…' : title}</button></div>
   </FocusDialog>
 }
 

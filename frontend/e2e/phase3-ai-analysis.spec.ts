@@ -186,4 +186,66 @@ test.describe('Phase 3 evidence-first analysis contracts', () => {
       expect(box?.height).toBeGreaterThanOrEqual(44)
     }
   })
+
+  test('AnalysisKChart keyboard zoom: focus + keys pan/zoom; window persists across re-render', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-chromium only')
+    // 独立最小 fixture: 200 根 → showBars=120 → 初始窗口 start=40
+    const rows = Array.from({ length: 200 }, (_, i) => {
+      const d = new Date(Date.UTC(2025, 0, 1 + i)).toISOString().slice(0, 10)
+      return { date: d, open: 100 + i, high: 105 + i, low: 98 + i, close: 102 + i, volume: 10000 }
+    })
+    const json = (body: unknown) => (route: import('@playwright/test').Route) =>
+      route.fulfill({ contentType: 'application/json', body: JSON.stringify(body) })
+    await page.route('**/api/**', route => route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ detail: 'unhandled' }) }))
+    await page.route('**/api/settings', json({ onboarding_completed: true }))
+    await page.route('**/api/monitor/rules**', json({ rules: [] }))
+    await page.route('**/api/portfolio/**', route => {
+      const p = new URL(route.request().url()).pathname
+      if (p.endsWith('/accounts')) return json({ accounts: [{ id: 1, name: '测试账户', archived_at: null }] })(route)
+      if (p.endsWith('/summary')) return json({ total_assets: 100000, available_funds: 10000, market_value: 90000, unrealized_pnl: 1000, positions: [] })(route)
+      if (p.endsWith('/positions')) return json({ positions: [] })(route)
+      return route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ detail: 'unhandled portfolio' }) })
+    })
+    await page.route('**/api/kline/daily**', json({ symbol: '600519.SH', name: '贵州茅台', source: 'mock', rows }))
+    await page.route('**/api/stock-analysis/levels**', json({
+      symbol: '600519.SH', close: 181,
+      levels: { sr: [{ value: 150, label: '支撑150', type: 'sr', side: 'support', strength: 'strong' }] },
+      series: {}, dates: [], summary: 'mock',
+    }))
+    await page.route('**/api/analysis/subjects/**/reports', json({ reports: [] }))
+    await page.route('**/api/stock-analysis/reports', json({ reports: [] }))
+    await page.route('**/api/advanced/viewpoints**', json({ viewpoints: [] }))
+
+    await page.addInitScript(() => localStorage.setItem('last_stock:stock-analysis', JSON.stringify({ symbol: '600519.SH', name: '贵州茅台' })))
+    await page.goto('/stock-analysis')
+
+    const chart = page.getByRole('img', { name: /关键价位 K 线图/ })
+    await expect(chart).toBeVisible({ timeout: 5_000 })
+    // 键盘可达: tabIndex + shortcuts 声明
+    await expect(chart).toHaveAttribute('tabindex', '0')
+    await expect(chart).toHaveAttribute('aria-keyshortcuts', 'ArrowLeft ArrowRight PageUp PageDown Home End')
+    // 初始窗口(最近 120 根)已读屏播报
+    const homeI0 = Math.floor(199 * 40 / 100)
+    const homeRange = `${rows[homeI0].date} 至 ${rows[199].date}`
+    await expect(chart).toHaveAttribute('aria-label', new RegExp(`当前显示 ${homeRange}`))
+
+    await chart.focus()
+    // 左移 → 窗口变化 (非初始)
+    await page.keyboard.press('ArrowLeft')
+    await expect(chart).toHaveAttribute('aria-label', /当前显示/)
+    await expect(chart).not.toHaveAttribute('aria-label', new RegExp(`当前显示 ${homeRange}`))
+    // 放大 (PageDown)
+    await page.keyboard.press('PageDown')
+    await expect(chart).toHaveAttribute('aria-label', /当前显示/)
+    // Home 复位
+    await page.keyboard.press('Home')
+    await expect(chart).toHaveAttribute('aria-label', new RegExp(`当前显示 ${homeRange}`))
+
+    // 缩放窗口跨重渲染保留: 平移后点击价位开关 (activeTypes 变化 → setOption 重建) 不重置
+    await page.keyboard.press('ArrowLeft')
+    await expect(chart).not.toHaveAttribute('aria-label', new RegExp(`当前显示 ${homeRange}`))
+    await page.getByRole('button', { name: /压力支撑/ }).click()
+    await expect(chart).toHaveAttribute('aria-label', /当前显示/)
+    await expect(chart).not.toHaveAttribute('aria-label', new RegExp(`当前显示 ${homeRange}`))
+  })
 })

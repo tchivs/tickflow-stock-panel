@@ -26,7 +26,7 @@ export function StrategyStoreDialog({ open, onClose }: Props) {
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: 10 }}
             transition={{ duration: 0.15, ease: [0.16, 1, 0.3, 1] }}
-            className="w-[560px] max-h-[78vh] bg-surface border border-border rounded-card shadow-xl flex flex-col"
+            className="w-[560px] max-h-[78vh] bg-surface border border-border rounded-dialog shadow-xl flex flex-col"
           >
             {/* 标题 */}
             <div className="flex items-center justify-between px-4 py-2.5 border-b border-border shrink-0">
@@ -34,7 +34,7 @@ export function StrategyStoreDialog({ open, onClose }: Props) {
                 <Store className="h-4 w-4 text-accent" />
                 获取策略
               </span>
-              <button onClick={onClose} className="p-1 rounded hover:bg-elevated transition-colors cursor-pointer">
+              <button type="button" onClick={onClose} aria-label="关闭" className="p-1 rounded hover:bg-elevated transition-colors cursor-pointer">
                 <X className="h-4 w-4 text-muted" />
               </button>
             </div>

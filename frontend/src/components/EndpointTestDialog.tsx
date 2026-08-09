@@ -1,10 +1,11 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Wifi, Play, Loader2, X, Check, Crown } from 'lucide-react'
 import { api, type EndpointItem } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { EXPERT_RANK, tierRank } from '@/lib/capability-labels'
+import { useModalA11y } from '@/lib/useModalA11y'
 
 interface EpResult {
   ok: boolean
@@ -18,6 +19,8 @@ interface EpResult {
 
 export function EndpointTestDialog({ hasKey, tierLabel, currentEndpoint, onClose }: { hasKey: boolean; tierLabel: string; currentEndpoint: string; onClose: () => void }) {
   const qc = useQueryClient()
+  const panelRef = useRef<HTMLDivElement>(null)
+  useModalA11y(panelRef, { onClose })
   const [results, setResults] = useState<Record<string, EpResult | null>>({})
   const [testing, setTesting] = useState<Record<string, boolean>>({})
   const [switching, setSwitching] = useState<string | null>(null)
@@ -81,11 +84,16 @@ export function EndpointTestDialog({ hasKey, tierLabel, currentEndpoint, onClose
           onClick={onClose}
         />
         <motion.div
+          ref={panelRef}
+          role="dialog"
+          aria-modal="true"
+          aria-label="端点测速"
+          tabIndex={-1}
           initial={{ opacity: 0, scale: 0.95, y: 12 }}
           animate={{ opacity: 1, scale: 1, y: 0 }}
           exit={{ opacity: 0, scale: 0.97, y: 8 }}
           transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
-          className="relative w-[calc(100vw-2rem)] max-w-[480px] max-h-[90vh] flex flex-col rounded-card border border-border bg-base shadow-2xl overflow-hidden"
+          className="relative w-[calc(100vw-2rem)] max-w-[480px] max-h-[90vh] flex flex-col rounded-dialog border border-border bg-base shadow-2xl overflow-hidden focus:outline-none"
         >
           {/* 顶栏 */}
           <div className="flex items-center justify-between px-5 py-3 border-b border-border shrink-0">

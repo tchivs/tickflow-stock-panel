@@ -539,7 +539,7 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
                       校验代码
                     </button>
                     <button onClick={handleSave} disabled={saving || loading || !code.trim()}
-                      className="h-8 px-3 rounded-lg bg-accent text-white text-xs font-medium hover:bg-accent/90 disabled:opacity-50 flex items-center gap-1.5">
+                      className="h-8 px-3 rounded-lg bg-accent-solid text-white text-xs font-medium hover:bg-accent-solid/90 disabled:opacity-50 flex items-center gap-1.5">
                       <Save className="h-3.5 w-3.5" />
                       {saving ? '保存中...' : mode === 'modify' ? '保存修改' : '保存自定义策略'}
                     </button>
@@ -565,7 +565,7 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
                     <ChevronLeft className="h-3 w-3" />上一步
                   </button>
                   <button onClick={handleSave} disabled={saving || loading}
-                    className="inline-flex items-center gap-1.5 h-7 px-3 rounded-lg bg-accent text-white text-xs font-medium hover:bg-accent/90 disabled:opacity-50 transition-all">
+                    className="inline-flex items-center gap-1.5 h-7 px-3 rounded-lg bg-accent-solid text-white text-xs font-medium hover:bg-accent-solid/90 disabled:opacity-50 transition-all">
                     <Save className="h-3 w-3" />
                     {saving ? '保存中...' : '保存策略'}
                   </button>

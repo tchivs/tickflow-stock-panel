@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import * as echarts from 'echarts'
 import type { ECharts, EChartsOption } from 'echarts'
 import type { MinuteKlineRow } from '@/lib/api'
-import { useChartTheme, type ChartTheme } from '@/lib/theme'
+import { useChartTheme, chartColor, CHART_BULL, CHART_BEAR, type ChartTheme } from '@/lib/theme'
 
 type YMode = 'adaptive' | 'limit'
 
@@ -11,8 +11,8 @@ const THEME = {
   line: '#3B82F6',
   areaFill: 'rgba(59,130,246,0.40)',
   avgLine: '#F59E0B',
-  volUp: 'rgba(240,68,56,0.6)',
-  volDown: 'rgba(18,183,106,0.6)',
+  volUp: chartColor(CHART_BULL, 0.6),
+  volDown: chartColor(CHART_BEAR, 0.6),
 }
 
 interface Props {
@@ -180,13 +180,13 @@ function buildOption(data: MinuteKlineRow[], prevClose: number | undefined, avgP
       markLineData.push(
         {
           yAxis: limitUp,
-          lineStyle: { color: 'rgba(199,64,64,0.4)', type: 'dashed', width: 1 },
+          lineStyle: { color: chartColor(CHART_BULL, 0.4), type: 'dashed', width: 1 },
           label: { show: false },
           symbol: 'none',
         },
         {
           yAxis: limitDown,
-          lineStyle: { color: 'rgba(45,155,101,0.4)', type: 'dashed', width: 1 },
+          lineStyle: { color: chartColor(CHART_BEAR, 0.4), type: 'dashed', width: 1 },
           label: { show: false },
           symbol: 'none',
         },
@@ -404,6 +404,24 @@ function buildOption(data: MinuteKlineRow[], prevClose: number | undefined, avgP
   }
 }
 
+/** 生成分时图的可访问摘要 (读屏 aria-label; 不输出逐分钟数据避免噪音)。 */
+function intradayAriaDescription(data: MinuteKlineRow[], prevClose: number | undefined, symbol: string | undefined, date: string | undefined): string {
+  if (data.length === 0) return `${symbol || '股票'}分时走势图，暂无数据`
+  const last = data[data.length - 1]
+  let hi = -Infinity
+  let lo = Infinity
+  for (const d of data) {
+    if (d.high > hi) hi = d.high
+    if (d.low < lo) lo = d.low
+  }
+  let change = ''
+  if (prevClose != null && prevClose > 0) {
+    const pct = (last.close - prevClose) / prevClose * 100
+    change = `，较昨收 ${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%（昨收 ${prevClose}）`
+  }
+  return `${symbol || '股票'}${date ? ` ${date}` : ''}分时走势图，最新价 ${last.close}${change}，盘中最高 ${hi}，最低 ${lo}，共 ${data.length} 个时点。`
+}
+
 export function EChartsIntraday({ data, height = 320, prevClose, date, symbol, onPriceHover, showLimitLines = true, showAvgLine = true }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<ECharts | null>(null)
@@ -425,8 +443,8 @@ export function EChartsIntraday({ data, height = 320, prevClose, date, symbol, o
   const lastClose = data.length > 0 ? data[data.length - 1].close : null
   const lineIsUp = lastClose != null && prevClose != null ? lastClose > prevClose : true
   const lineIsFlat = lastClose != null && prevClose != null ? lastClose === prevClose : false
-  const lineColor = lineIsFlat ? '#A1A1AA' : lineIsUp ? '#C74040' : '#2D9B65'
-  const areaFill = lineIsFlat ? 'rgba(180,180,190,0.40)' : lineIsUp ? 'rgba(199,64,64,0.40)' : 'rgba(34,197,94,0.40)'
+  const lineColor = lineIsFlat ? '#A1A1AA' : lineIsUp ? CHART_BULL : CHART_BEAR
+  const areaFill = lineIsFlat ? 'rgba(180,180,190,0.40)' : lineIsUp ? chartColor(CHART_BULL, 0.4) : chartColor(CHART_BEAR, 0.4)
 
   useEffect(() => {
     setInfoIdx(data.length - 1)
@@ -517,7 +535,7 @@ export function EChartsIntraday({ data, height = 320, prevClose, date, symbol, o
   const chg = d && prevClose != null ? d.close - prevClose : null
   const isUp = chg != null ? chg > 0 : true
   const isFlat = chg != null ? chg === 0 : false
-  const priceClr = isFlat ? '#A1A1AA' : isUp ? '#C74040' : '#2D9B65'
+  const priceClr = isFlat ? '#A1A1AA' : isUp ? CHART_BULL : CHART_BEAR
 
   return (
     <div className="w-full">
@@ -585,7 +603,13 @@ export function EChartsIntraday({ data, height = 320, prevClose, date, symbol, o
           )}
         </div>
       </div>
-      <div ref={containerRef} className="w-full" style={{ height: height - 42, cursor: 'crosshair' }} />
+      <div
+        ref={containerRef}
+        className="w-full"
+        style={{ height: height - 42, cursor: 'crosshair' }}
+        role="img"
+        aria-label={intradayAriaDescription(data, prevClose, symbol, date)}
+      />
     </div>
   )
 }

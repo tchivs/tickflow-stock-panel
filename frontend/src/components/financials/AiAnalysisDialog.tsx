@@ -90,7 +90,7 @@ export function AiAnalysisDialog({ task, mode, minimized }: Props) {
         <motion.div
           initial={{ opacity: 0, scale: 0.96, y: 12 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.96, y: 12 }}
           transition={{ type: 'spring', damping: 26, stiffness: 320 }}
-          className="w-full max-w-3xl max-h-[88vh] bg-surface border border-border rounded-2xl shadow-2xl flex flex-col overflow-hidden"
+          className="w-full max-w-3xl max-h-[88vh] bg-surface border border-border rounded-dialog shadow-2xl flex flex-col overflow-hidden"
         >
           {/* ===== 头部 ===== */}
           <div className="relative px-5 py-3.5 border-b border-border bg-elevated">

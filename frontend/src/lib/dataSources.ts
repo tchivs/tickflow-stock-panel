@@ -26,6 +26,11 @@ export function providerMeta(
   if (!dataSources || !name) return undefined
   const all = [
     ...(dataSources.builtin ?? []),
+    ...(dataSources.plugins ?? []).map(plugin => ({
+      name: plugin.name,
+      display_name: plugin.display_name,
+      datasets: plugin.datasets,
+    })),
     ...(dataSources.custom ?? []),
   ]
   return all.find(s => s.name === name)
@@ -48,6 +53,8 @@ export function providerDatasets(
   if (!name || name === 'tickflow') {
     return ['daily', 'adj_factor', 'realtime', 'minute', 'financial']
   }
+  const plugin = dataSources?.plugins?.find(item => item.name === name)
+  if (plugin) return plugin.available ? plugin.datasets : []
   return providerMeta(dataSources, name)?.datasets ?? []
 }
 

@@ -1,4 +1,5 @@
 import { Archive, BellRing, Pencil, RadioTower } from 'lucide-react'
+import { TABLE_ROW_NAV_KEYS, useTableRowNav } from '@/lib/useTableRowNav'
 import type { PortfolioPosition } from '@/lib/api'
 
 interface HoldingsTableProps {
@@ -43,9 +44,11 @@ function time(value: string | null) {
 }
 
 export function HoldingsTable({ holdings, accountNames, activeRuleCounts, onEdit, onArchive, onMonitor }: HoldingsTableProps) {
+  // 数据网格方向键行导航 (APG roving-tabindex) — ↑/↓/Home/End/PageUp/PageDown 行间移动
+  const { tbodyRef, onRowFocus, onRowKeyDown } = useTableRowNav<HTMLTableSectionElement>(holdings)
   return (
     <div className="hidden min-w-0 md:block">
-      <table className="w-full table-fixed border-collapse text-sm">
+      <table className="w-full table-fixed border-collapse text-sm" aria-keyshortcuts={TABLE_ROW_NAV_KEYS}>
         <thead className="sticky top-0 z-10 bg-surface text-xs text-muted shadow-[0_1px_0_hsl(var(--border))]">
           <tr>
             <Header className="w-[19%] text-left">标的</Header>
@@ -61,14 +64,14 @@ export function HoldingsTable({ holdings, accountNames, activeRuleCounts, onEdit
             <Header className="w-[12%] text-right xl:w-[6%]">操作</Header>
           </tr>
         </thead>
-        <tbody>
+        <tbody ref={tbodyRef}>
           {holdings.map(holding => {
             const latestPrice = holding.market_value == null || holding.quantity <= 0 ? null : holding.market_value / holding.quantity
             const pnlClass = holding.unrealized_pnl == null ? 'text-muted' : holding.unrealized_pnl >= 0 ? 'text-bull' : 'text-bear'
             const accountName = accountNames.get(holding.account_id) ?? `账户 ${holding.account_id}`
             const activeRules = activeRuleCounts?.get(holding.id) ?? 0
             return (
-              <tr key={holding.id} className="border-b border-border align-middle hover:bg-elevated/50">
+              <tr key={holding.id} onFocus={onRowFocus} onKeyDown={onRowKeyDown} className="border-b border-border align-middle transition-colors duration-150 hover:bg-elevated/50 focus-visible:bg-elevated/60 focus-visible:[outline-offset:-2px]">
                 <th scope="row" className="min-w-0 px-2 py-2 text-left font-normal">
                   <span className="num block truncate font-semibold text-foreground" title={holding.instrument_symbol}>{holding.instrument_symbol}</span>
                   <span className="mt-1 block truncate text-xs text-secondary xl:hidden" title={`${accountName} · ${styleLabel[holding.trading_style]}`}>{accountName} · {styleLabel[holding.trading_style]}</span>

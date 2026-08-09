@@ -135,7 +135,16 @@ function buildOption(rows: AuctionHistoryRow[], ct: ChartTheme): EChartsOption {
   }
 }
 
-export function AuctionHistoryChart({ symbol, height = 320, className }: Props) {
+/** 生成竞价历史图的可访问摘要 (读屏 aria-label)。 */
+function auctionAriaDescription(symbol: string, rows: AuctionHistoryRow[]): string {
+  if (rows.length === 0) return `${symbol}竞价历史，暂无数据`
+  const last = rows[rows.length - 1]
+  const vol = last.auction_volume
+  const amt = last.auction_amount
+  return `${symbol}竞价历史（窗口 09:15-09:25），最近 ${last.date}：竞价量 ${vol != null ? vol.toLocaleString('zh-CN') : '—'} 股，竞价金额 ${amt != null ? amt.toLocaleString('zh-CN') : '—'} 元。共 ${rows.length} 个交易日。`
+}
+
+export function AuctionHistoryChart({ symbol, height = 280, className }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<ECharts | null>(null)
   const roRef = useRef<ResizeObserver | null>(null)
@@ -182,7 +191,7 @@ export function AuctionHistoryChart({ symbol, height = 320, className }: Props) 
       className={className}
       style={{ height }}
       role="img"
-      aria-label="历史竞价量/金额趋势图"
+      aria-label={`历史竞价量/金额趋势图。${auctionAriaDescription(symbol, rows)}`}
     >
       {isPending && (
         <div className="text-sm text-muted py-4">加载中…</div>

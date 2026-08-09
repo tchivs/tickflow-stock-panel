@@ -103,9 +103,13 @@ export function FactorGroupNavChart({ result }: Props) {
       },
       series,
     } as any
-  }, [result.group_nav, result.long_short_nav, result.run_id, ct])
+  }, [result.group_nav, result.long_short_nav, ct])
 
-  const chartRef = useECharts(option, [result.run_id, ct])
+  const chartRef = useECharts(option, [result.run_id, ct], useMemo(() => {
+    if (!result.group_nav.length) return undefined
+    const cols = getGroupCols(result.group_nav[0])
+    return `因子分组净值曲线，共 ${result.group_nav.length} 期，${cols.length} 个分组${(result.long_short_nav ?? []).length ? '，含多空对冲净值' : ''}。`
+  }, [result]))
 
   // 图例
   const groupCols = result.group_nav.length > 0

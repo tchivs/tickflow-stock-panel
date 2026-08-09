@@ -339,7 +339,7 @@ export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModif
       onClose={onClose}
       labelledBy="strategy-settings-title"
       overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm"
-      panelClassName="w-[980px] max-h-[88vh] bg-surface/95 backdrop-blur-xl border border-border/50 rounded-2xl shadow-2xl flex flex-col overflow-hidden"
+      panelClassName="w-[980px] max-h-[88vh] bg-surface border border-border rounded-dialog shadow-2xl flex flex-col overflow-hidden"
     >
           {/* 标题 */}
           <div className="flex items-center justify-between px-5 py-3 border-b border-border/50">
@@ -582,7 +582,7 @@ export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModif
                 </button>
               )}
               <button onClick={handleSave} disabled={saving}
-                className="inline-flex items-center gap-1.5 h-8 px-4 rounded-lg bg-accent text-white text-xs font-semibold hover:bg-accent/90 transition-colors cursor-pointer disabled:opacity-50">
+                className="inline-flex items-center gap-1.5 h-8 px-4 rounded-lg bg-accent-solid text-white text-xs font-semibold hover:bg-accent-solid/90 transition-colors cursor-pointer disabled:opacity-50">
                 <Save className="h-3.5 w-3.5" />{saving ? '保存中…' : '保存设置'}
               </button>
             </div>
@@ -600,7 +600,7 @@ export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModif
         >
           <motion.div
             initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }}
-            className="w-[380px] bg-surface border border-border/50 rounded-2xl shadow-2xl p-6"
+            className="w-[380px] bg-surface border border-border rounded-dialog shadow-2xl p-6"
             onClick={e => e.stopPropagation()}
           >
             <div className="text-center space-y-3">

@@ -107,7 +107,7 @@ function renderExtValue(
   const separator = cfg?.separator?.trim() || null
   const tags = separator
     ? str.split(separator).map(s => s.trim()).filter(Boolean)
-    : str.split(/[、,，;；\-]/).map(s => s.trim()).filter(Boolean)
+    : str.split(/[、,，;；-]/).map(s => s.trim()).filter(Boolean)
 
   return renderTagList(tags, col, expanded, onToggle, EXT_TAG_CLS)
 }
@@ -198,7 +198,7 @@ export function ScreenerTable({
                   type="button"
                   onClick={() => onToggleWatchlist(r.symbol, inWatchlist)}
                   disabled={watchlistPending}
-                  className={`shrink-0 inline-flex items-center justify-center w-5 h-5 rounded-full border transition-colors cursor-pointer max-md:h-10 max-md:w-10
+                  className={`shrink-0 inline-flex items-center justify-center w-5 h-5 rounded-full border transition-colors cursor-pointer max-md:h-11 max-md:w-11
                     disabled:opacity-50
                     ${inWatchlist
                       ? 'border-accent/40 bg-accent/10 text-accent'
@@ -300,7 +300,7 @@ export function ScreenerTable({
               <button
                 type="button"
                 onClick={(event) => { event.stopPropagation(); onToggleDailyKChart() }}
-                className={`inline-flex items-center justify-center w-5 h-5 rounded transition-colors max-md:h-10 max-md:w-10 ${
+                className={`inline-flex items-center justify-center w-5 h-5 rounded transition-colors max-md:h-11 max-md:w-11 ${
                   dailyKChartVisible
                     ? 'text-accent bg-accent/10 hover:bg-accent/20'
                     : 'text-muted hover:text-foreground hover:bg-elevated'

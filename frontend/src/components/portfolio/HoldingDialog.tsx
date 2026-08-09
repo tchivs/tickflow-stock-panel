@@ -185,7 +185,7 @@ export function HoldingDialog({ holding, accounts, initialAccountId, onClose }: 
     <Modal
       onClose={onClose}
       labelledBy={titleId}
-      panelClassName="w-[calc(100vw-2rem)] max-w-[680px] max-h-[90vh] overflow-hidden rounded-card border border-border bg-surface shadow-xl"
+      panelClassName="w-[calc(100vw-2rem)] max-w-[680px] max-h-[90vh] overflow-hidden rounded-dialog border border-border bg-surface shadow-xl"
     >
       <form onSubmit={submit} className="flex max-h-[90vh] flex-col">
         <div className="border-b border-border px-6 py-4 max-md:px-4">
@@ -280,7 +280,7 @@ export function HoldingDialog({ holding, accounts, initialAccountId, onClose }: 
         </div>
         <div className="sticky bottom-0 flex items-center justify-between gap-3 border-t border-border bg-surface px-6 py-4 max-md:px-4">
           <button type="button" onClick={onClose} className="min-h-8 rounded-btn bg-elevated px-3 text-sm text-secondary hover:text-foreground max-md:min-h-11">返回投资组合</button>
-          <button type="submit" disabled={save.isPending} className="inline-flex min-h-10 items-center gap-1.5 rounded-btn bg-accent px-4 text-sm font-semibold text-white disabled:opacity-60 max-md:min-h-11"><Save className="h-4 w-4" />{save.isPending ? '正在保存…' : '保存持仓'}</button>
+          <button type="submit" disabled={save.isPending} className="inline-flex min-h-10 items-center gap-1.5 rounded-btn bg-accent-solid px-4 text-sm font-semibold text-white disabled:opacity-60 max-md:min-h-11"><Save className="h-4 w-4" />{save.isPending ? '正在保存…' : '保存持仓'}</button>
         </div>
       </form>
       {confirmArchive && holding && <ArchiveConfirmation pending={archive.isPending} onCancel={() => setConfirmArchive(false)} onConfirm={() => archive.mutate()} />}
@@ -311,7 +311,7 @@ const NumberField = forwardRef<HTMLInputElement, {
 function ArchiveConfirmation({ pending, onCancel, onConfirm }: { pending: boolean; onCancel: () => void; onConfirm: () => void }) {
   const cancelRef = useRef<HTMLButtonElement>(null)
   return (
-    <Modal onClose={onCancel} ariaLabel="确认归档持仓" initialFocusRef={cancelRef} panelClassName="w-[calc(100vw-2rem)] max-w-md rounded-card border border-border bg-surface shadow-xl">
+    <Modal onClose={onCancel} ariaLabel="确认归档持仓" initialFocusRef={cancelRef} panelClassName="w-[calc(100vw-2rem)] max-w-md rounded-dialog border border-border bg-surface shadow-xl">
       <div className="p-6 max-md:p-4">
         <h2 className="text-base font-semibold">归档持仓？</h2>
         <p className="mt-3 text-sm leading-6 text-secondary">归档后将不再计入默认汇总；持仓、规则和告警历史会保留。</p>

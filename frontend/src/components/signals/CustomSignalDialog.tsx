@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowRight, Plus, Save, X } from 'lucide-react'
 import { api, type CustomSignal, type CustomSignalCondition } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
+import { useModalA11y } from '@/lib/useModalA11y'
 
 interface Props {
   open: boolean
@@ -21,6 +22,9 @@ const emptySignal = (kind: CustomSignal['kind'] = 'exit'): CustomSignal => ({
 export function CustomSignalDialog({ open, signal, defaultKind = 'exit', onClose, onSaved }: Props) {
   const qc = useQueryClient()
   const options = useQuery({ queryKey: QK.customSignalsOptions, queryFn: api.customSignalsOptions, enabled: open })
+  const panelRef = useRef<HTMLDivElement>(null)
+  // 常驻挂载 (AnimatePresence 条件渲染内容) → active=open 控制捕获/陷阱/还原
+  useModalA11y(panelRef, { onClose, active: open })
 
   const [draft, setDraft] = useState<CustomSignal>(() => emptySignal(defaultKind))
   const [error, setError] = useState('')
@@ -72,13 +76,15 @@ export function CustomSignalDialog({ open, signal, defaultKind = 'exit', onClose
           onClick={onClose}
         >
           <motion.div
+            ref={panelRef}
+            tabIndex={-1}
             role="dialog"
             aria-modal="true"
             initial={{ opacity: 0, scale: 0.95, y: 10 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: 10 }}
             transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
-            className="w-full max-w-3xl max-h-[88vh] bg-surface border border-border rounded-dialog shadow-2xl flex flex-col overflow-hidden"
+            className="w-full max-w-3xl max-h-[88vh] bg-surface border border-border rounded-dialog shadow-2xl flex flex-col overflow-hidden focus:outline-none"
             onClick={e => e.stopPropagation()}
           >
             <div className="flex items-center justify-between gap-3 border-b border-border/50 px-5 py-4">
@@ -86,7 +92,7 @@ export function CustomSignalDialog({ open, signal, defaultKind = 'exit', onClose
                 <h3 className="text-sm font-semibold text-foreground">{editing ? '编辑自定义信号' : '新建自定义信号'}</h3>
                 <p className="mt-1 text-[11px] text-muted">标识保存后不可修改，如需更换请新建。自定义信号保存为 csg_* 列。</p>
               </div>
-              <button onClick={onClose} className="rounded-lg p-1.5 text-muted transition-colors hover:bg-elevated hover:text-foreground">
+              <button type="button" onClick={onClose} aria-label="关闭" className="rounded-lg p-1.5 text-muted transition-colors hover:bg-elevated hover:text-foreground">
                 <X className="h-4 w-4" />
               </button>
             </div>

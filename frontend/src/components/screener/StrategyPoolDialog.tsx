@@ -146,7 +146,7 @@ export function StrategyPoolDialog({ pool, onConfirm, onClose }: Props) {
           animate={{ opacity: 1, scale: 1, y: 0 }}
           exit={{ opacity: 0, scale: 0.95, y: 10 }}
           transition={{ duration: 0.15, ease: [0.16, 1, 0.3, 1] }}
-          className="w-[680px] max-h-[78vh] bg-surface border border-border rounded-card shadow-xl flex flex-col"
+          className="w-[680px] max-h-[78vh] bg-surface border border-border rounded-dialog shadow-xl flex flex-col"
         >
           {/* 标题 */}
           <div className="flex items-center justify-between px-4 py-2.5 border-b border-border shrink-0">
@@ -308,7 +308,7 @@ export function StrategyPoolDialog({ pool, onConfirm, onClose }: Props) {
               </button>
               <button
                 onClick={() => { onConfirm(draftPool); onClose() }}
-                className="px-3 py-1 text-xs rounded-btn bg-accent text-white hover:bg-accent/90 transition-colors cursor-pointer"
+                className="px-3 py-1 text-xs rounded-btn bg-accent-solid text-white hover:bg-accent-solid/90 transition-colors cursor-pointer"
               >
                 确定
               </button>

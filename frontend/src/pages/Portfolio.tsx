@@ -105,7 +105,7 @@ export function Portfolio() {
         right={
           <div className="flex flex-wrap items-center gap-2">
             <button type="button" onClick={() => setAccountDialog('create')} className="inline-flex min-h-8 items-center gap-1.5 rounded-btn border border-border bg-elevated px-3 text-sm text-secondary hover:text-foreground max-md:min-h-11"><Plus className="h-4 w-4" />新建账户</button>
-            <button type="button" onClick={openNewHolding} className="inline-flex min-h-10 items-center gap-1.5 rounded-btn bg-accent px-3 text-sm font-semibold text-white disabled:opacity-60 max-md:min-h-11"><Plus className="h-4 w-4" />添加持仓</button>
+            <button type="button" onClick={openNewHolding} className="inline-flex min-h-10 items-center gap-1.5 rounded-btn bg-accent-solid px-3 text-sm font-semibold text-white disabled:opacity-60 max-md:min-h-11"><Plus className="h-4 w-4" />添加持仓</button>
           </div>
         }
       />
@@ -119,7 +119,7 @@ export function Portfolio() {
         {isInitialLoading && !summary ? <PortfolioSkeleton /> : isError && !summary ? (
           <div className="rounded-card border border-border bg-surface">
             <EmptyState title="无法读取投资组合。请检查服务连接后重新加载投资组合。" hint="" />
-            <div className="flex justify-center pb-8"><button type="button" onClick={retry} className="inline-flex min-h-10 items-center gap-1.5 rounded-btn bg-accent px-4 text-sm font-semibold text-white"><RefreshCw className="h-4 w-4" />重新加载投资组合</button></div>
+            <div className="flex justify-center pb-8"><button type="button" onClick={retry} className="inline-flex min-h-10 items-center gap-1.5 rounded-btn bg-accent-solid px-4 text-sm font-semibold text-white"><RefreshCw className="h-4 w-4" />重新加载投资组合</button></div>
           </div>
         ) : (
           <>
@@ -154,7 +154,7 @@ export function Portfolio() {
               {holdingsQuery.isLoading && holdings.length === 0 ? <HoldingSkeletons /> : holdings.length === 0 ? (
                 <div className="rounded-card border border-border bg-surface">
                   <EmptyState icon={WalletCards} title="还没有持仓" hint="先新建账户，再添加第一笔持仓。" />
-                  <div className="flex justify-center pb-8"><button type="button" onClick={openNewHolding} className="inline-flex min-h-10 items-center gap-1.5 rounded-btn bg-accent px-4 text-sm font-semibold text-white"><Plus className="h-4 w-4" />添加持仓</button></div>
+                  <div className="flex justify-center pb-8"><button type="button" onClick={openNewHolding} className="inline-flex min-h-10 items-center gap-1.5 rounded-btn bg-accent-solid px-4 text-sm font-semibold text-white"><Plus className="h-4 w-4" />添加持仓</button></div>
                 </div>
               ) : (
                 <>

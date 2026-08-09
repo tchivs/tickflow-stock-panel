@@ -1,10 +1,11 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Save, Loader2, Check, Wifi, WifiOff, Eye, EyeOff, Shield,
   Shuffle, Plug, Zap, Settings2, ExternalLink, Trash2,
   Terminal,
 } from 'lucide-react'
+import { useModalA11y } from '@/lib/useModalA11y'
 import { useSettings } from '@/lib/useSharedQueries'
 import { api, type SettingsState } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
@@ -51,6 +52,10 @@ export function SettingsAIPanel() {
   const [confirmClear, setConfirmClear] = useState(false)
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null)
+
+  // 清空确认对话框 — 焦点捕获 + Tab 陷阱 + ESC 关闭 + 卸载还原 (内联常驻组件 → active=confirmClear)
+  const confirmClearRef = useRef<HTMLDivElement>(null)
+  useModalA11y(confirmClearRef, { onClose: () => setConfirmClear(false), active: confirmClear })
 
   const isCodexProvider = provider === CODEX_PROVIDER
   const savedCodexProvider = s?.ai_provider === CODEX_PROVIDER
@@ -334,7 +339,7 @@ export function SettingsAIPanel() {
       </div>
 
       <div className="flex gap-2">
-        <button onClick={() => save.mutate()} disabled={save.isPending || !canSave} className="flex-1 h-10 rounded-xl bg-accent text-white text-sm font-semibold flex items-center justify-center gap-2 hover:bg-accent/90 disabled:opacity-40 transition-all">
+        <button onClick={() => save.mutate()} disabled={save.isPending || !canSave} className="flex-1 h-10 rounded-xl bg-accent-solid text-white text-sm font-semibold flex items-center justify-center gap-2 hover:bg-accent-solid/90 disabled:opacity-40 transition-all">
           {save.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : saved ? <Check className="h-4 w-4" /> : <Save className="h-4 w-4" />}
           {save.isPending ? '保存中...' : saved ? '已保存' : '保存配置'}
         </button>
@@ -349,7 +354,14 @@ export function SettingsAIPanel() {
       {confirmClear && (
         <div className="fixed inset-0 z-50 flex items-center justify-center">
           <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setConfirmClear(false)} />
-          <div className="relative w-[90vw] max-w-[380px] rounded-card border border-border bg-base shadow-2xl p-6">
+          <div
+            ref={confirmClearRef}
+            role="dialog"
+            aria-modal="true"
+            aria-label="清空 AI 配置"
+            tabIndex={-1}
+            className="relative w-[90vw] max-w-[380px] rounded-dialog border border-border bg-base shadow-2xl p-6 focus:outline-none"
+          >
             <h3 className="text-sm font-medium text-foreground mb-2">清空 AI 配置</h3>
             <p className="text-xs text-secondary mb-5 leading-relaxed">
               这会清空已保存的 provider、API Key、API 地址、模型和 Codex CLI 命令。之后可以重新配置。

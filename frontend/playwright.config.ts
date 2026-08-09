@@ -22,10 +22,12 @@ export default defineConfig({
     command: 'node ./node_modules/vite/bin/vite.js --host 127.0.0.1 --port 4173 --strictPort',
     url: baseURL,
     reuseExistingServer: !process.env.CI,
+    timeout: 120_000,
   },
   projects: [
     {
       name: 'desktop-chromium',
+      testMatch: /e2e\/.*\.spec\.ts/,
       use: {
         browserName: 'chromium',
         viewport: { width: 1440, height: 960 },
@@ -33,6 +35,7 @@ export default defineConfig({
     },
     {
       name: 'mobile-chromium-320',
+      testMatch: /e2e\/.*\.spec\.ts/,
       use: {
         browserName: 'chromium',
         viewport: { width: 320, height: 800 },
@@ -62,6 +65,7 @@ export default defineConfig({
     },
     {
       name: 'phase4-fastapi-host',
+      testMatch: /e2e\/.*\.spec\.ts/,
       use: {
         baseURL: 'http://127.0.0.1:4173',
         browserName: 'chromium',

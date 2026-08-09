@@ -18,6 +18,7 @@ export default {
         secondary:  'hsl(var(--fg-secondary) / <alpha-value>)',
         muted:      'hsl(var(--fg-muted) / <alpha-value>)',
         accent:     'hsl(var(--accent) / <alpha-value>)',
+        accentSolid: 'hsl(var(--accent-solid) / <alpha-value>)',
         // A 股语义色:仅用于价格 / K 线,不用于 UI 状态
         bull:       'hsl(var(--bull) / <alpha-value>)',
         bear:       'hsl(var(--bear) / <alpha-value>)',

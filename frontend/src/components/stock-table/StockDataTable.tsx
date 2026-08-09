@@ -9,6 +9,7 @@ import { cloneElement, isValidElement, type ReactElement, type ReactNode } from 
 import type { ColumnConfig } from '@/lib/list-columns'
 import { UNSORTABLE_KEYS } from '@/lib/stock-table'
 import type { SortState } from './useTableSort'
+import { TABLE_ROW_NAV_KEYS, useTableRowNav } from '@/lib/useTableRowNav'
 
 export type { SortState }
 
@@ -71,9 +72,12 @@ export function StockDataTable({
     ? 'sticky top-0 z-10 bg-surface after:absolute after:inset-x-0 after:bottom-0 after:h-px after:bg-border'
     : 'bg-elevated'
 
+  // 数据网格方向键行导航 (APG roving-tabindex) — ↑/↓/Home/End/PageUp/PageDown 行间移动
+  const { tbodyRef, onRowFocus, onRowKeyDown } = useTableRowNav<HTMLTableSectionElement>(rows)
+
   return (
     <div className={className}>
-      <table className="w-full text-sm" style={{ minWidth: computedMinWidth }}>
+      <table className="w-full text-sm" style={{ minWidth: computedMinWidth }} aria-keyshortcuts={TABLE_ROW_NAV_KEYS}>
         <thead className={theadClass}>
           <tr className="text-left text-secondary">
             {visibleColumns.map(col => {
@@ -116,12 +120,14 @@ export function StockDataTable({
             )}
           </tr>
         </thead>
-        <tbody>
+        <tbody ref={tbodyRef}>
           {rows.map((r: any) => {
             return (
               <tr
                 key={rowKey(r)}
-                className={`transition-colors duration-150 ease-smooth group ${rowClassName(r)}`}
+                onFocus={onRowFocus}
+                onKeyDown={onRowKeyDown}
+                className={`transition-colors duration-150 ease-smooth group focus-visible:bg-elevated/60 focus-visible:[outline-offset:-2px] ${rowClassName(r)}`}
               >
                 {visibleColumns.map(col => {
                   // renderCell 返回的 <td> 无 key, 这里补上避免 React key 警告

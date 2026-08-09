@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback, useMemo } from 'react'
-import { chartTheme, getTheme, useTheme } from '@/lib/theme'
+import { chartTheme, chartColor, getTheme, useTheme, CHART_BULL, CHART_BEAR } from '@/lib/theme'
 import * as echarts from 'echarts'
 import type { ECharts, EChartsOption } from 'echarts'
 
@@ -109,7 +109,7 @@ export const SUB_CHARTS: SubChartDef[] = [
           data: data.map(d => ({
             value: d.volume ?? 0,
             itemStyle: {
-              color: d.close >= d.open ? 'rgba(240,68,56,0.6)' : 'rgba(18,183,106,0.6)',
+              color: d.close >= d.open ? chartColor(CHART_BULL, 0.6) : chartColor(CHART_BEAR, 0.6),
             },
           })),
           barWidth: '60%',
@@ -136,7 +136,7 @@ export const SUB_CHARTS: SubChartDef[] = [
     buildInfo: (d) => {
       if (!d) return []
       return [
-        { label: '量', color: d.close >= d.open ? '#C74040' : '#2D9B65', value: fmtVol(d.volume) },
+        { label: '量', color: d.close >= d.open ? CHART_BULL : CHART_BEAR, value: fmtVol(d.volume) },
       ]
     },
   },
@@ -169,7 +169,7 @@ export const SUB_CHARTS: SubChartDef[] = [
           if (v == null) return '-'
           return {
             value: Number(v),
-            itemStyle: { color: Number(v) >= 0 ? 'rgba(240,68,56,0.6)' : 'rgba(18,183,106,0.6)' },
+            itemStyle: { color: Number(v) >= 0 ? chartColor(CHART_BULL, 0.6) : chartColor(CHART_BEAR, 0.6) },
           }
         }),
         barWidth: '40%',
@@ -181,7 +181,7 @@ export const SUB_CHARTS: SubChartDef[] = [
       return [
         { label: 'DIF', color: '#FACC15', value: d.macd_dif != null ? d.macd_dif.toFixed(3) : '—' },
         { label: 'DEA', color: '#8B5CF6', value: d.macd_dea != null ? d.macd_dea.toFixed(3) : '—' },
-        { label: 'MACD', color: d.macd_hist != null && d.macd_hist >= 0 ? '#C74040' : '#2D9B65', value: d.macd_hist != null ? d.macd_hist.toFixed(3) : '—' },
+        { label: 'MACD', color: d.macd_hist != null && d.macd_hist >= 0 ? CHART_BULL : CHART_BEAR, value: d.macd_hist != null ? d.macd_hist.toFixed(3) : '—' },
       ]
     },
   },
@@ -296,10 +296,10 @@ interface Props {
 
 // 序列颜色 (双主题通用); 画布轴/网格/文字等主题相关色走 CT() 动态取
 const THEME = {
-  bull: '#C74040',
-  bear: '#2D9B65',
-  bullAlpha: 'rgba(240,68,56,0.7)',
-  bearAlpha: 'rgba(18,183,106,0.7)',
+  bull: CHART_BULL,
+  bear: CHART_BEAR,
+  bullAlpha: chartColor(CHART_BULL, 0.7),
+  bearAlpha: chartColor(CHART_BEAR, 0.7),
   ma5: '#A1A1AA',
   ma10: '#3B82F6',
   ma20: '#F97316',
@@ -720,6 +720,28 @@ function buildOption(
   }
 }
 
+/** 生成 K 线图的可访问摘要 (读屏 aria-label; 不输出逐根数据避免噪音)。 */
+function klineAriaDescription(data: OHLC[], name: string | undefined): string {
+  if (data.length === 0) return `${name || '股票'}日K 蜡烛图，暂无数据`
+  const first = data[0]
+  const last = data[data.length - 1]
+  let hi = -Infinity
+  let lo = Infinity
+  for (const d of data) {
+    if (d.high > hi) hi = d.high
+    if (d.low < lo) lo = d.low
+  }
+  let change = ''
+  if (data.length >= 2) {
+    const pc = data[data.length - 2].close
+    if (typeof pc === 'number' && pc > 0 && typeof last.close === 'number') {
+      const pct = (last.close - pc) / pc * 100
+      change = `，较上一交易日 ${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%`
+    }
+  }
+  return `${name || '股票'}日K 蜡烛图，${first.date} 至 ${last.date}，共 ${data.length} 根。最新收盘 ${last.close}${change}，区间最高 ${hi}，最低 ${lo}。`
+}
+
 
 export function EChartsCandlestick({
   data,
@@ -804,6 +826,64 @@ export function EChartsCandlestick({
     start: Math.max(0, 100 - (visibleBars / Math.max(data.length, 1)) * 100),
     end: 100,
   }), [visibleBars, data.length])
+
+  // 键盘缩放/平移 (dataZoom): 容器聚焦后方向键操作。
+  // 读屏 aria-label 同步追加「当前显示 …」区间, 让 SR 用户感知缩放结果。
+  const handleChartKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const chart = chartRef.current
+    if (!chart) return
+    const base = userZoomRef.current ?? initialZoom
+    let { start, end } = base
+    const span = Math.max(end - start, 1)
+    const step = span * 0.1
+    switch (e.key) {
+      case 'ArrowLeft': {
+        const d = Math.min(step, start)
+        start -= d; end -= d
+        break
+      }
+      case 'ArrowRight': {
+        const d = Math.min(step, 100 - end)
+        start += d; end += d
+        break
+      }
+      case 'PageUp': {
+        const grow = span * 0.2
+        start = Math.max(0, start - grow / 2)
+        end = Math.min(100, end + grow / 2)
+        break
+      }
+      case 'PageDown': {
+        const shrink = span * 0.2
+        start = Math.min(start + shrink / 2, 100 - 1)
+        end = Math.max(end - shrink / 2, start + 1)
+        break
+      }
+      case 'Home':
+        start = initialZoom.start
+        end = initialZoom.end
+        break
+      case 'End':
+        start = 0
+        end = 100
+        break
+      default:
+        return
+    }
+    e.preventDefault()
+    start = Math.max(0, Math.min(start, 99))
+    end = Math.max(start + 1, Math.min(100, end))
+    if (start === base.start && end === base.end) return
+    chart.dispatchAction({ type: 'dataZoom', start, end })
+    // 同步读屏标签: 追加当前可见区间
+    const el = containerRef.current
+    if (el && data.length > 0) {
+      const i0 = Math.min(data.length - 1, Math.max(0, Math.floor((data.length - 1) * start / 100)))
+      const i1 = Math.min(data.length - 1, Math.max(0, Math.floor((data.length - 1) * end / 100)))
+      const vis = i1 > i0 ? `${data[i0].date} 至 ${data[i1].date}` : data[i0].date
+      el.setAttribute('aria-label', `${klineAriaDescription(data, stockInfo?.name ?? _symbol)} 当前显示 ${vis}。`)
+    }
+  }
 
   // ===== 信息栏 HTML 内容 (基于 infoIdxRef.current) =====
   const getInfoBarHTML = useCallback(() => {
@@ -1096,8 +1176,18 @@ export function EChartsCandlestick({
           dangerouslySetInnerHTML={{ __html: initialHTML }} />
       )}
 
-      {/* ECharts canvas */}
-      <div ref={containerRef} className="w-full" style={{ height: chartHeight }} />
+      {/* ECharts canvas — 键盘可达: Tab 聚焦后方向键平移/PageUp-PageDown 缩放/Home-End 复位 */}
+      <div
+        ref={containerRef}
+        className="w-full rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+        style={{ height: chartHeight }}
+        role="img"
+        tabIndex={0}
+        aria-keyshortcuts="ArrowLeft ArrowRight PageUp PageDown Home End"
+        title="方向键平移 · PageUp/PageDown 缩放 · Home 复位 · End 全部"
+        onKeyDown={handleChartKeyDown}
+        aria-label={klineAriaDescription(data, stockInfo?.name ?? _symbol)}
+      />
     </div>
   )
 }

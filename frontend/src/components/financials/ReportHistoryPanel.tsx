@@ -60,6 +60,15 @@ export function ReportHistoryPanel() {
               key={r.id}
               className="group flex items-center gap-3 px-4 py-2.5 hover:bg-elevated/30 transition-colors cursor-pointer"
               onClick={() => openHistoryReport(r.id)}
+              role="button"
+              tabIndex={0}
+              aria-label={`查看报告 ${r.name || r.symbol}`}
+              onKeyDown={e => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  openHistoryReport(r.id)
+                }
+              }}
             >
               {/* 图标 */}
               <div className={`flex h-8 w-8 items-center justify-center rounded-lg shrink-0 ${

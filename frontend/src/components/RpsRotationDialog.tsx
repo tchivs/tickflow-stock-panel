@@ -163,6 +163,15 @@ export function RpsRotationDialog({ onClose }: Props) {
           <td
             key={d}
             onClick={() => setSelected(prev => prev === name ? null : name)}
+            role="button"
+            tabIndex={0}
+            aria-pressed={isSelected}
+            onKeyDown={e => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                setSelected(prev => prev === name ? null : name)
+              }
+            }}
             className={cn(
               'px-2 py-1 cursor-pointer whitespace-nowrap text-center align-middle transition-colors',
               pctBgClass(pct),
@@ -203,7 +212,7 @@ export function RpsRotationDialog({ onClose }: Props) {
       onClose={onClose}
       labelledBy="rps-rotation-title"
       overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-      panelClassName="w-[92vw] max-w-[1100px] h-[88vh] bg-surface border border-border rounded-card shadow-xl flex flex-col"
+      panelClassName="w-[92vw] max-w-[1100px] h-[88vh] bg-surface border border-border rounded-dialog shadow-xl flex flex-col"
     >
           {/* 标题栏 */}
           <div className="flex items-center justify-between px-4 py-2.5 border-b border-border shrink-0">

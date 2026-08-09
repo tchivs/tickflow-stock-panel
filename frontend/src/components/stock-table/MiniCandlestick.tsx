@@ -1,6 +1,7 @@
 /** 迷你蜡烛图（自选/策略列表共享）。 */
 import { memo } from 'react'
 import type { KlineRow } from '@/lib/api'
+import { CHART_BULL, CHART_BEAR } from '@/lib/theme'
 
 export const MiniCandlestick = memo(function MiniCandlestick({ rows, width = 100, height = 80 }: { rows: KlineRow[]; width?: number; height?: number }) {
   // 空数据：返回等尺寸占位（不画内容），保证 kline 加载前后单元格尺寸一致、不闪烁
@@ -8,8 +9,8 @@ export const MiniCandlestick = memo(function MiniCandlestick({ rows, width = 100
     return <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} className="block" aria-label="加载中" />
   }
 
-  const BULL = '#C74040'
-  const BEAR = '#2D9B65'
+  const BULL = CHART_BULL
+  const BEAR = CHART_BEAR
   const NEUTRAL = '#A1A1AA'
 
   const W = width
@@ -74,7 +75,7 @@ export const MiniCandlestick = memo(function MiniCandlestick({ rows, width = 100
   }
 
   return (
-    <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} className="block">
+    <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} className="block" role="img" aria-label="迷你K线">
       {wicks}
       {rects}
     </svg>

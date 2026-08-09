@@ -57,7 +57,7 @@ export function LifecyclePanel({
           type="button"
           onClick={() => confirm.mutate(pendingReview.id)}
           disabled={confirm.isPending || reject.isPending}
-          className="min-h-11 rounded-btn bg-accent px-3 text-sm font-semibold text-white focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-base"
+          className="min-h-11 rounded-btn bg-accent-solid px-3 text-sm font-semibold text-white focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-base"
         >
           确认服务端审阅
         </button>
@@ -247,7 +247,7 @@ function ObservationPlan({
       <button
         type="submit"
         disabled={record.isPending}
-        className="min-h-11 rounded-btn bg-accent px-3 text-sm font-semibold text-white disabled:opacity-50 sm:col-span-2 sm:justify-self-start"
+        className="min-h-11 rounded-btn bg-accent-solid px-3 text-sm font-semibold text-white disabled:opacity-50 sm:col-span-2 sm:justify-self-start"
       >
         {record.isPending ? '正在保存结果' : '保存观察结果'}
       </button>

@@ -58,6 +58,14 @@ function getServerSnapshot() {
   return null
 }
 
+function cancelServerTask(qs: string): void {
+  void fetch('/api/backtest/strategy/cancel', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ qs }),
+  }).catch(() => {})
+}
+
 /** 查询字符串构建 */
 function buildQuery(params: Record<string, string | number | boolean | undefined | null>): string {
   const sp = new URLSearchParams()
@@ -175,7 +183,7 @@ function connectSSE(url: string): void {
   let reconnectAttempts = 0
 
   const clearReconnecting = () => {
-    if (current?.id === id && current.reconnecting) {
+    if (current?.id === id && current.isPending && current.reconnecting) {
       current = { ...current, reconnecting: false }
       emit()
     }
@@ -187,18 +195,22 @@ function connectSSE(url: string): void {
   }
 
   es.addEventListener('progress', (e: MessageEvent) => {
-    if (current?.id !== id) return
+    if (current?.id !== id || !current.isPending) return
     // 收到数据说明连接恢复正常
     reconnectAttempts = 0
     try {
-      const prog = JSON.parse(e.data) as BacktestProgress
+      const parsed: unknown = JSON.parse(e.data)
+      if (!isRecord(parsed) || typeof parsed.day !== 'number' || !Number.isFinite(parsed.day)
+        || typeof parsed.total !== 'number' || !Number.isFinite(parsed.total) || parsed.total <= 0
+        || typeof parsed.date !== 'string' || typeof parsed.equity !== 'number' || !Number.isFinite(parsed.equity)) return
+      const prog = parsed as unknown as BacktestProgress
       current = { ...current, progress: prog, reconnecting: false }
       emit()
     } catch { /* ignore */ }
   })
 
   es.addEventListener('research', (e: MessageEvent) => {
-    if (current?.id !== id) return
+    if (current?.id !== id || !current.isPending) return
     try {
       const handle = JSON.parse(e.data)?.execution_handle
       if (typeof handle !== 'string' || !handle.trim()) return
@@ -208,7 +220,7 @@ function connectSSE(url: string): void {
   })
 
   es.addEventListener('done', (e: MessageEvent) => {
-    if (current?.id !== id) return
+    if (current?.id !== id || !current.isPending) return
     try {
       const payload: unknown = JSON.parse(e.data)
       if (!isStrategyBacktestResult(payload)) throw new Error('Malformed strategy result')
@@ -233,7 +245,7 @@ function connectSSE(url: string): void {
   })
 
   es.addEventListener('error', (e: MessageEvent) => {
-    if (current?.id !== id) return
+    if (current?.id !== id || !current.isPending) return
     // SSE error 事件: 有 data 说明是后端主动推送的错误/取消; 无 data 说明是连接断开
     if (e.data) {
       try {
@@ -256,6 +268,7 @@ function connectSSE(url: string): void {
       // 放弃: 停止自动重连, 进入可重试的错误态 (用户可重新发起回测)
       es.close()
       eventSource = null
+      localStorage.removeItem(RECONNECT_KEY)
       current = {
         ...current,
         isPending: false,
@@ -295,11 +308,16 @@ export function startBacktest(params: {
   holding_days?: number
   asset_type?: 'stock' | 'etf'
 }): void {
+  const previousQs = localStorage.getItem(RECONNECT_KEY)
+
   // 取消之前的任务状态
   if (eventSource) {
     eventSource.close()
     eventSource = null
   }
+  // Closing EventSource alone leaves the daemon job running on the server.
+  // Cancel the previous job without awaiting it so a new run cannot race it.
+  if (previousQs) cancelServerTask(previousQs)
 
   const id = ++taskSeq
   current = { id, isPending: true, result: null, progress: null, error: null, reconnecting: false, researchExecutionHandle: null }
@@ -338,6 +356,19 @@ export function startBacktest(params: {
 export async function stopBacktest(): Promise<void> {
   // 从 reconnect key 提取 job_key (后端按参数 hash 算 job_key)
   const qs = localStorage.getItem(RECONNECT_KEY)
+  const source = eventSource
+  const taskId = current?.id
+  eventSource = null
+  source?.close()
+
+  // Mark the local task before awaiting the network request. This prevents a
+  // quick rerun from being cancelled by a late response from the old request.
+  if (current?.isPending && current.id === taskId) {
+    current = { ...current, isPending: false, error: '已取消', reconnecting: false, researchExecutionHandle: null }
+    emit()
+  }
+  localStorage.removeItem(RECONNECT_KEY)
+
   if (qs) {
     // 解析出参数, 用 fetch 调 cancel
     try {
@@ -353,19 +384,13 @@ export async function stopBacktest(): Promise<void> {
       }).catch(() => {})
     } catch { /* ignore */ }
   }
-  if (eventSource) {
-    eventSource.close()
-    eventSource = null
-  }
-  if (current?.isPending) {
-    current = { ...current, isPending: false, error: '已取消', reconnecting: false, researchExecutionHandle: null }
-    emit()
-  }
-  localStorage.removeItem(RECONNECT_KEY)
 }
 
 /** 清除任务状态 (隐藏提示) */
 export function clearBacktest(): void {
+  eventSource?.close()
+  eventSource = null
+  localStorage.removeItem(RECONNECT_KEY)
   current = null
   emit()
 }

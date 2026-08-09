@@ -291,7 +291,7 @@ export function DataSourceEditor({
           <button
             onClick={() => save.mutate()}
             disabled={!canSave}
-            className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-btn bg-accent text-white text-sm font-medium hover:bg-accent/90 disabled:opacity-50 transition-colors"
+            className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-btn bg-accent-solid text-white text-sm font-medium hover:bg-accent-solid/90 disabled:opacity-50 transition-colors"
           >
             <Save className="h-3.5 w-3.5" />
             {save.isPending ? '保存中...' : '保存'}

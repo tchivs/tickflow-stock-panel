@@ -16,6 +16,7 @@ import {
 } from 'lucide-react'
 import { api, type ExtDataDetectUrlResult, type ExtDataField } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
+import { useModalA11y } from '@/lib/useModalA11y'
 
 type SourceMode = 'url' | 'file' | 'manual'
 
@@ -26,6 +27,8 @@ type MappingChoice = {
 
 export function CreateExtDialog({ onClose }: { onClose: () => void }) {
   const qc = useQueryClient()
+  const panelRef = useRef<HTMLDivElement>(null)
+  useModalA11y(panelRef, { onClose })
   const [sourceMode, setSourceMode] = useState<SourceMode>('url')
   const [id, setId] = useState('')
   const [label, setLabel] = useState('')
@@ -310,11 +313,16 @@ export function CreateExtDialog({ onClose }: { onClose: () => void }) {
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
       <motion.div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="新增扩展数据"
+        tabIndex={-1}
         initial={{ opacity: 0, scale: 0.95, y: 12 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.97, y: 8 }}
         transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
-        className="relative rounded-2xl border border-border bg-surface shadow-2xl mx-4 w-full max-w-2xl max-h-[88vh] flex flex-col overflow-hidden"
+        className="relative rounded-dialog border border-border bg-surface shadow-2xl mx-4 w-full max-w-2xl max-h-[88vh] flex flex-col overflow-hidden focus:outline-none"
       >
         <div className="px-6 pt-5 pb-4">
           <div className="flex items-center justify-between">
@@ -609,7 +617,7 @@ export function CreateExtDialog({ onClose }: { onClose: () => void }) {
 
             {sourceMode === 'file' && fields.length === 0 ? (
               <div
-                onClick={() => detectFileRef.current?.click()}
+                onClick={() => { if (!detecting) detectFileRef.current?.click() }}
                 onDragOver={e => { e.preventDefault(); setDragOver(true) }}
                 onDragLeave={() => setDragOver(false)}
                 onDrop={e => {
@@ -618,6 +626,16 @@ export function CreateExtDialog({ onClose }: { onClose: () => void }) {
                   const file = e.dataTransfer.files[0]
                   if (file) detectFile(file)
                 }}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    if (!detecting) detectFileRef.current?.click()
+                  }
+                }}
+                role="button"
+                tabIndex={detecting ? -1 : 0}
+                aria-disabled={detecting}
+                aria-label="选择或拖拽文件"
                 className={`rounded-xl border-2 border-dashed py-6 flex flex-col items-center justify-center gap-2 cursor-pointer transition-colors ${
                   dragOver ? 'border-accent bg-accent/[0.06]' : detecting ? 'border-border/40 pointer-events-none' : 'border-border/30 hover:border-accent/40 hover:bg-accent/[0.02]'
                 }`}

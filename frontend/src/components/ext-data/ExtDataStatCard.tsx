@@ -116,6 +116,15 @@ export function ExtDataStatCard({ config, onDelete, deleting, onEdit }: {
             <div
               className="absolute bottom-0 inset-x-0 h-6 bg-gradient-to-t from-surface to-transparent cursor-pointer flex items-end justify-center"
               onClick={() => setFieldsExpanded(true)}
+              role="button"
+              tabIndex={0}
+              aria-label="展开全部字段"
+              onKeyDown={e => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  setFieldsExpanded(true)
+                }
+              }}
             >
               <ChevronDown className="h-3 w-3 text-muted" />
             </div>
@@ -211,10 +220,20 @@ export function ExtDataStatCard({ config, onDelete, deleting, onEdit }: {
                     onChange={handleFile}
                   />
                   <div
-                    onClick={() => fileRef.current?.click()}
+                    onClick={() => { if (!uploading) fileRef.current?.click() }}
                     onDragOver={e => { e.preventDefault(); setDragOver(true) }}
                     onDragLeave={() => setDragOver(false)}
                     onDrop={handleDrop}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault()
+                        if (!uploading) fileRef.current?.click()
+                      }
+                    }}
+                    role="button"
+                    tabIndex={uploading ? -1 : 0}
+                    aria-disabled={uploading}
+                    aria-label="选择或拖拽文件上传"
                     className={`relative cursor-pointer rounded-lg border-2 border-dashed transition-colors py-5 flex flex-col items-center justify-center gap-1.5 ${
                       dragOver
                         ? 'border-accent bg-accent/10'
@@ -274,7 +293,7 @@ export function ExtDataStatCard({ config, onDelete, deleting, onEdit }: {
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.97, y: 8 }}
               transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
-              className="relative w-[90vw] max-w-[380px] rounded-card border border-border bg-base shadow-2xl p-6"
+              className="relative w-[90vw] max-w-[380px] rounded-dialog border border-border bg-base shadow-2xl p-6"
             >
               <div className="flex items-start gap-3">
                 <div className="shrink-0 h-10 w-10 rounded-full bg-danger/12 flex items-center justify-center">

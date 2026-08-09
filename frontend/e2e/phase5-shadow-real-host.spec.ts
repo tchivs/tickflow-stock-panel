@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto'
-import { readFile } from 'node:fs/promises'
+import { spawn, type ChildProcess } from 'node:child_process'
+import { chmod, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { expect, test, type Page, type Request } from '@playwright/test'
+import { join, resolve } from 'node:path'
+import { expect, test, type Request } from '@playwright/test'
 
 /**
  * CR-01 real-host primary node.
@@ -14,8 +15,116 @@ import { expect, test, type Page, type Request } from '@playwright/test'
 const SHADOW_HEADING = 'Shadow 成交证据与策略候选'
 const password = process.env.PHASE5_REAL_HOST_PASSWORD ?? 'phase5-real-host-password'
 const browserUrl = 'http://127.0.0.1:4175'
-
+// 与 phase1/phase4 host spec 同款 self-spawn: 本 spec 需要一个「启用 Shadow 模块 + 遥测」的真实后端。
+// 本地 venv 自带 sklearn → shadow 模块 available; fixtures 提供 600001.SH 的 2024 日K。
+const backendPort = Number(process.env.PHASE5_BACKEND_PORT ?? 3033)
+const backendUrl = `http://127.0.0.1:${backendPort}`
+const frontendPort = Number(process.env.PHASE5_BROWSER_PORT ?? 4183)
+const frontendUrl = `http://127.0.0.1:${frontendPort}`
+let host: ChildProcess | undefined
+let frontend: ChildProcess | undefined
+let hostOutput = ''
+let frontendOutput = ''
 test.setTimeout(240_000)
+test.use({ baseURL: frontendUrl })
+
+function sleep(milliseconds: number) {
+  const deferred = Promise.withResolvers<void>()
+  setTimeout(deferred.resolve, milliseconds)
+  return deferred.promise
+}
+
+function shadowFixtureBars(symbol: string, start: string, end: string, baseline: number) {
+  const bars: Array<Record<string, number | string>> = []
+  const cursor = new Date(`${start}T00:00:00Z`)
+  const finalDate = new Date(`${end}T00:00:00Z`)
+  let businessDay = 0
+  while (cursor <= finalDate) {
+    const weekday = cursor.getUTCDay()
+    if (weekday !== 0 && weekday !== 6) {
+      const close = baseline + (businessDay % 23) * 0.12
+      const date = cursor.toISOString().slice(0, 10)
+      // D-17 契约: quote_ts 必须在 Asia/Shanghai 交易时段内 (09:30 = UTC 01:30)。
+      bars.push({ symbol, date, open: close - 0.05, high: close + 0.15, low: close - 0.18, close, volume: 4_000_000, amount: 4_000_000 * close, quote_ts: cursor.getTime() + 5_400_000 })
+      businessDay += 1
+    }
+    cursor.setUTCDate(cursor.getUTCDate() + 1)
+  }
+  return bars
+}
+
+async function waitForHost() {
+  for (let attempt = 0; attempt < 220; attempt += 1) {
+    try {
+      if ((await fetch(`${backendUrl}/health`)).ok) return
+    } catch {
+      // The actual FastAPI lifespan is still initializing.
+    }
+    await sleep(250)
+  }
+  throw new Error(`real FastAPI host did not become ready: ${hostOutput.slice(-4_000)}`)
+}
+
+async function waitForFrontend() {
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    try {
+      if ((await fetch(frontendUrl)).ok) return
+    } catch {
+      // Vite is still starting.
+    }
+    await sleep(250)
+  }
+  throw new Error(`isolated Vite host did not become ready: ${frontendOutput.slice(-4_000)}`)
+}
+
+test.beforeAll(async (_fixtures, testInfo) => {
+  testInfo.setTimeout(180_000)
+  const root = resolve(import.meta.dirname, '../..')
+  const fixtureDir = await mkdtemp(join(tmpdir(), 'phase5-shadow-fixture-'))
+  const dataDir = await mkdtemp(join(tmpdir(), 'phase5-shadow-data-'))
+  await writeFile(join(fixtureDir, 'instruments.json'), JSON.stringify({ instruments: [{ symbol: '600001.SH', name: '平安银行', code: '600001', exchange: 'SH' }] }))
+  await writeFile(join(fixtureDir, 'market-data.json'), JSON.stringify({
+    daily: shadowFixtureBars('600001.SH', '2023-11-01', '2024-12-31', 10),
+    index_daily: [],
+    adjustment_factors: [{ symbol: '600001.SH', trade_date: '2023-11-01', adj_factor: 1 }],
+    financials: [{ symbol: '600001.SH', report_date: '2024-06-30', roe: 0.11 }],
+  }))
+  await chmod(join(fixtureDir, 'instruments.json'), 0o444)
+  await chmod(join(fixtureDir, 'market-data.json'), 0o444)
+  await chmod(fixtureDir, 0o555)
+  host = spawn(join(root, 'backend', '.venv', 'bin', 'uvicorn'), ['app.main:app', '--host', '127.0.0.1', '--port', String(backendPort)], {
+    cwd: join(root, 'backend'),
+    env: {
+      ...process.env,
+      DATA_DIR: dataDir,
+      PORT: String(frontendPort),
+      AUTH_PASSWORD: 'phase5-real-host-password',
+      PHASE1_FIXTURE_MODE: '1',
+      PHASE1_FIXTURE_DIR: fixtureDir,
+      PHASE5_REAL_HOST_TELEMETRY: '1',
+    },
+    stdio: 'pipe',
+  })
+  host.stdout?.on('data', chunk => { hostOutput += String(chunk) })
+  host.stderr?.on('data', chunk => { hostOutput += String(chunk) })
+  await waitForHost()
+  frontend = spawn('pnpm', ['exec', 'vite', '--host', '127.0.0.1', '--port', String(frontendPort), '--strictPort'], {
+    cwd: join(root, 'frontend'),
+    env: { ...process.env, VITE_API_PROXY_TARGET: backendUrl },
+    stdio: 'pipe',
+  })
+  frontend.stdout?.on('data', chunk => { frontendOutput += String(chunk) })
+  frontend.stderr?.on('data', chunk => { frontendOutput += String(chunk) })
+  await waitForFrontend()
+})
+
+test.afterAll(async () => {
+  frontend?.kill('SIGTERM')
+  host?.kill('SIGTERM')
+  await sleep(600)
+  frontend?.kill('SIGKILL')
+  host?.kill('SIGKILL')
+})
 
 function shadowExecutionCsv(): string {
   const header = 'symbol,side,time,quantity,price,fees,currency,fill_id'

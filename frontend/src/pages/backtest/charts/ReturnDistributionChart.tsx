@@ -59,7 +59,10 @@ export function ReturnDistributionChart({ distribution }: { distribution: DistBi
     }
   }, [distribution, ct])
 
-  const chartRef = useECharts(option, [distribution, ct])
+  const chartRef = useECharts(option, [distribution, ct], useMemo(() => {
+    const total = distribution.reduce((s, d) => s + d.count, 0)
+    return `候选标的收益分布直方图，共 ${total} 个标的，分 ${distribution.length} 档，柱色按正负收益区分。`
+  }, [distribution]))
 
   return <div ref={chartRef} className="h-48 w-full" />
 }

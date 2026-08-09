@@ -16,7 +16,7 @@ const feedbackLabels: Record<AdvancedExperimentFeedback['conclusion'], string> =
 }
 
 const controlClass = 'min-h-11 rounded-btn border border-border bg-base px-3 py-2 text-xs text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:cursor-not-allowed disabled:opacity-45'
-const primaryClass = `${controlClass} border-accent bg-accent text-white hover:bg-accent/90`
+const primaryClass = `${controlClass} border-accent bg-accent-solid text-white hover:bg-accent-solid/90`
 
 function serialize(value: Record<string, string | number | boolean | null> | null | undefined) {
   return Object.entries(value ?? {}).map(([key, item]) => `${key}: ${String(item)}`).join(' · ') || '无额外受控参数'

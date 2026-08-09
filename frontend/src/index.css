@@ -23,6 +23,7 @@
   --fg-secondary: 240 4% 35%;/* #52525B */
   --fg-muted: 240 4% 46%;    /* #71717A — 原 #A1A1AA 2.5:1 不达标 */
   --accent: 221 83% 53%;     /* #2563EB 电光蓝(亮色加深) — 原 #3B82F6 3.5:1 不达标 */
+  --accent-solid: 221 83% 53%; /* #2563EB — 实底填充专用 (主按钮/选中格白字 ≥4.5:1); 交互态文字/焦点环仍走 --accent */
   --bull: 0 72% 51%;         /* #DC2626 红涨(亮色加深) */
   --bear: 142 72% 29%;       /* #15803D 绿跌(亮色加深) */
   --warning: 26 90% 37%;     /* #B45309 警示橙(亮色加深) */
@@ -38,6 +39,7 @@ html.dark {
   --fg-secondary: 240 5% 78%;/* #C4C4CB 大幅提亮 — 子标题/导航非激活态 */
   --fg-muted: 240 5% 58%;    /* #8E8E96 muted 提亮 — 辅助提示 */
   --accent: 217 91% 60%;
+  --accent-solid: 221 83% 53%; /* #2563EB — 暗色实底填充白字 ≥4.5:1; --accent 保持亮电光蓝做文字/焦点 */
   --bull: 4 87% 60%;
   --bear: 152 67% 45%;
   --warning: 32 95% 50%;
@@ -90,4 +92,17 @@ body {
   -webkit-font-smoothing: subpixel-antialiased;
   -moz-osx-font-smoothing: auto;
   text-rendering: optimizeLegibility;
+}
+
+/* 减少动态 (WCAG 2.3.3): 用户系统开启减少动态后, 禁用非必要 CSS 动画/过渡/平滑滚动。
+   framer-motion 的 JS 动画由根组件 <MotionConfig reducedMotion="user"> 统一处理。 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0s !important;
+    scroll-behavior: auto !important;
+  }
 }

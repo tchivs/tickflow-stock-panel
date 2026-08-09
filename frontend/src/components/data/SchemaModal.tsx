@@ -1,5 +1,8 @@
+import { useRef } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { useQuery } from '@tanstack/react-query'
+import { X } from 'lucide-react'
+import { useModalA11y } from '@/lib/useModalA11y'
 import { api, type EnrichedField } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 
@@ -53,6 +56,11 @@ export function EnrichedSchemaModal({ table, onClose }: { table: string | null; 
 
   const title = table ? (TABLE_TITLES[table] ?? table) : ''
 
+  // 模态语义: 焦点捕获 + Tab 陷阱 + ESC 关闭 + 卸载还原 (WCAG 2.1.2/2.1.1)。
+  // 内容按 open 条件渲染 (AnimatePresence) → active=open 让 effect 在打开时重跑。
+  const panelRef = useRef<HTMLDivElement>(null)
+  useModalA11y(panelRef, { onClose, active: open })
+
   return (
     <AnimatePresence>
       {open && (
@@ -65,7 +73,12 @@ export function EnrichedSchemaModal({ table, onClose }: { table: string | null; 
         >
           <div className="absolute inset-0 bg-black/40" onClick={onClose} />
           <motion.div
-            className="relative w-full max-w-xl max-h-[70vh] rounded-card border border-border bg-surface shadow-xl overflow-hidden mx-4"
+            ref={panelRef}
+            role="dialog"
+            aria-modal="true"
+            aria-label={`${title} 字段说明`}
+            tabIndex={-1}
+            className="relative w-full max-w-xl max-h-[70vh] rounded-dialog border border-border bg-surface shadow-xl overflow-hidden mx-4 focus:outline-none"
             initial={{ opacity: 0, scale: 0.95, y: 8 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: 8 }}
@@ -73,7 +86,17 @@ export function EnrichedSchemaModal({ table, onClose }: { table: string | null; 
           >
             <div className="flex items-center justify-between px-5 py-3 border-b border-border">
               <h3 className="text-sm font-medium text-foreground">{title} 字段说明</h3>
-              <span className="text-[10px] text-muted font-mono">{fields.length} 个字段</span>
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] text-muted font-mono">{fields.length} 个字段</span>
+                <button
+                  type="button"
+                  onClick={onClose}
+                  aria-label="关闭"
+                  className="p-1 rounded-btn text-muted hover:text-foreground hover:bg-elevated transition-colors"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
             </div>
             <div className="px-5 py-3 overflow-y-auto max-h-[calc(70vh-48px)]">
               {schema.isLoading ? (

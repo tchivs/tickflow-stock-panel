@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
@@ -247,16 +247,16 @@ export function SettingsDataSourcesPanel() {
             const pluginUnavailable = plugin && !plugin.available
             const installing = installMut.isPending && installMut.variables === item.name
             const uninstalling = uninstallMut.isPending && uninstallMut.variables === item.name
+            const selectSource = () => {
+              if (pluginUnavailable) return
+              setSelected(item.name)
+              if (customList.some(c => c.name === item.name)) {
+                editExisting.mutate(item.name)
+              }
+            }
             return (
               <div
                 key={item.name}
-                onClick={() => {
-                  if (pluginUnavailable) return
-                  setSelected(item.name)
-                  if (customList.some(c => c.name === item.name)) {
-                    editExisting.mutate(item.name)
-                  }
-                }}
                 className={`relative text-left rounded-lg border px-3.5 py-3 transition-all ${
                   pluginUnavailable
                     ? 'border-border/40 bg-elevated/10 opacity-70'
@@ -265,7 +265,16 @@ export function SettingsDataSourcesPanel() {
                       : 'border-border/60 bg-elevated/20 hover:bg-elevated/40 cursor-pointer'
                 }`}
               >
-                <div className="flex items-center gap-2 mb-1">
+                {/* 整卡主操作: stretched-link 语义按钮 (键盘/读屏可达) — 覆盖全卡, 内容区 pointer-events-none 让点击落在这里 */}
+                {!pluginUnavailable && (
+                  <button
+                    type="button"
+                    onClick={selectSource}
+                    aria-label={`配置 ${item.display_name}`}
+                    className="absolute inset-0 z-0 cursor-pointer rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+                  />
+                )}
+                <div className="pointer-events-none flex items-center gap-2 mb-1">
                   <span className={`text-sm truncate flex-1 ${selected === item.name ? 'font-medium text-foreground' : 'text-secondary'}`}>
                     {item.display_name}
                   </span>
@@ -277,25 +286,25 @@ export function SettingsDataSourcesPanel() {
                   )}
                   {pluginUnavailable ? (
                     installing ? (
-                      <span className="inline-flex items-center gap-1 text-[9px] text-accent shrink-0">
+                      <span className="pointer-events-auto relative z-10 inline-flex items-center gap-1 text-[9px] text-accent shrink-0">
                         <RefreshCw className="h-2.5 w-2.5 animate-spin" /> 安装中...
                       </span>
                     ) : (
                       <button
-                        onClick={(e) => { e.stopPropagation(); installMut.mutate(item.name) }}
+                        onClick={() => installMut.mutate(item.name)}
                         disabled={installMut.isPending}
-                        className="inline-flex min-h-11 shrink-0 items-center gap-1 rounded bg-accent/10 px-2.5 text-xs font-medium text-accent transition-colors hover:bg-accent/20 disabled:opacity-50 sm:min-h-0 sm:px-1.5 sm:py-0.5 sm:text-[10px]"
+                        className="pointer-events-auto relative z-10 inline-flex min-h-11 shrink-0 items-center gap-1 rounded bg-accent/10 px-2.5 text-xs font-medium text-accent transition-colors hover:bg-accent/20 disabled:opacity-50 sm:min-h-0 sm:px-1.5 sm:py-0.5 sm:text-[10px]"
                       >
                         <Zap className="h-2.5 w-2.5" /> 安装
                       </button>
                     )
                   ) : plugin ? (
-                    <div className="flex items-center gap-1 shrink-0">
+                    <div className="pointer-events-auto relative z-10 flex items-center gap-1 shrink-0">
                       {uninstalling ? (
                         <RefreshCw className="h-2.5 w-2.5 animate-spin text-muted" />
                       ) : (
                         <button
-                          onClick={(e) => { e.stopPropagation(); uninstallMut.mutate(item.name) }}
+                          onClick={() => uninstallMut.mutate(item.name)}
                           disabled={uninstallMut.isPending}
                           className="min-h-11 px-2 text-xs text-muted/60 transition-colors hover:text-danger disabled:opacity-40 sm:min-h-0 sm:px-0 sm:text-[10px]"
                           title="卸载依赖"
@@ -306,7 +315,7 @@ export function SettingsDataSourcesPanel() {
                     </div>
                   ) : item.name === 'tickflow' ? null : null}
                 </div>
-                <div className="flex flex-wrap gap-1 ml-0">
+                <div className="pointer-events-none flex flex-wrap gap-1 ml-0">
                   {item.datasets.length > 0 ? item.datasets.map(ds => (
                     <span key={ds} className="text-[9px] text-muted/60 bg-elevated/60 px-1 py-0.5 rounded">
                       {DATASET_LABELS[ds] || ds}
@@ -316,7 +325,7 @@ export function SettingsDataSourcesPanel() {
                   )}
                 </div>
                 {pluginUnavailable && plugin?.install_hint && (
-                  <div className="ml-0 mt-1 text-[10px] text-muted/40 font-mono truncate">{plugin.install_hint}</div>
+                  <div className="pointer-events-none ml-0 mt-1 text-[10px] text-muted/40 font-mono truncate">{plugin.install_hint}</div>
                 )}
               </div>
             )
@@ -376,7 +385,7 @@ export function SettingsDataSourcesPanel() {
             className="absolute inset-0 bg-black/60 backdrop-blur-sm"
             onClick={() => setConfirmDelete(null)}
           />
-          <div className="relative w-[90vw] max-w-[380px] rounded-card border border-border bg-base shadow-2xl p-6">
+          <div className="relative w-[90vw] max-w-[380px] rounded-dialog border border-border bg-base shadow-2xl p-6">
             <h3 className="text-sm font-medium text-foreground mb-2">删除数据源</h3>
             <p className="text-xs text-secondary mb-5">
               确认删除「{customList.find(s => s.name === confirmDelete)?.display_name || confirmDelete}」? 该数据源的配置文件将被移除,此操作不可撤销。
@@ -420,6 +429,13 @@ function ChainEditor({
   onSave: (names: string[]) => void
 }) {
   const [draft, setDraft] = useState<string[]>(chain.length ? chain : ['tickflow'])
+  const chainSignature = chain.join('\u0000')
+
+  // Preferences arrive after the panel mounts; keep the editor aligned with
+  // the server chain without overwriting an in-progress local reorder.
+  useEffect(() => {
+    setDraft(chain.length ? chain : ['tickflow'])
+  }, [dataset, chainSignature])
 
   // 该数据集可用源: tickflow (全支持) + 声明支持该数据集的源
   const available = allItems.filter(item =>
@@ -529,7 +545,7 @@ function ChainEditor({
         <button
           onClick={() => onSave(draft)}
           disabled={!dirty || saving}
-          className="inline-flex min-h-9 items-center gap-1.5 rounded-btn bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent/90 disabled:opacity-40 transition-colors"
+          className="inline-flex min-h-9 items-center gap-1.5 rounded-btn bg-accent-solid px-3 py-1.5 text-xs font-medium text-white hover:bg-accent-solid/90 disabled:opacity-40 transition-colors"
         >
           {saving ? <RefreshCw className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
           保存

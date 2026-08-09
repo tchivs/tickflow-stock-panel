@@ -5,6 +5,7 @@ import type { AuctionColumnsDecl, PoolHubRow, PoolHubStrategy } from '@/lib/api'
 import { boardTag } from '@/components/stock-table/primitives'
 import { fmtBigNum, fmtPct, isToday, priceColorClass } from '@/lib/format'
 import { useAuctionProbe, useQuoteStatus } from '@/lib/useSharedQueries'
+import { TABLE_ROW_NAV_KEYS, useTableRowNav } from '@/lib/useTableRowNav'
 
 // 复用既有标签处理: 关联因子 = 策略名 amber 标签; 概念板块 = 概念 chips
 const STRATEGY_TAG_CLS = 'inline-block px-1.5 py-px rounded text-[10px] font-medium leading-tight bg-amber-500/10 text-amber-600 border border-amber-500/20'
@@ -233,10 +234,13 @@ export function StockListTable({
   onToggleSelectAll,
   onPreview,
 }: StockListTableProps) {
-  if (!strategy) return null
   const conceptActive = filterText.trim().length > 0
   const filterActive = conceptActive || watchlistOnly
   const columns = mode === 'guest' ? GUEST_COLUMNS : VIP_COLUMNS
+
+  // 数据网格方向键行导航 (APG roving-tabindex) — ↑/↓/Home/End/PageUp/PageDown 行间移动。
+  // 必须在任何条件 return 之前调用 (rules of hooks)。
+  const { tbodyRef, onRowFocus, onRowKeyDown } = useTableRowNav<HTMLTableSectionElement>(rows)
 
   // WATCH-04 表头全选三态 (LG-04): 以「可见行」(rows prop = 页面 filteredRows) 为界 —
   // 勾选行已不在可见集不计入, 与 handleBatchAdd 防御性 intersect 同语义。
@@ -262,6 +266,8 @@ export function StockListTable({
       className="h-4 w-4 cursor-pointer"
     />
   )
+
+  if (!strategy) return null
 
   // 竞价列分组 (OQ-2/H1): 列存在性完全由服务端 auction_columns 声明驱动, 绝不从行值推导 (PIT-3)。
   // real 组整组同存同隐; open_gap 已留基础列「开盘涨幅」渲染, 不搬入派生组不重复渲染 (OQ-5)。
@@ -336,7 +342,7 @@ export function StockListTable({
       {/* 表 */}
       {!loading && !error && rows.length > 0 && (
         <div className="rounded-card border border-border overflow-x-auto">
-          <table className="w-full text-sm" style={{ minWidth: grouped ? 940 : 720 }}>
+          <table className="w-full text-sm" style={{ minWidth: grouped ? 940 : 720 }} aria-keyshortcuts={TABLE_ROW_NAV_KEYS}>
             <thead className="bg-elevated">
               {grouped ? (
                 /* 两行分组表头 (UI-SPEC §3.2): 基础列 rowSpan=2 + 真实集合竞价/派生·虚拟成交 colSpan=2 组带 */
@@ -393,7 +399,7 @@ export function StockListTable({
                 </tr>
               )}
             </thead>
-            <tbody>
+            <tbody ref={tbodyRef}>
               {rows.map((row, index) => {
                 const board = boardTag(row.symbol)
                 const cross = row.cross_resonance
@@ -405,8 +411,10 @@ export function StockListTable({
                 return (
                   <tr
                     key={rowKey}
+                    onFocus={onRowFocus}
+                    onKeyDown={onRowKeyDown}
                     className={cn(
-                      'border-t border-border hover:bg-elevated/50 transition-colors duration-150 ease-smooth',
+                      'border-t border-border hover:bg-elevated/50 transition-colors duration-150 ease-smooth focus-visible:bg-elevated/60 focus-visible:[outline-offset:-2px]',
                       cross && 'bg-accent/[0.06]',
                     )}
                   >
@@ -445,7 +453,7 @@ export function StockListTable({
                             disabled={watchlistPending}
                             aria-label={inList ? '移出自选' : '加入自选'}
                             title={inList ? '移出自选' : '加入自选'}
-                            className="p-1 max-md:h-10 max-md:w-10 rounded-btn transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                            className="p-1 max-md:h-11 max-md:w-11 rounded-btn transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                           >
                             <Star
                               className={'h-3.5 w-3.5 ' + (inList ? 'text-[#FACC15]' : 'text-muted hover:text-foreground hover:bg-elevated')}

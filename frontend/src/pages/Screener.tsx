@@ -881,7 +881,7 @@ export function Screener() {
             setSettingsStrategyId(null)
             setBuilderMode('modify')
             setShowBuilder(true)
-          } catch {}
+          } catch { /* keep the builder closed state when AI loading fails */ }
         }}
         onDeleted={() => {
           if (settingsStrategyId) {

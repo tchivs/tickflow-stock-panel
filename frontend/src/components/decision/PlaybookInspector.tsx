@@ -138,7 +138,7 @@ function ReviewAndApply({
           type="button"
           onClick={onApply}
           disabled={applying.pending || !proposal.adjustments.length}
-          className="min-h-11 rounded-btn bg-accent px-3 text-sm font-semibold text-white disabled:opacity-50"
+          className="min-h-11 rounded-btn bg-accent-solid px-3 text-sm font-semibold text-white disabled:opacity-50"
         >
           {applying.pending ? '正在执行受限校验' : '应用受限调整'}
         </button>
@@ -380,7 +380,7 @@ export function PlaybookInspector({ onClose }: { onClose: () => void }) {
   return <Modal
     onClose={onClose}
     ariaLabel="决策计划"
-    panelClassName="w-[calc(100vw-32px)] max-w-4xl max-h-[90vh] overflow-auto rounded-card border border-border bg-surface shadow-xl"
+    panelClassName="w-[calc(100vw-32px)] max-w-4xl max-h-[90vh] overflow-auto rounded-dialog border border-border bg-surface shadow-xl"
   >
     <div className="sticky top-0 z-10 border-b border-border bg-surface px-4 py-3">
       <div className="flex items-start justify-between gap-3">

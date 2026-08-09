@@ -272,7 +272,7 @@ export function Layout() {
     queryKey: QK.pipelineJobs,
     queryFn: () => api.pipelineJobs(1),
     refetchInterval: (query) => (query.state.data?.active_id ? 2000 : 15000),
-    refetchIntervalInBackground: true,
+    // 后台不轮询 (与 Dashboard MonitorWidget 同一先例): 切走标签页暂停, 回到前台恢复
   })
   const isDataSyncing = !!pipelineJobs?.active_id
 
@@ -401,7 +401,7 @@ export function Layout() {
     queryKey: ['alerts-total'],
     queryFn: () => api.alertsList({ days: 7, limit: 1 }),
     refetchInterval: 15000,
-    refetchIntervalInBackground: true,
+    // 后台不轮询 — 徽标仅前台活跃时刷新, 回到前台自动恢复
     select: (data) => data.total,
   })
   // 只在拿到真实总数时同步徽标 (避免 data=undefined 时传 0 重置 lastSeen)
@@ -455,6 +455,13 @@ export function Layout() {
 
   return (
     <div className="h-screen bg-base text-foreground overflow-hidden md:grid md:grid-cols-[14rem_1fr]">
+      {/* 跳转链接 (WCAG 2.4.1 Bypass Blocks): 首个可聚焦元素, 键盘用户跳过侧边导航直达内容 */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:fixed focus:left-2 focus:top-2 focus:z-[9999] focus:rounded-btn focus:bg-accent-solid focus:px-3 focus:py-2 focus:text-sm focus:font-medium focus:text-white focus:shadow-lg"
+      >
+        跳到主要内容
+      </a>
       {isMobile && mobileNavOpen && (
         <button
           type="button"
@@ -714,6 +721,8 @@ export function Layout() {
       </aside>
 
       <motion.main
+        id="main-content"
+        tabIndex={-1}
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}

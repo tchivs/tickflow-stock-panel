@@ -4,9 +4,12 @@ import { motion } from 'framer-motion'
 import { X, Loader2, Upload } from 'lucide-react'
 import { api, type ExtDataConfig, type ExtDataField } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
+import { useModalA11y } from '@/lib/useModalA11y'
 
 export function EditExtDialog({ config, onClose }: { config: ExtDataConfig; onClose: () => void }) {
   const qc = useQueryClient()
+  const panelRef = useRef<HTMLDivElement>(null)
+  useModalA11y(panelRef, { onClose })
   const [label, setLabel] = useState(config.label)
   const [description, setDescription] = useState(config.description ?? '')
   const [fields, setFields] = useState<ExtDataField[]>([...config.fields])
@@ -81,15 +84,20 @@ export function EditExtDialog({ config, onClose }: { config: ExtDataConfig; onCl
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
       <motion.div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="编辑扩展数据"
+        tabIndex={-1}
         initial={{ opacity: 0, scale: 0.95, y: 12 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.97, y: 8 }}
         transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
-        className="relative rounded-2xl border border-border bg-surface shadow-2xl mx-4 w-full max-w-lg max-h-[85vh] flex flex-col overflow-hidden"
+        className="relative rounded-dialog border border-border bg-surface shadow-2xl mx-4 w-full max-w-lg max-h-[85vh] flex flex-col overflow-hidden focus:outline-none"
       >
         <div className="flex items-center justify-between px-5 py-3 border-b border-border">
           <h3 className="text-sm font-medium text-foreground">编辑扩展数据</h3>
-          <button onClick={onClose} className="p-0.5 rounded hover:bg-elevated text-secondary">
+          <button type="button" onClick={onClose} aria-label="关闭" className="p-0.5 rounded hover:bg-elevated text-secondary">
             <X className="h-4 w-4" />
           </button>
         </div>

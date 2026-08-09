@@ -133,7 +133,7 @@ export function StockAnalysis() {
                 ref={analyzeButtonRef}
                 onClick={handleAnalyze}
                 disabled={checking}
-                className="inline-flex min-h-11 items-center gap-1.5 rounded-btn bg-accent px-3 text-xs font-medium text-white transition-colors hover:bg-accent/90 focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-base disabled:cursor-not-allowed disabled:opacity-40"
+                className="inline-flex min-h-11 items-center gap-1.5 rounded-btn bg-accent-solid px-3 text-xs font-medium text-white transition-colors hover:bg-accent-solid/90 focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-base disabled:cursor-not-allowed disabled:opacity-40"
               >
                 {checking ? <Loader2 className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />}
                 AI 个股分析
@@ -369,7 +369,7 @@ function ConfirmModal({ report, onView, onRedo, onClose }: {
           查看历史
         </button>
         <button type="button" onClick={onRedo}
-          className="inline-flex min-h-11 flex-1 items-center justify-center rounded-btn bg-accent px-3 text-xs font-medium text-white transition-colors hover:bg-accent/90 focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-base">
+          className="inline-flex min-h-11 flex-1 items-center justify-center rounded-btn bg-accent-solid px-3 text-xs font-medium text-white transition-colors hover:bg-accent-solid/90 focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-base">
           重新分析
         </button>
       </div>

@@ -119,3 +119,20 @@ export function chartTheme(theme: Theme): ChartTheme {
 export function useChartTheme(): ChartTheme {
   return chartTheme(useTheme())
 }
+
+// ================================================================
+// 图表语义色 — 画布/迷你图不走 CSS 变量, 双主题一致。
+// 与 UI token (bull hsl(0 72% 51%) / bear hsl(142 72% 29%)) 色相不同:
+// 画布与小字号信息条上这两档更亮更稳, 是既有图表规范, 集中在此单一来源。
+// 所有图表组件 MUST 从这里取色, 禁止再写裸 hex/rgba。
+// ================================================================
+export const CHART_BULL = '#C74040'
+export const CHART_BEAR = '#2D9B65'
+/** 对应 alpha 填充 (vol/area/marker), 与上两档同一 rgb。 */
+export const CHART_BULL_ALPHA = 'rgba(199,64,64,0.7)'
+export const CHART_BEAR_ALPHA = 'rgba(45,155,101,0.7)'
+/** 把语义色按 alpha 转 rgba 填充 — 所有 vol/area/marker 填充都从 CHART_BULL/BEAR 派生。 */
+export function chartColor(hex: string, alpha: number): string {
+  const n = parseInt(hex.slice(1), 16)
+  return `rgba(${(n >> 16) & 0xff},${(n >> 8) & 0xff},${n & 0xff},${alpha})`
+}

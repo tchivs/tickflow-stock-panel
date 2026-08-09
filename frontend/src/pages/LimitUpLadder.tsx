@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useMemo, useEffect } from 'react'
+import React, { useState, useCallback, useMemo, useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
 import { RefreshCw, ChevronDown, Flame, Settings2, X, Bell, BellOff, AlertCircle } from 'lucide-react'
@@ -8,6 +8,7 @@ import { StockPreviewDialog } from '@/components/StockPreviewDialog'
 import { QK } from '@/lib/queryKeys'
 import { storage } from '@/lib/storage'
 import { fmtPct, priceColorClass } from '@/lib/format'
+import { useModalA11y } from '@/lib/useModalA11y'
 import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
 import { useTheme } from '@/lib/theme'
@@ -107,7 +108,7 @@ function getExtTags(stock: LimitLadderStock, item?: ExtFieldItem): string[] {
   const sep = cfg?.separator?.trim() || null
   const tags = sep
     ? str.split(sep).map(s => s.trim()).filter(Boolean)
-    : str.split(/[、,，;；\-]/).map(s => s.trim()).filter(Boolean)
+    : str.split(/[、,，;；-]/).map(s => s.trim()).filter(Boolean)
 
   const maxTags = cfg?.maxTags ?? 0
   const sliced = maxTags > 0 ? tags.slice(0, maxTags) : tags
@@ -585,7 +586,7 @@ function MonitorMenu({ stock, direction, sealMode, monitorRule, anchorRect, hasD
             onClick={handleSave}
             disabled={saving || !threshold || !hasDepth}
             title={!hasDepth ? '需 Pro+ 套餐 (批量五档能力)' : ''}
-            className="flex-1 h-7 rounded text-[11px] font-medium transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed bg-accent text-white hover:bg-accent/90 active:scale-[0.98] disabled:active:scale-100"
+            className="flex-1 h-7 rounded text-[11px] font-medium transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed bg-accent-solid text-white hover:bg-accent-solid/90 active:scale-[0.98] disabled:active:scale-100"
           >
             {saving ? '保存中…' : !hasDepth ? '需 Pro+ 套餐' : existing ? '更新监控' : '开启监控'}
           </button>
@@ -1321,14 +1322,9 @@ function ExtConfigDialog({ fields, onSave, onClose }: {
     queryKey: QK.extDataSchemaAll,
     queryFn: api.extDataSchemaAll,
   })
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
+  const panelRef = useRef<HTMLDivElement>(null)
+  // 焦点捕获 + Tab 陷阱 + ESC 关闭 + 卸载还原 (WCAG 2.1.2/2.1.1)
+  useModalA11y(panelRef, { onClose })
 
   const options = useMemo((): SchemaOption[] => {
     if (!schemaData?.items) return []
@@ -1347,10 +1343,12 @@ function ExtConfigDialog({ fields, onSave, onClose }: {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
       <motion.div
+        ref={panelRef}
+        tabIndex={-1}
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
         exit={{ opacity: 0, scale: 0.95 }}
-        className="w-[calc(100vw-2rem)] max-w-3xl max-h-[calc(100vh-2rem)] overflow-y-auto rounded-lg border border-border bg-surface shadow-xl"
+        className="w-[calc(100vw-2rem)] max-w-3xl max-h-[calc(100vh-2rem)] overflow-y-auto rounded-lg border border-border bg-surface shadow-xl focus:outline-none"
         onClick={e => e.stopPropagation()}
         role="dialog"
         aria-modal="true"

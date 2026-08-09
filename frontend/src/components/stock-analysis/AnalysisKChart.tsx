@@ -1,5 +1,5 @@
 import { useEffect, useRef, useMemo, useState } from 'react'
-import { chartTheme, getTheme, useTheme } from '@/lib/theme'
+import { chartTheme, chartColor, getTheme, useTheme, CHART_BULL, CHART_BEAR } from '@/lib/theme'
 import * as echarts from 'echarts'
 import type { ECharts, EChartsOption } from 'echarts'
 import type { KlineRow, LevelSeries } from '@/lib/api'
@@ -21,10 +21,10 @@ import type { KlineRow, LevelSeries } from '@/lib/api'
 
 // ===== 配色(红涨绿跌, 双主题通用); 画布轴/网格主题相关色走 CT() =====
 const THEME = {
-  bull: '#C74040',
-  bear: '#2D9B65',
-  volUp: 'rgba(240,68,56,0.5)',
-  volDown: 'rgba(18,183,106,0.5)',
+  bull: CHART_BULL,
+  bear: CHART_BEAR,
+  volUp: chartColor(CHART_BULL, 0.5),
+  volDown: chartColor(CHART_BEAR, 0.5),
 }
 
 /** 当前主题的图表调色板 (buildOption 渲染时调用; 切换由组件 effect 触发重建)。 */
@@ -111,6 +111,21 @@ interface Props {
 
 const VOL_PANE_H = 90
 
+/** 生成个股分析 K 线图的可访问摘要 (读屏 aria-label; 不输出逐根数据避免噪音)。 */
+function analysisKlineAriaDescription(rows: KlineRow[], dates: string[]): string {
+  if (rows.length === 0) return '关键价位 K 线图，暂无数据'
+  const lastRow = rows[rows.length - 1]
+  let hi = -Infinity
+  let lo = Infinity
+  for (const r of rows) {
+    if (r.high > hi) hi = r.high
+    if (r.low < lo) lo = r.low
+  }
+  const first = dates[0]
+  const lastDate = dates[dates.length - 1]
+  return `关键价位 K 线图，${first} 至 ${lastDate}，共 ${rows.length} 根。最新收盘 ${lastRow.close}，区间最高 ${hi}，最低 ${lo}。`
+}
+
 export function AnalysisKChart({
   rows,
   levels,
@@ -125,6 +140,8 @@ export function AnalysisKChart({
 }: Props) {
   const chartRef = useRef<HTMLDivElement>(null)
   const chartInstRef = useRef<ECharts | null>(null)
+  /** 用户缩放窗口(鼠标滚轮/slider/键盘); null = 未手动缩放, 用初始 zoomStart */
+  const userZoomRef = useRef<{ start: number; end: number } | null>(null)
   /** seriesIndex → levelKey 映射, buildOption 填充, ECharts hover 事件反查 */
   const seriesKeyMapRef = useRef<Map<number, string>>(new Map())
   // 主题: buildOption 内部用 CT() 动态取色, 这里只负责切换时触发重建
@@ -388,8 +405,20 @@ export function AnalysisKChart({
         }
       })
       chartInstRef.current.on('globalout', () => setHoveredKey(null))
+      // 追踪用户缩放(滚轮/slider/键盘): 跨重渲染保留窗口
+      chartInstRef.current.on('dataZoom', () => {
+        const dz = (chartInstRef.current?.getOption().dataZoom as { start?: number; end?: number }[] | undefined)?.[0]
+        if (dz && typeof dz.start === 'number' && typeof dz.end === 'number') {
+          userZoomRef.current = { start: dz.start, end: dz.end }
+        }
+      })
     }
     chartInstRef.current.setOption(buildOption(), true)
+    // 恢复用户缩放窗口(此前 setOption(notMerge) 会重置到 zoomStart; 修复: hover/开关/主题切换后保留)
+    const zoom = userZoomRef.current ?? { start: zoomStart, end: 100 }
+    chartInstRef.current.dispatchAction({ type: 'dataZoom', start: zoom.start, end: zoom.end })
+    // 同步读屏 label: React 重渲染会把 aria-label 重置为 JSX 摘要, 这里按实际缩放窗口补回「当前显示」
+    if (userZoomRef.current) applyZoomLabel(zoom.start, zoom.end)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows, levels, series, seriesDates, activeTypes, pivotRank, markers, ranges, height, theme, hoveredKey])
 
@@ -409,6 +438,66 @@ export function AnalysisKChart({
       else next.add(t)
       return next
     })
+  }
+
+  // 键盘缩放/平移 (dataZoom): 容器聚焦后方向键操作。读屏 aria-label 同步追加「当前显示 …」区间。
+  // 直接 DOM 更新 (无 React 重渲染), 保持图表高频交互路径零额外渲染。
+  const applyZoomLabel = (start: number, end: number) => {
+    const el = chartRef.current
+    if (!el || rows.length === 0) return
+    const i0 = Math.min(rows.length - 1, Math.max(0, Math.floor((rows.length - 1) * start / 100)))
+    const i1 = Math.min(rows.length - 1, Math.max(0, Math.floor((rows.length - 1) * end / 100)))
+    const vis = i1 > i0 ? `${dates[i0]} 至 ${dates[i1]}` : dates[i0]
+    el.setAttribute('aria-label', `${analysisKlineAriaDescription(rows, dates)} 当前显示 ${vis}。`)
+  }
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const inst = chartInstRef.current
+    if (!inst) return
+    const initial = { start: zoomStart, end: 100 }
+    const base = userZoomRef.current ?? initial
+    let { start, end } = base
+    const span = Math.max(end - start, 1)
+    const step = span * 0.1
+    switch (e.key) {
+      case 'ArrowLeft': {
+        const d = Math.min(step, start)
+        start -= d; end -= d
+        break
+      }
+      case 'ArrowRight': {
+        const d = Math.min(step, 100 - end)
+        start += d; end += d
+        break
+      }
+      case 'PageUp': {
+        const grow = span * 0.2
+        start = Math.max(0, start - grow / 2)
+        end = Math.min(100, end + grow / 2)
+        break
+      }
+      case 'PageDown': {
+        const shrink = span * 0.2
+        start = Math.min(start + shrink / 2, 100 - 1)
+        end = Math.max(end - shrink / 2, start + 1)
+        break
+      }
+      case 'Home':
+        start = initial.start
+        end = initial.end
+        break
+      case 'End':
+        start = 0
+        end = 100
+        break
+      default:
+        return
+    }
+    e.preventDefault()
+    start = Math.max(0, Math.min(start, 99))
+    end = Math.max(start + 1, Math.min(100, end))
+    if (start === base.start && end === base.end) return
+    inst.dispatchAction({ type: 'dataZoom', start, end })
+    applyZoomLabel(start, end)
   }
 
   return (
@@ -466,8 +555,19 @@ export function AnalysisKChart({
           )}
         </div>
       )}
-      {/* 图表:右侧预留带(grid.right 预留)显示价位标签文字,不压蜡烛 */}
-      <div ref={chartRef} style={{ width: '100%', height }} />
+      {/* 图表:右侧预留带(grid.right 预留)显示价位标签文字,不压蜡烛。
+          键盘可达: Tab 聚焦后方向键平移 / PageUp-PageDown 缩放 / Home-End 复位 */}
+      <div
+        ref={chartRef}
+        style={{ width: '100%', height }}
+        className="rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+        role="img"
+        tabIndex={0}
+        aria-keyshortcuts="ArrowLeft ArrowRight PageUp PageDown Home End"
+        title="方向键平移 · PageUp/PageDown 缩放 · Home 复位 · End 全部"
+        onKeyDown={handleKeyDown}
+        aria-label={analysisKlineAriaDescription(rows, dates)}
+      />
 
       {/* 价位统计面板:把当前开启的点位按"压力 / 支撑"结构化列出 */}
       {levels && (

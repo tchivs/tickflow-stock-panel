@@ -559,7 +559,7 @@ export function ForecastPanel({ instrument, title }: ForecastPanelProps) {
       {selectedCatalogView && <CatalogDetails view={selectedCatalogView} />}
       {selectedCatalogView && !gateVerified && <div role="alert" className="rounded-input border border-danger/50 bg-danger/10 p-4 text-danger"><AlertTriangle className="mr-2 inline h-4 w-4" aria-hidden="true" />完整性校验未通过：{text(selectedCatalogView.reason, String(selectedCatalogView.integrity))}。不能开始任务，也不能绕过本地批准目录。</div>}
       <div className="rounded-input border border-border bg-surface p-4"><p className="font-semibold">开始前确认</p><p className="mt-1 text-secondary">对象 {instrument} · {horizon} 个交易日 · 检查点 {selectedCatalog?.catalog_id ?? '未选择'}。服务端将冻结受治理日线、解析检查点身份并创建新的不可变任务；浏览器不提供量化结果、摘要或官方状态。</p></div>
-      <button type="button" onClick={() => selectedCatalog && submitNewForecast(horizon, selectedCatalog.catalog_id)} disabled={!gateVerified || createJob.isPending || (!!taskJob && (taskJob.status === 'queued' || taskJob.status === 'running'))} className={`${BUTTON} w-full bg-accent font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto`}>{createJob.isPending ? '正在创建预测任务…' : '生成概率预测'}</button>
+      <button type="button" onClick={() => selectedCatalog && submitNewForecast(horizon, selectedCatalog.catalog_id)} disabled={!gateVerified || createJob.isPending || (!!taskJob && (taskJob.status === 'queued' || taskJob.status === 'running'))} className={`${BUTTON} w-full bg-accent-solid font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto`}>{createJob.isPending ? '正在创建预测任务…' : '生成概率预测'}</button>
     </section>
 
     {(taskJob || progressStage) && <section aria-live="polite" className="rounded-card border border-border p-4"><h3 className="text-base font-semibold">当前任务</h3><p className="mt-2">{taskJob?.id ?? activeJobId} · {jobStageLabel(progressStage)}</p>{showReconnect && <p className="mt-2 text-warning">进度连接已中断，正在按记录状态重新连接。</p>}{taskJob && taskJob.status !== 'completed' && !['queued', 'running'].includes(taskJob.status) && <TerminalError job={taskJob} canRetry={catalogEntries.some(entry => entry.catalog_id === taskJob.catalog_id && catalogProjection(entry).available === true && catalogProjection(entry).integrity === 'verified')} onRetry={() => retryTerminalJob(taskJob)} onCatalogRetry={() => catalogQuery.refetch()} />}</section>}
@@ -761,17 +761,19 @@ function ForecastChart({ rows, paths, history, actuals }: { rows: QuantileRow[];
       ],
     }
   }, [actuals, history, paths, rows, theme])
-  const chartRef = useECharts(option, [rows, paths, history, actuals, theme])
-  const accessibleSeries = [
-    ...(history.length ? ['历史 close'] : []),
-    'P10',
-    'P90',
-    'P10–P90 不确定区间',
-    'P50',
-    ...(actuals.length ? ['actual'] : []),
-    ...(paths.length ? ['选中采样路径'] : []),
-  ]
-  return <div ref={chartRef} role="img" aria-label={`${accessibleSeries.join('、')}概率图；表格顺序 P10、P50、P90`} className="h-[280px] w-full md:h-[320px] xl:h-[360px]" />
+  const chartRef = useECharts(option, [rows, paths, history, actuals, theme], useMemo(() => {
+    const accessibleSeries = [
+      ...(history.length ? ['历史 close'] : []),
+      'P10',
+      'P90',
+      'P10–P90 不确定区间',
+      'P50',
+      ...(actuals.length ? ['actual'] : []),
+      ...(paths.length ? ['选中采样路径'] : []),
+    ]
+    return `${accessibleSeries.join('、')}概率图；表格顺序 P10、P50、P90`
+  }, [actuals, history, paths, rows]))
+  return <div ref={chartRef} className="h-[280px] w-full md:h-[320px] xl:h-[360px]" />
 }
 
 function QuantileTable({ rows }: { rows: QuantileRow[] }) {

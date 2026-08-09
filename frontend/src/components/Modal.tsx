@@ -42,7 +42,7 @@ export function Modal({
   children,
   labelledBy,
   ariaLabel,
-  panelClassName = 'w-[92vw] max-w-lg bg-surface border border-border rounded-card shadow-xl',
+  panelClassName = 'w-[92vw] max-w-lg bg-surface border border-border rounded-dialog shadow-xl',
   overlayClassName = 'fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm',
   initialFocusRef,
   closeOnBackdrop = true,

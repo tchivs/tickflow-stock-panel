@@ -210,7 +210,7 @@ function DisclaimerStep({ onNext }: { onNext: () => void }) {
       <div className="mt-6 flex items-center justify-center">
         <button
           onClick={onNext}
-          className="inline-flex items-center gap-2 px-6 h-11 rounded-xl bg-accent text-white text-sm font-semibold hover:bg-accent/90 transition-all"
+          className="inline-flex items-center gap-2 px-6 h-11 rounded-xl bg-accent-solid text-white text-sm font-semibold hover:bg-accent-solid/90 transition-all"
         >
           我已了解,继续
           <ArrowRight className="h-4 w-4" />
@@ -269,7 +269,7 @@ function WelcomeStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => voi
       <div className="mt-8 flex items-center justify-center gap-3">
         <button
           onClick={onNext}
-          className="inline-flex items-center gap-2 px-6 h-11 rounded-xl bg-accent text-white text-sm font-semibold hover:bg-accent/90 transition-all"
+          className="inline-flex items-center gap-2 px-6 h-11 rounded-xl bg-accent-solid text-white text-sm font-semibold hover:bg-accent-solid/90 transition-all"
         >
           开始配置
           <ArrowRight className="h-4 w-4" />
@@ -343,7 +343,7 @@ function KeyStep({ onNext, onSkip, onBack }: { onNext: () => void; onSkip: () =>
           <div className="flex items-center gap-1.5">
             <span className="inline-flex h-[18px] items-center rounded px-1.5 text-[10px] font-bold font-mono bg-accent/15 text-accent">Free</span>
             <span className="text-xs font-medium text-foreground">注册免费获取</span>
-            <span className="inline-flex items-center rounded-full bg-accent px-1.5 py-0.5 text-[10px] font-bold text-white shadow-sm shadow-accent/30">推荐</span>
+            <span className="inline-flex items-center rounded-full bg-accent-solid px-1.5 py-0.5 text-[10px] font-bold text-white shadow-sm shadow-accent/30">推荐</span>
           </div>
           <ul className="mt-2 space-y-1 text-[11px] text-secondary leading-relaxed">
             <li>· 无需付费,注册即享</li>
@@ -459,7 +459,7 @@ function KeyStep({ onNext, onSkip, onBack }: { onNext: () => void; onSkip: () =>
           <button
             onClick={() => keyInput.trim() && save.mutate()}
             disabled={save.isPending || !keyInput.trim()}
-            className="inline-flex items-center gap-2 px-5 h-9 rounded-xl bg-accent text-white text-sm font-semibold hover:bg-accent/90 disabled:opacity-40 transition-all"
+            className="inline-flex items-center gap-2 px-5 h-9 rounded-xl bg-accent-solid text-white text-sm font-semibold hover:bg-accent-solid/90 disabled:opacity-40 transition-all"
           >
             {save.isPending ? (
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -560,7 +560,7 @@ function ResultStep({ onNext, onBack }: { onNext: () => void; onBack: () => void
         </button>
         <button
           onClick={onNext}
-          className="inline-flex items-center gap-2 px-5 h-9 rounded-xl bg-accent text-white text-sm font-semibold hover:bg-accent/90 transition-colors"
+          className="inline-flex items-center gap-2 px-5 h-9 rounded-xl bg-accent-solid text-white text-sm font-semibold hover:bg-accent-solid/90 transition-colors"
         >
           下一步
           <ArrowRight className="h-4 w-4" />
@@ -667,7 +667,7 @@ function FinishStep({ onNext, onBack, pending }: { onNext: () => void; onBack: (
         <button
           onClick={onNext}
           disabled={pending}
-          className="inline-flex items-center gap-2 px-6 h-10 rounded-xl bg-accent text-white text-sm font-semibold hover:bg-accent/90 disabled:opacity-60 transition-all"
+          className="inline-flex items-center gap-2 px-6 h-10 rounded-xl bg-accent-solid text-white text-sm font-semibold hover:bg-accent-solid/90 disabled:opacity-60 transition-all"
         >
           {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
           {pending ? '正在进入…' : '进入面板'}

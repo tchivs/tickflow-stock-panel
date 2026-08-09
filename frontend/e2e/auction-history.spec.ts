@@ -198,6 +198,8 @@ test.describe('Phase 26 auction history chart (CHART-02)', () => {
     const region = auctionChartRegion(page)
     // ECharts canvas 可见
     await expect(region.locator('canvas').first()).toBeVisible()
+    // 读屏 label 含 symbol + 数据摘要 (子串匹配既有契约「历史竞价量/金额趋势图」前缀保留)
+    await expect(region).toHaveAttribute('aria-label', /300750.*竞价历史/)
     // 轴单位 DOM 标注: 柱·竞价量(股) / 线·竞价金额(元)
     await expect(region.getByText('股')).toBeVisible()
     await expect(region.getByText('元')).toBeVisible()

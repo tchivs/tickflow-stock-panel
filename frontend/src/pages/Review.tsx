@@ -256,7 +256,7 @@ export function Review() {
                 'inline-flex items-center gap-1.5 rounded-btn px-3.5 py-1.5 text-xs font-medium transition-all',
                 isGenerating
                   ? 'border border-accent/40 bg-accent/10 text-accent cursor-not-allowed'
-                  : 'bg-accent text-white shadow-sm shadow-accent/25 hover:bg-accent/90 hover:shadow hover:shadow-accent/30',
+                  : 'bg-accent-solid text-white shadow-sm shadow-accent/25 hover:bg-accent-solid/90 hover:shadow hover:shadow-accent/30',
               )}
             >
               {isGenerating ? (
@@ -290,7 +290,7 @@ export function Review() {
               <button
                 type="button"
                 onClick={() => marketQuery.refetch()}
-                className="inline-flex items-center gap-1.5 rounded-btn bg-accent px-4 py-2 text-xs font-medium text-white transition-all hover:bg-accent/90 max-md:min-h-11 max-md:min-w-11"
+                className="inline-flex items-center gap-1.5 rounded-btn bg-accent-solid px-4 py-2 text-xs font-medium text-white transition-all hover:bg-accent-solid/90 max-md:min-h-11 max-md:min-w-11"
               >
                 <RefreshCw className="h-3.5 w-3.5" />重试
               </button>
@@ -308,7 +308,7 @@ export function Review() {
               </div>
               <Link
                 to="/data"
-                className="inline-flex items-center gap-1.5 rounded-btn bg-accent px-4 py-2 text-xs font-medium text-white shadow-sm transition-all hover:bg-accent/90 hover:shadow"
+                className="inline-flex items-center gap-1.5 rounded-btn bg-accent-solid px-4 py-2 text-xs font-medium text-white shadow-sm transition-all hover:bg-accent-solid/90 hover:shadow"
               >
                 <Database className="h-3.5 w-3.5" />前往数据页同步
                 <ChevronRight className="h-3.5 w-3.5" />
@@ -376,7 +376,7 @@ export function Review() {
               initial={{ scale: 0.96, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.96, opacity: 0 }}
-              className="w-full max-w-md rounded-card border border-border bg-surface p-5 shadow-2xl"
+              className="w-full max-w-md rounded-dialog border border-border bg-surface p-5 shadow-2xl"
               onClick={(e) => e.stopPropagation()}
             >
               <div className="mb-4 flex items-center justify-between">
@@ -452,7 +452,7 @@ export function Review() {
                         : 'border-border/60 bg-base/40 hover:bg-base/60',
                     )}
                   >
-                    <span className={cn('flex h-3 w-3 shrink-0 items-center justify-center rounded border', reviewPushChannels.includes('feishu') ? 'border-accent bg-accent text-white' : 'border-border')}>
+                    <span className={cn('flex h-3 w-3 shrink-0 items-center justify-center rounded border', reviewPushChannels.includes('feishu') ? 'border-accent bg-accent-solid text-white' : 'border-border')}>
                       {reviewPushChannels.includes('feishu') && <Check className="h-2.5 w-2.5" />}
                     </span>
                     <span className="text-[11px] text-foreground">飞书</span>
@@ -473,7 +473,7 @@ export function Review() {
                         : 'border-border/60 bg-base/40 hover:bg-base/60',
                     )}
                   >
-                    <span className={cn('flex h-3 w-3 shrink-0 items-center justify-center rounded border', reviewPushChannels.includes('wecom') ? 'border-accent bg-accent text-white' : 'border-border')}>
+                    <span className={cn('flex h-3 w-3 shrink-0 items-center justify-center rounded border', reviewPushChannels.includes('wecom') ? 'border-accent bg-accent-solid text-white' : 'border-border')}>
                       {reviewPushChannels.includes('wecom') && <Check className="h-2.5 w-2.5" />}
                     </span>
                     <span className="text-[11px] text-foreground">企业微信</span>
@@ -510,7 +510,7 @@ export function Review() {
                 <button
                   onClick={() => reviewMut.mutate({ enabled: draft.enabled, hour: draft.hour, minute: draft.minute })}
                   disabled={reviewMut.isPending}
-                  className="inline-flex items-center gap-1.5 rounded-btn bg-accent px-4 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent/90 disabled:opacity-50"
+                  className="inline-flex items-center gap-1.5 rounded-btn bg-accent-solid px-4 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent-solid/90 disabled:opacity-50"
                 >
                   {reviewMut.isPending ? '保存中…' : '保存'}
                 </button>
@@ -789,6 +789,14 @@ function HistoryPanel({
                   viewingId === null ? 'bg-accent/10 ring-1 ring-accent/20' : 'hover:bg-elevated/60',
                 )}
                 onClick={onBackToGenerating}
+                role="button"
+                tabIndex={0}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    onBackToGenerating()
+                  }
+                }}
               >
                 <div className="grid h-8 w-8 shrink-0 place-items-center rounded bg-accent/15">
                   <RefreshCw className="h-3.5 w-3.5 animate-spin text-accent" />
@@ -809,6 +817,15 @@ function HistoryPanel({
                     viewingId === r.id ? 'bg-accent/10 ring-1 ring-accent/20' : 'hover:bg-elevated/60',
                   )}
                   onClick={() => onView(r)}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`查看复盘 ${r.emotion_label ?? r.as_of}`}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault()
+                      onView(r)
+                    }
+                  }}
                 >
                   <div
                     className="grid h-8 w-8 shrink-0 place-items-center rounded font-mono text-[10px] font-bold tabular-nums"

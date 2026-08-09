@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Loader2 } from 'lucide-react'
+import { useModalA11y } from '@/lib/useModalA11y'
 import { api } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { isExpertOrAbove } from '@/lib/capability-labels'
@@ -107,6 +108,10 @@ function MinuteExtendControls({ hasMinuteCap, tierLabel, isRunning, onStart }: {
   const [value, setValue] = useState(5)
   const [confirmOpen, setConfirmOpen] = useState(false)
 
+  // 获取分钟K确认对话框 — 焦点捕获 + Tab 陷阱 + ESC 关闭 + 卸载还原 (内联 → active=confirmOpen)
+  const confirmRef = useRef<HTMLDivElement>(null)
+  useModalA11y(confirmRef, { onClose: () => setConfirmOpen(false), active: confirmOpen })
+
   const dataStatus = useQuery({
     queryKey: QK.dataStatus,
     queryFn: api.dataStatus,
@@ -194,7 +199,14 @@ function MinuteExtendControls({ hasMinuteCap, tierLabel, isRunning, onStart }: {
       {confirmOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center">
           <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setConfirmOpen(false)} />
-          <div className="relative rounded-card border border-border bg-surface shadow-2xl mx-4 px-6 py-5 max-w-sm w-full space-y-4">
+          <div
+            ref={confirmRef}
+            role="dialog"
+            aria-modal="true"
+            aria-label="获取分钟K数据确认"
+            tabIndex={-1}
+            className="relative rounded-dialog border border-border bg-surface shadow-2xl mx-4 px-6 py-5 max-w-sm w-full space-y-4 focus:outline-none"
+          >
             <div className="text-sm text-foreground text-center">本地暂无分钟K数据，是否立即获取最近 {value} {unit === 'month' ? '月' : '天'}的分钟K？</div>
             <div className="flex items-center justify-center gap-3">
               <button

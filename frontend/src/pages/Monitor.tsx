@@ -71,7 +71,6 @@ export function Monitor() {
   const qc = useQueryClient()
   const [editorOpen, setEditorOpen] = useState(false)
   const [editingRule, setEditingRule] = useState<MonitorRule | null>(null)
-  const [mobileSection, setMobileSection] = useState<'alerts' | 'rules'>('alerts')
 
   // 触发记录: 类型、严重级别与投递状态均来自持久化历史。
   const [filter, setFilter] = useState<'all' | 'position' | 'strategy' | 'signal' | 'price' | 'market'>('all')
@@ -133,23 +132,20 @@ export function Monitor() {
       <PageHeader title="监控中心" subtitle="实时信号与规则管理" />
       <div className="flex-1 min-h-0 px-4 py-4 sm:px-5">
         <div className="mx-auto flex h-full max-w-7xl flex-col gap-3 md:flex-row md:gap-4">
-          <div className="grid grid-cols-2 gap-1 rounded-card border border-border bg-surface/60 p-1 md:hidden" role="tablist" aria-label="监控面板">
-            <button type="button" role="tab" aria-selected={mobileSection === 'alerts'} onClick={() => setMobileSection('alerts')} className={`min-h-11 rounded-btn px-3 text-xs font-medium ${mobileSection === 'alerts' ? 'bg-accent/15 text-accent' : 'text-muted'}`}>触发记录</button>
-            <button type="button" role="tab" aria-selected={mobileSection === 'rules'} onClick={() => setMobileSection('rules')} className={`min-h-11 rounded-btn px-3 text-xs font-medium ${mobileSection === 'rules' ? 'bg-accent/15 text-accent' : 'text-muted'}`}>监控规则</button>
-          </div>
-          <section aria-label="触发记录" className={`min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-card border border-border bg-surface/40 ${mobileSection === 'alerts' ? 'flex' : 'hidden'} md:flex`}>
+          <section aria-label="触发记录" className="min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-card border border-border bg-surface/40 flex">
             <div className="flex flex-wrap items-center gap-2 border-b border-border/60 bg-surface/60 px-3 py-3">
               <SectionHeader icon={BellRing} title="触发记录" />
-              <div className="order-3 flex w-full flex-wrap items-center gap-1 md:order-none md:w-auto" aria-label="告警类型筛选">
-                {(['all', 'position', 'price', 'signal', 'market', 'strategy'] as const).map(value => <button key={value} type="button" aria-pressed={filter === value} onClick={() => setFilter(value)} className={cn('min-h-8 rounded-btn px-2 text-xs max-md:min-h-11 max-md:min-w-11', filter === value ? 'bg-accent/15 text-accent' : 'text-muted hover:bg-elevated hover:text-secondary')}>{value === 'all' ? '全部' : TYPE_LABEL[value]}</button>)}
-              </div>
               <label className="sr-only" htmlFor="monitor-severity">严重级别</label>
-              <select id="monitor-severity" value={severity} onChange={event => setSeverity(event.target.value as typeof severity)} className="h-8 rounded-btn border border-border bg-base px-2 text-xs text-secondary max-md:min-h-11 max-md:min-w-11"><option value="all">全部级别</option><option value="info">普通</option><option value="warn">警告</option><option value="critical">重要</option></select>
+              <select id="monitor-severity" value={severity} onChange={event => setSeverity(event.target.value as typeof severity)} className="h-8 rounded-btn border border-border bg-base px-2 text-xs text-secondary max-md:min-h-11 max-md:min-w-11 md:order-2"><option value="all">全部级别</option><option value="info">普通</option><option value="warn">警告</option><option value="critical">重要</option></select>
               <label className="sr-only" htmlFor="monitor-delivery">投递状态</label>
-              <select id="monitor-delivery" value={delivery} onChange={event => setDelivery(event.target.value as typeof delivery)} className="h-8 rounded-btn border border-border bg-base px-2 text-xs text-secondary max-md:min-h-11 max-md:min-w-11"><option value="all">全部投递</option><option value="pending">待投递</option><option value="sent">已发送</option><option value="failed">投递失败</option><option value="skipped">已跳过</option></select>
-              <div className="ml-auto flex items-center gap-2">
+              <select id="monitor-delivery" value={delivery} onChange={event => setDelivery(event.target.value as typeof delivery)} className="h-8 rounded-btn border border-border bg-base px-2 text-xs text-secondary max-md:min-h-11 max-md:min-w-11 md:order-2"><option value="all">全部投递</option><option value="pending">待投递</option><option value="sent">已发送</option><option value="failed">投递失败</option><option value="skipped">已跳过</option></select>
+              <div className="ml-auto flex items-center gap-2 md:order-2">
                 <span className="rounded-md bg-elevated/50 px-1.5 py-0.5 text-[10px] font-medium text-muted">{total}</span>
                 {total > 0 && <button onClick={() => setConfirmClear(true)} className="inline-flex min-h-8 items-center gap-1 rounded-btn px-2 text-xs text-muted hover:bg-danger/10 hover:text-danger max-md:min-h-11 max-md:min-w-11"><Trash2 className="h-3 w-3" />清空</button>}
+              </div>
+              {/* 移动端整行排在最下 (order-last), 桌面端紧随标题 (md:order-1) — DOM 顺序即视觉/焦点顺序 */}
+              <div className="order-last flex w-full flex-wrap items-center gap-1 md:order-1 md:w-auto" aria-label="告警类型筛选">
+                {(['all', 'position', 'price', 'signal', 'market', 'strategy'] as const).map(value => <button key={value} type="button" aria-pressed={filter === value} onClick={() => setFilter(value)} className={cn('min-h-8 rounded-btn px-2 text-xs max-md:min-h-11 max-md:min-w-11', filter === value ? 'bg-accent/15 text-accent' : 'text-muted hover:bg-elevated hover:text-secondary')}>{value === 'all' ? '全部' : TYPE_LABEL[value]}</button>)}
               </div>
             </div>
             <div className="min-h-0 flex-1 overflow-auto p-3">
@@ -158,7 +154,7 @@ export function Monitor() {
           </section>
 
           {/* 右栏: 监控规则 */}
-          <section aria-label="监控规则" className={`min-h-0 w-full flex-col overflow-hidden rounded-card border border-border bg-surface/40 ${mobileSection === 'rules' ? 'flex' : 'hidden'} md:flex md:w-[400px] md:shrink-0`}>
+          <section aria-label="监控规则" className="min-h-0 w-full flex-col overflow-hidden rounded-card border border-border bg-surface/40 flex md:w-[400px] md:shrink-0">
             <div className="flex items-center gap-3 border-b border-border/60 bg-surface/60 px-4 py-2.5">
               <SectionHeader icon={ListChecks} title="监控规则" />
               <span className="rounded-md bg-elevated/50 px-1.5 py-0.5 text-[10px] font-medium text-muted">{rulesCount}</span>
@@ -717,7 +713,7 @@ function RulesList({ rulesQuery, onEdit }: {
 // ── 规则编辑对话框 ────────────────────────────────────
 function RuleEditorDialog({ open, rule, onClose }: { open: boolean; rule: MonitorRule | null; onClose: () => void }) {
   if (!open) return null
-  return <Modal onClose={onClose} ariaLabel="监控规则" panelClassName="w-[calc(100vw-32px)] max-w-2xl max-h-[90vh] overflow-auto rounded-card border border-border bg-surface shadow-xl"><RuleEditor rule={rule} onClose={onClose} onSaved={onClose} /></Modal>
+  return <Modal onClose={onClose} ariaLabel="监控规则" panelClassName="w-[calc(100vw-32px)] max-w-2xl max-h-[90vh] overflow-auto rounded-dialog border border-border bg-surface shadow-xl"><RuleEditor rule={rule} onClose={onClose} onSaved={onClose} /></Modal>
 }
 
 // ── 确认对话框 ────────────────────────────────────────
@@ -732,5 +728,5 @@ function ConfirmDialog({ open, title, message, confirmText, danger, pending, onC
   onConfirm: () => void
 }) {
   if (!open) return null
-  return <Modal onClose={onCancel} ariaLabel={title} panelClassName="w-[calc(100vw-32px)] max-w-sm rounded-card border border-border bg-surface p-5 shadow-xl"><h3 className="text-sm font-medium text-foreground">{title}</h3><p className="mt-1.5 text-xs text-muted">{message}</p><div className="mt-4 flex justify-end gap-2"><button onClick={onCancel} className="px-3 py-1.5 rounded-btn bg-elevated text-secondary text-xs max-md:min-h-11 max-md:min-w-11">取消</button><button onClick={onConfirm} disabled={pending} className={cn('px-3 py-1.5 rounded-btn text-xs font-medium disabled:opacity-50 max-md:min-h-11 max-md:min-w-11', danger ? 'bg-danger text-base' : 'bg-accent text-base')}>{confirmText ?? '确定'}</button></div></Modal>
+  return <Modal onClose={onCancel} ariaLabel={title} panelClassName="w-[calc(100vw-32px)] max-w-sm rounded-dialog border border-border bg-surface p-5 shadow-xl"><h3 className="text-sm font-medium text-foreground">{title}</h3><p className="mt-1.5 text-xs text-muted">{message}</p><div className="mt-4 flex justify-end gap-2"><button onClick={onCancel} className="px-3 py-1.5 rounded-btn bg-elevated text-secondary text-xs max-md:min-h-11 max-md:min-w-11">取消</button><button onClick={onConfirm} disabled={pending} className={cn('px-3 py-1.5 rounded-btn text-xs font-medium disabled:opacity-50 max-md:min-h-11 max-md:min-w-11', danger ? 'bg-danger text-base' : 'bg-accent text-base')}>{confirmText ?? '确定'}</button></div></Modal>
 }

@@ -19,7 +19,7 @@ import { QK } from '@/lib/queryKeys'
 const PAGE_SIZE = 50
 const CONTROL_CLASS = 'min-h-11 rounded-input border border-border bg-base px-4 py-2 text-sm text-foreground transition-colors duration-150 ease-smooth focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none'
 const BUTTON_CLASS = 'inline-flex min-h-11 items-center justify-center gap-2 rounded-btn border border-border bg-base px-4 py-2 text-sm text-foreground transition-colors duration-150 ease-smooth hover:bg-elevated focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none'
-const PRIMARY_CLASS = `${BUTTON_CLASS} border-accent bg-accent font-semibold text-white hover:bg-accent/90`
+const PRIMARY_CLASS = `${BUTTON_CLASS} border-accent bg-accent-solid font-semibold text-white hover:bg-accent-solid/90`
 const TABLE_HEADER_CLASS = 'border-b border-border bg-elevated/60 text-left text-xs font-normal text-secondary'
 const TABLE_CELL_CLASS = 'border-b border-border/60 px-3 py-2 align-top text-xs'
 
@@ -75,7 +75,8 @@ function ConfirmationDialog({ open, title, description, confirmLabel, pending, c
       <h3 id="shadow-confirmation-title" className="text-base font-semibold text-foreground">{title}</h3>
       <div className="mt-3 max-w-[70ch] text-sm leading-relaxed text-secondary">{description}</div>
       {children}
-      <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+      {/* 移动端纵向堆叠: 主操作在下 (flex-col, DOM 顺序=视觉/焦点顺序); 桌面横向主操作居右 */}
+      <div className="mt-6 flex flex-col gap-2 sm:flex-row sm:justify-end">
         <button type="button" className={BUTTON_CLASS} disabled={pending} onClick={closeWhenSafe}>返回审阅</button>
         <button type="button" className={PRIMARY_CLASS} disabled={pending || confirmDisabled} onClick={() => { if (!pending && !confirmDisabled) onConfirm() }}>{pending ? '正在记录…' : confirmLabel}</button>
       </div>
@@ -453,7 +454,7 @@ export function ShadowAccount() {
             <p className="mt-2 max-w-[70ch] text-sm text-secondary">支持 CSV 与 XLSX；文件大小上限 8 MB、预览行数最多 50 行。每次文件、映射或源时区变更都会重新生成服务端确认标识。文件仅发送到当前自托管服务，不提供手工逐笔录入。</p>
             <div className="mt-4 grid gap-4 lg:grid-cols-2">
               <label className="text-sm text-secondary">选择本地成交日志
-                <input aria-label="选择本地成交日志" type="file" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" className={`${CONTROL_CLASS} mt-1 block w-full cursor-pointer file:mr-4 file:rounded-btn file:border-0 file:bg-accent file:px-4 file:py-2 file:text-sm file:font-semibold file:text-white`} onChange={event => chooseFile(event.target.files?.[0] ?? null)} />
+                <input aria-label="选择本地成交日志" type="file" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" className={`${CONTROL_CLASS} mt-1 block w-full cursor-pointer file:mr-4 file:rounded-btn file:border-0 file:bg-accent-solid file:px-4 file:py-2 file:text-sm file:font-semibold file:text-white`} onChange={event => chooseFile(event.target.files?.[0] ?? null)} />
               </label>
               <div className="grid gap-4 sm:grid-cols-2">
                 <label className="text-sm text-secondary">来源标签

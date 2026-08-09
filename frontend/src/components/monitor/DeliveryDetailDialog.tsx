@@ -64,7 +64,7 @@ export function DeliveryDetailDialog({ eventId, onClose }: { eventId: string; on
     <Modal
       onClose={onClose}
       ariaLabel="投递结果"
-      panelClassName="w-[calc(100vw-32px)] max-w-lg max-h-[90vh] overflow-auto rounded-card border border-border bg-surface shadow-xl"
+      panelClassName="w-[calc(100vw-32px)] max-w-lg max-h-[90vh] overflow-auto rounded-dialog border border-border bg-surface shadow-xl"
     >
       <div className="flex items-center justify-between border-b border-border px-4 py-3">
         <div>

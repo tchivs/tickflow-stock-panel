@@ -8,7 +8,7 @@
  * - DimensionGroupSidebar: 维度分组侧边栏
  */
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
 import {
@@ -30,6 +30,7 @@ import { cn } from '@/lib/cn'
 import type { DimensionGroup, QuoteMap } from '@/lib/analysis-adapter'
 import { computeQuoteMetrics } from '@/lib/analysis-adapter'
 import { fmtPct, priceColorClass } from '@/lib/format'
+import { useModalA11y } from '@/lib/useModalA11y'
 
 // ===== 配置类型 =====
 
@@ -61,6 +62,9 @@ export function AnalysisConfigDialog({
   onClose: () => void
   showHierarchyLevel?: boolean
 }) {
+  const panelRef = useRef<HTMLDivElement>(null)
+  // 已有 window ESC 处理, 仅补焦点陷阱 (closeOnEscape: false 避免双触发)
+  useModalA11y(panelRef, { onClose, closeOnEscape: false })
   const [draft, setDraft] = useState<AnalysisFieldConfig>(currentConfig)
   const { data: extList } = useQuery({
     queryKey: QK.extData,
@@ -94,10 +98,12 @@ export function AnalysisConfigDialog({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
       <motion.div
+        ref={panelRef}
+        tabIndex={-1}
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
         exit={{ opacity: 0, scale: 0.95 }}
-        className="w-[calc(100vw-2rem)] max-w-[420px] rounded-lg border border-border bg-surface shadow-xl"
+        className="w-[calc(100vw-2rem)] max-w-[420px] rounded-lg border border-border bg-surface shadow-xl focus:outline-none"
         onClick={e => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
@@ -493,7 +499,7 @@ export function PresetFetchState({
         <button
           onClick={onFetch}
           disabled={isLoading}
-          className="mt-5 inline-flex items-center gap-2 rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white transition-colors hover:brightness-110 disabled:opacity-60"
+          className="mt-5 inline-flex items-center gap-2 rounded-lg bg-accent-solid px-4 py-2 text-sm font-medium text-white transition-colors hover:brightness-110 disabled:opacity-60"
         >
           {isLoading ? (
             <><RefreshCw className="h-4 w-4 animate-spin" /> 获取中...</>

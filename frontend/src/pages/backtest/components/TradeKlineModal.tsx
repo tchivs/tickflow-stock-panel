@@ -5,6 +5,7 @@ import { StockPanel } from '@/components/StockPanel'
 import type { ChartPriceLine, ChartRange } from '@/components/EChartsCandlestick'
 import type { StrategyBacktestTrade } from '@/lib/api'
 import { fmtPct, fmtPrice, priceColorClass } from '@/lib/format'
+import { CHART_BULL, CHART_BEAR } from '@/lib/theme'
 
 interface Props {
   trade: StrategyBacktestTrade | null
@@ -74,14 +75,14 @@ export function TradeKlineModal({ trade, onClose }: Props) {
       {
         value: Number(trade.entry_price),
         label: `买入价 ${fmtPrice(trade.entry_price)}`,
-        color: '#C74040',
+        color: CHART_BULL,
         start,
         end,
       },
       {
         value: Number(trade.exit_price),
         label: `卖出价 ${fmtPrice(trade.exit_price)}`,
-        color: '#2D9B65',
+        color: CHART_BEAR,
         start,
         end,
       },
@@ -105,7 +106,7 @@ export function TradeKlineModal({ trade, onClose }: Props) {
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.97, y: 8 }}
             transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
-            className="relative flex max-h-[94vh] w-[92vw] max-w-[1120px] flex-col overflow-hidden rounded-card border border-border bg-base shadow-2xl"
+            className="relative flex max-h-[94vh] w-[92vw] max-w-[1120px] flex-col overflow-hidden rounded-dialog border border-border bg-base shadow-2xl"
           >
             <div className="flex items-center justify-between gap-4 border-b border-border px-5 py-3">
               <div className="min-w-0">

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
@@ -27,11 +27,21 @@ interface Props {
 
 // ===== 板块标识 (统一由 stock-table/primitives boardTag 提供, 全站唯一实现) =====
 
-// 预设快捷范围（只保留半年和1年）
+// ===== 预设快捷范围（只保留半年和1年） =====
 const PRESETS: { label: string; months: number }[] = [
   { label: '半年', months: 6 },
   { label: '1年', months: 12 },
 ]
+
+// 焦点陷阱可选聚焦元素 (同 Modal 原语)
+const FOCUSABLE = [
+  'a[href]',
+  'button:not([disabled])',
+  'textarea:not([disabled])',
+  'input:not([disabled])',
+  'select:not([disabled])',
+  '[tabindex]:not([tabindex="-1"])',
+].join(',')
 
 export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props) {
   const [showIntraday, setShowIntraday] = useState(false)
@@ -40,6 +50,43 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props
   const [dateRange, setDateRange] = useState(getDefaultRange)
   const [showMonitorEditor, setShowMonitorEditor] = useState(false)
   const qc = useQueryClient()
+
+  const panelRef = useRef<HTMLDivElement>(null)
+  const closeBtnRef = useRef<HTMLButtonElement>(null)
+  const restoreFocusRef = useRef<HTMLElement | null>(null)
+
+  // 打开: 捕获触发元素并把焦点移入对话框 (关闭按钮)
+  useEffect(() => {
+    if (!symbol) return
+    restoreFocusRef.current = document.activeElement as HTMLElement | null
+    closeBtnRef.current?.focus()
+  }, [symbol])
+
+  // 关闭: 焦点还给触发元素
+  useEffect(() => {
+    if (symbol) return
+    restoreFocusRef.current?.focus?.()
+    restoreFocusRef.current = null
+  }, [symbol])
+
+  // Tab / Shift+Tab 焦点陷阱: 焦点不逃出对话框
+  const handlePanelKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key !== 'Tab') return
+    const panel = panelRef.current
+    if (!panel) return
+    const focusables = Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE))
+      .filter(el => el.getClientRects().length > 0)
+    if (focusables.length === 0) return
+    const first = focusables[0]
+    const last = focusables[focusables.length - 1]
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault()
+      last.focus()
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault()
+      first.focus()
+    }
+  }, [])
 
   const watchlist = useQuery({
     queryKey: QK.watchlist,
@@ -90,11 +137,17 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props
 
           {/* 弹窗主体 */}
           <motion.div
+            ref={panelRef}
+            onKeyDown={handlePanelKeyDown}
+            role="dialog"
+            aria-modal="true"
+            aria-label={`个股详情 ${symbol}${name ? ` ${name}` : ''}`}
+            tabIndex={-1}
             initial={{ opacity: 0, scale: 0.95, y: 12 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.97, y: 8 }}
             transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
-            className="relative w-[92vw] max-w-[1100px] max-h-[95vh] rounded-card border border-border bg-base shadow-2xl overflow-hidden flex flex-col"
+            className="relative w-[92vw] max-w-[1100px] max-h-[95vh] rounded-dialog border border-border bg-base shadow-2xl overflow-hidden flex flex-col"
           >
             {/* 顶栏 */}
             <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-5 py-3 border-b border-border shrink-0">
@@ -206,6 +259,7 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props
 
                 {/* 关闭 */}
                 <button
+                  ref={closeBtnRef}
                   onClick={onClose}
                   className="p-1 max-md:h-9 max-md:w-9 rounded-btn text-secondary hover:text-foreground hover:bg-elevated transition-colors"
                   aria-label="关闭"

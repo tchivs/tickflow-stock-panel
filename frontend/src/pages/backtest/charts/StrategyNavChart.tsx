@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import { useECharts } from './useECharts'
 import type { StrategyBacktestResult } from '@/lib/api'
-import { useChartTheme } from '@/lib/theme'
+import { useChartTheme, chartColor, CHART_BULL } from '@/lib/theme'
 
 interface Props {
   result: StrategyBacktestResult
@@ -24,7 +24,10 @@ export function StrategyNavChart({ result }: Props) {
     const benchmarkByDate = new Map((result.benchmark_curve ?? []).map(r => [r.date.slice(0, 10), r.close ?? r.value]))
     const benchmarkValues = dates.map(d => benchmarkByDate.get(d) ?? null)
     const hasBenchmark = benchmarkValues.some(v => v != null)
-    const ddValues = result.drawdown_curve.map(r => r.value * 100)
+    // Align by date instead of array position. The backend may omit a drawdown
+    // point for a non-trading day while the equity curve still contains it.
+    const drawdownByDate = new Map(result.drawdown_curve.map(r => [r.date.slice(0, 10), r.value * 100]))
+    const ddValues = dates.map(d => drawdownByDate.get(d) ?? 0)
 
     return {
       animation: false,
@@ -177,14 +180,19 @@ export function StrategyNavChart({ result }: Props) {
           yAxisIndex: 2,
           data: ddValues,
           symbol: 'none',
-          lineStyle: { color: 'rgba(240,68,56,0.6)', width: 1 },
-          areaStyle: { color: 'rgba(240,68,56,0.12)' },
+          lineStyle: { color: chartColor(CHART_BULL, 0.6), width: 1 },
+          areaStyle: { color: chartColor(CHART_BULL, 0.12) },
         },
       ],
     } as any
-  }, [result.equity_curve, result.drawdown_curve, result.benchmark_curve, result.run_id, ct])
+  }, [result.equity_curve, result.drawdown_curve, result.benchmark_curve, ct])
 
-  const chartRef = useECharts(option, [result.run_id, ct])
+  const chartRef = useECharts(option, [result.run_id, ct], useMemo(() => {
+    if (!result.equity_curve.length) return undefined
+    const last = result.equity_curve[result.equity_curve.length - 1]
+    const maxDd = result.drawdown_curve.reduce((m, r) => Math.max(m, Math.abs(r.value * 100)), 0)
+    return `策略净值曲线，共 ${result.equity_curve.length} 个交易日，最新净值 ${last.value.toFixed(2)}，最大回撤 ${maxDd.toFixed(2)}%${(result.benchmark_curve ?? []).length ? '，含基准对比' : ''}。`
+  }, [result]))
 
   return (
     <div>

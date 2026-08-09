@@ -498,8 +498,14 @@ test.describe('Phase 18 pool hub', () => {
     test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
     await installShell(page)
     await page.route('**/api/pool/hub**', route => json(route, hubPayload))
-    // 弹窗内日 K 请求 mock 成功 (不落 unhandled 500)
-    await page.route('**/api/kline/daily**', route => json(route, { symbol: '300750.SZ', name: '宁德时代', rows: [], source: 'mock' }))
+    // 弹窗内日 K 请求 mock 成功 (2 根 K, 验证读屏数据摘要)
+    await page.route('**/api/kline/daily**', route => json(route, {
+      symbol: '300750.SZ', name: '宁德时代', source: 'mock', stock_info: { name: '宁德时代' },
+      rows: [
+        { date: '2026-08-06', open: 180, high: 185, low: 179, close: 184, volume: 100000 },
+        { date: '2026-08-07', open: 184, high: 190, low: 183, close: 188, volume: 120000 },
+      ],
+    }))
 
     await page.goto('/pool-hub')
     await expect(page.getByText('宁德时代', { exact: true })).toBeVisible()
@@ -507,6 +513,10 @@ test.describe('Phase 18 pool hub', () => {
     // 点击名称 → 弹窗出现 (可观测锚点: 「竞价历史」toggle 仅 StockPreviewDialog 挂载时存在, 同 auction-history.spec)
     await page.getByRole('button', { name: /宁德时代/ }).click()
     await expect(page.getByRole('button', { name: '竞价历史' })).toBeVisible()
+
+    // 弹窗内日K 图读屏可达: role=img + 数据摘要 aria-label (区间/收盘/涨跌幅)
+    const dialog = page.locator('div.fixed.inset-0')
+    await expect(dialog.getByRole('img', { name: /宁德时代.*日K 蜡烛图，2026-08-06 至 2026-08-07，共 2 根。最新收盘 188，较上一交易日 \+2\.17%/ })).toBeVisible()
 
     // 详情漏斗: 弹窗内「个股分析」链接直达 /stock-analysis (携带 symbol+name)
     // 侧边栏导航也有 个股分析 项 → 用弹窗遮罩层作用域消歧
@@ -516,6 +526,283 @@ test.describe('Phase 18 pool hub', () => {
     // ESC 关闭 → 弹窗消失
     await page.keyboard.press('Escape')
     await expect(page.getByRole('button', { name: '竞价历史' })).toHaveCount(0)
+  })
+
+  test('K-line chart keyboard zoom: focus + arrow keys pan and update aria-label', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
+    await installShell(page)
+    await page.route('**/api/pool/hub**', route => json(route, hubPayload))
+    // 80 根 → 默认 visibleBars=60 初始窗口非全量 (start=25), 方向键平移才有效
+    const rows = Array.from({ length: 80 }, (_, i) => {
+      const d = new Date(Date.UTC(2026, 4, 1 + i)).toISOString().slice(0, 10)
+      return { date: d, open: 100 + i, high: 105 + i, low: 98 + i, close: 102 + i, volume: 10000 }
+    })
+    await page.route('**/api/kline/daily**', route => json(route, { symbol: '300750.SZ', name: '宁德时代', source: 'mock', stock_info: { name: '宁德时代' }, rows }))
+
+    await page.goto('/pool-hub')
+    await page.getByRole('button', { name: /宁德时代/ }).click()
+    const chart = page.locator('div.fixed.inset-0').getByRole('img', { name: /日K 蜡烛图/ })
+    await expect(chart).toBeVisible()
+
+    // 键盘可达: tabIndex 聚焦 + aria-keyshortcuts 声明; 初始 summary 无缩放区间
+    await expect(chart).toHaveAttribute('tabindex', '0')
+    await expect(chart).toHaveAttribute('aria-keyshortcuts', 'ArrowLeft ArrowRight PageUp PageDown Home End')
+    await expect(chart).not.toHaveAttribute('aria-label', /当前显示/)
+
+    await chart.focus()
+    // 左移 → 可见区间变化并同步进读屏 label
+    await page.keyboard.press('ArrowLeft')
+    await expect(chart).toHaveAttribute('aria-label', /当前显示/)
+    // 放大 (PageDown)
+    await page.keyboard.press('PageDown')
+    await expect(chart).toHaveAttribute('aria-label', /当前显示/)
+    // Home 复位到初始窗口 (最近 60 根: 2026-05-20 至 2026-07-19)
+    await page.keyboard.press('Home')
+    await expect(chart).toHaveAttribute('aria-label', /当前显示 2026-05-20 至 2026-07-19/)
+  })
+
+  test('info-bar column drawer traps focus and restores it on ESC', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
+    await installShell(page)
+    await page.route('**/api/pool/hub**', route => json(route, hubPayload))
+    // StockInfoBar 在 rows 为空时整行不渲染 → 必须给非空日K (2 根即可)
+    await page.route('**/api/kline/daily**', route => json(route, {
+      symbol: '300750.SZ', name: '宁德时代', source: 'mock', stock_info: { name: '宁德时代' },
+      rows: [
+        { date: '2026-08-06', open: 180, high: 185, low: 179, close: 184, volume: 100000 },
+        { date: '2026-08-07', open: 184, high: 190, low: 183, close: 188, volume: 120000 },
+      ],
+    }))
+
+    await page.goto('/pool-hub')
+    await page.getByRole('button', { name: /宁德时代/ }).click()
+    await expect(page.getByRole('button', { name: '竞价历史' })).toBeVisible()
+    const trigger = page.getByRole('button', { name: /自定义信息条/ })
+    await trigger.click()
+
+    const drawer = page.getByRole('dialog', { name: '信息条指标' })
+    await expect(drawer).toBeVisible()
+    // 打开即捕获焦点到抽屉内首个可聚焦项 (标题栏关闭按钮)
+    const focusInDrawer = () => page.evaluate(() => {
+      const el = document.activeElement as HTMLElement | null
+      return el?.closest?.('[role="dialog"]')?.getAttribute('aria-label') === '信息条指标'
+    })
+    await expect.poll(focusInDrawer).toBe(true)
+    // Tab 循环 8 次: 焦点始终不逃出抽屉 (WCAG 2.1.2 焦点不困住 = 模态必须困住)
+    for (let i = 0; i < 8; i++) {
+      await page.keyboard.press('Tab')
+      await expect.poll(focusInDrawer).toBe(true)
+    }
+    // ESC 关闭且焦点还原到触发按钮
+    await page.keyboard.press('Escape')
+    await expect(drawer).toHaveCount(0)
+    await expect(trigger).toBeFocused()
+  })
+
+  test('drill-down table arrow-key roving row navigation', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
+    await installShell(page)
+    // 15 行 → PageDown/PageUp (步长 10) 可测中间行; VIP 行首控件 = 选择 checkbox
+    const manyRows = Array.from({ length: 15 }, (_, i) => {
+      const code = `6000${String(i).padStart(2, '0')}`
+      return {
+        symbol: `${code}.SH`, code, name: `测试股${String(i).padStart(2, '0')}`,
+        open_gap: 0.01, change_pct: 0.01, concept_board: ['测试'], hit_factors: ['竞价多头'], cross_resonance: false,
+      }
+    })
+    await page.route('**/api/pool/hub**', route => json(route, {
+      as_of: HUB_AS_OF, updated_at: HUB_UPDATED_AT, mode: 'vip',
+      strategies: [{ id: 'auction_bullish', name: '竞价多头', total: manyRows.length, rows: manyRows }],
+      resonance_count: 0,
+    }))
+
+    await page.goto('/pool-hub')
+    const tbody = page.locator('tbody')
+    await expect(tbody.locator('tr')).toHaveCount(15)
+    const row = (i: number) => tbody.locator('tr').nth(i)
+
+    // 打开即 roving 停靠点在第 1 行 (tabIndex=0), 其余行 -1
+    await expect(row(0)).toHaveAttribute('tabindex', '0')
+    await expect(row(1)).toHaveAttribute('tabindex', '-1')
+    await row(0).focus()
+    await expect(row(0)).toBeFocused()
+
+    // ↓ → 第 2 行 (roving 迁移)
+    await page.keyboard.press('ArrowDown')
+    await expect(row(1)).toBeFocused()
+    await expect(row(1)).toHaveAttribute('tabindex', '0')
+    await expect(row(0)).toHaveAttribute('tabindex', '-1')
+
+    // End → 末行
+    await page.keyboard.press('End')
+    await expect(row(14)).toBeFocused()
+    await expect(row(14)).toHaveAttribute('tabindex', '0')
+
+    // ↑ → 倒数第 2 行
+    await page.keyboard.press('ArrowUp')
+    await expect(row(13)).toBeFocused()
+
+    // Home → 首行
+    await page.keyboard.press('Home')
+    await expect(row(0)).toBeFocused()
+
+    // PageDown 步长 10 → 第 11 行
+    await page.keyboard.press('PageDown')
+    await expect(row(10)).toBeFocused()
+
+    // PageUp 回退 10 → 首行 (0 下限钳制)
+    await page.keyboard.press('PageUp')
+    await expect(row(0)).toBeFocused()
+
+    // 行内 Tab: 第 1 行首控件 = 选择 checkbox; 行仍保持 roving 停靠点
+    await page.keyboard.press('Tab')
+    await expect(page.getByRole('checkbox', { name: '选择600000' })).toBeFocused()
+  })
+
+  test('preview dialog DatePicker arrow-key APG grid navigation', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
+    await installShell(page)
+    await page.route('**/api/pool/hub**', route => json(route, hubPayload))
+    await page.route('**/api/kline/daily**', route => json(route, { symbol: '300750.SZ', name: '宁德时代', rows: [], source: 'mock' }))
+
+    await page.goto('/pool-hub')
+    await page.getByRole('button', { name: /宁德时代/ }).click()
+    await expect(page.getByRole('button', { name: '竞价历史' })).toBeVisible()
+
+    const dialog = page.locator('div.fixed.inset-0')
+    const pickers = dialog.getByRole('button', { name: /^\d{4}-\d{2}-\d{2}$/ })
+    await expect(pickers).toHaveCount(2)
+    await pickers.first().click()
+
+    // 日期格断言辅助
+    const cellLabel = () => page.evaluate(() => document.activeElement?.getAttribute('aria-label') ?? null)
+    const parseLabel = (s: string) => {
+      const m = /^(\d{4})年(\d{1,2})月(\d{1,2})日$/.exec(s)
+      return m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : null
+    }
+    const fmtLabel = (d: Date) => `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`
+    const addDays = (d: Date, n: number) => { const x = new Date(d); x.setDate(x.getDate() + n); return x }
+    const monday = (d: Date) => addDays(d, -((d.getDay() + 6) % 7))
+    const pad2 = (n: number) => String(n).padStart(2, '0')
+    const iso = (d: Date) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`
+
+    // 打开后 roving tabindex 聚焦「选中日」 (tabIndex=0 单停靠点)
+    const initial = await cellLabel()
+    expect(initial).toMatch(/^\d{4}年\d{1,2}月\d{1,2}日$/)
+    expect(await page.evaluate(() => (document.activeElement as HTMLElement)?.tabIndex)).toBe(0)
+
+    // → 下一天
+    await page.keyboard.press('ArrowRight')
+    const d1 = await cellLabel()
+    expect(parseLabel(d1)!.getTime()).toBe(parseLabel(initial)!.getTime() + 86_400_000)
+
+    // ↓ +7 天 (同一列下行)
+    await page.keyboard.press('ArrowDown')
+    const d2 = await cellLabel()
+    expect(parseLabel(d2)!.getTime()).toBe(parseLabel(d1)!.getTime() + 7 * 86_400_000)
+
+    // Home → 当周周一
+    await page.keyboard.press('Home')
+    expect(await cellLabel()).toBe(fmtLabel(monday(parseLabel(d2)!)))
+
+    // Enter 选中 → 日历关闭, 触发按钮显示新日期 (本周一)
+    await page.keyboard.press('Enter')
+    await expect(dialog.getByRole('button', { name: /^\d{4}年\d{1,2}月\d{1,2}日$/ })).toHaveCount(0)
+    await expect(pickers.first()).toHaveText(iso(monday(parseLabel(d2)!)))
+  })
+
+  test('preview dialog DatePicker year-grid APG arrow-key navigation', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
+    await installShell(page)
+    await page.route('**/api/pool/hub**', route => json(route, hubPayload))
+    await page.route('**/api/kline/daily**', route => json(route, { symbol: '300750.SZ', name: '宁德时代', rows: [], source: 'mock' }))
+
+    await page.goto('/pool-hub')
+    await page.getByRole('button', { name: /宁德时代/ }).click()
+    await expect(page.getByRole('button', { name: '竞价历史' })).toBeVisible()
+
+    const dialog = page.locator('div.fixed.inset-0')
+    const pickers = dialog.getByRole('button', { name: /^\d{4}-\d{2}-\d{2}$/ })
+    await expect(pickers).toHaveCount(2)
+    // 用「结束日期」picker: 只有 min 没有 max, 选远期年份后日格仍可用, 焦点可落
+    await pickers.nth(1).click()
+
+    const initial = (await pickers.nth(1).textContent())!
+    const initialYear = Number(initial.slice(0, 4))
+
+    // 进入年份选择
+    const header = dialog.getByRole('button', { name: /^\d{4} 年 \d{1,2} 月$/ })
+    await header.click()
+    await expect(dialog.getByRole('button', { name: /^\d{4} - \d{4}$/ })).toBeVisible()
+
+    const activeYear = () => page.evaluate(() => document.activeElement?.textContent?.trim() ?? null)
+
+    // roving tabindex 落在「选中年」
+    expect(Number(await activeYear())).toBe(initialYear)
+    expect(await page.evaluate(() => (document.activeElement as HTMLElement)?.tabIndex)).toBe(0)
+
+    // → +1 年; ↓ +4 年 (4 列网格同列下行); ↑ -4 回原位
+    await page.keyboard.press('ArrowRight')
+    expect(Number(await activeYear())).toBe(initialYear + 1)
+    await page.keyboard.press('ArrowDown')
+    expect(Number(await activeYear())).toBe(initialYear + 5)
+    await page.keyboard.press('ArrowUp')
+    expect(Number(await activeYear())).toBe(initialYear + 1)
+
+    // Home → 批首; End → 批末 (viewYear±5/±6)
+    await page.keyboard.press('Home')
+    expect(Number(await activeYear())).toBe(initialYear - 5)
+    await page.keyboard.press('End')
+    expect(Number(await activeYear())).toBe(initialYear + 6)
+
+    // Escape → 回日视图, 标题恢复「年 月」
+    await page.keyboard.press('Escape')
+    await expect(dialog.getByRole('button', { name: /^\d{4} 年 \d{1,2} 月$/ })).toBeVisible()
+
+    // 再次进入 → PageDown 出批, 12 年批窗口平移, 焦点落新批末
+    await dialog.getByRole('button', { name: /^\d{4} 年 \d{1,2} 月$/ }).click()
+    await page.keyboard.press('PageDown')
+    expect(Number(await activeYear())).toBe(initialYear + 12)
+    await expect(dialog.getByRole('button', { name: new RegExp(`^${initialYear + 1} - ${initialYear + 12}$`) })).toBeVisible()
+
+    // Enter 选中 → 回日视图, 视图切到选中年, 焦点回日格
+    await page.keyboard.press('Enter')
+    await expect(dialog.getByRole('button', { name: new RegExp(`^${initialYear + 12} 年 `) })).toBeVisible()
+    expect(await page.evaluate(() => document.activeElement?.getAttribute('aria-label') ?? null)).toMatch(/^\d{4}年\d{1,2}月\d{1,2}日$/)
+  })
+
+  test('preview dialog: role=dialog + focus-on-open + Tab trap + focus return', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
+    await installShell(page)
+    await page.route('**/api/pool/hub**', route => json(route, hubPayload))
+    await page.route('**/api/kline/daily**', route => json(route, { symbol: '300750.SZ', name: '宁德时代', rows: [], source: 'mock' }))
+
+    await page.goto('/pool-hub')
+    await page.getByRole('button', { name: /宁德时代/ }).click()
+
+    // 语义 + 打开即聚焦 (关闭按钮)
+    const dialog = page.getByRole('dialog', { name: /个股详情 300750\.SZ/ })
+    await expect(dialog).toBeVisible()
+    await expect(dialog).toHaveAttribute('aria-modal', 'true')
+    await expect(dialog.getByRole('button', { name: '关闭' })).toBeFocused()
+
+    // Tab 陷阱: 聚焦最后一个可聚焦元素后 Tab → 焦点仍留在对话框内
+    await page.evaluate(() => {
+      const panel = document.querySelector('[role="dialog"][aria-modal="true"]') as HTMLElement
+      const f = Array.from(panel.querySelectorAll<HTMLElement>('button, a[href], [tabindex]:not([tabindex="-1"])'))
+        .filter(el => el.getClientRects().length > 0)
+      f[f.length - 1]?.focus()
+    })
+    await page.keyboard.press('Tab')
+    const stillInDialog = await page.evaluate(() => {
+      const panel = document.querySelector('[role="dialog"][aria-modal="true"]')
+      return panel ? panel.contains(document.activeElement) : false
+    })
+    expect(stillInDialog).toBe(true)
+
+    // 关闭 → 焦点还给触发元素
+    await dialog.getByRole('button', { name: '关闭' }).click()
+    await expect(page.getByRole('button', { name: /宁德时代/ })).toBeFocused()
   })
 
   test('light theme token contrast passes WCAG AA (muted/bull/bear/accent on surface)', async ({ page }, testInfo) => {
@@ -572,7 +859,9 @@ test.describe('Phase 18 pool hub', () => {
     await page.goto('/pool-hub')
     await expect(page.getByText('宁德时代', { exact: true })).toBeVisible()
 
-    // Tab 到首个可聚焦控件 (刷新股池按钮), 断言获得可见焦点环
+    // 首个可聚焦元素是跳过链接, 再 Tab 一次到页面首个内容控件 (刷新股池按钮), 断言获得可见焦点环
+    await page.keyboard.press('Tab')
+    await expect(page.getByRole('link', { name: '跳到主要内容' })).toBeFocused()
     await page.keyboard.press('Tab')
     const outline = await page.evaluate(() => {
       const el = document.activeElement as HTMLElement
@@ -581,6 +870,42 @@ test.describe('Phase 18 pool hub', () => {
     })
     expect(outline.style).not.toBe('none')
     expect(Number.parseFloat(outline.width)).toBeGreaterThan(0)
+  })
+
+  test('skip link jumps keyboard focus to main content (WCAG 2.4.1)', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
+    await installShell(page)
+    await page.route('**/api/pool/hub**', route => json(route, hubPayload))
+
+    await page.goto('/pool-hub')
+    await expect(page.getByText('宁德时代', { exact: true })).toBeVisible()
+
+    await page.keyboard.press('Tab')
+    const skip = page.getByRole('link', { name: '跳到主要内容' })
+    await expect(skip).toBeFocused()
+    await page.keyboard.press('Enter')
+    await expect(page.locator('main#main-content')).toBeFocused()
+  })
+
+  test('prefers-reduced-motion disables CSS animations globally (WCAG 2.3.3)', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
+    await installShell(page)
+    await page.route('**/api/pool/hub**', route => json(route, hubPayload))
+    await page.emulateMedia({ reducedMotion: 'reduce' })
+
+    await page.goto('/pool-hub')
+    await expect(page.getByText('宁德时代', { exact: true })).toBeVisible()
+
+    // 全局 CSS 重置: 任意元素的 spin 动画在 reduce 偏好下不得按原时长运行
+    const duration = await page.evaluate(() => {
+      const el = document.createElement('div')
+      el.style.animation = 'spin 1s linear infinite'
+      document.body.appendChild(el)
+      const d = getComputedStyle(el).animationDuration
+      el.remove()
+      return d
+    })
+    expect(duration).not.toBe('1s')
   })
 
   test('preview dialog fits 375px viewport without horizontal overflow', async ({ page }, testInfo) => {
@@ -783,7 +1108,7 @@ test.describe('Phase 18 pool hub', () => {
     expect(execPaths, `execution-family endpoints hit: ${execPaths.join(', ')}`).toEqual([])
   })
 
-  test('pool page source contains no execution API call or form', async ({ page }, testInfo) => {
+  test('pool page source contains no execution API call or form', async ({ page: _page }, testInfo) => {
     test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
     const frontendRoot = process.cwd()
     const files = [
@@ -915,7 +1240,7 @@ test.describe('Phase 18 pool hub', () => {
     await expect(page.getByRole('button', { name: /动量增强/ })).toHaveScreenshot('pool-card-unavailable.png', { maxDiffPixelRatio: 0.02 })
   })
 
-  test('frontend contains no client-side masking code (grep guard)', async ({ page }, testInfo) => {
+  test('frontend contains no client-side masking code (grep guard)', async ({ page: _page }, testInfo) => {
     test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
     const frontendRoot = process.cwd()
     const files = [
@@ -1463,5 +1788,58 @@ test.describe('Phase 18 pool hub', () => {
     await expect(page.getByRole('checkbox', { name: '选择300750' })).not.toBeChecked()
     // 批量按钮回到空选禁用 — stale 选择不残留
     await expect(page.getByRole('button', { name: '批量加自选' })).toBeDisabled()
+  })
+})
+
+// ===== 移动端 e2e 契约 (mobile-chromium-320) — 补全 phase1 之外的移动覆盖 (ResponsiveAudit P2) =====
+// 设计规范: 移动端触控目标 ≥44px (h-11); 页面/弹窗不得横向溢出。
+test.describe('Phase 18 mobile contracts @320', () => {
+  const MOBILE_PROJECT = 'mobile-chromium-320'
+
+  test('hub fits 320px and star toggle hit-area ≥ 44×44', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== MOBILE_PROJECT, 'mobile-only workflow')
+    await installShell(page)
+    await page.route('**/api/pool/hub**', route => json(route, hubPayload))
+
+    await page.goto('/pool-hub')
+    await expect(page.getByText('宁德时代', { exact: true })).toBeVisible()
+
+    // 无横向溢出 (表内可滚动, 但 document 不得水平滚动)
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
+    expect(overflow, 'hub must not overflow viewport horizontally').toBeLessThanOrEqual(0)
+
+    // 星标触控目标 ≥ 44×44 (DESIGN §触控)
+    const star = page.getByRole('button', { name: '加入自选' }).first()
+    const box = await star.boundingBox()
+    expect(box, 'star button must be visible').not.toBeNull()
+    expect(box!.width).toBeGreaterThanOrEqual(44)
+    expect(box!.height).toBeGreaterThanOrEqual(44)
+  })
+
+  test('preview dialog no overflow + DatePicker trigger ≥ 44px tall at 320', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== MOBILE_PROJECT, 'mobile-only workflow')
+    await installShell(page)
+    await page.route('**/api/pool/hub**', route => json(route, hubPayload))
+    await page.route('**/api/kline/daily**', route => json(route, { symbol: '300750.SZ', name: '宁德时代', rows: [], source: 'mock' }))
+
+    await page.goto('/pool-hub')
+    await page.getByRole('button', { name: /宁德时代/ }).click()
+    await expect(page.getByRole('button', { name: '竞价历史' })).toBeVisible()
+
+    // 弹窗面板不横向溢出
+    const panelOverflow = await page.evaluate(() => {
+      const panel = [...document.querySelectorAll('div')].find(d => d.classList.contains('w-[92vw]'))
+      return panel ? panel.scrollWidth - panel.clientWidth : null
+    })
+    expect(panelOverflow, 'dialog panel must not overflow').not.toBeNull()
+    expect(panelOverflow!).toBeLessThanOrEqual(0)
+
+    // 日期选择触发按钮 (移动端 max-md:min-h-11) — CSS 契约: min-height 44px; box 允许亚像素取整
+    const picker = page.locator('div.fixed.inset-0').getByRole('button', { name: /^\d{4}-\d{2}-\d{2}$/ }).first()
+    const box = await picker.boundingBox()
+    expect(box, 'DatePicker trigger must be visible').not.toBeNull()
+    expect(box!.height, 'touch target ≈ 44px (subpixel)').toBeGreaterThanOrEqual(43.5)
+    const minH = await picker.evaluate(el => getComputedStyle(el).minHeight)
+    expect(minH).toBe('44px')
   })
 })

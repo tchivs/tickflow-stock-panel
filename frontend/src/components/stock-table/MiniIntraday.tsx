@@ -10,6 +10,7 @@
 */
 import { memo, useId } from 'react'
 import type { MinuteKlineRow } from '@/lib/api'
+import { CHART_BULL, CHART_BEAR } from '@/lib/theme'
 
 export const MiniIntraday = memo(function MiniIntraday({ rows, prevClose, changePct, width = 100, height = 56 }: {
   rows: MinuteKlineRow[]
@@ -20,13 +21,16 @@ export const MiniIntraday = memo(function MiniIntraday({ rows, prevClose, change
   width?: number
   height?: number
 }) {
+  // useId must be called on every render, including the empty placeholder path.
+  const gradId = useId().replace(/:/g, '')
+
   // 空数据：返回等尺寸占位
   if (!rows || rows.length < 2) {
     return <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} className="block" aria-label="暂无分时" />
   }
 
-  const BULL = '#C74040'
-  const BEAR = '#2D9B65'
+  const BULL = CHART_BULL
+  const BEAR = CHART_BEAR
   const LINE_PREV_CLOSE = '#7A7A85'   // 昨收基准线: 深灰实线
   const LINE_AVG = '#E0B84A'          // 均线: 暖黄
 
@@ -90,10 +94,8 @@ export const MiniIntraday = memo(function MiniIntraday({ rows, prevClose, change
   const prevCloseY = yScale(baseline)
 
   // 渐变 id 唯一化(自选列表同屏多张图, 避免互相覆盖)
-  const gradId = useId().replace(/:/g, '')
-
   return (
-    <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} className="block">
+    <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} className="block" role="img" aria-label="迷你分时走势">
       <defs>
         <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
           <stop offset="0" stopColor={color} stopOpacity={0.4} />

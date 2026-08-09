@@ -6,7 +6,7 @@
  * - 下半区「内置列」：按业务分组折叠
  * - 底部「扩展数据列」：复用 ext_data schema，按需添加字段
  */
-import React, { useState, useCallback, useEffect, useMemo } from 'react'
+import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   DndContext, closestCenter, KeyboardSensor, PointerSensor,
@@ -23,6 +23,7 @@ import { useQuery } from '@tanstack/react-query'
 import { QK } from '@/lib/queryKeys'
 import type { ColumnConfig, ColumnGroup, ExtColumnDisplayConfig, CandleColumnConfig, IntradayColumnConfig } from '@/lib/list-columns'
 import { resolveCandleConfig, resolveIntradayConfig } from '@/lib/list-columns'
+import { useModalA11y } from '@/lib/useModalA11y'
 
 interface ListColumnCustomizerProps {
   columns: ColumnConfig[]
@@ -136,6 +137,9 @@ export function ListColumnCustomizer({
   showExtColumns = true,
   showStandaloneToggle = false,
 }: ListColumnCustomizerProps) {
+  const panelRef = useRef<HTMLDivElement>(null)
+  // 常驻挂载, 内容按 open 渲染 → active=open; 打开时聚焦首个可聚焦项并困住 Tab
+  useModalA11y(panelRef, { onClose, active: open })
   const extSchema = useQuery({
     queryKey: QK.extDataSchemaAll,
     queryFn: api.extDataSchemaAll,
@@ -603,7 +607,7 @@ export function ListColumnCustomizer({
 
   const renderCheckbox = (checked: boolean) => (
     <span className={`shrink-0 w-4 h-4 rounded flex items-center justify-center transition-colors ${
-      checked ? 'bg-accent text-white' : 'border border-border text-transparent group-hover:border-muted'
+      checked ? 'bg-accent-solid text-white' : 'border border-border text-transparent group-hover:border-muted'
     }`}>
       <svg viewBox="0 0 16 16" className="w-2.5 h-2.5" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
         <path d="M3 8.5L6.5 12L13 4" />
@@ -664,9 +668,14 @@ export function ListColumnCustomizer({
             onClick={onClose}
           />
           <motion.div
+            ref={panelRef}
+            role="dialog"
+            aria-modal="true"
+            aria-label={title}
+            tabIndex={-1}
             initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }}
             transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
-            className="relative w-[360px] max-w-[90vw] h-full bg-base border-l border-border shadow-2xl flex flex-col"
+            className="relative w-[360px] max-w-[90vw] h-full bg-base border-l border-border shadow-2xl flex flex-col focus:outline-none"
           >
             <div className="flex items-center justify-between px-4 py-3 border-b border-border">
               <h3 className="text-sm font-medium text-foreground">{title}</h3>

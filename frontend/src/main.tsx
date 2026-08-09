@@ -2,6 +2,7 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { RouterProvider } from 'react-router-dom'
 import { QueryClient, QueryClientProvider, QueryCache } from '@tanstack/react-query'
+import { MotionConfig } from 'framer-motion'
 import { router } from './router'
 import './index.css'
 
@@ -45,7 +46,10 @@ const queryClient = new QueryClient({
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
-      <RouterProvider router={router} />
+      {/* 全局减少动态: 用户系统偏好 reduce → 所有 framer-motion 动画即时完成 (WCAG 2.3.3) */}
+      <MotionConfig reducedMotion="user">
+        <RouterProvider router={router} />
+      </MotionConfig>
     </QueryClientProvider>
   </React.StrictMode>
 )

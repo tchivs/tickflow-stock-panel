@@ -403,6 +403,15 @@ function StockList({ title, rows, mode, onStockClick }: {
             key={`${r.symbol}-${idx}`}
             className="grid grid-cols-[18px_1fr_auto] items-center gap-1.5 rounded bg-elevated/40 px-1.5 py-1 cursor-pointer hover:bg-elevated hover:brightness-110 transition-colors"
             onClick={() => onStockClick?.(r.symbol, r.name ?? undefined)}
+            role="button"
+            tabIndex={0}
+            aria-label={`查看 ${r.name || r.symbol}`}
+            onKeyDown={e => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                onStockClick?.(r.symbol, r.name ?? undefined)
+              }
+            }}
           >
             <span className="text-center font-mono text-[10px] text-muted">{idx + 1}</span>
             <div className="min-w-0">
@@ -856,7 +865,7 @@ function FetchDataCard({
               <span className="text-xs text-danger">同步失败,请重试</span>
               <button
                 onClick={onStart}
-                className="inline-flex items-center gap-1.5 px-3 h-8 rounded-btn bg-accent text-white text-xs font-medium hover:bg-accent/90 transition-colors max-md:min-h-11"
+                className="inline-flex items-center gap-1.5 px-3 h-8 rounded-btn bg-accent-solid text-white text-xs font-medium hover:bg-accent-solid/90 transition-colors max-md:min-h-11"
               >
                 <Play className="h-3.5 w-3.5" />重新获取
               </button>
@@ -865,7 +874,7 @@ function FetchDataCard({
             <div className="mt-3 flex items-center gap-3">
               <button
                 onClick={onStart}
-                className="inline-flex items-center gap-1.5 px-4 h-8 rounded-btn bg-accent text-white text-xs font-medium hover:bg-accent/90 transition-colors max-md:min-h-11"
+                className="inline-flex items-center gap-1.5 px-4 h-8 rounded-btn bg-accent-solid text-white text-xs font-medium hover:bg-accent-solid/90 transition-colors max-md:min-h-11"
               >
                 <Play className="h-3.5 w-3.5" />立即获取数据
               </button>
@@ -922,7 +931,7 @@ function WelcomeFetchModal({
           </button>
           <button
             onClick={onStart}
-            className="inline-flex items-center gap-2 px-5 h-9 rounded-xl bg-accent text-white text-sm font-semibold shadow-lg shadow-accent/20 hover:bg-accent/90 transition-all"
+            className="inline-flex items-center gap-2 px-5 h-9 rounded-xl bg-accent-solid text-white text-sm font-semibold shadow-lg shadow-accent/20 hover:bg-accent-solid/90 transition-all"
           >
             <Play className="h-4 w-4" />开始获取
           </button>

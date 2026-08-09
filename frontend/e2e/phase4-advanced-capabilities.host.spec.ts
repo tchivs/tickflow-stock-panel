@@ -5,13 +5,19 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { expect, test, type Page } from '@playwright/test'
 
-const hostUrl = 'http://127.0.0.1:3018'
-const browserUrl = 'http://127.0.0.1:4173'
+const hostPort = Number(process.env.PHASE4_HOST_PORT ?? 3021)
+const hostUrl = `http://127.0.0.1:${hostPort}`
+const browserPort = Number(process.env.PHASE4_BROWSER_PORT ?? 4176)
+const browserUrl = `http://127.0.0.1:${browserPort}`
 const password = 'phase4-host-password'
 let host: ChildProcess | undefined
+let frontend: ChildProcess | undefined
 let capabilityBranch: 'affirmative_isolation_proved' | 'isolation_unavailable_fail_closed' | undefined
 let hostOutput = ''
+let frontendOutput = ''
 test.setTimeout(180_000)
+
+test.use({ baseURL: browserUrl })
 
 function sleep(milliseconds: number) {
   const deferred = Promise.withResolvers<void>()
@@ -51,6 +57,18 @@ async function waitForHost() {
   throw new Error(`real FastAPI host did not become ready: ${hostOutput.slice(-4_000)}`)
 }
 
+async function waitForFrontend() {
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    try {
+      if ((await fetch(browserUrl)).ok) return
+    } catch {
+      // Vite is still starting.
+    }
+    await sleep(250)
+  }
+  throw new Error(`isolated Vite host did not become ready: ${frontendOutput.slice(-4_000)}`)
+}
+
 async function sameOriginRequest(page: Page, path: string, method = 'GET', body?: object) {
   return page.evaluate(async ({ requestPath, requestMethod, requestBody }) => {
     const response = await fetch(requestPath, {
@@ -74,6 +92,7 @@ async function login(page: Page, redirect: '/stock-analysis' | '/backtest' = '/s
 async function selectFixtureStock(page: Page) {
   const search = page.getByPlaceholder('输入股票代码或名称，如 600000 / 浦发')
   await search.fill('600000')
+  await expect(page.getByRole('button', { name: /600000\.SH/ }).first()).toBeVisible()
   await search.press('Enter')
   await expect(page.getByRole('heading', { name: '归因观点与表现校准' })).toBeVisible()
 }
@@ -102,7 +121,7 @@ async function stopRootSse(page: Page) {
   })
 }
 
-test.beforeAll(async ({}, testInfo) => {
+test.beforeAll(async (_fixtures, testInfo) => {
   testInfo.setTimeout(90_000)
   const root = resolve(import.meta.dirname, '../..')
   const fixtureDir = await mkdtemp(join(tmpdir(), 'phase4-fastapi-fixture-'))
@@ -153,17 +172,28 @@ test.beforeAll(async ({}, testInfo) => {
   await chmod(join(fixtureDir, 'market-data.json'), 0o444)
   await chmod(advancedFixture, 0o444)
   await chmod(fixtureDir, 0o555)
-  host = spawn('uv', ['run', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', '3018'], {
+  host = spawn('uv', ['run', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', String(hostPort)], {
     cwd: join(root, 'backend'),
-    env: { ...process.env, AUTH_PASSWORD: password, DATA_DIR: dataDir, PHASE1_FIXTURE_MODE: '1', PHASE1_FIXTURE_DIR: fixtureDir, ADVANCED_HOST_FIXTURE: advancedFixture },
+    env: { ...process.env, AUTH_PASSWORD: password, DATA_DIR: dataDir, PORT: String(hostPort), PHASE1_FIXTURE_MODE: '1', PHASE1_FIXTURE_DIR: fixtureDir, ADVANCED_HOST_FIXTURE: advancedFixture },
     stdio: 'pipe',
   })
   host.stdout?.on('data', chunk => { hostOutput += String(chunk) })
   host.stderr?.on('data', chunk => { hostOutput += String(chunk) })
   await waitForHost()
+  frontend = spawn('pnpm', ['exec', 'vite', '--host', '127.0.0.1', '--port', String(browserPort), '--strictPort'], {
+    cwd: join(root, 'frontend'),
+    env: { ...process.env, VITE_API_PROXY_TARGET: hostUrl },
+    stdio: 'pipe',
+  })
+  frontend.stdout?.on('data', chunk => { frontendOutput += String(chunk) })
+  frontend.stderr?.on('data', chunk => { frontendOutput += String(chunk) })
+  await waitForFrontend()
 })
 
-test.afterAll(() => host?.kill('SIGTERM'))
+test.afterAll(() => {
+  frontend?.kill('SIGTERM')
+  host?.kill('SIGTERM')
+})
 
 test('real host visibly preserves immutable viewpoint lineage, correction, evaluation, calibration, viewport evidence, job audit, and root SSE', async ({ page }) => {
   await login(page)

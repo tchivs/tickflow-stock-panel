@@ -154,7 +154,7 @@ export function SettingsKeysPanel() {
               <button
                 type="submit"
                 disabled={save.isPending || (!keyInput.trim() && !saved)}
-                className="w-full h-10 rounded-xl bg-accent text-white text-sm font-semibold flex items-center justify-center gap-2 hover:bg-accent/90 disabled:opacity-40 transition-all"
+                className="w-full h-10 rounded-xl bg-accent-solid text-white text-sm font-semibold flex items-center justify-center gap-2 hover:bg-accent-solid/90 disabled:opacity-40 transition-all"
               >
                 {save.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : saved ? <Check className="h-4 w-4" /> : <Save className="h-4 w-4" />}
                 {save.isPending ? '保存中...' : saved ? '已保存' : '保存并检测'}
@@ -315,7 +315,7 @@ export function SettingsKeysPanel() {
             className="absolute inset-0 bg-black/60 backdrop-blur-sm"
             onClick={() => setConfirmClear(false)}
           />
-          <div className="relative w-[90vw] max-w-[380px] rounded-card border border-border bg-base shadow-2xl p-6">
+          <div className="relative w-[90vw] max-w-[380px] rounded-dialog border border-border bg-base shadow-2xl p-6">
             <h3 className="text-sm font-medium text-foreground mb-2">清除 API Key</h3>
             <p className="text-xs text-secondary mb-5">
               清除后将退回 None 档(仅历史日K),需要重新输入 Key 才能恢复。
@@ -352,10 +352,15 @@ function TierHelpPopover({ currentLabel }: { currentLabel: string }) {
 
   return (
     <div className="relative inline-flex items-center">
-      <HelpCircle
-        className="h-4 w-4 text-muted/60 cursor-help hover:text-muted transition-colors"
+      <button
+        type="button"
         onClick={() => setOpen(v => !v)}
-      />
+        aria-label="档位说明"
+        aria-expanded={open}
+        className="inline-flex items-center justify-center rounded text-muted/60 cursor-help hover:text-muted transition-colors focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-base"
+      >
+        <HelpCircle className="h-4 w-4" aria-hidden />
+      </button>
       <AnimatePresence>
         {open && (
           <>

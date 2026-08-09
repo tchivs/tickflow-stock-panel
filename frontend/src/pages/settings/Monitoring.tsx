@@ -311,7 +311,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
         <a
           href="/settings?tab=account"
           className="inline-flex items-center gap-2 px-5 py-2.5 rounded-btn
-                     bg-accent text-white text-sm font-medium
+                     bg-accent-solid text-white text-sm font-medium
                      hover:bg-accent/90 transition-colors"
         >
           配置 API Key 升级
@@ -524,32 +524,37 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
           <div className="space-y-2">
             {/* 飞书 (可用): 勾选默认 + 展开地址配置 */}
             <div className="rounded-btn border border-border/60 bg-base/40 overflow-hidden">
-              <div
-                onClick={() => setChannelOpen(o => !o)}
-                className="flex items-center gap-2 px-2.5 py-2 cursor-pointer transition-colors hover:bg-base/60"
-              >
+              <div className="flex items-center gap-2 px-2.5 py-2 hover:bg-base/60">
                 <input
                   type="checkbox"
                   checked={webhookDefaultChannels.includes('feishu')}
-                  onChange={e => { e.stopPropagation(); toggleDefaultChannel('feishu', e.target.checked) }}
-                  onClick={e => e.stopPropagation()}
+                  onChange={e => toggleDefaultChannel('feishu', e.target.checked)}
                   title="作为新建规则的默认推送渠道"
+                  aria-label="飞书作为默认推送渠道"
                   className="h-3 w-3 accent-accent cursor-pointer"
                 />
-                <span className="text-[11px] font-medium text-foreground">飞书</span>
-                <span className="text-[9px] text-muted">群推送 Webhook</span>
-                {webhookDefaultChannels.includes('feishu') && (
-                  <span className="rounded bg-accent/15 px-1 py-px text-[9px] text-accent">默认</span>
-                )}
-                <span className={`ml-auto text-[9px] ${feishuWebhookUrl ? 'text-emerald-500' : 'text-warning'}`}>
-                  {feishuWebhookUrl ? '已配置' : '未配置'}
-                </span>
-                <ChevronDown className={`h-3 w-3 text-muted transition-transform ${channelOpen ? 'rotate-180' : ''}`} />
+                <button
+                  type="button"
+                  onClick={() => setChannelOpen(o => !o)}
+                  aria-expanded={channelOpen}
+                  aria-controls="feishu-config"
+                  className="flex flex-1 items-center gap-2 text-left cursor-pointer"
+                >
+                  <span className="text-[11px] font-medium text-foreground">飞书</span>
+                  <span className="text-[9px] text-muted">群推送 Webhook</span>
+                  {webhookDefaultChannels.includes('feishu') && (
+                    <span className="rounded bg-accent/15 px-1 py-px text-[9px] text-accent">默认</span>
+                  )}
+                  <span className={`ml-auto text-[9px] ${feishuWebhookUrl ? 'text-emerald-500' : 'text-warning'}`}>
+                    {feishuWebhookUrl ? '已配置' : '未配置'}
+                  </span>
+                  <ChevronDown className={`h-3 w-3 text-muted transition-transform ${channelOpen ? 'rotate-180' : ''}`} />
+                </button>
               </div>
 
               {/* 飞书地址配置 — 行内展开 */}
               {channelOpen && (
-                <div className="border-t border-border/60 bg-base/30 p-3">
+                <div id="feishu-config" className="border-t border-border/60 bg-base/30 p-3">
                   <label className="block space-y-1.5">
                     <span className="text-[11px] text-muted">Webhook 地址</span>
                     <input
@@ -610,31 +615,36 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
 
             {/* Telegram Bot (可用): 与飞书并列, 勾选默认 + 展开凭证配置 */}
             <div className="rounded-btn border border-border/60 bg-base/40 overflow-hidden">
-              <div
-                onClick={() => setTelegramOpen(o => !o)}
-                className="flex items-center gap-2 px-2.5 py-2 cursor-pointer transition-colors hover:bg-base/60"
-              >
+              <div className="flex items-center gap-2 px-2.5 py-2 hover:bg-base/60">
                 <input
                   type="checkbox"
                   checked={webhookDefaultChannels.includes('telegram')}
-                  onChange={e => { e.stopPropagation(); toggleDefaultChannel('telegram', e.target.checked) }}
-                  onClick={e => e.stopPropagation()}
+                  onChange={e => toggleDefaultChannel('telegram', e.target.checked)}
                   title="作为新建规则的默认推送渠道"
+                  aria-label="Telegram 作为默认推送渠道"
                   className="h-3 w-3 accent-accent cursor-pointer"
                 />
-                <span className="text-[11px] font-medium text-foreground">Telegram</span>
-                <span className="text-[9px] text-muted">Bot API 推送</span>
-                {webhookDefaultChannels.includes('telegram') && (
-                  <span className="rounded bg-accent/15 px-1 py-px text-[9px] text-accent">默认</span>
-                )}
-                <span className={`ml-auto text-[9px] ${telegramBotToken && telegramChatId ? 'text-emerald-500' : 'text-warning'}`}>
-                  {telegramBotToken && telegramChatId ? '已配置' : '未配置'}
-                </span>
-                <ChevronDown className={`h-3 w-3 text-muted transition-transform ${telegramOpen ? 'rotate-180' : ''}`} />
+                <button
+                  type="button"
+                  onClick={() => setTelegramOpen(o => !o)}
+                  aria-expanded={telegramOpen}
+                  aria-controls="telegram-config"
+                  className="flex flex-1 items-center gap-2 text-left cursor-pointer"
+                >
+                  <span className="text-[11px] font-medium text-foreground">Telegram</span>
+                  <span className="text-[9px] text-muted">Bot API 推送</span>
+                  {webhookDefaultChannels.includes('telegram') && (
+                    <span className="rounded bg-accent/15 px-1 py-px text-[9px] text-accent">默认</span>
+                  )}
+                  <span className={`ml-auto text-[9px] ${telegramBotToken && telegramChatId ? 'text-emerald-500' : 'text-warning'}`}>
+                    {telegramBotToken && telegramChatId ? '已配置' : '未配置'}
+                  </span>
+                  <ChevronDown className={`h-3 w-3 text-muted transition-transform ${telegramOpen ? 'rotate-180' : ''}`} />
+                </button>
               </div>
 
               {telegramOpen && (
-                <div className="border-t border-border/60 bg-base/30 p-3">
+                <div id="telegram-config" className="border-t border-border/60 bg-base/30 p-3">
                   <label className="block space-y-1.5">
                     <span className="text-[11px] text-muted">Bot Token</span>
                     <input
@@ -694,9 +704,12 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
 
             {/* 企业微信群推送 Webhook — 仅复盘推送使用; 告警投递已不支持企业微信, 不再提供默认渠道勾选 */}
             <div className="rounded-btn border border-border/60 bg-base/40 overflow-hidden">
-              <div
+              <button
+                type="button"
                 onClick={() => setWecomOpen(o => !o)}
-                className="flex items-center gap-2 px-2.5 py-2 cursor-pointer transition-colors hover:bg-base/60"
+                aria-expanded={wecomOpen}
+                aria-controls="wecom-config"
+                className="flex items-center gap-2 px-2.5 py-2 w-full text-left cursor-pointer transition-colors hover:bg-base/60"
               >
                 <span className="text-[11px] font-medium text-foreground">企业微信</span>
                 <span className="text-[9px] text-muted">群推送 Webhook · 仅复盘推送</span>
@@ -704,10 +717,10 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
                   {wecomWebhookUrl ? '已配置' : '未配置'}
                 </span>
                 <ChevronDown className={`h-3 w-3 text-muted transition-transform ${wecomOpen ? 'rotate-180' : ''}`} />
-              </div>
+              </button>
 
               {wecomOpen && (
-                <div className="border-t border-border/60 bg-base/30 p-3">
+                <div id="wecom-config" className="border-t border-border/60 bg-base/30 p-3">
                   <label className="block space-y-1.5">
                     <span className="text-[11px] text-muted">Webhook 地址 或 Key</span>
                     <input
@@ -757,29 +770,34 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
 
             {/* 企业微信智能机器人 (BotID + Secret): 长连接通道, 与群推送 Webhook 并列 */}
             <div className="rounded-btn border border-border/60 bg-base/40 overflow-hidden">
-              <div
-                onClick={() => setBotOpen(o => !o)}
-                className="flex items-center gap-2 px-2.5 py-2 cursor-pointer transition-colors hover:bg-base/60"
-              >
+              <div className="flex items-center gap-2 px-2.5 py-2 hover:bg-base/60">
                 <input
                   type="checkbox"
                   checked={wecomBotEnabled}
-                  onChange={e => { e.stopPropagation(); toggleBotConnection.mutate(e.target.checked) }}
-                  onClick={e => e.stopPropagation()}
+                  onChange={e => toggleBotConnection.mutate(e.target.checked)}
                   disabled={!wecomBotId || toggleBotConnection.isPending}
                   title="开启后建立长连接保活, 关闭则断开"
+                  aria-label="启用企业微信智能机器人连接"
                   className="h-3 w-3 accent-accent cursor-pointer disabled:opacity-40"
                 />
-                <span className="text-[11px] font-medium text-foreground">企业微信</span>
-                <span className="text-[9px] text-muted">智能机器人</span>
-                <span className={`ml-auto text-[9px] ${wecomBotId ? (botStatus?.connected ? 'text-emerald-500' : 'text-warning') : 'text-muted'}`}>
-                  {wecomBotId ? (botStatus?.connected ? '已连接' : (wecomBotEnabled ? '连接中' : '已配置')) : '未配置'}
-                </span>
-                <ChevronDown className={`h-3 w-3 text-muted transition-transform ${botOpen ? 'rotate-180' : ''}`} />
+                <button
+                  type="button"
+                  onClick={() => setBotOpen(o => !o)}
+                  aria-expanded={botOpen}
+                  aria-controls="bot-config"
+                  className="flex flex-1 items-center gap-2 text-left cursor-pointer"
+                >
+                  <span className="text-[11px] font-medium text-foreground">企业微信</span>
+                  <span className="text-[9px] text-muted">智能机器人</span>
+                  <span className={`ml-auto text-[9px] ${wecomBotId ? (botStatus?.connected ? 'text-emerald-500' : 'text-warning') : 'text-muted'}`}>
+                    {wecomBotId ? (botStatus?.connected ? '已连接' : (wecomBotEnabled ? '连接中' : '已配置')) : '未配置'}
+                  </span>
+                  <ChevronDown className={`h-3 w-3 text-muted transition-transform ${botOpen ? 'rotate-180' : ''}`} />
+                </button>
               </div>
 
               {botOpen && (
-                <div className="border-t border-border/60 bg-base/30 p-3">
+                <div id="bot-config" className="border-t border-border/60 bg-base/30 p-3">
                   <p className="mb-2.5 text-[10px] text-muted leading-relaxed">
                     勾选卡片左侧开关可启用长连接保活(开启后后端持续保持与企业微信的
                     WebSocket 连接)。保存凭证后需勾选才会连接, 取消勾选则立即断开。
