@@ -22,6 +22,7 @@ from app.research.run_contract import (
     TERMINAL_STATUSES,
     attempt_token_digest,
     canonical_json,
+    digest_bytes,
     freeze_input_snapshot,
     validate_bounded_json,
     validate_progress_counters,
@@ -88,6 +89,10 @@ class AlphaRunPreflightError(ValueError):
 
 class AlphaCheckpointValidationError(ValueError):
     """A recovery checkpoint cursor failed fail-closed validation (D-07, T-45-05)."""
+
+
+class CloneOverrideForbidden(ValueError):
+    """A clone override touched a non-overridable dimension (seed/universe)."""
 
 
 class ResearchRunService:
@@ -1093,6 +1098,246 @@ class ResearchRunService:
             return "complete"
         # Any earlier/unknown cursor (e.g. a preflight checkpoint) -> start at Stage 1.
         return "stage1"
+    # ------------------------------------------------------------------
+    # Phase 50-02: compare / stress / replay-branch / clone (SC2/SC3, AF-REQ-20/22).
+    # Read-mostly projections over durable facts; clone + replay-branch delegate
+    # new-run creation to the EXISTING immutable create() path (no second path).
+    # ------------------------------------------------------------------
+
+    _TIER1_STRESS_AXES: frozenset[str] = frozenset({"fee_bps", "slippage_bps", "rebalance"})
+    # Tier-2 stress axes are an explicit deferral (OQ/Q3): they require
+    # re-scoring through the signal chain + a new stress-trial table.  Requesting
+    # one returns a bounded not_implemented, never a fake result.
+    _TIER2_STRESS_AXES: frozenset[str] = frozenset(
+        {"calendar_regime", "coverage", "symbol_subset"}
+    )
+    _CLONE_OVERRIDABLE: frozenset[str] = frozenset({"scoring", "costs", "budgets"})
+    _CLONE_FORBIDDEN: frozenset[str] = frozenset({"seed", "universe"})
+
+    def compare_candidates(
+        self,
+        run_id: str,
+        *,
+        principal: str,
+        candidate_ids: Sequence[str],
+    ) -> dict[str, Any] | None:
+        """Side-by-side comparison projection with NO opaque winner (SC3).
+
+        Reads each present candidate's configuration, per-fold evidence,
+        admission verdict + gate trail, artifact refs, and diversity outcome
+        from durable facts and exposes them equally.  An unknown candidate
+        among the requested set is skipped (graceful partial); cross-principal
+        or unknown runs return ``None`` (the same 404 boundary, no leak).
+        """
+        from app.research import projections
+
+        run = self._repository.get_alpha_run(run_id, principal=principal)
+        if run is None:
+            return None
+        requested = {cid for cid in candidate_ids if isinstance(cid, str) and cid}
+        all_candidates = self._repository.list_candidates(
+            run_id, principal=principal, artifact_service=self._artifact_service,
+        )
+        selected = [c for c in all_candidates if c["id"] in requested]
+        verdicts = self._repository.list_admission_verdicts_for_run(run_id)
+        entries = [
+            self._compare_entry(candidate, verdicts)
+            for candidate in selected
+        ]
+        return {"run_id": run_id, "candidates": entries}
+
+    @staticmethod
+    def _match_verdict(
+        verdicts: Sequence[Mapping[str, Any]], candidate: Mapping[str, Any],
+    ) -> Mapping[str, Any] | None:
+        """Read the admission verdict row bound to one candidate (if any)."""
+        cid = candidate.get("id")
+        cdigest = candidate.get("candidate_digest")
+        for verdict in verdicts:
+            if verdict.get("candidate_id") == cid or verdict.get("candidate_digest") == cdigest:
+                return verdict
+        return None
+
+    def _compare_entry(
+        self, candidate: Mapping[str, Any], verdicts: Sequence[Mapping[str, Any]],
+    ) -> dict[str, Any]:
+        """Assemble one candidate's side-by-side comparison record (read-only)."""
+        from app.research import projections
+
+        fold_rows = self._repository.list_alpha_fold_evidence(
+            run_id=candidate["run_id"], candidate_digest=candidate["candidate_digest"],
+        )
+        verdict = self._match_verdict(verdicts, candidate)
+        artifact_refs: list[dict[str, Any]] = []
+        if candidate.get("evidence_artifact_id"):
+            artifact_refs.append({"artifact_id": str(candidate["evidence_artifact_id"])})
+        return {
+            "candidate_id": str(candidate["id"]),
+            "candidate_digest": str(candidate["candidate_digest"]),
+            "config": {
+                "canonical_expression": str(candidate["canonical_expression"]),
+                "seed": int(candidate["seed"]),
+                "step": int(candidate["step"]),
+                "operation": str(candidate["operation"]),
+                "candidate_digest": str(candidate["candidate_digest"]),
+                "attempt_ordinal": int(candidate["attempt_ordinal"]),
+                "dsl_version": str(candidate["dsl_version"]),
+            },
+            "fold_evidence": [projections.fold_evidence(row) for row in fold_rows],
+            "admission_verdict": str(verdict["verdict"]) if verdict else None,
+            "gate_trail_digest": (
+                digest_bytes(verdict["gates"]) if verdict and verdict.get("gates") else None
+            ),
+            "policy_version": str(verdict["policy_version"]) if verdict else None,
+            "artifact_refs": artifact_refs,
+            "diversity": projections.diversity(candidate),
+        }
+
+    @staticmethod
+    def _round_trip_cost_rate(costs: Mapping[str, Any]) -> float:
+        """Round-trip cost rate per unit one-way turnover — mirrors ``_cost_rate``.
+
+        ``commission_pct`` is double-sided, ``stamp_tax_pct`` is sell-only, and
+        ``slippage_bps`` (basis points) is double-sided — the EXACT semantics of
+        ``evaluation._cost_rate`` (evaluation.py:92-102).  The baseline row of
+        the stress matrix is the frozen ``cost_diagnostics`` verbatim, so this
+        helper reproduces the declared-config rate identically.
+        """
+        commission = float(costs.get("commission_pct", 0.0) or 0.0)
+        stamp = float(costs.get("stamp_tax_pct", 0.0) or 0.0)
+        slippage = float(costs.get("slippage_bps", 0.0) or 0.0)
+        return commission * 2.0 + stamp + slippage * 2.0 / 1e4
+
+    @staticmethod
+    def _extract_cost_diagnostics(
+        fold_rows: Sequence[Mapping[str, Any]],
+    ) -> Mapping[str, Any] | None:
+        """Read the stored cost diagnostics from the best fold (read-only)."""
+        if not fold_rows:
+            return None
+        oos = [r for r in fold_rows if int(r.get("is_oos", 0))]
+        pool = oos if oos else list(fold_rows)
+        best = max(pool, key=lambda r: int(r.get("fold_index", 0)))
+        stats = best.get("stats") if isinstance(best.get("stats"), Mapping) else {}
+        cd = stats.get("cost_diagnostics")
+        return cd if isinstance(cd, Mapping) else None
+
+    def stress_matrix(
+        self,
+        run_id: str,
+        *,
+        principal: str,
+        candidate_id: str,
+        axes: Mapping[str, Sequence[Any]],
+    ) -> dict[str, Any] | None:
+        """Tier-1 pure-arithmetic stress matrix over STORED turnover (AF-REQ-20).
+
+        Recomputes ``cost_drag`` / ``net_long_short_return`` under alternative
+        declared fee/slippage/rebalance values as pure arithmetic over the
+        frozen ``cost_diagnostics`` — zero factor-value recomputation, zero
+        admission-threshold touch.  Tier-2 axes raise ``NotImplementedError``
+        (bounded deferral — never a fake result).
+        """
+        from app.research.projections import _REBALANCE_FREQUENCY
+
+        run = self._repository.get_alpha_run(run_id, principal=principal)
+        if run is None:
+            return None
+        # Reject any Tier-2 axis BEFORE doing work (explicit deferral, OQ/Q3).
+        for axis in axes:
+            if axis in self._TIER2_STRESS_AXES:
+                raise NotImplementedError(
+                    f"stress axis '{axis}' is not implemented (Tier-2 deferred)"
+                )
+            if axis not in self._TIER1_STRESS_AXES:
+                raise ValueError(f"unknown stress axis '{axis}'")
+        snapshot = self._repository.get_run_snapshot(run_id) or {}
+        manifest = snapshot.get("manifest", {}) if isinstance(snapshot, Mapping) else {}
+        costs = manifest.get("costs", {}) if isinstance(manifest, Mapping) else {}
+        scoring = manifest.get("scoring", {}) if isinstance(manifest, Mapping) else {}
+        declared_rebalance = scoring.get("rebalance", "daily") if isinstance(scoring, Mapping) else "daily"
+        candidates = self._repository.list_candidates(
+            run_id, principal=principal, artifact_service=self._artifact_service,
+        )
+        candidate = next((c for c in candidates if c["id"] == candidate_id), None)
+        if candidate is None:
+            return None
+        fold_rows = self._repository.list_alpha_fold_evidence(
+            run_id=run_id, candidate_digest=candidate["candidate_digest"],
+        )
+        cost_diag = self._extract_cost_diagnostics(fold_rows)
+        baseline = self._stress_baseline(cost_diag, costs)
+        return {
+            "candidate_id": candidate_id,
+            "baseline": baseline,
+            "matrix": self._stress_rows(
+                cost_diag, costs, declared_rebalance, axes, _REBALANCE_FREQUENCY,
+            ),
+        }
+
+    def _stress_baseline(
+        self, cost_diag: Mapping[str, Any] | None, costs: Mapping[str, Any],
+    ) -> dict[str, float]:
+        """The baseline row — the frozen ``cost_diagnostics`` verbatim."""
+        if cost_diag:
+            return {
+                "total_turnover": float(cost_diag.get("total_turnover", 0.0) or 0.0),
+                "cost_rate": float(cost_diag.get("cost_rate", 0.0) or 0.0),
+                "cost_drag": float(cost_diag.get("cost_drag", 0.0) or 0.0),
+                "raw_long_short_return": float(cost_diag.get("raw_long_short_return", 0.0) or 0.0),
+                "net_long_short_return": float(cost_diag.get("net_long_short_return", 0.0) or 0.0),
+            }
+        rate = self._round_trip_cost_rate(costs)
+        return {
+            "total_turnover": 0.0, "cost_rate": rate, "cost_drag": 0.0,
+            "raw_long_short_return": 0.0, "net_long_short_return": 0.0,
+        }
+
+    def _stress_rows(
+        self,
+        cost_diag: Mapping[str, Any] | None,
+        costs: Mapping[str, Any],
+        declared_rebalance: str,
+        axes: Mapping[str, Sequence[Any]],
+        frequency: Mapping[str, float],
+    ) -> list[dict[str, Any]]:
+        """Pure-arithmetic re-projection over stored turnover at alt assumptions."""
+        total_turnover = float(cost_diag.get("total_turnover", 0.0) or 0.0) if cost_diag else 0.0
+        raw_ls = float(cost_diag.get("raw_long_short_return", 0.0) or 0.0) if cost_diag else 0.0
+        frozen_fee = (
+            float(costs.get("commission_pct", 0.0) or 0.0) * 2.0
+            + float(costs.get("stamp_tax_pct", 0.0) or 0.0)
+        )
+        frozen_slippage = float(costs.get("slippage_bps", 0.0) or 0.0)
+        declared_factor = frequency.get(declared_rebalance, frequency["daily"])
+        rows: list[dict[str, Any]] = []
+        for value in axes.get("fee_bps", []) or []:
+            rate = float(value) / 1e4 + frozen_slippage * 2.0 / 1e4
+            drag = total_turnover * rate
+            rows.append(self._stress_row("fee_bps", float(value), total_turnover, rate, drag, raw_ls))
+        for value in axes.get("slippage_bps", []) or []:
+            rate = frozen_fee + float(value) * 2.0 / 1e4
+            drag = total_turnover * rate
+            rows.append(self._stress_row("slippage_bps", float(value), total_turnover, rate, drag, raw_ls))
+        for value in axes.get("rebalance", []) or []:
+            alt_factor = frequency.get(str(value), declared_factor)
+            rel = alt_factor / declared_factor if declared_factor else 1.0
+            alt_turnover = total_turnover * rel
+            rate = self._round_trip_cost_rate(costs)
+            drag = alt_turnover * rate
+            rows.append(self._stress_row("rebalance", str(value), alt_turnover, rate, drag, raw_ls))
+        return rows
+
+    @staticmethod
+    def _stress_row(
+        axis: str, value: Any, total_turnover: float, rate: float,
+        drag: float, raw_ls: float,
+    ) -> dict[str, Any]:
+        return {
+            "axis": axis, "value": value, "total_turnover": total_turnover,
+            "cost_rate": rate, "cost_drag": drag,
+            "net_long_short_return": raw_ls - drag,
+        }
 
     # Phase 48 fixture-mode orchestration moved to agent_orchestrator.py to
     # keep this Phase 45 module free of provider/stage imports (boundary

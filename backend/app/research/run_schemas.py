@@ -230,3 +230,100 @@ class EvidenceClassificationDTO(StrictAlphaModel):
     ]
     fixture: bool
     clean: bool
+
+
+# ------------------------------------------------------------------
+# Phase 50-02: compare + Tier-1 stress matrix + replay-branch + clone.
+# ------------------------------------------------------------------
+
+
+class AlphaCandidateComparisonDTO(StrictAlphaModel):
+    """One candidate's side-by-side comparison record (SC3, AF-REQ-22).
+
+    Every requested candidate is exposed equally — there is never an opaque
+    aggregate ``winner``/``rank``/``score`` field (the deny-by-default
+    ``extra='forbid'`` rejects any such injected key at the trust boundary).
+    """
+
+    candidate_id: str
+    candidate_digest: str = Field(pattern=_MANIFEST_SHA256)
+    config: dict[str, Any]
+    fold_evidence: list[dict[str, Any]]
+    admission_verdict: str | None = None
+    gate_trail_digest: str | None = None
+    policy_version: str | None = None
+    artifact_refs: list[dict[str, Any]]
+    diversity: dict[str, Any] | None = None
+
+
+class AlphaCompareDTO(StrictAlphaModel):
+    """Side-by-side comparison page — all candidates, no opaque winner (SC3)."""
+
+    run_id: str
+    candidates: list[AlphaCandidateComparisonDTO]
+
+
+class StressMatrixBaselineDTO(StrictAlphaModel):
+    """The frozen cost-diagnostics baseline row (zero recomputation)."""
+
+    total_turnover: float
+    cost_rate: float
+    cost_drag: float
+    raw_long_short_return: float
+    net_long_short_return: float
+
+
+class StressMatrixRowDTO(StrictAlphaModel):
+    """One Tier-1 stress row — pure arithmetic over stored turnover."""
+
+    axis: Literal["fee_bps", "slippage_bps", "rebalance"]
+    value: float | str
+    total_turnover: float
+    cost_rate: float
+    cost_drag: float
+    net_long_short_return: float
+
+
+class StressMatrixDTO(StrictAlphaModel):
+    """Tier-1 stress matrix — fee/slippage/rebalance re-projection (AF-REQ-20)."""
+
+    candidate_id: str
+    baseline: StressMatrixBaselineDTO
+    matrix: list[StressMatrixRowDTO]
+
+
+class ReplayBranchRequestDTO(StrictAlphaModel):
+    """Bounded branch-replay intent — re-derive the PRNG frontier into a child run."""
+
+    idempotency_key: str = Field(min_length=16, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
+    parent_step: int = Field(ge=0)
+    max_candidates: int | None = Field(default=None, ge=1, le=MAX_INT64)
+
+
+class ReplayBranchResultDTO(StrictAlphaModel):
+    """Branch-replay result — new child run sharing the parent's frozen inputs."""
+
+    parent_run_id: str
+    child_run_id: str
+    parent_step: int
+    shared_snapshot_sha256: str = Field(pattern=_MANIFEST_SHA256)
+    shared_manifest_sha256: str = Field(pattern=_MANIFEST_SHA256)
+    replayed_prefix_digests: list[str]
+
+
+class CloneRequestDTO(StrictAlphaModel):
+    """Bounded clone intent — override declared scoring/costs/budgets only."""
+
+    idempotency_key: str = Field(min_length=16, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
+    overrides: dict[str, Any] = Field(default_factory=dict, max_length=16)
+
+
+class CloneResultDTO(StrictAlphaModel):
+    """Clone result — new/parent run id + field-level diff (SC2 clone half)."""
+
+    parent_run_id: str
+    clone_run_id: str
+    parent_manifest_sha256: str = Field(pattern=_MANIFEST_SHA256)
+    clone_manifest_sha256: str = Field(pattern=_MANIFEST_SHA256)
+    changed_dimensions: list[str]
+    no_op: bool

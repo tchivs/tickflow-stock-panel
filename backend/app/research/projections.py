@@ -235,6 +235,131 @@ def evidence_classification(
         "clean": clean,
     }
 
+# ------------------------------------------------------------------
+# Phase 50-02: side-by-side compare + Tier-1 stress matrix projections.
+# Every projection is an explicit allowlist — no opaque aggregate, no
+# admission internals, no re-scored values (SC3, AF-REQ-20/22).
+# ------------------------------------------------------------------
+
+_FOLD_EVIDENCE_STAT_KEYS: tuple[str, ...] = (
+    "mean_ic", "rank_ic", "icir", "coverage", "monthly_robustness",
+    "long_short_stats", "cost_diagnostics",
+)
+
+
+def fold_evidence(record: Mapping[str, Any]) -> dict[str, object]:
+    """Expose one stored fold-evidence row without raw payload internals.
+
+    The per-fold IC/RankIC/ICIR/coverage/monthly robustness + the Phase-47
+    cost diagnostics are the read-only evidence compare lays side by side.
+    """
+    stats = record.get("stats") if isinstance(record.get("stats"), Mapping) else {}
+    return {
+        "fold_index": int(record.get("fold_index", 0)),
+        "is_oos": bool(int(record.get("is_oos", 0))),
+        "revision_id": _safe_text(record.get("revision_id")),
+        "train_start": _safe_text(record.get("train_start")),
+        "train_end": _safe_text(record.get("train_end")),
+        "test_start": _safe_text(record.get("test_start")),
+        "test_end": _safe_text(record.get("test_end")),
+        "stats": {k: stats[k] for k in _FOLD_EVIDENCE_STAT_KEYS if k in stats},
+        "declared_fingerprints": dict(record["declared_fingerprints"])
+        if isinstance(record.get("declared_fingerprints"), Mapping) else {},
+    }
+
+
+def diversity(candidate_record: Mapping[str, Any]) -> dict[str, object] | None:
+    """Expose the recorded structural signatures that drive diversity/redundancy.
+
+    This is a READ over the candidate row's stored ``ast_signature`` /
+    ``shape_signature`` — it is never a re-score through the signal chain
+    (research §3, alpha_factory.diversity_summary is the producer, not this
+    projection).  ``None`` when the candidate row carries no signatures.
+    """
+    ast_sig = candidate_record.get("ast_signature")
+    shape_sig = candidate_record.get("shape_signature")
+    if not ast_sig and not shape_sig:
+        return None
+    return {
+        "ast_signature": _safe_text(ast_sig),
+        "shape_signature": _safe_text(shape_sig),
+    }
+
+
+_COMPARE_CANDIDATE_KEYS: tuple[str, ...] = (
+    "candidate_id", "candidate_digest", "config", "fold_evidence",
+    "admission_verdict", "gate_trail_digest", "policy_version",
+    "artifact_refs", "diversity",
+)
+
+
+def compare_candidate(entry: Mapping[str, Any]) -> dict[str, object]:
+    """Allowlist one candidate's side-by-side comparison record (SC3).
+
+    Deny-by-default: only the declared comparison dimensions surface — never
+    raw reason/payload internals and never an opaque aggregate score.
+    """
+    return {key: entry[key] for key in _COMPARE_CANDIDATE_KEYS if key in entry}
+
+
+def compare(record: Mapping[str, Any]) -> dict[str, object]:
+    """Project a side-by-side comparison page with NO opaque winner (SC3).
+
+    Every requested candidate's full configuration, per-fold evidence,
+    admission verdict + gate trail, artifact refs, and diversity/redundancy
+    outcome is exposed equally.  No aggregate / winner / rank / score field
+    is ever computed or hidden — the researcher makes the call.
+    """
+    return {
+        "run_id": str(record["run_id"]),
+        "candidates": [
+            compare_candidate(entry) for entry in record.get("candidates", [])
+        ],
+    }
+
+
+# Tier-1 rebalance-cadence → annual rebalance-frequency approximation.  The
+# stored ``turnover_per_rebalance`` reflects the declared cadence; a coarser
+# alternative scales total turnover by the relative annual frequency (pure
+# arithmetic over the stored diagnostic, no factor-value recomputation).
+_REBALANCE_FREQUENCY: dict[str, float] = {
+    "daily": 252.0,
+    "weekly": 52.0,
+    "monthly": 12.0,
+}
+
+
+def stress_matrix(record: Mapping[str, Any]) -> dict[str, object]:
+    """Project a Tier-1 stress matrix page (observed values only, AF-REQ-20).
+
+    ``baseline`` is the frozen ``cost_diagnostics`` verbatim (zero
+    recomputation at the declared config).  ``matrix`` rows are the pure
+    arithmetic re-projection over stored turnover at alternative declared
+    fee/slippage/rebalance values.  No admission verdict, no factor re-score.
+    """
+    baseline = record.get("baseline", {}) if isinstance(record.get("baseline"), Mapping) else {}
+    return {
+        "candidate_id": str(record["candidate_id"]),
+        "baseline": dict(baseline),
+        "matrix": [dict(row) for row in record.get("matrix", [])],
+    }
+
+
+def clone_diff(record: Mapping[str, Any]) -> dict[str, object]:
+    """Project a field-level clone diff + parent/child manifest hashes (SC2).
+
+    Deny-by-default: only the changed-dimension names + the parent/child
+    manifest digests surface — never raw manifest internals.
+    """
+    return {
+        "parent_run_id": str(record["parent_run_id"]),
+        "clone_run_id": str(record["clone_run_id"]),
+        "parent_manifest_sha256": str(record["parent_manifest_sha256"]),
+        "clone_manifest_sha256": str(record["clone_manifest_sha256"]),
+        "changed_dimensions": list(record.get("changed_dimensions", [])),
+        "no_op": bool(record.get("no_op", False)),
+    }
+
 
 def progress(record: Mapping[str, Any]) -> dict[str, object]:
     """Expose the four bounded progress counters without token or principal."""

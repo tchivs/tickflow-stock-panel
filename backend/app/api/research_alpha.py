@@ -14,10 +14,13 @@ from app.research import projections
 from app.research.repository import AlphaRunConflictError
 from app.research.run_service import (
     AlphaRunPreflightError,
+    CloneOverrideForbidden,
     ResearchRunService,
 )
 from app.research.run_schemas import (
+    AlphaCandidateComparisonDTO,
     AlphaCandidateDTO,
+    AlphaCompareDTO,
     AlphaLineageDTO,
     AlphaLineageEdgeDTO,
     AlphaProgressDTO,
@@ -29,7 +32,12 @@ from app.research.run_schemas import (
     AlphaRunReplayDTO,
     AlphaRunRetryRequest,
     AlphaSnapshotDTO,
+    CloneRequestDTO,
+    CloneResultDTO,
     EvidenceClassificationDTO,
+    ReplayBranchRequestDTO,
+    ReplayBranchResultDTO,
+    StressMatrixDTO,
 )
 
 router = APIRouter(prefix="/api/research/alpha", tags=["research-alpha"])
@@ -334,3 +342,86 @@ async def get_evidence_classification(
         snapshot, candidate, fold_evidence, fixture_flag,
     )
     return EvidenceClassificationDTO(**classification)
+
+
+@router.get("/runs/{run_id}/compare", response_model=AlphaCompareDTO)
+async def compare_candidates(
+    request: Request,
+    run_id: str,
+    candidates: str = Query(..., min_length=1, max_length=2048),
+) -> AlphaCompareDTO:
+    """Side-by-side comparison of every requested candidate (SC3, AF-REQ-22).
+
+    Exposes each present candidate's configuration, per-fold evidence,
+    admission verdict + gate trail, artifact refs, and diversity outcome
+    equally — there is NEVER an opaque aggregate ``winner`` score.  An unknown
+    candidate among the set is skipped (graceful partial); cross-principal or
+    unknown runs return the same 404 boundary (no leak).
+    """
+    service = _service(request)
+    principal = _principal(request)
+    candidate_ids = [cid for cid in candidates.split(",") if cid]
+    result = service.compare_candidates(
+        run_id, principal=principal, candidate_ids=candidate_ids,
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail="run not found")
+    projected = projections.compare(result)
+    return AlphaCompareDTO(
+        run_id=projected["run_id"],
+        candidates=[AlphaCandidateComparisonDTO(**entry) for entry in projected["candidates"]],
+    )
+
+
+_TIER2_QUERY_AXES = {"calendar_regime", "coverage", "symbol_subset"}
+
+
+@router.get("/runs/{run_id}/stress-matrix", response_model=StressMatrixDTO)
+async def get_stress_matrix(
+    request: Request,
+    run_id: str,
+    candidate_id: str = Query(..., min_length=1, max_length=128),
+    fee_bps: list[float] = Query(default_factory=list),
+    slippage_bps: list[float] = Query(default_factory=list),
+    rebalance: list[str] = Query(default_factory=list),
+    calendar_regime: list[str] = Query(default_factory=list),
+    coverage: list[str] = Query(default_factory=list),
+    symbol_subset: list[str] = Query(default_factory=list),
+) -> StressMatrixDTO:
+    """Tier-1 stress matrix — pure arithmetic over stored turnover (AF-REQ-20).
+
+    Recomputes cost_drag/net under declared fee/slippage/rebalance values with
+    zero factor-value recomputation and zero admission-threshold touch.
+    Tier-2 axes (calendar-regime/coverage/symbol-subset) are an explicit
+    deferral and return a bounded 422 ``not_implemented``.
+    """
+    service = _service(request)
+    principal = _principal(request)
+    tier2 = {
+        "calendar_regime": calendar_regime, "coverage": coverage,
+        "symbol_subset": symbol_subset,
+    }
+    if any(tier2[axis] for axis in _TIER2_QUERY_AXES):
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "not_implemented", "axis": "tier2_stress_deferred"},
+        )
+    axes = {
+        "fee_bps": fee_bps, "slippage_bps": slippage_bps, "rebalance": rebalance,
+    }
+    try:
+        result = service.stress_matrix(
+            run_id, principal=principal, candidate_id=candidate_id, axes=axes,
+        )
+    except NotImplementedError as error:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "not_implemented", "reason": str(error)},
+        ) from error
+    if result is None:
+        raise HTTPException(status_code=404, detail="run or candidate not found")
+    return StressMatrixDTO(
+        candidate_id=result["candidate_id"],
+        baseline=result["baseline"],
+        matrix=result["matrix"],
+    )
