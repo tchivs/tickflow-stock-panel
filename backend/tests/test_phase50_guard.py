@@ -261,3 +261,268 @@ class TestPhase50ModuleGraphCompleteness:
         assert "research_alpha_sse.router" in main_source, (
             "main.py: research_alpha_sse.router not included"
         )
+
+
+# ================================================================
+# Broker/execution AST scan (SC5d) — no execution-surface import
+# ================================================================
+
+# The execution surface: the strategy/portfolio engine packages + broker/order/
+# position/portfolio/monitor/execution modules.  No Alpha/Agent/promotion/
+# workbench module may import from or call any of these (SC5d).
+_EXECUTION_PACKAGES: frozenset[str] = frozenset({
+    "app.strategy",
+    "app.portfolio",
+    "app.broker",
+    "app.order",
+    "app.position",
+    "app.execution",
+    "app.monitor",
+})
+
+
+class TestNoExecutionSurfaceImport:
+    """No Phase 50 module imports from or calls the execution surface (SC5d)."""
+
+    @pytest.mark.parametrize("label,path", list(PHASE50_MODULES.items()))
+    def test_execution_surface_not_imported(self, label: str, path: Path) -> None:
+        """No Alpha/Agent/promotion/workbench module reaches the execution engine."""
+        _module_exists(label, path)
+        source = _strip_docstring(path.read_text(encoding="utf-8"))
+        tree = ast.parse(source)
+        for imp in _extract_imports(tree):
+            for pkg in _EXECUTION_PACKAGES:
+                if imp == pkg or imp.startswith(pkg + "."):
+                    pytest.fail(
+                        f"{label}: execution-surface import '{imp}' reaches {pkg}"
+                    )
+
+
+# ================================================================
+# Runtime fake-collaborator proof (SC5d visible proof)
+# ================================================================
+
+
+class _RaisingFake:
+    """A fake execution collaborator that fails immediately if ever invoked.
+
+    Reused from the Phase 49 guard (test_phase49_guard.py:208-228).  If any
+    Phase 50 workbench/SSE/compare/stress/replay/clone handler calls a method
+    on this object, the test fails — proving no broker/order/position/
+    portfolio/monitor/execution collaborator is reachable from the workbench.
+    """
+
+    def __init__(self, name: str = "fake") -> None:
+        self.name = name
+        self.calls: list[str] = []
+
+    def __getattr__(self, item: str) -> Any:
+        def _fail(*_args: Any, **_kwargs: Any) -> None:
+            self.calls.append(item)
+            pytest.fail(
+                f"execution collaborator '{self.name}.{item}' was called — "
+                "Phase 50 workbench must not invoke execution collaborators"
+            )
+
+        return _fail
+
+
+_PRINCIPAL = "researcher@example.com"
+
+
+def _sample_manifest(*, seed: int = 42) -> dict[str, Any]:
+    """A manifest valid for create()/clone()/replay_branch() with scoring+costs."""
+    return {
+        "dsl": {"version": "factor-dsl-v1"},
+        "grammar": {"fingerprint": "a" * 64, "version": "grammar-v1"},
+        "vocabulary": {"fingerprint": "b" * 64, "size": 64},
+        "policy": {"version": "admission-v1", "thresholds": {"min_ic": 0.02}},
+        "budgets": {"max_expressions": 1000, "max_candidates": 200},
+        "objective": {"name": "sharpe", "direction": "maximize"},
+        "universe": {
+            "name": "cn-a-share", "asset_type": "stock",
+            "membership_fingerprint": "c" * 64,
+        },
+        "measured_window": {
+            "start": "2020-01-01", "end": "2023-12-31", "calendar": "SSE",
+        },
+        "fold_geometry": {
+            "train_size": 120, "gap_size": 5, "test_size": 20, "n_folds": 10,
+            "oos_size": 20, "horizon": 5,
+        },
+        "code_manifest": {
+            "fingerprint": "d" * 64, "build_fingerprint": "e" * 64,
+            "dependency_fingerprint": "f" * 64,
+        },
+        "data_manifest": {"fingerprint": "g" * 64, "partition_fingerprint": "h" * 64},
+        "scoring": {"rebalance": "daily", "n_groups": 5, "warmup_days": 10},
+        "costs": {"commission_pct": 0.0003, "stamp_tax_pct": 0.001, "slippage_bps": 5.0},
+        "seed": seed,
+    }
+
+
+def _seed_full_workbench(
+    tmp_path: Path,
+) -> tuple[Any, Any, str, list[str]]:
+    """Seed a run exercising every workbench handler; return (repo, service, run_id, cids).
+
+    Persists deterministic factory candidates (so replay_branch's seed re-derivation
+    succeeds), a mutation lineage edge, and fold evidence carrying cost_diagnostics
+    (so compare/stress/evidence-classification have data to project).  All durable
+    facts only — no execution surface.
+    """
+    from app.research.alpha_factory import AlphaFactory
+    from app.research.repository import ResearchRepository
+    from app.research.run_contract import freeze_input_snapshot
+    from app.research.run_service import ResearchRunService
+    from tests.research.conftest import DeterministicClock
+
+    clock = DeterministicClock()
+    repo = ResearchRepository(
+        tmp_path / "guard50.db", clock=clock, artifact_root=tmp_path / "art",
+    )
+    repo.migrate()
+    manifest = _sample_manifest(seed=42)
+    snapshot = freeze_input_snapshot(manifest=manifest, created_at=clock.now_iso())
+    clock.advance()
+    run = repo.create_alpha_run(
+        run_id="run-guard50", principal=_PRINCIPAL,
+        idempotency_key="idem-guard50-run", snapshot=snapshot,
+        event_id="aevt-guard50",
+    )
+    factory = AlphaFactory(42, max_candidates=64)
+    candidate_ids: list[str] = []
+    costs = manifest["costs"]
+    cost_rate = (
+        float(costs["commission_pct"]) * 2.0
+        + float(costs["stamp_tax_pct"])
+        + float(costs["slippage_bps"]) * 2.0 / 1e4
+    )
+    for ordinal in range(1, 4):
+        result = factory.generate_next()
+        assert result is not None
+        cid = f"cand-{result.step}"
+        candidate_ids.append(cid)
+        repo.append_candidate_attempt(
+            run_id=run["id"], candidate_id=cid, attempt_ordinal=ordinal,
+            candidate_digest=result.digest,
+            canonical_expression=result.canonical_expression,
+            ast_signature=f"ast-{result.step}", shape_signature=f"shape-{result.step}",
+            dsl_version="factor-dsl-v1", operation=result.operation,
+            seed=42, step=result.step, status="generated",
+            reason={"note": f"factory candidate {result.step}"},
+        )
+        cost_diag = {
+            "turnover_per_rebalance": [{"date": "2020-01-02", "turnover": 2.0}],
+            "total_turnover": 2.0,
+            "cost_rate": cost_rate,
+            "cost_drag": 2.0 * cost_rate,
+            "raw_long_short_return": 0.5,
+            "net_long_short_return": 0.5 - 2.0 * cost_rate,
+        }
+        repo.record_alpha_fold_evidence(
+            run_id=run["id"], candidate_digest=result.digest,
+            fold_index=0, is_oos=False, revision_id=f"rev-{result.step}",
+            train_start="2020-01-01", train_end="2020-06-30",
+            test_start="2020-07-01", test_end="2020-12-31",
+            membership_fingerprint="c" * 64,
+            declared_fingerprints={"panel": "p" * 64},
+            stats={"coverage": 0.95, "mean_ic": 0.03, "cost_diagnostics": cost_diag},
+        )
+    # Mutation lineage edge: cand-0 -> cand-1 (cand-1 is the child).
+    if "cand-0" in candidate_ids and "cand-1" in candidate_ids:
+        repo.append_candidate_lineage(
+            run_id=run["id"], lineage_id="lin-1",
+            child_attempt_id="cand-1", parent_attempt_id="cand-0",
+            edge_ordinal=0, operation="mutation",
+        )
+    service = ResearchRunService(repo)
+    return repo, service, run["id"], candidate_ids
+
+
+def _inject_fakes(*targets: Any) -> list[_RaisingFake]:
+    """Attach raising execution-collaborator fakes onto each target surface."""
+    fakes: list[_RaisingFake] = []
+    for name in ("broker", "order", "position", "portfolio", "monitor", "execution"):
+        fake = _RaisingFake(name)
+        for target in targets:
+            setattr(target, f"_{name}_collaborator", fake)
+        fakes.append(fake)
+    return fakes
+
+
+class TestRuntimeNoExecutionCollaborator:
+    """Runtime proof: every workbench/SSE handler invokes no execution collaborator."""
+
+    def test_runtime_no_execution_collaborator_across_handlers(
+        self, tmp_path: Path,
+    ) -> None:
+        repo, service, run_id, candidate_ids = _seed_full_workbench(tmp_path)
+        fakes = _inject_fakes(repo, service)
+
+        # 1. inspect — lineage read projection.
+        assert service.list_lineage(run_id, principal=_PRINCIPAL) is not None
+        # 2. evidence-classification — SC4 temporal/degradation read.
+        assert service.candidate_evidence_classification(
+            run_id, candidate_ids[0], principal=_PRINCIPAL,
+        ) is not None
+        # 3. compare — side-by-side projection (no opaque winner).
+        compare = service.compare_candidates(
+            run_id, principal=_PRINCIPAL, candidate_ids=candidate_ids[:2],
+        )
+        assert compare is not None and compare["candidates"] is not None
+        # 4. stress — Tier-1 pure-arithmetic matrix (no admission touch).
+        stress = service.stress_matrix(
+            run_id, principal=_PRINCIPAL, candidate_id=candidate_ids[0],
+            axes={"fee_bps": [3.0], "slippage_bps": [10.0], "rebalance": ["weekly"]},
+        )
+        assert stress is not None and stress["candidate_id"] == candidate_ids[0]
+        # 5. replay-branch — seed re-derivation into a NEW child run.
+        branch = service.replay_branch(
+            run_id, principal=_PRINCIPAL, parent_step=0,
+            idempotency_key="idem-guard50-replay",
+        )
+        assert branch is not None and branch["child_run_id"] != run_id
+        # 6. clone — overridable manifest dimensions into a new immutable run.
+        clone = service.clone_run(
+            run_id, principal=_PRINCIPAL,
+            overrides={"costs": {"commission_pct": 0.0005}},
+            idempotency_key="idem-guard50-clone",
+        )
+        assert clone is not None
+
+        # No execution collaborator was touched across any handler.
+        assert all(fake.calls == [] for fake in fakes), (
+            "execution collaborator invoked: "
+            + ", ".join(f"{f.name}={f.calls}" for f in fakes if f.calls)
+        )
+
+    async def test_runtime_no_execution_sse_stream_only_reads(
+        self, tmp_path: Path,
+    ) -> None:
+        """The SSE generator invokes only read service methods — never a write/execution path."""
+        from app.api.research_alpha_sse import _stream_events
+
+        repo, service, run_id, _cids = _seed_full_workbench(tmp_path)
+        fakes = _inject_fakes(repo, service)
+
+        state = {"drained": False}
+
+        async def _disconnect() -> bool:
+            return state["drained"]
+
+        seen: list[Any] = []
+        async for event in _stream_events(
+            service, run_id, _PRINCIPAL, 0,
+            poll_interval=0, is_disconnected=_disconnect,
+        ):
+            seen.append(event)
+            state["drained"] = True  # stop after draining the durable page
+
+        # The durable ledger had at least the run-creation event; the generator
+        # emitted it without invoking any execution collaborator.
+        assert seen, "SSE stream yielded no events"
+        assert all(fake.calls == [] for fake in fakes), (
+            "execution collaborator invoked during SSE stream: "
+            + ", ".join(f"{f.name}={f.calls}" for f in fakes if f.calls)
+        )
