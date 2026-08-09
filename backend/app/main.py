@@ -51,6 +51,7 @@ from app.api import research_promotion
 from app.api import portfolio_panels
 from app.api import research_panels
 from app.api import walkforward_sse
+from app.api import research_alpha_sse
 from app.api import analysis as analysis_menus
 from app.api import auth as auth_api
 from app.api import settings as settings_api
@@ -895,6 +896,7 @@ app.include_router(monitor_rules.router)
 app.include_router(portfolio.router)
 app.include_router(decision.router)
 app.include_router(research_alpha.router)
+app.include_router(research_alpha_sse.router)
 app.include_router(research_promotion.router)
 app.include_router(research_panels.router)
 app.include_router(portfolio_panels.router)
