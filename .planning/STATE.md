@@ -2,18 +2,18 @@
 gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: 可回放 Alpha Factory 与 FactorResearchAgent
-current_phase: 50
-status: completed
+status: Awaiting next milestone
 stopped_at: Phase 49 complete; ready to plan Phase 50
-last_updated: "2026-08-09T10:34:38.923Z"
+last_updated: "2026-08-09T10:35:05.714Z"
 last_activity: 2026-08-09
-last_activity_desc: Phase 50 complete
+last_activity_desc: Milestone v3.0 completed and archived
 progress:
   total_phases: 6
   completed_phases: 1
   total_plans: 27
   completed_plans: 22
   percent: 17
+current_phase: 50
 current_phase_name: Replay Workbench & Release Hardening
 ---
 
@@ -28,10 +28,10 @@ See: .planning/PROJECT.md (updated 2026-08-06)
 
 ## Current Position
 
-Phase: 50
-Plan: Not started
-Status: All phases complete
-Last activity: 2026-08-09 — Phase 50 complete
+Phase: Milestone v3.0 complete
+Plan: —
+Status: Awaiting next milestone
+Last activity: 2026-08-09 — Milestone v3.0 completed and archived
 
 ## v3.0 Phase Summary
 
@@ -109,7 +109,7 @@ Resume file: None
 
 ## Operator Next Steps
 
-- Start planning Phase 50 with `/gsd-plan-phase 50`.
+- Start the next milestone with /gsd-new-milestone
 
 ## Deferred Items
 

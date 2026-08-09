@@ -1,5 +1,36 @@
 # Milestones
 
+## v3.0 v3.0 (Shipped: 2026-08-09)
+
+**Phases completed:** 6 phases, 22 plans, 20 tasks
+
+**Key accomplishments:**
+
+- 45-01 (wave 1)
+- 45-02 (wave 2)
+- 45-03 (wave 3)
+- Typed principal-scoped durable run operations with safe projections, explicit lifecycle conflicts, and a complete no-execution module-graph guard.
+- 46-01 (wave 1)
+- 46-02 (wave 2)
+- 46-03 (wave 3)
+- 46-deterministic-alpha-factory
+- 47-01 (wave 1)
+- 47-02 (wave 2)
+- 47-03 (wave 2)
+- 47-04 (wave 3, final)
+- 48-01 · **Wave:** 1 (depends_on: []) · **Requirements:** AF-REQ-11, AF-REQ-14
+- 48-02 · **Wave:** 2 (depends_on: [48-01]) · **Requirements:** AF-REQ-12
+- 48-03 · **Wave:** 2 (depends_on: [48-01, 48-02]) · **Requirements:** AF-REQ-13, AF-REQ-21
+- 48-04 · **Wave:** 3 (depends_on: [48-01, 48-02, 48-03]) · **Requirements:** AF-REQ-21, AF-REQ-26
+- 49-01 · **Wave:** 1 (depends_on: []) · **Requirements:** AF-REQ-15 (SC1, SC2 expire/conflict half)
+- 49-02 · **Wave:** 2 (depends_on: [49-01]) · **Requirements:** AF-REQ-15 (SC2 concurrent half, SC3), AF-REQ-17 (SC4)
+- 50-replay-workbench
+- 50-replay-workbench
+- 50-replay-workbench
+- 50-replay-workbench
+
+---
+
 ## v2.5 v2.5 (Shipped: 2026-08-07)
 
 **Phases completed:** 5 phases, 14 plans, 9 tasks
