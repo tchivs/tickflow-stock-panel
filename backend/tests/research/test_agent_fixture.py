@@ -467,3 +467,259 @@ class TestExperienceLibraryNoFallback:
                 )
 
         assert _Custom().lookup(factor_family="x", objective="y")
+
+
+# ==================================================================
+# 48-04-03 -- resume-from-checkpoint + e2e fixture-mode run (AF-REQ-21 §6.1)
+# ==================================================================
+
+
+async def _run_fixture(
+    repo, run_id, started, *, stop_after_stage=None, fixture=None, settings=None
+):
+    from app.research.agent_fixture import OfflineFixtureProvider
+    from app.research.run_service import ResearchRunService
+
+    service = ResearchRunService(repo)
+    return await service.run_fixture_mode(
+        run_id,
+        principal="researcher@example.com",
+        snapshot=_snapshot(),
+        request=_stage1_request(),
+        snapshot_ref={
+            "snapshot_sha256": started["snapshot_sha256"],
+            "manifest_sha256": started["manifest_sha256"],
+        },
+        settings=settings or _settings(),
+        attempt_token=started["_attempt_token"],
+        fixture=fixture or OfflineFixtureProvider(),
+        stop_after_stage=stop_after_stage,
+    )
+
+
+class TestResumeAgentStage:
+    def test_resume_no_checkpoint_returns_stage1(self, tmp_path) -> None:
+        from app.research.run_service import ResearchRunService
+
+        repo = ResearchRepository(tmp_path / "operational.db")
+        repo.migrate()
+        started = _make_started_run(repo)
+        run_id = started["id"]
+        service = ResearchRunService(repo)
+        stage = service.resume_agent_stage(
+            run_id,
+            principal="researcher@example.com",
+            expected_version=started["transition_version"],
+            attempt_token=started["_attempt_token"],
+        )
+        assert stage == "stage1"
+
+    async def test_resume_after_stage1_returns_stage2(self, tmp_path) -> None:
+        from app.research.run_service import ResearchRunService
+
+        repo = ResearchRepository(tmp_path / "operational.db")
+        repo.migrate()
+        started = _make_started_run(repo)
+        run_id = started["id"]
+        # Run preflight + stage1 + the stage1 boundary checkpoint, then stop.
+        await _run_fixture(repo, run_id, started, stop_after_stage="stage1")
+        service = ResearchRunService(repo)
+        # Refresh the run row (version advanced when stage1 boundary committed).
+        run = repo.get_alpha_run(run_id, principal="researcher@example.com")
+        # resume reads the stage2_pending checkpoint cursor and reports stage2.
+        stage = service.resume_agent_stage(
+            run_id,
+            principal="researcher@example.com",
+            expected_version=run["transition_version"],
+            attempt_token=started["_attempt_token"],
+        )
+        assert stage == "stage2"
+
+    def test_resume_stale_token_rejected(self, tmp_path) -> None:
+        from app.research.run_service import ResearchRunService
+
+        repo = ResearchRepository(tmp_path / "operational.db")
+        repo.migrate()
+        started = _make_started_run(repo)
+        run_id = started["id"]
+        service = ResearchRunService(repo)
+        with pytest.raises(ValueError, match="token"):
+            service.resume_agent_stage(
+                run_id,
+                principal="researcher@example.com",
+                expected_version=started["transition_version"],
+                attempt_token="a-stale-token-not-the-current-one",
+            )
+
+    def test_resume_non_running_run_rejected(self, tmp_path) -> None:
+        from app.research.run_service import ResearchRunService
+
+        repo = ResearchRepository(tmp_path / "operational.db")
+        repo.migrate()
+        run_id = _make_run(repo)  # still queued, never started
+        service = ResearchRunService(repo)
+        run = repo.get_alpha_run(run_id, principal="researcher@example.com")
+        with pytest.raises(ValueError, match="running"):
+            service.resume_agent_stage(
+                run_id,
+                principal="researcher@example.com",
+                expected_version=run["transition_version"],
+                attempt_token="anything",
+            )
+
+
+class TestFixtureModeRunE2E:
+    async def test_e2e_fixture_run_full_trace_non_production(self, tmp_path) -> None:
+        from app.research.agent_fixture import FIXTURE_PROVIDER
+
+        repo = ResearchRepository(tmp_path / "operational.db")
+        repo.migrate()
+        started = _make_started_run(repo)
+        run_id = started["id"]
+        result = await _run_fixture(repo, run_id, started)
+        assert result["stage"] == "complete"
+        # preflight passed, stage1 + stage2 ran.
+        attempts1 = repo.list_analysis_attempts(run_id, stage="stage1")
+        attempts2 = repo.list_analysis_attempts(run_id, stage="stage2")
+        assert attempts1 and attempts2
+        # Every fixture AnalysisRecord is labeled non-production.
+        for a in attempts1 + attempts2:
+            assert a["provider"] == FIXTURE_PROVIDER
+        # A validated stage2 row + the stage2 checkpoint exist.
+        assert any(a["outcome"] == "validated" for a in attempts2)
+        from app.research.run_service import ResearchRunService
+
+        checkpoint = ResearchRunService(repo).get_latest_valid_checkpoint(
+            run_id, principal="researcher@example.com"
+        )
+        assert checkpoint is not None and checkpoint["stage"] == "stage2"
+
+    async def test_e2e_fixture_run_is_resumable_no_duplicate_side_effects(
+        self, tmp_path
+    ) -> None:
+        repo = ResearchRepository(tmp_path / "operational.db")
+        repo.migrate()
+        started = _make_started_run(repo)
+        run_id = started["id"]
+        # Run 1: preflight + stage1 + stage1 boundary, then stop.
+        await _run_fixture(repo, run_id, started, stop_after_stage="stage1")
+        proposals_after_stage1 = repo.list_stage1_proposals(run_id)
+        assert proposals_after_stage1
+        stage1_proposal_count = len(proposals_after_stage1)
+        # Run 2: resume from the stage2_pending cursor and run ONLY stage2.
+        run = repo.get_alpha_run(run_id, principal="researcher@example.com")
+        started2 = dict(run)
+        started2["_attempt_token"] = started["_attempt_token"]
+        result = await _run_fixture(repo, run_id, started2)
+        assert result["stage"] == "complete"
+        # Stage 1 proposals were NOT recomputed (append-only idempotent read).
+        assert len(repo.list_stage1_proposals(run_id)) == stage1_proposal_count
+        # Stage 2 ran exactly once (one validated row).
+        attempts2 = repo.list_analysis_attempts(run_id, stage="stage2")
+        assert sum(1 for a in attempts2 if a["outcome"] == "validated") == 1
+
+    async def test_e2e_fixture_run_byte_identical_across_two_runs(self, tmp_path) -> None:
+        from app.research.agent_fixture import OfflineFixtureProvider
+
+        def _checksums(repo, run_id):
+            rows = repo.list_analysis_attempts(run_id)
+            return {
+                "stage1_response": next(
+                    (r["response_sha256"] for r in rows if r["stage"] == "stage1"), None
+                ),
+                "stage1_request": next(
+                    (r["request_scope_sha256"] for r in rows if r["stage"] == "stage1"), None
+                ),
+                "stage2_response": next(
+                    (r["response_sha256"] for r in rows if r["stage"] == "stage2"), None
+                ),
+                "stage2_parsed": next(
+                    (r["parsed_output_sha256"] for r in rows if r["stage"] == "stage2"), None
+                ),
+            }
+
+        # Run A.
+        repo_a = ResearchRepository(tmp_path / "a.db")
+        repo_a.migrate()
+        started_a = _make_started_run(repo_a, run_id="run-a")
+        await _run_fixture(repo_a, "run-a", started_a, fixture=OfflineFixtureProvider())
+        sums_a = _checksums(repo_a, "run-a")
+        # Run B (independent DB, same fixture + request).
+        repo_b = ResearchRepository(tmp_path / "b.db")
+        repo_b.migrate()
+        started_b = _make_started_run(repo_b, run_id="run-b")
+        await _run_fixture(repo_b, "run-b", started_b, fixture=OfflineFixtureProvider())
+        sums_b = _checksums(repo_b, "run-b")
+        # The fixture produces byte-identical AnalysisRecord traces.
+        assert sums_a == sums_b
+
+    async def test_e2e_fixture_requires_explicit_selector(self, tmp_path) -> None:
+        from app.research.run_service import ResearchRunService
+
+        repo = ResearchRepository(tmp_path / "operational.db")
+        repo.migrate()
+        started = _make_started_run(repo)
+        run_id = started["id"]
+        service = ResearchRunService(repo)
+        with pytest.raises(ValueError, match="explicit"):
+            await service.run_fixture_mode(
+                run_id,
+                principal="researcher@example.com",
+                snapshot=_snapshot(),
+                request=_stage1_request(),
+                snapshot_ref={
+                    "snapshot_sha256": started["snapshot_sha256"],
+                    "manifest_sha256": started["manifest_sha256"],
+                },
+                settings={},  # no explicit selector -> fail closed
+                attempt_token=started["_attempt_token"],
+            )
+
+    async def test_e2e_fixture_run_idempotent_full(self, tmp_path) -> None:
+        # Re-running a completed fixture run is a no-op (no duplicate rows).
+        repo = ResearchRepository(tmp_path / "operational.db")
+        repo.migrate()
+        started = _make_started_run(repo)
+        run_id = started["id"]
+        await _run_fixture(repo, run_id, started)
+        attempts_before = len(repo.list_analysis_attempts(run_id))
+        proposals_before = len(repo.list_stage1_proposals(run_id))
+        run = repo.get_alpha_run(run_id, principal="researcher@example.com")
+        started2 = dict(run)
+        started2["_attempt_token"] = started["_attempt_token"]
+        result = await _run_fixture(repo, run_id, started2)
+        assert result["stage"] == "complete"
+        assert len(repo.list_analysis_attempts(run_id)) == attempts_before
+        assert len(repo.list_stage1_proposals(run_id)) == proposals_before
+
+
+class TestFixtureModeRunResumeBoundaryTokenFence:
+    async def test_stage2_boundary_with_stale_token_rejected_on_resume(
+        self, tmp_path
+    ) -> None:
+        # After resume fences the old token, a Stage 2 boundary written under
+        # the stale token is rejected by expected_attempt_token_digest.
+        from app.research.run_service import ResearchRunService
+
+        repo = ResearchRepository(tmp_path / "operational.db")
+        repo.migrate()
+        started = _make_started_run(repo)
+        run_id = started["id"]
+        await _run_fixture(repo, run_id, started, stop_after_stage="stage1")
+        service = ResearchRunService(repo)
+        run = repo.get_alpha_run(run_id, principal="researcher@example.com")
+        # Recover fences the original token; the recovered token is fresh.
+        recovered = service.recover_running_attempt(
+            run_id,
+            principal="researcher@example.com",
+            expected_version=run["transition_version"],
+        )
+        assert recovered is not None
+        # The OLD token is now stale; resume_agent_stage rejects it.
+        with pytest.raises(ValueError, match="token"):
+            service.resume_agent_stage(
+                run_id,
+                principal="researcher@example.com",
+                expected_version=run["transition_version"],
+                attempt_token=started["_attempt_token"],
+            )

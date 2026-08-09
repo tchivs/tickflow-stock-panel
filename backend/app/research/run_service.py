@@ -970,6 +970,273 @@ class ResearchRunService:
             raise AlphaCheckpointValidationError(
                 "inline checkpoint payload is not canonical UTF-8 JSON"
             ) from error
+    # ----------------------------------------------------------------
+    # Phase 48-04: resume-from-checkpoint + offline-fixture run mode
+    # ----------------------------------------------------------------
+
+    def resume_agent_stage(
+        self,
+        run_id: str,
+        *,
+        principal: str,
+        expected_version: int,
+        attempt_token: str,
+    ) -> str:
+        """Read the Phase 45 cursor and report the Agent stage to resume at.
+
+        Phase 48-04 (AF-REQ-21 §6.1). Reuses the existing checkpoint/event
+        cursor — it introduces NO new Agent/validation framework (ROADMAP.md:71).
+        Validates the run is ``running`` and the caller holds the current
+        attempt token (only the current worker may resume), then reads the
+        latest valid checkpoint's ``stage`` discriminator and maps it to the
+        next Agent stage to execute:
+
+        * no / early checkpoint -> ``"stage1"`` (preflight already passed at run
+          start; Stage 1 has not committed its boundary yet).
+        * ``stage2_pending`` -> ``"stage2"`` (Stage 1 boundary committed; resume
+          runs ONLY Stage 2).
+        * ``stage2`` -> ``"complete"`` (terminal for the Agent; nothing to do).
+
+        Resume does NOT recompute committed candidate/OOS/promotion evidence:
+        those are append-only idempotent (repository.py:2250-2358, 1078-1135) and
+        Stage 2 reads them rather than recomputing. Token re-fencing is the
+        orchestrator's job via :meth:`recover_running_attempt`; a checkpoint
+        written under a stale token is rejected by ``append_stage_boundary``'s
+        ``expected_attempt_token_digest`` fence (repository.py).
+        """
+        run = self._repository.get_alpha_run(run_id, principal=principal)
+        if run is None:
+            raise ValueError("run not found for principal")
+        if run["status"] != "running":
+            raise ValueError("only a running attempt can be resumed")
+        if not self._validate_attempt_token(
+            run_id,
+            principal=principal,
+            expected_version=expected_version,
+            attempt_token=attempt_token,
+        ):
+            raise ValueError("invalid or stale attempt token")
+        checkpoint = self.get_latest_valid_checkpoint(run_id, principal=principal)
+        if checkpoint is None:
+            return "stage1"
+        stage = checkpoint["stage"]
+        if stage == "stage2_pending":
+            return "stage2"
+        if stage == "stage2":
+            return "complete"
+        # Any earlier/unknown cursor (e.g. a preflight checkpoint) -> start at Stage 1.
+        return "stage1"
+
+    def _append_stage1_boundary(
+        self,
+        repo: Any,
+        run_id: str,
+        *,
+        principal: str,
+        expected_version: int,
+        attempt_token: str,
+        run: Mapping[str, Any],
+        committed_event_seq: int,
+        proposals_count: int,
+    ) -> dict[str, Any]:
+        """Append the Stage 1 terminal event + ``stage2_pending`` checkpoint.
+
+        Mirrors what :meth:`Stage2Service.run` does for Stage 2 but for the
+        Stage 1 boundary (Stage1Service does not own its own checkpoint). The
+        terminal ``stage1_completed`` event and the contiguous
+        ``stage2_pending`` checkpoint are written in one ``BEGIN IMMEDIATE``
+        transaction via :meth:`append_stage_boundary`, reusing the attempt-token
+        / version / contiguity / binding fences (T-48-03d). Stage 1 produces
+        transient proposals, not committed candidates, so the referenced
+        candidate set is empty.
+        """
+        from app.research.run_contract import (
+            attempt_token_digest,
+            checkpoint_state_checksum,
+        )
+
+        checkpoint_version = repo.next_checkpoint_version(run_id)
+        inline_summary = {"stage": "stage1", "proposals": int(proposals_count)}
+        state_checksum = checkpoint_state_checksum(
+            run_id=run_id,
+            checkpoint_version=checkpoint_version,
+            committed_event_seq=committed_event_seq,
+            stage="stage2_pending",
+            snapshot_sha256=run["snapshot_sha256"],
+            manifest_sha256=run["manifest_sha256"],
+            referenced_candidate_ids=(),
+            inline_summary=inline_summary,
+            frontier_artifact_id=None,
+        )
+        return self.append_stage_boundary(
+            repo,
+            run_id=run_id,
+            after_stage="stage1",
+            event_id="aevt_" + uuid.uuid4().hex,
+            event_type="stage1_completed",
+            idempotency_key="stage1-boundary-" + uuid.uuid4().hex,
+            actor="service",
+            source="agent",
+            payload={"stage": "stage1", "proposals": int(proposals_count)},
+            committed_event_seq=committed_event_seq,
+            checkpoint_stage="stage2_pending",
+            snapshot_sha256=run["snapshot_sha256"],
+            manifest_sha256=run["manifest_sha256"],
+            state_checksum=state_checksum,
+            principal=principal,
+            expected_version=expected_version,
+            expected_attempt_token_digest=attempt_token_digest(attempt_token),
+            referenced_candidate_ids=(),
+            inline_summary=inline_summary,
+        )
+
+    async def run_fixture_mode(
+        self,
+        run_id: str,
+        *,
+        principal: str,
+        snapshot: Any,
+        request: Any,
+        snapshot_ref: Mapping[str, Any],
+        settings: Mapping[str, Any] | None,
+        attempt_token: str,
+        fixture: Any | None = None,
+        stop_after_stage: str | None = None,
+    ) -> dict[str, Any]:
+        """Run the deterministic offline-fixture Agent trace end-to-end.
+
+        Phase 48-04 (AF-REQ-26). Orchestrates the full
+        ``preflight -> stage1 -> stage2 -> AnalysisRecord`` chain over the
+        fixture's canned responses with ZERO provider I/O, labeled
+        non-production (``provider='offline_fixture'``) in every AnalysisRecord.
+
+        Fail-closed gate: if the fixture is not explicitly selected
+        (:func:`is_fixture_explicitly_selected`) this raises — the fixture is
+        NEVER an implicit production fallback (R3 / D-48-04).
+
+        Resumable: reads the checkpoint cursor via :meth:`resume_agent_stage`
+        and runs ONLY the stage(s) whose boundary is not yet committed. The
+        caller supplies the current worker ``attempt_token`` (issued by
+        ``start_or_resume`` / ``recover_running_attempt``); a checkpoint written
+        under a stale token is rejected by ``append_stage_boundary``'s
+        ``expected_attempt_token_digest`` fence. To fence an orphaned worker the
+        caller calls :meth:`recover_running_attempt` and passes the fresh token.
+        ``append_stage_boundary`` does not advance the transition version, so the
+        same token + version stays valid across stage boundaries of one attempt.
+
+        ``stop_after_stage`` ("stage1") runs preflight + Stage 1 + the Stage 1
+        boundary and returns without running Stage 2 — used to exercise resume.
+        """
+        from app.research.agent_fixture import (
+            FIXTURE_MODEL,
+            FIXTURE_MODEL_VERSION,
+            FIXTURE_PROVIDER,
+            OfflineFixtureProvider,
+            is_fixture_explicitly_selected,
+        )
+        from app.research.agent_provider import AgentProviderSeam
+        from app.research.agent_stage1 import Stage1Service
+        from app.research.agent_stage2 import Stage2Service
+        from app.research.preflight import preflight
+
+        if not is_fixture_explicitly_selected(settings):
+            raise ValueError(
+                "fixture mode requires an explicit non-default selector"
+            )
+        fixture = fixture if fixture is not None else OfflineFixtureProvider()
+        repo = self._repository
+
+        # 1. Preflight — the fixture gate passes because the fixture is explicit.
+        preflight_result = preflight(snapshot, fixture_selected=True)
+        if not preflight_result.passed:
+            return {"stage": "preflight_failed", "preflight": preflight_result}
+
+        run = repo.get_alpha_run(run_id, principal=principal)
+        if run is None:
+            raise ValueError("run not found for principal")
+        if run["status"] != "running":
+            raise ValueError("only a running run can execute fixture mode")
+
+        result: dict[str, Any] = {"preflight_passed": True}
+
+        # 2. Determine where to resume. resume_agent_stage validates the token.
+        stage = self.resume_agent_stage(
+            run_id,
+            principal=principal,
+            expected_version=run["transition_version"],
+            attempt_token=attempt_token,
+        )
+
+        if stage == "stage1":
+            # Run Stage 1 over the fixture transport (the seam uses the repo's
+            # own record_analysis_attempt; no custom recorder needed).
+            seam1 = AgentProviderSeam(
+                generate_text=fixture.generate_text_for("stage1")
+            )
+            stage1_service = Stage1Service(
+                provider=FIXTURE_PROVIDER,
+                model=FIXTURE_MODEL,
+                model_version=FIXTURE_MODEL_VERSION,
+            )
+            stage1_result = await stage1_service.run(
+                request=request, seam=seam1, repo=repo, run_id=run_id
+            )
+            proposals_count = len(stage1_result.confirmed.kept)
+            result["stage1"] = {
+                "attempt_ordinal": stage1_result.attempt_ordinal,
+                "proposals": proposals_count,
+                "partial": stage1_result.partial,
+            }
+            # Write the contiguous stage1 boundary (stage2_pending checkpoint)
+            # under the current attempt token (append_stage_boundary does not
+            # advance the transition version, so the same token remains valid).
+            run_after = repo.get_alpha_run(run_id, principal=principal)
+            committed_event_seq = int(run_after["last_event_seq"]) + 1
+            self._append_stage1_boundary(
+                repo,
+                run_id,
+                principal=principal,
+                expected_version=run_after["transition_version"],
+                attempt_token=attempt_token,
+                run=run_after,
+                committed_event_seq=committed_event_seq,
+                proposals_count=proposals_count,
+            )
+            stage = "stage2"
+            if stop_after_stage == "stage1":
+                result["stage"] = "stage2_pending"
+                return result
+
+        if stage == "stage2":
+            # Run Stage 2 (read-only over the Phase 47 evidence ledger) over the
+            # fixture transport; Stage2Service writes the contiguous stage2
+            # boundary checkpoint under the current attempt token.
+            run_now = repo.get_alpha_run(run_id, principal=principal)
+            seam2 = AgentProviderSeam(
+                generate_text=fixture.generate_text_for("stage2")
+            )
+            stage2_service = Stage2Service(
+                provider=FIXTURE_PROVIDER,
+                model=FIXTURE_MODEL,
+                model_version=FIXTURE_MODEL_VERSION,
+            )
+            await stage2_service.run(
+                snapshot_ref=snapshot_ref,
+                seam=seam2,
+                repo=repo,
+                run_id=run_id,
+                run_service=self,
+                principal=principal,
+                expected_version=run_now["transition_version"],
+                attempt_token=attempt_token,
+            )
+            result["stage"] = "complete"
+            return result
+
+        # stage == "complete": the Agent is already terminal; idempotent no-op
+        # (no duplicate candidate/proposal/checkpoint rows).
+        result["stage"] = "complete"
+        return result
 
 
 class RunEventPublisher:
