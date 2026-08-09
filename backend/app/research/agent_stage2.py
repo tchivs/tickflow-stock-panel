@@ -387,3 +387,50 @@ def decode_stage2_payload(raw: str) -> tuple[tuple[Caveat, ...], Recommendation]
     caveats = tuple(_decode_caveat(item, index) for index, item in enumerate(caveats_raw))
     recommendation = _decode_recommendation(payload["recommendation"])
     return caveats, recommendation
+
+
+# ------------------------------------------------------------------
+# Referential-integrity check over evidence_refs (candidate/evaluation/
+# gate=verdict-row/artifact) -- OQ-2 (AF-REQ-13 §4.4, AF-REQ-21)
+# ------------------------------------------------------------------
+
+
+class ReferentialIntegrityError(ValueError):
+    """A Stage 2 cited evidence id does not resolve within the same run.
+
+    A permanent validation failure (research §7): there is no fallback review.
+    The message is a bounded, machine-readable JSON detail naming the offending
+    ``{kind, id, run_id}``.
+    """
+
+
+def verify_evidence_refs(
+    refs: Iterable[EvidenceRef], *, repo: Any, run_id: str
+) -> None:
+    """Resolve every cited evidence id within ``run_id`` (OQ-2).
+
+    ``candidate`` -> ``repo.candidate_exists_in_run``;
+    ``evaluation`` -> ``repo.fold_evidence_exists_in_run``;
+    ``gate`` -> ``repo.admission_verdict_exists_in_run`` (verdict row bound to a
+    candidate in the run -- a bare non-verdict gate id resolves to nothing);
+    ``artifact`` -> ``repo.artifact_exists_in_run``. The first unresolvable or
+    cross-run reference raises :class:`ReferentialIntegrityError` with a bounded
+    detail. The check performs only bounded ``SELECT`` reads and never mutates.
+    """
+    for ref in refs:
+        if ref.kind == "candidate":
+            resolved = repo.candidate_exists_in_run(run_id, ref.id)
+        elif ref.kind == "evaluation":
+            resolved = repo.fold_evidence_exists_in_run(run_id, ref.id)
+        elif ref.kind == "gate":
+            resolved = repo.admission_verdict_exists_in_run(run_id, ref.id)
+        elif ref.kind == "artifact":
+            resolved = repo.artifact_exists_in_run(run_id, ref.id)
+        else:  # pragma: no cover - decode_stage2_payload rejects unknown kinds
+            resolved = False
+        if not resolved:
+            detail = canonical_bounded_json(
+                {"kind": ref.kind, "id": ref.id, "run_id": run_id},
+                "referential integrity detail",
+            )
+            raise ReferentialIntegrityError(detail)

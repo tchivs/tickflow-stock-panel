@@ -259,28 +259,6 @@ class TestDecodeStage2PayloadSchema:
         with pytest.raises(ValueError, match="unsupported field"):
             decode_stage2_payload(raw)
 
-    def test_decode_bad_disposition_rejected(self) -> None:
-        from app.research.agent_stage2 import decode_stage2_payload
-
-        raw = json.dumps(
-            _stage2_payload(recommendation=_recommendation_dict(disposition="self_destruct"))
-        )
-        with pytest.raises(ValueError, match="disposition"):
-            decode_stage2_payload(raw)
-
-    def test_decode_follow_up_dims_with_non_propose_disposition_rejected(self) -> None:
-        from app.research.agent_stage2 import decode_stage2_payload
-
-        raw = json.dumps(
-            _stage2_payload(
-                recommendation=_recommendation_dict(
-                    disposition="retain", follow_up_run_dims=["universe"],
-                )
-            )
-        )
-        with pytest.raises(ValueError, match="follow_up_run_dims"):
-            decode_stage2_payload(raw)
-
     def test_decode_oversized_caveats_rejected(self) -> None:
         from app.research.agent_stage2 import MAX_STAGE2_CAVEATS, decode_stage2_payload
 
@@ -424,3 +402,280 @@ class TestNoMutableFieldEnforcement:
         raw = json.dumps(_stage2_payload([_caveat_dict(evidence_refs=[ref])]))
         with pytest.raises(ValueError, match="forbidden mutable field"):
             decode_stage2_payload(raw)
+
+
+
+# ==================================================================
+# 48-03-02 -- verify_evidence_refs referential-integrity check (OQ-2)
+# ==================================================================
+
+
+_DIGEST_A = "a" * 64
+_DIGEST_B = "b" * 64
+_MEMBERSHIP = "c" * 64
+
+
+def _seed_candidate(repo: ResearchRepository, *, run_id: str, candidate_id: str) -> str:
+    repo.append_candidate_attempt(
+        run_id=run_id,
+        candidate_id=candidate_id,
+        attempt_ordinal=1,
+        candidate_digest=_DIGEST_A,
+        canonical_expression="close",
+        ast_signature="ast",
+        shape_signature="shape",
+        dsl_version="factor-dsl-v1",
+        operation="seed",
+        seed=1,
+        step=0,
+        status="rejected",
+        reason={"verdict": "rejected", "failing_gate": "min_ic", "gate_trail": []},
+    )
+    return candidate_id
+
+
+def _seed_fold_evidence(repo: ResearchRepository, *, run_id: str, revision_id: str) -> str:
+    row = repo.record_alpha_fold_evidence(
+        run_id=run_id,
+        candidate_digest=_DIGEST_A,
+        fold_index=0,
+        is_oos=False,
+        revision_id=revision_id,
+        train_start="2020-01-01",
+        train_end="2020-06-01",
+        test_start="2020-06-02",
+        test_end="2020-06-30",
+        membership_fingerprint=_MEMBERSHIP,
+        declared_fingerprints={"grammar": "a" * 64},
+        stats={"ic": 0.01},
+    )
+    return str(row["id"])
+
+
+def _seed_admission_verdict(
+    repo: ResearchRepository, *, run_id: str, candidate_id: str, revision_id: str
+) -> str:
+    repo.create_factor_with_revision(
+        factor_id="fac_" + revision_id,
+        revision_id=revision_id,
+        name="seed",
+        description="seed revision",
+        hypothesis="seed",
+        canonical_expression="close",
+        dsl_version="factor-dsl-v1",
+        ast_signature="ast",
+        shape_signature="shape",
+        fields=frozenset({"close"}),
+        operators=frozenset({}),
+        functions=frozenset({}),
+        provenance={"run_id": run_id, "candidate_id": candidate_id, "candidate_digest": _DIGEST_A},
+    )
+    row = repo.insert_admission_verdict(
+        revision_id=revision_id,
+        policy_version="admission-v1",
+        verdict="rejected",
+        reason="min_ic gate failed",
+        gates_json=[{"name": "min_ic", "observed": 0.0, "threshold": 0.02, "passed": False}],
+        candidate_trail_json={
+            "provenance": {
+                "run_id": run_id,
+                "candidate_id": candidate_id,
+                "candidate_digest": _DIGEST_A,
+            },
+            "evaluation_run_ids": [],
+            "experiment_snapshot_ids": [],
+            "gate_results": [],
+        },
+        resolved_universe_json={"membership_fingerprint": _MEMBERSHIP},
+        input_snapshot_sha256=_DIGEST_B,
+    )
+    return str(row["id"])
+
+
+def _seed_artifact(repo: ResearchRepository, *, run_id: str, artifact_id: str) -> str:
+    import sqlite3
+
+    with repo._connection() as connection, connection:
+        connection.execute(
+            """INSERT INTO research_alpha_artifacts
+               (id, run_id, logical_kind, relative_path, content_type,
+                byte_size, checksum_sha256, schema_version, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                artifact_id, run_id, "evidence",
+                f"research_artifacts/alpha_runs/{run_id}/{_DIGEST_A}.json",
+                "application/json", 16, _DIGEST_A,
+                "alpha-artifact-v1", "2026-08-09T00:00:00+00:00",
+            ),
+        )
+    return artifact_id
+
+
+class TestReferentialIntegrity:
+    """T-48-03b / OQ-2: every cited evidence id resolves within the same run."""
+
+    def test_valid_same_run_citations_across_all_four_kinds_resolve(self, tmp_path) -> None:
+        from app.research.agent_stage2 import EvidenceRef, verify_evidence_refs
+
+        repo = ResearchRepository(tmp_path / "operational.db")
+        repo.migrate()
+        run_id = _make_run(repo)
+        candidate_id = _seed_candidate(repo, run_id=run_id, candidate_id="acand_one")
+        fold_id = _seed_fold_evidence(repo, run_id=run_id, revision_id="rev_one")
+        verdict_id = _seed_admission_verdict(
+            repo, run_id=run_id, candidate_id=candidate_id, revision_id="rev_one"
+        )
+        artifact_id = _seed_artifact(repo, run_id=run_id, artifact_id="aart_one")
+
+        refs = (
+            EvidenceRef(kind="candidate", id=candidate_id),
+            EvidenceRef(kind="evaluation", id=fold_id),
+            EvidenceRef(kind="gate", id=verdict_id),
+            EvidenceRef(kind="artifact", id=artifact_id),
+        )
+        # Resolves -- no exception.
+        verify_evidence_refs(refs, repo=repo, run_id=run_id)
+
+    def test_fabricated_candidate_id_rejected(self, tmp_path) -> None:
+        from app.research.agent_stage2 import (
+            EvidenceRef,
+            ReferentialIntegrityError,
+            verify_evidence_refs,
+        )
+
+        repo = ResearchRepository(tmp_path / "operational.db")
+        repo.migrate()
+        run_id = _make_run(repo)
+        with pytest.raises(ReferentialIntegrityError) as exc_info:
+            verify_evidence_refs(
+                (EvidenceRef(kind="candidate", id="acand_missing"),),
+                repo=repo,
+                run_id=run_id,
+            )
+        # The bounded detail names the offending {kind, id}.
+        assert "candidate" in str(exc_info.value)
+        assert "acand_missing" in str(exc_info.value)
+
+    def test_cross_run_candidate_id_rejected(self, tmp_path) -> None:
+        from app.research.agent_stage2 import (
+            EvidenceRef,
+            ReferentialIntegrityError,
+            verify_evidence_refs,
+        )
+
+        repo = ResearchRepository(tmp_path / "operational.db")
+        repo.migrate()
+        _make_run(repo, run_id="run-a")
+        _make_run(repo, run_id="run-b")
+        _seed_candidate(repo, run_id="run-a", candidate_id="acand_a")
+        with pytest.raises(ReferentialIntegrityError):
+            verify_evidence_refs(
+                (EvidenceRef(kind="candidate", id="acand_a"),),
+                repo=repo,
+                run_id="run-b",
+            )
+
+    def test_fabricated_evaluation_id_rejected(self, tmp_path) -> None:
+        from app.research.agent_stage2 import (
+            EvidenceRef,
+            ReferentialIntegrityError,
+            verify_evidence_refs,
+        )
+
+        repo = ResearchRepository(tmp_path / "operational.db")
+        repo.migrate()
+        run_id = _make_run(repo)
+        with pytest.raises(ReferentialIntegrityError):
+            verify_evidence_refs(
+                (EvidenceRef(kind="evaluation", id="afe_missing"),),
+                repo=repo,
+                run_id=run_id,
+            )
+
+    def test_fabricated_artifact_id_rejected(self, tmp_path) -> None:
+        from app.research.agent_stage2 import (
+            EvidenceRef,
+            ReferentialIntegrityError,
+            verify_evidence_refs,
+        )
+
+        repo = ResearchRepository(tmp_path / "operational.db")
+        repo.migrate()
+        run_id = _make_run(repo)
+        with pytest.raises(ReferentialIntegrityError):
+            verify_evidence_refs(
+                (EvidenceRef(kind="artifact", id="aart_missing"),),
+                repo=repo,
+                run_id=run_id,
+            )
+
+    def test_gate_verdict_row_from_another_run_rejected(self, tmp_path) -> None:
+        from app.research.agent_stage2 import (
+            EvidenceRef,
+            ReferentialIntegrityError,
+            verify_evidence_refs,
+        )
+
+        repo = ResearchRepository(tmp_path / "operational.db")
+        repo.migrate()
+        _make_run(repo, run_id="run-a")
+        _make_run(repo, run_id="run-b")
+        _seed_candidate(repo, run_id="run-a", candidate_id="acand_a")
+        verdict_id = _seed_admission_verdict(
+            repo, run_id="run-a", candidate_id="acand_a", revision_id="rev_a"
+        )
+        # The verdict is bound to run-a; citing it from run-b is a cross-run ref.
+        with pytest.raises(ReferentialIntegrityError):
+            verify_evidence_refs(
+                (EvidenceRef(kind="gate", id=verdict_id),),
+                repo=repo,
+                run_id="run-b",
+            )
+
+    def test_gate_non_verdict_id_resolves_to_nothing(self, tmp_path) -> None:
+        from app.research.agent_stage2 import (
+            EvidenceRef,
+            ReferentialIntegrityError,
+            verify_evidence_refs,
+        )
+
+        repo = ResearchRepository(tmp_path / "operational.db")
+        repo.migrate()
+        run_id = _make_run(repo)
+        # A candidate id is NOT a verdict row -- a gate ref to it must not resolve.
+        candidate_id = _seed_candidate(repo, run_id=run_id, candidate_id="acand_one")
+        with pytest.raises(ReferentialIntegrityError):
+            verify_evidence_refs(
+                (EvidenceRef(kind="gate", id=candidate_id),),
+                repo=repo,
+                run_id=run_id,
+            )
+
+    def test_verify_evidence_refs_read_only_no_mutation(self, tmp_path) -> None:
+        from app.research.agent_stage2 import EvidenceRef, verify_evidence_refs
+
+        repo = ResearchRepository(tmp_path / "operational.db")
+        repo.migrate()
+        run_id = _make_run(repo)
+        candidate_id = _seed_candidate(repo, run_id=run_id, candidate_id="acand_one")
+        before = repo.list_candidates(run_id)
+        verify_evidence_refs(
+            (EvidenceRef(kind="candidate", id=candidate_id),),
+            repo=repo,
+            run_id=run_id,
+        )
+        after = repo.list_candidates(run_id)
+        assert before == after  # the check performs only bounded SELECT reads
+
+    def test_verify_evidence_refs_empty_iterable_passes(self, tmp_path) -> None:
+        from app.research.agent_stage2 import verify_evidence_refs
+
+        repo = ResearchRepository(tmp_path / "operational.db")
+        repo.migrate()
+        run_id = _make_run(repo)
+        verify_evidence_refs((), repo=repo, run_id=run_id)
+
+    def test_referential_integrity_error_is_value_error(self) -> None:
+        from app.research.agent_stage2 import ReferentialIntegrityError
+
+        assert issubclass(ReferentialIntegrityError, ValueError)

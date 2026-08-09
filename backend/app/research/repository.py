@@ -2970,6 +2970,114 @@ class ResearchRepository:
         error = record.pop("validation_error_json", None)
         record["validation_error"] = json.loads(error) if error else None
         return record
+
+    # ----------------------------------------------------------------
+    # Stage 2 same-run evidence-reference existence helpers (Phase 48-03)
+    # ----------------------------------------------------------------
+
+    def candidate_exists_in_run(self, run_id: str, candidate_id: str) -> bool:
+        """Resolve exactly one candidate attempt id within ``run_id``."""
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT 1 FROM research_alpha_candidate_attempts "
+                "WHERE id = ? AND run_id = ?",
+                (candidate_id, run_id),
+            ).fetchone()
+        return row is not None
+
+    def fold_evidence_exists_in_run(self, run_id: str, evidence_id: str) -> bool:
+        """Resolve exactly one candidate-keyed fold evidence id within ``run_id``."""
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT 1 FROM research_alpha_fold_evidence WHERE id = ? AND run_id = ?",
+                (evidence_id, run_id),
+            ).fetchone()
+        return row is not None
+
+    def admission_verdict_exists_in_run(self, run_id: str, verdict_id: str) -> bool:
+        """Resolve an admission verdict row bound to a candidate in ``run_id``.
+
+        OQ-2 (resolved): a Stage 2 ``gate`` ref cites the admission verdict ROW
+        id, not an individual gate id. The verdict row is bound to the run via
+        its ``candidate_trail.provenance.run_id`` (alpha_scoring.py:287-418
+        mints that provenance when recording the candidate admission). A bare
+        non-verdict id resolves to nothing and is rejected. Bounded SELECT; the
+        candidate_trail column is already bounded JSON.
+        """
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT candidate_trail_json FROM factor_admission_verdicts WHERE id = ?",
+                (verdict_id,),
+            ).fetchone()
+        if row is None:
+            return False
+        try:
+            trail = json.loads(row["candidate_trail_json"])
+        except (TypeError, ValueError):
+            return False
+        provenance = trail.get("provenance") if isinstance(trail, dict) else None
+        bound_run = provenance.get("run_id") if isinstance(provenance, dict) else None
+        return bound_run == run_id
+
+    def list_admission_verdicts_for_run(self, run_id: str) -> list[dict[str, Any]]:
+        """Read-only projection of admission verdict rows bound to ``run_id``.
+
+        Stage 2 assembles its read-only evidence projection from this (so the
+        model can cite verdict row ids as ``gate`` refs). Filters by the same
+        ``candidate_trail.provenance.run_id`` binding as
+        :meth:`admission_verdict_exists_in_run`. Bounded scan of the verdict
+        ledger; the verdict set per run is small (one per admitted/rejected
+        candidate).
+        """
+        with self._connection() as connection:
+            rows = connection.execute(
+                "SELECT id, revision_id, verdict, reason, gates_json, candidate_trail_json "
+                "FROM factor_admission_verdicts ORDER BY created_at, id"
+            ).fetchall()
+        results: list[dict[str, Any]] = []
+        for row in rows:
+            try:
+                trail = json.loads(row["candidate_trail_json"])
+            except (TypeError, ValueError):
+                continue
+            provenance = trail.get("provenance") if isinstance(trail, dict) else {}
+            if not isinstance(provenance, dict) or provenance.get("run_id") != run_id:
+                continue
+            results.append(
+                {
+                    "id": row["id"],
+                    "revision_id": row["revision_id"],
+                    "verdict": row["verdict"],
+                    "reason": row["reason"],
+                    "gates": json.loads(row["gates_json"]),
+                    "candidate_id": provenance.get("candidate_id"),
+                    "candidate_digest": provenance.get("candidate_digest"),
+                }
+            )
+        return results
+
+    def artifact_exists_in_run(self, run_id: str, artifact_id: str) -> bool:
+        """Resolve exactly one managed artifact descriptor within ``run_id``."""
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT 1 FROM research_alpha_artifacts WHERE id = ? AND run_id = ?",
+                (artifact_id, run_id),
+            ).fetchone()
+        return row is not None
+
+    def next_checkpoint_version(self, run_id: str) -> int:
+        """Return the next checkpoint version (``MAX(checkpoint_version) + 1``).
+
+        Used by the stage-boundary checkpoint so successive boundaries for one
+        run never collide on the cursor identity checksum.
+        """
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT COALESCE(MAX(checkpoint_version), 0) AS v "
+                "FROM research_alpha_checkpoints WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()
+        return int(row["v"]) + 1
     def append_checkpoint(
         self,
         *,
