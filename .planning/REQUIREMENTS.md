@@ -51,14 +51,14 @@ Locked boundaries:
 
 ### Research Workbench and Differentiators
 
-- [ ] **AF-REQ-18**: A researcher can inspect parent-to-child mutation/crossover lineage, canonical expression diffs, seed/step, and branch termination reasons, then replay one branch under the same frozen inputs.
+- [x] **AF-REQ-18**: A researcher can inspect parent-to-child mutation/crossover lineage, canonical expression diffs, seed/step, and branch termination reasons, then replay one branch under the same frozen inputs.
 - [x] **AF-REQ-19**: Search results show objective score together with structural similarity, field/operator overlap, factor-output/IC-series correlation, coverage, and fixed-policy diversity/redundancy outcomes; similar candidates remain inspectable rather than being silently merged.
-- [ ] **AF-REQ-20**: A candidate family can be evaluated across declared rebalance, fee/slippage, calendar-regime, coverage, and symbol-subset stress cases, with the exact trial matrix and evidence recorded without changing primary admission thresholds.
+- [x] **AF-REQ-20**: A candidate family can be evaluated across declared rebalance, fee/slippage, calendar-regime, coverage, and symbol-subset stress cases, with the exact trial matrix and evidence recorded without changing primary admission thresholds.
 - [x] **AF-REQ-21**: Stage 2 can identify missing assumptions, contradictory metrics, gate failures, narrow coverage, or redundancy and link each claim to candidate/evaluation/gate/artifact IDs; follow-up work is a bounded new run, never an unbounded autonomous loop.
-- [ ] **AF-REQ-22**: A completed run can be cloned into a new immutable specification while changing only declared dimensions; the UI shows field-level differences and parent/child links, and unchanged inputs retain their hashes.
+- [x] **AF-REQ-22**: A completed run can be cloned into a new immutable specification while changing only declared dimensions; the UI shows field-level differences and parent/child links, and unchanged inputs retain their hashes.
 - [x] **AF-REQ-23**: Candidate, wall-clock, memory, provider-call, retry, artifact, and worker budgets are enforced server-side; parallel workers may improve throughput but cannot change candidate order, score reduction, winner, or replay result.
-- [ ] **AF-REQ-24**: Researchers can compare explicitly retained experiment snapshots and candidate families side by side, including configuration, evidence, provenance, gate status, and artifacts without an opaque hidden winner score.
-- [ ] **AF-REQ-25**: The workbench displays data date, provider/source, cache/degradation state, missing fields, membership coverage, and whether evidence is exploratory, selection-fold, selection-OOS, or final-blind; degraded results cannot look equivalent to clean completed results.
+- [x] **AF-REQ-24**: Researchers can compare explicitly retained experiment snapshots and candidate families side by side, including configuration, evidence, provenance, gate status, and artifacts without an opaque hidden winner score.
+- [x] **AF-REQ-25**: The workbench displays data date, provider/source, cache/degradation state, missing fields, membership coverage, and whether evidence is exploratory, selection-fold, selection-OOS, or final-blind; degraded results cannot look equivalent to clean completed results.
 - [x] **AF-REQ-26**: Tests and operators can run an explicitly declared offline Agent fixture with known proposal and validation trace when no provider is configured; production paths never silently switch to the fixture, and the UI labels fixture evidence as non-production.
 
 ## Future Requirements (Deferred)
@@ -99,14 +99,14 @@ Locked boundaries:
 | AF-REQ-15 | Phase 49 | Complete |
 | AF-REQ-16 | Phase 45 | Complete |
 | AF-REQ-17 | Phase 49 | Complete |
-| AF-REQ-18 | Phase 50 | Pending |
+| AF-REQ-18 | Phase 50 | Complete |
 | AF-REQ-19 | Phase 46 | Complete |
-| AF-REQ-20 | Phase 50 | Pending |
+| AF-REQ-20 | Phase 50 | Complete |
 | AF-REQ-21 | Phase 48 | Complete |
-| AF-REQ-22 | Phase 50 | Pending |
+| AF-REQ-22 | Phase 50 | Complete |
 | AF-REQ-23 | Phase 46 | Complete |
-| AF-REQ-24 | Phase 50 | Pending |
-| AF-REQ-25 | Phase 50 | Pending |
+| AF-REQ-24 | Phase 50 | Complete |
+| AF-REQ-25 | Phase 50 | Complete |
 | AF-REQ-26 | Phase 48 | Complete |
 
 ---

@@ -22,7 +22,7 @@
 - [x] **Phase 47: Governed Scoring, Admission & Selection OOS** - Score candidates through the shared chain, retain evidence and gate trails, stress cost/robustness, and consume reserved selection OOS exactly once. (completed 2026-08-09)
 - [x] **Phase 48: FactorResearchAgent Two-Stage Workflow** - Add deterministic preflight, strict Stage 1/Stage 2 contracts, provider failure traces, bounded retry, cancellation, and checkpointed orchestration. (completed 2026-08-09)
 - [x] **Phase 49: Research-Only Promotion Ticket** - Refresh evidence at approval and hand an explicitly reviewed candidate to an immutable `FactorRevision`/catalog record without execution authority. (completed 2026-08-09)
-- [ ] **Phase 50: Replay Workbench & Release Hardening** - Project durable progress and evidence through SSE/polling, expose lineage/comparison/stress/degradation views, and harden release/license/execution boundaries.
+- [x] **Phase 50: Replay Workbench & Release Hardening** - Project durable progress and evidence through SSE/polling, expose lineage/comparison/stress/degradation views, and harden release/license/execution boundaries. (completed 2026-08-09)
 
 ## Phase Details
 
@@ -182,7 +182,7 @@ Plans:
 | 47. Governed Scoring, Admission & Selection OOS | 4/4 | Complete    | 2026-08-09 |
 | 48. FactorResearchAgent Two-Stage Workflow | 4/4 | Complete    | 2026-08-09 |
 | 49. Research-Only Promotion Ticket | 2/2 | Complete    | 2026-08-09 |
-| 50. Replay Workbench & Release Hardening | 0/TBD | Not started | - |
+| 50. Replay Workbench & Release Hardening | 4/4 | Complete    | 2026-08-09 |
 
 **Execution order:** 45 → 46 → 47 → 48 → 49 → 50. Each phase consumes durable, server-owned contracts from its predecessors; no phase grants execution authority.
 
