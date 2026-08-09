@@ -268,6 +268,12 @@ function StockSearchBox({
         <input
           ref={inputRef}
           type="text"
+          role="combobox"
+          aria-label="搜索股票或 ETF"
+          aria-expanded={dropdownVisible}
+          aria-controls="stock-search-results"
+          aria-autocomplete="list"
+          aria-activedescendant={activeIdx >= 0 ? `stock-search-${activeIdx}` : undefined}
           placeholder="搜索…"
           value={query}
           onChange={(e) => { setQuery(e.target.value); setOpen(true); setActiveIdx(-1) }}
@@ -288,12 +294,17 @@ function StockSearchBox({
               transition={{ duration: 0.12, ease: [0.16, 1, 0.3, 1] }}
               style={{ position: 'fixed', top: pos?.top ?? 0, left: pos?.left ?? 0, zIndex: 50 }}
               className="w-64 max-h-[320px] overflow-y-auto rounded-card border border-border bg-base shadow-xl"
+              role="listbox"
+              id="stock-search-results"
             >
               {results.map((r, i) => {
                 const inWatchlist = existingSymbols.includes(r.symbol)
                 return (
                   <div
                     key={r.symbol}
+                    role="option"
+                    id={`stock-search-${i}`}
+                    aria-selected={i === activeIdx}
                     className={`flex items-center gap-2.5 px-3 py-2 text-xs transition-colors duration-100 ${
                       i === activeIdx ? 'bg-accent/10 text-accent' : 'hover:bg-elevated text-foreground'
                     }`}

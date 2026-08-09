@@ -73,6 +73,12 @@ export function StockFinancialSearch({ onSelect }: Props) {
         <input
           ref={inputRef}
           type="text"
+          role="combobox"
+          aria-label="搜索个股"
+          aria-expanded={Boolean(open && trimmed && results.length > 0)}
+          aria-controls="financial-search-results"
+          aria-autocomplete="list"
+          aria-activedescendant={activeIdx >= 0 ? `financial-search-${activeIdx}` : undefined}
           placeholder="输入股票代码或名称，如 600000 / 浦发"
           value={query}
           onChange={(e) => { setQuery(e.target.value); setOpen(true); setActiveIdx(-1) }}
@@ -94,6 +100,8 @@ export function StockFinancialSearch({ onSelect }: Props) {
             exit={{ opacity: 0, y: -4 }}
             transition={{ duration: 0.12, ease: [0.16, 1, 0.3, 1] }}
             className="absolute left-0 right-0 top-full mt-1.5 z-50 max-h-[360px] overflow-y-auto rounded-card border border-border bg-base shadow-xl"
+            role="listbox"
+            id="financial-search-results"
           >
             {search.isLoading ? (
               <div className="px-4 py-6 flex items-center justify-center gap-2 text-xs text-muted">
@@ -109,6 +117,9 @@ export function StockFinancialSearch({ onSelect }: Props) {
                 <button
                   key={r.symbol}
                   type="button"
+                  role="option"
+                  id={`financial-search-${i}`}
+                  aria-selected={i === activeIdx}
                   onClick={() => handleSelect(r)}
                   className={`w-full flex items-center gap-3 px-4 py-2.5 text-left transition-colors duration-100 ${
                     i === activeIdx ? 'bg-accent/10 text-accent' : 'hover:bg-elevated text-foreground'

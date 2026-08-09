@@ -108,4 +108,41 @@ test.describe('Watchlist 工具条 / 清空确认对话框 可访问性', () => 
     await sh.click()
     await expect(sh).toHaveAttribute('aria-pressed', 'false')
   })
+
+  test('搜索框 combobox/listbox 语义: aria-expanded + activedescendant + selected 同步', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
+    await installShell(page)
+    await page.route('**/api/kline/instruments/search**', route => json(route, {
+      results: [
+        { symbol: '600000.SH', name: '浦发银行', code: '600000', asset_type: 'stock' },
+        { symbol: '600519.SH', name: '贵州茅台', code: '600519', asset_type: 'stock' },
+      ],
+    }))
+    await page.goto('/watchlist')
+
+    const combo = page.getByRole('combobox', { name: '搜索股票或 ETF' })
+    await expect(combo).toBeVisible()
+    await expect(combo).toHaveAttribute('aria-expanded', 'false')
+
+    // 输入触发下拉 → aria-expanded 同步
+    await combo.fill('600')
+    await expect(combo).toHaveAttribute('aria-expanded', 'true')
+    const listbox = page.getByRole('listbox')
+    await expect(listbox).toBeVisible()
+    await expect(page.getByRole('option')).toHaveCount(2)
+
+    // ArrowDown → 首个 option aria-selected + combobox aria-activedescendant 同步
+    await page.keyboard.press('ArrowDown')
+    await expect(page.getByRole('option').first()).toHaveAttribute('aria-selected', 'true')
+    await expect(combo).toHaveAttribute('aria-activedescendant', 'stock-search-0')
+    await page.keyboard.press('ArrowDown')
+    await expect(page.getByRole('option').nth(1)).toHaveAttribute('aria-selected', 'true')
+    await expect(combo).toHaveAttribute('aria-activedescendant', 'stock-search-1')
+
+    // Enter 选中 → 下拉关闭 (aria-expanded 归 false), 打开个股详情预览
+    await page.keyboard.press('Enter')
+    await expect(combo).toHaveAttribute('aria-expanded', 'false')
+    await expect(page.getByRole('option')).toHaveCount(0)
+    await expect(page.getByRole('dialog', { name: /个股详情 600519\.SH/ })).toBeVisible()
+  })
 })
