@@ -28,6 +28,17 @@ from app.research.run_contract import digest_bytes
 # the candidate (set by ``evaluate_selection_oos``). Refresh re-asserts it.
 _SELECTION_OOS_EVALUATED = "evaluated"
 
+# Provenance kind marking a formal catalog factor minted by an explicit,
+# reviewed promotion consume (Phase 49). Only ``kind != alpha_exploratory``
+# revisions appear in ``FactorRegistry.list_current`` — so a formal
+# ``alpha_promoted`` revision is the ONLY path that produces a catalog factor
+# (SC3: unreviewed output is structurally absent from the formal catalog).
+ALPHA_PROMOTED_KIND: str = "alpha_promoted"
+
+# Catalog discriminator for the promotion ExperimentSnapshot (mirrors the
+# ``admitted-factor`` summary_kind used by ``record_admitted_factor_summary``).
+_PROMOTION_SUMMARY_KIND = "promoted-factor"
+
 
 @dataclass(frozen=True, slots=True)
 class PromotionTicket:
@@ -443,3 +454,232 @@ def _verify_conflicts(repo: Any, ticket: PromotionTicket) -> Mapping[str, Any] |
             }
 
     return None
+
+# ---------------------------------------------------------------------
+# consume_promotion_ticket — atomic consume → formal FactorRevision (49-02).
+# ---------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class PromotionTicketConsumed:
+    """The outcome of consuming a ticket: the formal revision + catalog handoff.
+
+    ``revision`` is the newly-minted (or, on idempotent reconnect, the existing)
+    formal ``FactorRevision``. ``experiment_id`` is the promotion catalog
+    snapshot (``None`` on reconnect, where only the revision id is persisted on
+    the ticket).
+    """
+
+    revision: Any  # FactorRevision (typed lazily to avoid an import cycle)
+    ticket_id: str
+    experiment_id: str | None
+
+
+def _mint_promoted_factor(
+    repo: Any, registry: Any, catalog: Any, *, ticket: PromotionTicket
+) -> PromotionTicketConsumed:
+    """Step 6 of consume: mint the formal revision + snapshot and flip consumed.
+
+    Resolves the exploratory revision (cited as ``source_exploratory_revision_id``),
+    mints a NEW formal factor (``revision_number=1``, ``alpha_promoted``) via the
+    atomic repository handoff — NOT ``revise_factor`` on the exploratory
+    factor_id (OQ-1) — and records the promotion ``ExperimentSnapshot`` bound to
+    ``originating_run_id='promotion:{ticket_id}'`` (R6). The mint + flip share
+    ONE ``BEGIN IMMEDIATE`` so the partial consumed-candidate unique index is the
+    final at-most-one gate (T-49-02a): a losing concurrent consume rolls back its
+    uncommitted revision + snapshot and this ticket goes to ``conflicted``.
+
+    Re-reads verdicts; it does NOT re-compute (R2). The formal revision's parsed
+    features are sourced from the exploratory revision (the same expression) so
+    no DSL parse/re-score is performed on the promotion path.
+    """
+    import uuid
+
+    from app.research.catalog import FactorEvidencePackage
+    from app.research.factor_registry import FactorRevision
+
+    exploratory = registry.find_exploratory_revision(
+        ticket.run_id, ticket.candidate_digest
+    )
+    if exploratory is None:
+        raise PromotionTicketUnavailable("source exploratory revision is missing")
+    snapshot = repo.get_run_snapshot(ticket.run_id)
+    if snapshot is None:
+        raise PromotionTicketUnavailable("frozen input snapshot is missing")
+
+    factor_id = uuid.uuid4().hex
+    revision_id = uuid.uuid4().hex
+    experiment_id = uuid.uuid4().hex
+    provenance = {
+        "kind": ALPHA_PROMOTED_KIND,
+        "source_run_id": ticket.run_id,
+        "candidate_id": ticket.candidate_id,
+        "candidate_digest": ticket.candidate_digest,
+        "source_exploratory_revision_id": exploratory.id,
+        "admission_verdict_id": ticket.admission_verdict_id,
+        "selection_oos_fold_evidence_id": ticket.selection_oos_fold_evidence_id,
+        "promotion_ticket_id": ticket.id,
+        "reviewer": ticket.reviewer,
+    }
+    metrics = {
+        "summary_kind": _PROMOTION_SUMMARY_KIND,
+        "admission_verdict": {
+            "verdict_id": ticket.admission_verdict_id,
+            "verdict": ticket.admission_verdict,
+            "policy_version": ticket.policy_version,
+            "gate_trail_digest": ticket.gate_trail_digest,
+            "input_snapshot_sha256": ticket.snapshot_sha256,
+        },
+        "selection_oos": {
+            "status": ticket.selection_oos_status,
+            "fold_evidence_id": ticket.selection_oos_fold_evidence_id,
+        },
+        "factor_signature": {
+            "ast_signature": exploratory.ast_signature,
+            "shape_signature": exploratory.shape_signature,
+        },
+        "factor_lineage": {
+            "factor_id": factor_id,
+            "revision_id": revision_id,
+            "revision_number": 1,
+        },
+    }
+    # The trusted boundary payload structures the package before the atomic
+    # INSERT; persistence is one transaction with the ticket flip (T-49-02a).
+    package = FactorEvidencePackage(
+        evaluation_run_id=f"promotion:{ticket.id}",
+        factor_revision_id=revision_id,
+        resolved_config=snapshot["snapshot"],
+        input_manifest=snapshot["manifest"],
+        metrics=metrics,
+        prediction_signals={},
+        artifacts=(),
+        diagnostics={"summary_kind": _PROMOTION_SUMMARY_KIND},
+    )
+    result = repo.consume_promotion_ticket_atomic(
+        ticket_id=ticket.id,
+        factor_id=factor_id,
+        revision_id=revision_id,
+        experiment_id=experiment_id,
+        name=f"alpha-promoted:{ticket.run_id}:{ticket.candidate_digest}",
+        provenance=provenance,
+        resolved_config=package.resolved_config,
+        input_manifest=package.input_manifest,
+        metrics=package.metrics,
+        canonical_expression=ticket.canonical_expression,
+        dsl_version=exploratory.dsl_version,
+        ast_signature=exploratory.ast_signature,
+        shape_signature=exploratory.shape_signature,
+        fields=exploratory.fields,
+        operators=exploratory.operators,
+        functions=exploratory.functions,
+    )
+    outcome = result["outcome"]
+    if outcome == "concurrent_loss":
+        # A distinct ticket won this candidate; the mint rolled back.
+        reason = {
+            "kind": "conflict",
+            "binding": "consumed_candidate_unique",
+            "reason": "concurrent_consume",
+        }
+        repo.set_promotion_ticket_status(
+            ticket_id=ticket.id, status="conflicted", conflict_reason_json=reason
+        )
+        raise PromotionTicketConflict(reason)
+    if outcome == "terminal":
+        raise PromotionTicketUnavailable("promotion ticket is no longer issued")
+    if outcome == "consumed_reconnect":
+        revision = registry.get_revision(result["revision_id"])
+        if revision is None:
+            raise PromotionTicketUnavailable("consumed revision is missing")
+        return PromotionTicketConsumed(
+            revision=revision, ticket_id=ticket.id, experiment_id=None
+        )
+    return PromotionTicketConsumed(
+        revision=FactorRevision.from_record(result["revision"]),
+        ticket_id=ticket.id,
+        experiment_id=result["experiment_id"],
+    )
+
+
+def consume_promotion_ticket(
+    repo: Any,
+    registry: Any,
+    catalog: Any,
+    *,
+    idempotency_key: str,
+    _mint: Any = _mint_promoted_factor,
+) -> PromotionTicketConsumed:
+    """Atomically consume a current, exact-bound ticket into ONE formal revision.
+
+    The §3.1 8-step transaction:
+    (2) load the ticket by ``idempotency_key`` — fail-closed if absent;
+    (3) idempotent reconnect — a consumed ticket returns its existing revision
+        verbatim (no second mint);
+    (4) an expired/conflicted ticket raises ``PromotionTicketUnavailable``;
+    (5) re-verify every bound immutable fact + the live policy fingerprint
+        (delegates to the 49-01 predicate) — expiry ⇒ ``PromotionTicketExpired``,
+        divergence ⇒ ``PromotionTicketConflict``;
+    (6-8) mint the formal ``FactorRevision`` + promotion snapshot and flip the
+        ticket to ``consumed`` under ONE ``BEGIN IMMEDIATE``; the partial
+        consumed-candidate unique index is the final at-most-one gate.
+
+    Performs ZERO re-computation (R2). The server-resolved ``reviewer`` bound at
+    issue time is the only identity carried into the formal provenance.
+    """
+    ticket = repo.get_promotion_ticket_by_key(idempotency_key)
+    if ticket is None:
+        raise PromotionTicketUnavailable("promotion ticket does not exist")
+    if ticket.status == "consumed":
+        # Idempotent reconnect (sequential repeat): return the existing revision.
+        revision = registry.get_revision(ticket.produced_factor_revision_id)
+        if revision is None:
+            raise PromotionTicketUnavailable("consumed revision is missing")
+        return PromotionTicketConsumed(
+            revision=revision, ticket_id=ticket.id, experiment_id=None
+        )
+    if ticket.status != "issued":
+        raise PromotionTicketUnavailable(f"promotion ticket is {ticket.status}")
+
+    # (5a) Expiry — re-issueable (wall clock past expires_at).
+    if repo._now() > ticket.expires_at:
+        reason = {
+            "kind": "expired",
+            "binding": "expires_at",
+            "expires_at": ticket.expires_at,
+        }
+        repo.set_promotion_ticket_status(
+            ticket_id=ticket.id, status="expired", conflict_reason_json=reason
+        )
+        raise PromotionTicketExpired(reason)
+    # (5b) Stage-1 supersession — re-issueable (a newer proposal displaced the
+    # bound issued draft).
+    if ticket.stage1_proposal_digest is not None:
+        latest = _latest_stage1_digest(
+            repo, run_id=ticket.run_id, canonical_expression=ticket.canonical_expression
+        )
+        if latest is not None and latest != ticket.stage1_proposal_digest:
+            reason = {
+                "kind": "expired",
+                "binding": "stage1_proposal_digest",
+                "expected": ticket.stage1_proposal_digest,
+                "observed": latest,
+            }
+            repo.set_promotion_ticket_status(
+                ticket_id=ticket.id, status="expired", conflict_reason_json=reason
+            )
+            raise PromotionTicketExpired(reason)
+    # (5c) Conflict re-verify — hard reject (any bound fact drifted).
+    conflict = _verify_conflicts(repo, ticket)
+    if conflict is not None:
+        repo.set_promotion_ticket_status(
+            ticket_id=ticket.id, status="conflicted", conflict_reason_json=conflict
+        )
+        raise PromotionTicketConflict(conflict)
+
+    # (6-8) Atomic mint + flip; concurrent_loss ⇒ conflicted (inside _mint).
+    return _mint(repo, registry, catalog, ticket=ticket)
+
+
+# Lexically clear alias for the research-only register action (SC4 'register').
+register_research_factor = consume_promotion_ticket

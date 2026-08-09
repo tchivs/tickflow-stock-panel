@@ -3278,6 +3278,158 @@ class ResearchRepository:
         assert row is not None
         return PromotionTicket.from_record(row)
 
+    def consume_promotion_ticket_atomic(
+        self,
+        *,
+        ticket_id: str,
+        factor_id: str,
+        revision_id: str,
+        experiment_id: str,
+        name: str,
+        provenance: Mapping[str, Any],
+        resolved_config: Mapping[str, Any],
+        input_manifest: Mapping[str, Any],
+        metrics: Mapping[str, Any],
+        canonical_expression: str,
+        dsl_version: str,
+        ast_signature: str,
+        shape_signature: str,
+        fields: Sequence[str],
+        operators: Sequence[str],
+        functions: Sequence[str],
+    ) -> dict[str, Any]:
+        """Atomically mint the formal promoted revision + snapshot and flip consumed.
+
+        Runs the mint (factor definition + revision + promotion experiment
+        snapshot) and the ticket consume-flip under ONE ``BEGIN IMMEDIATE`` so
+        the partial ``ux_promotion_tickets_consumed_candidate`` unique index is
+        the final at-most-one gate (T-49-02a). A losing concurrent consume — a
+        distinct ticket whose candidate was already consumed — hits
+        ``IntegrityError`` on the flip and rolls back its uncommitted revision
+        + snapshot. Returns a tagged result dict:
+
+        - ``{"outcome": "consumed", "revision": <row>, "experiment_id": str,
+          "ticket": PromotionTicket}`` — this ticket won.
+        - ``{"outcome": "consumed_reconnect", "revision_id": str}`` — same
+          ticket already consumed under the lock (idempotent reconnect).
+        - ``{"outcome": "terminal"}`` — the ticket is expired/conflicted.
+        - ``{"outcome": "concurrent_loss"}`` — a distinct ticket won the
+          candidate; this ticket's mint was rolled back; caller flips conflicted.
+        """
+        now = self._now()
+        with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                row = connection.execute(
+                    "SELECT * FROM research_alpha_promotion_tickets WHERE id = ?",
+                    (ticket_id,),
+                ).fetchone()
+                if row is None:
+                    connection.execute("ROLLBACK")
+                    raise ValueError("promotion ticket does not exist")
+                status = row["status"]
+                if status == "consumed":
+                    # Idempotent reconnect: another consume of this same ticket
+                    # committed under the lock — return its revision verbatim.
+                    existing_revision_id = row["produced_factor_revision_id"]
+                    connection.execute("COMMIT")
+                    return {
+                        "outcome": "consumed_reconnect",
+                        "revision_id": existing_revision_id,
+                    }
+                if status != "issued":
+                    connection.execute("ROLLBACK")
+                    return {"outcome": "terminal"}
+                # Mint the formal factor definition + revision (INSERT only).
+                connection.execute(
+                    "INSERT INTO research_factor_definitions (id, created_at) VALUES (?, ?)",
+                    (factor_id, now),
+                )
+                self._insert_revision(
+                    connection,
+                    factor_id=factor_id,
+                    revision_id=revision_id,
+                    revision_number=1,
+                    name=name,
+                    description="",
+                    hypothesis="",
+                    canonical_expression=canonical_expression,
+                    dsl_version=dsl_version,
+                    ast_signature=ast_signature,
+                    shape_signature=shape_signature,
+                    fields=frozenset(fields),
+                    operators=frozenset(operators),
+                    functions=frozenset(functions),
+                    provenance=provenance,
+                    created_at=now,
+                )
+                # Mint the promotion ExperimentSnapshot (INSERT only). The
+                # promotion-scoped originating_run_id satisfies the UNIQUE
+                # constraint without colliding with the evaluation run (R6).
+                connection.execute(
+                    """INSERT INTO research_experiments (
+                           id, factor_revision_id, strategy_id, strategy_version,
+                           originating_run_id, status, validated, retained_at,
+                           resolved_config_json, input_manifest_json,
+                           prediction_signal_json, diagnostics_json, created_at
+                       ) VALUES (?, ?, NULL, NULL, ?, ?, ?, NULL, ?, ?, ?, ?, ?)""",
+                    (
+                        experiment_id,
+                        revision_id,
+                        f"promotion:{ticket_id}",
+                        "completed",
+                        1,
+                        _json(dict(resolved_config), "resolved configuration"),
+                        _json(dict(input_manifest), "input manifest"),
+                        _json({}, "prediction and signal metadata"),
+                        _json({"summary_kind": "promoted-factor"}, "diagnostics"),
+                        now,
+                    ),
+                )
+                connection.execute(
+                    """INSERT INTO research_experiment_metrics
+                           (experiment_id, metric_json, created_at)
+                       VALUES (?, ?, ?)""",
+                    (experiment_id, _json(dict(metrics), "metrics"), now),
+                )
+                # Flip the ticket to consumed — the partial unique index is the
+                # final at-most-one gate across distinct tickets.
+                try:
+                    connection.execute(
+                        """UPDATE research_alpha_promotion_tickets
+                               SET status = 'consumed', conflict_reason_json = ?,
+                                   consumed_at = ?, produced_factor_revision_id = ?
+                           WHERE id = ?""",
+                        (
+                            _bounded_json({}, "promotion conflict reason"),
+                            now,
+                            revision_id,
+                            ticket_id,
+                        ),
+                    )
+                except sqlite3.IntegrityError:
+                    # A distinct ticket already won this candidate. Roll back
+                    # this ticket's uncommitted revision + snapshot.
+                    connection.execute("ROLLBACK")
+                    return {"outcome": "concurrent_loss"}
+                revision_row = self._revision_row(connection, revision_id)
+                ticket_row = connection.execute(
+                    "SELECT * FROM research_alpha_promotion_tickets WHERE id = ?",
+                    (ticket_id,),
+                ).fetchone()
+                connection.execute("COMMIT")
+            except BaseException:
+                if connection.in_transaction:
+                    connection.execute("ROLLBACK")
+                raise
+        assert revision_row is not None
+        return {
+            "outcome": "consumed",
+            "revision": revision_row,
+            "experiment_id": experiment_id,
+            "ticket": PromotionTicket.from_record(ticket_row),
+        }
+
     def next_checkpoint_version(self, run_id: str) -> int:
         """Return the next checkpoint version (``MAX(checkpoint_version) + 1``).
 
