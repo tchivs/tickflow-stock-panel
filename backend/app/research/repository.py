@@ -3078,6 +3078,230 @@ class ResearchRepository:
                 (run_id,),
             ).fetchone()
         return int(row["v"]) + 1
+
+    def append_stage_boundary(
+        self,
+        *,
+        run_id: str,
+        event_id: str,
+        event_type: str,
+        entity_kind: str,
+        entity_id: str,
+        idempotency_key: str,
+        actor: str,
+        source: str,
+        payload: Mapping[str, Any],
+        committed_event_seq: int,
+        checkpoint_id: str,
+        checkpoint_version: int,
+        checkpoint_stage: str,
+        snapshot_sha256: str,
+        manifest_sha256: str,
+        state_checksum: str,
+        principal: str,
+        expected_version: int,
+        expected_attempt_token_digest: str,
+        referenced_candidate_ids: Sequence[str] = (),
+        inline_summary: Mapping[str, Any] | None = None,
+        frontier_artifact_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Append a stage's terminal event AND its checkpoint in ONE transaction.
+
+        Phase 48-03 (AF-REQ-21 §6.2): the stage-boundary checkpoint is written in
+        the same ``BEGIN IMMEDIATE`` transaction as the stage's terminal event so
+        resume (48-04) is contiguous and never repeats committed side effects.
+        Mirrors the ``append_run_event`` + ``append_checkpoint`` fences: the
+        attempt token + transition version must match the live running attempt,
+        the snapshot/manifest must bind to the run, the supplied
+        ``committed_event_seq`` must equal ``last_event_seq + 1`` (the event this
+        method appends), every referenced candidate + frontier artifact must
+        belong to the run, and the post-insert event ledger must be contiguous
+        through ``committed_event_seq``. A stale token, non-contiguous sequence,
+        or cross-run reference raises and rolls back -- nothing partial commits.
+        """
+        from app.research.run_contract import (
+            MAX_INLINE_CHECKPOINT_BYTES,
+            event_checksum,
+            validate_bounded_json,
+        )
+
+        if not isinstance(run_id, str) or not run_id:
+            raise ValueError("run_id is required")
+        if not isinstance(event_id, str) or not event_id:
+            raise ValueError("event_id is required")
+        if not isinstance(event_type, str) or not event_type:
+            raise ValueError("event_type is required")
+        if not isinstance(idempotency_key, str) or not idempotency_key:
+            raise ValueError("idempotency_key is required")
+        if not isinstance(principal, str) or not principal:
+            raise ValueError("principal is required")
+        if type(committed_event_seq) is not int or committed_event_seq <= 0:
+            raise ValueError("committed_event_seq must be a positive integer")
+        if type(checkpoint_version) is not int or checkpoint_version <= 0:
+            raise ValueError("checkpoint_version must be a positive integer")
+        if type(checkpoint_stage) is not str or not 1 <= len(checkpoint_stage) <= 128:
+            raise ValueError("checkpoint_stage must be a bounded string")
+        if type(expected_version) is not int or expected_version < 0:
+            raise ValueError("expected_version is required")
+        _wf_sha256(snapshot_sha256, "snapshot_sha256")
+        _wf_sha256(manifest_sha256, "manifest_sha256")
+        _wf_sha256(state_checksum, "state_checksum")
+        _wf_sha256(expected_attempt_token_digest, "expected_attempt_token_digest")
+        if any(
+            type(cid) is not str or not cid for cid in referenced_candidate_ids
+        ):
+            raise ValueError("referenced_candidate_ids must contain non-empty strings")
+        if len(referenced_candidate_ids) > 256:
+            raise ValueError("referenced_candidate_ids exceeds the 256-reference bound")
+        if inline_summary is not None:
+            validate_bounded_json(
+                inline_summary,
+                "stage boundary inline summary",
+                max_bytes=MAX_INLINE_CHECKPOINT_BYTES,
+            )
+        payload_json = _bounded_json(payload, "stage boundary payload")
+        expected_checksum = event_checksum(payload, idempotency_key, event_type)
+        referenced_json = _bounded_json(
+            list(referenced_candidate_ids), "checkpoint candidate references"
+        )
+        summary_json = _bounded_json(
+            dict(inline_summary) if inline_summary is not None else {},
+            "inline checkpoint summary",
+        )
+        occurred_at = self._now()
+        with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                run = connection.execute(
+                    "SELECT snapshot_sha256, manifest_sha256, last_event_seq, "
+                    "principal, status, transition_version "
+                    "FROM research_alpha_runs WHERE id = ?",
+                    (run_id,),
+                ).fetchone()
+                if run is None or run["principal"] != principal:
+                    raise ValueError("run not found for principal")
+                if run["status"] != "running" or run["transition_version"] != expected_version:
+                    raise ValueError("run is not in the expected running attempt")
+                latest = connection.execute(
+                    "SELECT payload_json FROM research_alpha_events "
+                    "WHERE run_id = ? AND event_type IN ('run_started', 'run_recovered') "
+                    "ORDER BY seq DESC LIMIT 1",
+                    (run_id,),
+                ).fetchone()
+                current_digest = (
+                    None
+                    if latest is None
+                    else json.loads(latest["payload_json"]).get("attempt_token_digest")
+                )
+                if current_digest != expected_attempt_token_digest:
+                    raise ValueError("stage boundary attempt token fence mismatch")
+                if (
+                    run["snapshot_sha256"] != snapshot_sha256
+                    or run["manifest_sha256"] != manifest_sha256
+                ):
+                    raise ValueError("stage boundary snapshot/manifest binding mismatch")
+                existing = connection.execute(
+                    "SELECT payload_checksum FROM research_alpha_events "
+                    "WHERE run_id = ? AND idempotency_key = ?",
+                    (run_id, idempotency_key),
+                ).fetchone()
+                if existing is not None:
+                    if existing["payload_checksum"] != expected_checksum:
+                        raise AlphaRunConflictError(
+                            "stage boundary idempotency key reused with a different payload"
+                        )
+                    chk = connection.execute(
+                        "SELECT * FROM research_alpha_checkpoints "
+                        "WHERE run_id = ? AND committed_event_seq = ? AND stage = ?",
+                        (run_id, committed_event_seq, checkpoint_stage),
+                    ).fetchone()
+                    connection.execute("COMMIT")
+                    if chk is None:
+                        raise AlphaRunConflictError(
+                            "stage boundary event exists without its checkpoint"
+                        )
+                    return self._checkpoint_dict(chk)
+                next_seq = int(run["last_event_seq"]) + 1
+                if next_seq != committed_event_seq:
+                    raise ValueError(
+                        "stage boundary committed_event_seq is not contiguous "
+                        "with the live event ledger"
+                    )
+                try:
+                    connection.execute(
+                        """INSERT INTO research_alpha_events (
+                               id, run_id, seq, event_type, entity_kind, entity_id,
+                               occurred_at, idempotency_key, actor, source,
+                               payload_json, payload_checksum, artifact_id,
+                               producer_version, created_at
+                           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)""",
+                        (
+                            event_id, run_id, next_seq, event_type, entity_kind,
+                            entity_id, occurred_at, idempotency_key, actor, source,
+                            payload_json, expected_checksum, PRODUCER_VERSION,
+                            occurred_at,
+                        ),
+                    )
+                except sqlite3.IntegrityError as error:
+                    if "UNIQUE" in str(error).upper():
+                        raise AlphaRunConflictError(
+                            "concurrent stage boundary event conflict"
+                        ) from error
+                    raise
+                connection.execute(
+                    "UPDATE research_alpha_runs SET last_event_seq = ? WHERE id = ?",
+                    (next_seq, run_id),
+                )
+                for candidate_id in referenced_candidate_ids:
+                    candidate = connection.execute(
+                        "SELECT 1 FROM research_alpha_candidate_attempts "
+                        "WHERE id = ? AND run_id = ?",
+                        (candidate_id, run_id),
+                    ).fetchone()
+                    if candidate is None:
+                        raise ValueError(
+                            "stage boundary references a candidate from another run"
+                        )
+                if frontier_artifact_id is not None:
+                    artifact = connection.execute(
+                        "SELECT 1 FROM research_alpha_artifacts WHERE id = ? AND run_id = ?",
+                        (frontier_artifact_id, run_id),
+                    ).fetchone()
+                    if artifact is None:
+                        raise ValueError(
+                            "stage boundary frontier artifact must belong to run"
+                        )
+                event_count = connection.execute(
+                    "SELECT COUNT(*) FROM research_alpha_events "
+                    "WHERE run_id = ? AND seq <= ?",
+                    (run_id, committed_event_seq),
+                ).fetchone()[0]
+                if int(event_count) != committed_event_seq:
+                    raise ValueError("stage boundary event sequence is not contiguous")
+                connection.execute(
+                    """INSERT INTO research_alpha_checkpoints (
+                           id, run_id, checkpoint_version, committed_event_seq,
+                           stage, snapshot_sha256, manifest_sha256, state_checksum,
+                           referenced_candidate_ids_json, inline_summary_json,
+                           frontier_artifact_id, created_at
+                       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        checkpoint_id, run_id, checkpoint_version, committed_event_seq,
+                        checkpoint_stage, snapshot_sha256, manifest_sha256, state_checksum,
+                        referenced_json, summary_json, frontier_artifact_id, occurred_at,
+                    ),
+                )
+                row = connection.execute(
+                    "SELECT * FROM research_alpha_checkpoints WHERE id = ?",
+                    (checkpoint_id,),
+                ).fetchone()
+                connection.execute("COMMIT")
+            except BaseException:
+                if connection.in_transaction:
+                    connection.execute("ROLLBACK")
+                raise
+        assert row is not None
+        return self._checkpoint_dict(row)
     def append_checkpoint(
         self,
         *,

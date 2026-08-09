@@ -679,3 +679,473 @@ class TestReferentialIntegrity:
         from app.research.agent_stage2 import ReferentialIntegrityError
 
         assert issubclass(ReferentialIntegrityError, ValueError)
+
+
+# ==================================================================
+# 48-03-03 -- Stage2Service (read-only) + stage-boundary checkpoint
+# ==================================================================
+
+
+def _make_started_run(repo: ResearchRepository, *, run_id: str = "run-stage2") -> dict:
+    from app.research.run_service import ResearchRunService
+
+    _make_run(repo, run_id=run_id)
+    run = repo.get_alpha_run(run_id, principal="researcher@example.com")
+    assert run is not None
+    started = ResearchRunService(repo).start_or_resume(
+        run_id, principal="researcher@example.com",
+        expected_version=run["transition_version"],
+    )
+    assert started is not None
+    return started
+
+
+def _seed_full_evidence(repo: ResearchRepository, *, run_id: str) -> dict:
+    candidate_id = _seed_candidate(repo, run_id=run_id, candidate_id="acand_one")
+    fold_id = _seed_fold_evidence(repo, run_id=run_id, revision_id="rev_one")
+    verdict_id = _seed_admission_verdict(
+        repo, run_id=run_id, candidate_id=candidate_id, revision_id="rev_one"
+    )
+    artifact_id = _seed_artifact(repo, run_id=run_id, artifact_id="aart_one")
+    return {
+        "candidate_id": candidate_id,
+        "fold_id": fold_id,
+        "verdict_id": verdict_id,
+        "artifact_id": artifact_id,
+    }
+
+
+def _stage2_service():
+    from app.research.agent_stage2 import Stage2Service
+
+    return Stage2Service(
+        provider="offline_fake", model="offline-fixture", model_version="offline-v1"
+    )
+
+
+def _generate_returning(raw: str):
+    async def _generate(*_args, **_kwargs) -> str:
+        return raw
+
+    return _generate
+
+
+def _generate_raising(error: BaseException):
+    async def _generate(*_args, **_kwargs) -> str:
+        raise error
+
+    return _generate
+
+
+class _FakeRecorder:
+    def __init__(self, repo: ResearchRepository) -> None:
+        self._repo = repo
+
+    def __call__(self, **kwargs):
+        return self._repo.record_analysis_attempt(**kwargs)
+
+
+def _seam(repo: ResearchRepository, generate_text):
+    from app.research.agent_provider import AgentProviderSeam
+
+    return AgentProviderSeam(
+        generate_text=generate_text, record_analysis_attempt=_FakeRecorder(repo)
+    )
+
+
+def _evidence_citing_payload(ids: dict, *, disposition: str = "inspect") -> str:
+    caveats = [
+        _caveat_dict(
+            kind="gate_failure",
+            evidence_refs=[
+                _evidence_ref("candidate", ids["candidate_id"]),
+                _evidence_ref("evaluation", ids["fold_id"]),
+                _evidence_ref("gate", ids["verdict_id"]),
+                _evidence_ref("artifact", ids["artifact_id"]),
+            ],
+        )
+    ]
+    recommendation = _recommendation_dict(disposition=disposition)
+    if disposition == "propose_new_run":
+        recommendation["follow_up_run_dims"] = ["universe", "window"]
+    return json.dumps(_stage2_payload(caveats=caveats, recommendation=recommendation))
+
+
+class TestStage2Service:
+    async def test_stage2_service_clean_run_records_validated_and_checkpoint(
+        self, tmp_path
+    ) -> None:
+        from app.research.agent_stage2 import Stage2Result
+        from app.research.run_service import ResearchRunService
+
+        repo = ResearchRepository(tmp_path / "operational.db")
+        repo.migrate()
+        started = _make_started_run(repo)
+        run_id = started["id"]
+        ids = _seed_full_evidence(repo, run_id=run_id)
+        raw = _evidence_citing_payload(ids)
+        result = await _stage2_service().run(
+            snapshot_ref={
+                "snapshot_sha256": started["snapshot_sha256"],
+                "manifest_sha256": started["manifest_sha256"],
+            },
+            seam=_seam(repo, _generate_returning(raw)),
+            repo=repo, run_id=run_id, run_service=ResearchRunService(repo),
+            principal="researcher@example.com",
+            expected_version=started["transition_version"],
+            attempt_token=started["_attempt_token"],
+        )
+        assert isinstance(result, Stage2Result)
+        assert result.attempt_ordinal == 1
+        # A validated attempt row exists for stage2.
+        attempts = repo.list_analysis_attempts(run_id, stage="stage2")
+        assert any(r["outcome"] == "validated" for r in attempts)
+        # The stage2_completed event was appended.
+        events = repo.list_run_events(run_id)
+        assert any(e["event_type"] == "stage2_completed" for e in events)
+        # A contiguous stage-boundary checkpoint was written.
+        boundary_event = next(e for e in events if e["event_type"] == "stage2_completed")
+        assert boundary_event["seq"] == started["last_event_seq"] + 1
+
+    async def test_stage2_service_checkpoint_is_contiguous_and_recoverable(
+        self, tmp_path
+    ) -> None:
+        from app.research.run_service import ResearchRunService
+
+        repo = ResearchRepository(tmp_path / "operational.db")
+        repo.migrate()
+        started = _make_started_run(repo)
+        run_id = started["id"]
+        ids = _seed_full_evidence(repo, run_id=run_id)
+        raw = _evidence_citing_payload(ids)
+        await _stage2_service().run(
+            snapshot_ref={
+                "snapshot_sha256": started["snapshot_sha256"],
+                "manifest_sha256": started["manifest_sha256"],
+            },
+            seam=_seam(repo, _generate_returning(raw)),
+            repo=repo, run_id=run_id, run_service=ResearchRunService(repo),
+            principal="researcher@example.com",
+            expected_version=started["transition_version"],
+            attempt_token=started["_attempt_token"],
+        )
+        service = ResearchRunService(repo)
+        checkpoint = service.get_latest_valid_checkpoint(
+            run_id, principal="researcher@example.com"
+        )
+        assert checkpoint is not None
+        assert checkpoint["stage"] == "stage2"
+        assert checkpoint["committed_event_seq"] == started["last_event_seq"] + 1
+        # The advisory recommendation is stored as bounded inline summary data.
+        assert checkpoint["inline_summary"]["stage"] == "stage2"
+        assert checkpoint["inline_summary"]["disposition"] == "inspect"
+
+    async def test_stage2_service_provider_exception_zero_validated_no_checkpoint(
+        self, tmp_path
+    ) -> None:
+        from app.research.agent_provider import ProviderCallError
+        from app.research.run_service import ResearchRunService
+
+        repo = ResearchRepository(tmp_path / "operational.db")
+        repo.migrate()
+        started = _make_started_run(repo)
+        run_id = started["id"]
+        _seed_full_evidence(repo, run_id=run_id)
+        with pytest.raises(ProviderCallError):
+            await _stage2_service().run(
+                snapshot_ref={
+                    "snapshot_sha256": started["snapshot_sha256"],
+                    "manifest_sha256": started["manifest_sha256"],
+                },
+                seam=_seam(repo, _generate_raising(TimeoutError("upstream blip"))),
+                repo=repo, run_id=run_id, run_service=ResearchRunService(repo),
+                principal="researcher@example.com",
+                expected_version=started["transition_version"],
+                attempt_token=started["_attempt_token"],
+            )
+        attempts = repo.list_analysis_attempts(run_id, stage="stage2")
+        # ZERO validated rows; the transport failure is a failed/cancelled row.
+        assert not any(r["outcome"] == "validated" for r in attempts)
+        assert any(r["outcome"] in ("failed", "cancelled") for r in attempts)
+        # No stage2_completed event and no checkpoint were written.
+        events = repo.list_run_events(run_id)
+        assert not any(e["event_type"] == "stage2_completed" for e in events)
+        assert (
+            ResearchRunService(repo).get_latest_valid_checkpoint(
+                run_id, principal="researcher@example.com"
+            )
+            is None
+            or ResearchRunService(repo)
+            .get_latest_valid_checkpoint(run_id, principal="researcher@example.com")[
+                "stage"
+            ]
+            != "stage2"
+        )
+
+    async def test_stage2_service_decode_failure_zero_validated(self, tmp_path) -> None:
+        from app.research.agent_provider import ProviderCallError
+        from app.research.run_service import ResearchRunService
+
+        repo = ResearchRepository(tmp_path / "operational.db")
+        repo.migrate()
+        started = _make_started_run(repo)
+        run_id = started["id"]
+        _seed_full_evidence(repo, run_id=run_id)
+        with pytest.raises(ProviderCallError):
+            await _stage2_service().run(
+                snapshot_ref={
+                    "snapshot_sha256": started["snapshot_sha256"],
+                    "manifest_sha256": started["manifest_sha256"],
+                },
+                seam=_seam(repo, _generate_returning("not json at all")),
+                repo=repo, run_id=run_id, run_service=ResearchRunService(repo),
+                principal="researcher@example.com",
+                expected_version=started["transition_version"],
+                attempt_token=started["_attempt_token"],
+            )
+        attempts = repo.list_analysis_attempts(run_id, stage="stage2")
+        assert not any(r["outcome"] == "validated" for r in attempts)
+        assert any(
+            r["outcome"] == "failed" and r["failure_class"] == "malformed_json"
+            for r in attempts
+        )
+
+    async def test_stage2_service_referential_failure_zero_validated(
+        self, tmp_path
+    ) -> None:
+        from app.research.agent_provider import ProviderCallError
+        from app.research.run_service import ResearchRunService
+
+        repo = ResearchRepository(tmp_path / "operational.db")
+        repo.migrate()
+        started = _make_started_run(repo)
+        run_id = started["id"]
+        # Seed evidence, but the model cites a fabricated candidate id.
+        _seed_full_evidence(repo, run_id=run_id)
+        payload = json.dumps(
+            _stage2_payload(
+                caveats=[
+                    _caveat_dict(
+                        evidence_refs=[_evidence_ref("candidate", "acand_missing")]
+                    )
+                ]
+            )
+        )
+        with pytest.raises(ProviderCallError):
+            await _stage2_service().run(
+                snapshot_ref={
+                    "snapshot_sha256": started["snapshot_sha256"],
+                    "manifest_sha256": started["manifest_sha256"],
+                },
+                seam=_seam(repo, _generate_returning(payload)),
+                repo=repo, run_id=run_id, run_service=ResearchRunService(repo),
+                principal="researcher@example.com",
+                expected_version=started["transition_version"],
+                attempt_token=started["_attempt_token"],
+            )
+        attempts = repo.list_analysis_attempts(run_id, stage="stage2")
+        assert not any(r["outcome"] == "validated" for r in attempts)
+        assert any(
+            r["outcome"] == "failed" and r["failure_class"] == "schema_violation"
+            for r in attempts
+        )
+
+    async def test_stage2_service_propose_new_run_does_not_spawn_run(
+        self, tmp_path
+    ) -> None:
+        from app.research.run_service import ResearchRunService
+
+        repo = ResearchRepository(tmp_path / "operational.db")
+        repo.migrate()
+        started = _make_started_run(repo)
+        run_id = started["id"]
+        ids = _seed_full_evidence(repo, run_id=run_id)
+        raw = _evidence_citing_payload(ids, disposition="propose_new_run")
+        with repo._connection() as connection:
+            before = connection.execute(
+                "SELECT COUNT(*) FROM research_alpha_runs"
+            ).fetchone()[0]
+        result = await _stage2_service().run(
+            snapshot_ref={
+                "snapshot_sha256": started["snapshot_sha256"],
+                "manifest_sha256": started["manifest_sha256"],
+            },
+            seam=_seam(repo, _generate_returning(raw)),
+            repo=repo, run_id=run_id, run_service=ResearchRunService(repo),
+            principal="researcher@example.com",
+            expected_version=started["transition_version"],
+            attempt_token=started["_attempt_token"],
+        )
+        assert result.recommendation.disposition == "propose_new_run"
+        with repo._connection() as connection:
+            after = connection.execute(
+                "SELECT COUNT(*) FROM research_alpha_runs"
+            ).fetchone()[0]
+        # disposition='propose_new_run' is advisory -- no autonomous run spawned.
+        assert before == after
+
+    async def test_stage2_service_read_only_no_candidate_write(self, tmp_path) -> None:
+        from app.research.run_service import ResearchRunService
+
+        repo = ResearchRepository(tmp_path / "operational.db")
+        repo.migrate()
+        started = _make_started_run(repo)
+        run_id = started["id"]
+        ids = _seed_full_evidence(repo, run_id=run_id)
+        before_candidates = repo.list_candidates(run_id)
+        before_folds = repo.list_alpha_fold_evidence(run_id=run_id)
+        raw = _evidence_citing_payload(ids)
+        await _stage2_service().run(
+            snapshot_ref={
+                "snapshot_sha256": started["snapshot_sha256"],
+                "manifest_sha256": started["manifest_sha256"],
+            },
+            seam=_seam(repo, _generate_returning(raw)),
+            repo=repo, run_id=run_id, run_service=ResearchRunService(repo),
+            principal="researcher@example.com",
+            expected_version=started["transition_version"],
+            attempt_token=started["_attempt_token"],
+        )
+        # Stage 2 is read-only over Phase 47 evidence: no new candidate/OOS rows.
+        assert repo.list_candidates(run_id) == before_candidates
+        assert repo.list_alpha_fold_evidence(run_id=run_id) == before_folds
+
+
+class TestStageBoundaryCheckpoint:
+    async def test_boundary_event_and_checkpoint_written_atomically(self, tmp_path) -> None:
+        from app.research.run_contract import attempt_token_digest, checkpoint_state_checksum
+        from app.research.run_service import ResearchRunService
+
+        repo = ResearchRepository(tmp_path / "operational.db")
+        repo.migrate()
+        started = _make_started_run(repo)
+        run_id = started["id"]
+        service = ResearchRunService(repo)
+        committed_event_seq = started["last_event_seq"] + 1
+        checkpoint_version = repo.next_checkpoint_version(run_id)
+        state_checksum = checkpoint_state_checksum(
+            run_id=run_id, checkpoint_version=checkpoint_version,
+            committed_event_seq=committed_event_seq, stage="stage2",
+            snapshot_sha256=started["snapshot_sha256"],
+            manifest_sha256=started["manifest_sha256"],
+            referenced_candidate_ids=(), inline_summary=None, frontier_artifact_id=None,
+        )
+        checkpoint = service.append_stage_boundary(
+            repo, run_id=run_id, after_stage="stage2",
+            event_id="aevt_b1", event_type="stage2_completed",
+            idempotency_key="stage2-boundary-1", actor="service", source="test",
+            payload={"stage": "stage2"},
+            committed_event_seq=committed_event_seq, checkpoint_stage="stage2",
+            snapshot_sha256=started["snapshot_sha256"],
+            manifest_sha256=started["manifest_sha256"],
+            state_checksum=state_checksum, principal="researcher@example.com",
+            expected_version=started["transition_version"],
+            expected_attempt_token_digest=attempt_token_digest(started["_attempt_token"]),
+        )
+        assert checkpoint["stage"] == "stage2"
+        assert checkpoint["committed_event_seq"] == committed_event_seq
+        events = repo.list_run_events(run_id)
+        assert any(e["event_type"] == "stage2_completed" for e in events)
+        assert next(e for e in events if e["event_type"] == "stage2_completed")["seq"] == committed_event_seq
+
+    def test_boundary_non_contiguous_committed_event_seq_rejected(self, tmp_path) -> None:
+        from app.research.run_contract import attempt_token_digest, checkpoint_state_checksum
+        from app.research.run_service import ResearchRunService
+
+        repo = ResearchRepository(tmp_path / "operational.db")
+        repo.migrate()
+        started = _make_started_run(repo)
+        run_id = started["id"]
+        service = ResearchRunService(repo)
+        # Predict the WRONG seq (off by one) -- the contiguity fence rejects it.
+        wrong_seq = started["last_event_seq"] + 2
+        checkpoint_version = repo.next_checkpoint_version(run_id)
+        state_checksum = checkpoint_state_checksum(
+            run_id=run_id, checkpoint_version=checkpoint_version,
+            committed_event_seq=wrong_seq, stage="stage2",
+            snapshot_sha256=started["snapshot_sha256"],
+            manifest_sha256=started["manifest_sha256"],
+            referenced_candidate_ids=(), inline_summary=None, frontier_artifact_id=None,
+        )
+        with pytest.raises(ValueError, match="contiguous"):
+            service.append_stage_boundary(
+                repo, run_id=run_id, after_stage="stage2",
+                event_id="aevt_bad", event_type="stage2_completed",
+                idempotency_key="stage2-boundary-bad", actor="service", source="test",
+                payload={"stage": "stage2"},
+                committed_event_seq=wrong_seq, checkpoint_stage="stage2",
+                snapshot_sha256=started["snapshot_sha256"],
+                manifest_sha256=started["manifest_sha256"],
+                state_checksum=state_checksum, principal="researcher@example.com",
+                expected_version=started["transition_version"],
+                expected_attempt_token_digest=attempt_token_digest(started["_attempt_token"]),
+            )
+        # Nothing partial committed: no stage2_completed event, no checkpoint.
+        events = repo.list_run_events(run_id)
+        assert not any(e["event_type"] == "stage2_completed" for e in events)
+
+    def test_boundary_stale_attempt_token_rejected(self, tmp_path) -> None:
+        from app.research.run_contract import checkpoint_state_checksum
+        from app.research.run_service import ResearchRunService
+
+        repo = ResearchRepository(tmp_path / "operational.db")
+        repo.migrate()
+        started = _make_started_run(repo)
+        run_id = started["id"]
+        service = ResearchRunService(repo)
+        committed_event_seq = started["last_event_seq"] + 1
+        checkpoint_version = repo.next_checkpoint_version(run_id)
+        state_checksum = checkpoint_state_checksum(
+            run_id=run_id, checkpoint_version=checkpoint_version,
+            committed_event_seq=committed_event_seq, stage="stage2",
+            snapshot_sha256=started["snapshot_sha256"],
+            manifest_sha256=started["manifest_sha256"],
+            referenced_candidate_ids=(), inline_summary=None, frontier_artifact_id=None,
+        )
+        with pytest.raises(ValueError, match="token"):
+            service.append_stage_boundary(
+                repo, run_id=run_id, after_stage="stage2",
+                event_id="aevt_stale", event_type="stage2_completed",
+                idempotency_key="stage2-boundary-stale", actor="service", source="test",
+                payload={"stage": "stage2"},
+                committed_event_seq=committed_event_seq, checkpoint_stage="stage2",
+                snapshot_sha256=started["snapshot_sha256"],
+                manifest_sha256=started["manifest_sha256"],
+                state_checksum=state_checksum, principal="researcher@example.com",
+                expected_version=started["transition_version"],
+                expected_attempt_token_digest="0" * 64,
+            )
+
+    def test_boundary_stage1_maps_to_stage2_pending_checkpoint(self, tmp_path) -> None:
+        from app.research.run_contract import attempt_token_digest, checkpoint_state_checksum
+        from app.research.run_service import ResearchRunService
+
+        repo = ResearchRepository(tmp_path / "operational.db")
+        repo.migrate()
+        started = _make_started_run(repo)
+        run_id = started["id"]
+        service = ResearchRunService(repo)
+        committed_event_seq = started["last_event_seq"] + 1
+        checkpoint_version = repo.next_checkpoint_version(run_id)
+        state_checksum = checkpoint_state_checksum(
+            run_id=run_id, checkpoint_version=checkpoint_version,
+            committed_event_seq=committed_event_seq, stage="stage2_pending",
+            snapshot_sha256=started["snapshot_sha256"],
+            manifest_sha256=started["manifest_sha256"],
+            referenced_candidate_ids=(), inline_summary=None, frontier_artifact_id=None,
+        )
+        checkpoint = service.append_stage_boundary(
+            repo, run_id=run_id, after_stage="stage1",
+            event_id="aevt_s1", event_type="stage1_completed",
+            idempotency_key="stage1-boundary-1", actor="service", source="test",
+            payload={"stage": "stage1"},
+            committed_event_seq=committed_event_seq, checkpoint_stage="stage2_pending",
+            snapshot_sha256=started["snapshot_sha256"],
+            manifest_sha256=started["manifest_sha256"],
+            state_checksum=state_checksum, principal="researcher@example.com",
+            expected_version=started["transition_version"],
+            expected_attempt_token_digest=attempt_token_digest(started["_attempt_token"]),
+        )
+        assert checkpoint["stage"] == "stage2_pending"
+        events = repo.list_run_events(run_id)
+        assert any(e["event_type"] == "stage1_completed" for e in events)

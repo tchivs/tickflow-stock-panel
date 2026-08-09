@@ -687,6 +687,106 @@ class ResearchRunService:
             expected_attempt_token_digest=expected_digest,
         )
 
+    def append_stage_boundary(
+        self,
+        repo: Any,
+        *,
+        run_id: str,
+        after_stage: str,
+        event_id: str,
+        event_type: str,
+        idempotency_key: str,
+        actor: str,
+        source: str,
+        payload: Mapping[str, Any],
+        committed_event_seq: int,
+        checkpoint_stage: str,
+        snapshot_sha256: str,
+        manifest_sha256: str,
+        state_checksum: str,
+        principal: str,
+        expected_version: int,
+        expected_attempt_token_digest: str,
+        referenced_candidate_ids: Sequence[str] = (),
+        inline_summary: Mapping[str, Any] | None = None,
+        frontier_artifact_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Append a stage's terminal event + checkpoint in one transaction.
+
+        Phase 48-03 (AF-REQ-21 §6.2). Validates the bounded payload + inline
+        summary, pins the stage->checkpoint mapping (Stage 1 boundary ->
+        ``stage2_pending``; Stage 2 boundary -> ``stage2``, terminal for the
+        Agent), recomputes the checkpoint version + state checksum and asserts
+        the caller-supplied checksum matches (fail-closed on drift), then
+        delegates the atomic event+checkpoint transaction to
+        :meth:`ResearchRepository.append_stage_boundary`. The repository fence
+        re-checks the attempt token, version, snapshot/manifest binding, and
+        event-sequence contiguity under ``BEGIN IMMEDIATE``.
+        """
+        from app.research.run_contract import (
+            MAX_INLINE_CHECKPOINT_BYTES,
+            checkpoint_state_checksum,
+        )
+
+        if after_stage not in ("stage1", "stage2"):
+            raise ValueError("after_stage must be 'stage1' or 'stage2'")
+        expected_checkpoint_stage = "stage2_pending" if after_stage == "stage1" else "stage2"
+        if checkpoint_stage != expected_checkpoint_stage:
+            raise ValueError(
+                f"checkpoint_stage must be '{expected_checkpoint_stage}' for "
+                f"after_stage='{after_stage}'"
+            )
+        if event_type not in ("stage1_completed", "stage2_completed"):
+            raise ValueError("event_type must be 'stage1_completed' or 'stage2_completed'")
+        validate_bounded_json(payload, "stage boundary payload")
+        if inline_summary is not None:
+            validate_bounded_json(
+                inline_summary,
+                "stage boundary inline summary",
+                max_bytes=MAX_INLINE_CHECKPOINT_BYTES,
+            )
+        checkpoint_version = repo.next_checkpoint_version(run_id)
+        expected_checksum = checkpoint_state_checksum(
+            run_id=run_id,
+            checkpoint_version=checkpoint_version,
+            committed_event_seq=committed_event_seq,
+            stage=checkpoint_stage,
+            snapshot_sha256=snapshot_sha256,
+            manifest_sha256=manifest_sha256,
+            referenced_candidate_ids=tuple(referenced_candidate_ids),
+            inline_summary=inline_summary,
+            frontier_artifact_id=frontier_artifact_id,
+        )
+        if expected_checksum != state_checksum:
+            raise AlphaCheckpointValidationError(
+                "stage boundary state checksum mismatch"
+            )
+        checkpoint_id = "chk_" + uuid.uuid4().hex
+        return repo.append_stage_boundary(
+            run_id=run_id,
+            event_id=event_id,
+            event_type=event_type,
+            entity_kind="run",
+            entity_id=run_id,
+            idempotency_key=idempotency_key,
+            actor=actor,
+            source=source,
+            payload=payload,
+            committed_event_seq=committed_event_seq,
+            checkpoint_id=checkpoint_id,
+            checkpoint_version=checkpoint_version,
+            checkpoint_stage=checkpoint_stage,
+            snapshot_sha256=snapshot_sha256,
+            manifest_sha256=manifest_sha256,
+            state_checksum=state_checksum,
+            principal=principal,
+            expected_version=expected_version,
+            expected_attempt_token_digest=expected_attempt_token_digest,
+            referenced_candidate_ids=referenced_candidate_ids,
+            inline_summary=inline_summary,
+            frontier_artifact_id=frontier_artifact_id,
+        )
+
     def validate_checkpoint(
         self,
         *,

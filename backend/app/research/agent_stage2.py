@@ -434,3 +434,348 @@ def verify_evidence_refs(
                 "referential integrity detail",
             )
             raise ReferentialIntegrityError(detail)
+
+
+# ------------------------------------------------------------------
+# Read-only server-evidence projection (Phase 47 ledger)
+# ------------------------------------------------------------------
+
+
+def _derive_selection_summary(
+    candidates: Sequence[Mapping[str, Any]],
+    fold_evidence: Sequence[Mapping[str, Any]],
+) -> Mapping[str, Any] | None:
+    """Derive a bounded read-only selection summary (winner + OOS count)."""
+    winner = next(
+        (c for c in candidates if c.get("status") == "admitted"), None
+    )
+    oos_count = sum(1 for fe in fold_evidence if fe.get("is_oos"))
+    if winner is None and not oos_count:
+        return None
+    return {
+        "winner_candidate_id": winner.get("id") if winner else None,
+        "oos_fold_count": oos_count,
+    }
+
+
+def assemble_server_evidence(
+    *, repo: Any, run_id: str, artifact_service: Any | None = None
+) -> ServerEvidence:
+    """Assemble a read-only evidence projection from the Phase 47 ledger.
+
+    Reads ONLY: ``list_candidates`` (candidate attempts), ``list_alpha_fold_evidence``
+    (per-fold evidence), and ``list_admission_verdicts_for_run`` (verdict rows
+    bound to the run). The model authors nothing it consumes here. No
+    candidate/OOS/promotion write occurs (Stage 2 is read-only over Phase 47
+    evidence).
+    """
+    candidates = tuple(repo.list_candidates(run_id, artifact_service=artifact_service))
+    fold_evidence = tuple(repo.list_alpha_fold_evidence(run_id=run_id))
+    admission_verdicts = tuple(repo.list_admission_verdicts_for_run(run_id))
+    selection_summary = _derive_selection_summary(candidates, fold_evidence)
+    return ServerEvidence(
+        candidates=candidates,
+        fold_evidence=fold_evidence,
+        admission_verdicts=admission_verdicts,
+        selection_summary=selection_summary,
+    )
+
+
+# ------------------------------------------------------------------
+# Stage2Service -- runs read-only over server evidence (AF-REQ-21 §6.2)
+# ------------------------------------------------------------------
+
+_STAGE2_SYSTEM_PROMPT = (
+    "Return JSON only. The object must contain exactly schema_version, caveats, "
+    "and recommendation. schema_version must be 'factor-stage2-v1'. caveats is an "
+    "array of objects with exactly kind, claim, evidence_refs; each evidence_refs "
+    "entry is an object with exactly kind (candidate|evaluation|gate|artifact) and "
+    "id, and must cite an id present in the supplied evidence. recommendation is an "
+    "object with exactly disposition (inspect|retain|propose_new_run|no_action), "
+    "rationale, and follow_up_run_dims (array or null; only with propose_new_run). "
+    "Do NOT include any expression, metric, threshold, oos, admission, score, or "
+    "override field, and no markdown or code."
+)
+
+
+@dataclass(frozen=True, slots=True)
+class Stage2Result:
+    """The outcome of one Stage 2 run over the Agent seam (advisory-only)."""
+
+    caveats: tuple[Caveat, ...]
+    recommendation: Recommendation
+    attempt_ordinal: int
+    provenance: Mapping[str, Any]
+
+
+def _stage2_messages(request: StageTwoRequest) -> list[dict[str, str]]:
+    return [
+        {"role": "system", "content": _STAGE2_SYSTEM_PROMPT},
+        {
+            "role": "user",
+            "content": canonical_bounded_json(
+                request.as_request_scope(), "stage2 request"
+            ),
+        },
+    ]
+
+
+def _stage2_failure(
+    klass: str, detail: str
+) -> "ProviderCallError":  # type: ignore[name-defined]
+    from app.research.agent_provider import ProviderCallError, ProviderFailure
+
+    # Every Stage 2 service failure (decode / referential) is permanent: no
+    # fallback review, no retry (research §7.1).
+    return ProviderCallError(
+        ProviderFailure(
+            klass=klass,
+            transient=False,
+            terminal=True,
+            reason={"code": klass, "detail": detail[:200]},
+            http_status=None,
+        )
+    )
+
+
+def _decoded_output_scope(
+    caveats: Sequence[Caveat], recommendation: Recommendation
+) -> dict[str, Any]:
+    """Bounded canonical projection of the decoded output (parsed-output digest)."""
+    return {
+        "caveats": [
+            {
+                "kind": c.kind,
+                "claim": c.claim,
+                "evidence_refs": [
+                    {"kind": r.kind, "id": r.id} for r in c.evidence_refs
+                ],
+            }
+            for c in caveats
+        ],
+        "recommendation": {
+            "disposition": recommendation.disposition,
+            "rationale": recommendation.rationale,
+            "follow_up_run_dims": list(recommendation.follow_up_run_dims)
+            if recommendation.follow_up_run_dims is not None
+            else None,
+        },
+    }
+
+
+def _advisory_inline_summary(
+    caveats: Sequence[Caveat], recommendation: Recommendation
+) -> dict[str, Any]:
+    """Bounded advisory summary for the stage-boundary checkpoint (no authority)."""
+    return {
+        "stage": "stage2",
+        "caveats_count": len(caveats),
+        "disposition": recommendation.disposition,
+        "follow_up_run_dims": list(recommendation.follow_up_run_dims)
+        if recommendation.follow_up_run_dims is not None
+        else None,
+    }
+
+
+class Stage2Service:
+    """Run Stage 2 read-only over the Wave 1 provider seam (AF-REQ-13/21).
+
+    The service assembles the read-only server evidence, hands the transport to
+    the :class:`AgentProviderSeam` (one transport attempt row), then decodes +
+    referentially validates the response, records the terminal ``validated``
+    attempt row, and appends the contiguous stage-boundary checkpoint (terminal
+    ``stage2_completed`` event + checkpoint in one transaction). There is NO
+    branch that synthesizes a fallback review: a provider/decode/referential
+    failure propagates with zero validated rows and no checkpoint. The
+    recommendation is advisory-only -- ``propose_new_run`` never spawns a run.
+    """
+
+    def __init__(
+        self,
+        *,
+        provider: str,
+        model: str,
+        model_version: str | None = None,
+        experience_context: Any | None = None,
+    ) -> None:
+        self.provider = provider
+        self.model = model
+        self.model_version = model_version
+        self._experience_context = experience_context
+
+    async def run(
+        self,
+        *,
+        snapshot_ref: Mapping[str, Any],
+        seam: Any,
+        repo: Any,
+        run_id: str,
+        run_service: Any,
+        principal: str,
+        expected_version: int,
+        attempt_token: str,
+        evidence: ServerEvidence | None = None,
+        budget_hints: Mapping[str, Any] | None = None,
+    ) -> Stage2Result:
+        from app.research.run_contract import (
+            attempt_token_digest,
+            checkpoint_state_checksum,
+        )
+
+        if evidence is None:
+            evidence = assemble_server_evidence(
+                repo=repo,
+                run_id=run_id,
+                artifact_service=getattr(run_service, "_artifact_service", None),
+            )
+        if budget_hints is None:
+            budget_hints = {"max_caveats": MAX_STAGE2_CAVEATS}
+        request = StageTwoRequest(
+            snapshot_ref=snapshot_ref, evidence=evidence, budget_hints=budget_hints
+        )
+        request_scope = request.as_request_scope()
+        request_scope_sha256 = _sha256_hex(
+            canonical_bounded_json(request_scope, "stage2 request")
+        )
+        attempt = await seam.request(
+            stage="stage2",
+            messages=_stage2_messages(request),
+            request_payload=request_scope,
+            repo=repo,
+            run_id=run_id,
+            schema_version=STAGE_TWO_SCHEMA_VERSION,
+            template_version=STAGE_TWO_PROMPT_TEMPLATE_VERSION,
+            provider=self.provider,
+            model=self.model,
+            model_version=self.model_version,
+        )
+        provenance = {
+            "provider": self.provider,
+            "model": self.model,
+            "model_version": self.model_version,
+            "template_version": STAGE_TWO_PROMPT_TEMPLATE_VERSION,
+            "schema_version": STAGE_TWO_SCHEMA_VERSION,
+        }
+
+        # Strict decode -- a failure is permanent (schema_violation/malformed_json).
+        try:
+            caveats, recommendation = decode_stage2_payload(attempt.raw)
+        except ValueError as error:
+            klass = (
+                "malformed_json" if "malformed JSON" in str(error) else "schema_violation"
+            )
+            repo.record_analysis_attempt(
+                run_id=run_id,
+                stage="stage2",
+                attempt_ordinal=attempt.attempt_ordinal + 1,
+                template_version=STAGE_TWO_PROMPT_TEMPLATE_VERSION,
+                schema_version=STAGE_TWO_SCHEMA_VERSION,
+                provider=self.provider,
+                model=self.model,
+                model_version=self.model_version,
+                request_scope_sha256=request_scope_sha256,
+                validation_errors=[{"code": klass, "detail": str(error)[:200]}],
+                failure_class=klass,
+                outcome="failed",
+            )
+            raise _stage2_failure(klass, str(error)) from error
+
+        # Referential integrity -- a failure is permanent (no fallback review).
+        cited_refs = [ref for caveat in caveats for ref in caveat.evidence_refs]
+        try:
+            verify_evidence_refs(cited_refs, repo=repo, run_id=run_id)
+        except ReferentialIntegrityError as error:
+            repo.record_analysis_attempt(
+                run_id=run_id,
+                stage="stage2",
+                attempt_ordinal=attempt.attempt_ordinal + 1,
+                template_version=STAGE_TWO_PROMPT_TEMPLATE_VERSION,
+                schema_version=STAGE_TWO_SCHEMA_VERSION,
+                provider=self.provider,
+                model=self.model,
+                model_version=self.model_version,
+                request_scope_sha256=request_scope_sha256,
+                validation_errors=[
+                    {"code": "referential_integrity", "detail": str(error)[:200]}
+                ],
+                failure_class="schema_violation",
+                outcome="failed",
+            )
+            raise _stage2_failure(
+                "schema_violation", f"referential integrity: {error}"
+            ) from error
+
+        # Terminal validated attempt row (parsed-output digest recorded).
+        parsed_output_sha256 = _sha256_hex(
+            canonical_bounded_json(
+                _decoded_output_scope(caveats, recommendation), "stage2 parsed output"
+            )
+        )
+        repo.record_analysis_attempt(
+            run_id=run_id,
+            stage="stage2",
+            attempt_ordinal=attempt.attempt_ordinal + 1,
+            template_version=STAGE_TWO_PROMPT_TEMPLATE_VERSION,
+            schema_version=STAGE_TWO_SCHEMA_VERSION,
+            provider=self.provider,
+            model=self.model,
+            model_version=self.model_version,
+            request_scope_sha256=request_scope_sha256,
+            parsed_output_sha256=parsed_output_sha256,
+            outcome="validated",
+        )
+
+        # Contiguous stage-boundary checkpoint (terminal event + checkpoint in
+        # one transaction). Stage 2 is terminal for the Agent.
+        run = repo.get_alpha_run(run_id, principal=principal)
+        if run is None:
+            raise ValueError("run not found for principal")
+        committed_event_seq = int(run["last_event_seq"]) + 1
+        checkpoint_version = repo.next_checkpoint_version(run_id)
+        inline_summary = _advisory_inline_summary(caveats, recommendation)
+        referenced_candidate_ids = tuple(
+            ref.id for ref in cited_refs if ref.kind == "candidate"
+        )
+        state_checksum = checkpoint_state_checksum(
+            run_id=run_id,
+            checkpoint_version=checkpoint_version,
+            committed_event_seq=committed_event_seq,
+            stage="stage2",
+            snapshot_sha256=run["snapshot_sha256"],
+            manifest_sha256=run["manifest_sha256"],
+            referenced_candidate_ids=referenced_candidate_ids,
+            inline_summary=inline_summary,
+            frontier_artifact_id=None,
+        )
+        run_service.append_stage_boundary(
+            repo,
+            run_id=run_id,
+            after_stage="stage2",
+            event_id="aevt_" + uuid.uuid4().hex,
+            event_type="stage2_completed",
+            idempotency_key="stage2-boundary-" + uuid.uuid4().hex,
+            actor="service",
+            source="agent",
+            payload={
+                "stage": "stage2",
+                "caveats_count": len(caveats),
+                "disposition": recommendation.disposition,
+            },
+            committed_event_seq=committed_event_seq,
+            checkpoint_stage="stage2",
+            snapshot_sha256=run["snapshot_sha256"],
+            manifest_sha256=run["manifest_sha256"],
+            state_checksum=state_checksum,
+            principal=principal,
+            expected_version=expected_version,
+            expected_attempt_token_digest=attempt_token_digest(attempt_token),
+            referenced_candidate_ids=referenced_candidate_ids,
+            inline_summary=inline_summary,
+        )
+
+        return Stage2Result(
+            caveats=caveats,
+            recommendation=recommendation,
+            attempt_ordinal=attempt.attempt_ordinal,
+            provenance=provenance,
+        )

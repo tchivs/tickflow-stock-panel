@@ -374,7 +374,12 @@ class AgentProviderSeam:
                 parsed_output_sha256=None,  # set by the Stage service after parsing.
                 retries=attempt_ordinal - 1,
                 latency_ms=latency_ms,
-                outcome="proposed" if stage == "stage1" else "validated",
+                # Transport success = "a response was proposed"; each Stage
+                # service records the terminal validated/proposed outcome after
+                # its own server-side checks pass (Stage 2 decode + referential
+                # integrity). This keeps a decode/referential failure at ZERO
+                # validated rows (SC4, plan 48-03-03).
+                outcome="proposed",
             )
             return AnalysisAttempt(
                 raw=raw,
