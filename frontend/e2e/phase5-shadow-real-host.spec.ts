@@ -3,7 +3,7 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { chmod, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { expect, test, type Request } from '@playwright/test'
+import { expect, test as base, type Request } from '@playwright/test'
 
 /**
  * CR-01 real-host primary node.
@@ -25,8 +25,6 @@ let host: ChildProcess | undefined
 let frontend: ChildProcess | undefined
 let hostOutput = ''
 let frontendOutput = ''
-test.setTimeout(240_000)
-test.use({ baseURL: frontendUrl })
 
 function sleep(milliseconds: number) {
   const deferred = Promise.withResolvers<void>()
@@ -77,8 +75,9 @@ async function waitForFrontend() {
   throw new Error(`isolated Vite host did not become ready: ${frontendOutput.slice(-4_000)}`)
 }
 
-test.beforeAll(async (_fixtures, testInfo) => {
-  testInfo.setTimeout(180_000)
+// worker-scoped custom fixture: codemod 只匹配 `test.beforeAll`, 对 fixture 定义免疫。
+const test = base.extend<{ phase5RealHostStack: void }>({
+      phase5RealHostStack: [async ({}, use) => {
   const root = resolve(import.meta.dirname, '../..')
   const fixtureDir = await mkdtemp(join(tmpdir(), 'phase5-shadow-fixture-'))
   const dataDir = await mkdtemp(join(tmpdir(), 'phase5-shadow-data-'))
@@ -102,6 +101,9 @@ test.beforeAll(async (_fixtures, testInfo) => {
       PHASE1_FIXTURE_MODE: '1',
       PHASE1_FIXTURE_DIR: fixtureDir,
       PHASE5_REAL_HOST_TELEMETRY: '1',
+      // 测试/fixture 模式: 禁用外部 provider 探测 (TickFlow 能力 / stock-sdk), 后端确定性快速 ready。
+      TICKFLOW_API_KEY: '',
+      STOCK_SDK_NODE: '/nonexistent-node',
     },
     stdio: 'pipe',
   })
@@ -116,15 +118,17 @@ test.beforeAll(async (_fixtures, testInfo) => {
   frontend.stdout?.on('data', chunk => { frontendOutput += String(chunk) })
   frontend.stderr?.on('data', chunk => { frontendOutput += String(chunk) })
   await waitForFrontend()
-})
-
-test.afterAll(async () => {
+  await use()
   frontend?.kill('SIGTERM')
   host?.kill('SIGTERM')
   await sleep(600)
   frontend?.kill('SIGKILL')
   host?.kill('SIGKILL')
+  }, { scope: 'worker' }],
 })
+
+test.setTimeout(240_000)
+test.use({ baseURL: frontendUrl })
 
 function shadowExecutionCsv(): string {
   const header = 'symbol,side,time,quantity,price,fees,currency,fill_id'
@@ -167,7 +171,8 @@ function isStaticCdnHost(host: string): boolean {
   )
 }
 
-test('CR-01 real host non-empty Shadow import to evidence distillation and IS-OOS', async ({ page, context }) => {
+test('CR-01 real host non-empty Shadow import to evidence distillation and IS-OOS', async ({ page, context, phase5RealHostStack }) => {
+  void phase5RealHostStack
   const routeHandlers: string[] = []
   const originalPageRoute = page.route.bind(page)
   const originalContextRoute = context.route.bind(context)

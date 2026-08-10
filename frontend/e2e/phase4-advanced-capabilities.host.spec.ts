@@ -3,7 +3,7 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { chmod, mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test as base, type Page } from '@playwright/test'
 
 const hostPort = Number(process.env.PHASE4_HOST_PORT ?? 3021)
 const hostUrl = `http://127.0.0.1:${hostPort}`
@@ -15,9 +15,6 @@ let frontend: ChildProcess | undefined
 let capabilityBranch: 'affirmative_isolation_proved' | 'isolation_unavailable_fail_closed' | undefined
 let hostOutput = ''
 let frontendOutput = ''
-test.setTimeout(180_000)
-
-test.use({ baseURL: browserUrl })
 
 function sleep(milliseconds: number) {
   const deferred = Promise.withResolvers<void>()
@@ -121,8 +118,9 @@ async function stopRootSse(page: Page) {
   })
 }
 
-test.beforeAll(async (_fixtures, testInfo) => {
-  testInfo.setTimeout(90_000)
+// worker-scoped custom fixture: codemod 只匹配 `test.beforeAll`, 对 fixture 定义免疫。
+const test = base.extend<{ phase4RealHostStack: void }>({
+      phase4RealHostStack: [async ({}, use) => {
   const root = resolve(import.meta.dirname, '../..')
   const fixtureDir = await mkdtemp(join(tmpdir(), 'phase4-fastapi-fixture-'))
   const dataDir = await mkdtemp(join(tmpdir(), 'phase4-fastapi-data-'))
@@ -174,7 +172,7 @@ test.beforeAll(async (_fixtures, testInfo) => {
   await chmod(fixtureDir, 0o555)
   host = spawn('uv', ['run', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', String(hostPort)], {
     cwd: join(root, 'backend'),
-    env: { ...process.env, AUTH_PASSWORD: password, DATA_DIR: dataDir, PORT: String(hostPort), PHASE1_FIXTURE_MODE: '1', PHASE1_FIXTURE_DIR: fixtureDir, ADVANCED_HOST_FIXTURE: advancedFixture },
+    env: { ...process.env, AUTH_PASSWORD: password, DATA_DIR: dataDir, PORT: String(hostPort), PHASE1_FIXTURE_MODE: '1', PHASE1_FIXTURE_DIR: fixtureDir, ADVANCED_HOST_FIXTURE: advancedFixture, TICKFLOW_API_KEY: '', STOCK_SDK_NODE: '/nonexistent-node' },
     stdio: 'pipe',
   })
   host.stdout?.on('data', chunk => { hostOutput += String(chunk) })
@@ -188,14 +186,17 @@ test.beforeAll(async (_fixtures, testInfo) => {
   frontend.stdout?.on('data', chunk => { frontendOutput += String(chunk) })
   frontend.stderr?.on('data', chunk => { frontendOutput += String(chunk) })
   await waitForFrontend()
-})
-
-test.afterAll(() => {
+  await use()
   frontend?.kill('SIGTERM')
   host?.kill('SIGTERM')
+  }, { scope: 'worker' }],
 })
 
-test('real host visibly preserves immutable viewpoint lineage, correction, evaluation, calibration, viewport evidence, job audit, and root SSE', async ({ page }) => {
+test.setTimeout(180_000)
+test.use({ baseURL: browserUrl })
+
+test('real host visibly preserves immutable viewpoint lineage, correction, evaluation, calibration, viewport evidence, job audit, and root SSE', async ({ page, phase4RealHostStack }) => {
+  void phase4RealHostStack
   await login(page)
   const bootstrap = await sameOriginRequest(page, '/api/advanced/viewpoints', 'POST', {
     source_profile: 'operator-research-v1', market_scope: 'CN-A', asset_type: 'stock', instrument: '600000.SH', published_at: '2024-01-02T00:00:00+00:00', direction: 'bullish', conclusion: '受控初始观点', rating: 'overweight', target_range: [7, 9], horizon_days: 60, confidence: 'high', evidence: [{ id: 'filing-1' }], evaluation_window_days: 60, benchmark: '000300.SH',
@@ -235,7 +236,8 @@ test('real host visibly preserves immutable viewpoint lineage, correction, evalu
   expect(payloads).toContainEqual(expect.objectContaining({ subject_key: '600000.SH', audit_reference: expect.any(String) }))
 })
 
-test('real host visibly resolves the immutable binding, completes research feedback to five gates, promotion, and sandbox capability branch', async ({ page }) => {
+test('real host visibly resolves the immutable binding, completes research feedback to five gates, promotion, and sandbox capability branch', async ({ page, phase4RealHostStack }) => {
+  void phase4RealHostStack
   await login(page, '/backtest')
   await page.getByRole('button', { name: '均线多头', exact: true }).click()
   await expect(page.getByText('服务器解析的研究资产')).toBeVisible()
@@ -344,7 +346,8 @@ test('real host visibly resolves the immutable binding, completes research feedb
   }
 })
 
-test('real host denies unauthenticated, out-of-scope, rate-limited, and revoked jobs without unauthorized SSE work', async ({ page }) => {
+test('real host denies unauthenticated, out-of-scope, rate-limited, and revoked jobs without unauthorized SSE work', async ({ page, phase4RealHostStack }) => {
+  void phase4RealHostStack
   await page.goto('/')
   const unauthenticated = await sameOriginRequest(page, '/api/advanced/subjects/600000.SH/jobs', 'POST', { task_type: 'research_draft' })
   expect(unauthenticated.status).toBe(401)

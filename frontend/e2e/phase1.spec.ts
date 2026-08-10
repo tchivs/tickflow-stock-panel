@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { chmod, mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { expect, test } from '@playwright/test'
+import { expect, test as base } from '@playwright/test'
 
 const DESKTOP_PROJECT = 'desktop-chromium'
 const MOBILE_PROJECT = 'mobile-chromium-320'
@@ -20,8 +20,6 @@ let host: ChildProcess | undefined
 let frontend: ChildProcess | undefined
 let hostOutput = ''
 let frontendOutput = ''
-test.setTimeout(180_000)
-test.use({ baseURL: frontendUrl })
 
 function sleep(milliseconds: number) {
   const deferred = Promise.withResolvers<void>()
@@ -73,8 +71,10 @@ async function waitForFrontend() {
   throw new Error(`isolated Vite host did not become ready: ${frontendOutput.slice(-4_000)}`)
 }
 
-test.beforeAll(async (_fixtures, testInfo) => {
-  testInfo.setTimeout(180_000)
+// worker-scoped custom fixture: 与 beforeAll 等价, 但 codemod 只匹配 `test.beforeAll`,
+// 对 fixture 定义免疫 — 不会再把空解构改写成非法的 `_fixtures` 破坏套件加载。
+const test = base.extend<{ phase1RealHostStack: void }>({
+      phase1RealHostStack: [async ({}, use, workerInfo) => {
   const root = resolve(import.meta.dirname, '../..')
   const fixtureDir = await mkdtemp(join(tmpdir(), 'phase1-fixture-'))
   const dataDir = await mkdtemp(join(tmpdir(), 'phase1-data-'))
@@ -100,6 +100,9 @@ test.beforeAll(async (_fixtures, testInfo) => {
       PHASE1_FIXTURE_DIR: fixtureDir,
       // 不设 AUTH_PASSWORD → 未初始化模式, 可信本机 origin 免登录。
       AUTH_PASSWORD: '',
+      // 测试/fixture 模式: 禁用外部 provider 探测 (TickFlow 能力 / stock-sdk), 后端确定性快速 ready。
+      TICKFLOW_API_KEY: '',
+      STOCK_SDK_NODE: '/nonexistent-node',
     },
     stdio: 'pipe',
   })
@@ -133,7 +136,7 @@ test.beforeAll(async (_fixtures, testInfo) => {
     'repo.create_delivery_outcome(event_id="phase1-fixture-alert", channel="feishu", status="sent", error=None)',
     'repo.create_delivery_outcome(event_id="phase1-fixture-alert", channel="telegram", status="sent", error=None)',
   ]
-  if (testInfo.project.name === MOBILE_PROJECT) {
+  if (workerInfo.project.name === MOBILE_PROJECT) {
     // mobile 测试依赖预置持仓卡; desktop 测试需零持仓走「空态 → 添加持仓」流程, 不能预置。
     seedScript.push(
       'acc = repo.create_account(name="预置账户", available_funds=20000)',
@@ -157,19 +160,21 @@ test.beforeAll(async (_fixtures, testInfo) => {
     })
     seed.on('error', rejectSeed)
   })
-})
-
-test.afterAll(async () => {
+  await use()
   frontend?.kill('SIGTERM')
   host?.kill('SIGTERM')
   await sleep(600)
   frontend?.kill('SIGKILL')
   host?.kill('SIGKILL')
+  }, { scope: 'worker' }],
 })
 
+test.setTimeout(180_000)
+test.use({ baseURL: frontendUrl })
 
 test.describe('Phase 1 isolated investor workflow', () => {
-  test('desktop investor creates a holding and reviews delivery status', async ({ page }, testInfo) => {
+  test('desktop investor creates a holding and reviews delivery status', async ({ page, phase1RealHostStack }, testInfo) => {
+    void phase1RealHostStack
     test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
 
     await page.goto('/portfolio')
@@ -212,7 +217,8 @@ test.describe('Phase 1 isolated investor workflow', () => {
 
   })
 
-  test('mobile investor uses the shared drawer with compact, overflow-safe operational views', async ({ page }, testInfo) => {
+  test('mobile investor uses the shared drawer with compact, overflow-safe operational views', async ({ page, phase1RealHostStack }, testInfo) => {
+    void phase1RealHostStack
     test.skip(testInfo.project.name !== MOBILE_PROJECT, 'mobile-only workflow')
 
     await page.goto('/portfolio')
