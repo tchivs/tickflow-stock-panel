@@ -138,7 +138,7 @@ export function Portfolio() {
               <div className="flex flex-col gap-2 border-y border-border py-3 sm:flex-row sm:flex-wrap sm:items-center">
                 <label className="relative w-full sm:min-w-0 sm:flex-1 sm:max-w-xs" htmlFor="portfolio-account-filter">
                   <span className="sr-only">选择账户</span>
-                  <select id="portfolio-account-filter" value={selectedAccountId ?? ''} onChange={event => setSelectedAccountId(event.target.value ? Number(event.target.value) : undefined)} disabled={accountsQuery.isLoading} className="h-8 w-full appearance-none rounded-btn border border-border bg-surface px-3 pr-8 text-sm text-foreground outline-none focus:border-accent focus:ring-2 focus:ring-accent/30 max-md:min-h-11">
+                  <select id="portfolio-account-filter" aria-label="选择账户" value={selectedAccountId ?? ''} onChange={event => setSelectedAccountId(event.target.value ? Number(event.target.value) : undefined)} disabled={accountsQuery.isLoading} className="h-8 w-full appearance-none rounded-btn border border-border bg-surface px-3 pr-8 text-sm text-foreground outline-none focus:border-accent focus:ring-2 focus:ring-accent/30 max-md:min-h-11">
                     <option value="">全部账户{accounts.length ? ` · ${accounts.length}` : ''}</option>
                     {accounts.map(account => <option key={account.id} value={account.id}>{account.name}{account.archived_at ? '（已归档）' : ''}</option>)}
                   </select>

@@ -22,13 +22,14 @@ export function ScheduleEditor({ value, onSave, loading, hint }: {
       <input
         type="number" min={0} max={23} value={h}
         onChange={e => setH(Math.max(0, Math.min(23, Number(e.target.value))))}
+        aria-label="每日小时"
         className="w-12 px-1.5 py-1 rounded-btn bg-base border border-border text-xs font-mono text-foreground text-center"
       />
       <span className="text-xs text-muted">:</span>
       <input
         type="number" min={0} max={59} value={m}
         onChange={e => setM(Math.max(0, Math.min(59, Number(e.target.value))))}
-        className="w-12 px-1.5 py-1 rounded-btn bg-base border border-border text-xs font-mono text-foreground text-center"
+        aria-label="每日分钟"
       />
       <button
         onClick={handleSave}

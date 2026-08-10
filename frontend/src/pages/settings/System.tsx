@@ -112,6 +112,7 @@ export function SettingsSystemPanel() {
               setToastMax(v)
               refreshAlertToastConfig()
             }}
+            aria-label="最大弹窗个数"
             className="w-16 h-8 px-1.5 rounded-btn border border-border bg-base text-xs text-foreground disabled:opacity-50"
           >
             {[1, 2, 3, 4, 5].map(n => <option key={n} value={n}>{n}</option>)}
@@ -148,6 +149,7 @@ export function SettingsSystemPanel() {
                 setSoundType(v)
                 if (v !== 'none') previewSound(v)
               }}
+              aria-label="声效选择"
               className="w-20 h-8 px-1.5 rounded-btn border border-border bg-base text-xs text-foreground disabled:opacity-50"
             >
               {SOUND_OPTIONS.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}

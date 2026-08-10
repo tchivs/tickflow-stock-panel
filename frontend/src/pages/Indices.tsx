@@ -211,6 +211,7 @@ export function Indices() {
           value={keyword}
           onChange={e => setKeyword(e.target.value)}
           placeholder="搜索指数代码/名称"
+          aria-label="搜索指数代码/名称"
           className="w-full rounded-btn border border-border bg-base py-1.5 pl-7 pr-2 text-xs text-foreground outline-none focus:border-accent"
         />
       </div>
@@ -298,6 +299,7 @@ export function Indices() {
                 type="date"
                 value={range.start}
                 onChange={e => setRange(r => ({ ...r, start: e.target.value }))}
+                aria-label="起始日期"
                 className="rounded-btn border border-border bg-base px-2 py-1 text-secondary outline-none focus:border-accent"
               />
               <span className="text-muted">至</span>
@@ -305,6 +307,7 @@ export function Indices() {
                 type="date"
                 value={range.end}
                 onChange={e => setRange(r => ({ ...r, end: e.target.value }))}
+                aria-label="结束日期"
                 className="rounded-btn border border-border bg-base px-2 py-1 text-secondary outline-none focus:border-accent"
               />
             </div>

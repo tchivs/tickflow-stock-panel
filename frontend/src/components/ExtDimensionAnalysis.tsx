@@ -258,6 +258,7 @@ export function ExtDimensionAnalysis({
             <select
               value={activeConfigId}
               onChange={(e) => { setSelectedConfigId(e.target.value); setDimensionField(''); setSelectedGroup(null) }}
+              aria-label="扩展数据源配置"
               className="h-8 max-md:min-h-11 w-full min-w-0 rounded-btn border border-border bg-surface px-2 text-xs text-foreground focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60 sm:w-auto sm:min-w-40"
             >
               {availableConfigs.length === 0 ? (
@@ -270,6 +271,7 @@ export function ExtDimensionAnalysis({
               value={activeDimensionField}
               onChange={(e) => { setDimensionField(e.target.value); setSelectedGroup(null) }}
               disabled={!activeConfig}
+              aria-label="维度字段"
               className="h-8 max-md:min-h-11 w-full min-w-0 rounded-btn border border-border bg-surface px-2 text-xs text-foreground disabled:opacity-50 focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60 sm:w-auto sm:min-w-36"
             >
               {dimensionOptions.length === 0 ? (
@@ -341,6 +343,7 @@ export function ExtDimensionAnalysis({
                         value={search}
                         onChange={(e) => { setSearch(e.target.value); setSelectedGroup(null) }}
                         placeholder={`搜索${activeKindLabel}`}
+                        aria-label={`搜索${activeKindLabel}`}
                         className="h-8 max-md:min-h-11 w-full rounded-btn border border-border bg-base pl-8 pr-3 text-xs text-foreground placeholder:text-muted/50 focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60"
                       />
                     </div>

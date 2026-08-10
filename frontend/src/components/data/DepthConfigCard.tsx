@@ -73,6 +73,7 @@ export function DepthConfigContent({ disabled }: { disabled?: boolean }) {
             value={intervalInput}
             disabled={disabled}
             onChange={e => setIntervalInput(e.target.value)}
+            aria-label="盘中轮询间隔(秒)"
             onBlur={() => {
               if (disabled) return
               let v = Number(intervalInput)
@@ -100,6 +101,7 @@ export function DepthConfigContent({ disabled }: { disabled?: boolean }) {
             value={finalizeHour}
             disabled={disabled}
             onChange={e => setFinalizeHour(e.target.value)}
+            aria-label="盘后定版小时"
             onBlur={() => {
               if (disabled) return
               let h = Number(finalizeHour)
@@ -122,6 +124,7 @@ export function DepthConfigContent({ disabled }: { disabled?: boolean }) {
             value={finalizeMinute}
             disabled={disabled}
             onChange={e => setFinalizeMinute(e.target.value)}
+            aria-label="盘后定版分钟"
             onBlur={() => {
               if (disabled) return
               let h = Number(finalizeHour)

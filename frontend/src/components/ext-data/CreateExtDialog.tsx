@@ -407,6 +407,7 @@ export function CreateExtDialog({ onClose }: { onClose: () => void }) {
                 value={label}
                 onChange={(e) => setLabel(e.target.value)}
                 placeholder={mode === 'snapshot' ? '例: 概念' : '例: 资金流'}
+                aria-label="显示名称"
                 className="w-full h-9 px-3 rounded-lg bg-base border border-border text-xs text-foreground placeholder:text-muted/40 focus:outline-none focus:ring-1 focus:ring-accent/30 focus:border-accent/50 transition-shadow"
               />
             </div>
@@ -416,6 +417,7 @@ export function CreateExtDialog({ onClose }: { onClose: () => void }) {
                 value={id}
                 onChange={(e) => setId(e.target.value.replace(/[^a-zA-Z0-9_]/g, ''))}
                 placeholder={mode === 'snapshot' ? '例: concept' : '例: money_flow'}
+                aria-label="标识符"
                 className="w-full h-9 px-3 rounded-lg bg-base border border-border text-xs text-foreground font-mono placeholder:text-muted/40 focus:outline-none focus:ring-1 focus:ring-accent/30 focus:border-accent/50 transition-shadow"
               />
             </div>
@@ -427,6 +429,7 @@ export function CreateExtDialog({ onClose }: { onClose: () => void }) {
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               placeholder="扩展数据 · 与标的 JOIN（可选自定义描述）"
+              aria-label="描述"
               className="w-full h-9 px-3 rounded-lg bg-base border border-border text-xs text-foreground placeholder:text-muted/40 focus:outline-none focus:ring-1 focus:ring-accent/30 focus:border-accent/50 transition-shadow"
             />
           </div>
@@ -441,6 +444,7 @@ export function CreateExtDialog({ onClose }: { onClose: () => void }) {
                 <select
                   value={method}
                   onChange={(e) => setMethod(e.target.value as 'GET' | 'POST')}
+                  aria-label="请求方法"
                   className="h-8 shrink-0 rounded-lg border border-border bg-base px-2 text-[11px] text-foreground"
                 >
                   <option value="GET">GET</option>
@@ -450,6 +454,7 @@ export function CreateExtDialog({ onClose }: { onClose: () => void }) {
                   value={url}
                   onChange={(e) => setUrl(e.target.value)}
                   placeholder="https://api.example.com/data"
+                  aria-label="请求 URL"
                   className="h-8 flex-1 min-w-0 rounded-lg border border-border bg-base px-3 text-[11px] font-mono text-foreground placeholder:text-muted/40 focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60"
                 />
                 <button
@@ -468,6 +473,7 @@ export function CreateExtDialog({ onClose }: { onClose: () => void }) {
                     value={responsePath}
                     onChange={(e) => setResponsePath(e.target.value)}
                     placeholder="data.list（可留空自动识别）"
+                    aria-label="响应数据路径"
                     className="w-full h-8 rounded-lg border border-border bg-base px-2 text-[10px] font-mono text-foreground placeholder:text-muted/40 focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60"
                   />
                 </div>
@@ -478,6 +484,7 @@ export function CreateExtDialog({ onClose }: { onClose: () => void }) {
                     min={1}
                     value={schedule}
                     onChange={(e) => setSchedule(Number(e.target.value) || 1)}
+                    aria-label="调度间隔(分钟)"
                     className="w-full h-8 rounded-lg border border-border bg-base px-2 text-[10px] font-mono text-foreground focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60"
                   />
                 </div>
@@ -490,6 +497,7 @@ export function CreateExtDialog({ onClose }: { onClose: () => void }) {
                     onChange={(e) => setHeaderStr(e.target.value)}
                     rows={2}
                     placeholder='{"Authorization":"Bearer xxx"}'
+                    aria-label="请求 Headers(JSON)"
                     className="w-full rounded-lg border border-border bg-base px-2 py-1.5 text-[10px] font-mono text-foreground placeholder:text-muted/40 resize-none focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60"
                   />
                 </div>
@@ -500,6 +508,7 @@ export function CreateExtDialog({ onClose }: { onClose: () => void }) {
                     onChange={(e) => setFieldMapStr(e.target.value)}
                     rows={2}
                     placeholder='{"code":"symbol","val":"score"}'
+                    aria-label="字段映射(JSON)"
                     className="w-full rounded-lg border border-border bg-base px-2 py-1.5 text-[10px] font-mono text-foreground placeholder:text-muted/40 resize-none focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60"
                   />
                 </div>
@@ -512,6 +521,7 @@ export function CreateExtDialog({ onClose }: { onClose: () => void }) {
                     onChange={(e) => setBody(e.target.value)}
                     rows={3}
                     placeholder='{"page":1}'
+                    aria-label="请求体(JSON)"
                     className="w-full rounded-lg border border-border bg-base px-2 py-1.5 text-[10px] font-mono text-foreground placeholder:text-muted/40 resize-none focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60"
                   />
                 </div>
@@ -695,17 +705,20 @@ export function CreateExtDialog({ onClose }: { onClose: () => void }) {
                         value={f.label}
                         onChange={(e) => updateField(idx, 'label', e.target.value)}
                         placeholder="显示名"
+                        aria-label={`字段 ${idx + 1} 显示名`}
                         className="w-[72px] h-7 px-2 rounded-md border border-border bg-base text-[11px] text-foreground placeholder:text-muted/40 focus:border-accent/40 focus-visible:ring-2 focus-visible:ring-accent/60"
                       />
                       <input
                         value={f.name}
                         onChange={(e) => updateField(idx, 'name', e.target.value)}
                         placeholder="字段名"
+                        aria-label={`字段 ${idx + 1} 字段名`}
                         className="flex-1 h-7 px-2 rounded-md border border-border bg-base text-[11px] font-mono text-foreground placeholder:text-muted/40 focus:border-accent/40 focus-visible:ring-2 focus-visible:ring-accent/60"
                       />
                       <select
                         value={f.dtype}
                         onChange={(e) => updateField(idx, 'dtype', e.target.value)}
+                        aria-label={`字段 ${idx + 1} 类型`}
                         className="h-7 px-2 rounded-md border border-border bg-base text-[11px] text-foreground"
                       >
                         <option value="string">文本</option>

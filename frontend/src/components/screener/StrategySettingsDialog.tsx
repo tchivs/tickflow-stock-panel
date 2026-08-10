@@ -93,6 +93,7 @@ function RangeField({ label, minVal, maxVal, onMinChange, onMaxChange, unit, ste
         onChange={e => onMinChange(e.target.value === '' ? null : Number(e.target.value))}
         placeholder="最小"
         step={step}
+        aria-label={`${label}最小值`}
         className="w-20 px-1.5 py-0.5 rounded bg-base border border-border text-[11px] font-mono text-foreground text-center focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60"
       />
       <span className="text-[10px] text-muted">~</span>
@@ -102,6 +103,7 @@ function RangeField({ label, minVal, maxVal, onMinChange, onMaxChange, unit, ste
         onChange={e => onMaxChange(e.target.value === '' ? null : Number(e.target.value))}
         placeholder="最大"
         step={step}
+        aria-label={`${label}最大值`}
         className="w-20 px-1.5 py-0.5 rounded bg-base border border-border text-[11px] font-mono text-foreground text-center focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60"
       />
       {unit && <span className="text-[10px] text-muted shrink-0">{unit}</span>}
@@ -126,10 +128,11 @@ function ParamField({ def, value, onChange }: {
         <button
           type="button"
           onClick={() => onChange(!checked)}
+          aria-label={def.label}
+          aria-pressed={checked}
           className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors duration-200 cursor-pointer ${
             checked ? 'bg-accent' : 'bg-elevated'
           }`}
-          aria-pressed={checked}
         >
           <span className={`inline-block h-3 w-3 rounded-full bg-white shadow-sm transition-transform duration-200 ${
             checked ? 'translate-x-[14px]' : 'translate-x-0.5'
@@ -145,6 +148,7 @@ function ParamField({ def, value, onChange }: {
         <select
           value={value ?? def.default}
           onChange={e => onChange(e.target.value)}
+          aria-label={def.label}
           className="w-24 px-1.5 py-0.5 rounded bg-base border border-border text-[11px] font-mono text-foreground focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60"
         >
           {def.options.map(o => <option key={o} value={o}>{o}</option>)}
@@ -163,6 +167,7 @@ function ParamField({ def, value, onChange }: {
         step={def.step ?? 0.1}
         min={def.min}
         max={def.max}
+        aria-label={def.label}
         className="w-20 px-1.5 py-0.5 rounded bg-base border border-border text-[11px] font-mono text-foreground text-center focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60"
       />
       {def.min != null && def.max != null && (
@@ -185,6 +190,7 @@ function ScoringField({ col, weight, pct, editing, onChange }: {
           value={weight}
           onChange={e => onChange(Number(e.target.value))}
           min={0} max={100} step={1}
+          aria-label={`${FIELD_LABEL[col] ?? col}权重`}
           className="flex-1 h-1 accent-amber-400 cursor-pointer"
         />
       ) : (
@@ -376,18 +382,18 @@ export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModif
                   <div className="flex-1 space-y-2">
                     <div className="flex items-center gap-2">
                       <span className="text-[10px] text-muted/50 uppercase tracking-wider w-8 shrink-0">名称</span>
-                      <input type="text" value={strategyName} onChange={e => setStrategyName(e.target.value)}
+                      <input type="text" value={strategyName} onChange={e => setStrategyName(e.target.value)} aria-label="策略名称"
                         className="flex-1 h-8 px-3 rounded-lg bg-base border-0 ring-1 ring-border/30 text-sm font-medium text-foreground focus:outline-none focus:ring-2 focus:ring-accent/30 transition-shadow" />
                     </div>
                     <div className="flex items-center gap-2">
                       <span className="text-[10px] text-muted/50 uppercase tracking-wider w-8 shrink-0">描述</span>
-                      <input type="text" value={strategyDesc} onChange={e => setStrategyDesc(e.target.value)}
+                      <input type="text" value={strategyDesc} onChange={e => setStrategyDesc(e.target.value)} aria-label="策略描述"
                         className="flex-1 h-8 px-3 rounded-lg bg-base border-0 ring-1 ring-border/30 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-accent/30 transition-shadow" />
                     </div>
                   </div>
                   <div className="flex items-center gap-1.5 pb-0.5 shrink-0">
                     <span className="text-[10px] text-muted/50">显示上限</span>
-                    <input type="number" value={displayLimit ?? ''} onChange={e => setDisplayLimit(e.target.value ? Number(e.target.value) : null)} step={1} min={10} max={200} placeholder="不限"
+                    <input type="number" value={displayLimit ?? ''} onChange={e => setDisplayLimit(e.target.value ? Number(e.target.value) : null)} step={1} min={10} max={200} placeholder="不限" aria-label="显示上限"
                       className="w-14 h-8 px-1.5 rounded-lg bg-base border border-border/40 text-xs font-mono text-foreground text-center focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60" />
                     <span className="text-[10px] text-muted/50">只</span>
                   </div>
@@ -502,13 +508,13 @@ export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModif
                       <div className="space-y-2">
                         <div className="flex items-center gap-1.5">
                           <span className="text-[11px] text-secondary w-12 shrink-0">止损</span>
-                          <input type="number" value={stopLoss ?? ''} onChange={e => setStopLoss(e.target.value === '' ? null : Number(e.target.value))} step={0.01} min={-0.5} max={0}
+                          <input type="number" value={stopLoss ?? ''} onChange={e => setStopLoss(e.target.value === '' ? null : Number(e.target.value))} step={0.01} min={-0.5} max={0} aria-label="止损"
                             className="w-16 h-6 px-1.5 rounded bg-base border border-border text-[11px] font-mono text-foreground text-center focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60" />
                           <span className="text-[10px] text-muted">{stopLoss != null ? `${(stopLoss * 100).toFixed(1)}%` : '—'}</span>
                         </div>
                         <div className="flex items-center gap-1.5">
                           <span className="text-[11px] text-secondary w-12 shrink-0">持有</span>
-                          <input type="number" value={maxHoldDays ?? ''} onChange={e => setMaxHoldDays(e.target.value === '' ? null : Number(e.target.value))} step={1} min={1}
+                          <input type="number" value={maxHoldDays ?? ''} onChange={e => setMaxHoldDays(e.target.value === '' ? null : Number(e.target.value))} step={1} min={1} aria-label="最大持有天数"
                             className="w-16 h-6 px-1.5 rounded bg-base border border-border text-[11px] font-mono text-foreground text-center focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60" />
                           <span className="text-[10px] text-muted">天</span>
                         </div>

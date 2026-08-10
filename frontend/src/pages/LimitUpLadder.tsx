@@ -525,11 +525,13 @@ function MonitorMenu({ stock, direction, sealMode, monitorRule, anchorRect, hasD
               value={threshold}
               onChange={e => setThreshold(e.target.value)}
               placeholder="≤ 报警"
+              aria-label="阈值"
               className="flex-1 min-w-0 h-7 px-2 rounded bg-base border border-border text-foreground text-center tabular-nums placeholder:text-muted/40 focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60"
             />
             <select
               value={unitKey}
               onChange={e => setUnitKey(e.target.value)}
+              aria-label="阈值单位"
               className="h-7 px-1.5 rounded bg-base border border-border text-secondary text-[11px] focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60 cursor-pointer"
             >
               {units.map(u => (
@@ -1161,6 +1163,7 @@ function FieldSelect({ value, onChange, options }: {
       <select
         value={value}
         onChange={e => onChange(e.target.value)}
+        aria-label="字段列选择"
         className="w-full h-7 bg-elevated border border-border rounded text-xs text-foreground px-2 focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60"
       >
       <option value="">不显示</option>
@@ -1216,6 +1219,7 @@ function ExtFieldSection({ item, onChange, options }: {
                   value={cfg?.separator ?? ''}
                   onChange={e => updateDisplay({ separator: e.target.value })}
                   placeholder="留空"
+                  aria-label="分隔符"
                   className="flex-1 min-w-0 h-7 bg-elevated border border-border rounded text-xs text-foreground px-2 placeholder:text-muted focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60"
                 />
               </div>
@@ -1235,6 +1239,7 @@ function ExtFieldSection({ item, onChange, options }: {
                   updateDisplay({ maxTags: v, ...(v ? {} : { hiddenIndices: undefined }) })
                 }}
                 placeholder="不限制"
+                aria-label="显示前N个"
                 className="flex-1 min-w-0 h-7 bg-elevated border border-border rounded text-xs text-foreground px-2 placeholder:text-muted focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60"
               />
             </div>

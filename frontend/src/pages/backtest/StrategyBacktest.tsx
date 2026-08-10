@@ -533,6 +533,7 @@ function ScoringWeightRow({ name, weight, pct, editing, onChange }: {
           step={1}
           value={weight}
           onChange={e => onChange(Number(e.target.value))}
+          aria-label={`${label}权重`}
           className="h-1 flex-1 cursor-pointer accent-amber-400"
         />
       ) : (
@@ -679,6 +680,7 @@ function StockPoolPicker({ value, onChange, assetType = 'stock' }: { value: stri
             onChange={e => { setQuery(e.target.value); setOpen(true) }}
             onFocus={() => { if (query.trim()) setOpen(true) }}
             placeholder="搜索股票名称/代码添加股票池"
+            aria-label="搜索股票池"
             className="w-full rounded-input border border-border bg-surface py-1.5 pl-8 pr-2.5 text-xs focus:border-accent focus:outline-none"
           />
           {open && query.trim().length > 0 && results.length > 0 && (
@@ -976,7 +978,7 @@ export function StrategyBacktest({ onStrategyChange }: { onStrategyChange?: (str
           : undefined,
       })
     }
-  }, [backtestTask, selectedStrategy])
+  }, [backtestTask, selectedStrategy, strategyDetail.data])
 
   const currentCompletedResult = backtestTask?.id === resultTaskId
     && !backtestTask.isPending
@@ -1554,6 +1556,7 @@ export function StrategyBacktest({ onStrategyChange }: { onStrategyChange?: (str
                       <select
                         value={range.unit}
                         onChange={e => updateQuickRange(range.id, { unit: e.target.value as QuickRangeUnit })}
+                        aria-label={`区间 ${index + 1} 单位`}
                         className={INPUT_CLS}
                       >
                         <option value="month">月</option>
@@ -1568,6 +1571,7 @@ export function StrategyBacktest({ onStrategyChange }: { onStrategyChange?: (str
                         value={range.unit === 'all' ? '' : range.value}
                         onChange={e => updateQuickRange(range.id, { value: Number(e.target.value) })}
                         placeholder="—"
+                        aria-label={`区间 ${index + 1} 数量`}
                         className={`${INPUT_CLS} ${range.unit === 'all' ? 'opacity-50' : ''}`}
                       />
                     </div>
@@ -1584,7 +1588,7 @@ export function StrategyBacktest({ onStrategyChange }: { onStrategyChange?: (str
               <label className="text-xs font-medium text-secondary">建仓口径</label>
               <FillRuleHint />
             </div>
-            <select value={entryFill} onChange={e => setEntryFill(e.target.value as any)} className={INPUT_CLS}>
+            <select value={entryFill} onChange={e => setEntryFill(e.target.value as any)} aria-label="建仓口径" className={INPUT_CLS}>
               <option value="open_t+1">次日开盘成交（推荐）</option>
               <option value="close_t">信号日收盘成交</option>
             </select>
@@ -1607,7 +1611,7 @@ export function StrategyBacktest({ onStrategyChange }: { onStrategyChange?: (str
           </div>
           <div>
             <label className="text-xs font-medium text-secondary block mb-1.5">买入权重</label>
-            <select value={positionSizing} onChange={e => setPositionSizing(e.target.value as any)} className={INPUT_CLS}>
+            <select value={positionSizing} onChange={e => setPositionSizing(e.target.value as any)} aria-label="买入权重" className={INPUT_CLS}>
               <option value="equal">等权买入</option>
               <option value="score_weight">评分加权</option>
             </select>

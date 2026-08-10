@@ -154,6 +154,7 @@ function IntervalEditor({ min, max, value, onChange }: {
           min={min} max={max} step={step}
           value={clamped}
           onChange={e => { const v = parseFloat(e.target.value); setDraft(v); onChange(v) }}
+          aria-label="间隔秒数"
           className="flex-1 h-1 accent-accent cursor-pointer"
         />
         <span className="text-[10px] font-mono text-foreground w-8 text-right">

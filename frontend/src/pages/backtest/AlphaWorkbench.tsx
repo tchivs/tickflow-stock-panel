@@ -561,6 +561,7 @@ function StressMatrixView({ runId, candidates }: { runId: string; candidates: Al
           data-testid="aw-stress-candidate"
           value={effectiveId}
           onChange={e => setCandidateId(e.target.value)}
+          aria-label="压力矩阵候选"
           className="ml-auto rounded-btn border border-border bg-surface px-2 py-1 text-xs text-foreground"
         >
           {candidates.map(c => (
@@ -650,6 +651,7 @@ function DataQualityBanner({ runId, candidates }: { runId: string; candidates: A
           data-testid="aw-quality-candidate"
           value={effectiveId}
           onChange={e => setCandidateId(e.target.value)}
+          aria-label="质量评估候选"
           className="ml-auto rounded-btn border border-border bg-surface px-2 py-1 text-xs text-foreground"
         >
           {candidates.map(c => (

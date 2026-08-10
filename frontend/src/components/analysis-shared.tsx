@@ -123,6 +123,7 @@ export function AnalysisConfigDialog({
             <select
               value={draft.configId ?? ''}
               onChange={e => setDraft(d => ({ ...d, configId: e.target.value || undefined, dimensionField: undefined }))}
+              aria-label="扩展数据源"
               className="w-full h-8 max-md:min-h-11 bg-elevated border border-border rounded text-xs text-foreground px-2 focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60"
             >
               <option value="">自动选择</option>
@@ -139,6 +140,7 @@ export function AnalysisConfigDialog({
               <select
                 value={draft.dimensionField ?? ''}
                 onChange={e => setDraft(d => ({ ...d, dimensionField: e.target.value || undefined }))}
+                aria-label="维度字段（留空自动探测）"
                 className="w-full h-8 max-md:min-h-11 bg-elevated border border-border rounded text-xs text-foreground px-2 focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60"
               >
                 <option value="">自动探测</option>
@@ -155,6 +157,7 @@ export function AnalysisConfigDialog({
               <select
                 value={draft.hierarchyLevel ?? 2}
                 onChange={e => setDraft(d => ({ ...d, hierarchyLevel: Number(e.target.value) as 1 | 2 | 3 }))}
+                aria-label="统计层级"
                 className="w-full h-8 max-md:min-h-11 bg-elevated border border-border rounded text-xs text-foreground px-2 focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60"
               >
                 <option value={1}>一级行业</option>

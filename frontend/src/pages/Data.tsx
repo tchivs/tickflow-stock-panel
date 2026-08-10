@@ -54,6 +54,18 @@ import { ExtDataStatCard } from '@/components/ext-data/ExtDataStatCard'
 import { CreateExtDialog } from '@/components/ext-data/CreateExtDialog'
 import { EditExtDialog } from '@/components/ext-data/EditExtDialog'
 
+const STAGE_CARD: Record<string, string> = {
+  sync_instruments: 'instruments',
+  sync_daily: 'daily',
+  extend_history: 'daily',
+  sync_adj: 'adj_factor',
+  compute_enriched: 'enriched',
+  rebuild_enriched: 'enriched',
+  sync_index: 'index_daily',
+  sync_minute: 'minute',
+  extend_minute: 'minute',
+}
+
 export function Data() {
   const qc = useQueryClient()
   const [activeJobId, setActiveJobId] = useState<string | null>(null)
@@ -253,26 +265,27 @@ export function Data() {
   // 引用 cardVisibleTick 触发重渲染(避免 lint 警告)
   void cardVisibleTick
 
+  const jobStatus = job.data?.status
   useEffect(() => {
-    if (job.data && (job.data.status === 'succeeded' || job.data.status === 'failed')) {
+    if (jobStatus === 'succeeded' || jobStatus === 'failed') {
       qc.invalidateQueries({ queryKey: QK.dataStatus })
       qc.invalidateQueries({ queryKey: QK.pipelineJobs })
       const t = setTimeout(() => setActiveJobId(null), 5_000)
       return () => clearTimeout(t)
     }
-  }, [job.data?.status])
+  }, [jobStatus, qc])
 
   useEffect(() => {
     if (job.isError && /404/.test(String((job.error as any)?.message ?? ''))) {
       setActiveJobId(null)
     }
-  }, [job.isError, job.error])
+  }, [job.isError, job.error, activeJobId])
 
   useEffect(() => {
     if (!activeJobId && history.data?.active_id) {
       setActiveJobId(history.data.active_id)
     }
-  }, [history.data?.active_id])
+  }, [history.data?.active_id, activeJobId])
 
   const s = status.data
   const isLoading = status.isLoading
@@ -310,17 +323,6 @@ export function Data() {
     Math.max(30, Math.ceil((Date.now() - indexTargetDate.getTime()) / 86_400_000) + 1),
   )
 
-  const STAGE_CARD: Record<string, string> = {
-    sync_instruments: 'instruments',
-    sync_daily: 'daily',
-    extend_history: 'daily',
-    sync_adj: 'adj_factor',
-    compute_enriched: 'enriched',
-    rebuild_enriched: 'enriched',
-    sync_index: 'index_daily',
-    sync_minute: 'minute',
-    extend_minute: 'minute',
-  }
   const activeCard = isRunning && job.data ? STAGE_CARD[job.data.stage] ?? null : null
 
   const skippedCards = new Set(
@@ -341,7 +343,7 @@ export function Data() {
     }
     prevStageRef.current = stage
     qc.invalidateQueries({ queryKey: QK.dataStatus })
-  }, [job.data?.stage])
+  }, [job.data?.stage, qc])
 
   useEffect(() => {
     if (!activeJobId) {
@@ -1049,6 +1051,7 @@ export function Data() {
                         value={indexBatchInput}
                         onChange={e => setIndexBatchInput(e.target.value)}
                         disabled={updateIndexBatchSize.isPending || !!activeJobId || syncIndexDaily.isPending}
+                        aria-label="指数批次大小"
                         className="w-20 px-2 py-1 rounded-btn bg-elevated border border-border text-xs font-mono text-foreground outline-none focus:border-accent disabled:opacity-40"
                       />
                       <button

@@ -217,9 +217,9 @@ export function StrategyOptimizer() {
                     </label>
                     {s.enabled && numeric && (
                       <div className="mt-2 grid grid-cols-3 gap-1.5">
-                        <input type="number" value={s.min} onChange={e => updateSweep(p.id, { min: e.target.value })} placeholder="min" className={INPUT_CLS} />
-                        <input type="number" value={s.max} onChange={e => updateSweep(p.id, { max: e.target.value })} placeholder="max" className={INPUT_CLS} />
-                        <input type="number" value={s.step} onChange={e => updateSweep(p.id, { step: e.target.value })} placeholder="step" className={INPUT_CLS} />
+                        <input type="number" value={s.min} onChange={e => updateSweep(p.id, { min: e.target.value })} placeholder="min" aria-label={`${p.label}最小值`} className={INPUT_CLS} />
+                        <input type="number" value={s.max} onChange={e => updateSweep(p.id, { max: e.target.value })} placeholder="max" aria-label={`${p.label}最大值`} className={INPUT_CLS} />
+                        <input type="number" value={s.step} onChange={e => updateSweep(p.id, { step: e.target.value })} placeholder="step" aria-label={`${p.label}步长`} className={INPUT_CLS} />
                       </div>
                     )}
                     {s.enabled && !numeric && (

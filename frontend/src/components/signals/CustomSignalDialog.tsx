@@ -134,15 +134,15 @@ export function CustomSignalDialog({ open, signal, defaultKind = 'exit', onClose
                   {draft.conditions.map((c, i) => (
                     <div key={i} className="flex items-center gap-1.5">
                       <span className="text-[10px] text-muted/60 w-6 text-right shrink-0">{i === 0 ? '当' : '且'}</span>
-                      <select value={c.left} onChange={e => updateCond(i, { left: e.target.value })} className="w-32 h-7 px-1.5 rounded bg-base border border-border text-[11px] text-foreground focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60">
+                      <select value={c.left} onChange={e => updateCond(i, { left: e.target.value })} aria-label={`条件 ${i + 1} 左侧字段`} className="w-32 h-7 px-1.5 rounded bg-base border border-border text-[11px] text-foreground focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60">
                         {fields.map(f => <option key={f.key} value={f.key}>{f.label}</option>)}
                       </select>
-                      <select value={c.op} onChange={e => updateCond(i, { op: e.target.value })} className="w-12 h-7 px-1 rounded bg-base border border-border text-[11px] font-mono text-foreground text-center focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60">
+                      <select value={c.op} onChange={e => updateCond(i, { op: e.target.value })} aria-label={`条件 ${i + 1} 操作符`} className="w-12 h-7 px-1 rounded bg-base border border-border text-[11px] font-mono text-foreground text-center focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60">
                         {operators.map(op => <option key={op} value={op}>{op}</option>)}
                       </select>
                       <RightValueInput cond={c} fields={fields} onChange={v => updateCond(i, { right: v })} />
                       {draft.conditions.length > 1 && (
-                        <button onClick={() => removeCond(i)} className="p-1 rounded text-muted hover:text-danger hover:bg-danger/10 cursor-pointer">
+                        <button onClick={() => removeCond(i)} aria-label={`删除条件 ${i + 1}`} className="p-1 rounded text-muted hover:text-danger hover:bg-danger/10 cursor-pointer">
                           <X className="h-3 w-3" />
                         </button>
                       )}
@@ -176,17 +176,17 @@ function RightValueInput({ cond, fields, onChange }: { cond: CustomSignalConditi
     <div className="flex items-center gap-1">
       {isField ? (
         <>
-          <select value={fieldValue} onChange={e => onChange(`field:${e.target.value}`)} className="w-32 h-7 px-1.5 rounded bg-base border border-border text-[11px] text-foreground focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60">
+          <select value={fieldValue} onChange={e => onChange(`field:${e.target.value}`)} aria-label="右侧字段" className="w-32 h-7 px-1.5 rounded bg-base border border-border text-[11px] text-foreground focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60">
             {fields.map(f => <option key={f.key} value={f.key}>{f.label}</option>)}
           </select>
-          <button onClick={() => onChange('0')} title="切换为数字" className="p-0.5 rounded text-muted hover:text-accent cursor-pointer">
+          <button onClick={() => onChange('0')} title="切换为数字" aria-label="切换为数字" className="p-0.5 rounded text-muted hover:text-accent cursor-pointer">
             <ArrowRight className="h-3 w-3 rotate-90" />
           </button>
         </>
       ) : (
         <>
-          <input type="number" value={numValue} onChange={e => onChange(e.target.value)} step="any" className="w-24 h-7 px-1.5 rounded bg-base border border-border text-[11px] font-mono text-foreground text-center focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60" />
-          <button onClick={() => onChange('field:close')} title="切换为字段" className="p-0.5 rounded text-muted hover:text-accent cursor-pointer">
+          <input type="number" value={numValue} onChange={e => onChange(e.target.value)} step="any" aria-label="右侧数值" className="w-24 h-7 px-1.5 rounded bg-base border border-border text-[11px] font-mono text-foreground text-center focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60" />
+          <button onClick={() => onChange('field:close')} title="切换为字段" aria-label="切换为字段" className="p-0.5 rounded text-muted hover:text-accent cursor-pointer">
             <ArrowRight className="h-3 w-3 -rotate-90" />
           </button>
         </>

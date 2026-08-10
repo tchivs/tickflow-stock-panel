@@ -138,6 +138,7 @@ export function SettingsKeysPanel() {
                   type={revealing ? 'text' : 'password'}
                   placeholder={mode === 'none' ? '粘贴 TickFlow API Key' : '粘贴新 Key 替换当前'}
                   value={keyInput}
+                  aria-label="TickFlow API Key"
                   onChange={(e) => { setKeyInput(e.target.value); if (saved) setSaved(false) }}
                   className="w-full px-3 py-2 pr-9 rounded-input bg-base border border-border text-sm font-mono focus:border-accent focus-visible:ring-2 focus-visible:ring-accent/60 transition-colors duration-150 ease-smooth"
                 />

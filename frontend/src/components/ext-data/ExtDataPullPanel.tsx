@@ -130,6 +130,7 @@ export function ExtDataPullPanel({ config, onSaved }: {
         <div className="flex gap-1.5">
           <select
             value={method} onChange={e => setMethod(e.target.value)}
+            aria-label="请求方法"
             className="shrink-0 rounded-btn border border-border bg-elevated px-2 py-1.5 text-[11px] text-foreground"
           >
             <option value="GET">GET</option>
@@ -138,6 +139,7 @@ export function ExtDataPullPanel({ config, onSaved }: {
           <input
             value={url} onChange={e => setUrl(e.target.value)}
             placeholder="https://api.example.com/data"
+            aria-label="请求 URL"
             className="flex-1 min-w-0 rounded-btn border border-border bg-elevated px-2.5 py-1.5 text-[11px] font-mono text-foreground placeholder:text-muted/50"
           />
         </div>
@@ -147,6 +149,7 @@ export function ExtDataPullPanel({ config, onSaved }: {
           <textarea
             value={headerStr} onChange={e => setHeaderStr(e.target.value)}
             placeholder='{"Authorization": "Bearer xxx"}'
+            aria-label="请求 Headers(JSON)"
             rows={2}
             className="w-full rounded-btn border border-border bg-elevated px-2.5 py-1.5 text-[10px] font-mono text-foreground placeholder:text-muted/40 resize-none"
           />
@@ -158,6 +161,7 @@ export function ExtDataPullPanel({ config, onSaved }: {
             <textarea
               value={body} onChange={e => setBody(e.target.value)}
               placeholder='{"page": 1}'
+              aria-label="请求体(JSON)"
               rows={2}
               className="w-full rounded-btn border border-border bg-elevated px-2.5 py-1.5 text-[10px] font-mono text-foreground placeholder:text-muted/40 resize-none"
             />
@@ -170,6 +174,7 @@ export function ExtDataPullPanel({ config, onSaved }: {
             <input
               value={responsePath} onChange={e => setResponsePath(e.target.value)}
               placeholder="data.list"
+              aria-label="响应数据路径"
               className="w-full rounded-btn border border-border bg-elevated px-2 py-1.5 text-[10px] font-mono text-foreground placeholder:text-muted/40"
             />
           </div>
@@ -177,6 +182,7 @@ export function ExtDataPullPanel({ config, onSaved }: {
             <div className="text-[10px] text-muted mb-1">调度间隔 (分钟)</div>
             <input
               type="number" min={1} value={schedule} onChange={e => setSchedule(Number(e.target.value))}
+              aria-label="调度间隔(分钟)"
               className="w-full rounded-btn border border-border bg-elevated px-2 py-1.5 text-[10px] font-mono text-foreground"
             />
           </div>
@@ -187,6 +193,7 @@ export function ExtDataPullPanel({ config, onSaved }: {
           <textarea
             value={fieldMapStr} onChange={e => setFieldMapStr(e.target.value)}
             placeholder='{"code": "symbol", "val": "score"}'
+            aria-label="字段映射(JSON)"
             rows={2}
             className="w-full rounded-btn border border-border bg-elevated px-2.5 py-1.5 text-[10px] font-mono text-foreground placeholder:text-muted/40 resize-none"
           />

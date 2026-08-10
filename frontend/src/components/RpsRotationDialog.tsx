@@ -243,6 +243,7 @@ export function RpsRotationDialog({ onClose }: Props) {
                   value={focus}
                   onChange={e => setFocus(e.target.value)}
                   placeholder="关注点(可选)"
+                  aria-label="关注点(可选)"
                   disabled={analyzing}
                   className="w-28 px-2 py-0.5 text-[11px] bg-elevated/50 border border-border rounded-btn text-foreground placeholder:text-muted/50 focus:border-accent/40 focus-visible:ring-2 focus-visible:ring-accent/60 disabled:opacity-50"
                 />
@@ -302,6 +303,7 @@ export function RpsRotationDialog({ onClose }: Props) {
                 step={1}
                 value={days}
                 onChange={e => setDays(Number(e.target.value))}
+                aria-label="分析天数"
                 className="w-24 accent-accent cursor-pointer"
               />
               <span className="text-[11px] text-secondary tabular-nums w-5">{days}</span>
@@ -315,6 +317,7 @@ export function RpsRotationDialog({ onClose }: Props) {
                   : 'border-border text-muted hover:text-secondary hover:bg-elevated',
               )}
               title="翻转排序(高↔低)"
+              aria-label="翻转排序(高↔低)"
             >
               <ArrowDownUp className="h-3 w-3" />
               {reversed ? '低→高' : '高→低'}

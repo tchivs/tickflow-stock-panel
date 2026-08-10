@@ -359,6 +359,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
                 step={minInterval < 1 ? 0.1 : minInterval < 3 ? 0.5 : 1}
                 value={intervalDraft}
                 onChange={(e) => setIntervalDraft(parseFloat(e.target.value))}
+                aria-label="行情拉取间隔"
                 className="flex-1 h-1 accent-accent cursor-pointer"
               />
               <span className="text-[10px] text-muted shrink-0">

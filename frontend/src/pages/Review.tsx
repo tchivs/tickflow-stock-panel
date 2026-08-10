@@ -327,6 +327,7 @@ export function Review() {
                   onChange={(e) => setFocus(e.target.value)}
                   onKeyDown={(e) => { if (e.key === 'Enter' && !isGenerating) generate() }}
                   placeholder="可选:补充复盘关注点,如「明日是否加仓半导体」「量能是否持续」"
+                  aria-label="复盘关注点"
                   className="flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted/60"
                 />
                 {focus && (
@@ -421,12 +422,14 @@ export function Review() {
                   <input
                     type="number" min={0} max={23} value={draft.hour}
                     onChange={e => setDraft(d => ({ ...d, hour: Math.max(0, Math.min(23, Number(e.target.value))) }))}
+                    aria-label="定时小时"
                     className="w-12 px-1.5 py-1 rounded-btn bg-base border border-border text-xs font-mono text-foreground text-center focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60"
                   />
                   <span className="text-xs text-muted">:</span>
                   <input
                     type="number" min={0} max={59} value={draft.minute}
                     onChange={e => setDraft(d => ({ ...d, minute: Math.max(0, Math.min(59, Number(e.target.value))) }))}
+                    aria-label="定时分钟"
                     className="w-12 px-1.5 py-1 rounded-btn bg-base border border-border text-xs font-mono text-foreground text-center focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60"
                   />
                   <span className="text-[10px] text-muted/70">不早于 15:00 · 工作日执行</span>

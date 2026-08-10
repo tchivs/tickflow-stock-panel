@@ -48,6 +48,7 @@ export function EnrichedRebuildPanel({ isRunning, onStart }: { isRunning: boolea
                 type="number"
                 value={draftSize}
                 onChange={e => setDraftSize(e.target.value)}
+                aria-label="批次大小"
                 className="w-20 px-2 py-1 text-xs font-mono rounded-btn border border-border bg-surface text-foreground text-right tabular-nums focus:border-accent focus-visible:ring-2 focus-visible:ring-accent/60"
                 min={1}
                 max={10000}

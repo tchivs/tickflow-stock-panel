@@ -257,6 +257,7 @@ export function DataSourceEditor({
                     <Toggle
                       checked={enabled}
                       onChange={(e) => { e?.stopPropagation(); setDatasetEnabled(key, !enabled) }}
+                      label={`启用${DATASET_LABEL[key]}`}
                     />
                   </button>
                 )
@@ -334,7 +335,7 @@ function DatasetDetail({
           <h3 className="text-sm font-medium text-foreground">{DATASET_LABEL[datasetKey]}</h3>
           <span className="text-[10px] text-muted/50 font-mono">{datasetKey}</span>
         </div>
-        <Toggle checked={enabled} onChange={() => onToggle(!enabled)} />
+        <Toggle checked={enabled} onChange={() => onToggle(!enabled)} label={`启用${DATASET_LABEL[datasetKey]}`} />
       </div>
 
       <AnimatePresence mode="wait">
@@ -582,23 +583,22 @@ function FieldMapEditor({
 
 function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
-    <div className="space-y-1.5">
-      <div className="flex items-center justify-between">
-        <span className="text-[10px] uppercase tracking-widest text-muted">{label}</span>
-        {hint && <span className="text-[9px] text-muted/50 normal-case">{hint}</span>}
-      </div>
+    <label className="space-y-1.5 block">
+      <span className="block text-[10px] uppercase tracking-widest text-muted">{label}</span>
+      {hint && <span className="block text-[9px] text-muted/50 normal-case">{hint}</span>}
       {children}
-    </div>
+    </label>
   )
 }
 
-function Toggle({ checked, onChange }: { checked: boolean; onChange: (e?: React.MouseEvent) => void }) {
+function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (e?: React.MouseEvent) => void; label?: string }) {
   return (
     <button
       type="button"
       onClick={onChange}
       className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors ${checked ? 'bg-accent' : 'bg-elevated'}`}
       aria-pressed={checked}
+      aria-label={label}
     >
       <span className={`inline-block h-3 w-3 rounded-full bg-white shadow-sm transition-transform ${checked ? 'translate-x-[14px]' : 'translate-x-[2px]'}`} />
     </button>

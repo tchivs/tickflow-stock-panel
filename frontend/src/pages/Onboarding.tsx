@@ -398,6 +398,7 @@ function KeyStep({ onNext, onSkip, onBack }: { onNext: () => void; onSkip: () =>
             type={revealing ? 'text' : 'password'}
             placeholder={alreadyHasKey ? '粘贴新 Key 替换当前' : '粘贴 TickFlow API Key'}
             value={keyInput}
+            aria-label="TickFlow API Key"
             onChange={(e) => {
               setKeyInput(e.target.value)
               if (saved) setSaved(false)

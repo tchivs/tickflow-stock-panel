@@ -722,7 +722,7 @@ function IndustryRail({
         </div>
         <div className="mt-2 relative">
           <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted" />
-          <input value={search} onChange={e => onSearch(e.target.value)} placeholder="搜索行业" className="h-8 w-full rounded-lg border border-border bg-base pl-8 pr-3 text-xs text-foreground outline-none focus:border-accent/50 max-md:min-h-11" />
+          <input value={search} onChange={e => onSearch(e.target.value)} placeholder="搜索行业" aria-label="搜索行业" className="h-8 w-full rounded-lg border border-border bg-base pl-8 pr-3 text-xs text-foreground outline-none focus:border-accent/50 max-md:min-h-11" />
         </div>
         <div className="mt-2 grid grid-cols-5 overflow-hidden rounded-lg border border-border text-[10px]">
           {([

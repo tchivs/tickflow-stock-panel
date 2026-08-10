@@ -276,6 +276,7 @@ export function SettingsAIPanel() {
                     value={model}
                     onChange={e => setModel(e.target.value)}
                     placeholder="例如 gpt-5.5"
+                    aria-label="自定义模型"
                     className={`${INPUT_CLS} mt-2`}
                   />
                 )}
@@ -415,21 +416,21 @@ function Field({ label, hint, inline, children }: {
 }) {
   if (inline) {
     return (
-      <div className="flex items-center justify-between gap-3">
+      <label className="flex items-center justify-between gap-3">
         <div>
-          <div className="text-[10px] text-muted/50 uppercase tracking-wider">{label}</div>
-          {hint && <div className="text-[10px] text-muted mt-0.5">{hint}</div>}
+          <span className="text-[10px] text-muted/50 uppercase tracking-wider">{label}</span>
+          {hint && <span className="block text-[10px] text-muted mt-0.5">{hint}</span>}
         </div>
         {children}
-      </div>
+      </label>
     )
   }
   return (
-    <div className="space-y-1.5">
-      <div className="text-[10px] text-muted/50 uppercase tracking-wider">{label}</div>
+    <label className="space-y-1.5 block">
+      <span className="text-[10px] text-muted/50 uppercase tracking-wider">{label}</span>
       {children}
-      {hint && <div className="text-[10px] text-muted">{hint}</div>}
-    </div>
+      {hint && <span className="block text-[10px] text-muted">{hint}</span>}
+    </label>
   )
 }
 

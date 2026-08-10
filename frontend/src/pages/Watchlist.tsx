@@ -1014,7 +1014,7 @@ export function Watchlist() {
                     key={board}
                     onClick={() => toggleBoard(board)}
                     aria-pressed={active}
-                    className={`px-2 py-0.5 rounded text-[11px] transition-colors ${
+                    className={`px-2 py-0.5 rounded text-[11px] transition-colors max-md:min-h-11 max-md:px-3 max-md:text-xs ${
                       active
                         ? 'bg-accent/15 text-accent'
                         : 'bg-elevated text-secondary hover:text-foreground hover:bg-elevated/80'
@@ -1044,7 +1044,8 @@ export function Watchlist() {
                           value={f.min ?? ''}
                           onChange={e => updateFilter(item.id, { min: e.target.value })}
                           placeholder="min"
-                          className={`w-12 h-5 rounded border text-[10px] px-1 placeholder:text-muted focus:outline-none ${
+                          aria-label={`${item.label} 最小值`}
+                          className={`w-12 h-5 rounded border text-[10px] px-1 placeholder:text-muted focus:outline-none max-md:h-11 max-md:w-16 max-md:text-xs ${
                             hasFilter ? 'border-accent/30 bg-accent/5' : 'border-border bg-elevated'
                           } text-foreground focus:border-accent/50`}
                         />
@@ -1054,7 +1055,8 @@ export function Watchlist() {
                           value={f.max ?? ''}
                           onChange={e => updateFilter(item.id, { max: e.target.value })}
                           placeholder="max"
-                          className={`w-12 h-5 rounded border text-[10px] px-1 placeholder:text-muted focus:outline-none ${
+                          aria-label={`${item.label} 最大值`}
+                          className={`w-12 h-5 rounded border text-[10px] px-1 placeholder:text-muted focus:outline-none max-md:h-11 max-md:w-16 max-md:text-xs ${
                             hasFilter ? 'border-accent/30 bg-accent/5' : 'border-border bg-elevated'
                           } text-foreground focus:border-accent/50`}
                         />
@@ -1066,7 +1068,7 @@ export function Watchlist() {
             )
           })}
           {hasActiveFilters && (
-            <button onClick={resetAllFilters} className="mt-1 text-[10px] text-danger hover:text-danger/80 transition-colors">
+            <button onClick={resetAllFilters} className="mt-1 text-[10px] text-danger hover:text-danger/80 transition-colors max-md:min-h-11 max-md:text-xs">
               重置全部筛选
             </button>
           )}
@@ -1104,7 +1106,7 @@ export function Watchlist() {
                       <button
                         type="button"
                         onClick={(event) => { event.stopPropagation(); toggleDailyKChart() }}
-                        className={`inline-flex items-center justify-center w-5 h-5 rounded transition-colors ${
+                        className={`inline-flex items-center justify-center w-5 h-5 rounded transition-colors max-md:min-h-11 max-md:min-w-11 ${
                           dailyKChartVisible
                             ? 'text-accent bg-accent/10 hover:bg-accent/20'
                             : 'text-muted hover:text-foreground hover:bg-elevated'
@@ -1124,7 +1126,7 @@ export function Watchlist() {
                       <button
                         type="button"
                         onClick={(event) => { event.stopPropagation(); toggleIntradayChart() }}
-                        className={`inline-flex items-center justify-center w-5 h-5 rounded transition-colors ${
+                        className={`inline-flex items-center justify-center w-5 h-5 rounded transition-colors max-md:min-h-11 max-md:min-w-11 ${
                           intradayChartVisible
                             ? 'text-accent bg-accent/10 hover:bg-accent/20'
                             : 'text-muted hover:text-foreground hover:bg-elevated'
