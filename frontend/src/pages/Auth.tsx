@@ -120,6 +120,8 @@ export function Auth() {
                 onChange={e => setPassword(e.target.value)}
                 placeholder="访问密码"
                 aria-label="访问密码"
+                aria-invalid={!!localError}
+                aria-describedby={localError ? 'auth-error' : undefined}
                 autoFocus
                 className="h-10 w-full rounded-btn border border-border bg-base px-3 pr-9 text-sm text-foreground outline-none transition-colors focus-visible:ring-2 focus-visible:ring-accent/60 focus:border-accent/50"
               />
@@ -142,13 +144,15 @@ export function Auth() {
                 onChange={e => setConfirmPassword(e.target.value)}
                 placeholder="再次输入密码"
                 aria-label="再次输入密码"
+                aria-invalid={localError === '两次密码不一致'}
+                aria-describedby={localError === '两次密码不一致' ? 'auth-error' : undefined}
                 className="h-10 w-full rounded-btn border border-border bg-base px-3 text-sm text-foreground outline-none transition-colors focus-visible:ring-2 focus-visible:ring-accent/60 focus:border-accent/50"
               />
             )}
 
             {/* 错误提示 */}
             {(localError || submitMut.error) && (
-              <div className="flex items-start gap-1.5 rounded-btn bg-danger/10 px-3 py-2 text-[11px] text-danger">
+              <div id="auth-error" role="alert" className="flex items-start gap-1.5 rounded-btn bg-danger/10 px-3 py-2 text-[11px] text-danger">
                 <ShieldAlert className="mt-px h-3.5 w-3.5 shrink-0" />
                 <span>{localError}</span>
               </div>

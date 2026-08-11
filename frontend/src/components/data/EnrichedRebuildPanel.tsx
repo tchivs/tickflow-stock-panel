@@ -87,7 +87,7 @@ export function EnrichedRebuildPanel({ isRunning, onStart }: { isRunning: boolea
           </span>
         </div>
         {hint && (
-          <div className="px-3 py-1 rounded-btn bg-accent/10 border border-accent/20 text-[10px] text-accent">
+          <div role="status" className="px-3 py-1 rounded-btn bg-accent/10 border border-accent/20 text-[10px] text-accent">
             {hint}
           </div>
         )}
