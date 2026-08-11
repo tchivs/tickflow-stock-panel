@@ -100,7 +100,7 @@ class JobStore:
 
     # ===== lifecycle =====
 
-    def create(self, timeout_s: int | None = None) -> tuple[str, bool]:
+    def create(self, timeout_s: int | None = None, *, label: str | None = None) -> tuple[str, bool]:
         """单飞创建任务。返回 (job_id, is_new)。
 
         去重条件为 **pending ∨ running**(而非仅 running):`/run` 先 create() 再在
@@ -110,6 +110,12 @@ class JobStore:
 
         is_new=False 表示复用了已有活跃任务,调用方**不得**再调度新的后台任务。
 
+        label: 可选任务标识 (如 "premarket_pool_preview")。给定后去重范围**收窄到
+        同 label**: 不同 label 的活跃任务互不挤占, 供「写面不相交」的同槽位 job
+        (如 09:26 盘前预览只写 premarket_results/ 独立根 与 竞价采集写 kline_auction
+        暂存) 并行, 不再被全局单飞静默跳过。label 任务**不写** ``_active_id``
+        (不污染全局单飞指针), 由同 label 去重 + 重任务槽 (调用方按需) 各自保障。
+
         timeout_s: 可选 per-job 超时豁免 (秒)。非 None 时持久化到 job 记录,由
         reap_stale() 优先采用 (``j.get("timeout_s", timeout_s)``); 缺省 None → 记录
         不含该键 → 回收仍按调用方的 timeout_s (默认 STALE_JOB_TIMEOUT_S=600)。
@@ -117,7 +123,11 @@ class JobStore:
         succeed()/fail() 整 dict 落盘, 该键随磁盘 round-trip 保留。
         """
         with self._lock:
-            if self._active_id:
+            if label is not None:
+                for jid, active in self._active_jobs.items():
+                    if active.get("label") == label and active.get("status") in ("pending", "running"):
+                        return jid, False
+            elif self._active_id:
                 active = self._active_jobs.get(self._active_id)
                 if active and active.get("status") in ("pending", "running"):
                     return self._active_id, False
@@ -136,10 +146,13 @@ class JobStore:
                 "result": None,
                 "error": None,
             }
+            if label is not None:
+                job["label"] = label
             if timeout_s is not None:
                 job["timeout_s"] = timeout_s
             self._active_jobs[job_id] = job
-            self._active_id = job_id
+            if label is None:
+                self._active_id = job_id
             return job_id, True
 
     def start(self, job_id: str) -> None:
@@ -251,33 +264,33 @@ class JobStore:
         无需用户再次手动触发同步。reload 后的孤儿 task(内存里已无 job 记录)
         不在此处理:它们没有 active_id,只能靠 executor 线程自然结束或进程重启。
 
+        扫描 **全部** running job (含 label 并行任务, 如独立盘前预览), 而非仅
+        ``_active_id``: 同槽位并行 job 卡死时同样能被自愈回收, 不再阻塞后续同
+        label 去重 (不重启进程)。
+
         超时判定 per-job 优先 (FA-01): job 记录含 ``timeout_s`` 键 (create 时声明)
         → 用该值豁免至其声明的上限 (如竞价回填 6h, 不再被 600s 缺省误杀);
         记录无该键 → 用本参数 (缺省 STALE_JOB_TIMEOUT_S=600, EOD/手动 run_all 语义不变)。
         """
         with self._lock:
-            jid = self._active_id
-            if not jid:
-                return
-            j = self._active_jobs.get(jid)
-            if not j or j.get("status") != "running":
-                return
-            started = j.get("started_at")
-            if not started:
-                return
-            per_job_timeout = j.get("timeout_s", timeout_s)
+            candidates = [
+                (jid, j) for jid, j in self._active_jobs.items()
+                if j.get("status") == "running" and j.get("started_at")
+            ]
         # 时间计算放到锁外(避免 datetime 解析持锁)。
         # started_at 形如 "2026-07-04T12:00:00Z"(start() 用 datetime.utcnow 存)。
         # 两端都用 timezone-aware UTC 比较,避免 naive/aware 混用导致 TypeError。
-        try:
-            start_dt = datetime.fromisoformat(started.replace("Z", "+00:00"))
-            elapsed = (datetime.now(start_dt.tzinfo) - start_dt).total_seconds()
-        except Exception:  # noqa: BLE001
-            return
-        if elapsed > per_job_timeout:
-            logger.warning("reap_stale: 强制取消卡死 job %s (已运行 %.0fs)",
-                           jid, elapsed)
-            self.fail(jid, f"超时自动取消 (运行 {int(elapsed)}s, 疑似卡死)")
+        for jid, j in candidates:
+            per_job_timeout = j.get("timeout_s", timeout_s)
+            try:
+                start_dt = datetime.fromisoformat(j["started_at"].replace("Z", "+00:00"))
+                elapsed = (datetime.now(start_dt.tzinfo) - start_dt).total_seconds()
+            except Exception:  # noqa: BLE001
+                continue
+            if elapsed > per_job_timeout:
+                logger.warning("reap_stale: 强制取消卡死 job %s (已运行 %.0fs)",
+                               jid, elapsed)
+                self.fail(jid, f"超时自动取消 (运行 {int(elapsed)}s, 疑似卡死)")
 
     def clear(self) -> None:
         """清空所有任务（内存 + 磁盘文件）。"""

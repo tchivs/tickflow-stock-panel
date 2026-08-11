@@ -720,22 +720,36 @@ def _refresh_instruments_view(repo: KlineRepository) -> None:
         logger.warning("refresh instruments view failed: %s", e)
 
 
-def _run_tracked(fn, job_label: str) -> None:
+def _run_tracked(fn, job_label: str, *, independent: bool = False) -> None:
     """调度触发时包装 JobStore 跟踪，确保同步历史有记录。
 
     单飞: 若已有活跃(pending∨running)任务(手动同步中), 本次调度直接跳过, 不并发。
     重任务执行槽: 再挡一层僵尸并发(reap 后线程仍活时不得并行写 parquet)。
+
+    independent=True: 该 job 的写面与其它重任务**不相交** (如盘前预览只写
+    ``premarket_results/`` 独立根, 绝不写 strategy_cache/screener_results), 因此:
+    - 只按 ``label`` 去重 (同任务不重入), 不占全局单飞 — 同槽位 (09:26) 竞价采集
+      不再把它静默挤掉;
+    - 不占全局重任务槽 (无共享 parquet 写面, 并行不损坏数据)。
+    调用方必须确保该 job 确实只写自身独立根, 否则不得置 True (镜像
+    premarket_pool.py 铁律: 零写共享湖/缓存)。
     """
     from app.services.pipeline_jobs import job_store, release_run_slot, try_acquire_run_slot
 
-    job_id, is_new = job_store.create()
-    if not is_new:
-        logger.info("scheduled %s 跳过: 已有活跃任务在运行 (job_id=%s)", job_label, job_id)
-        return
-    if not try_acquire_run_slot():
-        logger.warning("scheduled %s 跳过: 重任务执行槽被占用(疑似上次任务卡死)", job_label)
-        job_store.fail(job_id, f"scheduled {job_label} skipped: 已有数据任务在运行")
-        return
+    if independent:
+        job_id, is_new = job_store.create(label=job_label)
+        if not is_new:
+            logger.info("scheduled %s 跳过: 同任务活跃 (job_id=%s)", job_label, job_id)
+            return
+    else:
+        job_id, is_new = job_store.create()
+        if not is_new:
+            logger.info("scheduled %s 跳过: 已有活跃任务在运行 (job_id=%s)", job_label, job_id)
+            return
+        if not try_acquire_run_slot():
+            logger.warning("scheduled %s 跳过: 重任务执行槽被占用(疑似上次任务卡死)", job_label)
+            job_store.fail(job_id, f"scheduled {job_label} skipped: 已有数据任务在运行")
+            return
 
     def progress(stage: str, pct: int, msg: str, stage_pct: int | None = None,
                  skip_log: bool = False) -> None:
@@ -750,7 +764,8 @@ def _run_tracked(fn, job_label: str) -> None:
         logger.exception("scheduled %s failed: job_id=%s", job_label, job_id)
         job_store.fail(job_id, f"scheduled {job_label} failed")
     finally:
-        release_run_slot()
+        if not independent:
+            release_run_slot()
 
 
 # ================================================================
@@ -1364,10 +1379,13 @@ def start_scheduler(repo: KlineRepository, capset: CapabilitySet) -> AsyncIOSche
 
     # 盘前: 09:26 盘前预览 (PM-01) — 09:25 集合竞价撮合定盘后 / 09:30 连续竞价前。
     # 固定 09:26 (mon-fri, Asia/Shanghai); 独立存储 premarket_results/date={T}/part.json,
-    # 绝不写 strategy_cache / screener_results (与手动 run_all / EOD 并发写防护由
-    # _run_tracked 单飞保证)。盘前窗口窄, misfire_grace_time 短于 EOD 的 3600。
+    # 绝不写 strategy_cache / screener_results。independent=True: 只按 label 去重且
+    # 不占全局重任务槽 — 与同 09:26 竞价采集 (写 kline_auction 暂存) 写面不相交,
+    # 两 job 并行合法 (互不挤占, 不再被全局单飞静默跳过; 与手动 run_all / EOD 的
+    # 并发写防护不适用 — 预览零共享写面)。盘前窗口窄, misfire_grace_time 短于 EOD 的 3600。
     scheduler.add_job(
-        lambda: _run_tracked(_premarket_pool_preview, "premarket_pool_preview"),
+        lambda: _run_tracked(_premarket_pool_preview, "premarket_pool_preview",
+                             independent=True),
         trigger=CronTrigger(day_of_week="mon-fri",
                             hour=_PREMARKET_HOUR, minute=_PREMARKET_MINUTE,
                             timezone="Asia/Shanghai"),

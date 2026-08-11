@@ -339,6 +339,67 @@ def test_full_backfill_reap_stale_honors_lower_custom_timeout(tmp_path):
 
 
 # ================================================================
+# PM-01 回归 — label 去重 (同槽位并行写面不相交 job, 互不挤占)
+# ================================================================
+
+
+def test_job_store_create_label_dedup_per_label(tmp_path):
+    """label 去重: 同 label 复用; 不同 label 并行互不挤占; label 不污染全局单飞。"""
+    from app.services.pipeline_jobs import JobStore
+
+    store = JobStore(store_dir=tmp_path)
+
+    # 同 label: 复用活跃任务 (is_new=False, 同一 job_id)
+    pm1, is_new = store.create(label="premarket_pool_preview")
+    assert is_new
+    pm2, is_new = store.create(label="premarket_pool_preview")
+    assert not is_new and pm2 == pm1
+
+    # 不同 label / 全局: 并行创建, 互不挤占
+    sc1, is_new = store.create(label="auction_sidecar_capture")
+    assert is_new and sc1 != pm1
+    glob1, is_new = store.create()
+    assert is_new and glob1 not in (pm1, sc1)
+
+    # label 任务不写 _active_id: 全局单飞指针仍指向最后全局 job
+    assert store.active_id() == glob1
+
+    # 全局单飞去重仍生效 (同全局 active 复用)
+    glob2, is_new = store.create()
+    assert not is_new and glob2 == glob1
+
+
+def test_job_store_label_job_terminal_clears_label_active(tmp_path):
+    """同 label 任务结束后可再建 (succeed 整 dict 落盘, label 键随盘保留)。"""
+    import json as _json
+
+    from app.services.pipeline_jobs import JobStore
+
+    store = JobStore(store_dir=tmp_path)
+    pm, _ = store.create(label="premarket_pool_preview")
+    store.start(pm)
+    store.succeed(pm, {"as_of": "2026-08-10"})
+
+    on_disk = _json.loads((tmp_path / f"{pm}.json").read_text(encoding="utf-8"))
+    assert on_disk["label"] == "premarket_pool_preview", "label 随磁盘 round-trip 保留"
+
+    pm2, is_new = store.create(label="premarket_pool_preview")
+    assert is_new and pm2 != pm, "完成后的同 label 可再建"
+
+
+def test_job_store_reap_stale_covers_labeled_jobs(tmp_path):
+    """label 并行 job 卡死同样能被 reap_stale 自愈 (不重启进程不阻塞同 label 去重)。"""
+    from app.services.pipeline_jobs import JobStore
+
+    store = JobStore(store_dir=tmp_path)
+    pm, _ = store.create(label="premarket_pool_preview")
+    store.start(pm)
+    _backdate(store, pm, 601)
+    store.reap_stale()
+    assert store.get(pm)["status"] == "failed"
+
+
+# ================================================================
 # FA-02 — only_missing (覆盖预扫描 / 部分残差 / API 参数)
 # ================================================================
 

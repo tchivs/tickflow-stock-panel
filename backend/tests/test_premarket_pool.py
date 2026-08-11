@@ -150,6 +150,62 @@ def test_premarket_job_registered_in_scheduler():
     assert "id=_PREMARKET_JOB_ID" in text
 
 
+def test_premarket_job_registration_independent():
+    """PM-01 回归锁: 盘前预览注册走 independent=True — 与 09:26 同槽位竞价采集
+    并行 (写面不相交), 不再被全局单飞静默跳过 (今日 09:26 事故根因)。"""
+    src = Path(__file__).resolve().parents[1] / "app" / "jobs" / "daily_pipeline.py"
+    text = src.read_text(encoding="utf-8")
+
+    assert "_run_tracked(_premarket_pool_preview, \"premarket_pool_preview\",\n                             independent=True)" in text
+
+
+def test_run_tracked_independent_runs_while_other_job_active(tmp_path, monkeypatch):
+    """PM-01 回归: 同槽位竞价采集 active 时, 盘前预览 (independent=True) 仍独立
+    创建 job 并成功执行 — 不再被全局单飞静默跳过 (写面不相交: premarket_results
+    独立根 vs kline_auction 暂存)。对照组: 非 independent 仍被全局单飞跳过
+    (既有安全语义不回归)。"""
+    from app.jobs import daily_pipeline
+    from app.services import pipeline_jobs
+
+    # 同槽位先占全局单飞的竞价采集 job (active running, 写面不相交)
+    store = pipeline_jobs.JobStore(store_dir=tmp_path / "run")
+    monkeypatch.setattr(pipeline_jobs, "job_store", store)
+    auction_id, _ = store.create(label="auction_sidecar_capture")
+    store.start(auction_id)
+
+    calls: list[str] = []
+
+    def _fake_preview(on_progress=None) -> dict:
+        calls.append("ran")
+        if on_progress:
+            on_progress("premarket_pool_preview", 50, "mid")
+        return {"as_of": "2026-08-10", "strategies": 1}
+
+    daily_pipeline._run_tracked(_fake_preview, "premarket_pool_preview", independent=True)
+
+    assert calls == ["ran"], "independent 盘前预览应执行, 不被全局单飞挤掉"
+    assert store.get(auction_id)["status"] == "running", "竞价采集不被挤掉 (并行)"
+
+    recent = {j["id"]: j for j in store.list_recent()}
+    premarket_records = [
+        j for j in recent.values()
+        if (j.get("result") or {}).get("as_of") == "2026-08-10"
+    ]
+    assert len(premarket_records) == 1
+    assert premarket_records[0]["status"] == "succeeded"
+
+    # 对照组: 非 independent 仍受全局单飞保护 (既有语义不回归)
+    store2 = pipeline_jobs.JobStore(store_dir=tmp_path / "ctrl")
+    monkeypatch.setattr(pipeline_jobs, "job_store", store2)
+    other_id, _ = store2.create()
+    store2.start(other_id)
+    calls2: list[str] = []
+    daily_pipeline._run_tracked(
+        lambda on_progress=None: calls2.append("ran") or {}, "other_job",
+    )
+    assert calls2 == [], "非 independent 调度仍受全局单飞保护"
+
+
 # ================================================================
 # Task 1 — 存储隔离 + 诚实 skip
 # ================================================================
