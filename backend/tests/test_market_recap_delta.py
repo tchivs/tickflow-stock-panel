@@ -531,11 +531,13 @@ def test_review_schedule_floor_unchanged(tmp_path, monkeypatch):
 
 
 def test_review_tsx_fallback_literal_1540():
-    """Review.tsx:105 兜底字面量 minute 10 → 40 (唯一前端触碰点, 非 Watchlist.tsx)。"""
+    """Review.tsx 兜底字面量 minute 10 → 40 (唯一前端触碰点, 非 Watchlist.tsx)。
+    匹配 review_schedule 行而非 reviewSched 行: useMemo 重构把兜底字面量拆到第二行,
+    行为不变 (15:40 默认仍保留)。"""
     src = _REPO_ROOT / "frontend" / "src" / "pages" / "Review.tsx"
     text = src.read_text(encoding="utf-8")
     sched_line = next(
-        (ln for ln in text.splitlines() if "reviewSched" in ln and "minute" in ln), "",
+        (ln for ln in text.splitlines() if "review_schedule" in ln and "minute" in ln), "",
     )
     assert "minute: 40" in sched_line
     assert "minute: 10" not in text
