@@ -58,7 +58,7 @@ export function Settings() {
       <div className="px-4 py-4 sm:px-6 sm:py-5 lg:px-8 lg:py-6">
         <div className="flex flex-col gap-4 md:flex-row md:gap-6 md:items-stretch">
           {/* ===== 设置分类：手机横向滚动，桌面竖向侧栏 ===== */}
-          <nav className="w-full min-w-0 md:w-36 md:shrink-0">
+          <nav aria-label="设置分类" className="w-full min-w-0 md:w-36 md:shrink-0">
             <div className="flex gap-1 overflow-x-auto pb-1 md:sticky md:top-6 md:min-h-[60vh] md:flex-col md:justify-center md:overflow-visible md:pb-0">
               {TABS.map(({ key, label, icon: Icon, badge }) => (
                 <button

@@ -149,7 +149,7 @@ function Sample({ v }: { v: Variant }) {
         </div>
 
         {/* 模拟导航 */}
-        <nav className="px-2 py-3 space-y-0.5">
+        <nav aria-label="品牌演示导航" className="px-2 py-3 space-y-0.5">
           {MOCK_NAV.slice(0, 5).map(({ icon: I, label }, i) => (
             <div
               key={label}
