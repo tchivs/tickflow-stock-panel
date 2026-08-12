@@ -371,7 +371,12 @@ export function IndustryAnalysis() {
   }
 
   if (configsQuery.isLoading) {
-    return <div className="flex h-full items-center justify-center"><RefreshCw className="h-5 w-5 animate-spin text-muted" /></div>
+    return (
+      <div className="flex h-full items-center justify-center">
+        <h1 className="sr-only">行业分析</h1>
+        <RefreshCw className="h-5 w-5 animate-spin text-muted" />
+      </div>
+    )
   }
 
   if (!activeConfig) {

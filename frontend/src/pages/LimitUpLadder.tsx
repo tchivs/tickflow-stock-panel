@@ -1502,6 +1502,7 @@ export function LimitUpLadder() {
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-full">
+        <h1 className="sr-only">{direction === 'down' ? '连跌梯队' : '连板梯队'}</h1>
         <RefreshCw className="h-5 w-5 animate-spin text-muted" />
       </div>
     )

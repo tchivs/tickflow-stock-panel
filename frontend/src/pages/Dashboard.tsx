@@ -597,6 +597,7 @@ export function Dashboard() {
   if (overview.isLoading && !data) {
     return (
       <div className="flex h-full items-center justify-center bg-base">
+        <h1 className="sr-only">市场看板</h1>
         <div className="flex items-center gap-2 text-sm text-muted">
           <Loader2 className="h-4 w-4 animate-spin" /> 加载市场看板…
         </div>
@@ -607,6 +608,7 @@ export function Dashboard() {
   if (!data) {
     return (
       <div className="flex h-full items-center justify-center bg-base p-6">
+        <h1 className="sr-only">市场看板</h1>
         <div className="rounded-card border border-border bg-surface p-6 text-center">
           <div className="text-sm text-danger">看板加载失败</div>
           <button onClick={() => overview.refetch()} className="mt-3 rounded-btn bg-accent px-3 py-1.5 text-xs font-medium text-base">重试</button>
@@ -620,10 +622,26 @@ export function Dashboard() {
   const strongDown = data.breadth.strong_down ?? 0
   const latestDate = dataStatus.data?.enriched?.latest_date ?? null
   const currentDate = selectedDate ?? data.as_of ?? ''
-  const quoteRunning = (!selectedDate || selectedDate === latestDate) && data.quote_status?.running
+  const isHistoricalView = Boolean(selectedDate && selectedDate !== latestDate)
+  const quoteEnabled = data.quote_status?.enabled === true
+  const quoteRunning = !isHistoricalView && data.quote_status?.running === true
   // 实时模式: none / watchlist / full_market。
   // watchlist (Free 档) 仅自选 ≤5 只实时, 看板呈现的大盘数据实为盘后快照, 需提示避免误读。
   const quoteMode = data.quote_status?.mode as ('none' | 'watchlist' | 'full_market') | undefined
+  const quoteStatusLabel = isHistoricalView
+    ? '历史快照'
+    : quoteRunning
+      ? '实时'
+      : quoteEnabled
+        ? data.quote_status?.is_trading_hours ? '等待行情' : '非交易时段'
+        : '未开启实时'
+  const quoteAgeLabel = quoteRunning
+    ? quoteAge(data.quote_status?.quote_age_ms)
+    : isHistoricalView
+      ? '历史数据'
+      : quoteEnabled
+        ? '等待更新'
+        : '未开启'
 
   return (
     <div className="min-h-full bg-base p-3">
@@ -679,8 +697,20 @@ export function Dashboard() {
           ) : (
             <span className="font-mono text-secondary">—</span>
           )}
-          <span className="flex shrink-0 items-center gap-1 whitespace-nowrap"><Timer className="h-3 w-3" />{quoteAge(data.quote_status?.quote_age_ms)}</span>
-          <span className={`shrink-0 whitespace-nowrap ${quoteRunning ? 'text-accent' : 'text-warning'}`}>{quoteRunning ? '实时' : '非实时'}</span>
+          <span className="flex shrink-0 items-center gap-1 whitespace-nowrap"><Timer className="h-3 w-3" />{quoteAgeLabel}</span>
+          {quoteStatusLabel === '未开启实时' ? (
+            <Link
+              to="/settings?tab=monitoring"
+              className="shrink-0 whitespace-nowrap text-warning hover:text-foreground transition-colors"
+              title="打开实时行情设置"
+            >
+              {quoteStatusLabel}
+            </Link>
+          ) : (
+            <span className={`shrink-0 whitespace-nowrap ${quoteRunning ? 'text-accent' : isHistoricalView ? 'text-muted' : 'text-warning'}`}>
+              {quoteStatusLabel}
+            </span>
+          )}
           <button
             onClick={handleRefresh}
             disabled={manualFetching}
