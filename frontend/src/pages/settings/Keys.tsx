@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
@@ -350,6 +350,14 @@ export function SettingsKeysPanel() {
 function TierHelpPopover({ currentLabel }: { currentLabel: string }) {
   const [open, setOpen] = useState(false)
   const currentBase = tierBaseName(currentLabel)
+
+  // ESC 关闭提示弹层
+  useEffect(() => {
+    if (!open) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [open])
 
   return (
     <div className="relative inline-flex items-center">

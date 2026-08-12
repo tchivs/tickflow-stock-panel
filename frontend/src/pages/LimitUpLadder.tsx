@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useMemo, useRef } from 'react'
+import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
 import { RefreshCw, ChevronDown, Flame, Settings2, X, Bell, BellOff, AlertCircle } from 'lucide-react'
@@ -262,17 +262,19 @@ const StockCard = React.memo(function StockCard({ stock, extFields, direction, s
     <div className="relative group w-full">
       {/* 监控设置按钮 (右上角): 不能嵌在卡片 button 内 */}
       <button
+        type="button"
         onClick={e => {
           e.stopPropagation()
           setMenuAnchor(e.currentTarget.getBoundingClientRect())
           setShowMonitorMenu(v => !v)
         }}
-        title={monitored ? '封单监控已开启' : '开启封单监控'}
+        aria-label={monitored ? '封单监控已开启' : '开启封单监控'}
+        aria-expanded={showMonitorMenu}
         className={`absolute top-1 right-1 z-20 p-0.5 rounded transition-opacity cursor-pointer ${
           monitored ? 'opacity-100 text-amber-400' : 'opacity-0 group-hover:opacity-70 text-muted hover:!opacity-100'
         }`}
       >
-        {monitored ? <Bell className="h-3 w-3" /> : <BellOff className="h-3 w-3" />}
+        {monitored ? <Bell className="h-3 w-3" aria-hidden="true" /> : <BellOff className="h-3 w-3" aria-hidden="true" />}
       </button>
       {/* 监控菜单 */}
       {showMonitorMenu && menuAnchor && (
@@ -372,6 +374,25 @@ function MonitorMenu({ stock, direction, sealMode, monitorRule, anchorRect, hasD
   onClose: () => void
   onChanged: () => void
 }) {
+  const menuRef = useRef<HTMLDivElement>(null)
+  // 弹层含可聚焦表单控件: 打开即移焦到首个控件, ESC 关闭, 卸载还原焦点到触发按钮
+  useEffect(() => {
+    const prev = document.activeElement as HTMLElement | null
+    const first = menuRef.current?.querySelector<HTMLElement>('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled])')
+    first?.focus()
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation()
+        onClose()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      prev?.focus?.()
+    }
+  }, [onClose])
+
   const ruleId = `mr_ladder_${stock.symbol.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase()}`
   const existing = monitorRule
 
@@ -481,6 +502,9 @@ function MonitorMenu({ stock, direction, sealMode, monitorRule, anchorRect, hasD
     <>
       <div className="fixed inset-0 z-40" onClick={onClose} />
       <div
+        ref={menuRef}
+        role="dialog"
+        aria-label={`${stock.name ?? stock.symbol} · ${warnLabel}设置`}
         className="fixed z-50 w-60 rounded-lg bg-surface border border-border shadow-xl text-xs overflow-hidden"
         style={{ left, top }}
       >

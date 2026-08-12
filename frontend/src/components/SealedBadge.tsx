@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
@@ -54,6 +54,13 @@ export function SealedBadge({ degraded, hasDepth, isHistorical, sealedReady, sea
   invalidateKeys?: string[]
 }) {
   const [showHint, setShowHint] = useState(false)
+  // ESC 关闭提示弹层
+  useEffect(() => {
+    if (!showHint) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setShowHint(false) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [showHint])
   const navigate = useNavigate()
   const qc = useQueryClient()
   const runFix = useMutation({
@@ -76,7 +83,10 @@ export function SealedBadge({ degraded, hasDepth, isHistorical, sealedReady, sea
   return (
     <div className="relative inline-flex items-center">
       <button
+        type="button"
         onClick={() => setShowHint(v => !v)}
+        aria-expanded={showHint}
+        aria-haspopup="dialog"
         className="group inline-flex items-center gap-1 h-5 px-2 rounded-full bg-yellow-500/10 border border-yellow-500/30 cursor-help transition-all hover:bg-yellow-500/20 hover:border-yellow-500/50"
       >
         <span className="h-1.5 w-1.5 rounded-full bg-yellow-500" />
