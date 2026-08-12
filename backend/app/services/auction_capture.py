@@ -60,6 +60,20 @@ def _json_default(obj: Any) -> Any:
     raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
 
+def _trade_date_compact(value: Any) -> str:
+    """TickBar trade_date → ``YYYYMMDD`` 紧凑形态。
+
+    服务端实测返回 ISO 形态 ``2026-08-11T00:00:00+08:00`` (stockdb_provider.get_ticks
+    原始 JSON 未归一化); 夹具/旧路径亦见紧凑 ``20260807``。统一抽前 8 位数字 →
+    ``YYYYMMDD``, 两种形态同义 (归属日判定只看日期, 忽略时分秒/时区)。
+    空/None/非法 → "" (永不匹配, fail-closed)。
+    """
+    s = str(value or "").strip()
+    if not s:
+        return ""
+    return "".join(ch for ch in s if ch.isdigit())[:8]
+
+
 def _validate_tick_window(rows: list[dict], trade_date: str) -> dict:
     """fail-closed 完整性校验 (Pattern 1 骨架): 归属日==T ∧ 09:25:00 撮合行 ∧ 窗口覆盖。
 
@@ -75,9 +89,9 @@ def _validate_tick_window(rows: list[dict], trade_date: str) -> dict:
     r09 = [r for r in rows if "09:15:00" <= str(r.get("time", "")) <= "09:25:04"]
     match = [r for r in r09 if int(r.get("num_trades") or 0) > 0]
     ok = (
-        all(str(r.get("trade_date", "")).startswith(trade_date) for r in rows)  # 归属日==T
-        and any(str(r.get("time")) == "09:25:00" for r in match)                 # 09:25 撮合行存在
-        and len(r09) >= _WINDOW_MIN_ROWS                                        # 窗口覆盖阈值
+        all(_trade_date_compact(r.get("trade_date")) == trade_date for r in rows)  # 归属日==T
+        and any(str(r.get("time")) == "09:25:00" for r in match)                    # 09:25 撮合行存在
+        and len(r09) >= _WINDOW_MIN_ROWS                                           # 窗口覆盖阈值
     )
     return {"ok": ok, "window_rows": len(r09), "match_rows": len(match)}
 

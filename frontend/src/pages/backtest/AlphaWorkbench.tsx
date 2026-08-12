@@ -450,7 +450,7 @@ function ComparePanel({ runId, candidates }: { runId: string; candidates: AlphaC
     })
   }
 
-  const rows: AlphaCandidateComparison[] = query.data?.candidates ?? []
+  const rows = useMemo<AlphaCandidateComparison[]>(() => query.data?.candidates ?? [], [query.data?.candidates])
   const configKeys = useMemo(() => {
     const keys = new Set<string>()
     for (const c of rows) for (const k of Object.keys(c.config)) keys.add(k)

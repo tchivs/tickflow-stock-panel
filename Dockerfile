@@ -105,4 +105,7 @@ ENV PYTHONPATH=/app
 # 此处让日志时间戳等其余 naive 时间也对齐北京时间。
 ENV TZ=Asia/Shanghai
 EXPOSE 3018
-CMD ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "3018"]
+# --no-sync: 依赖已在构建期 bake 进 .venv; 运行时不再触发 uv sync,
+# 避免 uv 因源文件更新而重建 editable 根项目(hatchling 校验 ../README.md
+# 超出项目目录失败, 导致容器崩溃循环)。
+CMD ["uv", "run", "--no-sync", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "3018"]

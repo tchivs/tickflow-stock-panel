@@ -105,9 +105,10 @@ export function Screener() {
   }, [])
 
   // 对原始结果应用过滤
-  const filteredRows = result
-    ? applyFilter(result.rows, filter)
-    : []
+  const filteredRows = useMemo(
+    () => result ? applyFilter(result.rows, filter) : [],
+    [result, filter],
+  )
 
   const { data: prefs } = usePreferences()
   const screenerAutoRun = prefs?.screener_auto_run ?? true
@@ -165,7 +166,7 @@ export function Screener() {
   }, [availableStrategyIds, prune, strategies.isError, strategies.isSuccess])
 
   // 策略文件加载失败时提示用户(避免"策略静默消失"被误判为正常)
-  const loadErrors = strategies.data?.load_errors ?? []
+  const loadErrors = useMemo(() => strategies.data?.load_errors ?? [], [strategies.data?.load_errors])
   useEffect(() => {
     for (const e of loadErrors) {
       toast(`策略「${e.file}」加载失败：${e.error}`, 'error')
@@ -366,7 +367,7 @@ export function Screener() {
         if (activeStrategy) applyRunAllResult(activeStrategy, asOf, data)
       },
     })
-  }, [asOf, strategies.data, visiblePool, extColumnsParam, cacheCoversPool, screenerAutoRun, activeStrategy, applyRunAllResult])
+  }, [asOf, assetType, strategies.data, visiblePool, extColumnsParam, cacheCoversPool, screenerAutoRun, activeStrategy, applyRunAllResult, runAll])
 
   const qc = useQueryClient()
 

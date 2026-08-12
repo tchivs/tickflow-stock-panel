@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, type KeyboardEvent } from 'react'
+import { useState, useRef, useEffect, useMemo, type KeyboardEvent } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Calendar, ChevronLeft, ChevronRight } from 'lucide-react'
 
@@ -104,6 +104,38 @@ export function DatePicker({
   const cellRefs = useRef<(HTMLButtonElement | null)[]>([])
   const pendingFocus = useRef<string | null>(null)
 
+  const cells = useMemo(() => {
+    // 构建日历格子: 周一为第一天
+    const firstDay = new Date(viewYear, viewMonth, 1).getDay()
+    const offset = firstDay === 0 ? 6 : firstDay - 1          // 周一=0
+    const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate()
+    const prevMonthDays = new Date(viewYear, viewMonth, 0).getDate()
+    const nextCells: { day: number; cur: boolean; dateStr: string; disabled: boolean }[] = []
+
+    // 上月尾部
+    for (let i = offset - 1; i >= 0; i--) {
+      const d = prevMonthDays - i
+      const m = viewMonth === 0 ? 11 : viewMonth - 1
+      const y = viewMonth === 0 ? viewYear - 1 : viewYear
+      const ds = toDateStr(y, m, d)
+      nextCells.push({ day: d, cur: false, dateStr: ds, disabled: !!min && ds < min || !!max && ds > max })
+    }
+    // 当月
+    for (let d = 1; d <= daysInMonth; d++) {
+      const ds = toDateStr(viewYear, viewMonth, d)
+      nextCells.push({ day: d, cur: true, dateStr: ds, disabled: !!min && ds < min || !!max && ds > max })
+    }
+    // 下月头部 — 补齐到 6 行 × 7 = 42
+    const remain = 42 - nextCells.length
+    for (let d = 1; d <= remain; d++) {
+      const m = viewMonth === 11 ? 0 : viewMonth + 1
+      const y = viewMonth === 11 ? viewYear + 1 : viewYear
+      const ds = toDateStr(y, m, d)
+      nextCells.push({ day: d, cur: false, dateStr: ds, disabled: !!min && ds < min || !!max && ds > max })
+    }
+    return nextCells
+  }, [viewYear, viewMonth, min, max])
+
   // 打开时把焦点放到「选中日 || 今天 || 首个可用日」; 切月/箭头移动后聚焦 pendingFocus
   useEffect(() => {
     if (!open) return
@@ -115,14 +147,14 @@ export function DatePicker({
       ?? ''
     pendingFocus.current = null
     setFocusDate(target)
-  }, [open, value, viewYear, viewMonth, today])
+  }, [open, value, viewYear, viewMonth, today, cells])
 
   // roving tabindex 目标变化或切换月份后, 把 DOM 焦点移过去 (含从年份视图返回)
   useEffect(() => {
     if (!open || showYearPicker) return
     const idx = cells.findIndex(c => c.dateStr === focusDate)
     if (idx >= 0) cellRefs.current[idx]?.focus()
-  }, [open, focusDate, viewYear, viewMonth, showYearPicker])
+  }, [open, focusDate, viewYear, viewMonth, showYearPicker, cells])
 
   const onGridKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.key === 'Escape') {
@@ -226,35 +258,6 @@ export function DatePicker({
   }
 
   // 构建日历格子: 周一为第一天
-  const firstDay = new Date(viewYear, viewMonth, 1).getDay()
-  const offset = firstDay === 0 ? 6 : firstDay - 1          // 周一=0
-  const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate()
-  const prevMonthDays = new Date(viewYear, viewMonth, 0).getDate()
-
-  const cells: { day: number; cur: boolean; dateStr: string; disabled: boolean }[] = []
-
-  // 上月尾部
-  for (let i = offset - 1; i >= 0; i--) {
-    const d = prevMonthDays - i
-    const m = viewMonth === 0 ? 11 : viewMonth - 1
-    const y = viewMonth === 0 ? viewYear - 1 : viewYear
-    const ds = toDateStr(y, m, d)
-    cells.push({ day: d, cur: false, dateStr: ds, disabled: !!min && ds < min || !!max && ds > max })
-  }
-  // 当月
-  for (let d = 1; d <= daysInMonth; d++) {
-    const ds = toDateStr(viewYear, viewMonth, d)
-    cells.push({ day: d, cur: true, dateStr: ds, disabled: !!min && ds < min || !!max && ds > max })
-  }
-  // 下月头部 — 补齐到 6 行 × 7 = 42
-  const remain = 42 - cells.length
-  for (let d = 1; d <= remain; d++) {
-    const m = viewMonth === 11 ? 0 : viewMonth + 1
-    const y = viewMonth === 11 ? viewYear + 1 : viewYear
-    const ds = toDateStr(y, m, d)
-    cells.push({ day: d, cur: false, dateStr: ds, disabled: !!min && ds < min || !!max && ds > max })
-  }
-
   const displayLabel = value || placeholder
 
   return (

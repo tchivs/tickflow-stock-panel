@@ -75,8 +75,10 @@ export function PoolHubPage() {
   // 缺失/未知 mode 安全回退 vip — 页面默认不明文掩码。
   const mode = data?.mode === 'guest' ? 'guest' : 'vip'
   // 默认选中第一个策略, 进入页面即可看到明细表
+  const firstHitStrategy =
+    data?.strategies.find(s => s.total > 0) ?? data?.strategies[0] ?? null
   const activeStrategy =
-    data?.strategies.find(s => s.id === activeId) ?? data?.strategies[0] ?? null
+    data?.strategies.find(s => s.id === activeId) ?? firstHitStrategy
 
   const knownStrategies = useMemo(() => {
     const map = new Map<string, string>()

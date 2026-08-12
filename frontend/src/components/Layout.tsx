@@ -20,7 +20,7 @@ import {
   useToggleRealtimeQuotes,
 } from '@/lib/useSharedMutations'
 import { QK } from '@/lib/queryKeys'
-import { tierRank, tierStyle } from '@/lib/capability-labels'
+import { tierRank } from '@/lib/capability-labels'
 import { providerDatasets, providerDisplayName, isNonTickflow } from '@/lib/dataSources'
 import {
   Star,
@@ -28,7 +28,6 @@ import {
   History,
   FileText,
   Settings,
-  Key,
   Database,
   Loader2,
   LayoutDashboard,
@@ -42,6 +41,7 @@ import {
   Cable,
   RadioTower,
   CheckCircle2,
+  ShieldCheck,
   BookOpenCheck,
   ExternalLink,
   Sun,
@@ -174,44 +174,35 @@ function SidebarIndexQuotes({ rows, items }: { rows: IndexQuote[] | undefined; i
   )
 }
 
-// ===== 档位卡片 =====
-function TierBadge({ label, hasKey }: { label: string; hasKey?: boolean }) {
-  const base = label.split(' ')[0].split('+')[0].toLowerCase()
-  const isNone = base === 'none'
-
-  const t = tierStyle(label)
-  // none 档显示英文「None」,无 label 时也显示「None」
-  const displayLabel = isNone ? 'None' : (label || 'None')
+// ===== 账户与授权卡片 =====
+function AccessBadge({ hasTickflowKey, sourceCount }: { hasTickflowKey: boolean; sourceCount: number }) {
+  const status = hasTickflowKey
+    ? 'TickFlow 已连接'
+    : sourceCount > 0
+      ? `${sourceCount} 个数据源已接入`
+      : '本地模式'
+  const statusColor = hasTickflowKey ? 'bg-accent' : sourceCount > 0 ? 'bg-bull' : 'bg-warning'
 
   return (
     <NavLink
-      to="/settings?tab=account"
+      to="/settings?tab=data-sources"
       className="mt-2.5 group block -mx-2.5"
-      title="API 设置"
+      title="账户与数据源设置"
     >
       <div className="relative rounded-lg border border-border bg-surface px-3 py-2 transition-colors hover:border-accent/40">
         <div className="flex items-center gap-2">
-          <div className="flex h-6 w-6 items-center justify-center rounded-md bg-blue-400/10 text-blue-300 ring-1 ring-blue-400/20">
-            <Key className="h-3.5 w-3.5" />
+          <div className="flex h-6 w-6 items-center justify-center rounded-md bg-accent/10 text-accent ring-1 ring-accent/20">
+            <ShieldCheck className="h-3.5 w-3.5" />
           </div>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-1.5">
-              <span className="text-xs font-medium text-foreground">TickFlow</span>
-              <span
-                className="h-1.5 w-1.5 rounded-full"
-                style={{ ...t.dotStyle, ...(base === 'expert' ? { animation: 'pulse 2s infinite' } : {}) }}
-              />
+              <span className="text-xs font-medium text-foreground">账户与授权</span>
+              <span className={`h-1.5 w-1.5 rounded-full ${statusColor}`} />
             </div>
             <div className="mt-0.5 truncate text-[10px] leading-tight text-muted">
-              {isNone && !hasKey ? '配置 Key 解锁更多能力' : t.desc}
+              {status}
             </div>
           </div>
-          <span
-            className="inline-flex h-[18px] max-w-[68px] shrink-0 items-center overflow-hidden rounded px-1.5 text-[10px] font-bold font-mono leading-none"
-            style={t.tagBg}
-          >
-            <span className="truncate" style={t.labelTextStyle}>{displayLabel}</span>
-          </span>
           <Settings className="h-3 w-3 shrink-0 text-muted group-hover:text-blue-300 transition-colors" />
         </div>
 
@@ -315,6 +306,7 @@ export function Layout() {
     if (!isMobile || !mobileNavOpen) return
     const drawer = drawerRef.current
     if (!drawer) return
+    const returnFocus = menuButtonRef.current
 
     const focusFirst = () => {
       const first = drawer.querySelector<HTMLElement>(FOCUSABLE_SELECTOR)
@@ -350,7 +342,7 @@ export function Layout() {
     return () => {
       cancelAnimationFrame(frame)
       document.removeEventListener('keydown', onKeyDown, true)
-      menuButtonRef.current?.focus()
+      returnFocus?.focus()
     }
   }, [isMobile, mobileNavOpen])
 
@@ -390,11 +382,13 @@ export function Layout() {
     ? providerDisplayName(dataSources, realtimeProvider)
     : null
 
-  // 当前主数据源 (用于菜单底部状态条)
-  const activeProvider = prefs?.daily_data_provider || 'tickflow'
-  const activeProviderName = providerDisplayName(dataSources, activeProvider)
+  // 当前日K首选源 (用于菜单底部状态条)。优先读取新配置链，兼容旧单值字段。
+  const activeProvider = prefs?.provider_chains?.daily?.[0] || prefs?.daily_data_provider || ''
+  const activeProviderName = activeProvider
+    ? providerDisplayName(dataSources, activeProvider)
+    : '未配置'
   const activeProviderDatasets = providerDatasets(dataSources, activeProvider)
-  const isCustomActive = isNonTickflow(activeProvider)
+  const isAlternativeActive = isNonTickflow(activeProvider)
 
   // 轮询触发记录总数 → 更新监控中心徽标 (每 15 秒)
   const alertsTotalQuery = useQuery({
@@ -495,13 +489,13 @@ export function Layout() {
               className="font-mono font-bold text-[13px] tracking-[0.06em] text-foreground leading-tight"
               style={{ textShadow: `0 0 10px ${BRAND}44` }}
             >
-              <div>TickFlow</div>
-              <div>Stock Panel</div>
+              <div>AthenaQuant</div>
+              <div>Research Terminal</div>
             </div>
           </div>
 
           <div className="mt-2.5 text-[10px] uppercase tracking-[0.22em] text-secondary">
-            Quant · Terminal
+            Quant · Research Terminal
           </div>
 
           <div
@@ -509,9 +503,15 @@ export function Layout() {
             style={{ background: `linear-gradient(90deg, ${BRAND}88, transparent 80%)` }}
           />
 
-          <TierBadge
-            label={caps?.label ?? ''}
-            hasKey={settingsState?.mode !== 'none'}
+          <AccessBadge
+            hasTickflowKey={settingsState?.mode !== 'none'}
+            sourceCount={
+              new Set([
+                ...(dataSources?.builtin ?? []).map(source => source.name),
+                ...(dataSources?.plugins ?? []).filter(plugin => plugin.available).map(plugin => plugin.name),
+                ...(dataSources?.custom ?? []).map(source => source.name),
+              ]).size
+            }
           />
           <AIConfigBadge
             configured={settingsState?.ai_configured ?? settingsState?.has_ai_key}
@@ -566,27 +566,24 @@ export function Layout() {
           title="数据源设置"
         >
           <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md ${
-            isCustomActive ? 'bg-accent/15' : 'bg-elevated'
+            isAlternativeActive ? 'bg-accent/15' : 'bg-elevated'
           }`}>
-            <Database className={`h-3 w-3 ${isCustomActive ? 'text-accent' : 'text-muted'}`} />
+            <Database className={`h-3 w-3 ${isAlternativeActive ? 'text-accent' : 'text-muted'}`} />
           </span>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-1.5">
               <span className="text-[11px] font-medium text-secondary truncate group-hover:text-foreground transition-colors">
                 {activeProviderName}
               </span>
-              {isCustomActive && (
+              {activeProvider && (
                 <span className="shrink-0 rounded bg-accent/15 px-1 py-px text-[8px] font-semibold uppercase tracking-wider text-accent">
-                  自定义
+                  {isAlternativeActive ? '首选' : '回退'}
                 </span>
               )}
             </div>
             <div className="mt-0.5 flex gap-0.5">
               {(['daily', 'adj_factor', 'realtime', 'minute'] as const).map(ds => {
-                const supported = ds === 'daily' || ds === 'adj_factor' || ds === 'realtime' || ds === 'minute'
-                const active = supported && (
-                  isCustomActive ? activeProviderDatasets.includes(ds) : true
-                )
+                const active = activeProviderDatasets.includes(ds)
                 return (
                   <span
                     key={ds}

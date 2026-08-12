@@ -532,7 +532,8 @@ function RulesList({ rulesQuery, onEdit }: {
   const [previewSymbol, setPreviewSymbol] = useState<string | null>(null)
   const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const rules: MonitorRule[] = (rulesQuery.data as any)?.rules ?? []
+  const ruleRows = (rulesQuery.data as any)?.rules as MonitorRule[] | undefined
+  const rules = useMemo<MonitorRule[]>(() => ruleRows ?? [], [ruleRows])
 
   // 收集所有规则的股票代码, 批量查名称
   const allSymbols = useMemo(() => {

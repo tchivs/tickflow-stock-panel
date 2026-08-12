@@ -515,7 +515,7 @@ export function EChartsIntraday({ data, height = 320, prevClose, date, symbol, o
     } else {
       chart.clear()
     }
-  }, [data, prevClose, height, lineColor, areaFill, yMode, ct, symbol, showLimitLines, showAvgLine])
+  }, [data, prevClose, avgPrices, height, lineColor, areaFill, yMode, ct, symbol, showLimitLines, showAvgLine])
 
   useEffect(() => {
     return () => {

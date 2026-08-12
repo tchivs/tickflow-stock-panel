@@ -59,7 +59,7 @@ export function Portfolio() {
   })
   const rulesQuery = useQuery({ queryKey: QK.monitorRules, queryFn: api.monitorRulesList, staleTime: 30_000 })
 
-  const accounts = accountsQuery.data?.accounts ?? []
+  const accounts = useMemo(() => accountsQuery.data?.accounts ?? [], [accountsQuery.data?.accounts])
   const holdings = useMemo(() => [...(holdingsQuery.data?.positions ?? [])].sort((left, right) => {
     const accountOrder = left.account_id - right.account_id
     return accountOrder || left.instrument_symbol.localeCompare(right.instrument_symbol)

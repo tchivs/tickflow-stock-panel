@@ -135,6 +135,37 @@ class TestApiStatusBoundary:
         assert response.status_code == 401
 
 
+class TestRunListRoute:
+    def test_list_is_principal_scoped_and_newest_first(
+        self,
+        alpha_client: TestClient,
+        deterministic_clock,
+    ) -> None:
+        older = _create_run(alpha_client, idempotency_key="idem-list-older-00001")
+        deterministic_clock.advance()
+        newer = _create_run(alpha_client, idempotency_key="idem-list-newer-00001")
+        _create_run(
+            alpha_client,
+            idempotency_key="idem-list-other-00001",
+            principal=_OTHER_PRINCIPAL,
+        )
+
+        response = alpha_client.get(
+            "/api/research/alpha/runs?limit=1",
+            headers={"X-Test-Principal": _PRINCIPAL},
+        )
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert [run["id"] for run in body] == [newer["id"]]
+        assert all("principal" not in run for run in body)
+        assert older["id"] not in {run["id"] for run in body}
+
+    def test_list_requires_a_principal(self, alpha_client: TestClient) -> None:
+        response = alpha_client.get("/api/research/alpha/runs")
+        assert response.status_code == 401
+
+
 # ================================================================
 # Retry route (AF-REQ-16, D-06/D-07)
 # ================================================================

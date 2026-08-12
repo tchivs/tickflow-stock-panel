@@ -827,9 +827,10 @@ function FocusDialog({ title, initialFocus, onClose, children }: { title: string
   const dialogRef = useRef<HTMLDivElement>(null)
   const returnFocus = useRef(document.activeElement as HTMLElement | null)
   useEffect(() => {
+    const restoreFocus = returnFocus.current
     const selector = initialFocus === 'textarea' ? '[data-dialog-textarea]' : '[data-dialog-cancel]'
     requestAnimationFrame(() => dialogRef.current?.querySelector<HTMLElement>(selector)?.focus())
-    return () => returnFocus.current?.focus()
+    return () => restoreFocus?.focus()
   }, [initialFocus])
   function onKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
     if (event.key === 'Escape') { event.preventDefault(); onClose(); return }

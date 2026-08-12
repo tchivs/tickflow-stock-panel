@@ -156,7 +156,7 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
       if (mode === 'modify') setTab('custom')
     }
     setLoaded(true)
-  }, [open])
+  }, [open, draftStore, mode])
 
   // 打开时检查 AI 状态
   useEffect(() => {
@@ -171,7 +171,7 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
     } else {
       draftStore.set({ name, description, direction, rules, code, step, strategyId, source } as any)
     }
-  }, [name, description, direction, rules, code, step, strategyId, source])
+  }, [draftStore, name, description, direction, rules, code, step, strategyId, source])
   useEffect(() => { if (loaded) persist() }, [loaded, persist])
 
   const clearDraft = () => {

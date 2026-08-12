@@ -258,7 +258,11 @@ def provider_has_dataset(name: str, dataset: str) -> bool:
     provider = _PROVIDERS.get((name or "").lower())
     if provider is None:
         return False
-    return dataset in provider.config.datasets
+    config = getattr(provider, "config", None)
+    if config is not None:
+        return dataset in config.datasets
+    plugin = _PLUGIN_STATUS.get((name or "").lower())
+    return dataset in (plugin or {}).get("datasets", [])
 
 
 def get_config_dict(name: str) -> dict | None:
@@ -496,4 +500,3 @@ def _load_entry(entry_ref: str):
 
 # 模块导入时即扫描一次, 保证 names()/_allowed_data_providers() 在 startup 前可用。
 _load_builtin_plugins()
-

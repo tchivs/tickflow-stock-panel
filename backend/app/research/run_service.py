@@ -461,6 +461,11 @@ class ResearchRunService:
     def get(self, run_id: str, *, principal: str) -> dict[str, Any] | None:
         """Return one principal-scoped durable run row."""
         return self._repository.get_alpha_run(run_id, principal=principal)
+
+    def list(self, *, principal: str, limit: int = 100) -> list[dict[str, Any]]:
+        """Return recent principal-scoped durable run rows."""
+        return self._repository.list_alpha_runs(principal=principal, limit=limit)
+
     def replay(
         self,
         run_id: str,

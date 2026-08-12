@@ -89,7 +89,7 @@ async function login(page: Page, redirect: '/stock-analysis' | '/backtest' = '/s
 async function selectFixtureStock(page: Page) {
   const search = page.getByPlaceholder('输入股票代码或名称，如 600000 / 浦发')
   await search.fill('600000')
-  await expect(page.getByRole('button', { name: /600000\.SH/ }).first()).toBeVisible()
+  await expect(page.getByRole('option', { name: /600000\.SH/ }).first()).toBeVisible()
   await search.press('Enter')
   await expect(page.getByRole('heading', { name: '归因观点与表现校准' })).toBeVisible()
 }

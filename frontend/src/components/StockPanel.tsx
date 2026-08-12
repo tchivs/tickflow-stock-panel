@@ -86,7 +86,7 @@ export function StockPanel({
     onSelectDate?.(date)
   }, [onSelectDate])
 
-  const rows = dailyResult?.rows ?? []
+  const rows = useMemo(() => dailyResult?.rows ?? [], [dailyResult?.rows])
   const stockInfo = dailyResult?.stockInfo
   const rawRows: KlineRow[] = dailyResult?.rawRows ?? []
 

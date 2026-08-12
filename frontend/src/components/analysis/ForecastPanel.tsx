@@ -772,7 +772,7 @@ function ForecastChart({ rows, paths, history, actuals }: { rows: QuantileRow[];
       ...(paths.length ? ['选中采样路径'] : []),
     ]
     return `${accessibleSeries.join('、')}概率图；表格顺序 P10、P50、P90`
-  }, [actuals, history, paths, rows]))
+  }, [actuals, history, paths]))
   return <div ref={chartRef} className="h-[280px] w-full md:h-[320px] xl:h-[360px]" />
 }
 
@@ -828,4 +828,3 @@ function ForecastHistory({ records, jobs, selectedRecordId, onSelect }: { record
   const descriptionId = useId()
   return <section aria-labelledby={`${descriptionId}-heading`} className="space-y-2"><h3 id={`${descriptionId}-heading`} className="text-base font-semibold">不可变预测与任务历史</h3><p id={descriptionId} className="text-xs text-secondary">左右滚动查看完整记录。失败任务与完成记录均只读保留；只有 completed 任务关联概率结果。</p><div tabIndex={0} aria-describedby={descriptionId} className={`overflow-x-auto ${FOCUS}`}><table className="min-w-[900px] w-full text-left text-xs"><caption className="sr-only">不可变概率预测历史</caption><thead className="bg-elevated text-secondary"><tr><th scope="col" className="p-2">记录 / 状态</th><th scope="col" className="p-2">创建时间</th><th scope="col" className="p-2">as-of / horizon</th><th scope="col" className="p-2">检查点</th><th scope="col" className="p-2">P50 终点</th><th scope="col" className="p-2">样本 / fingerprint</th><th scope="col" className="p-2">详情</th></tr></thead><tbody>{records.map(item => { const rows = quantileRows(item); return <tr key={item.id} className={`border-t border-border ${item.id === selectedRecordId ? 'bg-accent/5' : ''}`}><th scope="row" className="p-2 font-normal">{recordLabel(item)} · completed</th><td className="p-2">{dateTime(item.created_at)}</td><td className="p-2">{recordAsOf(item)} / {item.horizon}</td><td className="p-2">{item.catalog_id}</td><td className="p-2 font-mono">{rows.at(-1)?.p50 ?? '—'}</td><td className="p-2">{item.sample_count}<span className="block break-words font-mono [overflow-wrap:anywhere]">{text(recordInput(item).fingerprint, item.input_fingerprint)}</span></td><td className="p-2"><button type="button" onClick={() => onSelect(item.id)} className={`${BUTTON} min-h-0 py-2 text-accent underline`}>查看不可变记录</button></td></tr> })}{jobs.filter(job => job.status !== 'completed').map(job => <tr key={job.id} className="border-t border-border"><th scope="row" className="p-2 font-normal">{job.id} · {job.status}</th><td className="p-2">{dateTime(job.created_at)}</td><td className="p-2">— / {job.horizon}</td><td className="p-2">{job.catalog_id}</td><td className="p-2">未创建结果</td><td className="p-2">{job.safe_reason ?? '只读终态'}</td><td className="p-2">查看恢复方式</td></tr>)}</tbody></table></div>{jobs.length === 0 && records.length === 0 && <p className="text-secondary">尚无任务或不可变记录。</p>}</section>
 }
-

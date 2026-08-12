@@ -1838,6 +1838,20 @@ class ResearchRepository:
                 return None
             return self._alpha_run_row(connection, run_id)
 
+    def list_alpha_runs(self, *, principal: str, limit: int = 100) -> list[dict[str, Any]]:
+        """Return recent runs for one principal in deterministic newest-first order."""
+        if limit < 1 or limit > 500:
+            raise ValueError("alpha run list limit is out of bounds")
+        with self._connection() as connection:
+            rows = connection.execute(
+                """SELECT * FROM research_alpha_runs
+                   WHERE principal = ?
+                   ORDER BY created_at DESC, id DESC
+                   LIMIT ?""",
+                (principal, limit),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     # ----------------------------------------------------------------
     # Guarded lifecycle cursor transitions (Wave 3: D-06, T-45-06/07/12)
     # ----------------------------------------------------------------

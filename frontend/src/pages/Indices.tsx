@@ -92,9 +92,9 @@ export function Indices() {
     enabled: keyword.trim().length > 0,
   })
 
-  const rows: IndexInstrument[] = keyword.trim()
+  const rows = useMemo<IndexInstrument[]>(() => keyword.trim()
     ? (search.data?.results ?? [])
-    : (list.data?.results ?? [])
+    : (list.data?.results ?? []), [keyword, search.data?.results, list.data?.results])
   const topRows = useMemo(() => {
     const all = list.data?.results ?? []
     return PINNED_INDEXES.map(p => (

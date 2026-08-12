@@ -749,8 +749,8 @@ export function Watchlist() {
   const handleCardCancelRemove = useCallback(() => setConfirmRemove(null), [])
   const handleCardRequestRemove = useCallback((sym: string) => setConfirmRemove(sym), [])
 
-  const allSymbols = list.data?.symbols?.map(s => s.symbol) ?? []
-  const rows = enriched.data?.rows ?? []
+  const allSymbols = useMemo(() => list.data?.symbols?.map(s => s.symbol) ?? [], [list.data?.symbols])
+  const rows = useMemo(() => enriched.data?.rows ?? [], [enriched.data?.rows])
 
   // 实时监控圆点: 仅 Free/低档 "按自选股实时监控" 模式 (mode === 'watchlist') 下显示;
   // Starter+ 全市场模式 (mode === 'full_market') 全部标的都在监控, 标圆点无意义, 故不显示。

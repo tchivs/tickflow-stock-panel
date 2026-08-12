@@ -101,3 +101,17 @@ def test_plugin_manifest_is_linux_native():
     text = manifest.read_text(encoding="utf-8")
     assert "runtime: none" in text
     assert "financial" in text
+
+
+def test_builtin_plugin_dataset_lookup_does_not_require_config(monkeypatch):
+    from app.data_providers.custom import loader
+
+    provider = TushareProvider(token="TOKEN", api_url="http://fixture")
+    monkeypatch.setitem(loader._PROVIDERS, "tushare", provider)
+    monkeypatch.setitem(loader._PLUGIN_STATUS, "tushare", {
+        "datasets": ["daily", "adj_factor", "financial"],
+    })
+
+    assert loader.provider_has_dataset("tushare", "daily")
+    assert loader.provider_has_dataset("tushare", "financial")
+    assert not loader.provider_has_dataset("tushare", "auction")

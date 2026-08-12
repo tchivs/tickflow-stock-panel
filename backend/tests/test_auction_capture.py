@@ -151,6 +151,47 @@ def test_validate_window_rejects_short_window():
     assert check["ok"] is False
 
 
+def test_validate_window_accepts_iso_trade_date():
+    """服务端实测 ISO 形态 trade_date (``2026-08-07T00:00:00+08:00``) → 归属日==T 通过。
+
+    回归: stockdb_provider.get_ticks 返回原始 JSON 未归一化, trade_date 为 ISO 带时区
+    形态; 旧实现 ``str(...).startswith("YYYYMMDD")`` 恒 False → 采集必 0/6 (capture_all_failed),
+    tick_staging 永不落盘。本测试锁定 ISO 形态可正常通过完整性校验。
+    """
+    from app.services.auction_capture import _validate_tick_window
+
+    fixture = _load_fixture()
+    rows = [dict(r, trade_date="2026-08-07T00:00:00+08:00") for r in fixture["window"]]
+    check = _validate_tick_window(rows, "20260807")
+    assert check["ok"] is True
+
+
+def test_validate_window_rejects_iso_wrong_trade_date():
+    """ISO 形态但归属日 != T → fail-closed (镜像 compact 语义, Pitfall 3)。"""
+    from app.services.auction_capture import _validate_tick_window
+
+    fixture = _load_fixture()
+    rows = [dict(r, trade_date="2026-08-06T00:00:00+08:00") for r in fixture["window"]]
+    check = _validate_tick_window(rows, "20260807")
+    assert check["ok"] is False
+
+
+def test_validate_window_rejects_mixed_trade_date_formats():
+    """ISO/compact 混合形态同归属日 → 全部通过; 混入他日 → fail-closed。"""
+    from app.services.auction_capture import _validate_tick_window
+
+    fixture = _load_fixture()
+    rows = [dict(r, trade_date="2026-08-07T00:00:00+08:00") for r in fixture["window"]]
+    rows[0] = dict(rows[0], trade_date="20260807")
+    check = _validate_tick_window(rows, "20260807")
+    assert check["ok"] is True
+
+    bad = list(rows)
+    bad[1] = dict(bad[1], trade_date="2026-08-08T00:00:00+08:00")
+    check_bad = _validate_tick_window(bad, "20260807")
+    assert check_bad["ok"] is False
+
+
 # ============================================================
 # Task 2: 采集池解析 (白名单 ≤200 默认自选池) + 失败语义
 # ============================================================

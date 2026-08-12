@@ -110,6 +110,12 @@ export function SettingsDataSourcesPanel() {
     name: p.name, display_name: p.display_name, datasets: p.datasets,
   }))
   const allItems = [...builtin, ...pluginItems, ...customList]
+  const providerChains = prefs.data?.provider_chains ?? {}
+  const configuredProviders = new Set(
+    DATASETS.flatMap(({ key }) => providerChains[key] ?? []),
+  )
+  const configuredDatasetCount = DATASETS.filter(({ key }) => (providerChains[key] ?? []).length > 0).length
+  const dailyPreferred = providerChains.daily?.[0]
 
   const selectedCustom = customList.find(s => s.name === selected)
 
@@ -141,6 +147,27 @@ export function SettingsDataSourcesPanel() {
           每个数据集按顺序尝试启用的源, 主源缺数据时自动回退到下一个。
           点击展开可启用/禁用并调整优先级。
         </p>
+
+        <div className="mb-4 grid grid-cols-3 border-y border-border/50 py-2.5">
+          <div className="min-w-0 px-2 first:pl-0">
+            <div className="text-[10px] text-muted/60">已接入源</div>
+            <div className="mt-0.5 truncate text-sm font-medium text-foreground">
+              {configuredProviders.size || 0}
+            </div>
+          </div>
+          <div className="min-w-0 border-l border-border/50 px-3">
+            <div className="text-[10px] text-muted/60">已配置数据集</div>
+            <div className="mt-0.5 text-sm font-medium text-foreground">
+              {configuredDatasetCount}/{DATASETS.length}
+            </div>
+          </div>
+          <div className="min-w-0 border-l border-border/50 px-3 last:pr-0">
+            <div className="text-[10px] text-muted/60">日K首选</div>
+            <div className="mt-0.5 truncate text-sm font-medium text-foreground" title={dailyPreferred}>
+              {dailyPreferred ? providerDisplayName(sources.data, dailyPreferred) : '未配置'}
+            </div>
+          </div>
+        </div>
 
         {/* 每数据集一行: 折叠 + 展开编辑器 */}
         <div className="space-y-2">
@@ -230,7 +257,7 @@ export function SettingsDataSourcesPanel() {
           <span>启用多个源自动回退</span>
           <span className="text-muted/30">·</span>
           <span className="inline-flex items-center gap-1">
-            <Shield className="h-2.5 w-2.5" /> TickFlow 始终兜底
+            <Shield className="h-2.5 w-2.5" /> 按配置链顺序回退
           </span>
         </div>
       </section>
@@ -434,7 +461,7 @@ function ChainEditor({
   // Preferences arrive after the panel mounts; keep the editor aligned with
   // the server chain without overwriting an in-progress local reorder.
   useEffect(() => {
-    setDraft(chain.length ? chain : ['tickflow'])
+    setDraft(chainSignature ? chainSignature.split('\u0000') : ['tickflow'])
   }, [dataset, chainSignature])
 
   // 该数据集可用源: tickflow (全支持) + 声明支持该数据集的源
@@ -450,6 +477,9 @@ function ChainEditor({
 
   const enabled = draft
   const disabled = available.filter(a => !enabled.includes(a.name))
+  const unavailablePlugins = new Set(
+    (sources?.plugins ?? []).filter(plugin => !plugin.available).map(plugin => plugin.name),
+  )
 
   const toggle = (name: string) => {
     if (name === 'tickflow') return // 兜底不可禁
@@ -481,12 +511,15 @@ function ChainEditor({
       <div className="space-y-1.5">
         {enabled.map((name, idx) => (
           <div key={name} className="flex items-center gap-2 rounded-lg border border-border/50 bg-base px-2.5 py-2">
-            <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${idx === 0 ? 'bg-accent' : 'bg-muted/40'}`} />
+            <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${
+              unavailablePlugins.has(name) ? 'bg-warning' : idx === 0 ? 'bg-accent' : 'bg-muted/40'
+            }`} />
             <span className="flex-1 text-xs truncate">
-              <span className={idx === 0 ? 'text-accent font-medium' : 'text-foreground'}>
+              <span className={unavailablePlugins.has(name) ? 'text-warning font-medium' : idx === 0 ? 'text-accent font-medium' : 'text-foreground'}>
                 {providerDisplayName(sources, name)}
               </span>
               {idx === 0 && <span className="ml-1.5 text-[9px] text-accent/70">首选</span>}
+              {unavailablePlugins.has(name) && <span className="ml-1.5 text-[9px] text-warning/80">未就绪</span>}
             </span>
             <button
               onClick={() => moveUp(idx)}
@@ -519,7 +552,7 @@ function ChainEditor({
           </div>
         ))}
         {enabled.length === 0 && (
-          <div className="text-[11px] text-muted/50 px-1 py-2">无启用源 — 将自动使用 TickFlow 兜底</div>
+          <div className="text-[11px] text-muted/50 px-1 py-2">无启用源 — 保存后将按系统回退链处理</div>
         )}
       </div>
 

@@ -230,7 +230,7 @@ export function ListColumnCustomizer({
   const resetExtDisplay = useCallback((colId: string) => {
     onChange(columns.map(c => {
       if (c.id !== colId) return c
-      const { extDisplay, ...rest } = c
+      const { extDisplay: _extDisplay, ...rest } = c
       return rest
     }))
   }, [columns, onChange])
@@ -245,7 +245,7 @@ export function ListColumnCustomizer({
   const resetCandleConfig = useCallback((colId: string) => {
     onChange(columns.map(c => {
       if (c.id !== colId) return c
-      const { candleConfig, ...rest } = c
+      const { candleConfig: _candleConfig, ...rest } = c
       return rest
     }))
   }, [columns, onChange])
@@ -260,7 +260,7 @@ export function ListColumnCustomizer({
   const resetIntradayConfig = useCallback((colId: string) => {
     onChange(columns.map(c => {
       if (c.id !== colId) return c
-      const { intradayConfig, ...rest } = c
+      const { intradayConfig: _intradayConfig, ...rest } = c
       return rest
     }))
   }, [columns, onChange])

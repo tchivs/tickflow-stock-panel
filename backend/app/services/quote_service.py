@@ -196,6 +196,9 @@ class QuoteService:
     }
     DEFAULT_INTERVAL = 10.0
     MAX_INTERVAL = 60.0
+    # 自适应默认开启的连通性探测: 无显式偏好时先验证实时源能拉到数据再持久化 true;
+    # 连续 PROBE_MAX_FAILURES 次源连接错误 → 自动禁用并持久化 false。见 _resolve_probe。
+    PROBE_MAX_FAILURES = 3
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -227,13 +230,22 @@ class QuoteService:
         # 午休/收盘最终同步状态: 到边界后必须成功拉取一版行情, 再进入休盘态。
         self._final_sync_done: set[tuple[date, str]] = set()
         self._final_sync_failed: dict[tuple[date, str], str] = {}
+        # 自适应默认开启的探测态: True 表示线程在跑但尚未确认实时源连通,
+        # 首次成功拉取 → 持久化 true; 连续错误达阈值 → _auto_disable。
+        self._awaiting_confirm = False
+        self._probe_failures = 0
 
     # ================================================================
     # 生命周期
     # ================================================================
 
-    def start(self, interval: float = 0.0) -> None:
-        """启动后台行情轮询线程。"""
+    def start(self, interval: float = 0.0, *, persist: bool = True) -> None:
+        """启动后台行情轮询线程。
+
+        persist=False: 自适应默认开启的探测期 —— 线程照常跑, 但不落盘 true,
+        待首次拉取确认实时源连通后由 _resolve_probe 持久化。显式开启(boot_check
+        读到显式偏好 / enable())走 persist=True 直接落盘。
+        """
         if self._running:
             return
         if interval <= 0:
@@ -244,17 +256,22 @@ class QuoteService:
         self._enabled = True
         self._thread = threading.Thread(target=self._poll_loop, daemon=True)
         self._thread.start()
-        self._save_enabled(True)
+        if persist:
+            self._save_enabled(True)
         logger.info("行情服务已启动, 轮询间隔 %.1fs", self._interval)
 
     def stop(self) -> None:
-        """停止后台行情轮询线程。"""
+        """停止后台行情轮询线程（进程停机/内部停止）—— 不落盘关闭偏好。
+
+        显式用户关闭走 disable()（持久化 false）；停机路径（main.py shutdown）
+        只 stop() 不触碰偏好 —— 否则每次重启都把 realtime_quotes_enabled 抹成
+        false，实时行情变会话级、用户选择被静默丢弃。
+        """
         self._running = False
         self._enabled = False
         if self._thread:
             self._thread.join(timeout=10)
             self._thread = None
-        self._save_enabled(False)
         logger.info("行情服务已停止")
 
     def enable(self) -> bool:
@@ -266,6 +283,9 @@ class QuoteService:
         if not self.is_realtime_allowed():
             logger.warning("实时行情开启被拒:当前档位(none)无实时行情权限")
             return False
+        # 用户显式开启: 结束自适应探测态, 直接落盘 true。
+        self._awaiting_confirm = False
+        self._probe_failures = 0
         self._enabled = True
         self._save_enabled(True)
         if not self._running:
@@ -278,8 +298,11 @@ class QuoteService:
         return True
 
     def disable(self) -> None:
-        """关闭自动行情。"""
+        """关闭自动行情（用户显式关闭, 持久化 false）。"""
+        self._awaiting_confirm = False
+        self._probe_failures = 0
         self.stop()
+        self._save_enabled(False)
         logger.info("行情服务已关闭")
 
     # ================================================================
@@ -325,6 +348,9 @@ class QuoteService:
 
         none 档无实时行情权限:即使 preferences 标记为 enabled,
         也不启动,并同步 preferences 为关闭(避免 UI 误显示已开启)。
+
+        自适应默认(无显式偏好): start(persist=False) 进入探测态, 不立刻落盘 true;
+        首次成功拉取确认实时源连通后持久化, 连续失败则自动禁用。
         """
         from app.services import preferences
         if not self.is_realtime_allowed():
@@ -332,8 +358,17 @@ class QuoteService:
                 self._save_enabled(False)
             logger.info("实时行情未启动:当前档位(none)无实时行情权限")
             return
-        if preferences.get_realtime_quotes_enabled():
-            self.start()
+        enabled = preferences.get_realtime_quotes_enabled()
+        if enabled:
+            explicit = preferences.has_realtime_quotes_pref()
+            self.start(persist=explicit)
+            if not explicit:
+                self._awaiting_confirm = True
+                self._probe_failures = 0
+                logger.info(
+                    "实时行情按自适应默认开启, 等待实时源连通确认(最多 %d 次连续失败)",
+                    self.PROBE_MAX_FAILURES,
+                )
 
     def set_repo(self, repo) -> None:
         """注入 KlineRepository, 用于实时落盘。"""
@@ -679,11 +714,54 @@ class QuoteService:
             if final:
                 logger.info("最终行情同步开始")
             if self.realtime_mode() == "watchlist":
-                self._fetch_watchlist_quotes()
+                status = self._fetch_watchlist_quotes()
             else:
-                self._fetch_full_market_quotes()
-            return self._fetched_at > before
+                status = self._fetch_full_market_quotes()
+            ok = self._fetched_at > before
+        # 自适应默认探测(仅探测期): 成功→持久化 true; 连续源错误→自动禁用。
+        self._resolve_probe(status=status, ok=ok)
+        return ok
 
+    # ================================================================
+    # 自适应默认开启的连通性探测 (实时源连通性门控)
+    # ================================================================
+
+    def _resolve_probe(self, *, status: str, ok: bool) -> None:
+        """自适应默认开启的连通性判定(仅探测期有效, 其余状态无操作)。
+
+        - ok: 拉到数据 → 实时源连通, 持久化 true, 退出探测态。
+        - status == "error": 源连接错误(网络/鉴权/服务端) → 累计;
+          连续 PROBE_MAX_FAILURES 次 → _auto_disable 自动禁用并持久化 false。
+        - empty/skip: 源可达但暂无数据 / 配置未拉取, 不计数, 保持探测。
+        """
+        if not self._awaiting_confirm:
+            return
+        if ok:
+            self._awaiting_confirm = False
+            self._probe_failures = 0
+            self._save_enabled(True)
+            logger.info("实时源连通确认: 自适应默认开启已生效并持久化")
+            return
+        if status == "error":
+            self._probe_failures += 1
+            logger.warning(
+                "实时源连接失败 %d/%d 次, 连续失败将自动禁用实时行情",
+                self._probe_failures, self.PROBE_MAX_FAILURES,
+            )
+            if self._probe_failures >= self.PROBE_MAX_FAILURES:
+                self._auto_disable()
+
+    def _auto_disable(self) -> None:
+        """实时源持续不可达 → 自动禁用并持久化 false。
+
+        从轮询线程内调用: 只关标志、不 join 自身线程, 轮询循环自然退出。
+        """
+        self._awaiting_confirm = False
+        self._probe_failures = 0
+        self._enabled = False
+        self._running = False
+        self._save_enabled(False)
+        logger.warning("实时源不可达, 已自动禁用实时行情(可在设置中手动重新开启)")
 
     def _all_market_symbols(self) -> list[str]:
         """全市场股票 + 指数 + ETF 代码 (instruments 表, 去重后带交易所后缀)。"""
@@ -710,8 +788,12 @@ class QuoteService:
             logger.warning("all_market_symbols etf: %s", e)
         return sorted(symbols)
 
-    def _fetch_full_market_quotes(self) -> None:
-        """拉取全市场行情 → 写 daily + 计算 enriched + 更新缓存。"""
+    def _fetch_full_market_quotes(self) -> str:
+        """拉取全市场行情 → 写 daily + 计算 enriched + 更新缓存。
+
+        返回状态: "ok"=已取数更新; "empty"=源可达但无数据; "error"=源连接错误;
+        "skip"=配置原因未拉取(无代码/无key), 不计入连通性失败。供 _resolve_probe 判定。
+        """
         from app.services import preferences
 
         provider_name = preferences.get_realtime_data_provider()
@@ -724,9 +806,12 @@ class QuoteService:
                     records = custom_sources.get_provider(provider_name).get_realtime()
                 except Exception as e:
                     logger.warning("自定义实时行情拉取失败: %s", e)
-                    return
+                    return "error"
+                if not records:
+                    logger.warning("自定义实时行情数据为空")
+                    return "empty"
                 self._process_full_market_records(records, t0=t0, now_ts=now_ts)
-                return
+                return "ok"
             if provider_name == "tencent":
                 # 腾讯实时: 免费不封 IP, 从 instruments 拿全市场代码分批拉取。
                 from app.data_providers import chain as provider_chain
@@ -734,7 +819,7 @@ class QuoteService:
                 symbols = self._all_market_symbols()
                 if not symbols:
                     logger.warning("腾讯实时拉取失败: 无 instruments 代码")
-                    return
+                    return "skip"
                 try:
                     t0 = time.perf_counter()
                     now_ts = time.perf_counter()
@@ -742,12 +827,12 @@ class QuoteService:
                     records = provider.get_realtime(symbols=symbols)
                 except Exception as e:  # noqa: BLE001
                     logger.warning("腾讯实时拉取失败: %s", e)
-                    return
+                    return "error"
                 if not records:
                     logger.warning("腾讯实时数据为空")
-                    return
+                    return "empty"
                 self._process_full_market_records(records, t0=t0, now_ts=now_ts)
-                return
+                return "ok"
             # 自定义源未配置 realtime → 回退 TickFlow
 
         from app.tickflow.client import get_paid_realtime_client
@@ -755,7 +840,7 @@ class QuoteService:
         tf = get_paid_realtime_client()
         if tf is None:
             logger.warning("实时行情拉取失败:未配置付费服务器 API Key")
-            return
+            return "skip"
         t0 = time.perf_counter()
         now_ts = time.perf_counter()
 
@@ -791,11 +876,11 @@ class QuoteService:
                 logger.info("核心指数行情拉取完成: %d 只 (%.2fs)", len(_core_syms), time.perf_counter() - _i0)
         except Exception as e:  # noqa: BLE001
             logger.warning("行情拉取失败 (%.2fs): %s", time.perf_counter() - t0, e)
-            return
+            return "error"
 
         if not resp:
             logger.warning("行情数据为空")
-            return
+            return "empty"
 
         # ---- 解析 API 响应 (临时变量, 用完丢弃) ----
         records = []
@@ -830,6 +915,7 @@ class QuoteService:
             })
 
         self._process_full_market_records(records, t0=t0, now_ts=now_ts)
+        return "ok"
 
     def _process_full_market_records(self, records: list[dict], *, t0: float, now_ts: float) -> None:
         """把全市场 records 写盘并增量计算 enriched。"""
@@ -900,14 +986,18 @@ class QuoteService:
         # ---- 策略监控 + 告警评估 ----
         self._evaluate_monitors(daily_df, quote_extra)
 
-    def _fetch_watchlist_quotes(self) -> None:
-        """自选股实时: 免费档最多 5 个; 腾讯源无需付费 key。"""
+    def _fetch_watchlist_quotes(self) -> str:
+        """自选股实时: 免费档最多 5 个; 腾讯源无需付费 key。
+
+        返回状态: "ok"=已取数更新; "empty"=源可达但无数据; "error"=源连接错误;
+        "skip"=配置原因未拉取(无标的/无key), 不计入连通性失败。供 _resolve_probe 判定。
+        """
         from app.services import preferences
 
         symbols = preferences.get_realtime_watchlist_symbols()
         if not symbols:
             logger.info("自选实时未配置标的, 跳过行情拉取")
-            return
+            return "skip"
 
         provider_name = preferences.get_realtime_data_provider()
         if provider_name == "tencent":
@@ -920,16 +1010,19 @@ class QuoteService:
                 records = provider.get_realtime(symbols=symbols)
             except Exception as e:
                 logger.warning("腾讯自选实时拉取失败: %s", e)
-                return
+                return "error"
+            if not records:
+                logger.warning("腾讯自选实时数据为空")
+                return "empty"
             self._process_watchlist_records(records, t0=t0, now_ts=now_ts)
-            return
+            return "ok"
 
         from app.tickflow.client import get_paid_realtime_client
 
         tf = get_paid_realtime_client()
         if tf is None:
             logger.warning("自选实时拉取失败:未配置付费服务器 API Key")
-            return
+            return "skip"
 
         t0 = time.perf_counter()
         now_ts = time.perf_counter()
@@ -937,11 +1030,11 @@ class QuoteService:
             resp = tf.quotes.get(symbols=symbols) or []
         except Exception as e:
             logger.warning("自选实时拉取失败: %s", e)
-            return
+            return "error"
 
         if not resp:
             logger.warning("自选实时行情数据为空")
-            return
+            return "empty"
 
         records = []
         for q in resp:
@@ -974,6 +1067,7 @@ class QuoteService:
             })
 
         self._process_watchlist_records(records, t0=t0, now_ts=now_ts)
+        return "ok"
 
     def _process_watchlist_records(self, records: list[dict], *, t0: float, now_ts: float) -> None:
         """自选实时 records → 元信息 + 日K写盘 + enriched + 通知。"""

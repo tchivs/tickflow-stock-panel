@@ -96,6 +96,17 @@ async def create_run(
     return AlphaRunReadDTO(**projections.run(run))
 
 
+@router.get("/runs", response_model=list[AlphaRunReadDTO])
+async def list_runs(
+    request: Request,
+    limit: int = Query(100, ge=1, le=500),
+) -> list[AlphaRunReadDTO]:
+    """Return recent runs for the authenticated principal."""
+    service = _service(request)
+    principal = _principal(request)
+    return [AlphaRunReadDTO(**projections.run(run)) for run in service.list(principal=principal, limit=limit)]
+
+
 @router.get("/runs/{run_id}", response_model=AlphaRunReadDTO)
 async def get_run(request: Request, run_id: str) -> AlphaRunReadDTO:
     """Return one principal-scoped run projection."""

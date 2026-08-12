@@ -415,7 +415,7 @@ test.describe('Phase 18 pool hub', () => {
     test.skip(testInfo.project.name !== DESKTOP_PROJECT, 'desktop-only workflow')
     await installShell(page)
     await page.route('**/api/pool/hub**', async route => {
-      await new Promise(resolve => setTimeout(resolve, 500))
+      await new Promise(resolve => setTimeout(resolve, 1_500))
       await json(route, hubPayload)
     })
 

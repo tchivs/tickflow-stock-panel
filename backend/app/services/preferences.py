@@ -40,7 +40,30 @@ def save(updates: dict) -> dict:
 
 
 def get_realtime_quotes_enabled() -> bool:
-    return load().get("realtime_quotes_enabled", False)
+    """实时行情开关。
+
+    默认（无显式配置）: 有可用实时源时开启（default-on），无源时关闭；
+    显式配置过则尊重用户选择（开关持久化，停机不再抹除 — stop() 不落盘）。
+    """
+    val = load().get("realtime_quotes_enabled")
+    if val is not None:
+        return bool(val)
+    return _realtime_source_available()
+
+
+def _realtime_source_available() -> bool:
+    """是否存在可用实时源（档位允许实时行情）。
+
+    惰性导入 QuoteService 避免循环依赖: 腾讯源恒 full_market, TickFlow
+    free→watchlist / starter+→full_market 均为可用; 仅 none 档无源。
+    """
+    from app.services.quote_service import QuoteService
+    return QuoteService.is_realtime_allowed()
+
+
+def has_realtime_quotes_pref() -> bool:
+    """是否显式配置过实时行情开关（区别于自适应默认）。"""
+    return "realtime_quotes_enabled" in load()
 
 
 def get_indices_nav_pinned() -> bool:

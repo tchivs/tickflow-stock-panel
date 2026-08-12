@@ -1,4 +1,4 @@
-/** 数据源 provider 元数据辅助: 在 builtin + custom 中解析显示名 / 数据集能力。 */
+/** 数据源 provider 元数据辅助: 在 builtin + plugins + custom 中解析显示名 / 数据集能力。 */
 import type { DataSourceItem, DataSourcesResponse } from './api'
 
 /** 数据集 key → 中文标签 (DataSources 卡片徽标 / 状态条用)。 */
@@ -16,8 +16,8 @@ export const DATASET_LABELS: Record<string, string> = {
 }
 
 /**
- * 查 provider 元数据 (builtin 优先, 其次 custom)。返回 {name, display_name, datasets}。
- * 后端 /data-sources 的 builtin + custom 都是 DataSourceItem 形状。
+ * 查 provider 元数据 (builtin 优先, 其次 plugins/custom)。返回 {name, display_name, datasets}。
+ * 后端 /data-sources 的 builtin、plugins 和 custom 统一为展示元数据。
  */
 export function providerMeta(
   dataSources: DataSourcesResponse | undefined,
@@ -36,7 +36,7 @@ export function providerMeta(
   return all.find(s => s.name === name)
 }
 
-/** provider 显示名: tickflow → 'TickFlow'; 其它查 builtin/custom, 未知回退原名。 */
+/** provider 显示名: tickflow → 'TickFlow'; 其它查 builtin/plugins/custom, 未知回退原名。 */
 export function providerDisplayName(
   dataSources: DataSourcesResponse | undefined,
   name: string,
@@ -45,7 +45,7 @@ export function providerDisplayName(
   return providerMeta(dataSources, name)?.display_name || name
 }
 
-/** provider 支持的数据集列表 (tickflow → 全量 5 类, 其它查 builtin/custom)。 */
+/** provider 支持的数据集列表 (tickflow → 全量 5 类, 其它查 builtin/plugins/custom)。 */
 export function providerDatasets(
   dataSources: DataSourcesResponse | undefined,
   name: string,

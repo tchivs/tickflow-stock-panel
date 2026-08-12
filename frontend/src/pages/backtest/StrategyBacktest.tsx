@@ -112,10 +112,18 @@ function FillRuleHint() {
 
   return (
     <div ref={iconRef} className="relative inline-flex items-center">
-      <HelpCircle
-        className="h-3.5 w-3.5 text-yellow-500/80 hover:text-yellow-500 cursor-help transition-colors"
+      <button
+        type="button"
+        aria-label="成交口径说明"
+        aria-expanded={open}
         onClick={handleOpen}
-      />
+        className="inline-flex items-center justify-center rounded cursor-help focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
+      >
+        <HelpCircle
+          className="h-3.5 w-3.5 text-yellow-500/80 hover:text-yellow-500 transition-colors"
+          aria-hidden="true"
+        />
+      </button>
       <AnimatePresence>
         {open && pos && (
           <>
