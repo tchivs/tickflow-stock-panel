@@ -6,6 +6,41 @@ AthenaQuant 是面向个人 A 股投资者的全栈量化研究平台，融合�
 
 ---
 
+## 实现现状(先读)
+
+> **本文档描述的是「完全体」目标蓝图**, 源项目索引指向规划期的外部仓库路径(他机), **不代表当前仓库结构**。
+> 当前仓库是**自研单体**, 不是多仓库集成。
+
+### 当前代码形态
+
+- **后端**: 单体 FastAPI — `backend/app/`(`main.py` 组装 + `bootstrap.py` lifespan + 40 个 API 模块 + 55 个 services)。
+- **前端**: 单体 React SPA — `frontend/src/`(Vite + TanStack Query + ECharts)。
+- **存储**: 本地 Parquet 数据湖 + DuckDB + SQLite(operational.db)。单容器可跑。
+
+### 蓝图能力落地状态
+
+| 蓝图能力 | 状态 | 代码位置 |
+|---|---|---|
+| Parquet 数据湖 + DuckDB/Polars 计算 | ✅ 已落地 | `backend/app/tickflow/`, `parquet.py` |
+| 实时行情轮询 + SSE 广播 | ✅ 已落地 | `services/quote_service.py`, `api/research_alpha_sse.py` |
+| 多数据源联邦 + 能力探测 + typed 降级 | ✅ 已落地 | `data_providers/`(6 providers) |
+| 确定性决策引擎 + LLM 护栏(受限字段/clamp/veto/审计) | ✅ 已落地 | `decision/`, `theses/`, `advanced/` |
+| Shadow Account(交易日志→蒸馏→回测→信号) | ✅ 已落地 | `shadow/`, `backtest/` |
+| 因子 DSL + IC/RankIC + 策略进化晋升门控 | ✅ 已落地 | `research/` |
+| 竞价数据捕获/回填/验证 | ✅ 已落地 | `services/auction_*.py`, `api/auction_*.py` |
+| Kronos 时序预测(分位数/样本路径) | ✅ 已落地 | `forecast/` |
+| LangGraph 多 Agent 工作流 | 🟡 部分(单机 bounded 工作流) | `advanced/workflow.py` |
+| 66 评委/博主立场跟踪/信息质量分级 | 🟡 规划中, 未在代码 | — |
+| PWA 移动端 / 桌面端 / 多 Agent 会议室 | ❌ 未落地(蓝图前端扩展) | — |
+
+### 导航建议
+
+- 看应用如何组装: `backend/app/main.py` → `bootstrap.py` → 各 `api/*.py`。
+- 看数据链路: `data_providers/` → `tickflow/repository.py` → `services/*_sync.py`。
+- 看前端结构: `frontend/src/lib/api.ts`(统一 API 客户端)+ `router.tsx` + `pages/`。
+
+---
+
 ## 源项目索引
 
 | 项目 | 源码路径 | 文档路径 | GitHub | 引入能力 |
