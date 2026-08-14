@@ -412,8 +412,11 @@ def test_make_minute_loader_module_no_write_paths():
 
 
 def _main_src() -> str:
+    """应用组装层源码: main.py (路由/中间件) + bootstrap.py (lifespan 接线)。"""
     backend = Path(__file__).resolve().parents[1]
-    return (backend / "app" / "main.py").read_text(encoding="utf-8")
+    return (backend / "app" / "main.py").read_text(encoding="utf-8") + "\n" + (
+        backend / "app" / "bootstrap.py"
+    ).read_text(encoding="utf-8")
 
 
 def _governed_src() -> str:

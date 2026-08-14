@@ -544,14 +544,17 @@ class TestModuleGraphCompleteness:
         ast.parse(source)
 
     def test_main_py_wires_research_run_service(self) -> None:
-        """main.py must initialize the shared ResearchRunService in app.state."""
-        main_source = (_BACKEND / "app" / "main.py").read_text("utf-8")
-        assert "research_run_service" in main_source, (
-            "main.py: app.state.research_run_service not wired"
+        """组装层必须初始化共享 ResearchRunService 到 app.state (自 main.py 拆分, 现于 bootstrap.py)。"""
+        backend_src = (
+            (_BACKEND / "app" / "main.py").read_text("utf-8")
+            + "\n" + (_BACKEND / "app" / "bootstrap.py").read_text("utf-8")
         )
-        assert "ResearchRunService" in main_source, (
-            "main.py: ResearchRunService not imported/constructed"
+        assert "research_run_service" in backend_src, (
+            "app bootstrap: app.state.research_run_service not wired"
         )
-        assert "research_alpha.router" in main_source, (
-            "main.py: research_alpha.router not included"
+        assert "ResearchRunService" in backend_src, (
+            "app bootstrap: ResearchRunService not imported/constructed"
+        )
+        assert "research_alpha.router" in backend_src, (
+            "app main: research_alpha.router not included"
         )

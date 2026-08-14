@@ -719,9 +719,13 @@ def test_auction_backfill_router_registered_in_main():
 
 
 def test_auction_backfill_guest_whitelist_untouched():
-    """guest 白名单零改动: 不放行 auction backfill (POST 非 guest 可读)。"""
-    src = _main_src()
-    block = src.split("_GUEST_READ_GET_PATHS = frozenset({", 1)[1].split("})", 1)[0]
+    """guest 白名单零改动: 不放行 auction backfill (POST 非 guest 可读)。
+
+    白名单常量在 app/api/security_middleware.py (自 main.py 拆分); 断言目标随迁。
+    """
+    backend = Path(__file__).resolve().parents[1]
+    src = (backend / "app" / "api" / "security_middleware.py").read_text(encoding="utf-8")
+    block = src.split("_GUEST_READ_GET_PATHS = frozenset(", 1)[1].split("})", 1)[0]
     assert "backfill" not in block
 
 

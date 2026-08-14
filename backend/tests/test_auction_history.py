@@ -322,8 +322,10 @@ def test_auction_history_has_no_write_path():
 
 
 def test_main_guest_whitelist_and_router_registration():
-    """main.py 结构门: guest 白名单 + include_router 两处命中 /api/kline/auction/history。"""
+    """结构门: guest 白名单(security_middleware.py) + include_router(main.py) 各命中 auction/history。"""
     backend = Path(__file__).resolve().parents[1]
     main_src = (backend / "app" / "main.py").read_text(encoding="utf-8")
-    assert main_src.count("/api/kline/auction/history") == 2
+    security_src = (backend / "app" / "api" / "security_middleware.py").read_text(encoding="utf-8")
+    assert main_src.count("/api/kline/auction/history") == 1  # CHART-01 注释
+    assert "/api/kline/auction/history" in security_src  # guest 白名单
     assert "app.include_router(auction_history.router)" in main_src
