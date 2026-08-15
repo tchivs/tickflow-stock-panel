@@ -378,6 +378,19 @@ export function WatchlistGroupPicker({ groups, groupId, symbol, disabled, onChan
   const group = groups.find(item => item.id === groupId)
   const groupName = group?.name ?? '未分组'
   const color = resolveWatchlistGroupColor(group?.color)
+  // 无自定义分组时选择器无意义 (唯一选项是默认未分组), 渲染静态图标, 避免向 a11y 树
+  // 暴露无用的原生 select option 节点干扰全局 role=option 计数。
+  if (groups.length === 0) {
+    return (
+      <span
+        className={`inline-flex h-5 w-5 items-center justify-center rounded border border-transparent ${disabled ? 'opacity-40' : ''}`}
+        title={`分组：${groupName}`}
+        aria-label={`${symbol} 的分组`}
+      >
+        <FolderInput className="h-3.5 w-3.5 text-muted" aria-hidden="true" />
+      </span>
+    )
+  }
   return (
     <label
       className={`relative inline-flex h-5 w-5 items-center justify-center rounded border transition-colors ${

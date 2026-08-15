@@ -10,7 +10,7 @@ import { fmtPrice, fmtPct, fmtBigNum, priceColorClass } from '@/lib/format'
 import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
 import { StockPreviewDialog } from '@/components/StockPreviewDialog'
-import { WatchlistGroupBar, type WatchlistGroupFilter } from '@/components/WatchlistGroups'
+import { WatchlistGroupBar, WatchlistGroupPicker, type WatchlistGroupFilter } from '@/components/WatchlistGroups'
 import { ColumnCustomizer } from '@/components/ColumnCustomizer'
 import { StockDataTable } from '@/components/stock-table/StockDataTable'
 import { useTableSort } from '@/components/stock-table/useTableSort'
@@ -804,6 +804,14 @@ export function Watchlist() {
     qc.invalidateQueries({ queryKey: QK.watchlistEnriched() })
   }, [invalidateGroups, qc])
 
+  // 单股分组分配 (行内选择器)
+  const setGroup = useCallback((symbol: string, groupId: string | null) => {
+    void api.watchlistSetGroup(symbol, groupId).then(() => {
+      qc.invalidateQueries({ queryKey: QK.watchlist })
+      qc.invalidateQueries({ queryKey: QK.watchlistGroups })
+    })
+  }, [qc])
+
   // 实时监控圆点: 仅 Free/低档 "按自选股实时监控" 模式 (mode === 'watchlist') 下显示;
   // Starter+ 全市场模式 (mode === 'full_market') 全部标的都在监控, 标圆点无意义, 故不显示。
   // 后端 Free 档实际只监控自选页前 N 个 (N = watchlist_symbol_count), 顺序与 allSymbols 一致。
@@ -1246,6 +1254,13 @@ export function Watchlist() {
                           ) : null}
                           {monitoredSymbols.has(r.symbol) && <span className="ml-2"><RealtimeDot /></span>}
                         </button>
+                        {/* 单股分组选择器 */}
+                        <WatchlistGroupPicker
+                          groups={groups}
+                          groupId={groupIdBySymbol.get(r.symbol) ?? null}
+                          symbol={r.symbol}
+                          onChange={setGroup}
+                        />
                         {/* 删除入口：默认减号图标，二次确认时替换为确定按钮 */}
                         <div className="ml-auto pl-1 shrink-0">
                           {confirmRemove === r.symbol ? (
