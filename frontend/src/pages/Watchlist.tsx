@@ -3,13 +3,14 @@ import { createPortal } from 'react-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Trash2, RefreshCw, Star, X, Search, LayoutGrid, List, Settings2, Plus, Check, Filter, Eye, EyeOff, Minus, ChevronsUp, Clock, RotateCcw } from 'lucide-react'
-import { api, type KlineRow, type MinuteKlineRow } from '@/lib/api'
+import { api, type KlineRow, type MinuteKlineRow, type WatchlistGroupColor } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { storage } from '@/lib/storage'
 import { fmtPrice, fmtPct, fmtBigNum, priceColorClass } from '@/lib/format'
 import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
 import { StockPreviewDialog } from '@/components/StockPreviewDialog'
+import { WatchlistGroupBar, type WatchlistGroupFilter } from '@/components/WatchlistGroups'
 import { ColumnCustomizer } from '@/components/ColumnCustomizer'
 import { StockDataTable } from '@/components/stock-table/StockDataTable'
 import { useTableSort } from '@/components/stock-table/useTableSort'
@@ -685,7 +686,8 @@ export function Watchlist() {
   const minuteData = intradayVisible ? (minuteBatch.data?.data ?? {}) : {}
 
   const addMutation = useMutation({
-    mutationFn: (sym: string) => api.watchlistAdd(sym),
+    mutationFn: ({ symbol, groupId }: { symbol: string; groupId: string | null }) =>
+      api.watchlistAdd(symbol, '', groupId),
     onSuccess: (data) => {
       qc.setQueryData(QK.watchlist, data)
       qc.invalidateQueries({ queryKey: QK.watchlist })
@@ -751,6 +753,56 @@ export function Watchlist() {
 
   const allSymbols = useMemo(() => list.data?.symbols?.map(s => s.symbol) ?? [], [list.data?.symbols])
   const rows = useMemo(() => enriched.data?.rows ?? [], [enriched.data?.rows])
+
+  // ===== 自选分组 (B2) =====
+  const [groupFilter, setGroupFilter] = useState<WatchlistGroupFilter>('all')
+  const groupsQuery = useQuery({
+    queryKey: QK.watchlistGroups,
+    queryFn: api.watchlistGroups,
+  })
+  const groups = groupsQuery.data?.groups ?? []
+  const groupIdBySymbol = useMemo(() => {
+    const map = new Map<string, string | null>()
+    for (const entry of list.data?.symbols ?? []) map.set(entry.symbol, entry.group_id ?? null)
+    return map
+  }, [list.data?.symbols])
+  const groupCounts = useMemo(() => {
+    const counts: Record<string, number> = { ungrouped: 0 }
+    for (const entry of list.data?.symbols ?? []) {
+      if (entry.group_id) counts[entry.group_id] = (counts[entry.group_id] ?? 0) + 1
+      else counts.ungrouped = (counts.ungrouped ?? 0) + 1
+    }
+    return counts
+  }, [list.data?.symbols])
+  const activeGroupId = groupFilter === 'all' || groupFilter === 'ungrouped' ? null : groupFilter
+
+  const invalidateGroups = useCallback(() => {
+    qc.invalidateQueries({ queryKey: QK.watchlistGroups })
+    qc.invalidateQueries({ queryKey: QK.watchlist })
+  }, [qc])
+
+  const createGroup = useCallback(async (name: string, color: WatchlistGroupColor) => {
+    await api.watchlistGroupCreate(name, color)
+    invalidateGroups()
+  }, [invalidateGroups])
+
+  const renameGroup = useCallback(async (groupId: string, name: string, color: WatchlistGroupColor) => {
+    await api.watchlistGroupRename(groupId, name, color)
+    invalidateGroups()
+  }, [invalidateGroups])
+
+  const deleteGroup = useCallback(async (groupId: string) => {
+    await api.watchlistGroupDelete(groupId)
+    if (groupFilter === groupId) setGroupFilter('all')
+    invalidateGroups()
+    qc.invalidateQueries({ queryKey: QK.watchlistEnriched() })
+  }, [invalidateGroups, groupFilter, qc])
+
+  const clearGroup = useCallback(async (groupId: string) => {
+    await api.watchlistGroupClear(groupId)
+    invalidateGroups()
+    qc.invalidateQueries({ queryKey: QK.watchlistEnriched() })
+  }, [invalidateGroups, qc])
 
   // 实时监控圆点: 仅 Free/低档 "按自选股实时监控" 模式 (mode === 'watchlist') 下显示;
   // Starter+ 全市场模式 (mode === 'full_market') 全部标的都在监控, 标圆点无意义, 故不显示。
@@ -828,8 +880,13 @@ export function Watchlist() {
 
   // 筛选 + 排序
   const filteredRows = useMemo(() => {
-    // 板块筛选（全选时跳过）
+    // 分组筛选 (全部/未分组/具体分组)
     let result = rows
+    if (groupFilter !== 'all') {
+      const targetGroup = groupFilter === 'ungrouped' ? null : groupFilter
+      result = result.filter(r => groupIdBySymbol.get(r.symbol) === targetGroup)
+    }
+    // 板块筛选（全选时跳过）
     if (boardFilter.size > 0 && boardFilter.size < BOARDS.length) {
       result = result.filter(r => {
         const board = getBoardType(r.symbol)
@@ -856,7 +913,7 @@ export function Watchlist() {
       })
     }
     return result
-  }, [rows, filters, columns, boardFilter])
+  }, [rows, filters, columns, boardFilter, groupFilter, groupIdBySymbol])
 
   const activeFilterCount = Object.values(filters).filter(v => v.min || v.max || v.text).length
   const hasBoardFilter = boardFilter.size > 0 && boardFilter.size < BOARDS.length
@@ -952,7 +1009,7 @@ export function Watchlist() {
             <StockSearchBox
               onPreview={(sym, name) => { setPreviewSymbol(sym); setPreviewName(name) }}
               existingSymbols={allSymbols as string[]}
-              onAdd={(sym) => addMutation.mutate(sym)}
+              onAdd={(sym) => addMutation.mutate({ symbol: sym, groupId: activeGroupId })}
             />
             <div className="w-px h-5 bg-border" />
             {/* 视图 */}
@@ -998,6 +1055,19 @@ export function Watchlist() {
             )}
           </div>
         }
+      />
+
+      {/* 自选分组 tab 栏 */}
+      <WatchlistGroupBar
+        groups={groups}
+        counts={groupCounts}
+        selected={groupFilter}
+        total={list.data?.symbols.length ?? 0}
+        onSelect={setGroupFilter}
+        onCreate={createGroup}
+        onRename={renameGroup}
+        onDelete={deleteGroup}
+        onClearGroup={clearGroup}
       />
 
       {/* 筛选栏 */}

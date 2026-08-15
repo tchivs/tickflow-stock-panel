@@ -7,7 +7,7 @@ import time
 from datetime import date
 
 import polars as pl
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from app.db_safe import is_valid_ext_ident, quote_ident
@@ -21,11 +21,22 @@ router = APIRouter(prefix="/api/watchlist", tags=["watchlist"])
 class AddRequest(BaseModel):
     symbol: str
     note: str = ""
+    group_id: str | None = None
 
 
 class BatchAddRequest(BaseModel):
     symbols: list[str]
     note: str = ""
+    group_id: str | None = None
+
+
+class GroupNameRequest(BaseModel):
+    name: str
+    color: str | None = None
+
+
+class GroupAssignRequest(BaseModel):
+    group_id: str | None = None
 
 
 def _with_names(rows: list[dict], request: Request) -> list[dict]:
@@ -49,20 +60,80 @@ def list_all(request: Request):
 
 @router.post("")
 def add_one(req: AddRequest, request: Request):
-    rows = watchlist.add(req.symbol, req.note)
+    try:
+        rows = watchlist.add(req.symbol, req.note, req.group_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
     return {"symbols": _with_names(rows, request)}
 
 
 @router.post("/batch")
 def add_batch(req: BatchAddRequest, request: Request):
-    for sym in req.symbols:
-        watchlist.add(sym, req.note)
-    return {"symbols": _with_names(watchlist.list_symbols(), request), "added": len(req.symbols)}
+    try:
+        rows, added = watchlist.add_batch(req.symbols, req.note, req.group_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    return {"symbols": _with_names(rows, request), "added": added}
+
+
+@router.get("/groups")
+def list_groups():
+    return {"groups": watchlist.list_groups()}
+
+
+@router.post("/groups")
+def create_group(req: GroupNameRequest):
+    try:
+        groups, group = watchlist.create_group(req.name, req.color)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    return {"groups": groups, "group": group}
+
+
+@router.put("/groups/{group_id}")
+def rename_group(group_id: str, req: GroupNameRequest):
+    try:
+        groups = watchlist.rename_group(group_id, req.name, req.color)
+    except KeyError as e:
+        raise HTTPException(404, "自选分组不存在") from e
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    return {"groups": groups}
+
+
+@router.delete("/groups/{group_id}")
+def delete_group(group_id: str, request: Request):
+    try:
+        groups, rows = watchlist.delete_group(group_id)
+    except KeyError as e:
+        raise HTTPException(404, "自选分组不存在") from e
+    return {"groups": groups, "symbols": _with_names(rows, request)}
+
+
+@router.post("/groups/{group_id}/clear")
+def clear_group(group_id: str, request: Request):
+    """清空分组成员:把该分组内所有股票转为未分组,保留分组定义。"""
+    try:
+        rows = watchlist.clear_group(group_id)
+    except KeyError as e:
+        raise HTTPException(404, "自选分组不存在") from e
+    return {"symbols": _with_names(rows, request)}
 
 
 @router.post("/{symbol}/top")
 def move_one_to_top(symbol: str, request: Request):
     rows = watchlist.move_to_top(symbol)
+    return {"symbols": _with_names(rows, request)}
+
+
+@router.put("/{symbol}/group")
+def assign_group(symbol: str, req: GroupAssignRequest, request: Request):
+    try:
+        rows = watchlist.set_group(symbol, req.group_id)
+    except KeyError as e:
+        raise HTTPException(404, "自选标的不存在") from e
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
     return {"symbols": _with_names(rows, request)}
 
 
