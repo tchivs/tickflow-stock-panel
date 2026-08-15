@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
@@ -9,6 +9,8 @@ import { cnSignal } from '@/lib/signals'
 import { StockPanel, getDefaultRange } from '@/components/StockPanel'
 import { DatePicker } from '@/components/DatePicker'
 import { RuleEditor } from '@/components/monitor/RuleEditor'
+import { PriceAlertDialog } from '@/components/stock-analysis/PriceAlertDialog'
+import { buildMonitorPriceLines } from '@/lib/price-alerts'
 import { boardTag } from '@/components/stock-table/primitives'
 
 interface Props {
@@ -33,6 +35,12 @@ const PRESETS: { label: string; months: number }[] = [
   { label: '1年', months: 12 },
 ]
 
+interface PriceAlertDraft {
+  id: number
+  targetPrice: number
+  currentPrice: number
+}
+
 // 焦点陷阱可选聚焦元素 (同 Modal 原语)
 const FOCUSABLE = [
   'a[href]',
@@ -49,6 +57,7 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props
   const [showAuction, setShowAuction] = useState(false)
   const [dateRange, setDateRange] = useState(getDefaultRange)
   const [showMonitorEditor, setShowMonitorEditor] = useState(false)
+  const [priceAlertDraft, setPriceAlertDraft] = useState<PriceAlertDraft | null>(null)
   const qc = useQueryClient()
 
   const panelRef = useRef<HTMLDivElement>(null)
@@ -95,6 +104,21 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props
   })
   const inWatchlist = (watchlist.data?.symbols ?? []).some((s: any) => s.symbol === symbol)
 
+  // 点位监控: 已启用规则以横虚线显示在日K/分时图上, 双击主图创建/预填
+  const monitorRules = useQuery({
+    queryKey: QK.monitorRules,
+    queryFn: api.monitorRulesList,
+    enabled: !!symbol,
+  })
+  const monitorPriceLines = useMemo(
+    () => symbol ? buildMonitorPriceLines(monitorRules.data?.rules ?? [], symbol) : [],
+    [monitorRules.data?.rules, symbol],
+  )
+
+  const openPriceAlert = (targetPrice: number, currentPrice: number) => {
+    setPriceAlertDraft({ id: Date.now(), targetPrice, currentPrice })
+  }
+
   const toggleWatchlist = useMutation({
     mutationFn: () => inWatchlist ? api.watchlistRemove(symbol!) : api.watchlistAdd(symbol!),
     onSuccess: () => {
@@ -103,15 +127,15 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props
     },
   })
 
-  // ESC 关闭
+  // ESC 关闭 (点位编辑弹层打开时由 PriceAlertDialog 自行处理)
   useEffect(() => {
     if (!symbol) return
     const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
+      if (e.key === 'Escape' && !priceAlertDraft) onClose()
     }
     document.addEventListener('keydown', handler)
     return () => document.removeEventListener('keydown', handler)
-  }, [symbol, onClose])
+  }, [symbol, onClose, priceAlertDraft])
 
   const handleRefresh = () => {
     if (!symbol) return
@@ -322,6 +346,8 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props
                 showAuction={showAuction}
                 onSelectDate={() => { if (!showIntraday) setShowIntraday(true) }}
                 dateRange={dateRange}
+                priceLines={monitorPriceLines}
+                onPriceDoubleClick={openPriceAlert}
                 onMonitor={() => setShowMonitorEditor(true)}
                 inWatchlist={inWatchlist}
                 onToggleWatchlist={() => toggleWatchlist.mutate()}
@@ -357,6 +383,16 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props
             </AnimatePresence>
           </motion.div>
         </div>
+      )}
+      {symbol && priceAlertDraft && (
+        <PriceAlertDialog
+          key={`${symbol}-${priceAlertDraft.id}`}
+          symbol={symbol}
+          name={name ?? ''}
+          initialTarget={priceAlertDraft.targetPrice}
+          initialCurrentPrice={priceAlertDraft.currentPrice}
+          onClose={() => setPriceAlertDraft(null)}
+        />
       )}
     </AnimatePresence>
   )

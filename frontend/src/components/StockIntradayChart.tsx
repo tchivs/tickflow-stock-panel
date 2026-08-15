@@ -12,6 +12,13 @@ interface Props {
   prevClose?: number
   className?: string
   onPriceHover?: (price: number | null) => void
+  /** 主图价格双击 (price: 目标价, currentPrice: 最新价) */
+  onPriceDoubleClick?: (price: number, currentPrice: number) => void
+  /** 已启用点位监控 (双击创建后显示横虚线) */
+  currentPrice?: number
+  priceLines?: { value: number; label?: string; color?: string }[]
+  /** 自动刷新间隔(ms)。undefined/0 = 不轮询(默认)。个股对话框盘中实时刷新时传入。 */
+  refetchIntervalMs?: number
 }
 
 export function StockIntradayChart({
@@ -21,6 +28,10 @@ export function StockIntradayChart({
   prevClose,
   className,
   onPriceHover,
+  onPriceDoubleClick,
+  currentPrice,
+  priceLines,
+  refetchIntervalMs,
 }: Props) {
   const qc = useQueryClient()
   const [minuteDismissed, setMinuteDismissed] = useState(false)
@@ -29,6 +40,7 @@ export function StockIntradayChart({
     queryKey: QK.klineMinute(symbol, date ?? ''),
     queryFn: () => api.klineMinute(symbol, date ?? undefined),
     enabled: !!symbol && !!date,
+    refetchInterval: refetchIntervalMs,
   })
 
   const fetchMinute = useMutation({
@@ -113,6 +125,9 @@ export function StockIntradayChart({
           date={date}
           symbol={symbol}
           onPriceHover={onPriceHover}
+          onPriceDoubleClick={onPriceDoubleClick}
+          currentPrice={currentPrice}
+          priceLines={priceLines}
         />
       )}
     </div>

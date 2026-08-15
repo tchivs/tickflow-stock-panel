@@ -993,6 +993,8 @@ export interface MonitorRule {
   created_at?: string
   metric?: 'sealed_vol' | 'sealed_amount'
   threshold?: number
+  /** list 接口透出的运行时警告 (板块目标失效/指数未入池), 非持久化字段 */
+  runtime_warning?: string | null
 }
 
 export interface MonitorRuleOptions {

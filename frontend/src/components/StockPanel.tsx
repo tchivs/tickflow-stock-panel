@@ -32,6 +32,8 @@ interface Props {
   showMarkerToggle?: boolean
   /** 加监控回调 (传入后信息条显示 RadioTower 图标) */
   onMonitor?: () => void
+  /** 主图价格双击 (price: 目标价, currentPrice: 最新价) */
+  onPriceDoubleClick?: (price: number, currentPrice: number) => void
   /** 加自选 (传入后信息条显示 Star 图标) */
   inWatchlist?: boolean
   onToggleWatchlist?: () => void
@@ -53,6 +55,7 @@ export function StockPanel({
   showLimitMarkers = true,
   showMarkerToggle = true,
   onMonitor,
+  onPriceDoubleClick,
   inWatchlist,
   onToggleWatchlist,
 }: Props) {
@@ -149,6 +152,7 @@ export function StockPanel({
           showMarkerToggle={showMarkerToggle}
           linkedPrice={linkedPrice}
           onDateClick={handleDateClick}
+          onPriceDoubleClick={onPriceDoubleClick}
           onDataChange={setDailyResult}
           visibleBars={showIntraday ? 40 : 60}
           extColumns={extColumns}
@@ -161,6 +165,9 @@ export function StockPanel({
             height={height}
             prevClose={prevClose}
             onPriceHover={setLinkedPrice}
+            onPriceDoubleClick={onPriceDoubleClick}
+            currentPrice={rows[rows.length - 1]?.close}
+            priceLines={priceLines}
             className="flex-1 min-w-0 border-l border-border pl-3"
           />
         )}
