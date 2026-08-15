@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
-import { RadioTower, Plus, Trash2, Settings2, Zap, Bell, ListChecks, BellRing, TrendingUp, TrendingDown, Flame, Check, Clock3, AlertTriangle, Moon } from 'lucide-react'
+import { RadioTower, Plus, Trash2, Settings2, Zap, Bell, ListChecks, BellRing, TrendingUp, TrendingDown, Flame, Check, Clock3, AlertTriangle, Moon, Tags } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
 import { Skeleton } from '@/components/data/Skeleton'
@@ -19,6 +20,7 @@ import { StockPreviewDialog } from '@/components/StockPreviewDialog'
 
 const TYPE_LABEL: Record<string, string> = {
   position: '持仓', signal: '信号', price: '价格', market: '市场', strategy: '策略',
+  sector: '板块',
   // 盘前告警源标签 (09:26 预览帧评估; 事件 rule_name 优先于 TYPE_LABEL 回退)
   preopen: '盘前',
 }
@@ -35,6 +37,7 @@ const SOURCE_BADGE_STYLE: Record<string, string> = {
   signal:   'bg-accent/10 text-accent border-accent/20',
   price:    'bg-emerald-400/10 text-emerald-400 border-emerald-400/20',
   market:   'bg-purple-500/10 text-purple-400 border-purple-500/20',
+  sector:   'bg-cyan-500/10 text-cyan-700 border-cyan-500/20 dark:text-cyan-300',
   // 盘前告警视觉区分 (cyan 色系, 与盘中色系区隔)
   preopen:  'bg-cyan-400/10 text-cyan-400 border-cyan-400/20',
 }
@@ -73,7 +76,7 @@ export function Monitor() {
   const [editingRule, setEditingRule] = useState<MonitorRule | null>(null)
 
   // 触发记录: 类型、严重级别与投递状态均来自持久化历史。
-  const [filter, setFilter] = useState<'all' | 'position' | 'strategy' | 'signal' | 'price' | 'market'>('all')
+  const [filter, setFilter] = useState<'all' | 'position' | 'strategy' | 'signal' | 'price' | 'market' | 'sector'>('all')
   const [severity, setSeverity] = useState<'all' | 'info' | 'warn' | 'critical'>('all')
   const [delivery, setDelivery] = useState<'all' | DeliveryStatus>('all')
   const [deliveryEventId, setDeliveryEventId] = useState<string | null>(null)
@@ -145,7 +148,7 @@ export function Monitor() {
               </div>
               {/* 移动端整行排在最下 (order-last), 桌面端紧随标题 (md:order-1) — DOM 顺序即视觉/焦点顺序 */}
               <div className="order-last flex w-full flex-wrap items-center gap-1 md:order-1 md:w-auto" aria-label="告警类型筛选">
-                {(['all', 'position', 'price', 'signal', 'market', 'strategy'] as const).map(value => <button key={value} type="button" aria-pressed={filter === value} onClick={() => setFilter(value)} className={cn('min-h-8 rounded-btn px-2 text-xs max-md:min-h-11 max-md:min-w-11', filter === value ? 'bg-accent/15 text-accent' : 'text-muted hover:bg-elevated hover:text-secondary')}>{value === 'all' ? '全部' : TYPE_LABEL[value]}</button>)}
+                {(['all', 'position', 'price', 'signal', 'market', 'strategy', 'sector'] as const).map(value => <button key={value} type="button" aria-pressed={filter === value} onClick={() => setFilter(value)} className={cn('min-h-8 rounded-btn px-2 text-xs max-md:min-h-11 max-md:min-w-11', filter === value ? 'bg-accent/15 text-accent' : 'text-muted hover:bg-elevated hover:text-secondary')}>{value === 'all' ? '全部' : TYPE_LABEL[value]}</button>)}
               </div>
             </div>
             <div className="min-h-0 flex-1 overflow-auto p-3">
@@ -226,6 +229,7 @@ function AlertsList({ alertsQuery, confirmClear, setConfirmClear, total, enterTs
   onDelivery: (eventId: string) => void
 }) {
   const qc = useQueryClient()
+  const navigate = useNavigate()
   const [confirmTs, setConfirmTs] = useState<number | null>(null)
   const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [previewEv, setPreviewEv] = useState<AlertEvent | null>(null)
@@ -364,7 +368,22 @@ function AlertsList({ alertsQuery, confirmClear, setConfirmClear, total, enterTs
                   })() : (
                     <>
                       <div className="flex items-center gap-2 flex-wrap">
-                        {ev.symbol && (() => {
+                        {ev.source === 'sector' && (
+                          <button
+                            onClick={() => {
+                              if (ev.sector_kind === 'index' && ev.symbol) {
+                                navigate(`/indices?symbol=${encodeURIComponent(ev.symbol)}`)
+                              }
+                            }}
+                            className="inline-flex items-center gap-1.5 rounded px-1 -mx-1 text-xs font-medium text-foreground transition-colors hover:bg-elevated/50 hover:text-accent cursor-pointer"
+                            title={ev.sector_kind === 'index' ? '打开指数详情' : undefined}
+                          >
+                            <Tags className="h-3.5 w-3.5 text-cyan-600 dark:text-cyan-300" />
+                            <span>{ev.sector_name ?? ev.name}</span>
+                            {ev.symbol && <span className="font-mono text-[10px] text-muted">{ev.symbol}</span>}
+                          </button>
+                        )}
+                        {ev.symbol && ev.source !== 'sector' && (() => {
                           const board = boardTag(ev.symbol)
                           return (
                             <button
@@ -674,8 +693,24 @@ function RulesList({ rulesQuery, onEdit }: {
                 </div>
               </div>
 
-              {/* 第二行: 策略类型显示选股池变更监控 */}
-              {r.type === 'strategy' && r.strategy_id ? (
+              {/* 第二行: 类型摘要 */}
+              {r.type === 'sector' ? (
+                <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1 pl-0.5">
+                  {(r.sector_targets ?? []).slice(0, 3).map(target => (
+                    <span key={target.key} className="max-w-28 truncate rounded bg-cyan-500/8 px-1.5 py-0.5 text-[9px] text-cyan-700 dark:text-cyan-300">
+                      {target.name}
+                    </span>
+                  ))}
+                  {(r.sector_targets?.length ?? 0) > 3 && (
+                    <span className="text-[9px] text-muted">+{(r.sector_targets?.length ?? 0) - 3}</span>
+                  )}
+                  <span className="text-[9px] text-secondary">·</span>
+                  <span className="text-[9px] text-secondary">
+                    {r.sector_trigger === 'momentum' ? `${r.window_minutes ?? 5}分钟异动` : '涨跌幅'}
+                    {r.direction === 'down' ? ' ≤ -' : ' ≥ '}{r.threshold_pct ?? 1}%
+                  </span>
+                </div>
+              ) : r.type === 'strategy' && r.strategy_id ? (
                 <div className="mt-0.5 flex items-center gap-2 pl-0.5">
                   <span className="text-[9px] text-secondary">选股池变更监控</span>
                 </div>

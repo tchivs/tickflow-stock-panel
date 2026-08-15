@@ -33,16 +33,36 @@ class ConditionModel(BaseModel):
     value: float | None = None   # op 非 truth 时必填
 
 
+class SectorTargetModel(BaseModel):
+    """板块监控对象 — 由 SectorMonitorService.list_targets() 下发, 前端原样回传。"""
+    key: str
+    kind: str
+    name: str
+    symbol: str | None = None
+    source_id: str | None = None
+    field: str | None = None
+    source_field: str | None = None
+    value: str | None = None
+    level: int | None = None
+    available: bool = True
+    member_count: int = 0
+
+
 class RuleModel(BaseModel):
     id: str
     name: str
     enabled: bool = True
-    type: str          # strategy | signal | price | market | position
+    type: str          # strategy | signal | price | market | position | sector
     asset_type: str = "stock"   # stock | etf (etf: strategy 型走 ETF 历史加载器)
     scope: str = "symbols"   # symbols | all | sector | positions
     symbols: list[str] = []
     position_ids: list[str | int] = []
     sector: str | None = None
+    sector_kind: str | None = None  # index | concept | industry (type=sector)
+    sector_targets: list[SectorTargetModel] = []
+    sector_trigger: str = "change_pct"  # change_pct | momentum
+    threshold_pct: float = 1.0
+    window_minutes: int = 5
     strategy_id: str | None = None
     direction: str = "entry"  # entry | exit | both
     conditions: list[ConditionModel] = []
@@ -66,7 +86,8 @@ class RuleModel(BaseModel):
 def get_options(request: Request):
     """返回可选字段、信号列、运算符、枚举,供前端表单使用。"""
     from app.indicators.pipeline import ENRICHED_COLUMNS
-    from app.strategy.custom_signals import ALLOWED_FIELDS, load_all as load_csg
+    from app.strategy.custom_signals import ALLOWED_FIELDS
+    from app.strategy.custom_signals import load_all as load_csg
     from app.strategy.monitor_rules import PREOPEN_ALLOWED_FIELDS
 
     # 阈值字段 (带中文标签)
@@ -97,6 +118,10 @@ def get_options(request: Request):
     except Exception:
         pass
 
+    sector_service = getattr(request.app.state, "sector_monitor_service", None)
+    sector_targets = sector_service.list_targets() if sector_service is not None else {
+        "index": [], "concept": [], "industry": [],
+    }
     return {
         "threshold_fields": threshold_fields,
         "preopen_threshold_fields": preopen_threshold_fields,
@@ -110,6 +135,7 @@ def get_options(request: Request):
             {"key": "strategy", "label": "策略监控"},
             {"key": "position", "label": "持仓监控"},
             {"key": "preopen", "label": "盘前异动"},
+            {"key": "sector", "label": "板块监控"},
         ],
         "scopes": [
             {"key": "symbols", "label": "指定股票"},
@@ -132,6 +158,7 @@ def get_options(request: Request):
             {"key": "exit", "label": "卖出"},
             {"key": "both", "label": "买卖都报"},
         ],
+        "sector_targets": sector_targets,
     }
 
 
@@ -139,6 +166,18 @@ def get_options(request: Request):
 @router.get("")
 def list_rules(request: Request):
     rules = monitor_rules.load_all(_data_dir(request))
+    # 板块规则 runtime 状态: 对象已失效 / 指数未启用实时池时挂提示, 供前端编辑器警示。
+    sector_service = getattr(request.app.state, "sector_monitor_service", None)
+    if sector_service is not None:
+        for rule in rules:
+            if rule.get("type") != "sector":
+                continue
+            missing = sector_service.missing_target_keys(rule.get("sector_targets", []))
+            unavailable = sector_service.unavailable_target_keys(rule.get("sector_targets", []))
+            if missing:
+                rule["runtime_warning"] = "部分板块数据已不存在, 请重新选择监控对象"
+            elif unavailable:
+                rule["runtime_warning"] = "所选指数未加入实时指数池, 请先在实时监控设置中启用"
     # 按 created_at 倒序
     rules.sort(key=lambda r: r.get("created_at", ""), reverse=True)
     return {"rules": rules}
@@ -191,7 +230,6 @@ def delete_rule(rule_id: str, request: Request):
 # ── 演示数据生成 (仅 Dev 页用) ─────────────────────────
 
 import time as _time
-from datetime import datetime, timezone
 
 
 def _demo_rule(rule_id: str, name: str, rtype: str, scope: str, symbols: list[str],
@@ -393,6 +431,7 @@ def trigger_ladder(request: Request):
     让用户看到真实的预警通知。绕过 cooldown 强制触发。
     """
     import time
+
     from app.services import alert_store
 
     repo = request.app.state.repo
@@ -435,7 +474,7 @@ def trigger_ladder(request: Request):
         inst = repo.get_instruments()
         if not inst.is_empty() and "name" in inst.columns:
             name_map = {r["symbol"]: r["name"] for r in inst.select(["symbol", "name"]).iter_rows(named=True) if r.get("name")}
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 
     for rule in engine.rules.values():
@@ -488,7 +527,7 @@ def trigger_ladder(request: Request):
     # 1. 落盘到 alerts.jsonl
     try:
         alert_store.append_many(repo.store.data_dir, rule_events)
-    except Exception as e:  # noqa: BLE001
+    except Exception:
         pass  # 落盘失败不阻断推送
 
     # 2. SSE 推送 (入 pending_alerts 队列)
@@ -502,14 +541,14 @@ def trigger_ladder(request: Request):
         } for ev in rule_events]
         try:
             quote_svc.push_alerts(sse_alerts)
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
 
     # 3. 飞书推送
     if quote_svc:
         try:
             quote_svc._maybe_send_webhook(rule_events, engine)
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
 
     return {

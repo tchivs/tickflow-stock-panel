@@ -1313,6 +1313,22 @@ class QuoteService:
                     rule_events = engine.evaluate(eval_df, asset_type="stock")
                     if engine.consume_strategy_result_updates():
                         self.notify_strategy_results_updated()
+                    # 板块规则轮: 股票 enriched 快照 + 实时指数快照按板块聚合评估。
+                    # 独立 try - 板块轮任何异常都不得丢弃本轮已算出的股票告警。
+                    if engine.has_rule_type("sector"):
+                        try:
+                            index_df = self.get_index_quotes()
+                            # 本仓库指数缓存 change_pct 为百分比 (3.66 = 3.66%),
+                            # 板块聚合统一用小数口径 (与股票 enriched change_pct 一致)。
+                            if not index_df.is_empty() and "change_pct" in index_df.columns:
+                                index_df = index_df.with_columns(
+                                    (pl.col("change_pct") / 100).alias("change_pct")
+                                )
+                            rule_events = rule_events + engine.evaluate_sectors(
+                                enriched_today, index_df,
+                            )
+                        except Exception as e:  # noqa: BLE001
+                            logger.warning("板块监控评估失败 (不影响通用规则): %s", e)
                     # ETF 规则轮: 股票快照不含 ETF, 用 ETF enriched 快照单独评估。
                     # 独立 try —— ETF 轮任何异常都不得丢弃本轮已算出的股票告警。
                     # refresh=False —— 不在轮询线程上触发 ETF 冷缓存的同步重算 (缓存由 ETF 实时

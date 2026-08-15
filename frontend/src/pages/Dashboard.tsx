@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, type ReactNode } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Activity, ArrowDownRight, ArrowUpRight, BarChart3, BellRing, Database, Flame, Gauge, Info, LineChart, Loader2, Play, RefreshCw, Sparkles, Target, Timer } from 'lucide-react'
@@ -86,15 +86,17 @@ const _SOURCE_BADGE: Record<string, string> = {
   signal: 'bg-accent/10 text-accent',
   price: 'bg-emerald-400/10 text-emerald-400',
   market: 'bg-purple-500/10 text-purple-400',
+  sector: 'bg-cyan-500/10 text-cyan-700 dark:text-cyan-300',
 }
 const _SOURCE_LABEL: Record<string, string> = {
-  strategy: '策略', signal: '信号', price: '价格', market: '异动',
+  strategy: '策略', signal: '信号', price: '价格', market: '异动', sector: '板块',
 }
 const _SEVERITY_BAR: Record<string, string> = {
   info: 'bg-accent/40', warn: 'bg-warning', critical: 'bg-danger',
 }
 
 function MonitorWidget() {
+  const navigate = useNavigate()
   const [previewEv, setPreviewEv] = useState<AlertEvent | null>(null)
   const alerts = useQuery({
     // 独立 key: 与监控中心的全量列表 (limit 500) 参数不同, 共用 key 会互相覆盖缓存
@@ -119,6 +121,7 @@ function MonitorWidget() {
           const sev = _SEVERITY_BAR[ev.severity ?? 'info'] ?? _SEVERITY_BAR.info
           const pct = ev.change_pct ?? 0
           const isStrategy = ev.source === 'strategy'
+          const isSector = ev.source === 'sector'
           const sm = isStrategy ? ev.message?.match(/策略「([^」]+)」/) : null
           const sname = sm ? sm[1] : ''
           const isNew = ev.type === 'new_entry'
@@ -134,9 +137,9 @@ function MonitorWidget() {
               {/* 第一行: 代码 + 名称 + 价格 + 涨跌幅 (点击代码/名称弹日K) */}
               <div className="flex items-center gap-1.5">
                 <button
-                  onClick={() => ev.symbol && setPreviewEv(ev)}
-                  title={ev.symbol ? `查看 ${ev.symbol} 日K` : undefined}
-                  className="inline-flex items-center gap-1 min-w-0 shrink-0 rounded hover:bg-elevated/60 transition-colors -mx-0.5 px-0.5 cursor-pointer"
+                  onClick={() => isSector ? navigate('/monitor') : ev.symbol && setPreviewEv(ev)}
+                  title={isSector ? '在监控中心查看板块告警' : ev.symbol ? `查看 ${ev.symbol} 日K` : undefined}
+                  className={`inline-flex items-center gap-1 min-w-0 shrink-0 rounded hover:bg-elevated/60 transition-colors -mx-0.5 px-0.5 ${isSector || ev.symbol ? 'cursor-pointer' : 'cursor-default'}`}
                 >
                   <span className="font-mono text-[10px] font-medium text-foreground/80 hover:text-accent">{ev.symbol?.replace(/\.(SH|SZ|BJ)$/, '')}</span>
                   {ev.symbol && (() => {

@@ -944,17 +944,39 @@ export interface MonitorCondition {
   value?: number | null   // op 非 truth 时必填
 }
 
+export type SectorKind = 'index' | 'concept' | 'industry'
+
+export interface SectorMonitorTarget {
+  key: string
+  kind: SectorKind
+  name: string
+  symbol?: string
+  source_id?: string
+  field?: string
+  source_field?: string
+  value?: string
+  level?: number | null
+  available: boolean
+  member_count: number
+}
+
 export interface MonitorRule {
   id: string
   name: string
   enabled: boolean
   // preopen: 09:26 盘前帧竞价白名单字段规则 (30-02 /options 契约)
-  type: 'strategy' | 'signal' | 'price' | 'market' | 'position' | 'ladder' | 'preopen'
+  type: 'strategy' | 'signal' | 'price' | 'market' | 'position' | 'ladder' | 'preopen' | 'sector'
   asset_type?: 'stock' | 'etf'
   scope: 'symbols' | 'all' | 'sector' | 'positions'
   symbols: string[]
   position_ids?: Array<string | number>
   sector?: string | null
+  // 板块监控 (type=sector): 对象种类 / 监控对象 / 触发维度
+  sector_kind?: SectorKind | null
+  sector_targets?: SectorMonitorTarget[]
+  sector_trigger?: 'change_pct' | 'momentum'
+  threshold_pct?: number
+  window_minutes?: 1 | 3 | 5 | 10 | 15
   strategy_id?: string | null
   direction: 'entry' | 'exit' | 'both' | 'up' | 'down'
   conditions: MonitorCondition[]
@@ -986,6 +1008,8 @@ export interface MonitorRuleOptions {
   // 盘前竞价白名单字段 (30-02 /options 外露: PREOPEN_ALLOWED_FIELDS + ENRICHED_COLUMNS 中文标签);
   // 旧后端缺键 → 前端回退空数组零崩溃。
   preopen_threshold_fields?: { key: string; label: string }[]
+  // 板块监控对象目录 (type=sector 规则编辑器用), 按 kind 分组。
+  sector_targets?: Record<SectorKind, SectorMonitorTarget[]>
 }
 
 export type DeliveryStatus = 'pending' | 'sent' | 'failed' | 'skipped'
@@ -1037,6 +1061,20 @@ export interface AlertEvent {
   degraded?: boolean
   strategy_ids?: string[]
   preopen_metrics?: Record<string, number | null>
+  // 板块告警增量键 (type=sector 事件): 与后端事件键集对齐; 全部可选。
+  sector_kind?: SectorKind
+  sector_key?: string
+  sector_name?: string
+  sector_source_field?: string
+  sector_value?: string
+  sector_level?: number | null
+  window_change_pct?: number | null
+  coverage_ratio?: number
+  valid_count?: number
+  total_count?: number
+  up_count?: number
+  down_count?: number
+  leader?: { symbol?: string; name?: string; change_pct?: number } | null
 }
 
 // ===== Portfolio =====

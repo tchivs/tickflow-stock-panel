@@ -16,14 +16,15 @@ import logging
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 import polars as pl
 
 from app.market_time import cn_today
-from app.strategy.custom_signals import _OP_BUILDERS  # type: ignore  # 复用运算符构造器
 from app.strategy import config as _strategy_config
+from app.strategy.custom_signals import _OP_BUILDERS  # type: ignore  # 复用运算符构造器
 from app.strategy.preopen_eval import build_preopen_frame, extract_preopen_metrics
 
 logger = logging.getLogger(__name__)
@@ -150,7 +151,7 @@ class StrategyMonitorService:
                         strategy_id=strategy_id,
                         symbol=sym,
                         name=name,
-                        message=f"买入信号触发",
+                        message="买入信号触发",
                         price=price,
                         change_pct=pct,
                         signals=hit_sigs,
@@ -167,7 +168,7 @@ class StrategyMonitorService:
                         strategy_id=strategy_id,
                         symbol=sym,
                         name=name,
-                        message=f"卖出信号触发",
+                        message="卖出信号触发",
                         price=price,
                         change_pct=pct,
                         signals=hit_sigs,
@@ -346,8 +347,9 @@ class MonitorRuleEngine:
         self._alert_handler = alert_handler
         self._clock = clock or time.time
         self._rules: dict[str, dict] = {}  # rule_id → rule
-        # (rule_id, symbol) → 上次触发时间戳(秒)。用于 cooldown 去重。
-        self._last_fire: dict[tuple[str, str], float] = {}
+        # (rule_id, symbol | target_key, event_type?) → 上次触发时间戳(秒)。
+        # 用于 cooldown 去重。sector 规则用 (rule_id, target_key, event_type) 三元组。
+        self._last_fire: dict[tuple, float] = {}
         self._strategy_engine = None  # 延迟注入, type=strategy 规则用它跑选股
         # symbol → 股票名 (enriched DataFrame 已 drop name 列, 触发时从此映射回填)
         self._name_map: dict[str, str] = {}
@@ -358,9 +360,9 @@ class MonitorRuleEngine:
         # 历史窗口加载器: (target_date, lookback_days) → 多日 enriched DataFrame。
         # 用于声明 filter_history 的策略 (如反包), 实时监控时拼历史窗口 + 今日行情跑选股。
         # 为 None 时, filter_history 策略仍会被跳过 (保持旧行为, 不破坏无历史场景)。
-        self._history_loader: Callable[[_dt.date, int], "pl.DataFrame"] | None = None
+        self._history_loader: Callable[[_dt.date, int], pl.DataFrame] | None = None
         # ETF 版历史窗口加载器 (asset_type=etf 的规则用)。为 None 时 ETF filter_history 策略跳过。
-        self._history_loader_etf: Callable[[_dt.date, int], "pl.DataFrame"] | None = None
+        self._history_loader_etf: Callable[[_dt.date, int], pl.DataFrame] | None = None
         # 板块 loader: (sector) -> 板块 dict 列表。scope=sector 规则用它做
         # 板块 JOIN。为 None 时 sector 规则 fail-closed 返回空。
         self._board_loader: Callable[[str], list[dict]] | None = None
@@ -374,6 +376,10 @@ class MonitorRuleEngine:
         self._building_strategy_results: dict[str, dict] = {}
         # 本轮成功写入股票策略实时结果的策略 ID, 供 QuoteService 在计算完成后精确通知策略页。
         self._latest_strategy_result_ids: set[str] = set()
+        # 板块监控 (type=sector): SectorMonitorService 注入点 + 条件状态机
+        # (rule_id, target_key) → 上轮是否命中, 用于 edge-trigger 只在由未命中→命中时报警。
+        self._sector_monitor_service = None
+        self._sector_condition_state: dict[tuple[str, str], bool] = {}
 
     def set_strategy_engine(self, engine) -> None:
         """注入 StrategyEngine, type=strategy 规则据此跑选股。"""
@@ -382,6 +388,13 @@ class MonitorRuleEngine:
     def set_data_dir(self, data_dir) -> None:
         """注入数据目录, 用于加载策略的用户覆盖配置。"""
         self._data_dir = data_dir
+
+    def set_sector_monitor_service(self, service) -> None:
+        """注入 SectorMonitorService, type=sector 规则据此按板块聚合快照评估。
+
+        为 None 时 evaluate_sectors 返回空 (板块规则 fail-closed)。
+        """
+        self._sector_monitor_service = service
 
     def set_history_loader(self, fn) -> None:
         """注入历史窗口加载器, 用于声明 filter_history 的策略跑实时监控。
@@ -436,6 +449,9 @@ class MonitorRuleEngine:
             if r.get("enabled") is not False:
                 new_rules[r["id"]] = r
         self._rules = new_rules
+        # 全量替换规则: 板块条件状态机一并重建 (previous=None 时 edge-trigger 不触发,
+        # 安全热启动, 不会因残留状态误报警)。
+        self._sector_condition_state = {}
         logger.info("MonitorRuleEngine: 装载 %d 条规则", len(self._rules))
 
     def add_rule(self, rule: dict) -> None:
@@ -443,15 +459,23 @@ class MonitorRuleEngine:
             self._rules[rule["id"]] = rule
         else:
             self._rules.pop(rule["id"], None)
+        # 更新规则时清除该规则的历史板块条件状态, 避免残留导致热更新后误判
+        self._sector_condition_state = {
+            k: v for k, v in list(self._sector_condition_state.items()) if k[0] != rule["id"]
+        }
 
     def remove_rule(self, rule_id: str) -> None:
         self._rules.pop(rule_id, None)
         # 清理对应的 cooldown 记录 (list 快照: 评估线程可能并发写 _last_fire)
         self._last_fire = {k: v for k, v in list(self._last_fire.items()) if k[0] != rule_id}
+        self._sector_condition_state = {
+            k: v for k, v in list(self._sector_condition_state.items()) if k[0] != rule_id
+        }
 
     def clear(self) -> None:
         self._rules.clear()
         self._last_fire.clear()
+        self._sector_condition_state.clear()
 
     @property
     def rules(self) -> dict[str, dict]:
@@ -529,7 +553,7 @@ class MonitorRuleEngine:
             # preopen 规则仅由 evaluate_premarket 在盘前 (09:26) 评估 — 盘中绝不
             # 求值 (D-03 回归锁): 盘中 enriched 帧含 open_gap 列, 若走通用条件
             # 匹配会在连续竞价重复触发, 且 change_pct 为盘中值 (误导)。
-            if rule.get("type") in {"position", "preopen"} or rule.get("asset_type", "stock") != asset_type:
+            if rule.get("type") in {"position", "preopen", "sector"} or rule.get("asset_type", "stock") != asset_type:
                 continue
             try:
                 events.extend(self._evaluate_rule(df, rule, now))
@@ -541,6 +565,161 @@ class MonitorRuleEngine:
         self._latest_strategy_results = self._building_strategy_results
 
         return events
+
+    def evaluate_sectors(
+        self,
+        stock_df: pl.DataFrame,
+        index_df: pl.DataFrame,
+        *,
+        now: float | None = None,
+    ) -> list[dict]:
+        """按板块聚合快照评估 type=sector 规则 (独立评估轮, 不经通用 evaluate)。
+
+        由 QuoteService 在股票规则轮后调用, 传入股票/指数实时快照。板块规则在
+        evaluate() 里显式跳过, 保证通用条件匹配路径不碰板块语义。
+        """
+        if self._sector_monitor_service is None:
+            return []
+        rules = [
+            rule for rule in list(self._rules.values())
+            if rule.get("enabled", True) and rule.get("type") == "sector"
+        ]
+        if not rules:
+            return []
+
+        targets_by_key: dict[str, dict] = {}
+        windows: set[int] = set()
+        for rule in rules:
+            for target in rule.get("sector_targets", []):
+                if target.get("key"):
+                    targets_by_key[str(target["key"])] = target
+            if rule.get("sector_trigger") == "momentum":
+                windows.add(int(rule.get("window_minutes", 5)))
+
+        timestamp = time.time() if now is None else now
+        snapshots = self._sector_monitor_service.build_snapshots(
+            stock_df,
+            index_df,
+            list(targets_by_key.values()),
+            windows,
+            now=timestamp,
+        )
+        events: list[dict] = []
+        for rule in rules:
+            try:
+                events.extend(self._evaluate_sector_rule(rule, snapshots, timestamp))
+            except Exception as exc:
+                logger.warning("板块规则评估失败 %s: %s", rule.get("id"), exc)
+        return events
+
+    def _evaluate_sector_rule(self, rule: dict, snapshots: dict[str, dict], now: float) -> list[dict]:
+        events: list[dict] = []
+        direction = rule.get("direction", "up")
+        trigger = rule.get("sector_trigger", "change_pct")
+        threshold = float(rule.get("threshold_pct", 1.0)) / 100
+        window = int(rule.get("window_minutes", 5))
+
+        for target in rule.get("sector_targets", []):
+            target_key = str(target.get("key") or "")
+            snapshot = snapshots.get(target_key)
+            if not snapshot or not snapshot.get("valid"):
+                continue
+            value = (
+                snapshot.get("change_pct")
+                if trigger == "change_pct"
+                else snapshot.get("window_changes", {}).get(window)
+            )
+            condition = value is not None and (
+                value >= threshold if direction == "up" else value <= -threshold
+            )
+            state_key = (rule["id"], target_key)
+            previous = self._sector_condition_state.get(state_key)
+            self._sector_condition_state[state_key] = condition
+            # edge-trigger: 仅由「未命中 → 命中」报警, 持续命中不重复刷屏
+            if previous is None or previous or not condition:
+                continue
+
+            event_type = f"sector_{trigger}_{direction}"
+            cooldown_key = (rule["id"], target_key, event_type)
+            last = self._last_fire.get(cooldown_key)
+            cooldown = int(rule.get("cooldown_seconds", 3600))
+            if last is not None and now - last < cooldown:
+                continue
+            self._last_fire[cooldown_key] = now
+            message = rule.get("message", "") or self._sector_message(
+                snapshot, trigger, direction, threshold, window, value,
+            )
+            event = {
+                "ts": int(now * 1000),
+                "rule_id": rule["id"],
+                "rule_name": rule.get("name", ""),
+                "strategy_id": None,
+                "source": "sector",
+                "type": event_type,
+                "symbol": snapshot.get("symbol") if snapshot.get("kind") == "index" else "",
+                "name": snapshot.get("name"),
+                "message": message,
+                "price": snapshot.get("price"),
+                "change_pct": snapshot.get("change_pct"),
+                "window_change_pct": value if trigger == "momentum" else None,
+                "signals": [],
+                "severity": rule.get("severity", "info"),
+                "conditions": [],
+                "logic": "and",
+                "sector_kind": snapshot.get("kind"),
+                "sector_key": target_key,
+                "sector_name": snapshot.get("name"),
+                "sector_source_field": snapshot.get("source_field"),
+                "sector_value": snapshot.get("value"),
+                "sector_level": snapshot.get("level"),
+                "coverage_ratio": snapshot.get("coverage_ratio"),
+                "valid_count": snapshot.get("valid_count"),
+                "total_count": snapshot.get("total_count"),
+                "up_count": snapshot.get("up_count"),
+                "down_count": snapshot.get("down_count"),
+                "leader": snapshot.get("leader"),
+            }
+            events.append(event)
+            if self._alert_handler:
+                try:
+                    self._alert_handler(event)
+                except Exception as exc:
+                    logger.warning("alert handler failed: %s", exc)
+        return events
+
+    @staticmethod
+    def _sector_message(
+        snapshot: dict,
+        trigger: str,
+        direction: str,
+        threshold: float,
+        window: int,
+        value: float | None,
+    ) -> str:
+        kind_label = {
+            "index": "指数", "concept": "概念", "industry": "行业",
+        }.get(snapshot.get("kind"), "板块")
+        current = float(snapshot.get("change_pct") or 0)
+        if trigger == "momentum":
+            action = "快速拉升" if direction == "up" else "快速下跌"
+            head = (
+                f"{kind_label}「{snapshot.get('name')}」{window}分钟{action} "
+                f"{float(value or 0) * 100:+.2f}%"
+            )
+        else:
+            action = "涨幅上穿" if direction == "up" else "跌幅下穿"
+            head = f"{kind_label}「{snapshot.get('name')}」{action} {threshold * 100:.2f}%"
+        parts = [head, f"当前 {current * 100:+.2f}%"]
+        if snapshot.get("kind") != "index":
+            parts.append(f"上涨 {snapshot.get('up_count', 0)}/{snapshot.get('valid_count', 0)}")
+            parts.append(f"覆盖 {float(snapshot.get('coverage_ratio') or 0) * 100:.0f}%")
+            leader = snapshot.get("leader") or {}
+            if leader.get("name") or leader.get("symbol"):
+                parts.append(
+                    f"领涨 {leader.get('name') or leader.get('symbol')} "
+                    f"{float(leader.get('change_pct') or 0) * 100:+.2f}%"
+                )
+        return "|".join(parts)
 
     def evaluate_premarket(self, payload: dict) -> list[dict]:
         """盘前评估: 消费 v2.1 预览 payload (JSON), 产出 preopen 告警事件。
@@ -605,7 +784,7 @@ class MonitorRuleEngine:
             return []
         raw_now = self._clock()
         if isinstance(raw_now, _dt.datetime):
-            current_time = raw_now if raw_now.tzinfo else raw_now.replace(tzinfo=_dt.timezone.utc)
+            current_time = raw_now if raw_now.tzinfo else raw_now.replace(tzinfo=_dt.UTC)
             now = current_time.timestamp()
         else:
             now = float(raw_now)
@@ -733,7 +912,7 @@ class MonitorRuleEngine:
             ev = {
                 "id": uuid.uuid4().hex,
                 "ts": int(now * 1000),
-                "occurred_at": _dt.datetime.fromtimestamp(now, tz=_dt.timezone.utc).isoformat(),
+                "occurred_at": _dt.datetime.fromtimestamp(now, tz=_dt.UTC).isoformat(),
                 "rule_id": rule["id"],
                 "rule_name": rule.get("name", ""),
                 "source": source,
@@ -890,7 +1069,7 @@ class MonitorRuleEngine:
                     ],
                 }
                 self._latest_strategy_result_ids.add(sid)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
 
         current_pool: set[str] = {r["symbol"] for r in result.rows}
@@ -1084,7 +1263,7 @@ class MonitorRuleEngine:
                 try:
                     s = self._strategy_engine.get(sid)
                     sname = s.meta.get("name", "") or s.meta.get("id", "")
-                except Exception:  # noqa: BLE001
+                except Exception:
                     sname = ""
             if not sname:
                 rn = rule.get("name", "")
