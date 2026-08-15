@@ -3,6 +3,7 @@ import { Settings2, RadioTower, Star } from 'lucide-react'
 import type { KlineRow, FinancialMetricRecord } from '@/lib/api'
 import { fmtPrice, fmtBigNum, fmtVolume } from '@/lib/format'
 import { ListColumnCustomizer } from '@/components/ListColumnCustomizer'
+import { WatchlistAddMenu } from '@/components/WatchlistAddMenu'
 import { INFO_GROUPS, type ColumnConfig } from '@/lib/stock-info-fields'
 import { CHART_BULL, CHART_BEAR } from '@/lib/theme'
 
@@ -24,6 +25,8 @@ interface Props {
   /** 加自选回调 + 是否已自选 (有 onToggle 时渲染 Star 图标) */
   inWatchlist?: boolean
   onToggleWatchlist?: () => void
+  /** 加自选时可选分组 (传入时未自选状态星标弹出分组菜单) */
+  onAddToWatchlistGroup?: (groupId: string | null) => void
 }
 
 /**
@@ -92,7 +95,7 @@ function renderExtInline(
   )
 }
 
-export function StockInfoBar({ symbol, name, stockInfo, rows, fields, onFieldsChange, financialMetrics, onMonitor, inWatchlist, onToggleWatchlist }: Props) {
+export function StockInfoBar({ symbol, name, stockInfo, rows, fields, onFieldsChange, financialMetrics, onMonitor, inWatchlist, onToggleWatchlist, onAddToWatchlistGroup }: Props) {
   // 弹窗开关：纯本地状态，与数据/配置无关，放早期 return 之前
   const [customizerOpen, setCustomizerOpen] = useState(false)
   // ext 标签展开状态：按 symbol::colId，切股/切字段时互不干扰
@@ -218,13 +221,24 @@ export function StockInfoBar({ symbol, name, stockInfo, rows, fields, onFieldsCh
         {/* 右侧操作按钮：加自选 + 加监控 + 信息条配置 */}
         <div className="ml-auto self-center flex items-center gap-1">
           {onToggleWatchlist && (
-            <button
-              onClick={onToggleWatchlist}
-              className={`p-1 rounded-btn transition-colors cursor-pointer max-md:h-11 max-md:w-11 ${inWatchlist ? 'text-[#FACC15]' : 'text-muted hover:text-foreground hover:bg-elevated'}`}
-              title={inWatchlist ? '移出自选' : '加自选'}
-            >
-              <Star className="h-3.5 w-3.5" />
-            </button>
+            !inWatchlist && onAddToWatchlistGroup ? (
+              <WatchlistAddMenu
+                onSelect={onAddToWatchlistGroup}
+                triggerClassName="p-1 rounded-btn transition-colors cursor-pointer max-md:h-11 max-md:w-11 text-muted hover:text-foreground hover:bg-elevated"
+                title="加自选"
+                ariaLabel="加自选"
+              >
+                <Star className="h-3.5 w-3.5" />
+              </WatchlistAddMenu>
+            ) : (
+              <button
+                onClick={onToggleWatchlist}
+                className={`p-1 rounded-btn transition-colors cursor-pointer max-md:h-11 max-md:w-11 ${inWatchlist ? 'text-[#FACC15]' : 'text-muted hover:text-foreground hover:bg-elevated'}`}
+                title={inWatchlist ? '移出自选' : '加自选'}
+              >
+                <Star className="h-3.5 w-3.5" />
+              </button>
+            )
           )}
           {onMonitor && (
             <button

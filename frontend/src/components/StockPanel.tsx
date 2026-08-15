@@ -37,6 +37,8 @@ interface Props {
   /** 加自选 (传入后信息条显示 Star 图标) */
   inWatchlist?: boolean
   onToggleWatchlist?: () => void
+  /** 加自选可选分组 (传入时未自选星标弹出分组菜单) */
+  onAddToWatchlistGroup?: (groupId: string | null) => void
   /** 只渲染信息条, 隐藏图表 (用于多日分时图共享信息条) */
   infoBarOnly?: boolean
 }
@@ -60,6 +62,7 @@ export function StockPanel({
   onPriceDoubleClick,
   inWatchlist,
   onToggleWatchlist,
+  onAddToWatchlistGroup,
   infoBarOnly = false,
 }: Props) {
   const [linkedPrice, setLinkedPrice] = useState<number | null>(null)
@@ -140,6 +143,7 @@ export function StockPanel({
         onMonitor={onMonitor}
         inWatchlist={inWatchlist}
         onToggleWatchlist={onToggleWatchlist}
+        onAddToWatchlistGroup={onAddToWatchlistGroup}
       />
 
       {infoBarOnly ? null : (

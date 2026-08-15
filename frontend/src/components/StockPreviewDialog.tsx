@@ -141,6 +141,15 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props
     },
   })
 
+  // 加自选带分组 (星标菜单选择后调用, 已自选时走 toggleWatchlist 移除)
+  const addToWatchlistGroup = useCallback((groupId: string | null) => {
+    if (!symbol || inWatchlist) return
+    void api.watchlistAdd(symbol, '', groupId).then(() => {
+      qc.invalidateQueries({ queryKey: QK.watchlist })
+      qc.invalidateQueries({ queryKey: QK.watchlistEnriched() })
+    })
+  }, [symbol, inWatchlist, qc])
+
   // ESC 关闭 (点位编辑弹层打开时由 PriceAlertDialog 自行处理)
   useEffect(() => {
     if (!symbol) return
@@ -402,6 +411,7 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props
                     onMonitor={() => setShowMonitorEditor(true)}
                     inWatchlist={inWatchlist}
                     onToggleWatchlist={() => toggleWatchlist.mutate()}
+                    onAddToWatchlistGroup={addToWatchlistGroup}
                   />
                   <StockMultiDayIntradayChart
                     symbol={symbol}
@@ -425,6 +435,7 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props
                   onMonitor={() => setShowMonitorEditor(true)}
                   inWatchlist={inWatchlist}
                   onToggleWatchlist={() => toggleWatchlist.mutate()}
+                  onAddToWatchlistGroup={addToWatchlistGroup}
                 />
               )}
             </div>
