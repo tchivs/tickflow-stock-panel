@@ -1038,11 +1038,13 @@ def sync_and_persist_minute(
     capset: CapabilitySet,
     days: int = 5,
     on_chunk_done: Callable[[int, int], None] | None = None,
+    force_full_days: bool = False,
 ) -> int:
     """同步分钟 K 并存到 Parquet(仅 raw,不前复权)。返回写入行数。
 
     使用 start_time / end_time 区间拉取, 确保所有标的覆盖同一时间段。
     on_chunk_done(current, total) 每个 chunk 完成后回调。
+    force_full_days=True 时强制回溯 days 自然日 (不增量补, 用于个股补齐历史)。
     """
     minute_provider = preferences.get_minute_data_provider()
     minute_is_custom = False
@@ -1064,8 +1066,13 @@ def sync_and_persist_minute(
     now = datetime.now()
 
     # 计算时间区间: 首次拉取回溯 N 天, 增量从最后数据时间开始
+    # force_full_days=True: 强制回溯 days 自然日 (个股补齐历史, 不增量)
     last_dt = _latest_minute_datetime(repo)
-    if last_dt:
+    if force_full_days:
+        # 按交易日换算自然日 (7/5 系数), 确保覆盖足够交易日
+        calendar_days = int(days * 7 / 5) + 5
+        start_time = now - timedelta(days=calendar_days)
+    elif last_dt:
         start_time = last_dt
     else:
         start_time = now - timedelta(days=days)
@@ -1096,7 +1103,10 @@ def sync_and_persist_minute(
         return 0
 
     # 按日期分区写 (唯一写面, merge-upsert 幂等)
-    written = _persist_minute_partitions(df, repo)
+    # 单股自动补齐可能与另一个补齐请求同时写同一日期分区。Windows 不允许
+    # 替换仍被另一写入占用的临时文件,因此读-改-写必须复用仓库写锁。
+    with repo._write_lock:
+        written = _persist_minute_partitions(df, repo)
 
     # 刷新视图
     _refresh_minute_view(repo)

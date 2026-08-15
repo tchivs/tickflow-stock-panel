@@ -7,10 +7,12 @@ import { api } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { cnSignal } from '@/lib/signals'
 import { StockPanel, getDefaultRange } from '@/components/StockPanel'
+import { StockMultiDayIntradayChart } from '@/components/StockMultiDayIntradayChart'
 import { DatePicker } from '@/components/DatePicker'
 import { RuleEditor } from '@/components/monitor/RuleEditor'
 import { PriceAlertDialog } from '@/components/stock-analysis/PriceAlertDialog'
 import { buildMonitorPriceLines } from '@/lib/price-alerts'
+import { storage } from '@/lib/storage'
 import { boardTag } from '@/components/stock-table/primitives'
 
 interface Props {
@@ -41,6 +43,15 @@ interface PriceAlertDraft {
   currentPrice: number
 }
 
+const INTRADAY_DAY_OPTIONS = [1, 5, 10, 20] as const
+
+function loadIntradayDays(): number {
+  const saved = storage.stockPreviewIntradayDays.get(5)
+  return INTRADAY_DAY_OPTIONS.includes(saved as typeof INTRADAY_DAY_OPTIONS[number])
+    ? (saved as number)
+    : 5
+}
+
 // 焦点陷阱可选聚焦元素 (同 Modal 原语)
 const FOCUSABLE = [
   'a[href]',
@@ -58,6 +69,7 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props
   const [dateRange, setDateRange] = useState(getDefaultRange)
   const [showMonitorEditor, setShowMonitorEditor] = useState(false)
   const [priceAlertDraft, setPriceAlertDraft] = useState<PriceAlertDraft | null>(null)
+  const [intradayDays, setIntradayDays] = useState(loadIntradayDays)
   const qc = useQueryClient()
 
   const panelRef = useRef<HTMLDivElement>(null)
@@ -253,6 +265,29 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props
                   分时
                 </button>
 
+                {/* 分时天数切换 (1/5/10/20 日) */}
+                {showIntraday && (
+                  <div className="inline-flex h-6 items-center overflow-hidden rounded border border-border bg-elevated">
+                    {INTRADAY_DAY_OPTIONS.map(days => (
+                      <button
+                        key={days}
+                        onClick={() => {
+                          setIntradayDays(days)
+                          storage.stockPreviewIntradayDays.set(days)
+                        }}
+                        aria-pressed={intradayDays === days}
+                        className={`px-1.5 text-[11px] leading-none transition-colors cursor-pointer ${
+                          intradayDays === days
+                            ? 'bg-accent/15 text-accent'
+                            : 'text-muted hover:text-foreground'
+                        }`}
+                      >
+                        {days}日
+                      </button>
+                    ))}
+                  </div>
+                )}
+
                 <span className="text-muted/20 mx-0.5">|</span>
 
                 {/* 竞价历史开关 (CHART-02) */}
@@ -339,19 +374,44 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props
 
             {/* K 线内容 */}
             <div className="flex-1 overflow-auto p-4">
-              <StockPanel
-                symbol={symbol}
-                height={420}
-                showIntraday={showIntraday}
-                showAuction={showAuction}
-                onSelectDate={() => { if (!showIntraday) setShowIntraday(true) }}
-                dateRange={dateRange}
-                priceLines={monitorPriceLines}
-                onPriceDoubleClick={openPriceAlert}
-                onMonitor={() => setShowMonitorEditor(true)}
-                inWatchlist={inWatchlist}
-                onToggleWatchlist={() => toggleWatchlist.mutate()}
-              />
+              {showIntraday && intradayDays > 1 ? (
+                <>
+                  <StockPanel
+                    symbol={symbol}
+                    height={420}
+                    showIntraday={false}
+                    showAuction={false}
+                    onSelectDate={() => { if (!showIntraday) setShowIntraday(true) }}
+                    dateRange={dateRange}
+                    infoBarOnly
+                    onMonitor={() => setShowMonitorEditor(true)}
+                    inWatchlist={inWatchlist}
+                    onToggleWatchlist={() => toggleWatchlist.mutate()}
+                  />
+                  <StockMultiDayIntradayChart
+                    symbol={symbol}
+                    days={intradayDays}
+                    height={480}
+                    refetchIntervalMs={undefined}
+                    priceLines={monitorPriceLines}
+                    onPriceDoubleClick={openPriceAlert}
+                  />
+                </>
+              ) : (
+                <StockPanel
+                  symbol={symbol}
+                  height={420}
+                  showIntraday={showIntraday}
+                  showAuction={showAuction}
+                  onSelectDate={() => { if (!showIntraday) setShowIntraday(true) }}
+                  dateRange={dateRange}
+                  priceLines={monitorPriceLines}
+                  onPriceDoubleClick={openPriceAlert}
+                  onMonitor={() => setShowMonitorEditor(true)}
+                  inWatchlist={inWatchlist}
+                  onToggleWatchlist={() => toggleWatchlist.mutate()}
+                />
+              )}
             </div>
 
             {/* 加监控编辑器弹层 */}

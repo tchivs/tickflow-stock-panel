@@ -37,6 +37,8 @@ interface Props {
   /** 加自选 (传入后信息条显示 Star 图标) */
   inWatchlist?: boolean
   onToggleWatchlist?: () => void
+  /** 只渲染信息条, 隐藏图表 (用于多日分时图共享信息条) */
+  infoBarOnly?: boolean
 }
 
 export { getDefaultRange }
@@ -58,6 +60,7 @@ export function StockPanel({
   onPriceDoubleClick,
   inWatchlist,
   onToggleWatchlist,
+  infoBarOnly = false,
 }: Props) {
   const [linkedPrice, setLinkedPrice] = useState<number | null>(null)
   const [selectedDate, setSelectedDate] = useState<string | null>(null)
@@ -139,6 +142,7 @@ export function StockPanel({
         onToggleWatchlist={onToggleWatchlist}
       />
 
+      {infoBarOnly ? null : (
       <div className="flex gap-3 items-start">
         <StockDailyKChart
           symbol={symbol}
@@ -176,6 +180,7 @@ export function StockPanel({
           <AuctionHistoryChart symbol={symbol} height={height} className="flex-1 min-w-0 border-l border-border pl-3" />
         )}
       </div>
+      )}
     </div>
   )
 }

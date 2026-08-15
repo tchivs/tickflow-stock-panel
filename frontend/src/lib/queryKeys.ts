@@ -149,6 +149,8 @@ export const QK = {
   stockLevels:          (symbol: string, days?: number) => ['stock-levels', symbol, days ?? 120] as const,
   klineMinute:          (symbol: string, date: string) =>
                              ['kline-minute', symbol, date] as const,
+  klineMinuteRange:     (symbol: string, days: number) =>
+                             ['kline-minute-range', symbol, days] as const,
   // 竞价历史聚合 (CHART-02): 历史不可变, 不入 SSE_INVALIDATE_PREFIXES (行情 tick 不无效刷新)
   auctionHistory:       (symbol: string, days: number) =>
                              ['kline-auction-history', symbol, days] as const,

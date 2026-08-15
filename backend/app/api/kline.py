@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 
 from app.indicators.pipeline import compute_enriched, compute_enriched_single
 from app.db_safe import is_valid_ext_ident, quote_ident
+from app.market_time import cn_today
 from app.services import kline_sync
 
 logger = logging.getLogger(__name__)
@@ -485,6 +486,116 @@ def get_minute_batch(request: Request, body: dict):
     return {"data": result}
 
 
+def _get_previous_closes(
+    repo,
+    symbol: str,
+    trade_dates: list[date],
+    asset_type: str,
+) -> dict[date, float | None]:
+    """每个交易日的前一交易日收盘价 (多日分时图昨收线用)。"""
+    from math import isfinite
+
+    if not trade_dates:
+        return {}
+    start = min(trade_dates) - timedelta(days=45)
+    end = max(trade_dates)
+    try:
+        daily = repo.get_daily_asset(
+            asset_type,
+            symbol,
+            start,
+            end,
+            columns=["date", "close"],
+        ).sort("date")
+    except Exception:
+        daily = None
+    if daily is None or daily.is_empty():
+        return {trade_date: None for trade_date in trade_dates}
+
+    closes: list[tuple[date, float]] = []
+    for daily_date, close in daily.select(["date", "close"]).iter_rows():
+        if close is None:
+            continue
+        numeric = float(close)
+        if isfinite(numeric) and numeric > 0:
+            closes.append((daily_date, numeric))
+
+    result: dict[date, float | None] = {}
+    for trade_date in trade_dates:
+        result[trade_date] = next(
+            (close for daily_date, close in reversed(closes) if daily_date < trade_date),
+            None,
+        )
+    return result
+
+
+@router.get("/minute-range")
+def get_minute_range(
+    request: Request,
+    symbol: str = Query(..., description="标的代码"),
+    days: int = Query(10, ge=1, le=20, description="最近交易日数量"),
+):
+    """读取单只标的最近 N 个已落库交易日的分钟 K (多日分时图)。"""
+    import polars as pl
+
+    repo = request.app.state.repo
+    asset_type = repo.resolve_asset_type(symbol)
+    stock_info = (
+        _get_stock_info(repo, symbol)
+        if asset_type == "stock"
+        else _get_asset_info(repo, symbol, asset_type)
+    )
+    base_response = {
+        "symbol": symbol,
+        "name": stock_info.get("name"),
+        "asset_type": asset_type,
+        "requested_days": days,
+    }
+
+    # 指数分钟 K 不落本地仓库, 最新分时仍由 /api/index/minute 实时读取。
+    if asset_type == "index":
+        return {**base_response, "sessions": [], "source": "none"}
+
+    end = cn_today()
+    start = end - timedelta(days=days * 3 + 20)
+    minute = repo.get_minute_range([symbol], start, end, asset_type=asset_type)
+    if minute.is_empty() or "datetime" not in minute.columns:
+        return {**base_response, "sessions": [], "source": "none"}
+
+    minute = minute.with_columns(
+        pl.col("datetime").dt.date().alias("_trade_date"),
+    )
+    trade_dates = sorted(minute["_trade_date"].unique().to_list())[-days:]
+    previous_closes = _get_previous_closes(repo, symbol, trade_dates, asset_type)
+    row_columns = [
+        column
+        for column in (
+            "datetime", "open", "high", "low", "close", "volume", "amount"
+        )
+        if column in minute.columns
+    ]
+    sessions = []
+    for trade_date in trade_dates:
+        rows = (
+            minute.filter(pl.col("_trade_date") == trade_date)
+            .sort("datetime")
+            .select(row_columns)
+            .to_dicts()
+        )
+        if rows:
+            sessions.append({
+                "date": trade_date.isoformat(),
+                "prev_close": previous_closes.get(trade_date),
+                "rows": rows,
+            })
+
+    return {
+        **base_response,
+        "sessions": sessions,
+        "source": "local" if sessions else "none",
+    }
+
+
 @router.get("/minute")
 def get_minute(
     request: Request,
@@ -641,6 +752,54 @@ async def sync_minute(request: Request):
 
     asyncio.create_task(task())
     return {"status": "started", "job_id": job_id}
+
+
+@router.post("/sync_minute_single")
+async def sync_minute_single(request: Request, body: dict):
+    """手动拉取单只股票的分钟K并落库 (仅 raw)。
+
+    body: { "symbol": "000001.SZ", "days": 10 }
+    用于个股多日分时图"获取数据/自动补齐"按钮: 本地数据不足时强制回溯补足。
+    """
+    import asyncio
+
+    from app.services.preferences import get_minute_sync_days
+
+    symbol = body.get("symbol", "").strip()
+    if not symbol:
+        raise HTTPException(status_code=400, detail="symbol 不能为空")
+
+    requested_days = body.get("days")
+    if requested_days is not None:
+        if isinstance(requested_days, bool) or not isinstance(requested_days, int):
+            raise HTTPException(status_code=400, detail="days 必须是整数")
+        if requested_days < 1 or requested_days > 30:
+            raise HTTPException(status_code=400, detail="days 必须在 1 到 30 之间")
+
+    repo = request.app.state.repo
+    capset = request.app.state.capabilities
+
+    # 指数分钟K无本地存储, 落库会污染股票分钟表 kline_minute;
+    # 指数分钟数据走 /api/index/minute 实时读取, 此端点显式拒绝。
+    if repo.resolve_asset_type(symbol) == "index":
+        raise HTTPException(status_code=400, detail="指数分钟K不支持落库同步 (指数分钟数据走 /api/index/minute 实时读取)")
+
+    if not _minute_allowed(capset):
+        raise HTTPException(status_code=403, detail="需要 Pro+ 权限")
+
+    days = requested_days if requested_days is not None else get_minute_sync_days()
+    loop = asyncio.get_event_loop()
+
+    def _run():
+        return kline_sync.sync_and_persist_minute([symbol], repo, capset, days=days, force_full_days=True)
+
+    written = await loop.run_in_executor(_long_task_executor, _run)
+
+    # 刷新视图
+    from app.jobs.daily_pipeline import _refresh_single_view
+    _refresh_single_view(repo, "kline_minute")
+
+    return {"status": "ok", "symbol": symbol, "rows": written}
 
 
 @router.post("/extend_history")

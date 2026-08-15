@@ -48,6 +48,9 @@ export const storage = {
   /** 自选列表分时图显示状态 */
   watchlistIntraday:    kv<boolean>('watchlist_showIntraday'),
 
+  /** 个股预览对话框分时图天数 (1/5/10/20) */
+  stockPreviewIntradayDays: kv<number>('stock_preview_intraday_days'),
+
   /** 策略结果列表日K蜡烛图显示状态 */
   screenerCandle:       kv<boolean>('screener_showCandle'),
 

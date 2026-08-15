@@ -609,6 +609,12 @@ export interface MinuteKlineRow {
   amount: number
 }
 
+export interface MinuteKlineSession {
+  date: string
+  prev_close: number | null
+  rows: MinuteKlineRow[]
+}
+
 export interface KlineRow {
   symbol?: string
   date: string
@@ -2062,8 +2068,21 @@ export const api = {
       date: string | null
       rows: MinuteKlineRow[]
       source?: 'local' | 'live' | 'none'
+      asset_type?: 'stock' | 'etf' | 'index'
+      prev_close?: number | null
     }>(
       `/api/kline/minute?symbol=${encodeURIComponent(symbol)}${date ? `&date=${date}` : ''}`,
+    ),
+  klineMinuteRange: (symbol: string, days = 10) =>
+    request<{
+      symbol: string
+      name?: string
+      asset_type: 'stock' | 'etf' | 'index'
+      requested_days: number
+      sessions: MinuteKlineSession[]
+      source: 'local' | 'none'
+    }>(
+      `/api/kline/minute-range?symbol=${encodeURIComponent(symbol)}&days=${days}`,
     ),
   indexList: () => request<{ results: IndexInstrument[]; count: number }>('/api/index/list'),
   indexSearch: (q: string, limit = 20) =>
@@ -2107,6 +2126,11 @@ export const api = {
     ),
   syncMinute: () =>
     request<{ status: string; job_id: string }>('/api/kline/sync_minute', { method: 'POST' }),
+  syncMinuteSingle: (symbol: string, days?: number) =>
+    request<{ status: string; symbol: string; rows: number }>('/api/kline/sync_minute_single', {
+      method: 'POST',
+      body: JSON.stringify({ symbol, ...(days != null ? { days } : {}) }),
+    }),
   extendHistory: (value: number, unit: 'day' | 'month' | 'year') =>
     request<{ status: string; job_id: string }>('/api/kline/extend_history', {
       method: 'POST',
