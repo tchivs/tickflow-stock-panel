@@ -176,7 +176,9 @@ test.describe('Phase 3 evidence-first analysis contracts', () => {
       await page.setViewportSize(viewport)
       await page.goto('/stock-analysis')
       const reportTab = page.getByRole('tab', { name: '分析结论' })
-      await reportTab.focus({ timeout: 1_000 })
+      // 等待 tab 渲染 (冷启动 Vite 模块编译 + React 挂载可能 >1s), 再验证键盘可达
+      await expect(reportTab).toBeVisible()
+      await reportTab.focus()
       await page.keyboard.press('ArrowRight')
       await expect(page.getByRole('tab', { name: '来源与核验' })).toBeFocused()
       await page.keyboard.press('Enter')
