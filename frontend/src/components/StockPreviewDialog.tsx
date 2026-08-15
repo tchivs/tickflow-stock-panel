@@ -2,9 +2,10 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, RefreshCw, Clock, Gavel, Zap, ArrowUpRight } from 'lucide-react'
+import { X, RefreshCw, Clock, Gavel, Zap, ArrowUpRight, Maximize2, Minimize2 } from 'lucide-react'
 import { api } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
+import { cn } from '@/lib/cn'
 import { cnSignal } from '@/lib/signals'
 import { StockPanel, getDefaultRange } from '@/components/StockPanel'
 import { StockMultiDayIntradayChart } from '@/components/StockMultiDayIntradayChart'
@@ -70,6 +71,7 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props
   const [showMonitorEditor, setShowMonitorEditor] = useState(false)
   const [priceAlertDraft, setPriceAlertDraft] = useState<PriceAlertDraft | null>(null)
   const [intradayDays, setIntradayDays] = useState(loadIntradayDays)
+  const [maximized, setMaximized] = useState(false)
   const qc = useQueryClient()
 
   const panelRef = useRef<HTMLDivElement>(null)
@@ -183,7 +185,10 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.97, y: 8 }}
             transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
-            className="relative w-[92vw] max-w-[1100px] max-h-[95vh] rounded-dialog border border-border bg-base shadow-2xl overflow-hidden flex flex-col"
+            className={cn(
+              'relative rounded-dialog border border-border bg-base shadow-2xl overflow-hidden flex flex-col transition-all duration-200',
+              maximized ? 'w-screen h-screen max-w-none max-h-none rounded-none' : 'w-[92vw] max-w-[1100px] max-h-[95vh]',
+            )}
           >
             {/* 顶栏 */}
             <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-5 py-3 border-b border-border shrink-0">
@@ -314,6 +319,16 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props
                   title="刷新"
                 >
                   <RefreshCw className="h-3.5 w-3.5" />
+                </button>
+
+                {/* 放大/还原全屏 */}
+                <button
+                  onClick={() => setMaximized(v => !v)}
+                  className="p-1 max-md:min-h-11 max-md:min-w-11 rounded-btn text-secondary hover:text-foreground hover:bg-elevated transition-colors"
+                  aria-label={maximized ? '退出全屏' : '放大全屏'}
+                  title={maximized ? '退出全屏' : '放大全屏'}
+                >
+                  {maximized ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
                 </button>
 
                 {/* 关闭 */}
