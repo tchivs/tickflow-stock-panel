@@ -1,7 +1,7 @@
 """Local stockdb (docker :8000) market data provider.
 
 HTTP adapter for the local stockdb service: X-API-Key header auth over the
-REST batch endpoints ``/v1/daily`` / ``/v1/minute``. Mirrors
+REST batch endpoints ``/v1/query/daily`` / ``/v1/minute``. Mirrors
 FreeStockDBProvider's httpx client pattern but with typed error
 classification — never the catch-all empty-frame swallow (PITFALLS P2) — and
 single-point normalization of the three wire differences (measured
@@ -11,10 +11,11 @@ single-point normalization of the three wire differences (measured
   * ``volume_hand`` (手) is identity (x1) — the lake stores 手, never x100
   * aware Asia/Shanghai ``date``/``bar_time`` -> naive lake wall clock
 
-Wire contract: batch endpoints return ``{sym: [bars]}`` with <=200 symbols
-per request; daily window includes the end date; minute window excludes the
-end date (must pass ``end + 1day``); 401/429/400 classified by status code
-only (body is log-only, Pitfall 5).
+Wire contract: daily returns ``{"ok": true, "state": "ok", "data":
+{sym: [bars]}}`` with <=200 symbols per request; minute returns
+``{sym: [bars]}``; daily window includes the end date; minute window excludes
+the end date (must pass ``end + 1day``); 401/429/400 classified by status
+code only (body is log-only, Pitfall 5).
 """
 from __future__ import annotations
 
@@ -73,6 +74,10 @@ class StockDBRateLimited(Exception):
 
 class StockDBBadRequest(Exception):
     """400 — programming error (bad adjust/freq/batch size)."""
+
+
+class StockDBProtocolError(Exception):
+    """200 response does not match the StockDB wire contract."""
 
 
 def _parse_retry_after(resp: httpx.Response) -> float:
@@ -153,6 +158,17 @@ class StockDBProvider:
         resp.raise_for_status()
         return resp.json()
 
+    @staticmethod
+    def _extract_symbol_bars(payload: Any) -> dict[str, Any]:
+        """Return the symbol map from direct or ``data``-wrapped responses."""
+        if isinstance(payload, dict) and isinstance(payload.get("data"), dict):
+            payload = payload["data"]
+        if not isinstance(payload, dict) or any(
+            not isinstance(bars, list) for bars in payload.values()
+        ):
+            raise StockDBProtocolError("stockdb response data must be a symbol mapping")
+        return payload
+
     # -- normalization (三差异唯一转换点) --------------------------------------
 
     def _map_daily_row(self, bar: dict) -> dict:
@@ -197,13 +213,13 @@ class StockDBProvider:
         rows: list[dict] = []
         for i, chunk in enumerate(chunked(list(symbols), self.batch_size)):
             sleep_between_batches(i, self.rpm)  # rpm=120 对齐服务端 daily 档位
-            payload = self._get_json("/v1/daily", {
+            payload = self._extract_symbol_bars(self._get_json("/v1/query/daily", {
                 "symbols": ",".join(_to_prefix(s) for s in chunk),
                 "start": start_time.strftime("%Y-%m-%d") if start_time else None,
                 "end": end_time.strftime("%Y-%m-%d") if end_time else None,
                 "adjust": "none",  # 原始价进湖, 复权读取时算
-            })
-            for sym, bars in payload.items():  # 批响应 = {sym: [bars]} (实测)
+            }))
+            for _sym, bars in payload.items():  # 新协议 data = {sym: [bars]}
                 rows.extend(self._map_daily_row(b) for b in bars)
         if not rows:
             return pl.DataFrame()
@@ -232,7 +248,7 @@ class StockDBProvider:
                 "end": end_param,
                 "freq": _MINUTE_UNIT.get(freq, 1),  # 服务端 freq 为 int 枚举
             })
-            for sym, bars in payload.items():
+            for _sym, bars in payload.items():
                 rows.extend(self._map_minute_row(b, freq) for b in bars)
         if not rows:
             return pl.DataFrame()

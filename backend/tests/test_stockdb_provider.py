@@ -10,8 +10,9 @@ Locks the three wire normalization differences (measured 2026-08-07):
   * aware Asia/Shanghai date/bar_time -> naive lake wall clock
 
 plus the typed error contract (401 no-retry / 429 Retry-After single retry
-then raise / 400 typed / 200+[] legitimate vacuum), batch semantics
-({sym: [bars]}, chunked <= batch_size) and rate-limit alignment (rpm=120).
+then raise / 400 typed / 200+[] legitimate vacuum), daily response semantics
+(`{"ok": true, "state": "ok", "data": {sym: [bars]}}`, chunked <=
+batch_size) and rate-limit alignment (rpm=120).
 
 Import of the provider module fails today (classes not yet implemented) —
 that red state is the contract-first acceptance step.
@@ -30,10 +31,11 @@ import polars as pl
 import pytest
 
 from app.data_providers.stockdb_provider import (
-    StockDBProvider,
     StockDBAuthError,
-    StockDBRateLimited,
     StockDBBadRequest,
+    StockDBProtocolError,
+    StockDBProvider,
+    StockDBRateLimited,
 )
 
 _FIXTURES = Path(__file__).parent / "fixtures" / "stockdb"
@@ -50,7 +52,7 @@ class _FakeResponse:
         status_code: int,
         body: Any,
         headers: dict[str, str] | None = None,
-        url: str = "http://stockdb.test/v1/daily",
+        url: str = "http://stockdb.test/v1/query/daily",
     ) -> None:
         self.status_code = status_code
         self._body = body
@@ -103,24 +105,28 @@ def _provider(routes: dict[str, Any], **kwargs: Any) -> StockDBProvider:
     return p
 
 
+def _daily_response(data: dict[str, Any]) -> dict[str, Any]:
+    return {"ok": True, "state": "ok", "data": data}
+
+
 # -- 三差异契约 (LOCAL-03) ---------------------------------------------------
 
 
 def test_daily_normalizes_symbol_to_suffix_form():
-    p = _provider({"/v1/daily": _load_fixture("daily_sh600519_20260805.json")})
+    p = _provider({"/v1/query/daily": _load_fixture("daily_sh600519_20260805.json")})
     df = p.get_daily(["SH600519"])
     assert df["symbol"][0] == "600519.SH"  # 差异①: 前缀 -> 后缀, 同股单键
 
 
 def test_daily_volume_is_identity_not_hand_to_share():
-    p = _provider({"/v1/daily": _load_fixture("daily_sh600519_20260805.json")})
+    p = _provider({"/v1/query/daily": _load_fixture("daily_sh600519_20260805.json")})
     df = p.get_daily(["SH600519"])
     assert df["volume"][0] == 42689.0  # 差异②: 恒等 x1 — 湖实测 = 手
     assert df["volume"][0] != 42689.0 * 100  # 回归: 永不做 x100 失真
 
 
 def test_daily_date_is_naive_trade_date():
-    p = _provider({"/v1/daily": _load_fixture("daily_sh600519_20260805.json")})
+    p = _provider({"/v1/query/daily": _load_fixture("daily_sh600519_20260805.json")})
     df = p.get_daily(["SH600519"])
     assert str(df["date"][0]) == "2026-08-05"  # 差异③: aware -> naive date
     assert df["date"].dtype == pl.Date
@@ -128,7 +134,7 @@ def test_daily_date_is_naive_trade_date():
 
 def test_request_symbols_sent_in_prefix_form():
     """湖内后缀形态输入 -> 请求侧前缀形态 (600519.SH -> SH600519)."""
-    p = _provider({"/v1/daily": _load_fixture("daily_sh600519_20260805.json")})
+    p = _provider({"/v1/query/daily": _load_fixture("daily_sh600519_20260805.json")})
     df = p.get_daily(["600519.SH"])
     assert p._client.calls[0][1]["symbols"] == "SH600519"
     assert df["symbol"][0] == "600519.SH"
@@ -138,7 +144,7 @@ def test_request_symbols_sent_in_prefix_form():
 
 
 def test_401_raises_typed_auth_error_not_empty():
-    p = _provider({"/v1/daily": [(401, _load_fixture("error_401.json"), {})]})
+    p = _provider({"/v1/query/daily": [(401, _load_fixture("error_401.json"), {})]})
     with pytest.raises(StockDBAuthError):
         p.get_daily(["SH600519"])
     assert len(p._client.calls) == 1  # 401 不重试 (配置错误信号)
@@ -148,7 +154,7 @@ def test_429_honors_retry_after_then_raises(monkeypatch):
     sleeps: list[float] = []
     monkeypatch.setattr("app.data_providers.stockdb_provider.time.sleep", lambda s: sleeps.append(s))
     p = _provider({
-        "/v1/daily": [
+        "/v1/query/daily": [
             (429, _load_fixture("error_429.json"), {"Retry-After": "50"}),
             (429, _load_fixture("error_429.json"), {"Retry-After": "50"}),
         ],
@@ -163,7 +169,7 @@ def test_429_retries_once_then_returns_frame(monkeypatch):
     sleeps: list[float] = []
     monkeypatch.setattr("app.data_providers.stockdb_provider.time.sleep", lambda s: sleeps.append(s))
     p = _provider({
-        "/v1/daily": [
+        "/v1/query/daily": [
             (429, _load_fixture("error_429.json"), {"Retry-After": "50"}),
             (200, _load_fixture("daily_sh600519_20260805.json"), {}),
         ],
@@ -175,16 +181,22 @@ def test_429_retries_once_then_returns_frame(monkeypatch):
 
 
 def test_400_raises_typed_bad_request():
-    p = _provider({"/v1/daily": [(400, {"error": "bad_request", "code": 400}, {})]})
+    p = _provider({"/v1/query/daily": [(400, {"error": "bad_request", "code": 400}, {})]})
     with pytest.raises(StockDBBadRequest):
         p.get_daily(["SH600519"])
 
 
 def test_200_empty_bars_is_legitimate_vacuum():
     """200 + 空 bars = 真空 (该窗口无数据), 返回空帧绝不抛."""
-    p = _provider({"/v1/daily": {"SH600519": []}})
+    p = _provider({"/v1/query/daily": _daily_response({"SH600519": []})})
     df = p.get_daily(["SH600519"])
     assert df.is_empty()
+
+
+def test_200_malformed_daily_payload_raises_protocol_error():
+    p = _provider({"/v1/query/daily": {"ok": True, "state": "ok"}})
+    with pytest.raises(StockDBProtocolError):
+        p.get_daily(["SH600519"])
 
 
 # -- 批语义 + 限频对齐 + 分钟端日语义 (LOCAL-01) ------------------------------
@@ -192,16 +204,16 @@ def test_200_empty_bars_is_legitimate_vacuum():
 
 def test_batch_endpoint_parses_sym_bars_dict():
     """批响应 {sym: [bars]} dict: 两 symbol 行都在, 各自归一化 (后缀形态)."""
-    p = _provider({"/v1/daily": _load_fixture("daily_sh600519_20260805.json")})
+    p = _provider({"/v1/query/daily": _load_fixture("daily_sh600519_20260805.json")})
     df = p.get_daily(["SH600519", "SH600000"])
     assert sorted(df["symbol"].unique().to_list()) == ["600000.SH", "600519.SH"]
     assert len(df) == 2
 
 
 def test_get_daily_chunks_by_batch_size(monkeypatch):
-    """3 symbols + batch_size=2 -> 2 次 /v1/daily 调用, 首次 2 个末次 1 个."""
+    """3 symbols + batch_size=2 -> 2 次 /v1/query/daily 调用, 首次 2 个末次 1 个."""
     monkeypatch.setattr("app.data_providers.stockdb_provider.sleep_between_batches", lambda i, rpm: None)
-    p = _provider({"/v1/daily": {"SH600519": [], "SH600000": [], "SZ000001": []}}, batch_size=2)
+    p = _provider({"/v1/query/daily": _daily_response({"SH600519": [], "SH600000": [], "SZ000001": []})}, batch_size=2)
     p.get_daily(["600519.SH", "600000.SH", "000001.SZ"])
     params = [params for _, params in p._client.calls]
     assert len(params) == 2
@@ -216,7 +228,7 @@ def test_sleep_between_batches_aligns_to_server_rpm(monkeypatch):
         "app.data_providers.stockdb_provider.sleep_between_batches",
         lambda i, rpm: calls.append((i, rpm)),
     )
-    p = _provider({"/v1/daily": {"SH600519": [], "SH600000": []}}, batch_size=1)
+    p = _provider({"/v1/query/daily": _daily_response({"SH600519": [], "SH600000": []})}, batch_size=1)
     p.get_daily(["600519.SH", "600000.SH"])
     assert calls == [(0, 120), (1, 120)]  # 默认 rpm=120
 
@@ -234,7 +246,7 @@ def test_minute_end_excludes_end_day(monkeypatch):
 def test_daily_end_includes_end_day(monkeypatch):
     """日K窗口含 end 日 (实测): end 请求参数原样传递."""
     monkeypatch.setattr("app.data_providers.stockdb_provider.sleep_between_batches", lambda i, rpm: None)
-    p = _provider({"/v1/daily": {"SH600519": []}})
+    p = _provider({"/v1/query/daily": _daily_response({"SH600519": []})})
     p.get_daily(["600519.SH"], end_time=datetime(2026, 8, 5))
     assert p._client.calls[0][1]["end"] == "2026-08-05"
 
@@ -254,7 +266,7 @@ def test_429_retry_after_header_controls_wait(monkeypatch):
     sleeps: list[float] = []
     monkeypatch.setattr("app.data_providers.stockdb_provider.time.sleep", lambda s: sleeps.append(s))
     p = _provider({
-        "/v1/daily": [
+        "/v1/query/daily": [
             (429, _load_fixture("error_429.json"), {"Retry-After": "50"}),
             (200, _load_fixture("daily_sh600519_20260805.json"), {}),
         ],
@@ -269,7 +281,7 @@ def test_429_retry_after_falls_back_to_body(monkeypatch):
     sleeps: list[float] = []
     monkeypatch.setattr("app.data_providers.stockdb_provider.time.sleep", lambda s: sleeps.append(s))
     p = _provider({
-        "/v1/daily": [
+        "/v1/query/daily": [
             (429, _load_fixture("error_429.json"), {}),
             (200, _load_fixture("daily_sh600519_20260805.json"), {}),
         ],

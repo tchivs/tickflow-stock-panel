@@ -2,7 +2,7 @@
 name = "athenaquant-backend"
 version = "1.2.0"
 description = "Self-hosted A-share quantitative research platform"
-readme = "../README.md"
+readme = { text = "Self-hosted A-share quantitative research platform", content-type = "text/plain" }
 requires-python = ">=3.11"
 license = { text = "MIT" }
 dependencies = [

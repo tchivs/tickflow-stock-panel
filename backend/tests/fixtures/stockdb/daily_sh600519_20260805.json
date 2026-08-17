@@ -1,4 +1,7 @@
 {
+  "ok": true,
+  "state": "ok",
+  "data": {
   "SH600519": [
     {
       "source": "tencent",
@@ -29,4 +32,5 @@
       "amount_yuan": 409580000.0
     }
   ]
+  }
 }
