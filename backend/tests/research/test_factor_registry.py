@@ -57,7 +57,7 @@ def test_saved_factor_contains_required_immutable_provenance(tmp_path: Path) -> 
     assert factor.description == "Volume-supported momentum"
     assert factor.hypothesis == "Persisting momentum is investable"
     assert factor.canonical_expression == "momentum_20d + rank(volume)"
-    assert factor.dsl_version == "factor-dsl-v2"
+    assert factor.dsl_version == "factor-dsl-v3"
     assert factor.provenance == {"source": "manual", "ticket": "R-42"}
     assert factor.created_at
 

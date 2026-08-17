@@ -14,7 +14,7 @@ from typing import Final, Literal, TypeAlias
 
 import polars as pl
 
-DSL_VERSION: Final = "factor-dsl-v2"
+DSL_VERSION: Final = "factor-dsl-v3"
 MAX_ROLLING_WINDOW: Final = 252
 
 # Leakage gate threshold (FACT-04): |IC| between a clean factor and the displaced
@@ -51,9 +51,19 @@ _FUNCTION_ARITY: Final[dict[str, int]] = {
     "rank": 1,
     "zscore": 1,
     "rolling_mean": 2,
+    # v3 (Alpha158 移植): 时序算子 + 逐点二元算子。
+    # ref/rolling_* 沿用 rolling_mean 的窗口字面量约束 (见 _WINDOW_ARGUMENTS);
+    # max/min 为逐点二元, 与 rolling_max/rolling_min 按前缀区分。
+    "ref": 2,
+    "rolling_std": 2,
+    "rolling_sum": 2,
+    "rolling_min": 2,
+    "rolling_max": 2,
+    "rolling_quantile": 3,
+    "rolling_corr": 3,
+    "max": 2,
+    "min": 2,
 }
-
-PartitionContext: TypeAlias = Literal["pointwise", "per_date", "per_symbol"]
 
 # Declared partition semantics for every stateful operator (FACT-04).  A function
 # added to _FUNCTION_ARITY without a matching entry here is a compile error and
@@ -66,7 +76,31 @@ _FUNCTION_PARTITION: Final[dict[str, PartitionContext]] = {
     "rank": "per_date",          # matches .over("date") in _compile_node
     "zscore": "per_date",        # matches .over("date")
     "rolling_mean": "per_symbol",  # matches .over("symbol")
+    "ref": "per_symbol",
+    "rolling_std": "per_symbol",
+    "rolling_sum": "per_symbol",
+    "rolling_min": "per_symbol",
+    "rolling_max": "per_symbol",
+    "rolling_quantile": "per_symbol",
+    "rolling_corr": "per_symbol",
+    "max": "pointwise",
+    "min": "pointwise",
 }
+
+# Argument positions that must be integer-literal windows in [1, MAX_ROLLING_WINDOW],
+# shared by validation and compilation so the two cannot drift.
+_WINDOW_ARGUMENTS: Final[dict[str, tuple[int, ...]]] = {
+    "rolling_mean": (1,),
+    "ref": (1,),
+    "rolling_std": (1,),
+    "rolling_sum": (1,),
+    "rolling_min": (1,),
+    "rolling_max": (1,),
+    "rolling_quantile": (1,),
+    "rolling_corr": (2,),
+}
+
+PartitionContext: TypeAlias = Literal["pointwise", "per_date", "per_symbol"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -308,6 +342,26 @@ def _literal_number(expression: Expression, message: str, location: SourceLocati
     raise FactorDslError(message, location)
 
 
+def _window_literal(call: Call, position: int) -> int:
+    """Extract the integer window literal shared by validation and compilation."""
+    return int(
+        _literal_number(
+            call.arguments[position],
+            f"{call.name} window must be an integer literal",
+            call.arguments[position].location,
+        )
+    )
+
+
+def _quantile_literal(call: Call) -> float:
+    return float(
+        _literal_number(
+            call.arguments[2],
+            "rolling_quantile quantile must be a numeric literal",
+            call.arguments[2].location,
+        )
+    )
+
 def _validate_call(call: Call) -> None:
     if call.name not in _FUNCTION_PARTITION:
         raise FactorDslError(
@@ -320,13 +374,28 @@ def _validate_call(call: Call) -> None:
         high = _literal_number(call.arguments[2], "clip upper bound must be a numeric literal", call.arguments[2].location)
         if low > high:
             raise FactorDslError("clip lower bound cannot exceed upper bound", call.location)
-    elif call.name == "rolling_mean":
-        window = _literal_number(call.arguments[1], "rolling_mean window must be an integer literal", call.arguments[1].location)
+    for position in _WINDOW_ARGUMENTS.get(call.name, ()):
+        window = _literal_number(
+            call.arguments[position],
+            f"{call.name} window must be an integer literal",
+            call.arguments[position].location,
+        )
         if not window.is_integer() or not 1 <= window <= MAX_ROLLING_WINDOW:
             raise FactorDslError(
-                f"rolling_mean window must be an integer from 1 to {MAX_ROLLING_WINDOW}", call.arguments[1].location
+                f"{call.name} window must be an integer from 1 to {MAX_ROLLING_WINDOW}",
+                call.arguments[position].location,
             )
-
+    if call.name == "rolling_quantile":
+        quantile = _literal_number(
+            call.arguments[2],
+            "rolling_quantile quantile must be a numeric literal",
+            call.arguments[2].location,
+        )
+        if not 0 < quantile < 1:
+            raise FactorDslError(
+                "rolling_quantile quantile must be strictly between 0 and 1",
+                call.arguments[2].location,
+            )
 
 def _denied_field_error(name: str, location: SourceLocation) -> FactorDslError:
     return FactorDslError(f"denied label/identity field {name!r} cannot enter a factor expression", location)
@@ -571,8 +640,31 @@ def _compile_node(expression: Expression) -> pl.Expr:
             value = arguments[0]
             return (value - value.mean().over("date")) / value.std().over("date")
         if expression.name == "rolling_mean":
-            window = int(_literal_number(expression.arguments[1], "rolling_mean window must be an integer literal", expression.location))
+            window = _window_literal(expression, 1)
             return arguments[0].rolling_mean(window_size=window, min_samples=1).over("symbol")
+        if expression.name == "ref":
+            # 时序滞后: 必须按 symbol 分区, 否则跨标的串行前值泄漏。
+            return arguments[0].shift(_window_literal(expression, 1)).over("symbol")
+        if expression.name == "rolling_std":
+            return arguments[0].rolling_std(window_size=_window_literal(expression, 1), min_samples=1).over("symbol")
+        if expression.name == "rolling_sum":
+            return arguments[0].rolling_sum(window_size=_window_literal(expression, 1), min_samples=1).over("symbol")
+        if expression.name == "rolling_min":
+            return arguments[0].rolling_min(window_size=_window_literal(expression, 1), min_samples=1).over("symbol")
+        if expression.name == "rolling_max":
+            return arguments[0].rolling_max(window_size=_window_literal(expression, 1), min_samples=1).over("symbol")
+        if expression.name == "rolling_quantile":
+            return arguments[0].rolling_quantile(
+                _quantile_literal(expression), window_size=_window_literal(expression, 1), min_samples=1
+            ).over("symbol")
+        if expression.name == "rolling_corr":
+            return pl.rolling_corr(
+                arguments[0], arguments[1], window_size=_window_literal(expression, 2), min_samples=1
+            ).over("symbol")
+        if expression.name == "max":
+            return pl.max_horizontal(arguments[0], arguments[1])
+        if expression.name == "min":
+            return pl.min_horizontal(arguments[0], arguments[1])
         raise FactorDslError(f"unknown factor function {expression.name!r}", expression.location)
     raise TypeError("expression is not a factor DSL AST node")
 

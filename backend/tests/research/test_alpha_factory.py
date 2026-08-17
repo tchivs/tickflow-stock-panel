@@ -93,7 +93,7 @@ class TestVocabularyFingerprint:
         # tracks the real grammar rather than a hardcoded count.
         assert len(factor_dsl.ALLOWED_FIELDS) == 46
         assert len(factor_dsl.DENIED_FIELDS) == 8
-        assert len(factor_dsl._FUNCTION_ARITY) == 7
+        assert len(factor_dsl._FUNCTION_ARITY) == 16
         # The grammar is self-consistent by construction.
         assert set(factor_dsl._FUNCTION_ARITY) == set(factor_dsl._FUNCTION_PARTITION)
 
