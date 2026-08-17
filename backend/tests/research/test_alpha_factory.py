@@ -338,6 +338,13 @@ def _take(factory: AlphaFactory, k: int) -> list[GenerationResult]:
     return [factory.generate_next() for _ in range(k)]
 
 
+def _walk_calls(node: factor_dsl.Expression) -> list[factor_dsl.Expression]:
+    """Depth-first Call nodes of an AST (test-side structural walk)."""
+    calls = [node] if isinstance(node, factor_dsl.Call) else []
+    for child in alpha_factory._children(node):
+        calls.extend(_walk_calls(child))
+    return calls
+
 class TestCandidateDigest:
     def test_is_lowercase_64_hex(self) -> None:
         digest = candidate_digest(
@@ -425,21 +432,42 @@ class TestSeedPoolEnumerationOrder:
 
     def test_rolling_mean_block_uses_legal_windows(self) -> None:
         n = len(factor_dsl.ALLOWED_FIELDS)
+        v3 = len(alpha_factory._V3_SEEDS)
         fields = sorted(factor_dsl.ALLOWED_FIELDS)
         windows = (5, 20, 60)
-        size = 4 * n + n * len(windows)
+        size = 4 * n + v3 + n * len(windows)
         factory = AlphaFactory(101, max_candidates=size)
         results = _take(factory, size)
-        rolling = results[4 * n:]
+        rolling = results[4 * n + v3:]
         expected = [f"rolling_mean({name}, {window})" for name in fields for window in windows]
         assert [r.canonical_expression for r in rolling] == expected
 
+    def test_v3_seed_block_precedes_rolling_mean_and_covers_new_vocabulary(self) -> None:
+        n = len(factor_dsl.ALLOWED_FIELDS)
+        v3 = len(alpha_factory._V3_SEEDS)
+        factory = AlphaFactory(101, max_candidates=4 * n + v3)
+        results = _take(factory, 4 * n + v3)
+        v3_seeds = results[4 * n:]
+        assert len(v3_seeds) == v3
+        operators = set()
+        for result in v3_seeds:
+            for node in _walk_calls(result.ast):
+                operators.add(node.name)
+        new_ops = set(alpha_factory._V3_WINDOWED_UNARY) | {
+            "rolling_quantile", "rolling_corr", "max", "min",
+        }
+        assert new_ops <= operators
+        # 每个种子独立重规范化不抛错 (by-construction 合法)。
+        for result in v3_seeds:
+            assert factor_dsl.canonicalize(result.ast) == result.canonical_expression
+
     def test_binary_trees_close_the_seed_pool(self) -> None:
         n = len(factor_dsl.ALLOWED_FIELDS)
+        v3 = len(alpha_factory._V3_SEEDS)
         fields = sorted(factor_dsl.ALLOWED_FIELDS)
         size = AlphaFactory(101, max_candidates=1).seed_pool_size
         factory = AlphaFactory(101, max_candidates=size)
-        tail = _take(factory, size)[4 * n + n * 3:]
+        tail = _take(factory, size)[4 * n + v3 + n * 3:]
         assert len(tail) == 5
         assert tail[0].canonical_expression == f"{fields[0]} + {fields[1]}"
         assert tail[1].canonical_expression == f"{fields[2]} - {fields[3]}"
@@ -449,9 +477,51 @@ class TestSeedPoolEnumerationOrder:
 
     def test_seed_pool_size_is_vocab_derived(self) -> None:
         n = len(factor_dsl.ALLOWED_FIELDS)
-        # 4 field-sized blocks + 3 rolling windows per field + 5 binary trees.
-        assert AlphaFactory(1, max_candidates=1).seed_pool_size == 4 * n + 3 * n + 5
+        v3 = len(alpha_factory._V3_SEEDS)
+        # 4 field-sized blocks + v3 时序种子块 + 3 rolling windows per field
+        # + 5 binary trees.
+        assert AlphaFactory(1, max_candidates=1).seed_pool_size == 4 * n + v3 + 3 * n + 5
 
+
+class TestV3EvolutionSpace:
+    def test_random_call_v3_shapes_are_legal(self) -> None:
+        factory = AlphaFactory(7, max_candidates=1)
+        for name in (
+            *alpha_factory._V3_WINDOWED_UNARY,
+            "rolling_quantile", "rolling_corr", "max", "min",
+        ):
+            ast = factory._random_call(name, 3)
+            # by-construction 合法: canonicalize 不抛错。
+            factor_dsl.canonicalize(ast)
+
+    def test_evolution_candidates_include_v3_operators(self) -> None:
+        pool = AlphaFactory(42, max_candidates=1).seed_pool_size
+        factory = AlphaFactory(42, max_candidates=pool + 200)
+        results = _take(factory, pool + 200)
+        v3_pattern = re.compile(
+            r"\b(ref|rolling_std|rolling_sum|rolling_min|rolling_max"
+            r"|rolling_quantile|rolling_corr|max|min)\("
+        )
+        evolved = [r for r in results if r.operation != "seed"]
+        assert evolved
+        v3_bearing = [r for r in evolved if v3_pattern.search(r.canonical_expression)]
+        assert v3_bearing
+
+    def test_quantile_literal_mutation_stays_in_open_unit_interval(self) -> None:
+        ast = factor_dsl.parse_factor("rolling_quantile(close, 20, 0.25)")
+        for seed in range(1, 24):
+            factory = AlphaFactory(seed, max_candidates=1)
+            mutated = factory._mutate_literal(ast)
+            if mutated is None:
+                continue
+            # 无论变异到哪个 Number, 结果必须仍可 canonicalize (合法)。
+            canonical = factor_dsl.canonicalize(mutated)
+            parsed = factor_dsl.parse_factor(canonical)
+            for node in _walk_calls(parsed):
+                if isinstance(node, factor_dsl.Call) and node.name == "rolling_quantile":
+                    quantile = node.args[2]
+                    assert isinstance(quantile, factor_dsl.Number)
+                    assert 0.0 < quantile.value < 1.0
 
 class TestPRNGIsolation:
     def test_only_instance_local_random_is_used(self) -> None:

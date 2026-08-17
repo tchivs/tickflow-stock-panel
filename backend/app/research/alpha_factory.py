@@ -153,13 +153,53 @@ _LOC = factor_dsl.SourceLocation(offset=0, line=1, column=1)
 _SEED_ROLLING_WINDOWS: Final[tuple[int, ...]] = (5, 20, 60)
 
 # Literals and functions used by the evolution phase.  Every safe literal is a
-# positive finite integer inside the legal rolling_mean window range and
+# positive finite integer inside the legal rolling window range (1..252) and
 # non-zero, so a mutated/grafted literal canonicalizes except for the rare
 # clip-bound-ordering case, which ``factor_dsl.canonicalize`` rejects (retry).
 _SAFE_LITERALS: Final[tuple[float, ...]] = (1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0)
+# v3 (Alpha158 移植): 时序算子进入演化空间。ref/rolling_* 窗口参数用
+# _SEED_ROLLING_WINDOWS 采样 (全部落在 1..252 合法区), rolling_quantile 的
+# 分位数参数单独走 (0,1) 开区间字面量, 保证 by-construction 合法。
+_V3_WINDOWED_UNARY: Final[tuple[str, ...]] = (
+    "ref", "rolling_std", "rolling_sum", "rolling_min", "rolling_max",
+)
+_QUANTILE_LITERALS: Final[tuple[float, ...]] = (0.25, 0.5, 0.75)
 _FUNCTION_CHOICES: Final[tuple[str, ...]] = (
     "abs", "sign", "log1p", "rank", "zscore", "rolling_mean", "clip",
+    *_V3_WINDOWED_UNARY, "rolling_quantile", "rolling_corr", "max", "min",
 )
+
+def _build_v3_seeds() -> tuple[Expression, ...]:
+    """v3 时序种子块: 核心字段 x 全部新算子形态, by-construction 合法。"""
+    seeds: list[Expression] = []
+    for name in ("close", "volume"):
+        for operator in _V3_WINDOWED_UNARY:
+            for window in _SEED_ROLLING_WINDOWS:
+                seeds.append(factor_dsl.Call(
+                    operator,
+                    (factor_dsl.Field(name, _LOC), factor_dsl.Number(float(window), _LOC)),
+                    _LOC,
+                ))
+    for name in ("close", "volume"):
+        for quantile in (0.25, 0.75):
+            seeds.append(factor_dsl.Call(
+                "rolling_quantile",
+                (factor_dsl.Field(name, _LOC), factor_dsl.Number(20.0, _LOC),
+                 factor_dsl.Number(quantile, _LOC)),
+                _LOC,
+            ))
+    seeds.append(factor_dsl.Call(
+        "rolling_corr",
+        (factor_dsl.Field("close", _LOC), factor_dsl.Field("volume", _LOC),
+         factor_dsl.Number(20.0, _LOC)),
+        _LOC,
+    ))
+    seeds.append(factor_dsl.Call("max", (factor_dsl.Field("high", _LOC), factor_dsl.Field("close", _LOC)), _LOC))
+    seeds.append(factor_dsl.Call("min", (factor_dsl.Field("low", _LOC), factor_dsl.Field("close", _LOC)), _LOC))
+    return tuple(seeds)
+
+
+_V3_SEEDS: Final[tuple[Expression, ...]] = _build_v3_seeds()
 _MUTATION_KINDS: Final[tuple[str, ...]] = (
     "point_mutation_field",
     "point_mutation_operator",
@@ -396,10 +436,13 @@ class AlphaFactory:
         """Frozen seed-pool enumeration order (O3); consumes NO PRNG draws.
 
         Order: (1) single allowed fields, (2) unary negation of fields,
-        (3) ``rank``/``zscore`` of single fields, (4) ``rolling_mean`` variants
-        over a field with legal windows, (5) small binary trees over
-        field/field and field/literal.  Every emitted node is a legal DSL AST,
-        so each canonicalizes without raising.
+        (3) ``rank``/``zscore`` of single fields, (4) v3 time-series seeds
+        (core fields x new operators x legal windows — placed before the
+        rolling_mean block so the default 256-candidate budget covers the
+        full live vocabulary), (5) ``rolling_mean`` variants over a field
+        with legal windows, (6) small binary trees over field/field and
+        field/literal.  Every emitted node is a legal DSL AST, so each
+        canonicalizes without raising.
         """
         fields = self._fields_sorted
         count = len(fields)
@@ -414,7 +457,9 @@ class AlphaFactory:
             yield factor_dsl.Call("rank", (factor_dsl.Field(name, _LOC),), _LOC)
         for name in fields:
             yield factor_dsl.Call("zscore", (factor_dsl.Field(name, _LOC),), _LOC)
-        # (4) rolling_mean variants over a field with legal windows
+        # (4) v3 时序种子: 全部新算子形态, by-construction 合法
+        yield from _V3_SEEDS
+        # (5) rolling_mean variants over a field with legal windows
         for name in fields:
             for window in _SEED_ROLLING_WINDOWS:
                 yield factor_dsl.Call(
@@ -422,7 +467,7 @@ class AlphaFactory:
                     (factor_dsl.Field(name, _LOC), factor_dsl.Number(float(window), _LOC)),
                     _LOC,
                 )
-        # (5) small binary trees over field/field and field/literal
+        # (6) small binary trees over field/field and field/literal
         if count >= 2:
             yield factor_dsl.Binary("+", factor_dsl.Field(fields[0], _LOC), factor_dsl.Field(fields[1], _LOC), _LOC)
         if count >= 4:
@@ -524,8 +569,18 @@ class AlphaFactory:
             return None
         path = self._rng.choice(paths)
         current = _node_at(ast, path)
-        others = [value for value in _SAFE_LITERALS if value != current.value]
-        new_value = self._rng.choice(others) if others else self._rng.choice(_SAFE_LITERALS)
+        # 分位数参数域 (0,1) 与窗口/clip 域不同: rolling_quantile 第 3 参
+        # 只能在 _QUANTILE_LITERALS 里变异, 否则必然非法。
+        parent = _node_at(ast, path[:-1]) if len(path) >= 2 else None
+        domain = _SAFE_LITERALS
+        if (
+            isinstance(parent, factor_dsl.Call)
+            and parent.name == "rolling_quantile"
+            and path[-1] == 2
+        ):
+            domain = _QUANTILE_LITERALS
+        others = [value for value in domain if value != current.value]
+        new_value = self._rng.choice(others) if others else self._rng.choice(domain)
         return _replace_at(ast, path, factor_dsl.Number(new_value, _LOC))
 
     def _mutate_subtree(self, ast: Expression) -> Expression | None:
@@ -625,11 +680,36 @@ class AlphaFactory:
     def _random_call(self, name: str, depth: int) -> Expression:
         if name in ("abs", "sign", "log1p", "rank", "zscore"):
             return factor_dsl.Call(name, (self._random_subtree(depth - 1),), _LOC)
-        if name == "rolling_mean":
+        if name in ("rolling_mean", *_V3_WINDOWED_UNARY):
+            # 窗口字面量取自 _SEED_ROLLING_WINDOWS, 全部在合法窗口区。
             window = float(self._rng.choice(_SEED_ROLLING_WINDOWS))
             return factor_dsl.Call(
-                "rolling_mean",
+                name,
                 (self._random_subtree(depth - 1), factor_dsl.Number(window, _LOC)),
+                _LOC,
+            )
+        if name == "rolling_quantile":
+            window = float(self._rng.choice(_SEED_ROLLING_WINDOWS))
+            quantile = self._rng.choice(_QUANTILE_LITERALS)
+            return factor_dsl.Call(
+                "rolling_quantile",
+                (self._random_subtree(depth - 1), factor_dsl.Number(window, _LOC),
+                 factor_dsl.Number(quantile, _LOC)),
+                _LOC,
+            )
+        if name == "rolling_corr":
+            window = float(self._rng.choice(_SEED_ROLLING_WINDOWS))
+            return factor_dsl.Call(
+                "rolling_corr",
+                (self._random_subtree(depth - 1), self._random_subtree(depth - 1),
+                 factor_dsl.Number(window, _LOC)),
+                _LOC,
+            )
+        if name in ("max", "min"):
+            # 逐点二元: 无窗口参数。
+            return factor_dsl.Call(
+                name,
+                (self._random_subtree(depth - 1), self._random_subtree(depth - 1)),
                 _LOC,
             )
         # clip(expr, low, high) with low <= high by construction.
