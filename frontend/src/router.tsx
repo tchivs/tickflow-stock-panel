@@ -7,35 +7,58 @@ import { useSettings } from './lib/useSharedQueries'
 import { Logo } from './components/Logo'
 
 import { NotFound } from './pages/NotFound'
+// 部署重启窗口 (docker compose up -d --build) 或网络瞬断会导致路由 chunk
+// 动态 import 失败, React Router 错误边界会把整页卡死在
+// "Failed to fetch dynamically imported module" 且无法恢复。
+// 策略: 原位重试一次; 仍失败则整页刷新一次拿最新 index.html,
+// sessionStorage 标记防止刷新循环, 任一页面加载成功后清除标记。
+const CHUNK_RELOAD_KEY = 'tf:chunk-reloaded'
+
+function lazyPage<T extends { default: React.ComponentType }>(load: () => Promise<T>) {
+  return lazy(async () => {
+    try {
+      const mod = await load()
+      sessionStorage.removeItem(CHUNK_RELOAD_KEY)
+      return mod
+    } catch (err) {
+      if (!sessionStorage.getItem(CHUNK_RELOAD_KEY)) {
+        sessionStorage.setItem(CHUNK_RELOAD_KEY, '1')
+        window.location.reload()
+        // 刷新前的短暂间隙: 挂起 Promise, 避免错误边界闪现
+        await new Promise<never>(() => {})
+      }
+      throw err
+    }
+  })
+}
+
 // 代码分割: 页面全部 lazy 加载, 避免首屏打包所有页面 (ECharts / lightweight-charts /
-// framer-motion 等重库) → 大幅减小首屏 bundle。命名导出用 .then 映射为 default。
-// Layout / Onboarding / Auth 为应用外壳与入口, 保持同步加载。
-const Watchlist = lazy(() => import('./pages/Watchlist').then(m => ({ default: m.Watchlist })))
-const Screener = lazy(() => import('./pages/Screener').then(m => ({ default: m.Screener })))
-const Backtest = lazy(() => import('./pages/Backtest').then(m => ({ default: m.Backtest })))
-const Financials = lazy(() => import('./pages/Financials').then(m => ({ default: m.Financials })))
-const Data = lazy(() => import('./pages/Data').then(m => ({ default: m.Data })))
-const Portfolio = lazy(() => import('./pages/Portfolio').then(m => ({ default: m.Portfolio })))
-const Optimization = lazy(() => import('./pages/portfolio/Optimization').then(m => ({ default: m.Optimization })))
-const RiskAttribution = lazy(() => import('./pages/portfolio/RiskAttribution').then(m => ({ default: m.RiskAttribution })))
-const RebalancePlan = lazy(() => import('./pages/portfolio/RebalancePlan').then(m => ({ default: m.RebalancePlan })))
-const ModelLibrary = lazy(() => import('./pages/backtest/ModelLibrary').then(m => ({ default: m.ModelLibrary })))
-const WalkForward = lazy(() => import('./pages/backtest/WalkForward').then(m => ({ default: m.WalkForward })))
-const AlphaWorkbench = lazy(() => import('./pages/backtest/AlphaWorkbench').then(m => ({ default: m.AlphaWorkbench })))
-const Monitor = lazy(() => import('./pages/Monitor').then(m => ({ default: m.Monitor })))
-const Trading = lazy(() => import('./pages/Trading').then(m => ({ default: m.Trading })))
-const Dashboard = lazy(() => import('./pages/Dashboard').then(m => ({ default: m.Dashboard })))
-const AnalysisDetail = lazy(() => import('./pages/AnalysisDetail').then(m => ({ default: m.AnalysisDetail })))
-const ConceptAnalysis = lazy(() => import('./pages/ConceptAnalysis').then(m => ({ default: m.ConceptAnalysis })))
-const PoolHubPage = lazy(() => import('./pages/PoolHubPage').then(m => ({ default: m.PoolHubPage })))
-const IndustryAnalysis = lazy(() => import('./pages/IndustryAnalysis').then(m => ({ default: m.IndustryAnalysis })))
-const StockAnalysis = lazy(() => import('./pages/StockAnalysis').then(m => ({ default: m.StockAnalysis })))
-const Review = lazy(() => import('./pages/Review').then(m => ({ default: m.Review })))
-const LimitUpLadder = lazy(() => import('./pages/LimitUpLadder').then(m => ({ default: m.LimitUpLadder })))
-const Branding = lazy(() => import('./pages/Branding').then(m => ({ default: m.Branding })))
-const Settings = lazy(() => import('./pages/Settings').then(m => ({ default: m.Settings })))
-const Indices = lazy(() => import('./pages/Indices').then(m => ({ default: m.Indices })))
-const Dev = lazy(() => import('./pages/Dev').then(m => ({ default: m.Dev })))
+const Watchlist = lazyPage(() => import('./pages/Watchlist').then(m => ({ default: m.Watchlist })))
+const Screener = lazyPage(() => import('./pages/Screener').then(m => ({ default: m.Screener })))
+const Backtest = lazyPage(() => import('./pages/Backtest').then(m => ({ default: m.Backtest })))
+const Financials = lazyPage(() => import('./pages/Financials').then(m => ({ default: m.Financials })))
+const Data = lazyPage(() => import('./pages/Data').then(m => ({ default: m.Data })))
+const Portfolio = lazyPage(() => import('./pages/Portfolio').then(m => ({ default: m.Portfolio })))
+const Optimization = lazyPage(() => import('./pages/portfolio/Optimization').then(m => ({ default: m.Optimization })))
+const RiskAttribution = lazyPage(() => import('./pages/portfolio/RiskAttribution').then(m => ({ default: m.RiskAttribution })))
+const RebalancePlan = lazyPage(() => import('./pages/portfolio/RebalancePlan').then(m => ({ default: m.RebalancePlan })))
+const ModelLibrary = lazyPage(() => import('./pages/backtest/ModelLibrary').then(m => ({ default: m.ModelLibrary })))
+const WalkForward = lazyPage(() => import('./pages/backtest/WalkForward').then(m => ({ default: m.WalkForward })))
+const AlphaWorkbench = lazyPage(() => import('./pages/backtest/AlphaWorkbench').then(m => ({ default: m.AlphaWorkbench })))
+const Monitor = lazyPage(() => import('./pages/Monitor').then(m => ({ default: m.Monitor })))
+const Trading = lazyPage(() => import('./pages/Trading').then(m => ({ default: m.Trading })))
+const Dashboard = lazyPage(() => import('./pages/Dashboard').then(m => ({ default: m.Dashboard })))
+const AnalysisDetail = lazyPage(() => import('./pages/AnalysisDetail').then(m => ({ default: m.AnalysisDetail })))
+const ConceptAnalysis = lazyPage(() => import('./pages/ConceptAnalysis').then(m => ({ default: m.ConceptAnalysis })))
+const PoolHubPage = lazyPage(() => import('./pages/PoolHubPage').then(m => ({ default: m.PoolHubPage })))
+const IndustryAnalysis = lazyPage(() => import('./pages/IndustryAnalysis').then(m => ({ default: m.IndustryAnalysis })))
+const StockAnalysis = lazyPage(() => import('./pages/StockAnalysis').then(m => ({ default: m.StockAnalysis })))
+const Review = lazyPage(() => import('./pages/Review').then(m => ({ default: m.Review })))
+const LimitUpLadder = lazyPage(() => import('./pages/LimitUpLadder').then(m => ({ default: m.LimitUpLadder })))
+const Branding = lazyPage(() => import('./pages/Branding').then(m => ({ default: m.Branding })))
+const Settings = lazyPage(() => import('./pages/Settings').then(m => ({ default: m.Settings })))
+const Indices = lazyPage(() => import('./pages/Indices').then(m => ({ default: m.Indices })))
+const Dev = lazyPage(() => import('./pages/Dev').then(m => ({ default: m.Dev })))
 
 // 首次使用守卫 —— 未完成向导则重定向到 /onboarding
 // 只挂在根路由上;/onboarding 本身不被守卫,避免循环重定向。
