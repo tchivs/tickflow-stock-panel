@@ -939,6 +939,7 @@ async def repair_daily(request: Request):
                 else:
                     job_store.succeed(job_id, result)
                 invalidate_storage_cache()
+                repo.refresh_cache()  # 与 /run 收尾一致: enriched 内存缓存随修正刷新
             except Exception as e:
                 logger.exception("repair_daily failed: job_id=%s", job_id)
                 job_store.fail(job_id, str(e))

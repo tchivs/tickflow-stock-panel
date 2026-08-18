@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import logging
+import time as _time
 from collections.abc import Callable
 from datetime import date
 from pathlib import Path
@@ -48,6 +49,38 @@ class PipelineStageError(RuntimeError):
 
 def _noop(stage: str, pct: int, msg: str, **kwargs) -> None:  # noqa: ARG001
     pass
+
+# EOD 源就绪竞态重试 (sync_daily): 今日日K 行数不足时延迟重拉。
+_EOD_SOURCE_RETRY_MAX = 3
+_EOD_SOURCE_RETRY_WAIT_MIN = 3
+
+# 残写 enriched 分区自愈 (compute_enriched): 自选实时写盘会让「今日」分区提前
+# 存在(仅几行), 方向检测按「分区存在性」判新日期 → 永不算新 → EOD enriched 跳过。
+# 按行数比对最近 N 个共同日期: enriched 明显薄于同日 daily(源故障/竞态残写)
+# → 删该分区, 让其自然进入 new_dates 走增量重算。
+_STALE_ENRICHED_CHECK_DAYS = 10
+_STALE_ENRICHED_RATIO = 0.5
+
+
+def _eod_complete_threshold(repo) -> int:
+    """今日日K「基本完整」行数阈值: 全市场标的数 × 0.5 (与 coverage 口径一致)。"""
+    try:
+        row = repo.execute_one("SELECT count(DISTINCT symbol) FROM instruments")
+        if row and row[0]:
+            return int(int(row[0]) * 0.5)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("eod threshold instruments count failed: %s", e)
+    return 0
+
+
+def _partition_row_counts(repo, view: str) -> dict[str, int]:
+    """{date_iso: rows} — duckdb 视图按日计数 (失败返回空, 调用方自然跳过自愈)。"""
+    try:
+        rows = repo.execute_all(f"SELECT date, count(*) FROM {view} GROUP BY date")  # noqa: S608
+        return {str(d): int(n) for d, n in rows}
+    except Exception as e:  # noqa: BLE001
+        logger.debug("partition row counts (%s) failed: %s", view, e)
+        return {}
 
 
 def fixture_provider_enabled() -> bool:
@@ -276,12 +309,35 @@ def run_now(
         def _daily_chunk_progress(cur: int, tot: int) -> None:
             emit("sync_daily", 12 + int(33 * cur / tot),
                  f"日K 批次 {cur}/{tot}", stage_pct=int(100 * cur / tot), skip_log=True)
-        written_daily = kline_sync.sync_and_persist_daily_batch(
-            universe, repo, capset,
-            start_date=_dt.combine(start_date, _dt.min.time()),
-            end_date=_dt.combine(today, _dt.min.time()),
-            on_chunk_done=_daily_chunk_progress,
-        )
+        def _pull_daily() -> int:
+            return kline_sync.sync_and_persist_daily_batch(
+                universe, repo, capset,
+                start_date=_dt.combine(start_date, _dt.min.time()),
+                end_date=_dt.combine(today, _dt.min.time()),
+                on_chunk_done=_daily_chunk_progress,
+            )
+        written_daily = _pull_daily()
+        # EOD 源就绪竞态护栏 (2026-08-18 实例): stockdb 15:30 起才开始当日 EOD
+        # 采集, 管道同刻拉取拿到空 → 今日 daily 仍是自选残写几行, enriched 随之
+        # 跳过。今日行数不足时延迟重拉, 等 EOD 源就绪; 重试耗尽仍薄 → 照常走
+        # 下方流程 (M003 coverage 横幅如实示警, 次日管道经 B 层自愈补齐)。
+        if start_date == today:
+            for attempt in range(1, _EOD_SOURCE_RETRY_MAX + 1):
+                try:
+                    row = repo.execute_one(
+                        "SELECT count(*) FROM kline_daily WHERE date = ?", [today.isoformat()])
+                    n_today = int(row[0]) if row else 0
+                except Exception:  # noqa: BLE001
+                    break
+                if n_today >= _eod_complete_threshold(repo):
+                    break
+                emit("sync_daily", 12 + int(30 * attempt / (_EOD_SOURCE_RETRY_MAX + 1)),
+                     f"今日日K仅 {n_today} 只, 等待 EOD 源就绪重拉 ({attempt}/{_EOD_SOURCE_RETRY_MAX})")
+                logger.info("sync_daily: 今日日K仅 %d 只 (阈值 %d), %d 分钟后重拉 (%d/%d)",
+                            n_today, _eod_complete_threshold(repo),
+                            _EOD_SOURCE_RETRY_WAIT_MIN, attempt, _EOD_SOURCE_RETRY_MAX)
+                _time.sleep(_EOD_SOURCE_RETRY_WAIT_MIN * 60)
+                written_daily = _pull_daily()
         gap_days = (today - start_date).days
         new_daily_days = gap_days
         emit("sync_daily", 45, f"日K 完成,覆盖 {gap_days} 天")
@@ -378,6 +434,49 @@ def run_now(
     daily_dir = repo.store.data_dir / "kline_daily"
     daily_days = len(list(daily_dir.glob("date=*"))) if daily_dir.exists() else 0
     prev_enriched_days = len(list(enriched_dir.glob("date=*"))) if enriched_exists else 0
+
+    # 数据修正 (override_start_date): 修正范围内的 enriched 分区是旧口径数据
+    # (典型: 破损日的 5 行残写), 而下方方向检测按「分区存在性」判新日期,
+    # 分区已存在 → new_dates 为空 → 跳过重算, 修正永远到不了 enriched。
+    # 先删 [start, today] 范围内的 stale 分区, 让方向检测自然走增量重算。
+    if override_start_date is not None and enriched_exists:
+        import shutil
+        removed = 0
+        for part in enriched_dir.glob("date=*"):
+            try:
+                part_date = date.fromisoformat(part.stem.split("=")[1])
+            except ValueError:
+                continue
+            if part_date >= override_start_date:
+                shutil.rmtree(part, ignore_errors=True)
+                removed += 1
+        if removed:
+            logger.info("compute_enriched: repair mode removed %d stale enriched partitions >= %s",
+                        removed, override_start_date)
+            enriched_exists = enriched_dir.exists() and any(enriched_dir.glob("date=*"))
+            prev_enriched_days = len(list(enriched_dir.glob("date=*"))) if enriched_exists else 0
+
+    # 残写自愈 (B 层): daily/enriched 分区都在但 enriched 明显薄于同日 daily
+    # (自选残写/源故障) → 方向检测判不出新日期, EOD enriched 永远跳过。
+    # 删薄分区, 让其自然进入 new_dates。放在 days 计数之后、方向检测之前,
+    # 删除会同步刷新 prev_enriched_days 以触发下方 daily_days > prev 判定。
+    if enriched_exists:
+        daily_counts = _partition_row_counts(repo, "kline_daily")
+        enriched_counts = _partition_row_counts(repo, "kline_enriched")
+        if daily_counts and enriched_counts:
+            common = sorted(set(daily_counts) & set(enriched_counts))[-_STALE_ENRICHED_CHECK_DAYS:]
+            stale = [d for d in common
+                     if enriched_counts[d] < daily_counts[d] * _STALE_ENRICHED_RATIO]
+            if stale:
+                import shutil
+                for d in stale:
+                    shutil.rmtree(enriched_dir / f"date={d}", ignore_errors=True)
+                logger.info(
+                    "compute_enriched: removed %d thin enriched partitions "
+                    "(enriched << daily, dates=%s)",
+                    len(stale), ",".join(stale))
+                enriched_exists = enriched_dir.exists() and any(enriched_dir.glob("date=*"))
+                prev_enriched_days = len(list(enriched_dir.glob("date=*"))) if enriched_exists else 0
 
     # 判断新日期方向: 找 daily 和 enriched 的日期集合做比较
     forward_incremental = False
