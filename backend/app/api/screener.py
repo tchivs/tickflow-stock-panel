@@ -15,6 +15,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from app.db_safe import is_valid_ext_ident, quote_ident
+from app.services.coverage import coverage_for_date
 from app.services.screener import PRESET_STRATEGIES, ScreenerService, strategy_supports_asset
 from app.services import pool_snapshot, strategy_cache
 from app.strategy import config as strategy_config
@@ -523,7 +524,13 @@ def limit_ladder(
 
     df = svc._load_enriched_for_date(as_of)
     if df.is_empty():
-        return {"as_of": str(as_of), "tiers": [], "counts": {"up": 0, "down": 0}}
+        return {
+            "as_of": str(as_of),
+            "tiers": [],
+            "counts": {"up": 0, "down": 0},
+            # 覆盖度 (M003): 空数据日诚实标注行数, 前端区分「无涨停」与「无数据」
+            "coverage": coverage_for_date(repo, as_of),
+        }
 
     # 双方向涨跌停计数(不论当前 direction, 前端始终同时显示)
     count_up_raw = int(df.filter(pl.col("signal_limit_up").fill_null(False)).height) if "signal_limit_up" in df.columns else 0
@@ -728,6 +735,7 @@ def limit_ladder(
         },
         "sealed_counts_up": sealed_counts_up,
         "sealed_counts_down": sealed_counts_down,
+        "coverage": coverage_for_date(repo, as_of),
     }
 
 

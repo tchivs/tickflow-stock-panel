@@ -12,6 +12,7 @@ from typing import Any, Callable
 from fastapi import APIRouter, Request
 
 from app.indicators.pipeline import ENRICHED_COLUMNS
+from app.services.coverage import coverage_snapshot
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +64,7 @@ def invalidate_data_cache(table: str | None = None) -> None:
 
     table=None 时清所有表 cache + storage(粗粒度,用于 pipeline 完成/clear);
     指定 table 时只清那张表,不影响 storage(细粒度,用于单 stage 写完)。
+    enriched 写入 (含 None) 同步失效覆盖度快照 — 每日行数必须反映最新写入 (M003)。
     """
     with _table_cache_lock:
         if table is None:
@@ -76,6 +78,10 @@ def invalidate_data_cache(table: str | None = None) -> None:
         elif table in _table_cache:
             _table_cache[table] = None
             _table_cache_ts[table] = 0.0
+    if table is None or table == "enriched":
+        from app.services.coverage import invalidate_coverage_cache
+
+        invalidate_coverage_cache()
 
 
 def invalidate_storage_cache() -> None:
@@ -609,9 +615,10 @@ def status(request: Request) -> dict:
         "instruments": _get_table_stats("instruments", lambda: _safe_aggregate_instruments(repo)),
         "financials":  _get_table_stats("financials",  lambda: _safe_aggregate_financials(repo)),
 
+        # 每日覆盖度 (M003): 近 N 日 enriched 真实行数, 揭示全期聚合掩盖的写入缺口
+        "coverage": coverage_snapshot(repo),
         # 文件层面信息(缓存)
         "storage": _get_storage(data_dir),
-
         # 调度
         "next_instruments_run": _next_cron_run(scheduler, "pre_market_instruments"),
         "next_pipeline_run":    _next_cron_run(scheduler, "daily_pipeline"),

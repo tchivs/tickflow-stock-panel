@@ -17,6 +17,7 @@ from app.market_time import cn_today
 from app.services.pool_hub import _project_hub, build_pool_hub, build_pool_hub_snapshot
 from app.services.pool_snapshot import list_backfill_gaps, list_snapshot_dates
 from app.services.premarket_snapshot import load_premarket_snapshot
+from app.services.coverage import coverage_for_date
 from app.services.guest_masking import mask_guest_hub
 
 router = APIRouter(prefix="/api/pool", tags=["pool"])
@@ -44,6 +45,11 @@ def get_pool_hub(
         return _strategy_display_name(engine, sid)
 
     hub = build_pool_hub(data_dir, as_of=as_of, concept=concept, name_for=name_for)
+
+    # 覆盖度 (M003): 该日 enriched 真实行数 vs 全市场 — 全市场策略池基于不完整
+    # 数据时 (外部源故障仅剩自选), 前端据此警示而非裸零值
+    if hub.get("as_of"):
+        hub["coverage"] = coverage_for_date(repo, hub["as_of"])
 
     # 服务端声明展示模式 (GUEST-01, CONTEXT D-03): 已解析的会话 principal = VIP,
     # 否则 guest。模式绝不由客户端输入或行值推导 (T-19-02)。
@@ -107,6 +113,10 @@ def get_pool_history(
             raise HTTPException(status_code=400, detail="invalid as_of")
 
     hub = build_pool_hub_snapshot(data_dir, as_of, concept=concept, name_for=name_for)
+
+    # 覆盖度 (M003): 历史快照日 enriched 真实行数 (与 /hub 同语义, 附加字段)
+    if hub.get("as_of"):
+        hub["coverage"] = coverage_for_date(request.app.state.repo, hub["as_of"])
 
     is_vip = getattr(request.state, "reviewer_principal", None) is not None
     hub["mode"] = "vip" if is_vip else "guest"

@@ -18,6 +18,7 @@ from typing import Any
 
 import polars as pl
 
+from app.services.coverage import coverage_for_date
 from app.services.ext_data import ExtConfig, ExtConfigStore
 from app.services.screener import ScreenerService
 
@@ -551,6 +552,9 @@ def build_market_overview(
         "as_of": str(as_of),
         "quote_status": status,
         "indices": indices,
+        # 覆盖度 (M003): 该日 enriched 真实行数 vs 全市场, 涨跌家数/情绪基于不完整
+        # 数据时前端据此警示, 避免把数据缺口误读为市场真相
+        "coverage": coverage_for_date(repo, as_of),
         "breadth": {
             "total": total,
             "up": up,
