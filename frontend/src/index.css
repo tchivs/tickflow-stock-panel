@@ -106,3 +106,17 @@ body {
     scroll-behavior: auto !important;
   }
 }
+
+/* 等宽长 token(路径/指纹/哈希)在小屏不得撑破容器 — 移动端适配 P1 修复 */
+code, kbd, samp {
+  overflow-wrap: anywhere;
+}
+pre {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+/* 例外: 明确要求横向滚动的代码块(如 API 请求体示例)保留原始空白 */
+pre.whitespace-pre {
+  white-space: pre;
+  overflow-wrap: normal;
+}

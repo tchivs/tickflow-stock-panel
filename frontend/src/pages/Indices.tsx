@@ -47,7 +47,10 @@ function toOHLC(rows: KlineRow[]): OHLC[] {
 
 function fmtPct(v: number | null | undefined) {
   if (v == null || Number.isNaN(Number(v))) return '--'
-  return `${Number(v).toFixed(2)}%`
+  // 脏数据护栏: 指数单日涨跌幅不可能超过 ±44%,超出按缺失显示
+  const x = Number(v)
+  if (Math.abs(x) > 44) return '--'
+  return `${x.toFixed(2)}%`
 }
 
 function fmtNum(v: number | null | undefined, digits = 2) {
@@ -162,6 +165,10 @@ export function Indices() {
   const selectedQuotePct = selectedQuote?.change_pct ?? selectedQuote?.pct
 
   const chartRows = useMemo(() => toOHLC(daily.data?.rows ?? []), [daily.data?.rows])
+  // K 线滞后标注 (M003): 日K最后一根早于行情日期时如实提示, 避免拿旧 K 线对照新报价
+  const klineLastDate = chartRows.length > 0 ? chartRows[chartRows.length - 1].date : null
+  const quoteDate = typeof selectedQuote?.date === 'string' ? selectedQuote.date.slice(0, 10) : null
+  const klineLagging = !!(klineLastDate && quoteDate && klineLastDate < quoteDate)
   const selectedInfo = [...topRows, ...listRows].find(r => r.symbol === selectedSymbol) || daily.data?.index_info
   const minuteRows: MinuteKlineRow[] = minute.data?.rows ?? []
   const selectedIdx = selectedDate ? chartRows.findIndex(r => r.date === selectedDate) : -1
@@ -237,7 +244,7 @@ export function Indices() {
         <div>
           <h1 className="text-lg font-semibold text-foreground">指数</h1>
           <p className="mt-1 text-xs text-muted">
-            指数使用独立 kline_index_* parquet，不进入股票选股和策略链路。
+            指数行情独立同步,不参与个股筛选与策略回测。
           </p>
         </div>
         <div className="grid grid-cols-2 gap-2 sm:flex sm:items-center">
@@ -286,12 +293,19 @@ export function Indices() {
                 <h2 className="truncate text-sm font-semibold text-foreground">
                   {selectedInfo?.name || selectedSymbol || '未选择指数'}
                 </h2>
-                {selectedSymbol && <span className="font-mono text-xs text-muted">{selectedSymbol}</span>}
                 {selectedSymbol && <span className="font-mono text-xs text-foreground">{fmtNum(selectedQuoteValue)}</span>}
                 {selectedSymbol && <span className={`font-mono text-xs ${Number(selectedQuotePct ?? 0) >= 0 ? 'text-bull' : 'text-bear'}`}>{fmtPct(selectedQuotePct)}</span>}
               </div>
-              <div className="mt-1 text-xs text-muted">
-                实时缓存 {quotes.data?.count ?? 0} 只指数 · 日K来源 {daily.data?.source ?? '--'}
+              <div className="mt-1 flex items-center gap-2 text-xs text-muted">
+                实时缓存 {quotes.data?.count ?? 0} 只指数
+                {klineLagging && klineLastDate && (
+                  <span
+                    title={`行情已更新至 ${quoteDate},但日K线数据截至 ${klineLastDate}(指数日K同步可能滞后),图表最后一根为此前交易日`}
+                    className="inline-flex items-center gap-1 rounded bg-amber-500/10 px-1.5 py-px text-[10px] font-medium text-amber-500"
+                  >
+                    K线截至 {klineLastDate.slice(5)}
+                  </span>
+                )}
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-2 text-xs">

@@ -680,7 +680,7 @@ function PulseList({
                             onStockClick(stock.symbol, stock.name || undefined)
                           }
                         }}
-                        className={cn('flex min-w-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] cursor-pointer hover:brightness-125 focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-1 focus:ring-offset-base', i === 0 ? 'bg-amber-300/10 text-foreground' : 'bg-elevated/60 text-secondary')}
+                        className={cn('flex min-w-0 items-center gap-1 rounded-md px-1.5 min-h-7 text-[10px] cursor-pointer hover:brightness-125 focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-1 focus:ring-offset-base', i === 0 ? 'bg-amber-300/10 text-foreground' : 'bg-elevated/60 text-secondary')}
                       >
                         <span className="flex min-w-0 items-center gap-1">
                           <span className="min-w-0 truncate font-medium">{stock.name || stock.symbol}</span>

@@ -539,7 +539,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
                   onClick={() => setChannelOpen(o => !o)}
                   aria-expanded={channelOpen}
                   aria-controls="feishu-config"
-                  className="flex flex-1 items-center gap-2 text-left cursor-pointer"
+                  className="flex flex-1 items-center gap-2 text-left cursor-pointer max-md:min-h-9 max-md:py-1"
                 >
                   <span className="text-[11px] font-medium text-foreground">飞书</span>
                   <span className="text-[9px] text-muted">群推送 Webhook</span>
@@ -630,7 +630,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
                   onClick={() => setTelegramOpen(o => !o)}
                   aria-expanded={telegramOpen}
                   aria-controls="telegram-config"
-                  className="flex flex-1 items-center gap-2 text-left cursor-pointer"
+                  className="flex flex-1 items-center gap-2 text-left cursor-pointer max-md:min-h-9 max-md:py-1"
                 >
                   <span className="text-[11px] font-medium text-foreground">Telegram</span>
                   <span className="text-[9px] text-muted">Bot API 推送</span>
@@ -786,7 +786,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
                   onClick={() => setBotOpen(o => !o)}
                   aria-expanded={botOpen}
                   aria-controls="bot-config"
-                  className="flex flex-1 items-center gap-2 text-left cursor-pointer"
+                  className="flex flex-1 items-center gap-2 text-left cursor-pointer max-md:min-h-9 max-md:py-1"
                 >
                   <span className="text-[11px] font-medium text-foreground">企业微信</span>
                   <span className="text-[9px] text-muted">智能机器人</span>

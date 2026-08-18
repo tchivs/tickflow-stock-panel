@@ -99,7 +99,7 @@ export function StockDataTable({
                     <button
                       type="button"
                       onClick={() => onSortToggle!(col.id)}
-                      className="inline-flex w-full items-center gap-1 cursor-pointer select-none"
+                      className="inline-flex min-h-11 w-full items-center gap-1 cursor-pointer select-none"
                     >
                       <span className={col.align === 'right' ? 'flex-1 text-right' : ''}>{col.label}</span>
                       <span

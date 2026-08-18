@@ -55,7 +55,7 @@ export function WatchlistGroupBar({
                 role="tab"
                 aria-selected={active}
                 onClick={() => onSelect(tab.id)}
-                className={`my-1.5 inline-flex shrink-0 items-center gap-1.5 rounded-btn border px-3 text-xs transition-colors ${
+                className={`my-1 inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-btn border px-3 text-xs transition-colors ${
                   active
                     ? color
                       ? `${color.text} ${color.border} ${color.background}`
@@ -77,7 +77,7 @@ export function WatchlistGroupBar({
         <button
           type="button"
           onClick={() => setManagerOpen(true)}
-          className="ml-2 inline-flex w-8 shrink-0 items-center justify-center text-muted hover:text-accent"
+          className="ml-2 inline-flex h-11 w-11 shrink-0 items-center justify-center text-muted hover:text-accent"
           title="管理自选分组"
           aria-label="管理自选分组"
         >
@@ -88,7 +88,7 @@ export function WatchlistGroupBar({
           <button
             type="button"
             onClick={() => setConfirmClear(true)}
-            className="inline-flex w-8 shrink-0 items-center justify-center text-muted hover:text-warning"
+            className="inline-flex h-11 w-11 shrink-0 items-center justify-center text-muted hover:text-warning"
             title="清空当前分组"
             aria-label="清空当前分组"
           >

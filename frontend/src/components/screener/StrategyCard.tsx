@@ -66,8 +66,8 @@ export function cardWrapCls(size: CardSize): string {
 const SRC_MAP: Record<string, string> = { builtin: '内置', custom: '自定义', ai: 'AI' }
 const BADGE_CLS_MAP: Record<string, string> = {
   builtin: 'bg-secondary/10 text-muted border-border',
-  ai: 'bg-purple-500/10 text-purple-400 border-purple-500/30',
-  custom: 'bg-amber-400/10 text-amber-400 border-amber-400/30',
+  ai: 'bg-accent/10 text-accent border-accent/30',
+  custom: 'bg-secondary/10 text-secondary border-border',
 }
 
 // ===== 策略卡片 =====
@@ -104,7 +104,7 @@ export function StrategyCard({
     : 'border-border bg-surface hover:border-accent/40 hover:bg-accent/[0.03]'
   const countCls = count === 0
     ? 'text-muted'
-    : 'bg-gradient-to-r from-amber-400 to-orange-500 bg-clip-text text-transparent'
+    : 'text-accent'
   const srcLabel = cardSize === 'mini' ? (SRC_MAP[source ?? ''] ?? '内') : (SRC_MAP[source ?? ''] ?? '内置')
   const badgeCls = BADGE_CLS_MAP[source ?? 'builtin'] ?? BADGE_CLS_MAP.builtin
 

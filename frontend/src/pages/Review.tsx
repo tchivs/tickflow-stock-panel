@@ -772,6 +772,21 @@ function HistoryPanel({
   onDelete: (id: string) => void
 }) {
   const empty = !generating && reports.length === 0
+  // 删除两步确认: 首次点击进入确认态,3 秒无操作自动复位(与 Watchlist/Monitor 范式一致)
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
+  const resetTimer = useRef<number | null>(null)
+  useEffect(() => () => { if (resetTimer.current) window.clearTimeout(resetTimer.current) }, [])
+  const armDelete = (id: string) => {
+    if (confirmDeleteId === id) {
+      if (resetTimer.current) window.clearTimeout(resetTimer.current)
+      setConfirmDeleteId(null)
+      onDelete(id)
+      return
+    }
+    setConfirmDeleteId(id)
+    if (resetTimer.current) window.clearTimeout(resetTimer.current)
+    resetTimer.current = window.setTimeout(() => setConfirmDeleteId(null), 3000)
+  }
   return (
     <div className="overflow-hidden rounded-card border border-border bg-surface/80">
       <div className="flex items-center gap-1.5 border-b border-border bg-elevated/50 px-3 py-2.5">
@@ -867,13 +882,23 @@ function HistoryPanel({
                       <div className="mt-0.5 font-mono text-[9px] text-muted">{fmtArchivedAt(r.created_at)}</div>
                     )}
                   </div>
-                  <button
-                    onClick={(e) => { e.stopPropagation(); onDelete(r.id) }}
-                    className="shrink-0 p-1 text-muted opacity-0 transition-all hover:text-danger group-hover:opacity-100"
-                    title="删除"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
+                  {confirmDeleteId === r.id ? (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); armDelete(r.id) }}
+                      className="inline-flex shrink-0 items-center gap-1 rounded-md border border-danger/30 bg-danger/15 px-1.5 py-0.5 text-[10px] font-medium text-danger animate-pulse"
+                      title="再次点击确认删除"
+                    >
+                      <Trash2 className="h-2.5 w-2.5" />确认删除
+                    </button>
+                  ) : (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); armDelete(r.id) }}
+                      className="shrink-0 p-1 text-muted opacity-60 transition-all hover:text-danger hover:opacity-100"
+                      title="删除(再次点击确认)"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  )}
                 </div>
               )
             })}

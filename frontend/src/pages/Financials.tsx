@@ -83,7 +83,7 @@ export function Financials() {
                 href="https://github.com/tchivs/AthenaQuant/issues"
                 target="_blank"
                 rel="noreferrer"
-                className="mt-2 inline-flex items-center gap-1 text-[11px] font-medium text-accent hover:underline"
+                className="mt-2 inline-flex items-center gap-1 text-[11px] font-medium text-accent hover:underline min-h-7"
               >
                 前往 Issues 推荐
                 <ExternalLink className="h-3 w-3" />

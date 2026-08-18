@@ -80,7 +80,7 @@ export function SettingsKeysPanel() {
                 href="https://tickflow.org/auth/register?ref=V3KDKGXPEA"
                 target="_blank"
                 rel="noreferrer"
-                className="text-accent hover:underline inline-flex items-baseline gap-0.5"
+                className="text-accent hover:underline inline-flex items-baseline gap-0.5 max-md:min-h-7"
               >
                 tickflow.org
                 <ExternalLink className="h-3 w-3 self-center" />
@@ -117,7 +117,7 @@ export function SettingsKeysPanel() {
                 <button
                   onClick={() => setConfirmClear(true)}
                   disabled={clear.isPending}
-                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-btn bg-elevated text-secondary hover:text-danger text-xs transition-colors duration-150 ease-smooth disabled:opacity-50 shrink-0"
+                  className="inline-flex items-center gap-1.5 min-h-9 px-2.5 py-1.5 rounded-btn bg-elevated text-secondary hover:text-danger text-xs transition-colors duration-150 ease-smooth disabled:opacity-50 shrink-0"
                 >
                   <Trash2 className="h-3 w-3" />
                   清除
@@ -213,7 +213,7 @@ export function SettingsKeysPanel() {
               <button
                 onClick={() => redetect.mutate()}
                 disabled={redetect.isPending}
-                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-btn bg-elevated hover:bg-elevated/80 text-xs text-secondary transition-colors duration-150 ease-smooth disabled:opacity-50"
+                className="inline-flex items-center gap-1.5 min-h-9 px-2.5 py-1.5 rounded-btn bg-elevated hover:bg-elevated/80 text-xs text-secondary transition-colors duration-150 ease-smooth disabled:opacity-50"
               >
                 <RefreshCw className={`h-3 w-3 ${redetect.isPending ? 'animate-spin' : ''}`} />
                 重新检测

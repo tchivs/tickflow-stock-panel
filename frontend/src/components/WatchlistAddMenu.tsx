@@ -54,7 +54,7 @@ export function WatchlistGroupMenu({
 
   const groupsQuery = useQuery({
     queryKey: QK.watchlistGroups,
-    queryFn: api.watchlistGroups,
+    queryFn: () => api.watchlistGroups(),
     enabled: open,
     staleTime: 60_000,
   })

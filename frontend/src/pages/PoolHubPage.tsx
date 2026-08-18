@@ -9,6 +9,7 @@ import { storage } from '@/lib/storage'
 import { usePremarketPool } from '@/lib/useSharedQueries'
 import { useWatchlistBatchAdd } from '@/lib/useSharedMutations'
 import { PageHeader } from '@/components/PageHeader'
+import { CoverageBanner } from '@/components/CoverageBanner'
 import { EmptyState } from '@/components/EmptyState'
 import { StrategyCardGrid } from '@/components/pool-hub/StrategyCardGrid'
 import { ConceptFilter } from '@/components/pool-hub/ConceptFilter'
@@ -294,10 +295,12 @@ export function PoolHubPage() {
           <EmptyState
             icon={CalendarX}
             title="今日盘前预览尚未生成"
-            hint="09:26 盘前预览 job 尚未生成今日预览。可查看历史收盘快照或稍后刷新。"
+            hint="今日盘前预览尚未生成(每日 09:26 自动产出)。可查看历史收盘快照或稍后刷新。"
           />
         )}
 
+        {/* 数据不完整 (M003): 该日仅覆盖部分标的时先于一切空态/结果提示, 杜绝「裸零值」误读 */}
+        <CoverageBanner coverage={data?.coverage} subject="全市场策略池" />
         {/* 无快照日 (200 语义, PIT-2): 先于零池分支短路 — 独立诚实空态, 绝不伪装零池 */}
         {data && data.available === false && !showPremarketEmpty && (
           <EmptyState

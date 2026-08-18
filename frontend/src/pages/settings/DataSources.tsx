@@ -524,7 +524,7 @@ function ChainEditor({
             <button
               onClick={() => moveUp(idx)}
               disabled={idx === 0}
-              className="p-1 text-muted/50 hover:text-foreground disabled:opacity-25 transition-colors"
+              className="p-1.5 text-muted/50 hover:text-foreground disabled:opacity-25 transition-colors max-md:min-h-9 max-md:min-w-9"
               title="上移"
             >
               <ArrowUp className="h-3 w-3" />
@@ -532,7 +532,7 @@ function ChainEditor({
             <button
               onClick={() => moveDown(idx)}
               disabled={idx >= enabled.length - 1}
-              className="p-1 text-muted/50 hover:text-foreground disabled:opacity-25 transition-colors"
+              className="p-1.5 text-muted/50 hover:text-foreground disabled:opacity-25 transition-colors max-md:min-h-9 max-md:min-w-9"
               title="下移"
             >
               <ArrowDown className="h-3 w-3" />
@@ -544,7 +544,7 @@ function ChainEditor({
             ) : (
               <button
                 onClick={() => toggle(name)}
-                className="text-[9px] text-danger/70 hover:text-danger transition-colors"
+                className="text-[9px] text-danger/70 hover:text-danger transition-colors max-md:min-h-9 max-md:inline-flex max-md:items-center"
               >
                 停用
               </button>

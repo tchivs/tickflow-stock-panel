@@ -10,6 +10,7 @@ import { storage } from '@/lib/storage'
 import { fmtPct, priceColorClass } from '@/lib/format'
 import { useModalA11y } from '@/lib/useModalA11y'
 import { PageHeader } from '@/components/PageHeader'
+import { CoverageBanner } from '@/components/CoverageBanner'
 import { EmptyState } from '@/components/EmptyState'
 import { useTheme } from '@/lib/theme'
 import { useCapabilities, usePreferences } from '@/lib/useSharedQueries'
@@ -1558,7 +1559,11 @@ export function LimitUpLadder() {
     return (
       <div className="flex flex-col h-full">
         <PageHeader title={direction === 'down' ? '连跌梯队' : '连板梯队'} />
-        <EmptyState icon={Flame} title={direction === 'down' ? '暂无连跌数据' : '暂无连板数据'} hint={direction === 'down' ? '该日期无跌停股或 enriched 数据未就绪' : '该日期无涨停股或 enriched 数据未就绪'} />
+        {/* 数据不完整 (M003): 覆盖度不足时「暂无连板」是数据缺口而非市场真相 */}
+        <div className="px-4">
+          <CoverageBanner coverage={data?.coverage} subject={`全市场${direction === 'down' ? '连跌' : '连板'}梯队`} />
+        </div>
+        <EmptyState icon={Flame} title={direction === 'down' ? '暂无连跌数据' : '暂无连板数据'} hint={direction === 'down' ? '该日期无跌停股,或行情数据尚未就绪' : '该日期无涨停股,或行情数据尚未就绪'} />
       </div>
     )
   }
@@ -1702,11 +1707,16 @@ export function LimitUpLadder() {
               disabled={isFetching}
               className="p-1.5 hover:bg-surface text-muted disabled:opacity-50"
             >
-              <RefreshCw className={`h-4 w-4 ${isFetching ? 'animate-spin' : ''}`} />
+              <RefreshCw className={`h-3.5 w-3.5 ${isFetching ? 'animate-spin' : ''}`} />
             </button>
           </div>
         }
       />
+
+      {/* 数据不完整 (M003): 覆盖度不足时梯队/计数不可作为全市场结论 */}
+      <div className="px-4">
+        <CoverageBanner coverage={data?.coverage} subject={`全市场${direction === 'down' ? '连跌' : '连板'}梯队`} />
+      </div>
 
       {/* 总览条 + 日期 */}
       <OverviewBar tiers={tiers} dateValue={dateValue} onDateChange={setAsOf} filterKeys={filterKeys} bf={extFields.bf} direction={direction} />

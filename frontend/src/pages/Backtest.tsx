@@ -13,6 +13,7 @@ import { AdvancedResearchPanels } from '@/components/advanced/AdvancedResearchPa
 import { BarChart3, FlaskConical, SlidersHorizontal, Library, Route } from 'lucide-react'
 import { ModelLibrary } from './backtest/ModelLibrary'
 import { WalkForward } from './backtest/WalkForward'
+import { ResearchFold } from './backtest/ResearchFold'
 
 type Tab = 'factor' | 'strategy' | 'optimizer' | 'library' | 'walkforward'
 
@@ -116,7 +117,7 @@ export function Backtest() {
       />
 
       <main className="flex-1 min-h-0 px-3 pb-3 pt-3 lg:px-4 lg:pb-4">
-        {activeTab === 'factor' && <div id="backtest-mode-panel-factor" role="tabpanel" aria-labelledby="backtest-mode-tab-factor" className="space-y-4"><FactorBacktest /><ResearchLibrary /><ExperimentComparison /></div>}
+        {activeTab === 'factor' && <div id="backtest-mode-panel-factor" role="tabpanel" aria-labelledby="backtest-mode-tab-factor" className="space-y-4"><FactorBacktest /><ResearchFold storageKey="bt-fold-research-factor" title="研究工具 · 因子库与实验对比"><ResearchLibrary /><ExperimentComparison /></ResearchFold></div>}
         <div
           id="backtest-mode-panel-strategy"
           role="tabpanel"
@@ -127,10 +128,9 @@ export function Backtest() {
           {/* Keep the main configuration mounted so mode switching does not discard an in-progress run. */}
           <StrategyBacktest onStrategyChange={setSelectedStrategyId} />
           {activeTab === 'strategy' && <>
-            <ResearchLibrary />
-            <ExperimentComparison />
-            <ShadowAccount />
-            <AdvancedResearchPanels binding={binding.data?.binding ?? null} bindingError={selectedStrategyId ? (binding.isLoading ? '正在解析服务器研究资产绑定。' : binding.isError ? '服务器研究资产绑定不可用；高级研究操作已禁用。' : null) : '请选择已安装策略以解析服务器研究资产绑定。'} />
+            <ResearchFold storageKey="bt-fold-research-strategy" title="研究工具 · 因子库与实验对比"><ResearchLibrary /><ExperimentComparison /></ResearchFold>
+            <ResearchFold storageKey="bt-fold-shadow" title="影子账户 · 模拟跟踪"><ShadowAccount /></ResearchFold>
+            <ResearchFold storageKey="bt-fold-advanced" title="高级研究 · 服务器研究资产"><AdvancedResearchPanels binding={binding.data?.binding ?? null} bindingError={selectedStrategyId ? (binding.isLoading ? '正在解析服务器研究资产绑定。' : binding.isError ? '服务器研究资产绑定不可用；高级研究操作已禁用。' : null) : '请选择已安装策略以解析服务器研究资产绑定。'} /></ResearchFold>
           </>}
         </div>
         {activeTab === 'optimizer' && <div id="backtest-mode-panel-optimizer" role="tabpanel" aria-labelledby="backtest-mode-tab-optimizer"><StrategyOptimizer /></div>}

@@ -522,7 +522,7 @@ export function Screener() {
     <>
       <PageHeader
         title="策略"
-        subtitle="基于本地 enriched 表 · 毫秒级 SQL"
+        subtitle="基于本地行情库,毫秒级筛选"
         right={
           <div className="flex flex-wrap items-center gap-2 max-md:gap-1">
             {/* 资产类型切换: 股票 / ETF */}
@@ -607,8 +607,8 @@ export function Screener() {
             <button
               onClick={() => { setBuilderMode('create'); setShowBuilder(true) }}
               className="inline-flex items-center gap-1.5 h-7 px-3 rounded-btn
-                text-xs font-medium text-amber-400 border border-amber-400/20 bg-amber-400/5
-                hover:bg-amber-400/15 transition-colors cursor-pointer"
+                text-xs font-medium text-accent border border-accent/20 bg-accent/5
+                hover:bg-accent/15 transition-colors cursor-pointer"
             >
               <Sparkles className="h-3.5 w-3.5" />
               创建策略 · AI
@@ -800,7 +800,7 @@ export function Screener() {
                   title={filterActive(filter) ? '筛选后无命中' : '今日无命中'}
                   hint={filterActive(filter)
                     ? '当前筛选条件过严, 试试放宽或重置筛选。'
-                    : '可能数据未跑盘后管道,或策略条件过于严苛。试试 POST /api/pipeline/run。'}
+                    : '可能今日数据尚未更新,或策略条件过于严苛。可到「数据」页运行每日更新后再试。'}
                 />
               ) : (
                 <>
@@ -832,7 +832,7 @@ export function Screener() {
               </div>
               <div className="flex flex-col items-center gap-1.5">
                 <span className="text-sm text-secondary">可先在右上角切换日期，再点击策略卡片查看选股结果</span>
-                <span className="text-[11px] text-muted">若提示 enriched 表无数据，请先运行盘后管道</span>
+                <span className="text-[11px] text-muted">若提示数据尚未就绪,请先到「数据」页完成每日更新</span>
               </div>
             </div>
           )}

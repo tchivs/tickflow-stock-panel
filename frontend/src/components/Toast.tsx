@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Check } from 'lucide-react'
+import { Check, X } from 'lucide-react'
 
 // ===== 全局 toast 状态 =====
 type ToastItem = { id: number; msg: string; kind: 'error' | 'success' }
@@ -14,10 +14,16 @@ function toast(msg: string, kind: 'error' | 'success' = 'error') {
   const item = { id: ++_id, msg, kind }
   _queue = [..._queue, item]
   _emit()
-  setTimeout(() => { _queue = _queue.filter(t => t.id !== item.id); _emit() }, 4000)
+  setTimeout(() => dismissToast(item.id), 4000)
 }
 
-export { toast }
+function dismissToast(id: number) {
+  _queue = _queue.filter(t => t.id !== id)
+  _emit()
+}
+
+export { toast, dismissToast }
+
 
 // ===== Toast 容器 — 挂在 Layout 最顶层 =====
 export function ToastContainer() {
@@ -49,7 +55,14 @@ export function ToastContainer() {
           }`}
         >
           {t.kind === 'success' && <Check className="mt-0.5 h-4 w-4 shrink-0 text-accent" aria-hidden="true" />}
-          <span>{t.msg}</span>
+          <span className="min-w-0 flex-1">{t.msg}</span>
+          <button
+            onClick={() => dismissToast(t.id)}
+            aria-label="关闭提示"
+            className="-mr-1.5 -mt-0.5 shrink-0 rounded p-1 opacity-70 transition-opacity hover:opacity-100 max-md:min-h-6 max-md:min-w-6"
+          >
+            <X className="h-3.5 w-3.5" aria-hidden="true" />
+          </button>
         </div>
       ))}
     </div>

@@ -1412,7 +1412,7 @@ export function StrategyBacktest({ onStrategyChange }: { onStrategyChange?: (str
                   key={group.id}
                   type="button"
                   onClick={() => setStrategyGroup(group.id)}
-                  className={`flex-1 rounded-[6px] px-1.5 py-1 text-[10px] font-medium transition-colors ${strategyGroup === group.id
+                  className={`flex-1 min-h-9 rounded-[6px] px-1.5 py-1.5 text-[11px] font-medium transition-colors ${strategyGroup === group.id
                     ? 'bg-accent/15 text-accent shadow-sm'
                     : 'text-muted hover:bg-elevated/70 hover:text-secondary'
                   }`}
@@ -1433,7 +1433,7 @@ export function StrategyBacktest({ onStrategyChange }: { onStrategyChange?: (str
                 key={st.id}
                 type="button"
                 onClick={() => handleStrategySelect(st.id)}
-                className={`px-2 py-1 rounded-btn text-[11px] border transition-all duration-150 ease-smooth cursor-pointer
+                className={`px-2.5 min-h-9 rounded-btn text-[11px] border transition-all duration-150 ease-smooth cursor-pointer
                   ${selectedStrategy === st.id
                     ? 'border-accent/50 bg-accent/10 text-accent'
                     : 'border-border bg-base text-secondary hover:border-accent/40'

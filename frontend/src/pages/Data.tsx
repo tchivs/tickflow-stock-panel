@@ -292,6 +292,11 @@ export function Data() {
   const isRunning = job.data?.status === 'running' || job.data?.status === 'pending'
   const isStarting = startSync.isPending
   const hasData = !!(s?.instruments?.rows || s?.daily?.rows)
+  // 每日覆盖度 (M003): 近 N 日 enriched 真实行数 — 全期聚合(止于 X 日/256 文件)会掩盖近期写入缺口
+  const coverage = s?.coverage
+  // 最新交易日覆盖不足 → 盘后管道行降级警示 (✓ 只代表任务完成, 不代表写入完整)
+  const latestCoverageDay = coverage?.days?.[0]
+  const pipelineCoverageDegraded = !!latestCoverageDay && !latestCoverageDay.complete
   // none 档(无 key / 无效 key) → 禁用立即同步 (同步依赖付费档的批量端点)
   const isNoKey = settings.data?.mode === 'none'
   const indexOverviewStats = s ? {
@@ -757,6 +762,14 @@ export function Data() {
                     >
                       <Clock className="h-3 w-3" />
                     </button>
+                    {pipelineCoverageDegraded && latestCoverageDay && (
+                      <span
+                        className="inline-flex items-center gap-1 rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-500"
+                        title={`管道任务已完成,但当日仅写入 ${latestCoverageDay.rows} 只(全市场约 ${coverage?.expected_universe ?? '—'} 只)— 判定依据为实际写入行数,非任务状态`}
+                      >
+                        ⚠ 仅 {latestCoverageDay.rows.toLocaleString()} 只
+                      </span>
+                    )}
                   </div>
                   <div className="flex items-center gap-2 font-mono text-secondary">
                     {s?.last_pipeline_run && (
@@ -869,6 +882,37 @@ export function Data() {
             ))}
           </div>
         </div>
+
+          {/* 每日覆盖度 (M003): 逐日真实写入行数 — 全期聚合正常不代表近期完整 */}
+          {coverage && coverage.days.length > 0 && (
+            <div className="mt-3 rounded-card border border-border bg-surface px-3 py-2.5">
+              <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-muted">
+                <span className="font-medium text-secondary">每日覆盖(近 {coverage.days.length} 个有数据日)</span>
+                <span>全市场约 {coverage.expected_universe.toLocaleString()} 只</span>
+                <span className="text-border">·</span>
+                <span>完整阈值 {coverage.threshold.toLocaleString()} 只</span>
+                {pipelineCoverageDegraded && (
+                  <span className="text-amber-500">最新交易日数据不完整 — 全市场股池/梯队/看板结果不可用</span>
+                )}
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {coverage.days.map((d) => (
+                  <span
+                    key={d.date}
+                    title={`${d.date}:写入 ${d.rows.toLocaleString()} 只${d.complete ? '' : `(低于阈值,数据不完整)`}`}
+                    className={`inline-flex min-h-7 flex-col items-center justify-center rounded-md border px-2 py-0.5 text-[10px] leading-tight ${
+                      d.complete
+                        ? 'border-border bg-elevated/50 text-muted'
+                        : 'border-amber-500/40 bg-amber-500/10 text-amber-500'
+                    }`}
+                  >
+                    <span className="font-mono">{d.date.slice(5)}</span>
+                    <span className="font-mono font-semibold tabular-nums">{d.rows.toLocaleString()}</span>
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
 
         {/* 同步历史 */}
         <div>

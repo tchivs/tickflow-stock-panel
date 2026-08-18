@@ -2,7 +2,7 @@ import React, { useState, useCallback, useRef, useEffect, useMemo, useLayoutEffe
 import { createPortal } from 'react-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Trash2, RefreshCw, Star, X, Search, LayoutGrid, List, Settings2, Plus, Check, Filter, Eye, EyeOff, Minus, ChevronsUp, Clock, RotateCcw } from 'lucide-react'
+import { Trash2, RefreshCw, Star, X, Search, LayoutGrid, List, Settings2, Plus, Check, Filter, Eye, EyeOff, Minus, ChevronsUp, Clock, RotateCcw, TriangleAlert } from 'lucide-react'
 import { api, type KlineRow, type MinuteKlineRow, type WatchlistGroupColor } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { storage } from '@/lib/storage'
@@ -475,11 +475,20 @@ const StockCard = React.memo(function StockCard({
           {isMonitored && <span className="ml-auto"><RealtimeDot /></span>}
         </div>
 
-        {/* 第二行: 大价格 + 涨跌幅胶囊 */}
+        {/* 第二行: 大价格 + 涨跌幅胶囊 (M003: 无数据行明说, 不裸「—」) */}
         <div className="flex items-end justify-between gap-2 mb-2">
-          <span className={`text-xl tabular-nums tracking-tighter leading-none ${priceColorClass(pct)}`}>
-            {fmtPrice(price)}
-          </span>
+          {price != null ? (
+            <span className={`text-xl tabular-nums tracking-tighter leading-none ${priceColorClass(pct)}`}>
+              {fmtPrice(price)}
+            </span>
+          ) : (
+            <span
+              title="本地暂无该股行情数据(可能停牌、退市或数据源未覆盖)"
+              className="inline-flex items-center self-center rounded bg-muted/15 px-1.5 py-0.5 text-[10px] font-medium text-muted"
+            >
+              无数据
+            </span>
+          )}
           {pct != null && (
             <span className={`shrink-0 inline-flex items-center px-1.5 py-[2px] rounded text-[11px] tabular-nums ${pctBg}`}>
               {isUp ? '+' : ''}{pct.toFixed(2)}%
@@ -758,7 +767,9 @@ export function Watchlist() {
   const [groupFilter, setGroupFilter] = useState<WatchlistGroupFilter>('all')
   const groupsQuery = useQuery({
     queryKey: QK.watchlistGroups,
-    queryFn: api.watchlistGroups,
+    // silent: 分组接口不可用(如旧版后端未部署该路由)时降级为"未分组"视图,
+    // 不弹全局错误 toast; 页面顶部显示可关闭的说明条。
+    queryFn: () => api.watchlistGroups(),
   })
   const groups = groupsQuery.data?.groups ?? []
   const groupIdBySymbol = useMemo(() => {
@@ -1064,6 +1075,22 @@ export function Watchlist() {
           </div>
         }
       />
+      {/* 分组服务不可用降级条: 后端缺分组路由(部署漂移)时明确告知而非静默失效 */}
+      {groupsQuery.isError && (
+        <div className="mx-4 mt-2 mb-1 flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/[0.06] px-3 py-2 text-xs text-secondary sm:mx-5">
+          <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
+          <span className="flex-1">
+            分组功能暂时不可用(后端服务版本过旧),当前按「未分组」展示全部自选,不影响查看与行情。重启或更新后端服务后恢复。
+          </span>
+          <button
+            type="button"
+            onClick={() => groupsQuery.refetch()}
+            className="shrink-0 rounded-md px-2 py-1 font-medium text-accent hover:bg-accent/10"
+          >
+            重试
+          </button>
+        </div>
+      )}
 
       {/* 自选分组 tab 栏 */}
       <WatchlistGroupBar
@@ -1237,7 +1264,7 @@ export function Watchlist() {
                         <button
                           type="button"
                           onClick={() => { setPreviewSymbol(r.symbol); setPreviewName(name ?? '') }}
-                          className="flex items-center gap-1 text-left min-w-0"
+                          className="flex items-center gap-1 text-left min-w-0 max-md:min-h-7"
                         >
                           <span className="font-mono text-foreground text-xs group-hover:text-accent transition-colors duration-150">
                             {r.symbol}
@@ -1307,6 +1334,19 @@ export function Watchlist() {
                 // 实时行情列：price/pct/amount 使用 rt_ 回退（自选页有实时推送）
                 const numCls = 'px-2 py-1.5 text-right num tabular-nums'
                 if (key === 'price') {
+                  // 整行无数据 (M003): close/rt_price 均缺失 → 明说「无数据」, 不再裸「—」让用户猜
+                  if (price == null) {
+                    return (
+                      <td className={`${numCls} text-muted`}>
+                        <span
+                          title="本地暂无该股行情数据(可能停牌、退市或数据源未覆盖),并非筛选隐藏"
+                          className="inline-flex items-center rounded bg-muted/15 px-1.5 py-px text-[10px] font-medium"
+                        >
+                          无数据
+                        </span>
+                      </td>
+                    )
+                  }
                   return <td className={`${numCls} ${priceColorClass(pct)}`}>{fmtPrice(price)}</td>
                 }
                 if (key === 'pct') {

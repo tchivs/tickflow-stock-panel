@@ -269,7 +269,7 @@ export function DimensionHeatmap({
         <span className="text-xs text-muted">热度分布（按标的覆盖数）</span>
         <button
           onClick={() => setShowAll(v => !v)}
-          className="text-[10px] text-muted hover:text-foreground flex items-center gap-0.5"
+          className="text-[10px] text-muted hover:text-foreground flex items-center gap-0.5 min-h-7 max-md:min-w-11 max-md:justify-center"
         >
           {showAll ? '收起' : `展开全部 (${enriched.length})`}
           <ChevronDown className={`h-3 w-3 transition-transform ${showAll ? 'rotate-180' : ''}`} />
