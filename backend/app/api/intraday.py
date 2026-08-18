@@ -114,9 +114,27 @@ def status(request: Request):
     """行情状态 (来自全局 QuoteService)。"""
     qs = _get_quote_service(request)
     if qs:
-        return qs.status()
-    return {"enabled": False, "running": False, "symbol_count": 0, "index_symbol_count": 0,
-            "quote_age_ms": None, "is_trading_hours": False, "last_fetch_ms": None}
+        out = qs.status()
+    else:
+        out = {"enabled": False, "running": False, "symbol_count": 0, "index_symbol_count": 0,
+               "quote_age_ms": None, "is_trading_hours": False, "last_fetch_ms": None}
+    # stockdb WS 实时通道状态 (M004): 未接入时 ws.configured=false, 前端隐藏指示
+    ws = getattr(request.app.state, "stockdb_ws", None)
+    out["ws"] = ws.status() if ws is not None else {"configured": False, "connected": False}
+    return out
+
+@router.get("/alerts")
+def alerts_feed(request: Request, since: int = Query(0, description="游标: 上次 cursor"),
+                limit: int = Query(100, ge=1, le=500)):
+    """实时异动事件流 (stockdb WS alerts 频道, M004)。
+
+    source_gate: open=上游推送中; closed=订阅 ≥120s 无帧 (stockdb THS_PUSH_ENABLED
+    未开, 异动源不存在); quiet=等待判定期。前端据 gate 如实呈现空态。
+    """
+    ws = getattr(request.app.state, "stockdb_ws", None)
+    if ws is None:
+        return {"events": [], "cursor": 0, "source_gate": "unavailable"}
+    return ws.alerts_since(since_seq=since, limit=limit)
 
 
 @router.get("/indices")

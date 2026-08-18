@@ -234,6 +234,10 @@ class QuoteService:
         # 首次成功拉取 → 持久化 true; 连续错误达阈值 → _auto_disable。
         self._awaiting_confirm = False
         self._probe_failures = 0
+        # stockdb WS 实时通道 (M004): None = 未接入; attach 后由 WS 推送驱动
+        # 自选实时 + 指数实时, WS 断线自动回退腾讯 HTTP 轮询
+        self._ws = None
+        self._ws_last_submitted: set[str] = set()
 
     # ================================================================
     # 生命周期
@@ -685,6 +689,8 @@ class QuoteService:
                 # 线程继续存活 + 分片 sleep, resume() 后即时恢复, 无需重启线程。
                 if not self._paused:
                     phase = self._market_phase()
+                    # WS 订阅集对齐 (自选增删后 1 周期内生效; 幂等)
+                    self._sync_ws_subscriptions()
                     if self._should_fetch_for_phase(phase):
                         is_final = phase in {"morning_final", "close_final"}
                         ok = self._fetch_quotes(final=is_final)
@@ -706,6 +712,116 @@ class QuoteService:
             while self._running and self._enabled and waited < self._interval:
                 time.sleep(0.5)
                 waited += 0.5
+    # ================================================================
+    # stockdb WS 实时通道 (M004)
+    # ================================================================
+
+    # 核心指数显示名 (WS snap 无 name 字段, 前端指数卡需要)
+    _CORE_INDEX_NAMES = {
+        "000001.SH": "上证指数",
+        "399001.SZ": "深证成指",
+        "399006.SZ": "创业板指",
+        "000680.SH": "科创综指",
+    }
+
+    def attach_stockdb_ws(self, ws) -> None:
+        """接入 WS 客户端: 注册 quotes 回调 + 立即对齐订阅集 (bootstrap 启动时)。"""
+        self._ws = ws
+        ws.on("quotes", self._on_ws_quotes)
+        self._sync_ws_subscriptions()
+
+    def _ws_index_symbol_set(self) -> set[str]:
+        """指数判定集: 核心指数 ∪ 本地指数维表 (后缀形态)。"""
+        syms = set(self.CORE_INDEX_SYMBOLS)
+        if self._repo is not None:
+            try:
+                syms.update(self._repo.get_index_symbol_set() or [])
+            except Exception:  # noqa: BLE001 — 维表不可得时只按核心指数判
+                pass
+        return syms
+
+    def _sync_ws_subscriptions(self) -> None:
+        """WS quotes 订阅集 = 核心指数 ∪ 自选 (≤200, 服务端单客户端上限)。
+
+        幂等: 集合未变化不发命令。由轮询循环每周期调用 (自选增删后 1 个周期内生效)。
+        """
+        if self._ws is None:
+            return
+        from app.services import preferences
+        want = set(self.CORE_INDEX_SYMBOLS)
+        try:
+            want.update(preferences.get_realtime_watchlist_symbols() or [])
+        except Exception:  # noqa: BLE001
+            pass
+        if want and want != self._ws_last_submitted:
+            self._ws_last_submitted = set(want)
+            from app.data_providers.stockdb_provider import _to_prefix
+            self._ws.set_quotes_symbols(sorted(_to_prefix(s) for s in want))
+
+    def _on_ws_quotes(self, data: list[dict]) -> None:
+        """WS quotes 批量帧回调 (asyncio 线程): 指数与自选股票分流。"""
+        index_syms = self._ws_index_symbol_set()
+        index_records: list[dict] = []
+        stock_records: list[dict] = []
+        for item in data:
+            snap = item.get("snap") or {}
+            sym_raw = str(item.get("symbol") or snap.get("symbol") or "")
+            if not sym_raw:
+                continue
+            from app.data_providers.stockdb_provider import _to_suffix
+            sym = _to_suffix(sym_raw)
+            last = snap.get("last")
+            prev = snap.get("prev_close")
+            if last is None or prev is None:
+                continue
+            change = snap.get("change")
+            if change is None:
+                change = float(last) - float(prev)
+            record = {
+                "symbol": sym,
+                "name": self._CORE_INDEX_NAMES.get(sym),
+                "last_price": last,
+                "prev_close": prev,
+                "open": snap.get("open"),
+                "high": snap.get("high"),
+                "low": snap.get("low"),
+                "volume": snap.get("volume_hand"),
+                "amount": snap.get("amount_yuan"),
+                # stockdb pct_chg 为百分数 (-0.02 = -0.02%) → AQ 小数制契约
+                "change_pct": (snap.get("pct_chg") / 100.0) if snap.get("pct_chg") is not None else None,
+                "change_amount": change,
+            }
+            ts = snap.get("bar_time")
+            if ts:
+                try:
+                    from datetime import datetime as _dt
+                    record["timestamp"] = int(_dt.fromisoformat(ts).timestamp() * 1000)
+                except ValueError:
+                    pass
+            if sym in index_syms:
+                index_records.append(record)
+            else:
+                stock_records.append(record)
+        if index_records:
+            self._apply_ws_index_records(index_records)
+        if stock_records:
+            self._process_watchlist_records(stock_records, t0=time.perf_counter(),
+                                            now_ts=time.perf_counter(), from_ws=True)
+
+    def _apply_ws_index_records(self, records: list[dict]) -> None:
+        """WS 指数帧 → 实时指数缓存 (upsert, 不清自选缓存, 不落股票 parquet)。"""
+        new_df = self._build_index_quotes(records)
+        if new_df.is_empty():
+            return
+        with self._lock:
+            old = self._index_quotes_cache
+            merged = (pl.concat([old, new_df]).unique(subset=["symbol"], keep="last")
+                      if old is not None and not old.is_empty() else new_df)
+            self._index_quotes_cache = merged
+            self._index_symbol_count = merged.height
+            self._fetch_time = time.perf_counter()
+            self._fetched_at = time.time() * 1000
+        logger.debug("WS 指数实时: %d 只 (缓存共 %d)", len(records), merged.height)
 
     def _fetch_quotes(self, *, final: bool = False) -> bool:
         """按当前档位拉取行情。加锁串行化 (后台轮询 vs 手动 refresh)。返回本轮是否成功更新。"""
@@ -954,7 +1070,6 @@ class QuoteService:
             self._index_quotes_cache = self._build_index_quotes(index_records)
 
         logger.info("行情刷新: %d 只股票, %d 只ETF, %d 只指数, 耗时 %.0fms", len(stock_records), len(etf_records), len(index_records), fetch_ms)
-
         # ---- 写 kline_daily (不复权原始价格, 只有 OHLCV) ----
         daily_df = self._build_daily(stock_records)
         if not daily_df.is_empty() and self._repo:
@@ -980,10 +1095,57 @@ class QuoteService:
         if not etf_daily_df.is_empty() and self._repo:
             self._flush_live_enriched(etf_daily_df, etf_quote_extra, asset_type="etf")
 
+        # stockdb WS 推送驱动时跳过腾讯 HTTP 轮询 (M004): WS 健康 = 近 30s 有帧,
+        # 断线/静默自动回退本路径。收盘 final 定版不受影响 (边界后 WS 静默 → 回退)。
+        if self._ws is not None and self._ws.is_healthy():
+            logger.debug("自选实时由 stockdb WS 推送驱动, 跳过 HTTP 轮询")
+            return "ok"
+
         # ---- 通知 SSE ----
         self._broadcast_quote_updated()
 
         # ---- 策略监控 + 告警评估 ----
+        self._evaluate_monitors(daily_df, quote_extra)
+
+        # ---- 写 kline_daily (不复权原始价格, 只有 OHLCV) ----
+    def _process_watchlist_records(self, records: list[dict], *, t0: float, now_ts: float,
+                                   from_ws: bool = False) -> None:
+        """自选实时 records → 元信息 + 日K写盘 + enriched + 通知。
+
+        from_ws=True (stockdb WS 推送帧): 指数缓存由 _apply_ws_index_records
+        独立维护, 此处不清 (腾讯 HTTP 全量刷新模式才需要清过期指数缓存)。
+        """
+        if not records:
+            logger.warning("自选实时行情数据为空")
+            return
+        fetch_ms = (time.perf_counter() - t0) * 1000
+        fetched_at = time.time() * 1000
+        with self._lock:
+            self._fetch_time = now_ts
+            self._fetch_ms = fetch_ms
+            self._fetched_at = fetched_at
+            self._symbol_count = len(records)
+            if not from_ws:
+                # 腾讯 HTTP 模式: 无指数记录, 清零; WS 模式指数计数由
+                # _apply_ws_index_records 维护, 不覆盖
+                self._index_symbol_count = 0
+            self._etf_symbol_count = 0
+            if not from_ws:
+                self._index_quotes_cache = None
+
+        logger.info("自选实时刷新(%s): %d 只, 耗时 %.0fms",
+                    "ws" if from_ws else "http", len(records), fetch_ms)
+
+        daily_df = self._build_daily(records)
+        quote_extra = self._build_quote_extra(records)
+        if not daily_df.is_empty() and self._repo:
+            try:
+                self._repo.merge_live_daily_asset("stock", daily_df)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("自选实时日K写盘失败: %s", e)
+            self._flush_live_enriched(daily_df, quote_extra, asset_type="stock", merge=True)
+
+        self._broadcast_quote_updated()
         self._evaluate_monitors(daily_df, quote_extra)
 
     def _fetch_watchlist_quotes(self) -> str:
@@ -992,12 +1154,16 @@ class QuoteService:
         返回状态: "ok"=已取数更新; "empty"=源可达但无数据; "error"=源连接错误;
         "skip"=配置原因未拉取(无标的/无key), 不计入连通性失败。供 _resolve_probe 判定。
         """
-        from app.services import preferences
-
         symbols = preferences.get_realtime_watchlist_symbols()
         if not symbols:
             logger.info("自选实时未配置标的, 跳过行情拉取")
             return "skip"
+
+        # stockdb WS 推送驱动时跳过 HTTP 轮询 (M004): WS 健康 = 近 30s 有推送帧。
+        # 断线/静默自动回退腾讯 HTTP; 收盘 final 定版不受影响 (边界后 WS 静默 → 回退)。
+        if self._ws is not None and self._ws.is_healthy():
+            logger.debug("自选实时由 stockdb WS 推送驱动, 跳过 HTTP 轮询")
+            return "ok"
 
         provider_name = preferences.get_realtime_data_provider()
         if provider_name == "tencent":
@@ -1068,36 +1234,6 @@ class QuoteService:
 
         self._process_watchlist_records(records, t0=t0, now_ts=now_ts)
         return "ok"
-
-    def _process_watchlist_records(self, records: list[dict], *, t0: float, now_ts: float) -> None:
-        """自选实时 records → 元信息 + 日K写盘 + enriched + 通知。"""
-        if not records:
-            logger.warning("自选实时行情数据为空")
-            return
-        fetch_ms = (time.perf_counter() - t0) * 1000
-        fetched_at = time.time() * 1000
-        with self._lock:
-            self._fetch_time = now_ts
-            self._fetch_ms = fetch_ms
-            self._fetched_at = fetched_at
-            self._symbol_count = len(records)
-            self._index_symbol_count = 0
-            self._etf_symbol_count = 0
-            self._index_quotes_cache = None
-
-        logger.info("自选实时刷新: %d 只股票, 耗时 %.0fms", len(records), fetch_ms)
-
-        daily_df = self._build_daily(records)
-        quote_extra = self._build_quote_extra(records)
-        if not daily_df.is_empty() and self._repo:
-            try:
-                self._repo.merge_live_daily_asset("stock", daily_df)
-            except Exception as e:  # noqa: BLE001
-                logger.warning("自选实时日K写盘失败: %s", e)
-            self._flush_live_enriched(daily_df, quote_extra, asset_type="stock", merge=True)
-
-        self._broadcast_quote_updated()
-        self._evaluate_monitors(daily_df, quote_extra)
 
 
     # ================================================================

@@ -7,7 +7,7 @@ import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
 import { Skeleton } from '@/components/data/Skeleton'
 import { Modal } from '@/components/Modal'
-import { api, type MonitorRule, type AlertEvent, type MonitorCondition, type DeliveryStatus, type DeliveryOutcome } from '@/lib/api'
+import { api, type MonitorRule, type AlertEvent, type MonitorCondition, type DeliveryStatus, type DeliveryOutcome, type WsAlertEvent } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { fmtPrice, fmtPct } from '@/lib/format'
 import { cn } from '@/lib/cn'
@@ -134,6 +134,7 @@ export function Monitor() {
     <div className="flex flex-col h-full">
       <PageHeader title="监控中心" subtitle="实时信号与规则管理" />
       <div className="flex-1 min-h-0 px-4 py-4 sm:px-5">
+        <LiveAlertsStrip />
         <div className="mx-auto flex h-full max-w-7xl flex-col gap-3 md:flex-row md:gap-4">
           <section aria-label="触发记录" className="min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-card border border-border bg-surface/40 flex">
             <div className="flex flex-wrap items-center gap-2 border-b border-border/60 bg-surface/60 px-3 py-3">
@@ -765,4 +766,96 @@ function ConfirmDialog({ open, title, message, confirmText, danger, pending, onC
 }) {
   if (!open) return null
   return <Modal onClose={onCancel} ariaLabel={title} panelClassName="w-[calc(100vw-32px)] max-w-sm rounded-dialog border border-border bg-surface p-5 shadow-xl"><h3 className="text-sm font-medium text-foreground">{title}</h3><p className="mt-1.5 text-xs text-muted">{message}</p><div className="mt-4 flex justify-end gap-2"><button onClick={onCancel} className="px-3 py-1.5 rounded-btn bg-elevated text-secondary text-xs max-md:min-h-11 max-md:min-w-11">取消</button><button onClick={onConfirm} disabled={pending} className={cn('px-3 py-1.5 rounded-btn text-xs font-medium disabled:opacity-50 max-md:min-h-11 max-md:min-w-11', danger ? 'bg-danger text-base' : 'bg-accent text-base')}>{confirmText ?? '确定'}</button></div></Modal>
+}
+
+// ── 实时异动 (stockdb WS alerts 频道, M004) ────────────
+/** SH600519 → 600519.SH (与全站后缀形态一致) */
+function wsSymbolToSuffix(sym: string): string {
+  const m = /^(SH|SZ|BJ)(\d{6})$/.exec(sym)
+  return m ? `${m[2]}.${m[1]}` : sym
+}
+
+/** 异动 level → 涨跌幅文字色 (level 分档: 3=大涨 红 / 2=明显 橙 / 1=轻微 灰) */
+function wsAlertLevelCls(pct: number): string {
+  if (pct >= 7) return 'text-danger font-semibold'
+  if (pct >= 5) return 'text-danger'
+  if (pct <= -7) return 'text-emerald-500 font-semibold'
+  if (pct <= -5) return 'text-emerald-500'
+  return 'text-secondary'
+}
+
+const WS_GATE_HINT: Record<string, string> = {
+  open: '上游异动推送中',
+  quiet: '异动源等待判定中…',
+  closed: '上游异动源未开启(stockdb THS_PUSH_ENABLED=0),开启后此处显示实时异动',
+  unavailable: '实时通道未接入',
+}
+
+function LiveAlertsStrip() {
+  // 10s 轮询增量拉取 (since 游标); 环缓冲在服务端 (deque 500)
+  const cursorRef = useRef(0)
+  const [events, setEvents] = useState<WsAlertEvent[]>([])
+  const [gate, setGate] = useState<string>('quiet')
+  const [wsOn, setWsOn] = useState<boolean | null>(null)
+  const feed = useQuery({
+    queryKey: ['intraday', 'ws-alerts'],
+    queryFn: async () => {
+      const r = await api.intradayAlerts(cursorRef.current)
+      return r
+    },
+    refetchInterval: 10_000,
+    select: undefined,
+  })
+  useEffect(() => {
+    const d = feed.data
+    if (!d) return
+    setGate(d.source_gate)
+    if (d.events.length > 0) {
+      cursorRef.current = Math.max(cursorRef.current, d.cursor)
+      setEvents(prev => [...d.events, ...prev].slice(0, 200))
+    }
+  }, [feed.data])
+  // WS 连接状态 (与异动独立 — 通道连通但 alerts 门可关)
+  const wsQ = useQuery({
+    queryKey: ['intraday', 'ws-status'],
+    queryFn: async () => {
+      const r = await api.intradayWsStatus()
+      return r.ws
+    },
+    refetchInterval: 30_000,
+  })
+  useEffect(() => { if (wsQ.data) setWsOn(wsQ.data.connected) }, [wsQ.data])
+
+  const dotCls = wsOn == null ? 'bg-muted' : wsOn ? 'bg-emerald-500' : 'bg-warning'
+  const dotTitle = wsOn == null ? '实时通道状态未知' : wsOn ? 'stockdb 实时通道已连接' : 'stockdb 实时通道重连中'
+  const showEmpty = gate !== 'open' || events.length === 0
+
+  return (
+    <section aria-label="实时异动" className="mx-auto w-full max-w-7xl shrink-0 rounded-card border border-border bg-surface/40">
+      <div className="flex items-center gap-2 border-b border-border/60 bg-surface/60 px-3 py-2">
+        <SectionHeader icon={Zap} title="实时异动" />
+        <span className={cn('h-1.5 w-1.5 rounded-full', dotCls)} title={dotTitle} aria-label={dotTitle} />
+        <span className="text-[10px] text-muted">{WS_GATE_HINT[gate] ?? gate}</span>
+        <span className="ml-auto rounded-md bg-elevated/50 px-1.5 py-0.5 text-[10px] font-medium text-muted">{events.length}</span>
+      </div>
+      <div className="max-h-40 overflow-auto px-3 py-2">
+        {showEmpty ? (
+          <p className="py-1.5 text-xs text-muted">{WS_GATE_HINT[gate] ?? '等待异动事件'}</p>
+        ) : (
+          <ul className="space-y-1">
+            {events.slice(0, 30).map(e => (
+              <li key={`${e.seq}-${e.symbol}-${e.ts}`} className="flex items-center gap-2 text-xs">
+                <span className="font-mono text-muted">{(e.ts || '').slice(11, 19)}</span>
+                <span className="font-mono font-medium text-foreground">{wsSymbolToSuffix(e.symbol)}</span>
+                <span className="font-mono text-secondary">{fmtPrice(e.last)}</span>
+                <span className={cn('font-mono', wsAlertLevelCls(e.pct_chg))}>
+                  {e.pct_chg > 0 ? '+' : ''}{e.pct_chg.toFixed(2)}%
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </section>
+  )
 }

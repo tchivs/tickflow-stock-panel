@@ -443,6 +443,12 @@ def init_app_state(app: FastAPI) -> None:
     qs = QuoteService()
     app.state.quote_service = qs
     qs.set_repo(repo)
+    # stockdb WS 实时通道 (M004): quotes 推送驱动自选+指数实时, alerts 入环缓冲
+    from app.services.stockdb_ws import StockDBWS
+    ws_client = StockDBWS(settings.local_stockdb_url, settings.local_stockdb_api_key)
+    app.state.stockdb_ws = ws_client
+    qs.attach_stockdb_ws(ws_client)
+    ws_client.start()  # lifespan 事件循环内启动; 未配 key 时内部 no-op
     app.state.advanced_job_service.set_progress_publisher(qs.notify_advanced_progress)
     from app.advanced.workflow import AdvancedWorkflowServices, build_advanced_graph
 
@@ -774,6 +780,9 @@ def shutdown_app_state(app: FastAPI) -> None:
     fsc = getattr(app.state, "financial_scheduler", None)
     if fsc:
         fsc.stop()
+    wsq = getattr(app.state, "stockdb_ws", None)
+    if wsq:
+        wsq.stop()
     qs = getattr(app.state, "quote_service", None)
     if qs:
         qs.stop()

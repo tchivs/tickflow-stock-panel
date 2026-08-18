@@ -9,6 +9,7 @@ import { QK } from '@/lib/queryKeys'
 import { fmtBigNum, fmtPct } from '@/lib/format'
 import { useDataStatus, useCapabilities, useSettings } from '@/lib/useSharedQueries'
 import { SealedBadge } from '@/components/SealedBadge'
+import { CoverageBanner } from '@/components/CoverageBanner'
 import { StockPreviewDialog } from '@/components/StockPreviewDialog'
 import { SettingsModal } from '@/components/data/SettingsModal'
 import { STAGE_LABELS } from '@/components/data/ActiveJobCard'
@@ -55,11 +56,18 @@ function pctClass(v: number | null | undefined) {
 
 function quoteAge(ms?: number | null) {
   if (ms == null) return '—'
-  if (ms < 1000) return `${Math.round(ms)}ms`
   const s = Math.round(ms / 1000)
-  if (s < 60) return `${s}s`
-  return `${Math.floor(s / 60)}m${s % 60}s`
+  if (s < 10) return '刚刚'
+  if (s < 60) return `${s} 秒前`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m} 分钟前`
+  const h = Math.floor(m / 60)
+  if (h < 24) return `${h} 小时前`
+  return `${Math.floor(h / 24)} 天前`
 }
+
+/** 行情延迟超过 10 分钟视为过期 */
+const STALE_MS = 10 * 60 * 1000
 
 function compactCount(v: number | null | undefined) {
   const x = n(v)
@@ -463,7 +471,7 @@ function RankColumn({ title, rows, tone, onStockClick }: {
               {r.count}只 · {r.leader?.symbol ? (
                 <button
                   onClick={(e) => { e.stopPropagation(); onStockClick?.(r.leader!.symbol!, r.leader!.name ?? undefined) }}
-                  className="hover:text-accent cursor-pointer"
+                  className="hover:text-accent cursor-pointer max-md:-my-1 max-md:inline-flex max-md:min-h-7 max-md:items-center"
                   title={r.leader?.symbol ?? undefined}
                 >{r.leader?.name ?? '—'}</button>
               ) : r.leader?.name ?? '—'}
@@ -631,15 +639,20 @@ export function Dashboard() {
   // 实时模式: none / watchlist / full_market。
   // watchlist (Free 档) 仅自选 ≤5 只实时, 看板呈现的大盘数据实为盘后快照, 需提示避免误读。
   const quoteMode = data.quote_status?.mode as ('none' | 'watchlist' | 'full_market') | undefined
+  const quoteAgeMs = data.quote_status?.quote_age_ms
+  // 行情年龄超过 STALE_MS 时「实时」降级为「延迟」,避免 2678 分钟仍标实时
+  const quoteStale = quoteRunning && quoteAgeMs != null && quoteAgeMs > STALE_MS
+  // quoteAgeMs 未知 (null) 时无从证明「实时」: 交易时段保守标「实时」(行情仍在轮询),
+  // 非交易时段如实标「快照」(盘后定版), 绝不无证据地宣称实时 (M003)
   const quoteStatusLabel = isHistoricalView
     ? '历史快照'
     : quoteRunning
-      ? '实时'
+      ? quoteStale ? '延迟' : (quoteAgeMs == null && data.quote_status?.is_trading_hours === false ? '快照' : '实时')
       : quoteEnabled
         ? data.quote_status?.is_trading_hours ? '等待行情' : '非交易时段'
         : '未开启实时'
   const quoteAgeLabel = quoteRunning
-    ? quoteAge(data.quote_status?.quote_age_ms)
+    ? quoteAge(quoteAgeMs)
     : isHistoricalView
       ? '历史数据'
       : quoteEnabled
@@ -730,12 +743,15 @@ export function Dashboard() {
         <div className="mb-3 flex items-start gap-2 rounded-card border border-amber-500/30 bg-amber-500/8 px-3 py-2 text-[11px] leading-relaxed">
           <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
           <div className="min-w-0 flex-1 text-secondary">
-            当前为「自选实时」模式,看板展示的大盘数据为<strong className="text-foreground">盘后快照</strong>(最新有数据日),并非盘中实时;
-            仅自选股({data.quote_status?.watchlist_symbol_count ?? 0} 只)支持实时监控。
+            当前为「自选实时」模式: 指数卡与自选股({data.quote_status?.watchlist_symbol_count ?? 0} 只)为<strong className="text-foreground">盘中实时</strong>(stockdb WS 推送);
+            涨跌家数、情绪与榜单等全市场口径仍为盘后数据(最新有数据日)。
             <span className="ml-1 text-accent">全市场实时需 Starter+</span>
           </div>
         </div>
       )}
+
+      {/* 数据不完整 (M003): 该日仅覆盖部分标的时, 涨跌家数/情绪/榜单均不可作为全市场结论 */}
+      <CoverageBanner coverage={data.coverage} subject="涨跌家数、情绪与榜单" />
 
       <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
         {data.indices.map(item => <IndexTicker key={item.symbol} item={item} />)}

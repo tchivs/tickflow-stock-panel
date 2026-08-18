@@ -45,7 +45,14 @@ export async function request<T>(path: string, init?: RequestInit & { silent?: b
         message = JSON.stringify(detail)
       }
     } catch { /* ignore */ }
-    const safeMessage = message || `${res.status} ${res.statusText}`
+    // FastAPI 默认 404 detail 就是 "Not Found" 这类无诊断价值的裸文案,
+    // 映射为带恢复线索的用户语言; 有具体 detail 时仍优先透传。
+    let safeMessage = message
+    if (!safeMessage) {
+      if (res.status === 404) safeMessage = '请求的资源不存在,可能功能尚未部署或接口已更新,请刷新页面或重启后端服务'
+      else if (res.status >= 400 && res.status < 500) safeMessage = `请求失败 (${res.status}),请稍后重试`
+      else safeMessage = `${res.status} ${res.statusText}`
+    }
     // 401 (未登录/会话过期) 不弹 toast — 由全局认证拦截器统一跳登录页, 避免刷屏
     if (res.status !== 401 && !silent) toast(safeMessage, 'error')
     throw new ApiRequestError(res.status, safeMessage, detail)
@@ -794,8 +801,15 @@ export interface PoolHubResponse {
   concept_attribution?: string
   /** 概念归属生效日期 (CONCEPT-07): as_of_snapshot 时 = 分区日 (YYYY-MM-DD); 回退态缺键/Null */
   concept_effective_date?: string | null
-  /** 概念分区归档时刻 (CONCEPT-07): as_of_snapshot 时 = manifest.captured_at; 回退态缺键/Null */
-  concept_captured_at?: string | null
+  /** 每日覆盖度 (M003): 该日 enriched 真实行数 vs 全市场期望 — 不完整时前端警示 */
+  coverage?: CoverageInfo
+}
+
+export interface CoverageInfo {
+  date: string
+  rows: number
+  expected: number
+  complete: boolean
 }
 
 /** 盘前预览载荷 (PM-04) — 扩展 PoolHubResponse: 窗口标注 / provisional / degraded / probe 透传。
@@ -835,6 +849,8 @@ export interface OverviewMarket {
     is_trading_hours?: boolean
     [key: string]: any
   }
+  /** 每日覆盖度 (M003) */
+  coverage?: CoverageInfo
   indices: IndexQuote[]
   breadth: {
     total: number
@@ -1106,6 +1122,34 @@ export interface AlertEvent {
   leader?: { symbol?: string; name?: string; change_pct?: number } | null
 }
 
+/** 实时异动事件 (stockdb WS alerts 频道推送帧, M004) */
+export interface WsAlertEvent {
+  seq?: number
+  symbol: string
+  pct_chg: number
+  last: number
+  ts: string
+  level: number
+}
+
+/** /api/intraday/alerts 响应 — source_gate: open=推送中 / quiet=等待判定 / closed=上游异动源未开启 */
+export interface AlertsFeedResponse {
+  events: WsAlertEvent[]
+  cursor: number
+  source_gate: 'open' | 'quiet' | 'closed' | 'unavailable'
+}
+
+/** /api/intraday/status 里的 stockdb WS 通道状态块 (M004) */
+export interface WsChannelStatus {
+  configured: boolean
+  connected: boolean
+  reconnects?: number
+  last_msg_age_s?: number | null
+  subscribed?: number
+  alerts_gate?: string
+}
+
+
 // ===== Portfolio =====
 export interface PortfolioAccount {
   id: number
@@ -1270,6 +1314,8 @@ export interface LimitLadderResult {
   sealed_ready?: boolean
   /** sealed 数据 age(秒), null=盘后定版或无数据 */
   sealed_age?: number | null
+  /** 每日覆盖度 (M003): 区分「无涨停」与「当日数据不完整」 */
+  coverage?: CoverageInfo
   /** sealed 修正统计: real=真封板, fake=假涨停(归炸板), pending=待确认 */
   sealed_counts?: { real: number; fake: number; pending: number }
   /** 涨停侧 sealed 明细 */
@@ -2184,7 +2230,8 @@ export const api = {
       body: JSON.stringify({ symbols, note, group_id: groupId ?? null }),
     }),
   watchlistGroups: () =>
-    request<{ groups: WatchlistGroup[] }>('/api/watchlist/groups'),
+    // silent: 旧版后端无此路由返回 404 属部署漂移, 由调用方降级处理, 不弹全局 toast。
+    request<{ groups: WatchlistGroup[] }>('/api/watchlist/groups', { silent: true }),
   watchlistGroupCreate: (name: string, color: WatchlistGroupColor) =>
     request<{ groups: WatchlistGroup[]; group: WatchlistGroup }>('/api/watchlist/groups', {
       method: 'POST',
@@ -3107,6 +3154,13 @@ export const api = {
   alertDeliveryDetails: (eventId: string) =>
     request<{ deliveries: DeliveryOutcome[] }>(`/api/alerts/${encodeURIComponent(eventId)}/deliveries`),
 
+  // ===== 实时异动 (stockdb WS alerts 频道, M004) =====
+  intradayAlerts: (since = 0) =>
+    request<AlertsFeedResponse>(`/api/intraday/alerts?since=${since}`),
+  intradayWsStatus: () =>
+    request<{ ws: WsChannelStatus }>('/api/intraday/status'),
+
+
   alertsClear: () =>
     request<{ ok: boolean; cleared: number }>('/api/alerts', { method: 'DELETE' }),
 
@@ -3648,6 +3702,8 @@ export interface DataStatus {
   next_instruments_run: string | null
   last_pipeline_run: string | null
   last_instruments_run: string | null
+  /** 每日覆盖度快照 (M003): 近 N 日 enriched 真实行数, 揭示全期聚合掩盖的写入缺口 */
+  coverage?: { expected_universe: number; threshold: number; days: { date: string; rows: number; complete: boolean }[] }
   checked_at: string
   indicators_ready?: boolean
 }

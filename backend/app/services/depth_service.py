@@ -232,9 +232,15 @@ class DepthService:
             return
 
         # 拉 depth(涨跌停一次拉, 按 capset batch 切片)
-        depth_data = self._call_depth_batch(all_syms)
+        # 深度源 (M004): 本地 stockdb 优先 (免费, 实时回源); 全失败/未配置 →
+        # TickFlow 付费回退 (保留原路径)。返回形状两源一致。
+        depth_data = self._call_depth_stockdb(all_syms) if self._local_depth_configured() else {}
+        source_tag = "stockdb"
         if not depth_data:
-            logger.warning("depth sealed: depth.batch 返回空")
+            depth_data = self._call_depth_batch(all_syms)
+            source_tag = "tickflow"
+        if not depth_data:
+            logger.warning("depth sealed: 深度源均返回空")
             return
 
         up_set = set(syms_up)
@@ -270,8 +276,8 @@ class DepthService:
             self._sealed_fetched_ts = now_perf
             self._sealed_fetched_at = now_wall
 
-        logger.info("depth sealed: 拉取 %d 只 (涨停%d/跌停%d) 日期=%s%s",
-                    len(new_cache), len(syms_up), len(syms_down),
+        logger.info("depth sealed[%s]: 拉取 %d 只 (涨停%d/跌停%d) 日期=%s%s",
+                    source_tag, len(new_cache), len(syms_up), len(syms_down),
                     enriched_date, " → 落盘" if persist else "")
 
         # 缓存已更新: 通知 SSE 推 depth_updated, 触发连板梯队刷新封单数据。
@@ -579,9 +585,60 @@ class DepthService:
     # ================================================================
 
     def _has_capability(self) -> bool:
+        """TickFlow 付费 DEPTH5_BATCH 或 本地 stockdb 深度源任一可用 (M004)。"""
         capset = self._get_capset()
         from app.tickflow.capabilities import Cap
-        return capset.has(Cap.DEPTH5_BATCH)
+        if capset.has(Cap.DEPTH5_BATCH):
+            return True
+        return self._local_depth_configured()
+
+    def _local_depth_configured(self) -> bool:
+        """本地 stockdb 深度源可用性: 配置了 url+key 即视为可用 (拉取失败再降级)。"""
+        from app.config import settings
+        return bool(settings.local_stockdb_url and settings.local_stockdb_api_key)
+
+    def _call_depth_stockdb(self, symbols: list[str]) -> dict:
+        """本地 stockdb HTTP 批量深度 (M004): GET /v1/depth?symbols= (≤200/批)。
+
+        返回形状与 _call_depth_batch 对齐: {symbol: {ask_volumes, bid_volumes, timestamp}}。
+        stockdb Depth 为 {bids/asks: [{price, volume_hand}×5]} (volume 单位=手);
+        档位缺失保持空列表 (不造 0 — sealed 判定 None 语义依赖 ask1/bid1 is None)。
+        depth=None (停牌/缺省) → 跳过该 symbol (与 TickFlow 源同语义)。
+        """
+        import httpx
+        from app.config import settings
+        from app.data_providers.stockdb_provider import _to_prefix, _to_suffix
+
+        result: dict = {}
+        base = settings.local_stockdb_url.rstrip("/")
+        headers = {"X-API-Key": settings.local_stockdb_api_key}
+        for i, chunk in enumerate(chunked(list(symbols), 200)):
+            sleep_between_batches(i, 60, default_interval=1.0)  # 120/min 档位留裕量
+            try:
+                resp = httpx.get(
+                    f"{base}/v1/depth",
+                    params={"symbols": ",".join(_to_prefix(s) for s in chunk)},
+                    headers=headers,
+                    timeout=15.0,
+                )
+                resp.raise_for_status()
+                payload = resp.json()
+            except Exception as e:  # noqa: BLE001 — 单批失败不影响其他批
+                logger.warning("stockdb depth 第 %d 批失败(%d 只): %s", i + 1, len(chunk), e)
+                continue
+            if not isinstance(payload, dict):
+                continue
+            for sym_prefix, depth in payload.items():
+                if not depth:
+                    continue  # 停牌/缺省 → 跳过
+                asks = depth.get("asks") or []
+                bids = depth.get("bids") or []
+                result[_to_suffix(sym_prefix)] = {
+                    "ask_volumes": [lv.get("volume_hand") for lv in asks],
+                    "bid_volumes": [lv.get("volume_hand") for lv in bids],
+                    "timestamp": None,  # stockdb 无盘口时间戳 → 上层回退 wall-clock
+                }
+        return result
 
     def _get_capset(self):
         """获取当前 capset(优先 app.state, 回退 detect)。"""
