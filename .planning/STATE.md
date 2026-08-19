@@ -62,7 +62,7 @@ None.
 ### Blockers/Concerns
 
 - [v3.0 → v3.1]: Tier-2 stress matrix(422)、成本 turnover×rate 近似、Stage 1 partial labeling、部署后真实 LLM 验证是 Phase 51 (BASE-04/BASE-03) 的直接输入 — 见 v3.0-MILESTONE-AUDIT.md 未决项。
-- [Planning]: PROJECT.md「Requirements/Active」段仍写 "Building toward v3.0", 留待 Phase 51 (BASE-01) 状态收口时一并修正。
+- [Planning]: PROJECT.md「Requirements/Active」段已修正为 v3.1 — BASE-01 文档一致性已满足。
 
 ## Deferred Items
 

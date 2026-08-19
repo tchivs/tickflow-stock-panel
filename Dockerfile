@@ -26,6 +26,7 @@ RUN if [ "$USE_CN_MIRROR" = "1" ]; then pnpm config set registry "$NPM_REGISTRY"
 COPY frontend/package.json frontend/pnpm-lock.yaml frontend/pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile || pnpm install
 COPY frontend/ ./
+RUN pnpm test -- --reporter=verbose
 RUN pnpm build
 
 # === Stage 1b: stock-sdk 插件依赖(可选,默认跳过) ===
