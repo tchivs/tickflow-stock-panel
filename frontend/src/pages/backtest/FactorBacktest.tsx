@@ -105,7 +105,7 @@ export function FactorBacktest({ initialFactorName = 'momentum_20d' }: { initial
     const cols = columns.data?.columns ?? []
     const groups: Record<string, FactorColumn[]> = {}
     for (const c of cols) {
-      ;(groups[c.group] ??= []).push(c)
+      (groups[c.group] ??= []).push(c)
     }
     return groups
   }, [columns.data])

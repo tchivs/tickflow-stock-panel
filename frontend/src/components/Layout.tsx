@@ -445,7 +445,7 @@ export function Layout() {
         setNavCollapsed(true)
         return
       }
-      try { setNavCollapsed(localStorage.getItem('tf-nav-collapsed') === '1') } catch {}
+      try { setNavCollapsed(localStorage.getItem('tf-nav-collapsed') === '1') } catch { /* localStorage 可能被禁用 */ }
     }
     syncSidebarWithViewport(compact)
     compact.addEventListener('change', syncSidebarWithViewport)
@@ -454,7 +454,7 @@ export function Layout() {
   const toggleNavCollapsed = () => {
     setNavCollapsed(prev => {
       const next = !prev
-      try { localStorage.setItem('tf-nav-collapsed', next ? '1' : '0') } catch {}
+      try { localStorage.setItem('tf-nav-collapsed', next ? '1' : '0') } catch { /* localStorage 可能被禁用 */ }
       return next
     })
   }

@@ -129,7 +129,7 @@ export function ScoringEditor({ value, directions, onChange, fallbackLabels = {}
   const factorGroups = useMemo(() => {
     const groups: Record<string, FactorColumn[]> = {}
     for (const item of factors.data?.columns ?? []) {
-      ;(groups[item.group] ??= []).push(item)
+      (groups[item.group] ??= []).push(item)
     }
     return groups
   }, [factors.data])

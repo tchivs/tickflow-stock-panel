@@ -56,7 +56,7 @@ export function Settings() {
   const toggleCollapsed = () => {
     setCollapsed(prev => {
       const next = !prev
-      try { localStorage.setItem('tf-settings-nav-collapsed', next ? '1' : '0') } catch {}
+      try { localStorage.setItem('tf-settings-nav-collapsed', next ? '1' : '0') } catch { /* localStorage 可能被禁用 */ }
       return next
     })
   }

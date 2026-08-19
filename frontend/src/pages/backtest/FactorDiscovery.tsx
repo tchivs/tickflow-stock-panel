@@ -67,7 +67,7 @@ function BatchDiscovery({ onInspect }: { onInspect: (factorName: string) => void
   const factorGroups = useMemo(() => {
     const groups: Record<string, FactorColumn[]> = {}
     for (const column of columns.data?.columns ?? []) {
-      ;(groups[column.group] ??= []).push(column)
+      (groups[column.group] ??= []).push(column)
     }
     return groups
   }, [columns.data])
