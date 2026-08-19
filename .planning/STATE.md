@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v3.1
 milestone_name: 可信工作台与运维闭环
-status: planning
-last_updated: "2026-08-18T12:10:03.000Z"
-last_activity: 2026-08-18
+status: in_progress
+last_updated: "2026-08-19T21:15:00.000Z"
+last_activity: 2026-08-19
 progress:
   total_phases: 4
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 0
   completed_plans: 0
-  percent: 0
+  percent: 25
 ---
 
 # Project State
@@ -20,15 +20,24 @@ progress:
 See: .planning/PROJECT.md (updated 2026-08-18)
 
 **Core value:** An investor can turn reliable market data and their own holdings into an auditable, actionable research and monitoring workflow without operating multiple disconnected tools.
-**Current focus:** Phase 51 — 发布基线收口 (v3.1 可信工作台与运维闭环)
+**Current focus:** Phase 52 — 全局可信度与工具审计 (v3.1 可信工作台与运维闭环)
 
 ## Current Position
 
-Phase: 51 of 54 (发布基线收口)
+Phase: 52 of 54 (全局可信度与工具审计)
 Plan: —
-Status: Roadmap created — ready to plan Phase 51
-Last activity: 2026-08-18 — v3.1 roadmap created (4 phases, 21/21 requirements mapped)
-Progress: [░░░░░░░░░░] 0%
+Status: Phase 51 complete — ready to plan Phase 52
+Last activity: 2026-08-19 — Phase 51 发布基线收口 delivered (BASE-01..04)
+Progress: [██░░░░░░░░] 25%
+
+### Phase 51 Completion (2026-08-19)
+
+| Requirement | Status |
+|-------------|--------|
+| BASE-01 doc consistency | Done — all planning docs v3.1-aligned |
+| BASE-02 vitest setup | Done — vitest 3.2.7, 51 tests pass, wired into Docker build |
+| BASE-03 smoke scripts | Done — LLM/provider/SSE smoke scripts (stdlib, explicit PASS/FAIL) |
+| BASE-04 tech debt registry | Done — .planning/TECH-DEBT-v3.0.md: 4 closed + 1 in progress |
 
 ## v3.0 Milestone Summary (shipped 2026-08-09)
 
@@ -73,9 +82,9 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-08-18
-Stopped at: v3.1 ROADMAP.md / REQUIREMENTS.md traceability / STATE.md written — ready to `/gsd-plan-phase 51`
+Last session: 2026-08-19
+Stopped at: Phase 51 complete (BASE-01..04 delivered, committed 9bbdbd9) — ready to plan Phase 52
 Resume file: None
 
 ---
-*Last updated: 2026-08-18 — v3.1 roadmap created; Phase 51 ready to plan*
+*Last updated: 2026-08-19 — Phase 51 发布基线收口 complete; Phase 52 ready to plan*

@@ -19,10 +19,10 @@ Locked boundaries:
 
 ### 发布基线收口 (Phase 51)
 
-- [ ] **BASE-01**: 用户打开任一规划文档(STATE/PROJECT/ROADMAP/REQUIREMENTS)看到的都是同一里程碑的同一状态, 无互相矛盾
-- [ ] **BASE-02**: 开发者运行一次命令即可执行 Vitest 前端单测套件, 且它在 CI/本地检查流程中被默认纳入
-- [ ] **BASE-03**: 开发者可在部署环境执行真实 LLM、Provider 降级与 SSE 重连三项冒烟脚本并得到通过/失败结论
-- [ ] **BASE-04**: 用户可在文档中查阅 v3.0 技债清单(Tier-2 stress matrix、成本近似等)及每项的处理或明确关闭结论
+- [x] **BASE-01**: 用户打开任一规划文档(STATE/PROJECT/ROADMAP/REQUIREMENTS)看到的都是同一里程碑的同一状态, 无互相矛盾
+- [x] **BASE-02**: 开发者运行一次命令即可执行 Vitest 前端单测套件, 且它在 CI/本地检查流程中被默认纳入
+- [x] **BASE-03**: 开发者可在部署环境执行真实 LLM、Provider 降级与 SSE 重连三项冒烟脚本并得到通过/失败结论
+- [x] **BASE-04**: 用户可在文档中查阅 v3.0 技债清单(Tier-2 stress matrix、成本近似等)及每项的处理或明确关闭结论
 
 ### 全局可信度与工具审计 (Phase 52)
 
@@ -70,10 +70,10 @@ Locked boundaries:
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| BASE-01 | Phase 51 | Pending |
-| BASE-02 | Phase 51 | Pending |
-| BASE-03 | Phase 51 | Pending |
-| BASE-04 | Phase 51 | Pending |
+| BASE-01 | Phase 51 | Complete |
+| BASE-02 | Phase 51 | Complete |
+| BASE-03 | Phase 51 | Complete |
+| BASE-04 | Phase 51 | Complete |
 | AUDIT-01 | Phase 52 | Pending |
 | AUDIT-02 | Phase 52 | Pending |
 | AUDIT-03 | Phase 52 | Pending |
