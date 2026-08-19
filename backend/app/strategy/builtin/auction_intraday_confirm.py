@@ -1,8 +1,7 @@
 """盘中确认 — 09:30–10:00 分钟帧截断到 evaluation_time=09:45 复评 (引擎单点截断, 绝不 lookahead)"""
 import polars as pl
-from datetime import datetime, time as dt_time
 
-from app.market_time import trading_minutes_elapsed_from_dt
+
 
 
 META = {
@@ -46,15 +45,14 @@ def filter(df: pl.DataFrame, params: dict) -> pl.Expr:
 
 def minute_confirm(df_minute: pl.DataFrame, params: dict) -> pl.DataFrame:
     """引擎已单点截断 datetime.time() <= evaluation_time=09:45; 只消费帧内统计.
-
-    time_factor = 240 / trading_minutes_elapsed_from_dt(evaluation_time) (market_time 折算),
-    eval=09:45 → elapsed=15 → time_factor=16.0. 确认条件: 盘中累计量 × time_factor >= 阈值
+    time_factor = 240 / 15 → 16.0 (09:45 已交易 15 分钟, market_time 折算内联).
+    确认条件: 盘中累计量 × time_factor >= 阈值
     且 (require_above_open 时) 截至 eval 的收盘不低于开盘 (量价齐升/不破开盘价)。
     """
     if df_minute.is_empty():
         return df_minute
-    eval_date = df_minute["datetime"].min().date()
-    elapsed = trading_minutes_elapsed_from_dt(datetime.combine(eval_date, dt_time(9, 45)))
+    # eval=09:45 固定 → 上午已交易 15 分钟 (9:30-9:45); 内联常量避免 import app.market_time
+    elapsed = 15.0
     time_factor = 240.0 / elapsed if elapsed > 0 else 1.0
     min_volume_scale = float(params.get("min_volume_scale", 10_000_000))
     require_above_open = bool(params.get("require_above_open", True))

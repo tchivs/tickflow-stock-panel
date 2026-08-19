@@ -63,9 +63,6 @@ def eligibility_expression(params: dict) -> pl.Expr:
     return expr
 
 
-def filter(df: pl.DataFrame, params: dict) -> pl.Expr:  # noqa: ARG001
-    return eligibility_expression(params)
-
 
 class BullishAlignmentMatrixStrategy:
     def required_fields(self) -> frozenset[str]:

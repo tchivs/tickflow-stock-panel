@@ -208,7 +208,6 @@ class StrategyDef:
     trailing_take_profit_activate: float | None
     trailing_take_profit_drawdown: float | None
     max_hold_days: int | None
-    alerts: list[dict]
     filter_fn: Callable[[pl.DataFrame, dict], pl.Expr] | None
     filter_history_fn: Callable[[pl.DataFrame, dict], pl.DataFrame] | None
     lookback_days: int
@@ -576,12 +575,8 @@ class StrategyEngine:
             trailing_take_profit_activate=getattr(mod, "TRAILING_TAKE_PROFIT_ACTIVATE", None),
             trailing_take_profit_drawdown=getattr(mod, "TRAILING_TAKE_PROFIT_DRAWDOWN", None),
             max_hold_days=getattr(mod, "MAX_HOLD_DAYS", None),
-            alerts=getattr(mod, "ALERTS", []),
             filter_fn=filter_fn,
             filter_history_fn=filter_history_fn,
-            minute_confirm_fn=getattr(mod, "minute_confirm", None),
-            evaluation_time=_parse_eval_time(meta.get("evaluation_time")),
-            minute_confirm_required=bool(meta.get("minute_confirm_required", False)),
             required_features=frozenset(meta.get("required_features", []) or [])
             | frozenset(getattr(mod, "REQUIRED_FEATURES", []) or []),
             lookback_days=int(getattr(mod, "LOOKBACK_DAYS", meta.get("lookback_days", 1)) or 1),
