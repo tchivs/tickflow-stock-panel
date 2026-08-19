@@ -55,6 +55,37 @@ class StubStrategyBacktestService:
         )
 
 
+def _stub_worker_result(task: dict, strategy_id: str) -> StrategyBacktestResult:
+    """Build a StrategyBacktestResult from the worker task config (upstream worker path)."""
+    from app.backtest.strategy import StrategyBacktestConfig
+    cfg = task.get("config", {})
+    if strategy_id == "cancelled":
+        return StrategyBacktestResult(run_id="untrusted-run", config={}, error="cancelled")
+    if strategy_id == "failed":
+        return StrategyBacktestResult(run_id="untrusted-run", config={}, error="registered run failed")
+    return StrategyBacktestResult(
+        run_id="untrusted-run",
+        config={
+            "symbols": cfg.get("symbols") or ["000001.SZ"],
+            "asset_type": cfg.get("asset_type", "stock"),
+            "start": cfg.get("start", "2025-01-01"),
+            "end": cfg.get("end", "2025-01-31"),
+        },
+        stats={"annual_return": 0.12, "panel_rows": 2},
+        equity_curve=[{"date": "2024-01-02", "equity": 1.0}],
+        drawdown_curve=[{"date": "2024-01-02", "drawdown": 0.0}],
+        benchmark_curve=[{"date": "2024-01-02", "equity": 1.0}],
+        trades=[{"symbol": "000001.SZ", "side": "buy"}],
+        strategy_info={"id": strategy_id, "source": "builtin"},
+        governed_input_manifest={
+            "loader": "BacktestEngine.load_panel",
+            "source_kind": "governed_enriched_parquet",
+            "revision": "governed-revision-v1",
+            "fingerprint": "governed-fingerprint-v1",
+        },
+    )
+
+
 def _client(tmp_path: Path, monkeypatch) -> TestClient:  # type: ignore[no-untyped-def]
     repository = ResearchRepository(tmp_path / "operational.db")
     repository.migrate()
@@ -70,6 +101,14 @@ def _client(tmp_path: Path, monkeypatch) -> TestClient:  # type: ignore[no-untyp
     app.state.research_strategy_handles = {}
     backtest_api._running_jobs.clear()
     monkeypatch.setattr("app.backtest.strategy.StrategyBacktestService", StubStrategyBacktestService)
+    # Upstream v0.2 strategy/run endpoint uses run_worker_task (spawned subprocess)
+    # instead of StrategyBacktestService.run; stub it to return our StrategyBacktestResult.
+    def _stub_run_worker(task, progress_cb=None, cancel_event=None):  # type: ignore[no-untyped-def]
+        del cancel_event
+        if progress_cb is not None:
+            progress_cb({"day": 1, "total": 1})
+        return _stub_worker_result(task, task["config"].get("strategy_id", "registered"))
+    monkeypatch.setattr("app.backtest.worker.run_worker_task", _stub_run_worker)
     return TestClient(app)
 
 

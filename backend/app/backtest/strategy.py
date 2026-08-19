@@ -536,6 +536,7 @@ class StrategyBacktestResult:
     strategy_info: dict = field(default_factory=dict)
     elapsed_ms: float = 0.0
     error: str | None = None
+    governed_input_manifest: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
