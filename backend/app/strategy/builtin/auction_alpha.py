@@ -12,6 +12,7 @@ pre_open 窗口: 禁 EOD 列 change_pct/close (lookahead)。
 import polars as pl
 
 META = {
+    "asset_types": ["stock"],
     "id": "auction_alpha",
     "name": "竞价阿尔法",
     "time_window": "pre_open",

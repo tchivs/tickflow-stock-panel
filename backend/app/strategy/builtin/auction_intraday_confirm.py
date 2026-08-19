@@ -6,6 +6,7 @@ from app.market_time import trading_minutes_elapsed_from_dt
 
 
 META = {
+    "asset_types": ["stock"],
     "id": "auction_intraday_confirm",
     "name": "盘中确认",
     "description": "日线初筛（开盘涨幅 >= 2%）后，消费引擎截断到 evaluation_time=09:45 的 09:30–10:00 分钟帧复评：盘中累计量 × time_factor 折算全天量级 + 不破开盘价；分钟数据缺席 → 空池，绝不 lookahead",

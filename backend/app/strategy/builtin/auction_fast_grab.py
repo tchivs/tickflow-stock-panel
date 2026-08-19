@@ -11,6 +11,7 @@ pre_open 窗口: 只引用开盘前可算列 (open_gap/auction_volume_ratio/auct
 import polars as pl
 
 META = {
+    "asset_types": ["stock"],
     "id": "auction_fast_grab",
     "name": "极速抢筹",
     "time_window": "pre_open",

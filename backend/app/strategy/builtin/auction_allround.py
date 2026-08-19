@@ -3,6 +3,7 @@ import polars as pl
 
 
 META = {
+    "asset_types": ["stock"],
     "id": "auction_allround",
     "name": "竞价全面",
     "description": "全因子复合：开盘涨幅 + 竞价量比 + 竞价金额强度；可选换手为盘后参考（EOD 列，默认关）——开启仅在帧已含换手列时收窄，绝不冒充盘前可算",

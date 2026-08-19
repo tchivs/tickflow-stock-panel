@@ -208,6 +208,7 @@ class StrategyDef:
     trailing_take_profit_activate: float | None
     trailing_take_profit_drawdown: float | None
     max_hold_days: int | None
+    alerts: list[dict]
     filter_fn: Callable[[pl.DataFrame, dict], pl.Expr] | None
     filter_history_fn: Callable[[pl.DataFrame, dict], pl.DataFrame] | None
     lookback_days: int

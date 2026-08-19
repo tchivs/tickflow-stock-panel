@@ -2,6 +2,7 @@
 import polars as pl
 
 META = {
+    "asset_types": ["stock"],
     "id": "auction_early_star",
     "name": "早盘之星",
     "description": "早盘之星 — 开盘涨幅或日涨幅任一达标, 概念板块佐证可选 (enriched 暂无概念列时默认关闭)",

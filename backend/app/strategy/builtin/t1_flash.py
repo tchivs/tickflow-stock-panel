@@ -3,6 +3,7 @@ import polars as pl
 
 
 META = {
+    "asset_types": ["stock"],
     "id": "t1_flash",
     "name": "T+1闪电",
     "description": "竞价买入信号（开盘涨幅 + 竞价量比 + 竞价金额强度），次日早盘分钟 K 卖出为 EXIT 语义，池只含 T 日信号、无 lookahead",

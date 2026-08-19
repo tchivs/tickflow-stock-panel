@@ -2,6 +2,7 @@
 import polars as pl
 
 META = {
+    "asset_types": ["stock"],
     "id": "auction_bullish",
     "name": "竞价多头",
     "description": "开盘涨幅 (open/prev_close−1) 与日涨幅 (change_pct) 双动量同时达标",

@@ -2,6 +2,7 @@
 import polars as pl
 
 META = {
+    "asset_types": ["stock"],
     "id": "auction_preopen_quant",
     "name": "盘前强势量化",
     "description": "盘前强度量化 — 开盘涨幅 + 量比 (成交量/5日均量) 双阈值, 集合竞价活跃度代理",

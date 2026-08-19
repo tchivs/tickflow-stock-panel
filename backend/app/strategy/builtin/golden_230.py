@@ -13,6 +13,7 @@ from datetime import time as dt_time
 from datetime import datetime  # noqa: F401 — 研究授权: 21-02 复用 datetime.combine
 
 META = {
+    "asset_types": ["stock"],
     "id": "golden_230",
     "name": "金色两点半",
     "time_window": "post_close",
