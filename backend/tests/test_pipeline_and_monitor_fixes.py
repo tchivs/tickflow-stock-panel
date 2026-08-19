@@ -4,23 +4,28 @@
 """
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import polars as pl
 import pytest
 
-from app.services import pipeline_jobs
+from app.jobs import daily_pipeline
+from app.services import pipeline_jobs, preferences
 from app.services.pipeline_jobs import JobStore
+from app.services.quote_service import QuoteService
 from app.strategy import monitor_rules
 from app.strategy.monitor import MonitorRuleEngine
 
-
 # ── JobStore 单飞 ────────────────────────────────────────────────────────
 
-def test_create_singleflight_dedupes_pending_window(tmp_path):
+def test_create_singleflight_dedupes_pending_window(monkeypatch, tmp_path):
     """两次快速 create() 在 pending 窗口内应复用同一 job(is_new=False)。"""
+    monkeypatch.setattr(preferences, "load", lambda: {"data_source_job_timeout_s": 3600})
     store = JobStore(store_dir=tmp_path / "jobs")
 
     jid1, new1 = store.create()
     assert new1 is True
+    assert store.get(jid1)["timeout_s"] == 3600
 
     # 尚未 start(), job 仍是 pending —— 旧实现会在此另起新 job(并发双跑根因)
     jid2, new2 = store.create()
@@ -34,10 +39,12 @@ def test_create_singleflight_dedupes_pending_window(tmp_path):
     assert new3 is False
 
 
-def test_create_new_after_terminal(tmp_path):
+def test_create_new_after_terminal(monkeypatch, tmp_path):
     """job 终态(succeed/fail)后, create() 应给出新 job。"""
+    monkeypatch.setattr(preferences, "load", lambda: {"data_source_long_job_timeout_s": 5400})
     store = JobStore(store_dir=tmp_path / "jobs")
-    jid1, _ = store.create()
+    jid1, _ = store.create(long_running=True)
+    assert store.get(jid1)["timeout_s"] == 5400
     store.start(jid1)
     store.succeed(jid1, {"ok": True})
 
@@ -59,7 +66,6 @@ def test_run_slot_is_exclusive():
     pipeline_jobs.release_run_slot()
     # 重复释放幂等, 不抛
     pipeline_jobs.release_run_slot()
-
 
 # ── 监控 sector fail-closed ──────────────────────────────────────────────
 
@@ -142,3 +148,131 @@ def test_sector_symbols_extracts_members() -> None:
         {"name": "junk", "members": ["abc", "12345", ""]},
     ]
     assert _sector_symbols(boards) == {"000016", "000049", "600000", "000063"}
+
+# ── Webhook 推送 (上游 v0.2 用例, 适配我方 delivery-service 架构) ─────────
+# 上游原版打桩 quote_service._WEBHOOK_EXECUTOR (线程池直推 feishu/wecom);
+# 我方权威实现改为 notification_delivery.enqueue (feishu/telegram, 持久化
+# 投递)。此处按我方符号重写, 保留上游用例意图: 按规则勾选渠道投递且标题
+# 不含品牌字样。
+
+
+def test_ladder_webhook_enqueues_configured_channels(monkeypatch):
+    calls = []
+
+    class CaptureDelivery:
+        def enqueue(self, **kwargs):
+            calls.append(kwargs)
+
+    monkeypatch.setattr("app.services.preferences.load", lambda: {})
+    monkeypatch.setattr("app.services.preferences.get_feishu_webhook_url", lambda: "https://open.feishu.cn/open-apis/bot/v2/hook/test")
+    monkeypatch.setattr("app.services.preferences.get_feishu_webhook_secret", lambda: "secret")
+
+    engine = type("Engine", (), {
+        "rules": {
+            "r_ladder": {"webhook_channels": ["feishu"]},
+            "r_muted": {"webhook_channels": []},
+        },
+    })()
+    service = object.__new__(QuoteService)
+    service._app_state = SimpleNamespace(notification_delivery=CaptureDelivery())
+
+    QuoteService._maybe_send_webhook(
+        service,
+        [
+            {
+                "id": "evt-1",
+                "rule_id": "r_ladder",
+                "source": "ladder",
+                "symbol": "600000.SH",
+                "name": "浦发银行",
+                "message": "炸板预警",
+            },
+            {
+                # 未勾选渠道的规则不投递
+                "id": "evt-2",
+                "rule_id": "r_muted",
+                "source": "ladder",
+                "symbol": "000001.SZ",
+                "name": "平安银行",
+                "message": "不应推送",
+            },
+        ],
+        engine,
+    )
+
+    assert len(calls) == 1
+    assert calls[0]["event_id"] == "evt-1"
+    assert [cfg.channel for cfg in calls[0]["channel_configs"]] == ["feishu"]
+    dumped = repr(calls)
+    assert "TickFlow" not in dumped
+
+
+def test_ladder_webhook_skips_when_no_channel_configured(monkeypatch):
+    calls = []
+
+    class CaptureDelivery:
+        def enqueue(self, **kwargs):
+            calls.append(kwargs)
+
+    monkeypatch.setattr("app.services.preferences.load", lambda: {})
+    # 飞书未配置 + telegram 未配置 -> 不 enqueue
+    monkeypatch.setattr("app.services.preferences.get_feishu_webhook_url", lambda: "")
+
+    engine = type("Engine", (), {
+        "rules": {"r_ladder": {"webhook_channels": ["feishu"]}},
+    })()
+    service = object.__new__(QuoteService)
+    service._app_state = SimpleNamespace(notification_delivery=CaptureDelivery())
+
+    QuoteService._maybe_send_webhook(
+        service,
+        [{"id": "evt-1", "rule_id": "r_ladder", "source": "ladder", "message": "炸板预警"}],
+        engine,
+    )
+
+    assert calls == []
+
+
+def test_system_notify_titles_use_chinese_source_labels_without_brand(monkeypatch):
+    """OS 通知标题含上游中文分类标签 (含 5b4b1d6 的 ladder=连板梯队), 不含品牌字样。"""
+    calls = []
+
+    monkeypatch.setattr("app.services.preferences.get_system_notify_enabled", lambda: True)
+    monkeypatch.setattr(
+        "app.services.notify_adapter.notify", lambda title, body: calls.append((title, body))
+    )
+
+    service = object.__new__(QuoteService)
+    QuoteService._maybe_send_system_notifications(
+        service,
+        [
+            {"source": "ladder", "symbol": "600000.SH", "name": "浦发银行", "message": "炸板预警"},
+            {"source": "sector", "symbol": "", "name": "5G", "message": "板块异动"},
+        ],
+    )
+
+    titles = [title for title, _ in calls]
+    assert titles == ["AthenaQuant · 连板梯队", "AthenaQuant · 板块"]
+    assert all("TickFlow" not in title for title in titles)
+
+
+def test_review_webhooks_use_title_without_brand(monkeypatch):
+    calls = []
+    monkeypatch.setattr("app.services.preferences.get_review_push_channels", lambda: ["feishu", "wecom"])
+    monkeypatch.setattr("app.services.preferences.get_feishu_webhook_url", lambda: "feishu-url")
+    monkeypatch.setattr("app.services.preferences.get_feishu_webhook_secret", lambda: "secret")
+    monkeypatch.setattr("app.services.preferences.get_wecom_webhook_url", lambda: "wecom-url")
+    monkeypatch.setattr(
+        "app.services.webhook_adapter.send_feishu_card",
+        lambda *args: calls.append(("feishu", args)) or True,
+    )
+    monkeypatch.setattr(
+        "app.services.webhook_adapter.send_wecom_markdown",
+        lambda *args: calls.append(("wecom", args)) or True,
+    )
+
+    daily_pipeline._maybe_push_review("复盘正文", {"as_of": "2026-07-18"})
+
+    # 我方品牌标题: "AthenaQuant · 每日复盘" (上游去品牌诉求 -> 不含 TickFlow)
+    assert [args[1] for _, args in calls] == ["AthenaQuant · 每日复盘"] * 2
+    assert all("TickFlow" not in args[1] for _, args in calls)

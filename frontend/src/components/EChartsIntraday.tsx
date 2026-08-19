@@ -1,8 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import * as echarts from 'echarts'
 import type { ECharts, EChartsOption } from 'echarts'
-import type { MinuteKlineRow } from '@/lib/api'
-import { useChartTheme, chartColor, CHART_BULL, CHART_BEAR, type ChartTheme } from '@/lib/theme'
+
+import type { MinuteKlineRow, PriceLimitInfo } from '@/lib/api'
+import { computeIntradayAverage, formatMinuteTime, FULL_DAY_TIMES } from '@/lib/intraday-chart'
+import { useChartTheme, type ChartTheme, chartColor, CHART_BULL, CHART_BEAR } from '@/lib/theme'
+
 
 type YMode = 'adaptive' | 'limit'
 
@@ -20,35 +23,18 @@ interface Props {
   height?: number
   prevClose?: number
   date?: string
+  priceLimit?: PriceLimitInfo
   symbol?: string
   onPriceHover?: (price: number | null) => void
+
   /** 主图价格双击 (price: 目标价, currentPrice: 最新价) */
   onPriceDoubleClick?: (price: number, currentPrice: number) => void
   /** 已启用点位监控 (双击创建后显示横虚线) */
   currentPrice?: number
   priceLines?: { value: number; label?: string; color?: string }[]
+
   showLimitLines?: boolean
   showAvgLine?: boolean
-}
-
-function fmtTime(dt: string): string {
-  const match = dt.match(/(\d{2}):(\d{2})/)
-  if (!match) return dt.slice(11, 16)
-  const h = (parseInt(match[1]) + 8) % 24
-  return `${String(h).padStart(2, '0')}:${match[2]}`
-}
-
-function computeAvgPrice(data: MinuteKlineRow[]): number[] {
-  // 分时均线 = 累计成交额 / 累计成交量(手→股)
-  const result: number[] = []
-  let sumAmt = 0
-  let sumVol = 0
-  for (const d of data) {
-    sumAmt += d.amount
-    sumVol += d.volume * 100
-    result.push(sumVol > 0 ? sumAmt / sumVol : d.close)
-  }
-  return result
 }
 
 function fmtAmt(v: number): string {
@@ -61,57 +47,31 @@ function isValidPrice(v: number | null | undefined): v is number {
   return typeof v === 'number' && Number.isFinite(v) && v > 0
 }
 
-/** 生成全天分时时间刻度 9:30 ~ 11:30, 13:00 ~ 15:00, 每分钟一个点 (共242个) */
-function generateFullDayTimes(): string[] {
-  const times: string[] = []
-  // 上午 9:30 ~ 11:30 (121 分钟)
-  for (let h = 9; h <= 11; h++) {
-    const startM = h === 9 ? 30 : 0
-    const endM = h === 11 ? 30 : 59
-    for (let m = startM; m <= endM; m++) {
-      times.push(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`)
-    }
-  }
-  // 下午 13:00 ~ 15:00 (121 分钟)
-  for (let h = 13; h <= 15; h++) {
-    const endM = h === 15 ? 0 : 59
-    for (let m = 0; m <= endM; m++) {
-      times.push(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`)
-    }
-  }
-  return times
-}
-
-const FULL_DAY_TIMES = generateFullDayTimes()
-
-/** 根据 symbol 判断涨跌停幅度 (创业板/科创板 ±20%, 北交所 ±30%, 其余 ±10%) */
-function getLimitPct(symbol?: string): number {
-  if (!symbol) return 0.10
-  if (symbol.endsWith('.BJ')) return 0.30                                  // 北交所
-  if (symbol.startsWith('300') || symbol.startsWith('301')) return 0.20  // 创业板
-  if (symbol.startsWith('688') || symbol.startsWith('689')) return 0.20  // 科创板
-  return 0.10
-}
-
 /** 计算实际涨跌停价 (四舍五入到2位小数) 和实际涨跌停幅度 */
-function getLimitPrices(prevClose: number, symbol?: string): {
+function getLimitPrices(prevClose: number, priceLimit?: PriceLimitInfo): {
   limitUp: number      // 涨停价 (四舍五入)
   limitDown: number    // 跌停价 (四舍五入)
   upPct: number        // 实际涨停幅度 (如 9.97)
   downPct: number      // 实际跌停幅度 (如 -9.97)
 } {
-  const pct = getLimitPct(symbol)
+  const pct = priceLimit && Number.isFinite(priceLimit.rate) ? priceLimit.rate : 0.10
   const rawUp = prevClose * (1 + pct)
   const rawDown = prevClose * (1 - pct)
   // A股涨跌停价四舍五入到分 (2位小数)
-  const limitUp = Math.round(rawUp * 100) / 100
-  const limitDown = Math.round(rawDown * 100) / 100
+  const limitUp = isValidPrice(priceLimit?.limit_up)
+    ? priceLimit.limit_up
+    : Math.round(rawUp * 100) / 100
+  const limitDown = isValidPrice(priceLimit?.limit_down)
+    ? priceLimit.limit_down
+    : Math.round(rawDown * 100) / 100
   const upPct = (limitUp - prevClose) / prevClose * 100
   const downPct = (limitDown - prevClose) / prevClose * 100
   return { limitUp, limitDown, upPct, downPct }
 }
 
-function buildOption(data: MinuteKlineRow[], prevClose: number | undefined, avgPrices: number[], lineColor: string, areaColor: string, yMode: YMode, ct: ChartTheme, symbol?: string, showLimitLines = true, showAvgLine = true, priceLines: Props['priceLines'] = []): EChartsOption {
+
+function buildOption(data: MinuteKlineRow[], prevClose: number | undefined, avgPrices: number[], lineColor: string, areaColor: string, yMode: YMode, ct: ChartTheme, _symbol: string | undefined, priceLimit?: PriceLimitInfo, showLimitLines = true, showAvgLine = true, priceLines: Props['priceLines'] = []): EChartsOption {
+
   // 将数据映射到全天时间轴上的正确位置
   const timeIndexMap = new Map(FULL_DAY_TIMES.map((t, i) => [t, i]))
   const closes = new Array(FULL_DAY_TIMES.length).fill(null) as (number | null)[]
@@ -122,7 +82,7 @@ function buildOption(data: MinuteKlineRow[], prevClose: number | undefined, avgP
 
   const volNeutral = 'rgba(161,161,170,0.5)'
   for (let i = 0; i < data.length; i++) {
-    const timeKey = fmtTime(data[i].datetime)
+    const timeKey = formatMinuteTime(data[i].datetime)
     const idx = timeIndexMap.get(timeKey)
     if (idx !== undefined) {
       closes[idx] = data[i].close
@@ -191,6 +151,7 @@ function buildOption(data: MinuteKlineRow[], prevClose: number | undefined, avgP
       }
     }
 
+
     // 点位监控线纳入 Y 轴范围 (防止上穿/下穿虚线被裁掉)
     const monitoredDiff = priceLines.reduce((largest, line) => (
       Number.isFinite(line.value) && line.value > 0
@@ -199,7 +160,7 @@ function buildOption(data: MinuteKlineRow[], prevClose: number | undefined, avgP
     ), 0) * 1.05
 
     if (showLimitLines && yMode === 'limit') {
-      const { limitUp, limitDown } = getLimitPrices(prevClose, symbol)
+      const { limitUp, limitDown } = getLimitPrices(prevClose, priceLimit)
       const limitDiffUp = limitUp - prevClose
       const limitDiffDown = prevClose - limitDown
       const limitDiff = Math.max(limitDiffUp, limitDiffDown)
@@ -225,7 +186,7 @@ function buildOption(data: MinuteKlineRow[], prevClose: number | undefined, avgP
     } else {
       // 自适应模式: Y 轴按实际涨跌幅对称, 但不超出实际涨跌停范围
       if (showLimitLines) {
-        const { limitUp, limitDown } = getLimitPrices(prevClose, symbol)
+        const { limitUp, limitDown } = getLimitPrices(prevClose, priceLimit)
         const limitDiff = Math.max(limitUp - prevClose, prevClose - limitDown)
         maxDiff = Math.min(maxDiff, limitDiff)
       }
@@ -436,6 +397,7 @@ function buildOption(data: MinuteKlineRow[], prevClose: number | undefined, avgP
   }
 }
 
+
 /** 生成分时图的可访问摘要 (读屏 aria-label; 不输出逐分钟数据避免噪音)。 */
 function intradayAriaDescription(data: MinuteKlineRow[], prevClose: number | undefined, symbol: string | undefined, date: string | undefined): string {
   if (data.length === 0) return `${symbol || '股票'}分时走势图，暂无数据`
@@ -454,7 +416,22 @@ function intradayAriaDescription(data: MinuteKlineRow[], prevClose: number | und
   return `${symbol || '股票'}${date ? ` ${date}` : ''}分时走势图，最新价 ${last.close}${change}，盘中最高 ${hi}，最低 ${lo}，共 ${data.length} 个时点。`
 }
 
-export function EChartsIntraday({ data, height = 320, prevClose, date, symbol, onPriceHover, onPriceDoubleClick, currentPrice, priceLines, showLimitLines = true, showAvgLine = true }: Props) {
+
+export function EChartsIntraday({
+  data,
+  height = 320,
+  prevClose,
+  date,
+  symbol,
+  priceLimit,
+  onPriceHover,
+  onPriceDoubleClick,
+  currentPrice,
+  priceLines,
+  showLimitLines = true,
+  showAvgLine = true,
+}: Props) {
+
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<ECharts | null>(null)
   const roRef = useRef<ResizeObserver | null>(null)
@@ -474,7 +451,7 @@ export function EChartsIntraday({ data, height = 320, prevClose, date, symbol, o
   const [infoIdx, setInfoIdx] = useState(data.length - 1)
   const [yMode, setYMode] = useState<YMode>('adaptive')
   const ct = useChartTheme()
-  const avgPrices = useMemo(() => computeAvgPrice(data), [data])
+  const avgPrices = useMemo(() => computeIntradayAverage(data), [data])
 
   // 分时线颜色：基于最新价 vs 昨收
   const lastClose = data.length > 0 ? data[data.length - 1].close : null
@@ -534,6 +511,7 @@ export function EChartsIntraday({ data, height = 320, prevClose, date, symbol, o
         onPriceHoverRef.current?.(null)
       })
 
+
       // 主图价格双击 -> 创建/预填点位监控 (成交量区与指标子图不触发)
       const handlePriceDoubleClick = (event: { offsetX: number; offsetY: number }) => {
         const pixel: [number, number] = [event.offsetX, event.offsetY]
@@ -547,6 +525,8 @@ export function EChartsIntraday({ data, height = 320, prevClose, date, symbol, o
       }
       priceDoubleClickHandlerRef.current = handlePriceDoubleClick
       chart.getZr().on('dblclick', handlePriceDoubleClick)
+      priceDoubleClickHandlerRef.current = handlePriceDoubleClick
+
     }
 
     if (data.length > 0) {
@@ -554,7 +534,7 @@ export function EChartsIntraday({ data, height = 320, prevClose, date, symbol, o
       const timeIndexMap = new Map(FULL_DAY_TIMES.map((t, i) => [t, i]))
       const mapping = new Map<number, number>()
       for (let i = 0; i < data.length; i++) {
-        const timeKey = fmtTime(data[i].datetime)
+        const timeKey = formatMinuteTime(data[i].datetime)
         const fullDayIdx = timeIndexMap.get(timeKey)
         if (fullDayIdx !== undefined) {
           mapping.set(fullDayIdx, i)
@@ -562,11 +542,15 @@ export function EChartsIntraday({ data, height = 320, prevClose, date, symbol, o
       }
       fullDayToDataIdx.current = mapping
 
-      chart.setOption(buildOption(data, prevClose, avgPrices, lineColor, areaFill, yMode, ct, symbol, showLimitLines, showAvgLine, priceLines), true)
+
+      chart.setOption(buildOption(data, prevClose, avgPrices, lineColor, areaFill, yMode, ct, symbol, priceLimit, showLimitLines, showAvgLine, priceLines), true)
+
     } else {
       chart.clear()
     }
-  }, [data, prevClose, avgPrices, height, lineColor, areaFill, yMode, ct, symbol, showLimitLines, showAvgLine, priceLines])
+
+  }, [data, prevClose, avgPrices, height, lineColor, areaFill, yMode, ct, symbol, priceLimit, showLimitLines, showAvgLine, priceLines])
+
 
   useEffect(() => {
     return () => {

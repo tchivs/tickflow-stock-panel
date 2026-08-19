@@ -171,11 +171,14 @@ def _invalidate(table: str | None = None) -> None:
     invalidate_data_cache(table)
 
 
-def _resolve_universe(capset: CapabilitySet) -> list[str]:
+def _resolve_universe(capset: CapabilitySet, repo=None) -> list[str]:
     """解析标的池 — 以 CN_Equity_A (沪深京A股 ~5522只) 为主。
 
     有 batch 能力 → 直接拉 CN_Equity_A universe
     其他用户 → 用 instruments parquet + watchlist 兜底
+
+    repo 传入时过滤自选兜底里的指数 symbol (指数日K走独立 kline_index_* 存储,
+    进股票池会污染 kline_daily/kline_minute)。ETF 刻意保留 (既有行为)。
     """
     if capset.has(Cap.KLINE_DAILY_BATCH):
         try:
@@ -196,6 +199,10 @@ def _resolve_universe(capset: CapabilitySet) -> list[str]:
             base.update(inst["symbol"].to_list())
         except Exception as e:  # noqa: BLE001
             logger.warning("instruments supplement failed: %s", e)
+    # 过滤自选兜底里的指数 symbol (指数日K走独立 kline_index_* 存储,
+    # 进股票池会污染 kline_daily/kline_minute)。ETF 刻意保留 (既有行为)。
+    if repo is not None:
+        base -= set(repo.get_index_symbol_set())
     return sorted(base)
 
 
@@ -244,7 +251,7 @@ def run_now(
     _invalidate("instruments")
 
     emit("resolve_universe", 9, "解析标的池…")
-    universe = _resolve_universe(capset)
+    universe = _resolve_universe(capset, repo)
     emit("resolve_universe", 10, f"标的池规模:{len(universe)} 只")
 
     # Step 1: 日 K 同步
@@ -668,10 +675,11 @@ def run_now(
         minute_start = today - _td(days=minute_days)
         emit("sync_minute", 90, f"获取分钟K [{minute_start} ~ {today}]…")
         logger.info("sync_minute: [%s ~ %s] start", minute_start, today)
-        minute_symbols = _resolve_minute_symbols(capset)
-        def _minute_chunk_progress(cur: int, tot: int) -> None:
+        minute_symbols = _resolve_minute_symbols(capset, repo)
+        def _minute_chunk_progress(cur: int, tot: int, seg_label: str = "") -> None:
             emit("sync_minute", 90 + int(3 * cur / tot),
-                 f"分钟K 批次 {cur}/{tot}", stage_pct=int(100 * cur / tot), skip_log=True)
+                 f"分钟K 批次 {cur}/{tot}" + (f" [{seg_label}]" if seg_label else ""),
+                 stage_pct=int(100 * cur / tot), skip_log=True)
         written_minute = kline_sync.sync_and_persist_minute(
             minute_symbols, repo, capset, days=minute_days,
             on_chunk_done=_minute_chunk_progress,
@@ -700,6 +708,60 @@ def run_now(
         _refresh_single_view(repo, "kline_auction")
     else:
         skipped.append("sync_auction")
+    # Step 2.6: 市场环境(regime) 增量计算 — enriched 已就绪后聚合环境指标。
+    # 双检测(缺口+stale), 自动补算遗漏/被覆写的日。软失败: 不阻断主管道。
+    # 默认关闭: regime 是本地聚合计算(非拉取), 首次/regime 表为空时需全量回填
+    # 多日, 内存与耗时较高。用户可在数据页「市场环境」卡片设置里开启自动计算,
+    # 或直接在该页面点「重算」手动触发(不受此开关影响)。
+    regime_days = 0
+    from app.services import preferences as _prefs_regime
+    if not _prefs_regime.get_pipeline_regime_enabled():
+        skipped.append("regime")
+        logger.info("compute_regime skipped: user disabled (pipeline_regime_enabled=False)")
+    else:
+        try:
+            emit("compute_regime", 90, "计算市场环境…")
+            from app.services import regime_builder
+            from app.api.regime import invalidate_regime_cache
+            new_regime = regime_builder.compute_regime_incremental(repo, repo.store.data_dir)
+            regime_days = new_regime.height if not new_regime.is_empty() else 0
+            if regime_days:
+                invalidate_regime_cache()
+                logger.info("compute_regime: %d days", regime_days)
+            emit("compute_regime", 92, f"市场环境 {regime_days} 天")
+            # 阶段切换推送监控通知 (软失败, 不影响管道): 末两日阶段不同 = 今日发生切换。
+            # 切入退潮/冰点为风险信号, 用 warn 级别; 其余 info。
+            if regime_days:
+                try:
+                    _push_phase_change_alert(repo.store.data_dir)
+                except Exception as e:
+                    logger.warning("phase change alert failed (soft): %s", e)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("compute_regime failed (soft): %s", e)
+            stage_errors.append(f"compute_regime: {e}")
+            skipped.append("regime")
+
+    # Step 2.7: 市场主线(概念/行业涨停梯队聚合) 增量计算 — regime 同开关。
+    # 只窄扫连板 >=1 的行, 增量通常 1 天, 开销可忽略。软失败: 不阻断主管道。
+    mainline_rows = 0
+    if not _prefs_regime.get_pipeline_regime_enabled():
+        skipped.append("mainline")
+    else:
+        try:
+            emit("compute_mainline", 93, "计算市场主线…")
+            from app.services import market_mainline
+            for _kind in ("concept", "industry"):
+                rows = market_mainline.compute_mainline_incremental(
+                    repo, repo.store.data_dir, kind=_kind
+                )
+                mainline_rows += rows.height if not rows.is_empty() else 0
+            if mainline_rows:
+                logger.info("compute_mainline: %d rows", mainline_rows)
+            emit("compute_mainline", 94, f"市场主线 {mainline_rows} 行")
+        except Exception as e:
+            logger.warning("compute_mainline failed (soft): %s", e)
+            stage_errors.append(f"compute_mainline: {e}")
+            skipped.append("mainline")
 
     # Step 3: 刷新视图
     emit("refresh_views", 95, "刷新 DuckDB 视图…")
@@ -720,6 +782,8 @@ def run_now(
         "etf_adj_factor_symbols": etf_adj_symbols,
         "minute_rows": written_minute,
         "auction_rows": written_auction,
+        "regime_days": regime_days,
+        "mainline_rows": mainline_rows,
         "lagging_symbols": len(lagging_symbols),
         "skipped_stages": skipped,
         "stage_errors": stage_errors,
@@ -769,7 +833,7 @@ def _refresh_single_view(repo: KlineRepository, name: str) -> None:
         logger.warning("refresh view %s failed: %s", name, e)
 
 
-def _resolve_minute_symbols(capset: CapabilitySet) -> list[str]:
+def _resolve_minute_symbols(capset: CapabilitySet, repo=None) -> list[str]:
     """分钟 K 同步标的 — 默认与日K共用同一标的池。
 
     运算符可通过 minute_sync_symbols 偏好限定同步范围 (空列表 = 全量, 默认行为不变),
@@ -778,7 +842,7 @@ def _resolve_minute_symbols(capset: CapabilitySet) -> list[str]:
     scoped = _prefs.get_minute_sync_symbols()
     if scoped:
         return scoped
-    return _resolve_universe(capset)
+    return _resolve_universe(capset, repo)
 
 
 def _resolve_auction_symbols(capset: CapabilitySet) -> list[str]:
@@ -819,7 +883,34 @@ def _refresh_instruments_view(repo: KlineRepository) -> None:
         logger.warning("refresh instruments view failed: %s", e)
 
 
-def _run_tracked(fn, job_label: str, *, independent: bool = False) -> None:
+def _push_phase_change_alert(data_dir) -> None:
+    """情绪周期阶段切换 → 推送监控通知(SSE toast + 监控中心)。
+
+    阶段切换(如 退潮→冰点)是重要的市场信号, 原先只有打开市场环境页才能看到。
+    复用 quote_service.push_alerts 广播通道; 未发生切换静默返回。
+    """
+    from app.services.market_phase import PHASE_LABELS
+    from app.services.regime_builder import latest_phase_transition
+
+    tr = latest_phase_transition(data_dir)
+    if not tr:
+        return
+    prev, cur, d = tr
+    msg = f"情绪周期阶段切换: {PHASE_LABELS.get(prev, prev)} → {PHASE_LABELS.get(cur, cur)} ({d})"
+    severity = "warn" if cur in ("ebb", "ice") else "info"
+    app_state = _get_app_state()
+    qs = getattr(app_state, "quote_service", None) if app_state else None
+    if qs:
+        qs.push_alerts([{
+            "source": "market",
+            "type": "phase_change",
+            "message": msg,
+            "severity": severity,
+        }])
+    logger.info("phase change alert: %s (severity=%s)", msg, severity)
+
+
+def _run_tracked(fn, job_label: str, *, independent: bool = False) -> bool:
     """调度触发时包装 JobStore 跟踪，确保同步历史有记录。
 
     单飞: 若已有活跃(pending∨running)任务(手动同步中), 本次调度直接跳过, 不并发。
@@ -832,6 +923,7 @@ def _run_tracked(fn, job_label: str, *, independent: bool = False) -> None:
     - 不占全局重任务槽 (无共享 parquet 写面, 并行不损坏数据)。
     调用方必须确保该 job 确实只写自身独立根, 否则不得置 True (镜像
     premarket_pool.py 铁律: 零写共享湖/缓存)。
+    返回 True 仅表示任务已成功并且执行槽已释放。
     """
     from app.services.pipeline_jobs import job_store, release_run_slot, try_acquire_run_slot
 
@@ -839,25 +931,27 @@ def _run_tracked(fn, job_label: str, *, independent: bool = False) -> None:
         job_id, is_new = job_store.create(label=job_label)
         if not is_new:
             logger.info("scheduled %s 跳过: 同任务活跃 (job_id=%s)", job_label, job_id)
-            return
+            return False
     else:
         job_id, is_new = job_store.create()
         if not is_new:
             logger.info("scheduled %s 跳过: 已有活跃任务在运行 (job_id=%s)", job_label, job_id)
-            return
+            return False
         if not try_acquire_run_slot():
             logger.warning("scheduled %s 跳过: 重任务执行槽被占用(疑似上次任务卡死)", job_label)
             job_store.fail(job_id, f"scheduled {job_label} skipped: 已有数据任务在运行")
-            return
+            return False
 
     def progress(stage: str, pct: int, msg: str, stage_pct: int | None = None,
                  skip_log: bool = False) -> None:
         job_store.progress(job_id, stage, pct, msg, stage_pct=stage_pct, skip_log=skip_log)
 
+    succeeded = False
     try:
         job_store.start(job_id)
         result = fn(on_progress=progress)
         job_store.succeed(job_id, result)
+        succeeded = True
         logger.info("scheduled %s completed: job_id=%s", job_label, job_id)
     except Exception:
         logger.exception("scheduled %s failed: job_id=%s", job_label, job_id)
@@ -865,6 +959,20 @@ def _run_tracked(fn, job_label: str, *, independent: bool = False) -> None:
     finally:
         if not independent:
             release_run_slot()
+    return succeeded
+
+
+def _scheduled_pipeline_task(pipeline_fn) -> None:
+    """Run weekly mining only after the tracked daily pipeline has fully succeeded."""
+    if not _run_tracked(pipeline_fn, "daily_pipeline"):
+        return
+    try:
+        from app.services.mining_schedule import run_weekly_mining
+
+        result = run_weekly_mining(_get_app_state())
+        logger.info("scheduled mining result: %s", result)
+    except Exception:
+        logger.exception("scheduled mining enqueue failed; daily pipeline remains succeeded")
 
 
 # ================================================================
@@ -1416,6 +1524,7 @@ def start_scheduler(repo: KlineRepository, capset: CapabilitySet) -> AsyncIOSche
         emit("done", 100, f"个股维表同步完成,{result.get('instruments_rows', 0)} 只标的")
         return result
 
+
     scheduler.add_job(
         lambda: _run_tracked(_instruments_task, "instruments_sync"),
         trigger=CronTrigger(day_of_week="mon-fri",
@@ -1451,7 +1560,7 @@ def start_scheduler(repo: KlineRepository, capset: CapabilitySet) -> AsyncIOSche
         return result
 
     scheduler.add_job(
-        lambda: _run_tracked(_pipeline_then_refresh, "daily_pipeline"),
+        lambda: _scheduled_pipeline_task(_pipeline_then_refresh),
         trigger=CronTrigger(day_of_week="mon-fri",
                             hour=sched["hour"], minute=sched["minute"],
                             timezone="Asia/Shanghai"),

@@ -51,8 +51,15 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
   const toggleQuote = useToggleRealtimeQuotes()
   const tier = tierRank(caps?.label ?? '')
   const isNoneTier = tier < 0
+  // None 档但配了自定义实时源时, 后端 is_realtime_allowed 仍返回 True (realtime_mode=full_market)
+  // 此时不应拦截实时监控页 — 用 quoteStatus.realtime_allowed 作为最终判据
+  const realtimeAllowed = quoteStatus?.realtime_allowed ?? !isNoneTier
   const isFreeTier = tier === 0
   const realtimeEnabled = prefs?.realtime_quotes_enabled ?? false
+  // 分时图实时刷新间隔 (秒), 与后端 [3,60] clamp 对齐; 默认 6
+  const intradayInterval = prefs?.minute_intraday_refresh_interval ?? 6
+  // 滑块本地草稿: 拖动时即时反馈, 停顿 2s 后落库 (与行情轮询滑块一致)
+  const [intradayIntervalDraft, setIntradayIntervalDraft] = useState(intradayInterval)
   const refreshPages = prefs?.sse_refresh_pages ?? {}
   const limitLadderMonitor = prefs?.limit_ladder_monitor_enabled ?? false
   const hasDepth = !!caps?.capabilities?.['depth5.batch']
@@ -64,8 +71,8 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
   const isTrading = quoteStatus?.is_trading_hours ?? false
   // 管道/数据修正运行期间实时行情被临时暂停 — 此时禁止开启
   const isPaused = quoteStatus?.paused ?? false
-  const interval = intervalData?.interval ?? 10
-  const minInterval = intervalData?.min_interval ?? 5
+  const interval = intervalData?.interval ?? 6
+  const minInterval = intervalData?.min_interval ?? 6
   const maxInterval = intervalData?.max_interval ?? 60
   const [intervalDraft, setIntervalDraft] = useState(interval)
   const feishuWebhookUrl = prefs?.feishu_webhook_url ?? ''
@@ -283,6 +290,20 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
     return () => window.clearTimeout(t)
   }, [intervalDraft, interval, updateInterval])
 
+  // 分时刷新间隔: 服务端值变化时同步本地草稿
+  useEffect(() => {
+    setIntradayIntervalDraft(intradayInterval)
+  }, [intradayInterval])
+
+  // 分时刷新间隔: 草稿与已保存值不同时, 2s 防抖落库
+  useEffect(() => {
+    if (intradayIntervalDraft === intradayInterval) return
+    const t = window.setTimeout(() => {
+      save({ minute_intraday_refresh_interval: intradayIntervalDraft })
+    }, 2000)
+    return () => window.clearTimeout(t)
+  }, [intradayIntervalDraft, intradayInterval, save])
+
   // highlight=depth-fix 时闪烁高亮连板梯队修正卡片
   const [flash, setFlash] = useState(false)
   const flashedRef = useRef(false)
@@ -298,7 +319,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
     }
   }, [highlight])
 
-  if (isNoneTier) {
+  if (isNoneTier && !realtimeAllowed) {
     return (
       <div className="flex flex-col items-center justify-center py-20 text-center">
         <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-accent/10 mb-5">
@@ -309,7 +330,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
           实时行情需要 Free 及以上档位。None 档可使用 free-api 获取历史日K（当日数据需盘后1-2小时），但不能调用付费服务器实时接口。
         </p>
         <a
-          href="/settings?tab=account"
+          href="/settings?tab=data-sources"
           className="inline-flex items-center gap-2 px-5 py-2.5 rounded-btn
                      bg-accent-solid text-white text-sm font-medium
                      hover:bg-accent/90 transition-colors"
@@ -321,7 +342,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
   }
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-[1fr_1fr] gap-6 max-w-5xl">
+    <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-6 max-w-5xl">
       {/* ========== 左列 ========== */}
       <div className="space-y-6">
         {/* 行情状态 — 开关 + 间隔 */}
@@ -425,14 +446,41 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
         </Card>
         )}
 
-        {/* 自选列表分时图实时刷新 (默认关闭, 开启后盘中 15s 轮询刷新分时数据) */}
+        {/* 自选列表分时图实时刷新 (默认关闭, 开启后盘中按设定间隔轮询刷新分时数据) */}
         <Card icon={Activity} title="分时图刷新">
           <ToggleRow
-            label="自选分时图实时刷新"
-            desc="开启后自选列表的分时图盘中每 15 秒自动刷新（需 Pro+ 权限）。关闭时仅打开页面时拉取一次。"
+            label="自选/策略分时图实时刷新"
+            desc={`开启后自选与策略列表的分时图盘中每 ${intradayInterval} 秒自动刷新（需 Pro+ 权限 + 实时行情运行）。关闭时仅打开页面时拉取一次, 可点表头刷新按钮手动更新。`}
             checked={prefs?.minute_intraday_refresh ?? false}
             onChange={(v) => save({ minute_intraday_refresh: v })}
           />
+          <div className="mt-3 pt-3 border-t border-border">
+            <div className="flex items-center justify-between gap-4 py-1">
+              <div className="min-w-0">
+                <div className="text-sm text-foreground">刷新间隔</div>
+                <div className="text-[11px] text-muted">
+                  间隔越短更新越及时, 但越耗数据源配额 (rpm)
+                </div>
+              </div>
+              <span className="text-[11px] font-mono text-foreground shrink-0 tabular-nums">
+                {intradayIntervalDraft}s
+              </span>
+            </div>
+            <div className="flex items-center gap-3 mt-2">
+              <input
+                type="range"
+                min={3}
+                max={60}
+                step={1}
+                value={intradayIntervalDraft}
+                onChange={(e) => setIntradayIntervalDraft(parseInt(e.target.value, 10))}
+                className="flex-1 h-1 accent-accent cursor-pointer"
+              />
+              <span className="text-[10px] text-muted shrink-0">
+                {intradayIntervalDraft !== intradayInterval ? '2秒后保存' : '3s — 60s'}
+              </span>
+            </div>
+          </div>
         </Card>
 
         {!isFreeTier && (
@@ -868,21 +916,6 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
               )}
             </div>
 
-            {/* 占位渠道 — 不可点 */}
-            {[
-              { name: 'QMT', hint: '量化交易终端', status: '待定' },
-              { name: 'ptrade', hint: '量化交易终端', status: '待定' },
-            ].map(ch => (
-              <div
-                key={ch.name}
-                className="flex items-center gap-2 rounded-btn border border-border/40 bg-base/20 px-2.5 py-2 opacity-60"
-              >
-                <input type="checkbox" disabled className="h-3 w-3 accent-accent" />
-                <span className="text-[11px] text-secondary">{ch.name}</span>
-                <span className="text-[9px] text-muted">{ch.hint}</span>
-                <span className="ml-auto rounded bg-muted/10 px-1 py-px text-[9px] text-muted">{ch.status}</span>
-              </div>
-            ))}
           </div>
         </Card>
       </div>

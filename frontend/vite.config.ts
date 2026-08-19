@@ -2,7 +2,11 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'node:path'
 
-const apiProxyTarget = process.env.VITE_API_PROXY_TARGET ?? 'http://127.0.0.1:3018'
+// 代理目标: 我方 VITE_API_PROXY_TARGET 优先, 否则与上游 dev.sh / dev.ps1 一致从 BACKEND_HOST/BACKEND_PORT 推导
+const backendHost = process.env.BACKEND_HOST || '127.0.0.1'
+const proxyHost = ['0.0.0.0', '::'].includes(backendHost) ? '127.0.0.1' : backendHost
+const backendPort = process.env.BACKEND_PORT || '3018'
+const apiProxyTarget = process.env.VITE_API_PROXY_TARGET ?? `http://${proxyHost}:${backendPort}`
 
 export default defineConfig({
   plugins: [react()],
@@ -12,7 +16,7 @@ export default defineConfig({
     },
   },
   server: {
-    host: '0.0.0.0',   // 允许局域网访问
+    host: '0.0.0.0',   // 允许局域网访问; dev.sh / dev.ps1 会用 CLI --host 覆盖
     port: 3011,
     proxy: {
       // dev 时 /api 转发到 FastAPI

@@ -173,7 +173,7 @@ export function PoolHubPage() {
     // WATCH-04 scope=选中行 (LG-04): 防御性 intersect 可见行 — 勾选行已不在当前可见集 → 剔除; 空选不发请求不 toast
     const symbols = [...selected].filter(s => filteredRows.some(r => r.symbol === s))
     if (!symbols.length) return
-    batchAdd.mutate(symbols, {
+    batchAdd.mutate({ symbols }, {
       onSuccess: (data) => {
         setBatchMsg(`已添加 ${data.added} 只到自选`)
         setTimeout(() => setBatchMsg(''), 3000)

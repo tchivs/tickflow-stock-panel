@@ -67,6 +67,34 @@ export const BUILTIN_SIGNAL_DEFINITIONS: BuiltinSignalDefinition[] = [
     description: '收盘价向下跌破 MA20，常用于趋势破位卖点。',
   },
   {
+    id: 'signal_ma5_breakout',
+    name: '突破MA5',
+    kind: 'entry',
+    category: '趋势',
+    description: '收盘价向上突破 MA5，偏短线转强或回踩企稳买点。',
+  },
+  {
+    id: 'signal_ma5_breakdown',
+    name: '跌破MA5',
+    kind: 'exit',
+    category: '趋势',
+    description: '收盘价向下跌破 MA5，偏短线转弱或止盈止损卖点。',
+  },
+  {
+    id: 'signal_ma10_breakout',
+    name: '突破MA10',
+    kind: 'entry',
+    category: '趋势',
+    description: '收盘价向上突破 MA10，偏短中线转强或突破买点。',
+  },
+  {
+    id: 'signal_ma10_breakdown',
+    name: '跌破MA10',
+    kind: 'exit',
+    category: '趋势',
+    description: '收盘价向下跌破 MA10，偏短中线转弱或破位卖点。',
+  },
+  {
     id: 'signal_n_day_high',
     name: '60日新高',
     kind: 'entry',
@@ -99,7 +127,7 @@ export const BUILTIN_SIGNAL_DEFINITIONS: BuiltinSignalDefinition[] = [
     name: '放量',
     kind: 'both',
     category: '量价',
-    description: '成交量显著放大，可作为买入确认、卖出确认或告警条件。',
+    description: '成交量显著放大，可作为入场确认、出场确认或告警条件。',
   },
   {
     id: 'signal_limit_up',
@@ -131,11 +159,20 @@ export const BUILTIN_SIGNAL_DEFINITIONS: BuiltinSignalDefinition[] = [
   },
 ]
 
+export const MONITOR_INTRADAY_SIGNAL_LABELS: Record<string, string> = {
+  signal_intraday_avg_cross_up: '分时价格上穿均价',
+  signal_intraday_avg_cross_down: '分时价格下穿均价',
+  signal_intraday_zero_cross_up: '分时价格上穿0轴',
+  signal_intraday_zero_cross_down: '分时价格下穿0轴',
+}
+
+export const MONITOR_INTRADAY_SIGNAL_OPTIONS = Object.keys(MONITOR_INTRADAY_SIGNAL_LABELS)
+
 /** 内置原子信号 → 中文标签 */
 export const SIGNAL_LABELS: Record<string, string> = BUILTIN_SIGNAL_DEFINITIONS.reduce<Record<string, string>>((acc, sig) => {
   acc[sig.id] = sig.name
   return acc
-}, {})
+}, { ...MONITOR_INTRADAY_SIGNAL_LABELS })
 
 /** 内置信号 ID 列表 */
 export const SIGNAL_OPTIONS = BUILTIN_SIGNAL_DEFINITIONS.map(sig => sig.id)

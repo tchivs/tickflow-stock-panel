@@ -1,174 +1,132 @@
-# Roadmap: AthenaQuant v3.0
+# Roadmap: AthenaQuant v3.1
 
-**Milestone:** v3.0 可回放 Alpha Factory 与 FactorResearchAgent  
-**Goal:** Deliver a replayable, deterministic, research-only factor discovery workflow over the existing governed Factor DSL, `FactorSignalChain`, measured-calendar walk-forward, admission, catalog, and human-review boundaries.  
-**Phase numbering:** Continues from completed v2.5 Phase 44 (`phase_naming: sequential`).  
-**Granularity:** Standard (six dependency-ordered delivery boundaries).
+**Milestone:** v3.1 可信工作台与运维闭环
+**Goal:** 以打磨现有功能为主, 补齐「用户能否看懂、验证、操作」的闭环 — 统一工具调用审计与数据质量可见性、首页今日工作台与统一待办、监控与报告闭环; 暂不扩展新的大型量化能力。
+**Phase numbering:** Continues from completed v3.0 Phase 50 (`phase_naming: sequential`).
+**Granularity:** Standard (four dependency-ordered delivery boundaries, 21/21 requirements mapped).
 
 ## Locked Boundaries
 
-- Candidate formulas use the existing restricted Factor DSL and canonical AST; no arbitrary Python, imports, `eval`, or second expression engine.
-- Every factor value is computed through the single governed `FactorSignalChain`; search does not create a StackVM or direct-Polars evaluator.
-- The default factory is deterministic seeded grammar/evolution on the existing Python 3.11+/FastAPI/Pydantic/SQLite/Parquet/Polars/DuckDB/LangGraph/SSE/React Query stack; no new base runtime dependency, PyTorch, RL, GPU, distributed queue, or WebSocket requirement.
-- Run inputs, data/universe, DSL/grammar/vocabulary, policy, costs, seed, fold geometry, provider metadata, and provenance are frozen before generation or provider calls.
-- Search and Agent review cannot access reserved walk-forward selection OOS; the selected candidate is evaluated there exactly once and it is never called a blind final holdout.
-- Agent output is untrusted proposal/review data. Deterministic server code owns parsing, metrics, gates, persistence, and authority; promotion requires explicit human review and evidence refresh.
-- Promotion is research-only. No broker, order, portfolio, position, monitor, live execution, or automatic promotion authority is added. AlphaMaster and PA_Agent provide patterns only; no AGPL source, prompts, domain rules, or derived implementation is copied.
+- 不引入新的模型执行权威: 工具审计只记录与展示, 不改变确定性代码对候选生成/评估/门禁/晋级的所有权。
+- ToolCallEnvelope 只追加事实(tool/params/version/scope/response_shape/raw_hash/duration/error), 审计内容脱敏后才可离开后端。
+- Provider Doctor 与数据质量 API 只读; 不新增自动修复动作。
+- 监控 test-fire 是 synthetic 投递, 不触达真实通知渠道预算以外的副作用。
+- 暂缓: 多市场扩张、新一轮因子/RL 搜索、Moderator 多 Agent 会议室(v3.2)、大规模实时架构、自动实盘交易。
+
+## Milestone Acceptance Chain
+
+端到端验收主链路(`.planning/v3.1-milestone-spec.md` 权威), 每一环由对应 phase 交付:
+
+| # | 链路环节 | 交付 phase | 支撑需求 |
+|---|---------|-----------|---------|
+| 1 | Provider 降级可诊断、可见 | Phase 52 | AUDIT-03, AUDIT-04 |
+| 2 | 首页显示质量告警 | Phase 53 | WORK-01, WORK-06 |
+| 3 | 启动研究任务(首页入口) | Phase 53 | WORK-02 |
+| 4 | SSE 查看运行过程 | Phase 54 | MON-06 |
+| 5 | 查看工具调用和 raw hash | Phase 52 | AUDIT-01, AUDIT-02 |
+| 6 | 报告回链证据 | Phase 54 | MON-04 |
+| 7 | 产生待确认事项 | Phase 53 | WORK-05 |
+| 8 | 人工审批 | Phase 53 | WORK-05 |
+| 9 | 创建监控并 test-fire | Phase 54 | MON-01 |
+| 10 | 查看通知投递结果 | Phase 54 | MON-02 |
+
+里程碑验收 = Phase 51-54 全部成功标准通过后, 上述链路在单一部署上可连续走通。
 
 ## Phases
 
-- [x] **Phase 45: Durable Governed Run Contract** - Freeze immutable run/input snapshots and establish the append-only candidate, event, checkpoint, lifecycle, and idempotency foundation. (completed 2026-08-08)
-- [x] **Phase 46: Deterministic Alpha Factory Core** - Generate only restricted canonical candidates with versioned vocabulary, lineage, bounded budgets, and stable replay order. (completed 2026-08-08)
-- [x] **Phase 47: Governed Scoring, Admission & Selection OOS** - Score candidates through the shared chain, retain evidence and gate trails, stress cost/robustness, and consume reserved selection OOS exactly once. (completed 2026-08-09)
-- [x] **Phase 48: FactorResearchAgent Two-Stage Workflow** - Add deterministic preflight, strict Stage 1/Stage 2 contracts, provider failure traces, bounded retry, cancellation, and checkpointed orchestration. (completed 2026-08-09)
-- [x] **Phase 49: Research-Only Promotion Ticket** - Refresh evidence at approval and hand an explicitly reviewed candidate to an immutable `FactorRevision`/catalog record without execution authority. (completed 2026-08-09)
-- [x] **Phase 50: Replay Workbench & Release Hardening** - Project durable progress and evidence through SSE/polling, expose lineage/comparison/stress/degradation views, and harden release/license/execution boundaries. (completed 2026-08-09)
+- [ ] **Phase 51: 发布基线收口** - 统一 STATE/PROJECT/ROADMAP/REQUIREMENTS 状态, 执行并纳入 Vitest, 补真实 LLM/Provider 降级/SSE 重连部署冒烟, 处理或明确关闭 v3.0 技债。
+- [ ] **Phase 52: 全局可信度与工具审计** - Provider/AI/通知/外部工具统一 ToolCallEnvelope, 统一 Provider Doctor 与数据质量 API, 审计脱敏与前端来源/日期/缓存/降级/schema/失败原因展示。
+- [ ] **Phase 53: 今日工作台与统一待办** - 首页集中展示数据新鲜度、Provider 健康、运行中/失败任务、最近报告与产物、监控触发、统一待确认收件箱, 每项有明确下一步入口。
+- [ ] **Phase 54: 监控与报告闭环** - synthetic test-fire、预算、冷却剩余、渠道健康与 digest 预览; 报告统一数据质量 Banner、证据卡、引用回链、多空冲突与失败路径; 运行页统一 Timeline、参数、工具调用、产物、失败重试与 SSE 恢复。
 
 ## Phase Details
 
-### Phase 45: Durable Governed Run Contract
+### Phase 51: 发布基线收口
 
-**Goal**: A researcher can create and replay an immutable, provenance-complete Alpha run whose lifecycle and every attempted outcome remain durable after retries, cancellation, or process restart.
+**Goal**: 里程碑在可信基线上开工 — 规划文档与真实进度一致, 前端单测默认执行, 三项部署冒烟可运行并给出结论, v3.0 每项技债有处理或明确关闭结论。
 
-**Depends on**: Phase 44 (completed); no v3.0 phase dependency.
+**Depends on**: Phase 50 (v3.0, completed 2026-08-09); first v3.1 phase, no v3.1 dependency.
 
-**Requirements**: AF-REQ-01, AF-REQ-04, AF-REQ-10, AF-REQ-16
-
-**Success Criteria** (what must be TRUE):
-
-1. Before any generation or provider call, the researcher can inspect a server-frozen run specification and `ResearchInputSnapshot` containing DSL/grammar/vocabulary/policy versions, seed, expression and candidate limits, objective/cost policy, universe, measured dates, fold geometry, and code/data/artifact manifest; editing inputs creates a new run rather than mutating the old one.
-2. The run retains every candidate attempt and terminal reason—including invalid, duplicate, low-coverage, failed, rejected, admitted, cancelled, and budget-exhausted outcomes—with immutable IDs, bounded diagnostics, evidence references, and a durable parent/child ledger rather than only a champion.
-3. Duplicate start/retry/cancel requests are idempotent and lifecycle states (`queued`, `running`, `cancel_requested`, `cancelled`, `completed`, `failed`, and invalid/preflight failure) remain consistent across process restart; a retry resumes a recorded cursor or creates a linked immutable run without overwriting prior facts.
-4. Durable events have a monotonic per-run sequence and idempotency key, and checkpoints are bounded recovery cursors referencing committed facts and checksums; a crash or inconsistent cursor fails closed instead of duplicating committed work or an OOS/promotion side effect.
-
-**Research flag**: **Yes** — settle SQLite transaction boundaries between run/candidate/event/checkpoint facts, sequence allocation and idempotency conflicts, JobStore bridging, and checkpoint file/artifact lifecycle before implementation.
-
-**Explicit non-goals**: No factory grammar/evolution search, fold scoring, Agent provider call, promotion, UI workbench, broker/order path, or strategy-specific `advanced_*` tables in this phase.
-
-**Plans:** 4/4 plans complete
-
-Plans:
-**Wave 1**
-
-- [x] 45-01-PLAN.md — create-to-replay durable tracer and frozen manifest contract
-
-**Wave 2** *(blocked on Wave 1 completion)*
-
-- [x] 45-02-PLAN.md — append-only candidate/event ledger and fail-closed checkpoint recovery
-
-**Wave 3** *(blocked on Wave 2 completion)*
-
-- [x] 45-03-PLAN.md — guarded lifecycle, idempotent retry/cancel, restart, and worker adapter
-
-**Wave 4** *(blocked on Wave 3 completion)*
-
-- [x] 45-04-PLAN.md — typed API/history seam and research-only no-execution guard
-
-### Phase 46: Deterministic Alpha Factory Core
-
-**Goal**: Given a frozen run, the system emits a bounded, canonical, fully accounted candidate population whose expressions, IDs, lineage, and ordering are reproducible independent of worker timing.
-
-**Depends on**: Phase 45
-
-**Requirements**: AF-REQ-02, AF-REQ-03, AF-REQ-19, AF-REQ-23
+**Requirements**: BASE-01, BASE-02, BASE-03, BASE-04
 
 **Success Criteria** (what must be TRUE):
 
-1. A researcher can inspect a stable, versioned vocabulary/grammar fingerprint covering fields, operators, functions, arity, partition semantics, windows, and complexity limits; unsupported or semantically incompatible versions fail closed rather than reinterpreting stored tokens.
-2. Replaying the same frozen snapshot, seed, grammar, and budget produces identical canonical expressions, candidate IDs/digests, parent/mutation/crossover metadata, candidate order, and checksums with one or many workers and with delayed worker completion.
-3. Every generated expression is parsed and semantically validated before evaluation; denied fields, unknown operators/functions, invalid arity/partition semantics, excessive depth/window, non-finite literals, and malformed expressions become explicit invalid records with diagnostics and consume the declared trial budget.
-4. Candidate, lineage, diversity, complexity, wall-clock, memory, artifact, and worker budgets are enforced server-side; objective score is shown beside structural/field/operator overlap and factor-output/IC-series redundancy without silently merging similar candidates or allowing parallelism to change the winner.
+1. 用户打开 STATE.md、PROJECT.md、ROADMAP.md、REQUIREMENTS.md 中任一文档, 看到的都是 v3.1 同一里程碑、同一阶段的同一状态; 「STATE 写 v3.0 完成但 Phase 50 未开始」「PROJECT 写正在建设 v3.0」这类互相矛盾不再存在。
+2. 开发者运行一条命令即可执行 Vitest 前端单测套件并得到通过/失败汇总; vitest 成为前端依赖, 且该套件在本地/CI 检查流程中被默认纳入(v3.0 已写好未执行的 unit suites 默认执行)。
+3. 开发者可在部署环境分别执行真实 LLM(两阶段分析)、Provider 降级、SSE 重连三个冒烟脚本, 每个脚本输出明确的通过/失败结论 — 不静默跳过, 不伪造通过。
+4. 用户可在文档中查阅 v3.0 技债清单(Tier-2 stress matrix 422、成本 turnover×rate 近似、Stage 1 partial labeling、部署后真实 LLM 验证)及每项「已处理 / 明确关闭(含理由)」结论。
 
-**Research flag**: **Yes** — calibrate the narrow A-share grammar, legal mutation/crossover operations, complexity/diversity cost model, candidate population, and CPU/memory/artifact budgets against governed panels. No ML/RL search is required.
+**Research flag**: **No dedicated research phase** — 状态收口是文档工作; Vitest/冒烟脚本按既有 e2e 与部署模式落地。
 
-**Explicit non-goals**: No direct factor computation, search-specific evaluator, fold/OOS scoring, Agent autonomy, provider calls, automatic admission/promotion, PyTorch/RL/GPU/distributed queue, arbitrary Python, or broker/execution integration.
+**Explicit non-goals**: 不修复与基线无关的业务缺陷, 不新增产品功能, 不做性能优化。
 
 **Plans**: TBD
 
-### Phase 47: Governed Scoring, Admission & Selection OOS
+### Phase 52: 全局可信度与工具审计
 
-**Goal**: Every valid candidate receives reproducible governed evidence and fixed admission decisions, while selection remains temporally honest and the reserved selection OOS is evaluated exactly once only after deterministic selection.
+**Goal**: Provider、AI、通知与外部工具的每次调用都留下统一、脱敏、可查询的 ToolCallEnvelope 审计事实; 统一 Provider Doctor 与数据质量 API 让降级、新鲜度与缺陷对用户可见。
 
-**Depends on**: Phase 46
+**Depends on**: Phase 51 (统一基线与默认 Vitest 为审计页面前端提供测试保障; 部署冒烟为 Provider 降级验证提供手段)。
 
-**Requirements**: AF-REQ-05, AF-REQ-06, AF-REQ-07, AF-REQ-08, AF-REQ-09
-
-**Success Criteria** (what must be TRUE):
-
-1. Factory scoring, Agent-requested evaluation seam, admission, composite use, walk-forward folds, and later as-of serving all compute factor values through the existing `FactorSignalChain`, exposing panel, PIT-universe, source-field, warmup, missing-data, and signal fingerprints.
-2. A run uses measured A-share trading dates and point-in-time membership per fold; missing, suspended, non-finite, warmup, stale, and source-quality states follow the declared policy, while current-constituent/full-lake substitution fails closed.
-3. For every evaluated candidate, the researcher can inspect immutable resolved configuration and evidence including per-date IC/RankIC, summaries, ICIR, positive rate, coverage, monthly robustness, group/long-short evidence, fees/slippage, cost/turnover diagnostics, artifacts, and a terminal failure reason when evaluation fails; failure is never converted to a zero score.
-4. The existing ordered deterministic admission policy exposes every observed value, threshold, pass/fail result, and reason; factory/Agent inputs cannot edit thresholds, reorder gates, or turn rejection into admission, and all rejected/failed verdicts remain linked to the candidate ledger.
-5. Search and Agent review receive only selection-fold evidence; after selection, the reserved fold receives one explicit `selection_oos` evaluation with an exactly-once durable binding. Reconnect/retry returns the existing result, and the UI/data model never labels it a blind final validation.
-
-**Research flag**: **Yes** — decide whether Alpha fold facts generalize existing `wf_folds` or require typed Alpha rows, and define factor-specific cost/robustness evidence without duplicating or weakening existing gates and exactly-once OOS constraints.
-
-**Explicit non-goals**: No Stage 1/Stage 2 provider orchestration, human promotion, live/paper execution, separate signal engine, threshold tuning, or separate final-blind holdout contract.
-
-**Plans:** 4/4 plans complete
-
-### Phase 48: FactorResearchAgent Two-Stage Workflow
-
-**Goal**: A FactorResearchAgent can safely orchestrate the proven factory and evidence path: deterministic preflight, strict bounded proposals/reviews, and durable recoverable failure traces without gaining scientific or operational authority.
-
-**Depends on**: Phase 47
-
-**Requirements**: AF-REQ-11, AF-REQ-12, AF-REQ-13, AF-REQ-14, AF-REQ-21, AF-REQ-26
+**Requirements**: AUDIT-01, AUDIT-02, AUDIT-03, AUDIT-04, AUDIT-05
 
 **Success Criteria** (what must be TRUE):
 
-1. Before a model call, deterministic preflight checks data availability/freshness and quality, measured calendar, PIT universe scope, required fields/sample length, DSL/grammar compatibility, budgets, provider availability, and policy mode; failure returns machine-readable reasons and makes zero provider calls.
-2. Stage 1 accepts a bounded thesis and permitted grammar/DSL options and returns versioned, strict schema-validated JSON with hypotheses/expressions, explanation, assumptions, scope, uncertainty, and evidence references; the server parser/canonicalizer confirms expressions and the result remains transient proposal data.
-3. Stage 2 receives only frozen run inputs and server-produced candidate/evaluation/gate evidence and returns schema-validated evidence-linked caveats and a bounded recommendation; it cannot change expressions, metrics, thresholds, OOS state, or admission status, and each challenge links to valid candidate/evaluation/gate/artifact IDs.
-4. Every Stage 1/2 attempt records template/schema/provider/model provenance, request scope, bounded raw-response checksum or approved response, parsed output, validation errors, retries, cancellation, latency, and partial/terminal failure state; malformed, refused, timed-out, unavailable, or rate-limited providers never create a fabricated fallback draft.
-5. Cancellation, retry, and restart resume from a server-owned checkpoint/event cursor without repeating committed candidate/OOS/promotion side effects. An explicitly declared offline fixture can produce a known full trace only when no provider is configured, is labeled non-production, and is never an implicit production fallback.
+1. Provider、AI、通知与外部工具的每次调用都追加一条统一 ToolCallEnvelope 记录(tool/params/version/scope/response_shape/raw_hash/duration/error), 开发者可按 principal/scope 查询; 审计只追加事实, 不改变确定性代码对生成/评估/门禁/晋级的所有权。
+2. 用户在统一审计页面查看全部工具调用, 可按来源、日期、缓存、降级、schema、失败原因筛选定位任一次调用。
+3. 用户可对任一 Provider 执行 Doctor 诊断, 看到健康/降级/不可用分级结论与建议动作; 诊断只读, 无自动修复副作用。
+4. 用户可通过统一数据质量 API 拉取各数据源新鲜度与缺陷摘要, 前端据此渲染质量告警 — 该 API 是 Phase 53 首页与各页面共享 Banner 的数据源。
+5. 审计对外展示经过脱敏: 密钥、完整报文与个人数据不出后端, 页面/API 只能看到 raw_hash 与脱敏摘要。
 
-**Research flag**: **Yes** — settle provider failure/retry taxonomy, response retention/hash policy, A-share diagnosis fields, strict schema/semantic bounds, and stage-to-event/checkpoint transaction boundaries. Do not add another Agent framework.
+**Research flag**: **Yes** — settle ToolCallEnvelope 存储形态(复用 append-only SQLite 事实表模式)、Provider/AI/通知/外部工具四类调用方的接入 seam、脱敏白名单与 raw 仅存 hash 的保留策略, 再动手实现。
 
-**Explicit non-goals**: No model-selected tools/paths/IDs, model-owned metrics or gates, autonomous/unbounded loops, new evaluator, direct registry mutation, automatic promotion, broker/order/portfolio/monitor access, or silent provider fallback.
+**Explicit non-goals**: 不建第二套审计语义或调用重放系统, 不改变 Provider 调用行为本身, 不做自动修复。
 
 **Plans**: TBD
+**UI hint**: yes
 
-### Phase 49: Research-Only Promotion Ticket
+### Phase 53: 今日工作台与统一待办
 
-**Goal**: A researcher can explicitly approve a complete, current, evidence-bound candidate and register only a new immutable research `FactorRevision`/catalog handoff; stale or modified approvals fail closed.
+**Goal**: 首页成为「今天什么状态、什么信号、什么任务、什么风险、下一步点哪里」的唯一入口 — 数据健康、任务、报告、监控、待确认事项一屏可见, 每项有明确下一步。
 
-**Depends on**: Phase 48 (and the Phase 47 evidence/OOS contracts)
+**Depends on**: Phase 52 (首页健康总览与质量 Banner 消费统一数据质量 API 与 Doctor; 失败原因消费 ToolCallEnvelope)。
 
-**Requirements**: AF-REQ-15, AF-REQ-17
+**Requirements**: WORK-01, WORK-02, WORK-03, WORK-04, WORK-05, WORK-06
 
 **Success Criteria** (what must be TRUE):
 
-1. The reviewer can compare a proposal's canonical expression, assumptions, evidence, gate trail, OOS status, and provenance, then create a Promotion Ticket bound to candidate/AST, run and snapshot digests, admission/OOS evidence, catalog state, policy/vocabulary versions, reviewer identity, and an expiry/idempotency key.
-2. Approval refreshes governed data and required evidence/gates; changed candidate expression, explanation/provenance, policy, vocabulary, membership, or snapshot expires/conflicts the ticket, and concurrent approval/consume requests register at most one revision.
-3. Only an explicitly reviewed and exact-bound ticket can create a new immutable `FactorRevision` and catalog entry with preserved candidate lineage and evidence references; unreviewed or altered Agent output is absent from the formal catalog and prior runs remain unchanged.
-4. The complete action surface is visibly research-only—inspect, compare, retain evidence, or register a research asset—and the promotion service has no broker, order, position, portfolio, monitor, live-execution, or automatic-promotion collaborator or route.
+1. 用户在首页一屏看到数据新鲜度与 Provider 健康总览; 质量告警 Banner 与 Alpha 工作台等页面共享同一数据源 — Provider 降级时首页出现质量告警, 不再只在 Alpha 工作台可见。
+2. 用户在首页看到运行中与失败任务及失败原因, 每项可跳转到对应运行页(验收链路第 3 环入口)。
+3. 用户在首页看到最近报告与研究产物入口, 每项可跳转到报告/产物详情。
+4. 用户在首页看到最近监控触发记录, 可跳转到监控详情。
+5. 用户在统一「待确认」收件箱看到生命周期、论点、因子晋升、纸面调仓四类待办, 每项有明确下一步入口直达审批/处理动作(验收链路第 7-8 环)。
 
-**Research flag**: **Yes** — verify transient canonical-candidate to `FactorRevision` mapping, catalog snapshot identity, normal signal/backtest binding compatibility, stale-refresh conflict semantics, and atomic reviewer handoff.
+**Research flag**: **No dedicated research phase** — 复用既有首页/React Query 模式与 Phase 52 数据质量 API; 计划期需核对四类待办的既有后端来源与聚合边界。
 
-**Explicit non-goals**: No automatic or model-authorized promotion, strategy-specific `advanced_*` candidate tables, broker/order submission, portfolio mutation, monitor activation, live/paper execution, or execution permit derived from admission/OOS.
+**Explicit non-goals**: 不改变各待办的审批语义与权限; 首页只读聚合, 不新增执行动作; 不做个性化/可配置仪表盘。
 
 **Plans**: TBD
+**UI hint**: yes
 
-### Phase 50: Replay Workbench & Release Hardening
+### Phase 54: 监控与报告闭环
 
-**Goal**: Researchers can inspect, compare, replay, and understand Alpha/Agent runs through durable progress and evidence projections, while release checks make degraded data, temporal labels, licensing, dependencies, and research-only boundaries explicit.
+**Goal**: 监控可验证(test-fire/预算/冷却/渠道健康/digest 预览)、报告可信(质量 Banner/证据卡/引用回链/冲突与失败路径)、运行页完整(Timeline/参数/工具调用/产物/重试/SSE 恢复) — 验收主链路端到端闭合。
 
-**Depends on**: Phases 45–49
+**Depends on**: Phase 53 (首页已聚合监控触发与待办入口) and Phase 52 (工具调用与 raw hash 可查, 供报告回链与运行页展示)。
 
-**Requirements**: AF-REQ-18, AF-REQ-20, AF-REQ-22, AF-REQ-24, AF-REQ-25
+**Requirements**: MON-01, MON-02, MON-03, MON-04, MON-05, MON-06
 
 **Success Criteria** (what must be TRUE):
 
-1. The workbench reconnects to a run using durable monotonic SSE `Last-Event-ID` replay or bounded polling and shows queued/running/terminal/cancelled progress without missing, duplicating, or inventing events; reconnect/restart never becomes UI authority.
-2. A researcher can inspect parent-to-child mutation/crossover lineage, canonical expression diffs, seed/step and branch termination reasons, replay one branch under the same frozen inputs, clone a completed run while changing only declared dimensions, and see field-level differences plus parent/child hashes.
-3. Candidate families and retained experiment snapshots can be compared side by side with configuration, evidence, provenance, gate status, artifacts, diversity/redundancy outcomes, and no opaque hidden winner; a candidate family can display the exact rebalance, fee/slippage, calendar-regime, coverage, and symbol-subset stress matrix without rewriting primary admission thresholds.
-4. The UI visibly distinguishes data date, source/provider, cache/degradation state, missing fields, membership coverage, exploratory evidence, selection-fold evidence, `selection_oos`, and unavailable final-blind evidence; stale, partial, blocked, or fixture results cannot look like clean production evidence.
-5. Release verification finds no AGPL-derived source, prohibited new base runtime dependency, arbitrary code path, or broker/execution import/call in Alpha/Agent/promotion surfaces; documented smoke evidence proves the shipped workbench exposes research-only actions and preserves the no-execution boundary.
+1. 用户可对任一监控规则执行 synthetic test-fire 并看到与真实触发一致的通知预览; test-fire 是 synthetic 投递, 不触达真实通知渠道预算以外的副作用。
+2. 用户可查看每个监控的预算消耗、冷却剩余时间与通知渠道健康状态; 可先预览 digest 汇总内容再启用定期投递。
+3. 每份报告带数据质量 Banner、证据卡与引用回链, 读者可从任一结论跳转到原始证据(含工具调用 raw hash 与产物)。
+4. 报告可展示多空冲突观点与失败路径(哪些数据/步骤不可用), 不隐藏坏消息。
+5. 运行页统一展示 Timeline、参数、工具调用与产物; 失败任务可重试; SSE 断连重连后从断点恢复, 不丢失也不发明事件。
 
-**Research flag**: **No dedicated research phase** — use standard React Query/native `EventSource` and existing API patterns; focused implementation verification must cover reconnect cursors, stale/degraded projections, OOS/ticket labels, restart replay, and license/import/execution scans.
+**Research flag**: **Yes** — settle test-fire 与真实通知链路的隔离边界(渠道预算/冷却是否共享)、报告证据卡的统一数据契约、运行页 SSE 恢复复用 Phase 45/50 durable Last-Event-ID 模式的适用范围。
 
-**Explicit non-goals**: No WebSocket or external event broker, second client/transport, hidden browser authority, final-blind holdout, AGPL source copying, PyTorch/RL/GPU/distributed runtime, automatic live/paper execution, broker integration, or changes to `frontend/src/pages/Watchlist.tsx`.
+**Explicit non-goals**: 不新增通知渠道, 不做实时推送架构, 不改变监控规则评估语义。
 
 **Plans**: TBD
 **UI hint**: yes
@@ -177,14 +135,16 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 45. Durable Governed Run Contract | 4/4 | Complete    | 2026-08-08 |
-| 46. Deterministic Alpha Factory Core | 4/4 | Complete    | 2026-08-08 |
-| 47. Governed Scoring, Admission & Selection OOS | 4/4 | Complete    | 2026-08-09 |
-| 48. FactorResearchAgent Two-Stage Workflow | 4/4 | Complete    | 2026-08-09 |
-| 49. Research-Only Promotion Ticket | 2/2 | Complete    | 2026-08-09 |
-| 50. Replay Workbench & Release Hardening | 4/4 | Complete    | 2026-08-09 |
+| 51. 发布基线收口 | 0/TBD | Not started | - |
+| 52. 全局可信度与工具审计 | 0/TBD | Not started | - |
+| 53. 今日工作台与统一待办 | 0/TBD | Not started | - |
+| 54. 监控与报告闭环 | 0/TBD | Not started | - |
 
-**Execution order:** 45 → 46 → 47 → 48 → 49 → 50. Each phase consumes durable, server-owned contracts from its predecessors; no phase grants execution authority.
+**Execution order:** 51 → 52 → 53 → 54. Each phase consumes its predecessors' unified audit/quality/inbox contracts; no phase gains execution or repair authority.
+
+## Requirement Coverage
+
+21/21 v1 requirements mapped, no orphans, no duplicates: BASE-01..04 → Phase 51; AUDIT-01..05 → Phase 52; WORK-01..06 → Phase 53; MON-01..06 → Phase 54. Per-requirement traceability lives in `.planning/REQUIREMENTS.md`.
 
 ---
-*Last updated: 2026-08-08 — v3.0 roadmap created; 26/26 requirements mapped.*
+*Last updated: 2026-08-18 — v3.1 roadmap created; 21/21 requirements mapped.*

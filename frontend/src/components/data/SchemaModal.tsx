@@ -5,6 +5,7 @@ import { X } from 'lucide-react'
 import { useModalA11y } from '@/lib/useModalA11y'
 import { api, type EnrichedField } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
+import { useDialogBackdrop } from '@/lib/useDialogBackdrop'
 
 const TABLE_TITLES: Record<string, string> = {
   instruments: '个股维表',
@@ -38,6 +39,7 @@ function categorize(name: string): string {
 
 export function EnrichedSchemaModal({ table, onClose }: { table: string | null; onClose: () => void }) {
   const open = !!table
+  const backdrop = useDialogBackdrop(onClose)
   const schema = useQuery({
     queryKey: QK.tableSchema(table!),
     queryFn: () => api.enrichedSchema(table!),
@@ -71,7 +73,7 @@ export function EnrichedSchemaModal({ table, onClose }: { table: string | null; 
           exit={{ opacity: 0 }}
           transition={{ duration: 0.15 }}
         >
-          <div className="absolute inset-0 bg-black/40" onClick={onClose} />
+          <div className="absolute inset-0 bg-black/40" {...backdrop} />
           <motion.div
             ref={panelRef}
             role="dialog"

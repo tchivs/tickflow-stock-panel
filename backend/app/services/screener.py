@@ -217,7 +217,6 @@ def _strategy_display_name(engine, sid: str) -> str:
             return sid
     return sid
 
-
 @dataclass
 class ScreenerResult:
     as_of: date
@@ -356,7 +355,11 @@ class ScreenerService:
 
         读取历史数据作为指标计算的 warmup, 计算完成后只返回目标日期的行。
         """
-        from app.indicators.pipeline import compute_indicators, compute_signals, compute_limit_signals
+        from app.indicators.pipeline import (
+            compute_indicators,
+            compute_limit_signals,
+            compute_signals,
+        )
 
         # 加载 warmup 历史 (目标日期前 ~120 天)
         enriched_dir = self.repo.store.data_dir / self._enriched_dirname
@@ -389,7 +392,11 @@ class ScreenerService:
         # 计算涨跌停信号 (需要 instruments; 涨停为股票专有, ETF 跳过)
         instruments = self.repo.get_instruments_asset(self.asset_type)
         if self.asset_type == "stock" and instruments is not None and not instruments.is_empty():
-            df_full = compute_limit_signals(df_full, instruments)
+            df_full = compute_limit_signals(
+                df_full,
+                instruments,
+                historical_shares=self.repo.get_historical_shares(),
+            )
 
         # 只保留目标日期
         df_result = df_full.filter(pl.col("date") == target_date)
@@ -438,7 +445,11 @@ class ScreenerService:
         # 优先级 3: scan_parquet + compute_indicators (慢路径, ~5s)
         logger.warning("_load_enriched_history cache miss, computing indicators (%s, %d)...",
                        target_date, lookback_days)
-        from app.indicators.pipeline import compute_indicators, compute_signals, compute_limit_signals
+        from app.indicators.pipeline import (
+            compute_indicators,
+            compute_limit_signals,
+            compute_signals,
+        )
 
         warmup = 60
         start = target_date - timedelta(days=min((lookback_days + warmup) * 2, 180))
@@ -467,7 +478,11 @@ class ScreenerService:
 
         instruments = self.repo.get_instruments_asset(self.asset_type)
         if self.asset_type == "stock" and instruments is not None and not instruments.is_empty():
-            df_full = compute_limit_signals(df_full, instruments)
+            df_full = compute_limit_signals(
+                df_full,
+                instruments,
+                historical_shares=self.repo.get_historical_shares(),
+            )
 
         if instruments is not None and not instruments.is_empty():
             inst_cols = [c for c in ["symbol", "name", "total_shares", "float_shares"] if c in instruments.columns]
@@ -700,6 +715,42 @@ class ScreenerService:
         if exprs:
             return df.filter(pl.all_horizontal(exprs))
         return df
+
+    def build_strategy_context(
+        self,
+        engine,
+        as_of: date,
+        strategy_ids: list[str],
+        *,
+        timeframe: str = "1d",
+        params_map: dict[str, dict] | None = None,
+        overrides_map: dict[str, dict] | None = None,
+        current: pl.DataFrame | None = None,
+        market=None,
+        cache_key: str | None = None,
+    ):
+        """按调用方要求装配标准策略数据上下文，不解释策略公式。"""
+        from app.strategy.engine import StrategyDataContext
+
+        if current is None:
+            current = self._load_enriched_for_date(as_of)
+        history_bars = engine.required_history_bars(
+            strategy_ids,
+            params_map=params_map,
+            overrides_map=overrides_map,
+        )
+        history = None
+        if history_bars > 1:
+            history = self._load_enriched_history(as_of, history_bars)
+        return StrategyDataContext(
+            asset_type=self.asset_type,
+            timeframe=timeframe,
+            as_of=as_of,
+            current=current,
+            history=history,
+            market=market,
+            cache_key=cache_key,
+        )
 
     def latest_date(self) -> date | None:
         if self.asset_type != "stock":

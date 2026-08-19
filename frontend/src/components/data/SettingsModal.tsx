@@ -2,15 +2,16 @@ import { useRef } from 'react'
 import { motion } from 'framer-motion'
 import { X } from 'lucide-react'
 import { useModalA11y } from '@/lib/useModalA11y'
+import { useDialogBackdrop } from '@/lib/useDialogBackdrop'
 
 export function SettingsModal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
   const panelRef = useRef<HTMLDivElement>(null)
   // 焦点捕获 + Tab 陷阱 + ESC 关闭 + 卸载还原 (WCAG 2.1.2/2.1.1)
   useModalA11y(panelRef, { onClose })
-
+  const backdrop = useDialogBackdrop(onClose)
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" {...backdrop} />
       <motion.div
         ref={panelRef}
         tabIndex={-1}

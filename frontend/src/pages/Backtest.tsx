@@ -1,60 +1,58 @@
-import { useState, type KeyboardEvent } from 'react'
+import { useState } from 'react'
+import { Navigate, useSearchParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
+import { BarChart3, BookmarkCheck, FlaskConical, Library, Route, ShieldCheck } from 'lucide-react'
 import { api } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { PageHeader } from '@/components/PageHeader'
-import { FactorBacktest } from './backtest/FactorBacktest'
+import { FactorDiscovery } from './backtest/FactorDiscovery'
+import { ResearchCandidatesDialog } from './backtest/ResearchCandidatesDialog'
+import { RobustnessValidation } from './backtest/RobustnessValidation'
 import { StrategyBacktest } from './backtest/StrategyBacktest'
-import { StrategyOptimizer } from './backtest/StrategyOptimizer'
 import { ResearchLibrary } from './backtest/ResearchLibrary'
 import { ExperimentComparison } from './backtest/ExperimentComparison'
 import { ShadowAccount } from './backtest/ShadowAccount'
 import { AdvancedResearchPanels } from '@/components/advanced/AdvancedResearchPanels'
-import { BarChart3, FlaskConical, SlidersHorizontal, Library, Route } from 'lucide-react'
 import { ModelLibrary } from './backtest/ModelLibrary'
 import { WalkForward } from './backtest/WalkForward'
 import { ResearchFold } from './backtest/ResearchFold'
 
-type Tab = 'factor' | 'strategy' | 'optimizer' | 'library' | 'walkforward'
+type Tab = 'factor' | 'strategy' | 'robustness' | 'library' | 'walkforward'
 
-const MODES: Record<Tab, { title: string; subtitle: string; hint: string }> = {
+const MODES: Record<Tab, { title: string; subtitle: string; icon: typeof BarChart3; hint?: string }> = {
   factor: {
-    title: '因子回测',
-    subtitle: '验证单个因子是否有预测能力',
-    hint: '看 IC / IR、分层收益和多空组合，适合先筛掉无效指标。',
+    title: '因子',
+    subtitle: '批量筛选与单因子检验',
+    icon: BarChart3,
   },
   strategy: {
-    title: '策略回测',
-    subtitle: '验证完整选股和交易规则',
-    hint: '看净值曲线、回撤、胜率和交易明细，适合判断策略是否可执行。',
+    title: '策略',
+    subtitle: '现有策略评估与候选沉淀',
+    icon: FlaskConical,
   },
-  optimizer: {
-    title: '参数优化',
-    subtitle: '网格搜索最优参数组合',
-    hint: '并行回测所有参数组合，按夏普/索提诺等目标排序，找到最优参数。',
+  robustness: {
+    title: '验证',
+    subtitle: '参数敏感性与滚动样本外',
+    icon: ShieldCheck,
   },
   library: {
     title: '模型库',
     subtitle: '已准入因子与组合模型',
     hint: '因子目录携带 IC / RankIC 证据，组合模型展示权重与谱系。',
+    icon: Library,
   },
   walkforward: {
     title: '走步验证',
     subtitle: '固定窗口折叠与保留 OOS',
     hint: '看 train / gap / test 几何、OOS 参数搜索与验证门槛结果。',
-  },
-}
-
-const TAB_ICONS: Record<Tab, typeof BarChart3> = {
-  factor: BarChart3,
-  strategy: FlaskConical,
-  optimizer: SlidersHorizontal,
-  library: Library,
-  walkforward: Route,
+    icon: Route,
+  }
 }
 
 export function Backtest() {
-  const [activeTab, setActiveTab] = useState<Tab>('strategy')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const requestedTab = searchParams.get('tab')
+  const [candidatesOpen, setCandidatesOpen] = useState(false)
   const [selectedStrategyId, setSelectedStrategyId] = useState<string | null>(null)
   const binding = useQuery({
     queryKey: QK.advancedResearchAssetBinding(selectedStrategyId ?? ''),
@@ -62,70 +60,80 @@ export function Backtest() {
     enabled: Boolean(selectedStrategyId),
   })
 
-  const handleModeKeyDown = (event: KeyboardEvent<HTMLButtonElement>, tab: Tab) => {
-    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
-    event.preventDefault()
-    const tabs = ['factor', 'strategy', 'optimizer', 'library', 'walkforward'] as const
-    const next = tabs[(tabs.indexOf(tab) + (event.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length]
-    setActiveTab(next)
-    document.getElementById(`backtest-mode-tab-${next}`)?.focus()
+  // 旧链接兼容: 挖掘已升级为一级路由 /mining, 保留 run/candidate 参数重定向
+  if (requestedTab === 'mining') {
+    const next = new URLSearchParams(searchParams)
+    next.delete('tab')
+    const search = next.toString()
+    return <Navigate to={search ? `/mining?${search}` : '/mining'} replace />
   }
 
-  const modeSwitch = (
-    <div role="tablist" aria-label="回测模式" className="flex w-full rounded-btn border border-border bg-surface/80 p-0.5 shadow-sm sm:inline-flex sm:w-auto">
-      {(['factor', 'strategy', 'optimizer', 'library', 'walkforward'] as const).map(tab => {
-        const Icon = TAB_ICONS[tab]
-        const active = activeTab === tab
-        return (
-          <button
-            key={tab}
-            id={`backtest-mode-tab-${tab}`}
-            role="tab"
-            aria-selected={active}
-            aria-controls={`backtest-mode-panel-${tab}`}
-            tabIndex={active ? 0 : -1}
-            onClick={() => setActiveTab(tab)}
-            onKeyDown={event => handleModeKeyDown(event, tab)}
-            className={`inline-flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-[5px] px-2 py-1.5 text-xs font-medium transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-base sm:flex-none sm:px-3 ${
-              active
-                ? 'bg-accent-solid text-white shadow-sm'
-                : 'text-secondary hover:bg-elevated hover:text-foreground'
-            }`}
-          >
-            <Icon aria-hidden="true" className="h-3.5 w-3.5" />
-            {MODES[tab].title}
-            {tab === 'optimizer' && (
-              <span className={`rounded border px-1 py-px text-[8px] font-semibold uppercase ${
-                active ? 'border-white/40 bg-white/15 text-white' : 'border-amber-400/30 bg-amber-400/10 text-amber-400'
-              }`}>
-                Beta
-              </span>
-            )}
-          </button>
-        )
-      })}
-    </div>
-  )
+  const activeTab: Tab = requestedTab && requestedTab in MODES
+    ? requestedTab as Tab
+    : 'strategy'
+
+  const changeTab = (tab: Tab) => {
+    const next = new URLSearchParams(searchParams)
+    next.set('tab', tab)
+    setSearchParams(next, { replace: true })
+  }
 
   return (
-    <div className="min-h-full bg-base flex flex-col">
+    <div className="flex min-h-full flex-col bg-base">
       <PageHeader
-        title="回测工作台"
-        subtitle={`${MODES[activeTab].title} · ${MODES[activeTab].hint}`}
-        right={modeSwitch}
-        className="shrink-0 bg-base/95"
+        title="量化研究"
+        subtitle={<span className="hidden md:inline">{MODES[activeTab].subtitle}</span>}
+        className="shrink-0 flex-wrap gap-x-4 gap-y-2 bg-base/95 px-3 lg:flex-nowrap lg:px-5"
+        right={(
+          <div className="flex w-full min-w-0 items-center gap-1.5 sm:gap-2 lg:w-auto">
+            <button
+              type="button"
+              onClick={() => setCandidatesOpen(true)}
+              aria-label="打开候选方案"
+              title="候选方案"
+              className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-btn border border-border bg-surface px-2 text-[11px] font-medium text-secondary transition-colors hover:border-accent/40 hover:text-accent sm:px-2.5 sm:text-xs"
+            >
+              <BookmarkCheck className="h-3.5 w-3.5" />
+              <span>候选方案</span>
+            </button>
+            <span className="h-5 w-px shrink-0 bg-border" aria-hidden="true" />
+            <nav className="min-w-0 flex-1 overflow-x-auto lg:flex-none" aria-label="量化研究视图">
+              <div className="inline-flex min-w-max items-center gap-0.5 rounded-btn border border-border bg-surface/80 p-0.5">
+                {(Object.keys(MODES) as Tab[]).map(tab => {
+                  const mode = MODES[tab]
+                  const Icon = mode.icon
+                  const active = activeTab === tab
+                  return (
+                    <button
+                      key={tab}
+                      type="button"
+                      onClick={() => changeTab(tab)}
+                      aria-current={active ? 'page' : undefined}
+                      className={`inline-flex h-7 items-center gap-1 rounded-[5px] px-1.5 text-[11px] font-medium transition-colors sm:gap-1.5 sm:px-2.5 sm:text-xs ${active
+                        ? 'bg-accent text-white shadow-sm'
+                        : 'text-secondary hover:bg-elevated hover:text-foreground'
+                      }`}
+                    >
+                      <Icon className="hidden h-3.5 w-3.5 sm:block" />
+                      {mode.title}
+                    </button>
+                  )
+                })}
+              </div>
+            </nav>
+          </div>
+        )}
       />
 
-      <main className="flex-1 min-h-0 px-3 pb-3 pt-3 lg:px-4 lg:pb-4">
-        {activeTab === 'factor' && <div id="backtest-mode-panel-factor" role="tabpanel" aria-labelledby="backtest-mode-tab-factor" className="space-y-4"><FactorBacktest /><ResearchFold storageKey="bt-fold-research-factor" title="研究工具 · 因子库与实验对比"><ResearchLibrary /><ExperimentComparison /></ResearchFold></div>}
-        <div
-          id="backtest-mode-panel-strategy"
-          role="tabpanel"
-          aria-labelledby="backtest-mode-tab-strategy"
-          hidden={activeTab !== 'strategy'}
-          className="space-y-4"
-        >
-          {/* Keep the main configuration mounted so mode switching does not discard an in-progress run. */}
+      <main className="min-h-0 flex-1 px-3 pb-3 pt-3 lg:px-4 lg:pb-4">
+        {activeTab === 'factor' && (
+          <div className="space-y-4">
+            <FactorDiscovery />
+            <ResearchFold storageKey="bt-fold-research-factor" title="研究工具 · 因子库与实验对比"><ResearchLibrary /><ExperimentComparison /></ResearchFold>
+          </div>
+        )}
+        {/* Keep the main configuration mounted so mode switching does not discard an in-progress run. */}
+        <div id="backtest-mode-panel-strategy" hidden={activeTab !== 'strategy'} className="space-y-4">
           <StrategyBacktest onStrategyChange={setSelectedStrategyId} />
           {activeTab === 'strategy' && <>
             <ResearchFold storageKey="bt-fold-research-strategy" title="研究工具 · 因子库与实验对比"><ResearchLibrary /><ExperimentComparison /></ResearchFold>
@@ -133,10 +141,12 @@ export function Backtest() {
             <ResearchFold storageKey="bt-fold-advanced" title="高级研究 · 服务器研究资产"><AdvancedResearchPanels binding={binding.data?.binding ?? null} bindingError={selectedStrategyId ? (binding.isLoading ? '正在解析服务器研究资产绑定。' : binding.isError ? '服务器研究资产绑定不可用；高级研究操作已禁用。' : null) : '请选择已安装策略以解析服务器研究资产绑定。'} /></ResearchFold>
           </>}
         </div>
-        {activeTab === 'optimizer' && <div id="backtest-mode-panel-optimizer" role="tabpanel" aria-labelledby="backtest-mode-tab-optimizer"><StrategyOptimizer /></div>}
-        {activeTab === 'library' && <div id="backtest-mode-panel-library" role="tabpanel" aria-labelledby="backtest-mode-tab-library"><ModelLibrary /></div>}
-        {activeTab === 'walkforward' && <div id="backtest-mode-panel-walkforward" role="tabpanel" aria-labelledby="backtest-mode-tab-walkforward"><WalkForward /></div>}
+        {activeTab === 'robustness' && <RobustnessValidation />}
+        {activeTab === 'library' && <ModelLibrary />}
+        {activeTab === 'walkforward' && <WalkForward />}
       </main>
+
+      {candidatesOpen && <ResearchCandidatesDialog onClose={() => setCandidatesOpen(false)} />}
     </div>
   )
 }

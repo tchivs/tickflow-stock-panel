@@ -21,6 +21,13 @@ dependencies = [
     "fastexcel>=0.10",            # Polars 读取 xlsx/xls
     "scipy>=1.17.1,<1.18",        # Phase 11 HRP (scipy.cluster.hierarchy); <1.18 上限: 1.18 要求 Python>=3.12
     "cvxpy==1.9.2",               # Phase 11 QP solver (精确锁定: 求解结果对版本敏感, 审计记录引用 cp.__version__); 内置 OSQP/Clarabel/SCS/HiGHS
+    "psutil>=5.9",                 # 独立回测 worker 的峰值 RSS 与退出后内存指标
+    # llvmlite 不再提供 macOS Intel wheel; 该平台使用 Matrix 纯 Python fallback。
+    "numba>=0.65.1; sys_platform != 'darwin' or platform_machine != 'x86_64'",
+    "pypinyin>=0.50",              # 股票名拼音首字母搜索 (同花顺式 payh -> 平安银行)
+    # Watchlist screenshot OCR (Tesseract)
+    "pytesseract>=0.3.10",
+    "Pillow>=10.0",
     # TickFlow 官方 SDK
     "tickflow[all]>=0.1.23",
     # Scheduling
@@ -46,8 +53,8 @@ legacy-cpu = [
     "polars[rtcompat]>=1.0",
 ]
 
-# 回测依赖 vectorbt → numba → llvmlite,体积大且 macOS/Intel 上无预构建 wheel 时
-# 需要 brew install cmake 现场编译。挪到可选 extras,主依赖瘦身。
+# vectorbt 还会引入绘图、交互组件等完整分析栈, 仍保持为可选 extras。
+# Matrix 引擎只直接依赖上面的 numba/llvmlite 编译内核。
 # 启用:`uv sync --extra backtest`
 backtest = [
     "vectorbt>=0.26",

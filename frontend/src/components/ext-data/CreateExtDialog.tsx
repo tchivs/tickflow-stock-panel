@@ -17,6 +17,7 @@ import {
 import { api, type ExtDataDetectUrlResult, type ExtDataField } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { useModalA11y } from '@/lib/useModalA11y'
+import { useDialogBackdrop } from '@/lib/useDialogBackdrop'
 
 type SourceMode = 'url' | 'file' | 'manual'
 
@@ -29,6 +30,7 @@ export function CreateExtDialog({ onClose }: { onClose: () => void }) {
   const qc = useQueryClient()
   const panelRef = useRef<HTMLDivElement>(null)
   useModalA11y(panelRef, { onClose })
+  const backdrop = useDialogBackdrop(onClose)
   const [sourceMode, setSourceMode] = useState<SourceMode>('url')
   const [id, setId] = useState('')
   const [label, setLabel] = useState('')
@@ -311,7 +313,7 @@ export function CreateExtDialog({ onClose }: { onClose: () => void }) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" {...backdrop} />
       <motion.div
         ref={panelRef}
         role="dialog"

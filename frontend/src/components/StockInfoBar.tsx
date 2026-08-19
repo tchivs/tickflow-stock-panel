@@ -22,11 +22,14 @@ interface Props {
   financialMetrics?: FinancialMetricRecord
   /** 加监控回调 (个股弹窗传入, 有值时渲染 RadioTower 图标) */
   onMonitor?: () => void
-  /** 加自选回调 + 是否已自选 (有 onToggle 时渲染 Star 图标) */
+  /** 自选状态与操作（传入对应回调时渲染 Star 图标） */
   inWatchlist?: boolean
   onToggleWatchlist?: () => void
   /** 加自选时可选分组 (传入时未自选状态星标弹出分组菜单) */
   onAddToWatchlistGroup?: (groupId: string | null) => void
+  onAddToWatchlist?: (groupId: string | null) => void
+  onRemoveFromWatchlist?: () => void
+  watchlistPending?: boolean
 }
 
 /**
@@ -95,7 +98,22 @@ function renderExtInline(
   )
 }
 
-export function StockInfoBar({ symbol, name, stockInfo, rows, fields, onFieldsChange, financialMetrics, onMonitor, inWatchlist, onToggleWatchlist, onAddToWatchlistGroup }: Props) {
+export function StockInfoBar({
+  symbol,
+  name,
+  stockInfo,
+  rows,
+  fields,
+  onFieldsChange,
+  financialMetrics,
+  onMonitor,
+  inWatchlist,
+  onToggleWatchlist,
+  onAddToWatchlistGroup,
+  onAddToWatchlist,
+  onRemoveFromWatchlist,
+  watchlistPending,
+}: Props) {
   // 弹窗开关：纯本地状态，与数据/配置无关，放早期 return 之前
   const [customizerOpen, setCustomizerOpen] = useState(false)
   // ext 标签展开状态：按 symbol::colId，切股/切字段时互不干扰
@@ -220,26 +238,29 @@ export function StockInfoBar({ symbol, name, stockInfo, rows, fields, onFieldsCh
         </span>
         {/* 右侧操作按钮：加自选 + 加监控 + 信息条配置 */}
         <div className="ml-auto self-center flex items-center gap-1">
-          {onToggleWatchlist && (
-            !inWatchlist && onAddToWatchlistGroup ? (
-              <WatchlistAddMenu
-                onSelect={onAddToWatchlistGroup}
-                triggerClassName="p-1 rounded-btn transition-colors cursor-pointer max-md:h-11 max-md:w-11 text-muted hover:text-foreground hover:bg-elevated"
-                title="加自选"
-                ariaLabel="加自选"
-              >
-                <Star className="h-3.5 w-3.5" />
-              </WatchlistAddMenu>
-            ) : (
-              <button
-                onClick={onToggleWatchlist}
-                className={`p-1 rounded-btn transition-colors cursor-pointer max-md:h-11 max-md:w-11 ${inWatchlist ? 'text-[#FACC15]' : 'text-muted hover:text-foreground hover:bg-elevated'}`}
-                title={inWatchlist ? '移出自选' : '加自选'}
-              >
-                <Star className="h-3.5 w-3.5" />
-              </button>
-            )
-          )}
+          {/* 自选星标: 移出(onRemoveFromWatchlist/onToggleWatchlist) 或 加自选(带分组菜单) */}
+          {inWatchlist && (onRemoveFromWatchlist ?? onToggleWatchlist) ? (
+            <button
+              type="button"
+              onClick={onRemoveFromWatchlist ?? onToggleWatchlist}
+              disabled={watchlistPending}
+              className={`rounded-btn p-1 transition-colors cursor-pointer max-md:h-11 max-md:w-11 hover:bg-elevated disabled:opacity-50 ${inWatchlist ? 'text-[#FACC15]' : 'text-muted hover:text-foreground'}`}
+              title="移出自选"
+              aria-label={`将 ${symbol} 移出自选`}
+            >
+              <Star className="h-3.5 w-3.5" />
+            </button>
+          ) : !inWatchlist && (onAddToWatchlistGroup ?? onAddToWatchlist) ? (
+            <WatchlistAddMenu
+              onSelect={(onAddToWatchlistGroup ?? onAddToWatchlist)!}
+              disabled={watchlistPending}
+              triggerClassName="p-1 rounded-btn transition-colors cursor-pointer max-md:h-11 max-md:w-11 text-muted hover:text-foreground hover:bg-elevated"
+              title="加自选"
+              ariaLabel="加自选"
+            >
+              <Star className="h-3.5 w-3.5" />
+            </WatchlistAddMenu>
+          ) : null}
           {onMonitor && (
             <button
               onClick={onMonitor}

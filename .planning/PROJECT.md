@@ -8,16 +8,17 @@ AthenaQuant is a shipped, self-hosted quantitative research platform for individ
 
 An investor can turn reliable market data and their own holdings into an auditable, actionable research and monitoring workflow without operating multiple disconnected tools.
 
-## Current Milestone: v3.0 可回放 Alpha Factory 与 FactorResearchAgent
+## Current Milestone: v3.1 可信工作台与运维闭环
 
-**Goal:** 在现有受治理数据、Factor DSL、共享信号链、准入门和独立 OOS 基础上，交付可重放的自动因子挖掘与两阶段研究 Agent 工作流：模型只提出受限研究假设，确定性代码负责候选生成、评估、门禁和研究资产晋级；全程保持 provenance、人工确认和零自动实盘执行权。
+**Goal:** 以打磨现有功能为主, 补齐「用户能否看懂、验证、操作」的闭环: 统一工具调用审计与数据质量可见性, 首页今日工作台与统一待办, 监控与报告闭环; 暂不扩展新的大型量化能力。
 
-**Target features（研究驱动，先确定性后学习型）：**
-- Alpha Factory：稳定 vocabulary、受限 AST/grammar 候选生成、mutation/crossover、精英池、谱系、多样性和成本压力评估
-- FactorResearchAgent：Preflight → Stage 1 研究诊断 → 确定性搜索 → Stage 2 候选复核，严格 JSON、失败留痕、可取消、可恢复
-- 研究运行工作台：持久化 run/event/candidate/evidence，poll/SSE Timeline，候选比较和 OOS 证据展示
-- Research-only Promotion Ticket：晋级前刷新数据与准入证据，显式人工确认后才注册正式因子/组合模型
-- 平台边界：不复制 AGPL 源码，不引入自动实盘、券商连接或任意 Python 执行
+**Target features（70% 产品闭环和可靠性, 20% 测试与部署验证, 10% 小型体验增强）:**
+- Phase 51 发布基线收口: 统一 STATE/PROJECT/ROADMAP/REQUIREMENTS 状态, 执行并纳入 Vitest, 补真实 LLM/Provider 降级/SSE 重连部署冒烟, 处理或明确关闭 v3.0 技债
+- Phase 52 全局可信度与工具审计: Provider/AI/通知/外部工具统一 ToolCallEnvelope, 统一 Provider Doctor 与数据质量 API, 审计脱敏与前端来源/日期/缓存/降级/schema/失败原因展示
+- Phase 53 今日工作台与统一待办: 首页集中展示数据新鲜度、Provider 健康、运行中/失败任务、最近报告与产物、监控触发、统一待确认收件箱, 每项有明确下一步入口
+- Phase 54 监控与报告闭环: synthetic test-fire、预算、冷却剩余、渠道健康与 digest 预览; 报告统一数据质量 Banner、证据卡、引用回链、多空冲突与失败路径; 运行页统一 Timeline、参数、工具调用、产物、失败重试与 SSE 恢复
+
+**验收主链路:** Provider 降级 → 首页质量告警 → 启动研究任务 → SSE 运行过程 → 工具调用与 raw hash → 报告回链证据 → 待确认事项 → 人工审批 → 创建监控并 test-fire → 通知投递结果。
 
 ## Success Metric
 
@@ -26,8 +27,7 @@ The v1.0 release is successful when all 23 requirements are verified end to end,
 ## Requirements
 
 ### Active
-
-Building toward v3.0 (可回放 Alpha Factory 与 FactorResearchAgent). Requirements are defined in `.planning/REQUIREMENTS.md`.
+Building toward v3.1 (可信工作台与运维闭环). Requirements are defined in `.planning/REQUIREMENTS.md`.
 
 ### Validated in v1.1
 
@@ -158,4 +158,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-08-08 — v3.0 milestone started (可回放 Alpha Factory 与 FactorResearchAgent)*
+*Last updated: 2026-08-18 — v3.1 milestone started (可信工作台与运维闭环)*

@@ -1,10 +1,13 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Save, X, Plus, Search, Building2, ChartNoAxesCombined, Check, Tags } from 'lucide-react'
-import { api, genRuleId, type MonitorRule, type MonitorCondition, type SectorKind, type SectorMonitorTarget } from '@/lib/api'
+import { Activity, Building2, ChartNoAxesCombined, Check, Layers3, Plus, RadioTower, Save, Search, Tags, TrendingUp, Waypoints, X } from 'lucide-react'
+import { api, genRuleId, type MonitorRule, type MonitorCondition, type SectorKind, type SectorMonitorTarget, type StrategyNotifyEvent } from '@/lib/api'
+import { DEFAULT_STRATEGY_NOTIFY_EVENTS, LEGACY_STRATEGY_NOTIFY_EVENTS, STRATEGY_NOTIFY_EVENT_OPTIONS } from '@/lib/strategyMonitorEvents'
 import { QK } from '@/lib/queryKeys'
+import { boardTag } from '@/components/stock-table/primitives'
 import { SignalPicker } from '@/components/screener/SignalPicker'
+import { MONITOR_INTRADAY_SIGNAL_OPTIONS, SIGNAL_OPTIONS, cnSignal } from '@/lib/signals'
 import { usePreferences } from '@/lib/useSharedQueries'
 
 interface Props {
@@ -20,11 +23,18 @@ interface Props {
 
 const TYPE_DEFAULT_NAME: Record<string, string> = {
   signal: '个股信号监控', price: '价格监控', market: '市场异动监控', strategy: '策略监控', position: '持仓监控', sector: '板块监控',
-  // 盘前异动 (preopen): 类型下拉由 /options types 驱动自动出现, 此处只供空名默认
+  // 盘前异动 (preopen): 类型入口由 /options types 驱动, 此处只供空名默认
   preopen: '盘前异动',
 }
 
-// 板块监控对象分类 (type=sector): 与后端 SECTOR_KINDS / SectorMonitorService 对齐。
+const TYPE_ICONS = {
+  signal: Activity,
+  price: TrendingUp,
+  market: RadioTower,
+  strategy: Waypoints,
+  sector: Layers3,
+}
+
 const SECTOR_KIND_OPTIONS: Array<{ key: SectorKind; label: string; icon: typeof ChartNoAxesCombined }> = [
   { key: 'index', label: '大盘指数', icon: ChartNoAxesCombined },
   { key: 'concept', label: '概念题材', icon: Tags },
@@ -35,6 +45,13 @@ const SECTOR_KIND_OPTIONS: Array<{ key: SectorKind; label: string; icon: typeof 
 // 旧规则里已下线的 wecom 渠道在装载草稿时剥离, 避免出现"看不见也取消不掉"的隐形渠道。
 const RULE_DELIVERY_CHANNELS = ['feishu', 'telegram']
 
+const STRATEGY_SOURCE_META = {
+  builtin: { label: '内置', className: 'border-accent/25 bg-accent/10 text-accent' },
+  custom: { label: '自定义', className: 'border-emerald-400/25 bg-emerald-400/10 text-emerald-400' },
+  ai: { label: 'AI', className: 'border-amber-400/25 bg-amber-400/10 text-amber-400' },
+  composite: { label: '叠加', className: 'border-teal-500/25 bg-teal-500/10 text-teal-400' },
+} as const
+
 const emptyRule = (preset?: Partial<MonitorRule>): MonitorRule => ({
   id: genRuleId(),
   name: '',
@@ -43,6 +60,7 @@ const emptyRule = (preset?: Partial<MonitorRule>): MonitorRule => ({
   asset_type: 'stock',
   scope: 'symbols',
   symbols: [],
+  position_ids: [],
   sector: null,
   sector_kind: 'index',
   sector_targets: [],
@@ -50,6 +68,8 @@ const emptyRule = (preset?: Partial<MonitorRule>): MonitorRule => ({
   threshold_pct: 1,
   window_minutes: 5,
   strategy_id: null,
+  score_min: null,
+  score_max: null,
   direction: 'entry',
   conditions: [],
   logic: 'or',
@@ -68,22 +88,54 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
   const telegramConfigured = !!(prefs?.telegram_bot_token && prefs?.telegram_chat_id)
   const [editing] = useState(!!rule)
   // 新建规则: 预填全局「默认推送渠道」(多选数组), preset 显式指定时以 preset 为准。
-  // 编辑规则: 沿用规则自身配置, 仅做兼容规范化 (剥离下线渠道、持仓 ID 统一为数字)。
-  const [draft, setDraft] = useState<MonitorRule>(
-    rule
-      ? {
-          ...rule,
-          conditions: rule.conditions.map(c => ({ ...c })),
-          sector_targets: rule.sector_targets?.map(target => ({ ...target })) ?? [],
-          webhook_channels: (rule.webhook_channels ?? []).filter(c => RULE_DELIVERY_CHANNELS.includes(c)),
-          // 后端接受 str|int 持仓 ID; 统一为数字, 保证与持仓列表的勾选匹配、避免混型重复。
-          position_ids: (rule.position_ids ?? []).map(Number),
-        }
-      : {
-          ...emptyRule(preset),
-          webhook_channels: (preset?.webhook_channels ?? prefs?.webhook_default_channels ?? []).filter(c => RULE_DELIVERY_CHANNELS.includes(c)),
-        },
-  )
+  // 编辑规则: 完全沿用规则自身配置, 不受默认值影响。
+  const [draft, setDraft] = useState<MonitorRule>(() => {
+    if (rule) {
+      return {
+        ...rule,
+        notify_events: rule.type === 'strategy'
+          ? [...(rule.notify_events ?? LEGACY_STRATEGY_NOTIFY_EVENTS)]
+          : undefined,
+        conditions: rule.conditions.map(c => ({ ...c })),
+        sector_targets: rule.sector_targets?.map(target => ({ ...target })) ?? [],
+        // 剥离已下线渠道; 持仓 ID 统一为数字, 避免与持仓列表勾选混型。
+        webhook_channels: (rule.webhook_channels ?? []).filter(c => RULE_DELIVERY_CHANNELS.includes(c)),
+        position_ids: (rule.position_ids ?? []).map(Number),
+      }
+    }
+    const initial = {
+      ...emptyRule(preset),
+      webhook_channels: (preset?.webhook_channels ?? prefs?.webhook_default_channels ?? []).filter(c => RULE_DELIVERY_CHANNELS.includes(c)),
+    }
+    if (initial.type === 'strategy' && !initial.notify_events) {
+      initial.notify_events = [...DEFAULT_STRATEGY_NOTIFY_EVENTS]
+    }
+    return initial
+  })
+  const assetType = draft.asset_type ?? 'stock'
+  // 策略列表跟随资产类型: ETF 只列技术类策略。
+  const strategies = useQuery({
+    queryKey: QK.screenerStrategies(assetType),
+    queryFn: () => api.screenerStrategies(assetType),
+  })
+  const [error, setError] = useState('')
+  const [symbolQuery, setSymbolQuery] = useState('')
+  const [sectorQuery, setSectorQuery] = useState('')
+  const [industryLevel, setIndustryLevel] = useState<1 | 2 | 3>(() => {
+    const level = rule?.sector_targets?.[0]?.level
+    return level === 1 || level === 3 ? level : 2
+  })
+  const [strategyQuery, setStrategyQuery] = useState('')
+  const [strategyCategory, setStrategyCategory] = useState<'all' | 'builtin' | 'custom' | 'ai' | 'composite'>('all')
+  // 标的搜索资产类型: ETF 一并搜股票; 指数只搜指数; 否则只搜股票。
+  const symbolAssetTypes = assetType === 'etf' ? 'stock,etf' : assetType === 'index' ? 'index' : 'stock'
+  const symbolSearch = useQuery({
+    queryKey: QK.instrumentSearch(symbolQuery, symbolAssetTypes),
+    queryFn: () => api.instrumentSearch(symbolQuery, 20, symbolAssetTypes),
+    enabled: symbolQuery.length > 0,
+  })
+
+  // 持仓监控: 拉取持仓与账户 (仅 position 类型时)
   const holdings = useQuery({
     queryKey: QK.portfolioHoldings(),
     queryFn: () => api.portfolioHoldings(),
@@ -99,56 +151,51 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
   // 避免计数包含"幽灵持仓"、用户却无处取消勾选。
   const holdingIds = new Set((holdings.data?.positions ?? []).map(position => position.id))
   const unavailablePositionIds = holdings.data ? (draft.position_ids ?? []).map(Number).filter(id => !holdingIds.has(id)) : []
-  const assetType = draft.asset_type ?? 'stock'
-  // 策略列表跟随资产类型: ETF 只列技术类策略。
-  const strategies = useQuery({
-    queryKey: QK.screenerStrategies(assetType),
-    queryFn: () => api.screenerStrategies(assetType),
-  })
-  const [error, setError] = useState('')
-  const [symbolQuery, setSymbolQuery] = useState('')
-  const [sectorQuery, setSectorQuery] = useState('')
-  const [industryLevel, setIndustryLevel] = useState<1 | 2 | 3>(() => {
-    const level = rule?.sector_targets?.[0]?.level
-    return level === 1 || level === 3 ? level : 2
-  })
-  // ETF 规则时标的搜索一并搜出 ETF。
-  const symbolAssetTypes = assetType === 'etf' ? 'stock,etf' : 'stock'
-  const symbolSearch = useQuery({
-    queryKey: QK.instrumentSearch(symbolQuery, symbolAssetTypes),
-    queryFn: () => api.instrumentSearch(symbolQuery, 20, symbolAssetTypes),
-    enabled: symbolQuery.length > 0,
-  })
 
   const save = useMutation({
     mutationFn: () => {
       const d = { ...draft }
+      delete d.runtime_warning
       // name 为空时用默认名
       if (!d.name.trim()) {
         const base = TYPE_DEFAULT_NAME[d.type] ?? '监控规则'
         d.name = d.type === 'sector' && d.sector_targets?.length
           ? `${base} · ${d.sector_targets[0].name}${d.sector_targets.length > 1 ? ` 等${d.sector_targets.length}个` : ''}`
           : d.scope === 'symbols' && d.symbols.length > 0
-            ? `${base} · ${d.symbols[0]}${d.symbols.length > 1 ? ` 等${d.symbols.length}只` : ''}`
-            : base
+          ? `${base} · ${d.symbols[0]}${d.symbols.length > 1 ? ` 等${d.symbols.length}只` : ''}`
+          : base
       }
       if (d.type === 'strategy') {
         if (!d.strategy_id) throw new Error('策略监控必须选择一个策略')
+        if (!d.notify_events?.length) throw new Error('至少选择一个通知事件')
+        for (const [label, value] of [['最低分', d.score_min], ['最高分', d.score_max]] as const) {
+          if (value != null && (!Number.isFinite(value) || value < 0 || value > 100)) {
+            throw new Error(`${label}必须在 0 到 100 之间`)
+          }
+        }
+        if (d.score_min != null && d.score_max != null && d.score_min > d.score_max) {
+          throw new Error('最低分不能高于最高分')
+        }
       } else if (d.type === 'sector') {
-        // 板块规则作用域恒为全市场, 由 sector_targets 圈定对象; 清空 conditions。
+        delete d.score_min
+        delete d.score_max
         d.scope = 'all'
         d.symbols = []
         d.conditions = []
+        delete d.notify_events
         if (!d.sector_targets?.length) throw new Error('请选择至少一个监控对象')
         if ((d.threshold_pct ?? 0) <= 0 || (d.threshold_pct ?? 0) > 20) throw new Error('阈值必须大于 0 且不超过 20%')
       } else {
+        delete d.score_min
+        delete d.score_max
+        delete d.notify_events
         if (d.conditions.length === 0) throw new Error('至少选择一个触发条件')
         for (const c of d.conditions) {
           if (!c.field || !c.op) throw new Error('条件填写不完整')
           if (c.op !== 'truth' && (c.value === null || c.value === undefined)) throw new Error('阈值条件需要数值')
         }
       }
-      if (d.type !== 'sector' && d.scope === 'symbols' && d.symbols.length === 0) throw new Error('请选择至少一只股票')
+      if (d.type !== 'sector' && d.type !== 'position' && d.scope === 'symbols' && d.symbols.length === 0) throw new Error('请选择至少一只标的')
       if (d.scope === 'positions' && !(d.position_ids?.length)) throw new Error('请选择至少一笔持仓')
       return api.monitorRuleSave(d)
     },
@@ -159,13 +206,26 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
     },
     onError: err => setError(String((err as any)?.message ?? err)),
   })
-  const changeType = (type: MonitorRule['type']) => {
-    setDraft(d => type === 'position'
-      ? { ...d, type, scope: 'positions', symbols: [] }
-      : type === 'sector'
-        ? { ...d, type, scope: 'all', symbols: [], conditions: [], position_ids: [] }
-        : { ...d, type, scope: d.scope === 'positions' ? 'symbols' : d.scope, position_ids: d.scope === 'positions' ? [] : d.position_ids },
-    )
+
+  // 条件编辑
+  const updateCond = (idx: number, patch: Partial<MonitorCondition>) =>
+    setDraft(d => ({ ...d, conditions: d.conditions.map((c, i) => i === idx ? { ...c, ...patch } : c) }))
+  const addCond = (op: 'truth' | 'threshold') =>
+    setDraft(d => ({
+      ...d,
+      conditions: [...d.conditions, op === 'truth'
+        ? { field: 'signal_volume_surge', op: 'truth' }
+        // simple 模式(个股弹窗)默认现价; 完整模式默认 RSI 超卖
+        : { field: simple ? 'close' : 'rsi_14', op: '<', value: simple ? 0 : 30 }],
+    }))
+  const removeCond = (idx: number) =>
+    setDraft(d => ({ ...d, conditions: d.conditions.filter((_, i) => i !== idx) }))
+
+  const addSymbol = (sym: string) => {
+    if (!draft.symbols.includes(sym)) {
+      setDraft(d => ({ ...d, symbols: [...d.symbols, sym] }))
+    }
+    setSymbolQuery('')
   }
 
   const selectSectorKind = (kind: SectorKind) => {
@@ -189,33 +249,22 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
     return { ...d, position_ids: selected.includes(positionId) ? selected.filter(id => id !== positionId) : [...selected, positionId] }
   })
 
-  // 条件编辑
-  const updateCond = (idx: number, patch: Partial<MonitorCondition>) =>
-    setDraft(d => ({ ...d, conditions: d.conditions.map((c, i) => i === idx ? { ...c, ...patch } : c) }))
-  const addCond = (op: 'truth' | 'threshold') =>
-    setDraft(d => ({
-      ...d,
-      conditions: [...d.conditions, op === 'truth'
-        ? { field: 'signal_volume_surge', op: 'truth' }
-        // simple 模式(个股弹窗)默认现价; 完整模式默认 RSI 超卖;
-        // preopen 默认 open_gap (竞价白名单字段 — 否则保存必被后端白名单拒绝)
-        : { field: draft.type === 'preopen' ? 'open_gap' : (simple ? 'close' : 'rsi_14'), op: '<', value: simple ? 0 : 30 }],
-    }))
-  const removeCond = (idx: number) =>
-    setDraft(d => ({ ...d, conditions: d.conditions.filter((_, i) => i !== idx) }))
-
-  const addSymbol = (sym: string) => {
-    if (!draft.symbols.includes(sym)) {
-      setDraft(d => ({ ...d, symbols: [...d.symbols, sym] }))
-    }
-    setSymbolQuery('')
-  }
-
-  // 勾选/取消勾选某个推送渠道 (飞书 / 企业微信 各自独立)
+  // 勾选/取消勾选某个推送渠道 (飞书 / Telegram 各自独立)
   const toggleChannel = (ch: string) =>
     setDraft(d => {
       const cur = d.webhook_channels ?? []
       return { ...d, webhook_channels: cur.includes(ch) ? cur.filter(c => c !== ch) : [...cur, ch] }
+    })
+
+  const toggleStrategyEvent = (event: StrategyNotifyEvent) =>
+    setDraft(d => {
+      const current = d.notify_events ?? LEGACY_STRATEGY_NOTIFY_EVENTS
+      return {
+        ...d,
+        notify_events: current.includes(event)
+          ? current.filter(item => item !== event)
+          : [...current, event],
+      }
     })
 
   // preopen 只能用竞价白名单字段 (后端 PREOPEN_ALLOWED_FIELDS — 禁 EOD 列);
@@ -225,12 +274,63 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
     : (options.data?.threshold_fields ?? [])
   const operators = options.data?.operators ?? ['>', '>=', '<', '<=', '==', '!=']
   const selectedSignals = draft.conditions.filter(c => c.op === 'truth').map(c => c.field)
+  const hasIntradaySignal = selectedSignals.some(signal => MONITOR_INTRADAY_SIGNAL_OPTIONS.includes(signal))
+  const intradaySupport = options.data?.intraday_signal_support
+  const monitorBuiltinSignals = [
+    ...SIGNAL_OPTIONS.map(key => ({ key, label: cnSignal(key) })),
+    ...(options.data?.builtin_signals ?? []).filter(option => MONITOR_INTRADAY_SIGNAL_OPTIONS.includes(option.key)),
+  ]
+  // 指数: 隐藏涨跌停/连板类 (指数无这些列) 与分时信号 (无本地分钟K, 会静默不触发)
+  const INDEX_HIDDEN_SIGNALS = (key: string) =>
+    key.includes('limit') || MONITOR_INTRADAY_SIGNAL_OPTIONS.includes(key)
+  const pickerSignals = assetType === 'index'
+    ? monitorBuiltinSignals.filter(o => !INDEX_HIDDEN_SIGNALS(o.key))
+    : monitorBuiltinSignals
+  // 指数: 监控类型仅 signal/price (无涨跌停/策略/封单语义)
+  const visibleTypes = (options.data?.types ?? []).filter(
+    t => assetType !== 'index' || t.key === 'signal' || t.key === 'price',
+  )
+  // 指数: 作用范围仅 symbols (无全市场/板块语义)
+  const visibleScopes = (options.data?.scopes ?? []).filter(
+    s => s.key !== 'positions' && s.key !== 'sector',
+  ).filter(
+    s => assetType !== 'index' || s.key === 'symbols',
+  )
+  const sectorKind = draft.sector_kind ?? 'index'
+  const sectorTargets = options.data?.sector_targets?.[sectorKind] ?? []
+  const visibleSectorTargets = sectorTargets.filter(target => {
+    if (sectorKind === 'industry' && target.level !== industryLevel) return false
+    const query = sectorQuery.trim().toLowerCase()
+    if (!query) return true
+    return `${target.name} ${target.symbol ?? ''} ${target.value ?? ''}`.toLowerCase().includes(query)
+  }).slice(0, 100)
   const thresholdConds = draft.conditions.filter(c => c.op !== 'truth')
+  const strategyPresets = strategies.data?.presets ?? []
+  const normalizedStrategyQuery = strategyQuery.trim().toLowerCase()
+  const visibleStrategies = strategyPresets.filter(strategy => {
+    if (strategyCategory !== 'all' && strategy.source !== strategyCategory) return false
+    if (!normalizedStrategyQuery) return true
+    return [strategy.name, strategy.id, strategy.description, ...(strategy.tags ?? [])]
+      .some(value => String(value ?? '').toLowerCase().includes(normalizedStrategyQuery))
+  })
+  const strategyCategories = [
+    { key: 'all' as const, label: '全部', count: strategyPresets.length },
+    { key: 'builtin' as const, label: '内置', count: strategyPresets.filter(strategy => strategy.source === 'builtin').length },
+    { key: 'custom' as const, label: '自定义', count: strategyPresets.filter(strategy => strategy.source === 'custom').length },
+    { key: 'ai' as const, label: 'AI', count: strategyPresets.filter(strategy => strategy.source === 'ai').length },
+    { key: 'composite' as const, label: '叠加', count: strategyPresets.filter(strategy => strategy.source === 'composite').length },
+  ]
 
   const onSignalPickerChange = (next: string[]) => {
-    const nonTruthConds = draft.conditions.filter(c => c.op !== 'truth')
-    const truthConds: MonitorCondition[] = next.map(field => ({ field, op: 'truth' }))
-    setDraft(d => ({ ...d, conditions: [...nonTruthConds, ...truthConds] }))
+    setDraft(d => {
+      const nonTruthConds = d.conditions.filter(c => c.op !== 'truth')
+      const truthConds: MonitorCondition[] = next.map(field => ({ field, op: 'truth' }))
+      return {
+        ...d,
+        scope: next.some(signal => MONITOR_INTRADAY_SIGNAL_OPTIONS.includes(signal)) ? 'symbols' : d.scope,
+        conditions: [...nonTruthConds, ...truthConds],
+      }
+    })
   }
 
   // ── 极简模式: 只显示信号点选 + 可选描述 ──
@@ -239,7 +339,7 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
       <div className="rounded-card border border-border bg-surface p-5 space-y-4">
         <div className="flex items-center justify-between gap-3">
           <h3 className="text-sm font-medium text-foreground">{editing ? '编辑监控' : '加入监控'}</h3>
-          <button onClick={onClose} className="rounded p-1 text-muted hover:bg-elevated hover:text-foreground cursor-pointer max-md:min-h-11 max-md:min-w-11">
+          <button onClick={onClose} aria-label="关闭" className="rounded p-1 text-muted hover:bg-elevated hover:text-foreground cursor-pointer max-md:min-h-11 max-md:min-w-11">
             <X className="h-4 w-4" />
           </button>
         </div>
@@ -254,7 +354,21 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
 
         <div>
           <div className="mb-1.5 text-[11px] text-muted">选择触发信号 (任一命中即报警)</div>
-          <SignalPicker signals={selectedSignals} onChange={onSignalPickerChange} kind="entry" />
+          <SignalPicker
+            signals={selectedSignals}
+            onChange={onSignalPickerChange}
+            kind="entry"
+            builtinSignals={pickerSignals}
+            disabledSignals={intradaySupport?.available === false ? MONITOR_INTRADAY_SIGNAL_OPTIONS : []}
+            disabledSignalHint={intradaySupport?.reason}
+          />
+          {hasIntradaySignal && (
+            <div className={`mt-2 text-[10px] ${intradaySupport?.available === false ? 'text-danger' : 'text-muted'}`}>
+              {intradaySupport?.available === false
+                ? intradaySupport.reason
+                : `按已完成的一分钟判断,当前最多监听 ${intradaySupport?.max_symbols ?? 0} 只标的。`}
+            </div>
+          )}
         </div>
 
         {/* 价位条件 (阈值) — 与信号共存, 可选添加 */}
@@ -272,14 +386,14 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
                 return (
                   <div key={i} className="flex items-center gap-1.5">
                     <span className="text-[10px] text-muted/60 w-6 text-right shrink-0">{i === 0 && selectedSignals.length === 0 ? '当' : draft.logic === 'and' ? '且' : '或'}</span>
-                    <select value={c.field} onChange={e => updateCond(realIdx, { field: e.target.value })} aria-label={`条件 ${i + 1} 字段`} className="flex-1 h-7 px-1.5 rounded bg-base border border-border text-[11px] text-foreground focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60">
+                    <select value={c.field} onChange={e => updateCond(realIdx, { field: e.target.value })} className="flex-1 h-7 px-1.5 rounded bg-base border border-border text-[11px] text-foreground focus:outline-none focus:border-accent/50">
                       {thresholdFields.map(f => <option key={f.key} value={f.key}>{f.label}</option>)}
                     </select>
-                    <select value={c.op} onChange={e => updateCond(realIdx, { op: e.target.value })} aria-label={`条件 ${i + 1} 操作符`} className="w-12 h-7 px-1 rounded bg-base border border-border text-[11px] font-mono text-foreground text-center focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60">
+                    <select value={c.op} onChange={e => updateCond(realIdx, { op: e.target.value })} className="w-12 h-7 px-1 rounded bg-base border border-border text-[11px] font-mono text-foreground text-center focus:outline-none focus:border-accent/50">
                       {operators.map(op => <option key={op} value={op}>{op}</option>)}
                     </select>
-                    <input type="number" value={c.value ?? 0} onChange={e => updateCond(realIdx, { value: parseFloat(e.target.value) })} step="any" aria-label={`条件 ${i + 1} 阈值`} className="w-24 h-7 px-1.5 rounded bg-base border border-border text-[11px] font-mono text-foreground text-center focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60" />
-                    <button onClick={() => removeCond(realIdx)} aria-label={`删除条件 ${i + 1}`} className="p-1 rounded text-muted hover:text-danger hover:bg-danger/10 cursor-pointer">
+                    <input type="number" value={c.value ?? 0} onChange={e => updateCond(realIdx, { value: parseFloat(e.target.value) })} step="any" className="w-24 h-7 px-1.5 rounded bg-base border border-border text-[11px] font-mono text-foreground text-center focus:outline-none focus:border-accent/50" />
+                    <button onClick={() => removeCond(realIdx)} className="p-1 rounded text-muted hover:text-danger hover:bg-danger/10 cursor-pointer">
                       <X className="h-3.5 w-3.5" />
                     </button>
                   </div>
@@ -314,81 +428,104 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
           <h3 className="text-sm font-medium text-foreground">{editing ? '编辑监控规则' : '新建监控规则'}</h3>
           <p className="mt-1 text-[11px] text-muted">规则标识自动生成,描述为可选。</p>
         </div>
-        <button onClick={onClose} className="rounded p-1 text-muted hover:bg-elevated hover:text-foreground cursor-pointer max-md:min-h-11 max-md:min-w-11">
+        <button onClick={onClose} className="rounded p-1 text-muted hover:bg-elevated hover:text-foreground cursor-pointer">
           <X className="h-4 w-4" />
         </button>
       </div>
 
-      {/* 资产类型: 股票 / ETF (个股极简模式不显示; 板块规则无资产维度) */}
+      {/* 资产类型: 股票 / ETF / 指数 (个股极简模式不显示) */}
       {!simple && draft.type !== 'sector' && (
         <div className="space-y-1.5">
           <span className="text-[11px] text-muted">资产类型</span>
           <div className="inline-flex h-9 rounded-btn border border-border overflow-hidden">
-            {(['stock', 'etf'] as const).map(t => (
+            {(['stock', 'etf', 'index'] as const).map(t => (
               <button
                 key={t}
                 type="button"
-                onClick={() => setDraft(d => ({ ...d, asset_type: t, strategy_id: null, symbols: [] }))}
+                aria-pressed={assetType === t}
+                onClick={() => {
+                  if (assetType === t) return
+                  setDraft(d => ({
+                    ...d,
+                    asset_type: t,
+                    strategy_id: null,
+                    symbols: [],
+                    type: t === 'index' && d.type !== 'signal' && d.type !== 'price' ? 'signal' : d.type,
+                    scope: t === 'index' ? 'symbols' : d.scope,
+                  }))
+                  setStrategyQuery('')
+                  setStrategyCategory('all')
+                }}
                 className={`h-full px-4 text-xs font-medium transition-colors cursor-pointer
                   ${assetType === t ? 'bg-accent/10 text-accent' : 'text-muted hover:text-foreground'}`}
               >
-                {t === 'stock' ? '股票' : 'ETF'}
+                {t === 'stock' ? '股票' : t === 'etf' ? 'ETF' : '指数'}
               </button>
             ))}
           </div>
         </div>
       )}
 
-      {/* 描述 (可选) + 类型 */}
-      {/* 基本信息与监控范围 */}
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-        <label className="space-y-1.5 md:col-span-2">
-          <span className="text-[11px] text-muted">描述 (可选)</span>
-          <input value={draft.name} onChange={e => setDraft(d => ({ ...d, name: e.target.value }))} placeholder="留空用默认名称" className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs text-foreground" />
-        </label>
-        <label className="space-y-1.5">
-          <span className="text-[11px] text-muted">监控类型</span>
-          <select value={draft.type} onChange={e => changeType(e.target.value as MonitorRule['type'])} className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs text-foreground">
-            {(options.data?.types ?? []).map(t => <option key={t.key} value={t.key}>{t.label}</option>)}
-          </select>
-        </label>
+      {/* 监控类型 */}
+      <div className="space-y-1.5">
+        <span className="text-[11px] text-muted">监控类型</span>
+        <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-5">
+          {visibleTypes.map(t => {
+            const Icon = TYPE_ICONS[t.key as keyof typeof TYPE_ICONS] ?? Activity
+            const active = draft.type === t.key
+            return (
+              <button
+                key={t.key}
+                type="button"
+                aria-pressed={active}
+                onClick={() => setDraft(d => {
+                  const type = t.key as MonitorRule['type']
+                  // 板块恒全市场; 持仓切专用作用域; 其它类型离开持仓域时回退 symbols
+                  const nextScope = type === 'sector'
+                    ? 'all'
+                    : type === 'position'
+                      ? 'positions'
+                      : d.scope === 'positions' ? 'symbols' : (type === 'strategy' && d.scope === 'symbols' && d.symbols.length === 0 ? 'all' : d.scope)
+                  return {
+                    ...d,
+                    type,
+                    notify_events: type === 'strategy'
+                      ? [...(d.notify_events ?? DEFAULT_STRATEGY_NOTIFY_EVENTS)]
+                      : undefined,
+                    scope: nextScope,
+                    symbols: type === 'sector' || type === 'position' ? [] : d.symbols,
+                    position_ids: type === 'position' ? d.position_ids : [],
+                    conditions: type === 'sector' ? [] : d.conditions,
+                    direction: type === 'sector' ? 'up' : d.type === 'sector' ? 'entry' : d.direction,
+                  }
+                })}
+                className={`inline-flex h-9 items-center justify-center gap-1.5 rounded-btn border px-2 text-xs font-medium transition-colors cursor-pointer ${
+                  active
+                    ? 'border-accent/40 bg-accent/12 text-accent'
+                    : 'border-border bg-base text-secondary hover:border-accent/25 hover:text-foreground'
+                }`}
+              >
+                <Icon className="h-3.5 w-3.5 shrink-0" />
+                <span>{t.label}</span>
+              </button>
+            )
+          })}
+        </div>
       </div>
 
-      {draft.type === 'position' ? (
-        <fieldset className="space-y-2">
-          <legend className="text-[11px] text-muted">监控范围 · 持仓</legend>
-          <p className="text-[10px] text-muted">选择需要监控的持仓；每项明确显示标的与账户。</p>
-          <div className="max-h-44 space-y-1 overflow-auto rounded-btn border border-border bg-base p-2" aria-describedby="position-selection-help">
-            {holdings.isLoading ? <span className="block px-2 py-2 text-xs text-muted">正在加载持仓…</span> : (holdings.data?.positions ?? []).length === 0 ? <span className="block px-2 py-2 text-xs text-warning">暂无可选择持仓，请先添加持仓。</span> : (holdings.data?.positions ?? []).map(position => (
-              <label key={position.id} className="flex min-h-9 cursor-pointer items-center gap-2 rounded px-2 text-xs hover:bg-elevated">
-                <input type="checkbox" checked={(draft.position_ids ?? []).includes(position.id)} onChange={() => togglePosition(position.id)} className="h-4 w-4 accent-accent" />
-                <span className="font-mono text-foreground">{position.instrument_symbol}</span>
-                <span className="min-w-0 truncate text-secondary">{accountNames.get(position.account_id) ?? `账户 ${position.account_id}`}</span>
-              </label>
-            ))}
-          </div>
-          <p id="position-selection-help" className="text-[10px] text-muted">已选择 {(draft.position_ids ?? []).length} 笔持仓。</p>
-          {unavailablePositionIds.length > 0 && (
-            <p className="text-[10px] text-warning">
-              {unavailablePositionIds.length} 笔已选持仓不在当前列表 (可能已归档或删除)，保存后仍会保留。
-              <button
-                type="button"
-                onClick={() => setDraft(d => ({ ...d, position_ids: (d.position_ids ?? []).map(Number).filter(id => holdingIds.has(id)) }))}
-                className="ml-1 text-accent hover:text-accent/80"
-              >
-                移除失效持仓
-              </button>
-            </p>
-          )}
-        </fieldset>
-      ) : draft.type === 'sector' ? (
+      <label className="space-y-1.5">
+        <span className="text-[11px] text-muted">描述 (可选)</span>
+        <input value={draft.name} onChange={e => setDraft(d => ({ ...d, name: e.target.value }))} placeholder="留空用默认名称" className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs text-foreground" />
+      </label>
+
+      {draft.type === 'sector' && (
         <div className="space-y-4 border-t border-border/60 pt-4">
           <div className="space-y-1.5">
             <span className="text-[11px] text-muted">板块分类</span>
             <div className="grid grid-cols-3 gap-1.5">
               {SECTOR_KIND_OPTIONS.map(option => {
                 const Icon = option.icon
-                const active = (draft.sector_kind ?? 'index') === option.key
+                const active = sectorKind === option.key
                 return (
                   <button
                     key={option.key}
@@ -407,7 +544,7 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
             </div>
           </div>
 
-          {(draft.sector_kind ?? 'index') === 'industry' && (
+          {sectorKind === 'industry' && (
             <div className="space-y-1.5">
               <span className="text-[11px] text-muted">行业层级</span>
               <div className="inline-flex h-8 overflow-hidden rounded-btn border border-border bg-base">
@@ -453,58 +590,46 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
               <input
                 value={sectorQuery}
                 onChange={event => setSectorQuery(event.target.value)}
-                placeholder={`搜索${SECTOR_KIND_OPTIONS.find(option => option.key === draft.sector_kind)?.label ?? '板块'}`}
+                placeholder={`搜索${SECTOR_KIND_OPTIONS.find(option => option.key === sectorKind)?.label ?? '板块'}`}
                 className="h-9 w-full rounded-btn border border-border bg-base pl-8 pr-3 text-xs text-foreground placeholder:text-muted/50 focus:border-accent/50 focus:outline-none"
               />
             </label>
             <div className="grid max-h-48 grid-cols-1 gap-1 overflow-y-auto pr-1 sm:grid-cols-2">
-              {(() => {
-                const sectorTargets = options.data?.sector_targets?.[draft.sector_kind ?? 'index'] ?? []
-                const visible = sectorTargets.filter(target => {
-                  if ((draft.sector_kind ?? 'index') === 'industry' && target.level !== industryLevel) return false
-                  const query = sectorQuery.trim().toLowerCase()
-                  if (!query) return true
-                  return `${target.name} ${target.symbol ?? ''} ${target.value ?? ''}`.toLowerCase().includes(query)
-                }).slice(0, 100)
-                if (visible.length === 0) {
-                  return (
-                    <div className="col-span-full rounded-btn border border-dashed border-border py-6 text-center text-xs text-muted">
-                      {options.isLoading ? '正在加载...' : '没有可用的监控对象'}
-                    </div>
-                  )
-                }
-                return visible.map(target => {
-                  const selected = draft.sector_targets?.some(item => item.key === target.key) ?? false
-                  const unavailable = !target.available || (target.kind !== 'index' && target.member_count < 5)
-                  const targetLabel = target.kind === 'industry'
-                    ? (target.value ?? target.name).replaceAll('-', ' / ')
-                    : target.name
-                  return (
-                    <button
-                      key={target.key}
-                      type="button"
-                      disabled={unavailable}
-                      aria-pressed={selected}
-                      onClick={() => toggleSectorTarget(target)}
-                      title={!target.available ? '请先在实时监控设置中加入该指数' : target.member_count < 5 ? '有效成分少于 5 只' : targetLabel}
-                      className={`flex h-9 min-w-0 items-center gap-2 rounded-btn border px-2.5 text-left transition-colors ${
-                        unavailable
-                          ? 'cursor-not-allowed border-border/40 bg-base/40 text-muted/40'
-                          : selected
-                            ? 'cursor-pointer border-accent/40 bg-accent/10 text-accent'
-                            : 'cursor-pointer border-border bg-base text-secondary hover:border-accent/25 hover:text-foreground'
-                      }`}
-                    >
-                      <span className="min-w-0 flex-1 truncate text-[11px]">{targetLabel}</span>
-                      {target.symbol && <span className="shrink-0 font-mono text-[9px] opacity-60">{target.symbol}</span>}
-                      {target.kind !== 'index' && <span className="shrink-0 font-mono text-[9px] opacity-60">{target.member_count}</span>}
-                      <span className={`grid h-4 w-4 shrink-0 place-items-center rounded-full border ${selected ? 'border-accent bg-accent text-white' : 'border-border text-transparent'}`}>
-                        <Check className="h-2.5 w-2.5" />
-                      </span>
-                    </button>
-                  )
-                })
-              })()}
+              {visibleSectorTargets.length === 0 ? (
+                <div className="col-span-full rounded-btn border border-dashed border-border py-6 text-center text-xs text-muted">
+                  {options.isLoading ? '正在加载...' : '没有可用的监控对象'}
+                </div>
+              ) : visibleSectorTargets.map(target => {
+                const selected = draft.sector_targets?.some(item => item.key === target.key) ?? false
+                const unavailable = !target.available || (target.kind !== 'index' && target.member_count < 5)
+                const targetLabel = target.kind === 'industry'
+                  ? (target.value ?? target.name).replaceAll('-', ' / ')
+                  : target.name
+                return (
+                  <button
+                    key={target.key}
+                    type="button"
+                    disabled={unavailable}
+                    aria-pressed={selected}
+                    onClick={() => toggleSectorTarget(target)}
+                    title={!target.available ? '请先在实时监控设置中加入该指数' : target.member_count < 5 ? '有效成分少于 5 只' : targetLabel}
+                    className={`flex h-9 min-w-0 items-center gap-2 rounded-btn border px-2.5 text-left transition-colors ${
+                      unavailable
+                        ? 'cursor-not-allowed border-border/40 bg-base/40 text-muted/40'
+                        : selected
+                          ? 'cursor-pointer border-accent/40 bg-accent/10 text-accent'
+                          : 'cursor-pointer border-border bg-base text-secondary hover:border-accent/25 hover:text-foreground'
+                    }`}
+                  >
+                    <span className="min-w-0 flex-1 truncate text-[11px]">{targetLabel}</span>
+                    {target.symbol && <span className="shrink-0 font-mono text-[9px] opacity-60">{target.symbol}</span>}
+                    {target.kind !== 'index' && <span className="shrink-0 font-mono text-[9px] opacity-60">{target.member_count}</span>}
+                    <span className={`grid h-4 w-4 shrink-0 place-items-center rounded-full border ${selected ? 'border-accent bg-accent text-white' : 'border-border text-transparent'}`}>
+                      <Check className="h-2.5 w-2.5" />
+                    </span>
+                  </button>
+                )
+              })}
             </div>
           </div>
 
@@ -579,7 +704,7 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
               </span>
             </label>
           </div>
-          {(draft.sector_kind ?? 'index') !== 'index' && (
+          {sectorKind !== 'index' && (
             <div className="flex flex-wrap gap-1.5 text-[9px] text-muted">
               <span className="rounded bg-elevated px-1.5 py-0.5">等权平均</span>
               <span className="rounded bg-elevated px-1.5 py-0.5">行情覆盖 ≥ 80%</span>
@@ -587,30 +712,83 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
             </div>
           )}
         </div>
-      ) : (
-        <div className="space-y-2">
-          <span className="text-[11px] text-muted">作用范围</span>
-          <div className="flex flex-wrap items-center gap-2">
-            <select value={draft.scope} onChange={e => setDraft(d => ({ ...d, scope: e.target.value as MonitorRule['scope'] }))} className="h-9 w-32 rounded-btn border border-border bg-base px-3 text-xs text-foreground">
-              {/* positions 有专属选择器; sector 后端 fail-closed (板块 JOIN 未实现), 均不下拉可选 */}
-              {(options.data?.scopes ?? []).filter(scope => scope.key !== 'positions' && scope.key !== 'sector').map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
-            </select>
-            {draft.scope === 'symbols' && (
-              <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
-                {draft.symbols.map(sym => <span key={sym} className="inline-flex items-center gap-1 rounded bg-elevated px-1.5 py-0.5 text-[10px] text-secondary">{sym}<button type="button" onClick={() => setDraft(d => ({ ...d, symbols: d.symbols.filter(s => s !== sym) }))} className="text-muted hover:text-danger"><X className="h-2.5 w-2.5" /></button></span>)}
-                <div className="relative">
-                  <input value={symbolQuery} onChange={e => setSymbolQuery(e.target.value)} placeholder="搜索股票..." aria-label="搜索股票" className="h-7 w-32 rounded border border-border bg-base pl-6 pr-2 text-[11px] text-foreground focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60" />
-                  <Search className="absolute left-1.5 top-1.5 h-3.5 w-3.5 text-muted" />
-                  {symbolSearch.data && symbolSearch.data.results.length > 0 && <div className="absolute z-10 mt-1 max-h-48 w-48 overflow-auto rounded border border-border bg-surface shadow-lg">{symbolSearch.data.results.map(r => <button type="button" key={r.symbol} onClick={() => addSymbol(r.symbol)} className="block w-full px-2 py-1 text-left text-[11px] hover:bg-elevated"><span className="font-mono text-foreground/80">{r.symbol}</span><span className="ml-1 text-muted">{r.name}</span></button>)}</div>}
-                </div>
-              </div>
-            )}
-            {draft.scope === 'all' && <span className="text-[11px] text-muted">对全市场所有股票生效</span>}
-          </div>
-        </div>
       )}
 
-      {/* 触发条件 (非 strategy / sector) */}
+      {/* 持仓监控: 专属持仓选择器 (无 symbols/全市场下拉) */}
+      {draft.type === 'position' && (
+        <fieldset className="space-y-2">
+          <legend className="text-[11px] text-muted">监控范围 · 持仓</legend>
+          <p className="text-[10px] text-muted">选择需要监控的持仓；每项明确显示标的与账户。</p>
+          <div className="max-h-44 space-y-1 overflow-auto rounded-btn border border-border bg-base p-2" aria-describedby="position-selection-help">
+            {holdings.isLoading ? <span className="block px-2 py-2 text-xs text-muted">正在加载持仓…</span> : (holdings.data?.positions ?? []).length === 0 ? <span className="block px-2 py-2 text-xs text-warning">暂无可选择持仓，请先添加持仓。</span> : (holdings.data?.positions ?? []).map(position => (
+              <label key={position.id} className="flex min-h-9 cursor-pointer items-center gap-2 rounded px-2 text-xs hover:bg-elevated">
+                <input type="checkbox" checked={(draft.position_ids ?? []).includes(position.id)} onChange={() => togglePosition(position.id)} className="h-4 w-4 accent-accent" />
+                <span className="font-mono text-foreground">{position.instrument_symbol}</span>
+                <span className="min-w-0 truncate text-secondary">{accountNames.get(position.account_id) ?? `账户 ${position.account_id}`}</span>
+              </label>
+            ))}
+          </div>
+          <p id="position-selection-help" className="text-[10px] text-muted">已选择 {(draft.position_ids ?? []).length} 笔持仓。</p>
+          {unavailablePositionIds.length > 0 && (
+            <p className="text-[10px] text-warning">
+              {unavailablePositionIds.length} 笔已选持仓不在当前列表 (可能已归档或删除)，保存后仍会保留。
+              <button
+                type="button"
+                onClick={() => setDraft(d => ({ ...d, position_ids: (d.position_ids ?? []).map(Number).filter(id => holdingIds.has(id)) }))}
+                className="ml-1 text-accent hover:text-accent/80"
+              >
+                移除失效持仓
+              </button>
+            </p>
+          )}
+        </fieldset>
+      )}
+
+      {/* 作用范围 */}
+      {draft.type !== 'sector' && draft.type !== 'position' && <div className="space-y-2">
+        <span className="text-[11px] text-muted">作用范围</span>
+        <div className="flex items-center gap-2">
+          <select value={draft.scope} onChange={e => setDraft(d => ({ ...d, scope: e.target.value as MonitorRule['scope'] }))} className="h-9 w-32 rounded-btn border border-border bg-base px-3 text-xs text-foreground">
+            {visibleScopes.map(s => <option key={s.key} value={s.key} disabled={hasIntradaySignal && s.key !== 'symbols'}>{s.label}</option>)}
+          </select>
+          {draft.scope === 'symbols' && (
+            <div className="flex-1 flex flex-wrap items-center gap-1.5">
+              {draft.symbols.map(sym => (
+                <span key={sym} className="inline-flex items-center gap-1 rounded bg-elevated px-1.5 py-0.5 text-[10px] text-secondary">
+                  {sym}
+                  <button onClick={() => setDraft(d => ({ ...d, symbols: d.symbols.filter(s => s !== sym) }))} className="text-muted hover:text-danger cursor-pointer">
+                    <X className="h-2.5 w-2.5" />
+                  </button>
+                </span>
+              ))}
+              <div className="relative">
+                <input
+                  value={symbolQuery}
+                  onChange={e => setSymbolQuery(e.target.value)}
+                  placeholder="搜索代码或名称..."
+                  className="h-7 w-32 rounded border border-border bg-base pl-6 pr-2 text-[11px] text-foreground focus:outline-none focus:border-accent/50"
+                />
+                <Search className="absolute left-1.5 top-1.5 h-3.5 w-3.5 text-muted" />
+                {symbolSearch.data && symbolSearch.data.results.length > 0 && (
+                  <div className="absolute z-10 mt-1 max-h-48 w-48 overflow-auto rounded border border-border bg-surface shadow-lg">
+                    {symbolSearch.data.results.map(r => (
+                      <button key={r.symbol} onClick={() => addSymbol(r.symbol)} className="block w-full px-2 py-1 text-left text-[11px] hover:bg-elevated cursor-pointer">
+                        <span className="font-mono text-foreground/80">{r.symbol}</span>
+                        {(() => { const b = boardTag(r.symbol); return b && <span className={`ml-1 inline-flex items-center justify-center rounded px-0.5 text-[9px] font-bold leading-tight border ${b.color}`}>{b.label}</span> })()}
+                        <span className="ml-1 text-muted">{r.name}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+          {draft.scope === 'all' && <span className="text-[11px] text-muted">对全市场所有标的生效</span>}
+          {draft.scope === 'sector' && <span className="text-[11px] text-muted/60">板块精确过滤(开发中,当前等同全市场)</span>}
+        </div>
+      </div>}
+
+      {/* 触发条件 (非 strategy) */}
       {draft.type !== 'strategy' && draft.type !== 'sector' && (
         <div className="space-y-3">
           <div className="flex items-center justify-between">
@@ -634,7 +812,21 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
           {draft.type !== 'preopen' && (selectedSignals.length > 0 || (options.data?.builtin_signals ?? []).length > 0) ? (
             <div>
               <div className="mb-1.5 text-[10px] text-muted/70">信号条件 (点选)</div>
-              <SignalPicker signals={selectedSignals} onChange={onSignalPickerChange} kind="entry" />
+              <SignalPicker
+                signals={selectedSignals}
+                onChange={onSignalPickerChange}
+                kind="entry"
+                builtinSignals={pickerSignals}
+                disabledSignals={intradaySupport?.available === false ? MONITOR_INTRADAY_SIGNAL_OPTIONS : []}
+                disabledSignalHint={intradaySupport?.reason}
+              />
+              {hasIntradaySignal && (
+                <div className={`mt-2 text-[10px] ${intradaySupport?.available === false ? 'text-danger' : 'text-muted'}`}>
+                  {intradaySupport?.available === false
+                    ? intradaySupport.reason
+                    : `分时穿越按已完成的一分钟判断,仅支持指定标的,当前最多监听 ${intradaySupport?.max_symbols ?? 0} 只。`}
+                </div>
+              )}
             </div>
           ) : null}
 
@@ -645,14 +837,14 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
                 return (
                   <div key={i} className="flex items-center gap-1.5">
                     <span className="text-[10px] text-muted/60 w-6 text-right shrink-0">{i === 0 && selectedSignals.length === 0 ? '当' : draft.logic === 'and' ? '且' : '或'}</span>
-                    <select value={c.field} onChange={e => updateCond(realIdx, { field: e.target.value })} aria-label={`条件 ${i + 1} 字段`} className="w-32 h-7 px-1.5 rounded bg-base border border-border text-[11px] text-foreground focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60">
+                    <select value={c.field} onChange={e => updateCond(realIdx, { field: e.target.value })} className="w-32 h-7 px-1.5 rounded bg-base border border-border text-[11px] text-foreground focus:outline-none focus:border-accent/50">
                       {thresholdFields.map(f => <option key={f.key} value={f.key}>{f.label}</option>)}
                     </select>
-                    <select value={c.op} onChange={e => updateCond(realIdx, { op: e.target.value })} aria-label={`条件 ${i + 1} 操作符`} className="w-12 h-7 px-1 rounded bg-base border border-border text-[11px] font-mono text-foreground text-center focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60">
+                    <select value={c.op} onChange={e => updateCond(realIdx, { op: e.target.value })} className="w-12 h-7 px-1 rounded bg-base border border-border text-[11px] font-mono text-foreground text-center focus:outline-none focus:border-accent/50">
                       {operators.map(op => <option key={op} value={op}>{op}</option>)}
                     </select>
-                    <input type="number" value={c.value ?? 0} onChange={e => updateCond(realIdx, { value: parseFloat(e.target.value) })} step="any" aria-label={`条件 ${i + 1} 阈值`} className="w-24 h-7 px-1.5 rounded bg-base border border-border text-[11px] font-mono text-foreground text-center focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60" />
-                    <button onClick={() => removeCond(realIdx)} aria-label={`删除条件 ${i + 1}`} className="p-1 rounded text-muted hover:text-danger hover:bg-danger/10 cursor-pointer">
+                    <input type="number" value={c.value ?? 0} onChange={e => updateCond(realIdx, { value: parseFloat(e.target.value) })} step="any" className="w-24 h-7 px-1.5 rounded bg-base border border-border text-[11px] font-mono text-foreground text-center focus:outline-none focus:border-accent/50" />
+                    <button onClick={() => removeCond(realIdx)} className="p-1 rounded text-muted hover:text-danger hover:bg-danger/10 cursor-pointer">
                       <X className="h-3 w-3" />
                     </button>
                   </div>
@@ -671,62 +863,267 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
 
       {/* strategy 类型: 选策略 + 方向 */}
       {draft.type === 'strategy' && (
-        <div className="space-y-2">
-          <span className="text-[11px] text-muted">策略与方向</span>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-            <label className="md:col-span-2 space-y-1.5">
-              <span className="text-[10px] text-muted/70">选择策略</span>
-              <select
-                value={draft.strategy_id ?? ''}
-                onChange={e => setDraft(d => ({ ...d, strategy_id: e.target.value || null }))}
-                className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs text-foreground"
-              >
-                <option value="">— 请选择 —</option>
-                {(strategies.data?.presets ?? []).map(s => (
-                  <option key={s.id} value={s.id}>{s.name}</option>
-                ))}
-              </select>
+        <div className="space-y-3">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+            <label className="min-w-0 flex-1 space-y-1.5">
+              <span className="text-[11px] text-muted">搜索策略</span>
+              <span className="relative block">
+                <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted" />
+                <input
+                  value={strategyQuery}
+                  onChange={e => setStrategyQuery(e.target.value)}
+                  placeholder="搜索名称、标签或策略 ID"
+                  className="h-9 w-full rounded-btn border border-border bg-base pl-8 pr-3 text-xs text-foreground placeholder:text-muted/50 focus:border-accent/50 focus:outline-none"
+                />
+              </span>
             </label>
-            <label className="space-y-1.5">
-              <span className="text-[10px] text-muted/70">触发方向</span>
-              <select
-                value={draft.direction}
-                onChange={e => setDraft(d => ({ ...d, direction: e.target.value as MonitorRule['direction'] }))}
-                className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs text-foreground"
-              >
-                {(options.data?.directions ?? []).map(d => <option key={d.key} value={d.key}>{d.label}</option>)}
-              </select>
-            </label>
+            <div className="grid grid-cols-4 gap-1 rounded-btn border border-border bg-base p-1 sm:w-[19rem]">
+              {strategyCategories.map(category => (
+                <button
+                  key={category.key}
+                  type="button"
+                  aria-pressed={strategyCategory === category.key}
+                  onClick={() => setStrategyCategory(category.key)}
+                  className={`flex h-7 min-w-0 items-center justify-center gap-1 rounded px-1 text-[10px] font-medium transition-colors cursor-pointer ${
+                    strategyCategory === category.key
+                      ? 'bg-elevated text-foreground'
+                      : 'text-muted hover:text-secondary'
+                  }`}
+                >
+                  <span className="truncate">{category.label}</span>
+                  <span className="font-mono text-[9px] opacity-70">{category.count}</span>
+                </button>
+              ))}
+            </div>
           </div>
-          <p className="text-[10px] leading-4 text-muted/70">
-            策略监控自动评估策略的买卖信号。entry=买入信号,exit=卖出信号,both=两者都报。作用范围建议用「全市场」。
-          </p>
+
+          <div className="grid max-h-56 grid-cols-1 gap-1.5 overflow-y-auto pr-1 sm:grid-cols-2">
+            {strategies.isLoading ? (
+              <div className="col-span-full py-8 text-center text-xs text-muted">正在加载策略...</div>
+            ) : visibleStrategies.length === 0 ? (
+              <div className="col-span-full rounded-btn border border-dashed border-border py-8 text-center text-xs text-muted">没有匹配的策略</div>
+            ) : visibleStrategies.map(strategy => {
+              const active = draft.strategy_id === strategy.id
+              const sourceMeta = STRATEGY_SOURCE_META[strategy.source]
+              const summary = strategy.tags?.length
+                ? strategy.tags.slice(0, 3).join(' · ')
+                : (strategy.description || strategy.id)
+              return (
+                <button
+                  key={strategy.id}
+                  type="button"
+                  aria-pressed={active}
+                  onClick={() => setDraft(d => ({ ...d, strategy_id: strategy.id }))}
+                  className={`flex min-h-14 min-w-0 items-start gap-2 rounded-btn border px-3 py-2 text-left transition-colors cursor-pointer ${
+                    active
+                      ? 'border-accent/45 bg-accent/10'
+                      : 'border-border bg-base hover:border-accent/25 hover:bg-elevated/50'
+                  }`}
+                >
+                  <span className="min-w-0 flex-1">
+                    <span className="flex min-w-0 items-center gap-1.5">
+                      <span className={`shrink-0 rounded border px-1 py-px text-[9px] font-medium ${sourceMeta.className}`}>{sourceMeta.label}</span>
+                      <span className="truncate text-xs font-medium text-foreground">{strategy.name}</span>
+                    </span>
+                    <span className="mt-1 block truncate text-[10px] text-muted" title={summary}>{summary}</span>
+                  </span>
+                  <span className={`mt-0.5 grid h-4 w-4 shrink-0 place-items-center rounded-full border ${
+                    active ? 'border-accent bg-accent text-white' : 'border-border text-transparent'
+                  }`}>
+                    <Check className="h-2.5 w-2.5" />
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+
+          <div className="border-t border-border/60 pt-3">
+            <div
+              className="mb-2 text-[11px] text-muted"
+              title="评分范围仅过滤选股结果与买入信号，卖出信号不受限制"
+            >
+              评分范围
+            </div>
+            <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2">
+              <label className="space-y-1.5">
+                <span className="text-[10px] text-muted">最低分（含）</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  step="any"
+                  value={draft.score_min ?? ''}
+                  onChange={event => setDraft(d => ({
+                    ...d,
+                    score_min: event.target.value === '' ? null : Number(event.target.value),
+                  }))}
+                  placeholder="不限"
+                  className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs font-mono text-foreground placeholder:text-muted/50 focus:border-accent/50 focus:outline-none"
+                />
+              </label>
+              <span className="mt-5 text-xs text-muted">至</span>
+              <label className="space-y-1.5">
+                <span className="text-[10px] text-muted">最高分（含）</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  step="any"
+                  value={draft.score_max ?? ''}
+                  onChange={event => setDraft(d => ({
+                    ...d,
+                    score_max: event.target.value === '' ? null : Number(event.target.value),
+                  }))}
+                  placeholder="不限"
+                  className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs font-mono text-foreground placeholder:text-muted/50 focus:border-accent/50 focus:outline-none"
+                />
+              </label>
+            </div>
+          </div>
+
+          <div className="border-t border-border/60 pt-3">
+            <div className="mb-2 flex items-center justify-between gap-3">
+              <span className="text-[11px] text-muted">通知事件</span>
+              <span className="text-[9px] text-muted">至少选择一项</span>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              {(['signal', 'pool'] as const).map(group => (
+                <div key={group} className="rounded-btn border border-border bg-base p-2.5">
+                  <div className="mb-2 text-[10px] font-medium text-secondary">
+                    {group === 'signal' ? '交易信号' : '选股结果'}
+                  </div>
+                  <div className="space-y-2">
+                    {STRATEGY_NOTIFY_EVENT_OPTIONS.filter(option => option.group === group).map(option => (
+                      <label key={option.key} className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={(draft.notify_events ?? LEGACY_STRATEGY_NOTIFY_EVENTS).includes(option.key)}
+                          onChange={() => toggleStrategyEvent(option.key)}
+                          className="h-3.5 w-3.5 accent-accent cursor-pointer"
+                        />
+                        <span className="text-[11px] text-foreground">{option.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+            {(draft.notify_events ?? LEGACY_STRATEGY_NOTIFY_EVENTS).length === 0 && (
+              <div className="mt-2 text-[10px] text-danger">至少选择一个通知事件</div>
+            )}
+          </div>
         </div>
       )}
 
-      {/* 通知与时间 */}
-      <section className="space-y-3 rounded-btn border border-border/40 bg-base/40 p-3">
-        <h3 className="text-[11px] font-medium text-foreground">通知与时间</h3>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <label className="space-y-1.5"><span className="text-[11px] text-muted">严重级别</span><select value={draft.severity} onChange={e => setDraft(d => ({ ...d, severity: e.target.value as MonitorRule['severity'] }))} className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs text-foreground">{(options.data?.severities ?? []).map(s => <option key={s.key} value={s.key}>{s.label}</option>)}</select></label>
-          <label className="space-y-1.5"><span className="text-[11px] text-muted">冷却期（秒）</span><input type="number" value={draft.cooldown_seconds} onChange={e => setDraft(d => ({ ...d, cooldown_seconds: parseInt(e.target.value) || 0 }))} min={0} className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs text-foreground" /></label>
-          <label className="space-y-1.5"><span className="text-[11px] text-muted">生效开始时间</span><input type="time" value={draft.active_time_start ?? ''} onChange={e => setDraft(d => ({ ...d, active_time_start: e.target.value || null, active_time_end: e.target.value ? (d.active_time_end ?? '23:59') : null }))} className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs text-foreground" /></label>
-          <label className="space-y-1.5"><span className="text-[11px] text-muted">生效结束时间</span><input type="time" value={draft.active_time_end ?? ''} onChange={e => setDraft(d => ({ ...d, active_time_end: e.target.value || null, active_time_start: e.target.value ? (d.active_time_start ?? '00:00') : null }))} className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs text-foreground" /></label>
+      {/* 通知设置 */}
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+        <label className="space-y-1.5">
+          <span className="text-[11px] text-muted">冷却期(秒)</span>
+          <input type="number" value={draft.cooldown_seconds} onChange={e => setDraft(d => ({ ...d, cooldown_seconds: parseInt(e.target.value) || 0 }))} min={0} className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs text-foreground" />
+        </label>
+        <label className="space-y-1.5">
+          <span className="text-[11px] text-muted">严重级别</span>
+          <select value={draft.severity} onChange={e => setDraft(d => ({ ...d, severity: e.target.value as MonitorRule['severity'] }))} className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs text-foreground">
+            {(options.data?.severities ?? []).map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
+          </select>
+        </label>
+        <label className="space-y-1.5 md:col-span-1">
+          <span className="text-[11px] text-muted">自定义提示(可选)</span>
+          <input value={draft.message} onChange={e => setDraft(d => ({ ...d, message: e.target.value }))} placeholder="留空用默认文案" className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs text-foreground" />
+        </label>
+        <label className="space-y-1.5">
+          <span className="text-[11px] text-muted">生效开始时间</span>
+          <input type="time" value={draft.active_time_start ?? ''} onChange={e => setDraft(d => ({ ...d, active_time_start: e.target.value || null, active_time_end: e.target.value ? (d.active_time_end ?? '23:59') : null }))} className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs text-foreground" />
+        </label>
+        <label className="space-y-1.5">
+          <span className="text-[11px] text-muted">生效结束时间</span>
+          <input type="time" value={draft.active_time_end ?? ''} onChange={e => setDraft(d => ({ ...d, active_time_end: e.target.value || null, active_time_start: e.target.value ? (d.active_time_start ?? '00:00') : null }))} className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs text-foreground" />
+        </label>
+      </div>
+      <label className="flex cursor-pointer items-start gap-2 text-xs text-secondary">
+        <input type="checkbox" checked={draft.bypass_quiet_period ?? false} onChange={e => setDraft(d => ({ ...d, bypass_quiet_period: e.target.checked }))} className="mt-0.5 h-4 w-4 accent-accent" />
+        <span><span className="block text-foreground">高优先级可绕过静默时段</span><span className="mt-1 block text-[10px] text-muted">规则命中始终会保存；静默时段只影响外部投递。</span></span>
+      </label>
+
+      {/* Webhook 推送 — 飞书 / Telegram */}
+      <div className="rounded-btn border border-border/40 bg-base/40 p-3 space-y-2">
+        <div className="flex items-center gap-1.5">
+          <span className="text-[11px] font-medium text-foreground">Webhook 推送</span>
+          <span className="text-[9px] text-muted">触发时推送告警到外部</span>
         </div>
-        <label className="flex cursor-pointer items-start gap-2 text-xs text-secondary"><input type="checkbox" checked={draft.bypass_quiet_period ?? false} onChange={e => setDraft(d => ({ ...d, bypass_quiet_period: e.target.checked }))} className="mt-0.5 h-4 w-4 accent-accent" /><span><span className="block text-foreground">高优先级可绕过静默时段</span><span className="mt-1 block text-[10px] text-muted">规则命中始终会保存；静默时段只影响外部投递。</span></span></label>
-        <div className="space-y-2 border-t border-border/60 pt-3">
-          <span className="text-[11px] text-muted">投递渠道</span>
-          <label className="flex cursor-pointer items-center gap-2 text-xs"><input type="checkbox" checked={(draft.webhook_channels ?? []).includes('feishu')} onChange={() => toggleChannel('feishu')} className="h-4 w-4 accent-accent" /><span className="text-foreground">飞书</span><span className={`ml-auto text-[10px] ${feishuConfigured ? 'text-emerald-500' : 'text-warning'}`}>{feishuConfigured ? '已配置' : '未配置'}</span></label>
-          <label className="flex cursor-pointer items-center gap-2 text-xs"><input type="checkbox" checked={(draft.webhook_channels ?? []).includes('telegram')} onChange={() => toggleChannel('telegram')} className="h-4 w-4 accent-accent" /><span className="text-foreground">Telegram</span><span className={`ml-auto text-[10px] ${telegramConfigured ? 'text-emerald-500' : 'text-warning'}`}>{telegramConfigured ? '已配置' : '未配置'}</span></label>
-          {(draft.webhook_channels ?? []).some(channel => (channel === 'feishu' && !feishuConfigured) || (channel === 'telegram' && !telegramConfigured)) && <p className="text-[10px] text-warning">所选渠道尚未配置，<Link to="/settings?tab=monitoring" className="text-accent hover:text-accent/80">前往设置</Link></p>}
+
+        {/* 渠道列表 */}
+        <div className="space-y-1.5">
+          {/* 飞书 (可用) */}
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={(draft.webhook_channels ?? []).includes('feishu')}
+              onChange={() => toggleChannel('feishu')}
+              className="h-3 w-3 accent-accent cursor-pointer"
+            />
+            <span className="text-[11px] text-foreground">飞书</span>
+            <span className="text-[9px] text-muted">群推送 Webhook</span>
+            {(draft.webhook_channels ?? []).includes('feishu') && (
+              <span className={`ml-auto text-[9px] ${feishuConfigured ? 'text-emerald-500' : 'text-warning'}`}>
+                {feishuConfigured ? '已配置' : '未配置'}
+              </span>
+            )}
+          </label>
+
+          {/* Telegram (可用; bot token 与 chat id 两者齐备才算配置) */}
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={(draft.webhook_channels ?? []).includes('telegram')}
+              onChange={() => toggleChannel('telegram')}
+              className="h-3 w-3 accent-accent cursor-pointer"
+            />
+            <span className="text-[11px] text-foreground">Telegram</span>
+            <span className="text-[9px] text-muted">Bot 推送</span>
+            {(draft.webhook_channels ?? []).includes('telegram') && (
+              <span className={`ml-auto text-[9px] ${telegramConfigured ? 'text-emerald-500' : 'text-warning'}`}>
+                {telegramConfigured ? '已配置' : '未配置'}
+              </span>
+            )}
+          </label>
+
         </div>
-      </section>
+
+        {/* 勾选了某渠道但该渠道地址未配置 → 提示前往设置 */}
+        {(draft.webhook_channels ?? []).length > 0 && (() => {
+          const selected = draft.webhook_channels ?? []
+          const unconfigured: string[] = []
+          if (selected.includes('feishu') && !feishuConfigured) unconfigured.push('飞书')
+          if (selected.includes('telegram') && !telegramConfigured) unconfigured.push('Telegram')
+          if (unconfigured.length === 0) return null
+          return (
+            <p className="text-[10px] leading-relaxed text-warning/80">
+              {unconfigured.join('、')}尚未配置,
+              <Link to="/settings?tab=monitoring" className="text-accent hover:text-accent/80">前往设置页配置 →</Link>
+            </p>
+          )
+        })()}
+        {(draft.webhook_channels ?? []).length > 0 && (() => {
+          const selected = draft.webhook_channels ?? []
+          const ready: string[] = []
+          if (selected.includes('feishu') && feishuConfigured) ready.push('飞书')
+          if (selected.includes('telegram') && telegramConfigured) ready.push('Telegram')
+          if (ready.length === 0) return null
+          return (
+            <p className="text-[10px] leading-relaxed text-muted">
+              命中本规则时,告警将推送到已配置的{ready.join(' + ')}。
+            </p>
+          )
+        })()}
+      </div>
+
       {error && <div className="rounded-btn border border-danger/30 bg-danger/5 px-3 py-2 text-xs text-danger">{error}</div>}
 
       <div className="flex justify-end gap-2">
-        <button onClick={onClose} className="px-4 py-1.5 rounded-btn bg-elevated text-secondary text-xs cursor-pointer">返回监控中心</button>
+        <button onClick={onClose} className="px-4 py-1.5 rounded-btn bg-elevated text-secondary text-xs cursor-pointer">取消</button>
         <button onClick={() => save.mutate()} disabled={save.isPending} className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-btn bg-accent text-base text-xs font-medium disabled:opacity-50 cursor-pointer">
-          <Save className="h-3.5 w-3.5" />{save.isPending ? '正在保存…' : '保存规则'}
+          <Save className="h-3.5 w-3.5" />保存
         </button>
       </div>
     </div>

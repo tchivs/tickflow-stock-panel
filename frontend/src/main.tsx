@@ -3,7 +3,7 @@ import ReactDOM from 'react-dom/client'
 import { RouterProvider } from 'react-router-dom'
 import { QueryClient, QueryClientProvider, QueryCache } from '@tanstack/react-query'
 import { MotionConfig } from 'framer-motion'
-import { router } from './router'
+import { initializeFrontendExtensions } from './extensions/bootstrap'
 import './index.css'
 
 // 全局认证拦截: 任何 query/mutation 收到 401 (未登录/会话过期) → 跳登录页。
@@ -43,13 +43,19 @@ const queryClient = new QueryClient({
   },
 })
 
-ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode>
-    <QueryClientProvider client={queryClient}>
-      {/* 全局减少动态: 用户系统偏好 reduce → 所有 framer-motion 动画即时完成 (WCAG 2.3.3) */}
-      <MotionConfig reducedMotion="user">
-        <RouterProvider router={router} />
-      </MotionConfig>
-    </QueryClientProvider>
-  </React.StrictMode>
-)
+async function bootstrap() {
+  await initializeFrontendExtensions()
+  const { router } = await import('./router')
+  ReactDOM.createRoot(document.getElementById('root')!).render(
+    <React.StrictMode>
+      <QueryClientProvider client={queryClient}>
+        {/* 全局减少动态: 用户系统偏好 reduce → 所有 framer-motion 动画即时完成 (WCAG 2.3.3) */}
+        <MotionConfig reducedMotion="user">
+          <RouterProvider router={router} />
+        </MotionConfig>
+      </QueryClientProvider>
+    </React.StrictMode>,
+  )
+}
+
+void bootstrap()

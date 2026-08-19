@@ -19,6 +19,7 @@ export const CARD_META: Record<string, {
   etf:         { capKey: 'kline.daily.batch',       tierReq: '' },
   minute:      { capKey: 'kline.minute.batch',      tierReq: 'Pro+' },
   financials:  { capKey: 'financial',                tierReq: 'Expert' },
+  regime:      { capKey: '',                        tierReq: '' },
 }
 
 export function Pill({ label, value }: { label: string; value: number | string }) {
@@ -230,6 +231,7 @@ export function StatCard({
               className={`p-0.5 rounded hover:bg-elevated transition-colors ${
                 settingsOpen ? 'text-accent' : 'text-secondary'
               }`}
+              title="设置"
             >
               <Settings className="h-3.5 w-3.5" />
             </button>

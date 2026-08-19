@@ -63,11 +63,12 @@ export function cardWrapCls(size: CardSize): string {
 
 // ===== 来源标签 =====
 
-const SRC_MAP: Record<string, string> = { builtin: '内置', custom: '自定义', ai: 'AI' }
+const SRC_MAP: Record<string, string> = { builtin: '内置', custom: '自定义', ai: 'AI', composite: '叠加' }
 const BADGE_CLS_MAP: Record<string, string> = {
   builtin: 'bg-secondary/10 text-muted border-border',
   ai: 'bg-accent/10 text-accent border-accent/30',
   custom: 'bg-secondary/10 text-secondary border-border',
+  composite: 'bg-teal-500/10 text-teal-400 border-teal-500/30',
 }
 
 // ===== 策略卡片 =====

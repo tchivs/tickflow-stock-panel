@@ -146,3 +146,6 @@ vendor/
 coverage/
 .cache/
 tmp/
+reports/tickflow_pro_probe/
+.cursor/debug-*.log
+reports/cursor_tickflow_pro_rate_limit_p0.bundle

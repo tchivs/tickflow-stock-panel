@@ -6,16 +6,31 @@ import math
 import time
 from datetime import date
 
+import anyio
 import polars as pl
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel
 
 from app.db_safe import is_valid_ext_ident, quote_ident
 from app.services import watchlist
+from app.services.watchlist_ocr import import_watchlist_image
+from app.services.watchlist_ocr.provider import get_ocr_provider
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/watchlist", tags=["watchlist"])
+
+_MAX_IMPORT_IMAGE_BYTES = 12 * 1024 * 1024  # 12MB
+_IMPORT_IMAGE_TYPES = {
+    "image/jpeg",
+    "image/jpg",
+    "image/png",
+    "image/webp",
+    "image/bmp",
+    "image/gif",
+}
+# OCR 独立并发上限：避免多张大图同时解码 + 多 Tesseract 子进程
+_OCR_LIMITER = anyio.CapacityLimiter(2)
 
 
 class AddRequest(BaseModel):
@@ -120,6 +135,51 @@ def clear_group(group_id: str, request: Request):
     return {"symbols": _with_names(rows, request)}
 
 
+@router.get("/ocr-status")
+def ocr_status():
+    """当前 OCR 引擎是否可用（前端可据此提示安装依赖）。"""
+    provider = get_ocr_provider()
+    return {"provider": provider.name, "available": provider.available()}
+
+
+@router.post("/import-image")
+async def import_from_image(request: Request, file: UploadFile = File(...)):
+    """从自选截图识别股票代码，返回候选列表（不自动写入自选）。"""
+    content_type = (file.content_type or "").split(";")[0].strip().lower()
+    filename = (file.filename or "").lower()
+    # 严格白名单：不接受任意 image/*（如 image/svg+xml）
+    ok_type = content_type in _IMPORT_IMAGE_TYPES
+    ok_ext = filename.endswith((".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif"))
+    if not ok_type and not ok_ext:
+        raise HTTPException(400, "仅支持 JPG / PNG / WebP / BMP / GIF 图片")
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(400, "空文件")
+    if len(data) > _MAX_IMPORT_IMAGE_BYTES:
+        raise HTTPException(400, "图片过大（上限 12MB）")
+
+    existing = {r["symbol"] for r in watchlist.list_symbols()}
+    data_dir = request.app.state.repo.store.data_dir
+    try:
+        # OCR 为同步 CPU/子进程；独立 limiter 限制并发，避免卡住事件循环（行情 SSE 等）
+        result = await anyio.to_thread.run_sync(
+            lambda: import_watchlist_image(data, data_dir, existing_symbols=existing),
+            limiter=_OCR_LIMITER,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except RuntimeError as e:
+        raise HTTPException(503, str(e)) from e
+    except Exception as e:  # noqa: BLE001
+        logger.exception("watchlist import-image failed")
+        raise HTTPException(500, f"识别失败: {e}") from e
+
+    # 响应不回传整段 raw_text（可能很长）；调试时可开 query，这里默认省略
+    result.pop("raw_text", None)
+    return result
+
+
 @router.post("/{symbol}/top")
 def move_one_to_top(symbol: str, request: Request):
     rows = watchlist.move_to_top(symbol)
@@ -152,7 +212,7 @@ def clear_all():
 
 # 自选页需要的列
 _WATCHLIST_COLS = [
-    "symbol", "close", "change_pct", "change_amount", "amount",
+    "symbol", "close", "open", "high", "low", "change_pct", "change_amount", "amount",
     "turnover_rate",
     "amplitude", "annual_vol_20d",
     "vol_ratio_5d",
@@ -194,8 +254,10 @@ def watchlist_enriched(
     # 按资产拆分自选 symbol; ETF enriched 是独立缓存, 仅自选真的含 ETF 才去加载
     # (避免无 ETF 用户在缓存冷启动时触发 ETF 全量懒加载)
     etf_set = repo.get_etf_symbol_set()
-    stock_symbols = [s for s in symbols if s not in etf_set]
+    index_set = repo.get_index_symbol_set()
     etf_symbols = [s for s in symbols if s in etf_set]
+    index_symbols = [s for s in symbols if s not in etf_set and s in index_set]
+    stock_symbols = [s for s in symbols if s not in etf_set and s not in index_set]
 
     df_e, cache_date = repo.get_enriched_latest()
 
@@ -224,8 +286,19 @@ def watchlist_enriched(
             df_etf = etf_watchlist_df
         df = df_etf if df.is_empty() else pl.concat([df, df_etf], how="diagonal_relaxed")
 
-    # as_of 取两类缓存中较旧者, 避免把旧的 ETF 行标成股票缓存日期
-    dates = [d for d in (cache_date if stock_symbols else None, etf_date) if d is not None]
+    # 指数行合并 (镜像 ETF 分支); 缺失列 (换手率/涨跌停信号等) 为 null
+    index_date = None
+    if index_symbols:
+        df_idx_all, index_date = repo.get_enriched_latest_asset("index")
+        idx_watchlist_df = pl.DataFrame({"symbol": index_symbols})
+        if not df_idx_all.is_empty():
+            df_idx = idx_watchlist_df.join(df_idx_all, on="symbol", how="left")
+        else:
+            df_idx = idx_watchlist_df
+        df = df_idx if df.is_empty() else pl.concat([df, df_idx], how="diagonal_relaxed")
+
+    # as_of 取三类缓存中较旧者
+    dates = [d for d in (cache_date if stock_symbols else None, etf_date, index_date) if d is not None]
     as_of = min(dates) if dates else None
     if df.is_empty():
         return {"rows": [], "as_of": str(as_of) if as_of else None, "elapsed_ms": 0}
@@ -239,8 +312,14 @@ def watchlist_enriched(
         pl.col("symbol").replace_strict(name_map, default=None, return_dtype=pl.Utf8).alias("name")
     )
 
+    # 标注资产类型: 前端据此渲染徽标/豁免板块筛选/分时列降级
+    asset_map = {**{s: "etf" for s in etf_symbols}, **{s: "index" for s in index_symbols}}
+    df = df.with_columns(
+        pl.col("symbol").replace_strict(asset_map, default="stock", return_dtype=pl.Utf8).alias("asset_type")
+    )
+
     # 选择内置需要的列
-    keep = [c for c in _WATCHLIST_COLS + ["name", "float_shares"] if c in df.columns]
+    keep = [c for c in _WATCHLIST_COLS + ["name", "float_shares", "asset_type"] if c in df.columns]
     df = df.select(keep)
 
     # 动态 JOIN 扩展数据表

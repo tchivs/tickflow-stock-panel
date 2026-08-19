@@ -1,6 +1,6 @@
 """AI 财务分析服务 — 读取个股财务数据 → 构建专业提示词 → 流式调用 LLM。
 
-职责: 拉取单只标的的 4 张财务表 → 转成紧凑 JSON → 拼装 CFA 分析师级系统提示词
+职责: 拉取单只标的的财务报表与股本表 → 转成紧凑 JSON → 拼装 CFA 分析师级系统提示词
        → 流式调用 OpenAI 兼容 API → 逐 chunk 吐给前端。
 
 不知道: HTTP、前端、配置持久化。
@@ -14,7 +14,7 @@ from typing import AsyncIterator
 
 import polars as pl
 
-from app.services.financial_sync import get_financial_df
+from app.services.financial_sync import FINANCIAL_TABLES, get_financial_df
 
 logger = logging.getLogger(__name__)
 
@@ -23,12 +23,12 @@ _MAX_PERIODS = 4
 
 
 def _load_stock_financials(data_dir: Path, symbol: str) -> dict[str, list[dict]]:
-    """读取该标的的 4 张财务表,返回 {table: [records...]}(按 period_end 降序,截取最新 N 期)。
+    """读取该标的财务数据,返回 {table: [records...]}(按 period_end 降序,截取最新 N 期)。
 
     数值统一做 NaN/Inf → null 清洗,保证 JSON 序列化不报错。
     """
     result: dict[str, list[dict]] = {}
-    for table in ("metrics", "income", "balance_sheet", "cash_flow"):
+    for table in FINANCIAL_TABLES:
         df = get_financial_df(data_dir, table)
         if df.is_empty():
             result[table] = []
@@ -60,7 +60,7 @@ def _load_stock_financials(data_dir: Path, symbol: str) -> dict[str, list[dict]]
 def _summarize(fins: dict[str, list[dict]]) -> str:
     """生成一行业务摘要,便于 LLM 快速把握数据全貌(行数/期数)。"""
     parts = []
-    for table in ("metrics", "income", "balance_sheet", "cash_flow"):
+    for table in FINANCIAL_TABLES:
         rows = fins.get(table, [])
         if rows:
             periods = [r.get("period_end") for r in rows if r.get("period_end")]
@@ -74,14 +74,20 @@ def _summarize(fins: dict[str, list[dict]]) -> str:
 # 系统提示词 —— CFA 分析师级,九维分析框架
 # ================================================================
 
-_SYSTEM_PROMPT = """你是一位拥有 15 年 A 股投研经验的资深财务分析师(CFA + CPA),服务于专业机构投资者。你的任务是:基于提供的上市公司财务数据,产出一份**严谨、专业、可直接用于投资决策**的财务分析报告。
+_SYSTEM_PROMPT = """你是一位拥有 15 年 A 股投研经验的资深财务分析师(CFA + CPA),以机构研究的严谨标准开展工作。你的任务是:基于提供的上市公司财务数据,产出一份**客观、中立、不包含任何投资建议或买卖指令**的财务分析报告。
+
+## 核心红线(务必遵守)
+
+- **绝对不输出**"投资参考""建议买入/卖出""值得投资""逢低吸纳"等任何投资建议或买卖指令
+- 你的角色是**客观陈述**该公司的财务特征画像、亮点、风险,供读者自行判断
+- 财务质量分类(如高质量蓝筹/高风险等)可作为客观特征描述,但不与"该不该投资"挂钩
 
 ## 输出规范
 
 用 **Markdown** 格式输出,严格遵循以下结构。不要输出任何 JSON 或代码块,直接输出 Markdown 正文。
 
 ### 1. 📌 核心摘要(1-2 句)
-用一句话概括该公司的财务画像:盈利质量、成长动能、财务健康度的最关键判断。结尾用【综合评级:★★★☆☆】给出 1-5 星评级。
+用一句话概括该公司的财务画像:盈利质量、成长动能、财务健康度的最关键判断。结尾用【综合评级:★★★☆☆】给出 1-5 星评级(仅反映财务质量客观水平,不构成投资建议)。
 
 ### 2. ✅ 亮点(2-3 条)
 列出最值得关注的**积极信号**,每条用加粗短语领起,配数据支撑。例如盈利高增、ROE 持续提升、现金流充沛等。
@@ -99,8 +105,8 @@ _SYSTEM_PROMPT = """你是一位拥有 15 年 A 股投研经验的资深财务�
 
 每个判断给「优秀 / 良好 / 一般 / 偏弱 / 警惕」之一,并一句话说明依据。
 
-### 5. 🎯 综合评估与展望
-2-3 段总结:该公司当前的财务状态(优秀/稳健/承压/恶化)、核心驱动力、未来需重点跟踪的指标。**结尾给出"投资参考"**:从纯财务质量角度,该股属于(高质量蓝筹 / 稳健成长 / 周期波动 / 财务承压 / 高风险)中的哪一类。
+### 5. 🎯 综合评估与财务特征画像
+2-3 段总结:该公司当前的财务状态(优秀/稳健/承压/恶化)、核心驱动力、未来需重点跟踪的指标。**结尾客观描述该公司的财务特征画像**(如"高 ROE + 低负债 + 现金流稳定 + 营收增速放缓"),作为财务层面的客观归纳,**不下"该不该投资""属于哪类投资标的"的结论**。
 
 ## 分析准则(务必遵守)
 
@@ -108,11 +114,12 @@ _SYSTEM_PROMPT = """你是一位拥有 15 年 A 股投研经验的资深财务�
 2. **纵向对比**:利用多期数据看趋势(改善/恶化),而非只看单期
 3. **交叉验证**:经营现金流 vs 净利润(是否造血)、毛利率 vs 费用率(盈利结构)、负债 vs 资产(杠杆)
 4. **行业常识**:对照 A 股常识判断水平(如 ROE>15% 优秀,资产负债率>70% 偏高,毛利率<20% 偏低)
-5. **诚实中立**:数据不支持时直言"数据不足,无法判断",绝不编造或过度演绎
-6. **简明有力**:避免冗长,用专业投资者能扫读的密度输出,总字数 800-1500 字
+5. **客观中立**:数据不支持时直言"数据不足,无法判断",绝不编造或过度演绎
+6. **不输出投资建议**:不写"建议买入/卖出/投资参考/值得投资"等;财务质量评级仅反映客观财务水平,不与投资行为挂钩
+7. **简明有力**:避免冗长,用专业读者能扫读的密度输出,总字数 800-1500 字
 
 ## 重要免责
-报告末尾附一行:"> ⚠️ 本报告由 AI 基于公开财务数据生成,仅供参考,不构成任何投资建议。"
+报告末尾附一行:"> ⚠️ 本内容由 AI 基于公开财务数据生成,仅客观陈述财务特征,不构成任何投资建议或买卖指令。"
 
 现在请基于下方数据进行分析。"""
 
@@ -129,10 +136,12 @@ def _build_user_prompt(fins: dict[str, list[dict]], symbol: str, focus: str) -> 
         data_json,
         "```",
     ]
-    if focus.strip():
+    from app.services.ai_provider import sanitize_focus
+    safe_focus = sanitize_focus(focus)
+    if safe_focus:
         lines.extend([
             "",
-            f"本次分析请特别关注: {focus.strip()}",
+            f"本次分析请特别关注: {safe_focus}",
         ])
     return "\n".join(lines)
 
@@ -169,14 +178,17 @@ async def analyze_financials_stream(
         from app.services.ai_provider import stream_ai_text
 
         user_prompt = _build_user_prompt(fins, symbol, focus)
+        got_content = False
         async for delta in stream_ai_text(
             [
                 {"role": "system", "content": _SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0.4,
-            max_tokens=4000,
+            # 不限制输出(推理模型思考 token 计入预算, 见 ai_provider.stream_ai_text)
+            max_tokens=None,
         ):
+            got_content = True
             yield json.dumps({"type": "delta", "content": delta}, ensure_ascii=False)
 
     except Exception as e:  # noqa: BLE001
@@ -184,4 +196,8 @@ async def analyze_financials_stream(
         yield json.dumps({"type": "error", "message": f"AI 分析失败: {e}"}, ensure_ascii=False)
         return
 
+    if not got_content:
+        logger.warning("AI financial analysis ended with empty content for %s", symbol)
+        yield json.dumps({"type": "error", "message": "AI 未返回正文(输出被截断), 请重试"}, ensure_ascii=False)
+        return
     yield json.dumps({"type": "done"}, ensure_ascii=False)

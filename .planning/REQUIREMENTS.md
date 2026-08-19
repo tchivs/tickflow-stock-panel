@@ -1,113 +1,102 @@
-# Requirements: AthenaQuant v3.0 可回放 Alpha Factory 与 FactorResearchAgent
+# Requirements: AthenaQuant v3.1 可信工作台与运维闭环
 
-**Defined:** 2026-08-08  
+**Defined:** 2026-08-18
 **Core Value:** An investor can turn reliable market data and their own holdings into an auditable, actionable research and monitoring workflow without operating multiple disconnected tools.
 
 ## Milestone Scope
 
-v3.0 extends the existing governed factor workflow into a replayable Alpha Factory and a two-stage FactorResearchAgent.
+v3.1 以打磨现有功能为主: 补齐「用户能否看懂、验证、操作」的闭环。范围定义来自 `.planning/v3.1-milestone-spec.md`(用户已确认)。
 
 Locked boundaries:
 
-- Candidate formulas use the existing restricted Factor DSL and canonical AST; no arbitrary Python, imports, `eval`, or second expression engine.
-- Candidate computation uses the single shared `FactorSignalChain`; no search-only evaluator or StackVM fork.
-- The default search is deterministic seeded grammar/evolution using the existing Python/runtime stack; no new base dependency, PyTorch, RL, GPU, distributed queue, or WebSocket requirement.
-- Search and Agent runs freeze data, universe, DSL/grammar/vocabulary, policy, costs, seed, fold geometry, and provenance before generation or provider calls.
-- Reserved walk-forward OOS is inaccessible during search and Agent review, then evaluated exactly once after selection.
-- Agent output is untrusted proposal/review data. Deterministic code owns parsing, metrics, admission gates, persistence, and authority.
-- Promotion is research-only and requires explicit human review plus approval-time evidence refresh. No broker, order, portfolio, monitor, or live execution authority is added.
-- AlphaMaster and PA_Agent contribute architectural patterns only. Their source, prompts, domain rules, and AGPL-derived implementation are not copied into this MIT backend.
+- 不引入新的模型执行权威: 工具审计只记录与展示, 不改变确定性代码对候选生成/评估/门禁/晋级的所有权
+- ToolCallEnvelope 只追加事实(tool/params/version/scope/response_shape/raw_hash/duration/error), 审计内容脱敏后才可离开后端
+- Provider Doctor 与数据质量 API 只读; 不新增自动修复动作
+- 监控 test-fire 是 synthetic 投递, 不触达真实通知渠道预算以外的副作用
+- 暂缓: 多市场扩张、新一轮因子/RL 搜索、Moderator 多 Agent 会议室、大规模实时架构、自动实盘交易
 
-## Active Requirements
+## v1 Requirements
 
-### Alpha Factory Contract and Determinism
+### 发布基线收口 (Phase 51)
 
-- [x] **AF-REQ-01**: A researcher can create an immutable factory run specification containing DSL/grammar/vocabulary versions, seed, expression limits, candidate budget, objective policy, universe, measured date range, fold geometry, costs, and code/data manifest; changing inputs creates a new run instead of mutating the original.
-- [x] **AF-REQ-02**: Given the same frozen specification, seed, and governed input manifest, a replay produces the same canonical candidate expressions, candidate IDs/digests, order, statuses, and checksums.
-- [x] **AF-REQ-03**: Every generated expression is parsed and validated before evaluation; unsupported fields/functions/operators, invalid arity or partition semantics, excessive depth/window, non-finite literals, and malformed expressions become explicit invalid candidate records with diagnostics.
-- [x] **AF-REQ-04**: The run retains every attempted candidate, including invalid, duplicate, low-coverage, failed, rejected, and admitted outcomes, with parent/mutation lineage, seed/step, status, reason, and evidence references; the system never retains only the champion.
-- [x] **AF-REQ-05**: Factory scoring, Agent-requested evaluation, admission, composite use, walk-forward folds, and later as-of serving all compute factor values through the existing governed `FactorSignalChain` and expose the panel/universe/source/warmup fingerprints used.
-- [x] **AF-REQ-06**: A replay uses measured A-share trading dates and point-in-time membership; missing, suspended, non-finite, warmup, and source-quality states follow the declared policy, and current-constituent/full-lake substitution fails closed.
+- [ ] **BASE-01**: 用户打开任一规划文档(STATE/PROJECT/ROADMAP/REQUIREMENTS)看到的都是同一里程碑的同一状态, 无互相矛盾
+- [ ] **BASE-02**: 开发者运行一次命令即可执行 Vitest 前端单测套件, 且它在 CI/本地检查流程中被默认纳入
+- [ ] **BASE-03**: 开发者可在部署环境执行真实 LLM、Provider 降级与 SSE 重连三项冒烟脚本并得到通过/失败结论
+- [ ] **BASE-04**: 用户可在文档中查阅 v3.0 技债清单(Tier-2 stress matrix、成本近似等)及每项的处理或明确关闭结论
 
-### Evaluation, Admission, OOS, and Provenance
+### 全局可信度与工具审计 (Phase 52)
 
-- [x] **AF-REQ-07**: For every evaluated candidate, a researcher can inspect resolved configuration and immutable evidence including per-date IC/RankIC, summaries, ICIR, positive rate, coverage, monthly robustness, group/long-short evidence, costs, and diagnostics; evaluation failure is a terminal reason, not a zero score.
-- [x] **AF-REQ-08**: Candidate status is produced by the existing deterministic admission policy with each gate's observed value, threshold, and reason visible; the Factory and Agent cannot edit thresholds, reorder gates, or convert rejection into admission.
-- [x] **AF-REQ-09**: Search and Agent review never consume the reserved OOS fold; the UI distinguishes selection-fold evidence, selection OOS, and any future final-blind holdout, and never labels selection OOS as blind final validation.
-- [x] **AF-REQ-10**: A run can be replayed from stored data/partition, universe, factor/DSL, grammar/vocabulary, seed, configuration, code/build, provider/model, candidate-order, and artifact checksums; missing required manifest fields fail closed.
+- [ ] **AUDIT-01**: 开发者通过统一 ToolCallEnvelope 结构(tool/params/version/scope/response_shape/raw_hash/duration/error)记录 Provider、AI、通知与外部工具调用
+- [ ] **AUDIT-02**: 用户可在统一审计页面按来源/日期/缓存/降级/schema/失败原因筛选查看全部工具调用
+- [ ] **AUDIT-03**: 用户可对任一 Provider 执行 Doctor 诊断并看到分级结论(健康/降级/不可用)与建议动作
+- [ ] **AUDIT-04**: 用户可通过统一数据质量 API 拉取各数据源新鲜度与缺陷摘要, 前端据此渲染质量告警
+- [ ] **AUDIT-05**: 审计展示内容经过脱敏, 不暴露密钥、完整报文或个人数据
 
-### FactorResearchAgent
+### 今日工作台与统一待办 (Phase 53)
 
-- [x] **AF-REQ-11**: Before any model call, deterministic preflight checks data availability/freshness, source quality, measured calendar, universe scope, required fields, sample length, DSL/grammar compatibility, budget, provider availability, and policy mode; a failed preflight makes zero provider calls and returns machine-readable reasons.
-- [x] **AF-REQ-12**: Stage 1 accepts a bounded research thesis and permitted DSL/grammar options, then returns versioned schema-validated JSON containing hypotheses/expressions, explanation, assumptions, scope, uncertainty, and evidence references; it remains a transient proposal until explicit review.
-- [x] **AF-REQ-13**: Stage 2 receives only frozen run inputs and server-produced candidate/evaluation/gate evidence, then returns schema-validated evidence-linked review with caveats and a bounded recommendation; it cannot change expressions, metrics, thresholds, OOS state, or admission status.
-- [x] **AF-REQ-14**: Every Stage 1/2 call records prompt/template/schema version, provider/model/version, request scope, response checksum or bounded raw response, parsed output, validation errors, retries, cancellation, latency, and partial-failure state; provider failure never creates a fabricated fallback draft.
+- [ ] **WORK-01**: 用户在首页一屏看到数据新鲜度与 Provider 健康总览
+- [ ] **WORK-02**: 用户在首页看到运行中/失败任务及失败原因
+- [ ] **WORK-03**: 用户在首页看到最近报告与研究产物入口
+- [ ] **WORK-04**: 用户在首页看到最近监控触发记录
+- [ ] **WORK-05**: 用户在统一「待确认」收件箱处理生命周期、论点、因子晋升、纸面调仓四类待办, 每项有明确下一步入口
+- [ ] **WORK-06**: 数据质量告警不再只出现在 Alpha 工作台, 首页与相关页面共享同一 Banner 数据源
 
-### Human Review and Research-only Delivery
+### 监控与报告闭环 (Phase 54)
 
-- [x] **AF-REQ-15**: A researcher can compare a proposal's expression, assumptions, evidence, gate trail, and provenance, then explicitly save a new immutable `FactorRevision`; changed expression/explanation/provenance that no longer matches the issued draft is rejected, and unreviewed output is absent from the formal catalog.
-- [x] **AF-REQ-16**: The workbench exposes queued/running/completed/failed/cancelled states, candidate/fold progress, cooperative cancellation, idempotent retry, and checkpointed resume; retry resumes or creates a linked run and never overwrites an earlier run or repeats a committed OOS/promotion side effect.
-- [x] **AF-REQ-17**: Alpha Factory and Agent runs expose only inspect, compare, retain, and research-only promotion actions; no route, collaborator, UI action, or model output can place broker orders, mutate positions/portfolios, activate monitors, or enable live execution.
+- [ ] **MON-01**: 用户可对任一监控规则执行 synthetic test-fire 并看到与真实触发一致的通知预览
+- [ ] **MON-02**: 用户可查看每个监控的预算消耗、冷却剩余时间与通知渠道健康状态
+- [ ] **MON-03**: 用户可预览 digest 汇总内容后再启用定期投递
+- [ ] **MON-04**: 每份报告带数据质量 Banner、证据卡与引用回链, 读者可从结论跳转到原始证据
+- [ ] **MON-05**: 报告可展示多空冲突观点与失败路径(哪些数据/步骤不可用), 不隐藏坏消息
+- [ ] **MON-06**: 运行页统一展示 Timeline、参数、工具调用、产物, 失败可重试, SSE 断连可恢复
 
-### Research Workbench and Differentiators
+## v2 Requirements
 
-- [x] **AF-REQ-18**: A researcher can inspect parent-to-child mutation/crossover lineage, canonical expression diffs, seed/step, and branch termination reasons, then replay one branch under the same frozen inputs.
-- [x] **AF-REQ-19**: Search results show objective score together with structural similarity, field/operator overlap, factor-output/IC-series correlation, coverage, and fixed-policy diversity/redundancy outcomes; similar candidates remain inspectable rather than being silently merged.
-- [x] **AF-REQ-20**: A candidate family can be evaluated across declared rebalance, fee/slippage, calendar-regime, coverage, and symbol-subset stress cases, with the exact trial matrix and evidence recorded without changing primary admission thresholds.
-- [x] **AF-REQ-21**: Stage 2 can identify missing assumptions, contradictory metrics, gate failures, narrow coverage, or redundancy and link each claim to candidate/evaluation/gate/artifact IDs; follow-up work is a bounded new run, never an unbounded autonomous loop.
-- [x] **AF-REQ-22**: A completed run can be cloned into a new immutable specification while changing only declared dimensions; the UI shows field-level differences and parent/child links, and unchanged inputs retain their hashes.
-- [x] **AF-REQ-23**: Candidate, wall-clock, memory, provider-call, retry, artifact, and worker budgets are enforced server-side; parallel workers may improve throughput but cannot change candidate order, score reduction, winner, or replay result.
-- [x] **AF-REQ-24**: Researchers can compare explicitly retained experiment snapshots and candidate families side by side, including configuration, evidence, provenance, gate status, and artifacts without an opaque hidden winner score.
-- [x] **AF-REQ-25**: The workbench displays data date, provider/source, cache/degradation state, missing fields, membership coverage, and whether evidence is exploratory, selection-fold, selection-OOS, or final-blind; degraded results cannot look equivalent to clean completed results.
-- [x] **AF-REQ-26**: Tests and operators can run an explicitly declared offline Agent fixture with known proposal and validation trace when no provider is configured; production paths never silently switch to the fixture, and the UI labels fixture evidence as non-production.
+### Moderator 研究会议室 (下一功能型里程碑候选)
 
-## Future Requirements (Deferred)
-
-- Neural/RL/AlphaGPT policy search, GPU infrastructure, and distributed optimization.
-- Broad grammar expansion before the narrow grammar is replayable and statistically accounted for.
-- Multi-agent debate, self-modifying prompts, model-selected tools, and autonomous/unbounded research loops.
-- Automatic factor promotion, paper/live execution, broker integration, monitor activation, portfolio mutation, and order submission.
-- A separate final-blind holdout unless a later milestone defines and funds a distinct data contract.
-- External event brokers, Redis/Kafka/NATS, Celery/RQ, WebSockets, or a second Agent/validation framework.
+- **MODR-01**: 多 Agent 会议室以 Moderator 主持的研究讨论形式接入, 复用 v3.1 的工具审计与证据回链
 
 ## Out of Scope
 
-- Investment return guarantees or claims that high IC/Agent confidence implies a trading recommendation.
-- Copying AlphaMaster or PA_Agent source, prompts, assets, crypto/Price Action rules, or AGPL-derived implementation.
-- Arbitrary code generation or execution through the Alpha Factory/FactorResearchAgent.
-- Changes to the existing broker/execution boundary or the user's `frontend/src/pages/Watchlist.tsx`.
-- Replacing the existing Parquet/DuckDB/Polars/SQLite architecture with an external database or queue.
+| Feature | Reason |
+|---------|--------|
+| 多市场全面扩张 | v3.0 结论: 继续加市场只会扩大维护面 |
+| 新一轮因子/RL 搜索 | Alpha158 与挖掘引擎刚收口, 先消化 |
+| 完整 Moderator 多 Agent 会议室 | 推迟到 v3.2, 依赖 v3.1 审计与证据链 |
+| 大规模实时架构 | 单人自托管场景收益不成比例 |
+| 自动实盘交易/券商连接 | 平台边界, 永久排除 |
 
 ## Traceability
 
-| REQ-ID | Phase | Status |
-|---|---:|---|
-| AF-REQ-01 | Phase 45 | Complete |
-| AF-REQ-02 | Phase 46 | Complete |
-| AF-REQ-03 | Phase 46 | Complete |
-| AF-REQ-04 | Phase 45 | Complete |
-| AF-REQ-05 | Phase 47 | Complete |
-| AF-REQ-06 | Phase 47 | Complete |
-| AF-REQ-07 | Phase 47 | Complete |
-| AF-REQ-08 | Phase 47 | Complete |
-| AF-REQ-09 | Phase 47 | Complete |
-| AF-REQ-10 | Phase 45 | Complete |
-| AF-REQ-11 | Phase 48 | Complete |
-| AF-REQ-12 | Phase 48 | Complete |
-| AF-REQ-13 | Phase 48 | Complete |
-| AF-REQ-14 | Phase 48 | Complete |
-| AF-REQ-15 | Phase 49 | Complete |
-| AF-REQ-16 | Phase 45 | Complete |
-| AF-REQ-17 | Phase 49 | Complete |
-| AF-REQ-18 | Phase 50 | Complete |
-| AF-REQ-19 | Phase 46 | Complete |
-| AF-REQ-20 | Phase 50 | Complete |
-| AF-REQ-21 | Phase 48 | Complete |
-| AF-REQ-22 | Phase 50 | Complete |
-| AF-REQ-23 | Phase 46 | Complete |
-| AF-REQ-24 | Phase 50 | Complete |
-| AF-REQ-25 | Phase 50 | Complete |
-| AF-REQ-26 | Phase 48 | Complete |
+| Requirement | Phase | Status |
+|-------------|-------|--------|
+| BASE-01 | Phase 51 | Pending |
+| BASE-02 | Phase 51 | Pending |
+| BASE-03 | Phase 51 | Pending |
+| BASE-04 | Phase 51 | Pending |
+| AUDIT-01 | Phase 52 | Pending |
+| AUDIT-02 | Phase 52 | Pending |
+| AUDIT-03 | Phase 52 | Pending |
+| AUDIT-04 | Phase 52 | Pending |
+| AUDIT-05 | Phase 52 | Pending |
+| WORK-01 | Phase 53 | Pending |
+| WORK-02 | Phase 53 | Pending |
+| WORK-03 | Phase 53 | Pending |
+| WORK-04 | Phase 53 | Pending |
+| WORK-05 | Phase 53 | Pending |
+| WORK-06 | Phase 53 | Pending |
+| MON-01 | Phase 54 | Pending |
+| MON-02 | Phase 54 | Pending |
+| MON-03 | Phase 54 | Pending |
+| MON-04 | Phase 54 | Pending |
+| MON-05 | Phase 54 | Pending |
+| MON-06 | Phase 54 | Pending |
+
+**Coverage:**
+- v1 requirements: 21 total
+- Mapped to phases: 21
+- Unmapped: 0 ✓
 
 ---
-*Requirements defined: 2026-08-08 — v3.0 Alpha Factory + FactorResearchAgent*
+*Requirements defined: 2026-08-18*
+*Last updated: 2026-08-18 — traceability confirmed against v3.1 ROADMAP.md (Phase 51-54)*

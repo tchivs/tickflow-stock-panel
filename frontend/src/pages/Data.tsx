@@ -45,6 +45,7 @@ import { RepairDailyPanel } from '@/components/data/RepairDailyPanel'
 import { EnrichedRebuildPanel } from '@/components/data/EnrichedRebuildPanel'
 import { MinuteSyncConfig } from '@/components/data/MinuteSyncConfig'
 import { AuctionProbeCard } from '@/components/data/AuctionProbeCard'
+import { RegimeConfigCard } from '@/components/data/RegimeConfigCard'
 import { PipelineScopeConfig } from '@/components/data/PipelineScopeConfig'
 import { PageSettingsModal, getCardVisibility, getCardOrder, type CardKey } from '@/components/data/PageSettingsModal'
 import { QuoteConfigCard } from '@/components/data/QuoteConfigCard'
@@ -64,6 +65,9 @@ const STAGE_CARD: Record<string, string> = {
   sync_index: 'index_daily',
   sync_minute: 'minute',
   extend_minute: 'minute',
+  compute_regime: 'regime',
+  // regime 软失败时入 skipped_stages 的是 'regime'(非 stage 名), 也映射到该卡片
+  regime: 'regime',
 }
 
 export function Data() {
@@ -82,6 +86,14 @@ export function Data() {
       if (activeJobId || data?.indicators_ready === false) return 2_000
       return 30_000
     },
+  })
+
+  // 市场环境(regime) 覆盖画像 —— 走独立接口(/api/regime/coverage), 不在 data/status 内。
+  // 同步任务完成后刷新一次; 平时 30s 轮询与 status 对齐。
+  const regimeCoverage = useQuery({
+    queryKey: QK.regimeCoverage,
+    queryFn: () => api.regimeCoverage(),
+    refetchInterval: activeJobId ? false : 30_000,
   })
 
   const history = useQuery({
@@ -270,6 +282,8 @@ export function Data() {
     if (jobStatus === 'succeeded' || jobStatus === 'failed') {
       qc.invalidateQueries({ queryKey: QK.dataStatus })
       qc.invalidateQueries({ queryKey: QK.pipelineJobs })
+      // 同步任务结束后 regime 覆盖范围可能变化, 一并刷新画像
+      qc.invalidateQueries({ queryKey: QK.regimeCoverage })
       const t = setTimeout(() => setActiveJobId(null), 5_000)
       return () => clearTimeout(t)
     }
@@ -327,6 +341,7 @@ export function Data() {
     5000,
     Math.max(30, Math.ceil((Date.now() - indexTargetDate.getTime()) / 86_400_000) + 1),
   )
+
 
   const activeCard = isRunning && job.data ? STAGE_CARD[job.data.stage] ?? null : null
 
@@ -522,17 +537,42 @@ export function Data() {
           />
         )
       }
-      case 'financials':
+      case 'financials': {
+        const historicalShareRows = s?.financials?.tables?.shares?.rows ?? 0
         return (
           <StatCard
             title="财务数据"
-            hint="利润表 / 资负表 / 现金流 / 指标"
+            hint="财报 / 指标 / 历史股本"
             stats={s?.financials ? { rows: s.financials.rows } : null}
             loading={isLoading}
             tierKey="financials"
             capLimits={caps.data?.capabilities}
             tierLabel={caps.data?.label}
             customProvider={getCustomProviderName('financials')}
+            subLabel={`历史股本 · ${historicalShareRows.toLocaleString()} 条`}
+            onSettings={hasData ? () => setOpenSettings(v => v === 'financials' ? null : 'financials') : undefined}
+            settingsOpen={openSettings === 'financials'}
+          />
+        )
+      }
+      case 'regime':
+        return (
+          <StatCard
+            title="市场环境"
+            hint="每日环境状态 · 本地计算"
+            stats={regimeCoverage.data ?? null}
+            loading={regimeCoverage.isLoading}
+            active={activeCard === 'regime'}
+            done={doneStages.has('regime')}
+            skipped={skippedCards.has('regime')}
+            stagePct={activeCard === 'regime' ? (job.data?.stage_pct ?? 0) : 0}
+            tierKey="regime"
+            capLimits={caps.data?.capabilities}
+            tierLabel={caps.data?.label}
+            auto={prefs.data?.pipeline_regime_enabled === true}
+            subLabel="状态 · 综合分 · 指标"
+            onSettings={hasData ? () => setOpenSettings(v => v === 'regime' ? null : 'regime') : undefined}
+            settingsOpen={openSettings === 'regime'}
           />
         )
       default:
@@ -631,7 +671,7 @@ export function Data() {
             <span className="text-secondary leading-relaxed">
               当前为 None 档,将使用免费数据源获取历史日K(无需注册)。
               配置 API Key 可解锁实时行情监控等扩展能力,前往
-              <Link to="/settings?tab=account" className="mx-0.5 font-medium text-accent hover:underline">
+              <Link to="/settings?tab=data-sources" className="mx-0.5 font-medium text-accent hover:underline">
                 配置
               </Link>
               。
@@ -661,8 +701,8 @@ export function Data() {
             running={quoteStatus.data?.running ?? false}
             isTrading={quoteStatus.data?.is_trading_hours ?? false}
             lastFetchMs={quoteStatus.data?.last_fetch_ms ?? null}
-            intervalS={quoteInterval.data?.interval ?? quoteStatus.data?.interval_s ?? 10}
-            intervalMin={quoteInterval.data?.min_interval ?? 5}
+            intervalS={quoteInterval.data?.interval ?? quoteStatus.data?.interval_s ?? 6}
+            intervalMin={quoteInterval.data?.min_interval ?? 6}
             intervalMax={quoteInterval.data?.max_interval ?? 60}
             loading={quoteStatus.isLoading}
             onToggle={(v) => toggleQuote.mutate(v)}
@@ -1015,7 +1055,31 @@ export function Data() {
       <AnimatePresence>
         {openSettings === 'enriched' && (
           <SettingsModal title="Enriched · 计算设置" onClose={() => setOpenSettings(null)}>
-            <EnrichedRebuildPanel isRunning={!!activeJobId} onStart={() => setOpenSettings(null)} />
+            <EnrichedRebuildPanel
+              isRunning={!!activeJobId}
+              onStart={(jobId) => { setActiveJobId(jobId); setOpenSettings(null) }}
+            />
+          </SettingsModal>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {openSettings === 'financials' && (
+          <SettingsModal title="财务数据 · 换手率重算" onClose={() => setOpenSettings(null)}>
+            <EnrichedRebuildPanel
+              isRunning={!!activeJobId}
+              purpose="turnover"
+              historicalShareRows={s?.financials?.tables?.shares?.rows ?? 0}
+              onStart={(jobId) => { setActiveJobId(jobId); setOpenSettings(null) }}
+            />
+          </SettingsModal>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {openSettings === 'regime' && (
+          <SettingsModal title="市场环境 · 计算设置" onClose={() => setOpenSettings(null)}>
+            <RegimeConfigCard />
           </SettingsModal>
         )}
       </AnimatePresence>
@@ -1143,7 +1207,7 @@ export function Data() {
       <AnimatePresence>
         {openSettings === 'minute' && (
           <SettingsModal title="分钟 K · 同步设置" onClose={() => setOpenSettings(null)}>
-            <MinuteSyncConfig caps={caps.data} isRunning={!!activeJobId} onStart={() => setOpenSettings(null)} />
+            <MinuteSyncConfig caps={caps.data} onJobStart={(jobId) => { setActiveJobId(jobId); setOpenSettings(null) }} />
           </SettingsModal>
         )}
       </AnimatePresence>

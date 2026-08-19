@@ -591,6 +591,9 @@ def init_app_state(app: FastAPI) -> None:
         Path(__file__).resolve().parent / "strategy" / "builtin",
         store.data_dir / "strategies" / "custom",
         store.data_dir / "strategies" / "ai",
+        # composite 叠加策略 (upstream v0.2): API 保存渲染到 strategies/composite,
+        # engine 按 EXECUTION_BACKEND="composite" 识别并聚合子策略。
+        store.data_dir / "strategies" / "composite",
     ]
     strategy_engine = StrategyEngine(
         enriched_loader=_screener_svc._load_enriched_for_date,

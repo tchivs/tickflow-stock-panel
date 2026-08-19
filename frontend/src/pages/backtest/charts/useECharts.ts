@@ -7,13 +7,17 @@ import type { ECharts, EChartsOption } from 'echarts'
  * 返回 ref 绑定到容器 div，和 setOption 方法。
  * @param ariaDescription 可选的可访问摘要; 提供时给图表容器加 role="img" + aria-label (读屏),
  *                        不提供则不触碰 aria (回退到纯 canvas 现状)。
+ * 可传入一个外部 ref (containerRef) 让调用方共享同一 DOM 节点,
+ * 用于在 setOption 前读取图表状态 (例如保留 dataZoom 缩放窗口)。
  */
 export function useECharts(
   option: EChartsOption | null,
   deps: any[] = [],
   ariaDescription?: string,
+  containerRef?: React.RefObject<HTMLDivElement>,
 ) {
-  const chartRef = useRef<HTMLDivElement>(null)
+  const ownRef = useRef<HTMLDivElement>(null)
+  const chartRef = containerRef ?? ownRef
   const instanceRef = useRef<ECharts | null>(null)
 
   // 初始化 / 销毁

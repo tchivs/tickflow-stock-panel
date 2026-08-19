@@ -6,6 +6,7 @@ import { api, type EndpointItem } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { EXPERT_RANK, tierRank } from '@/lib/capability-labels'
 import { useModalA11y } from '@/lib/useModalA11y'
+import { useDialogBackdrop } from '@/lib/useDialogBackdrop'
 
 interface EpResult {
   ok: boolean
@@ -21,6 +22,7 @@ export function EndpointTestDialog({ hasKey, tierLabel, currentEndpoint, onClose
   const qc = useQueryClient()
   const panelRef = useRef<HTMLDivElement>(null)
   useModalA11y(panelRef, { onClose })
+  const backdrop = useDialogBackdrop(onClose)
   const [results, setResults] = useState<Record<string, EpResult | null>>({})
   const [testing, setTesting] = useState<Record<string, boolean>>({})
   const [switching, setSwitching] = useState<string | null>(null)
@@ -81,7 +83,7 @@ export function EndpointTestDialog({ hasKey, tierLabel, currentEndpoint, onClose
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           className="absolute inset-0 bg-black/60 backdrop-blur-sm"
-          onClick={onClose}
+          {...backdrop}
         />
         <motion.div
           ref={panelRef}

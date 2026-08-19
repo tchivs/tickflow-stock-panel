@@ -1,7 +1,17 @@
 import { useRef, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { Check, FolderCog, FolderInput, Pencil, Plus, Trash2, X, Eraser } from 'lucide-react'
 import { Modal } from '@/components/Modal'
+import { api } from '@/lib/api'
+import { QK } from '@/lib/queryKeys'
+import { usePreferences } from '@/lib/useSharedQueries'
 import type { WatchlistGroup, WatchlistGroupColor } from '@/lib/api'
+import {
+  formatGroupPct,
+  groupPctColor,
+  groupPctTitle,
+  type GroupPctMap,
+} from '@/lib/watchlistGroupStats'
 import {
   DEFAULT_WATCHLIST_GROUP_COLOR,
   WATCHLIST_GROUP_COLORS,
@@ -15,6 +25,8 @@ interface GroupBarProps {
   counts: Record<string, number>
   selected: WatchlistGroupFilter
   total: number
+  /** 分组等权平均涨跌幅 (key: 'all' | 'ungrouped' | 分组id); 缺省不显示 */
+  pcts?: GroupPctMap
   onSelect: (group: WatchlistGroupFilter) => void
   onCreate: (name: string, color: WatchlistGroupColor) => Promise<void>
   onRename: (groupId: string, name: string, color: WatchlistGroupColor) => Promise<void>
@@ -27,6 +39,7 @@ export function WatchlistGroupBar({
   counts,
   selected,
   total,
+  pcts,
   onSelect,
   onCreate,
   onRename,
@@ -70,6 +83,18 @@ export function WatchlistGroupBar({
                 <span className={`font-mono text-[10px] tabular-nums ${active && !color ? 'text-accent/80' : 'text-muted'}`}>
                   {tab.count}
                 </span>
+                {pcts && (() => {
+                  const info = pcts[tab.id]
+                  if (!info || info.pct == null || info.sampled === 0) return null
+                  return (
+                    <span
+                      className={`font-mono text-[10px] tabular-nums ${groupPctColor(info.pct)}`}
+                      title={groupPctTitle(info)}
+                    >
+                      {formatGroupPct(info.pct)}
+                    </span>
+                  )
+                })()}
               </button>
             )
           })}
@@ -193,6 +218,20 @@ function GroupManagerDialog({
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
 
+  // 「显示在侧边栏」偏好开关
+  const qc = useQueryClient()
+  const prefs = usePreferences()
+  const groupsInNav = prefs.data?.watchlist_groups_in_nav ?? false
+  const [navTogglePending, setNavTogglePending] = useState(false)
+  const toggleGroupsInNav = async (enabled: boolean) => {
+    setNavTogglePending(true)
+    try {
+      await api.updateWatchlistGroupsInNav(enabled)
+      await qc.invalidateQueries({ queryKey: QK.preferences })
+    } finally {
+      setNavTogglePending(false)
+    }
+  }
   const validate = (name: string) => {
     const value = name.trim()
     if (!value) return '请输入分组名称'
@@ -255,6 +294,26 @@ function GroupManagerDialog({
         </button>
       </div>
 
+      {/* 显示在侧边栏 开关 */}
+      <div className="flex items-center justify-between border-b border-border px-4 py-2.5">
+        <div className="min-w-0">
+          <div className="text-xs font-medium text-foreground">显示在侧边栏</div>
+          <div className="mt-0.5 text-[10px] text-muted">开启后可在左侧菜单展开分组子菜单</div>
+        </div>
+        <button
+          type="button"
+          onClick={() => void toggleGroupsInNav(!groupsInNav)}
+          disabled={navTogglePending}
+          className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors duration-200 disabled:opacity-50 ${
+            groupsInNav ? 'bg-accent' : 'bg-elevated'
+          }`}
+          title={groupsInNav ? '已开启 — 点击关闭' : '已关闭 — 点击开启'}
+        >
+          <span className={`inline-block h-4 w-4 rounded-full bg-white shadow-sm transition-transform duration-200 ${
+            groupsInNav ? 'translate-x-[18px]' : 'translate-x-0.5'
+          }`} />
+        </button>
+      </div>
       <div className="px-4 py-3">
         <div className="flex gap-2">
           <input

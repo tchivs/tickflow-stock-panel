@@ -27,6 +27,8 @@ cp .env.example .env       # 按需填 TICKFLOW_API_KEY(留空 = None 模式)
 ```bash
 # 后端
 cd backend && uv sync --extra backtest   # 含回测依赖
+# 老 CPU: uv sync --extra legacy-cpu
+# 老 CPU + 回测: uv sync --extra legacy-cpu --extra backtest
 uv run uvicorn app.main:app --reload --port 3018
 
 # 前端
@@ -82,7 +84,18 @@ Provisioning 命令可重复执行；摘要一致的现有文件不会重复下�
 
 2027 覆盖采用[全国银行间同业拆借中心于 2025-12-19 发布的本币交易系统预设节假日](https://www.chinamoney.com.cn/chinese/bbjjr/20251219/3254570.html)，并与 `exchange-calendars` 的 XSHG 2010–2026 正式日历合并。该公告明确说明国务院正式通知发布后仍会调整；上交所发布 2027 年正式休市安排后，必须更新闭市日期并重新 provision。日历 revision 以 `xshg-cfets-preset-2027-` 标识，避免把预设日期误当成最终公告。
 
-> 💡 镜像已内置 Node.js 运行时并预装 **stock-sdk** 插件依赖,Docker 部署下开箱即用,无需手动 `npm install`。
+> ⚠️ **stock-sdk 插件默认不打包(合规考虑)**
+>
+> stock-sdk 数据源本质是抓取第三方财经网站(如东方财富)的行情接口,未经对方授权,可能违反其服务条款并涉及交易所行情版权问题。**出于合规考虑,Docker 默认构建不再内置 stock-sdk 插件依赖**。
+>
+> - **默认行为**:`docker compose up --build` 构建出的镜像**不含** stock-sdk,插件不可用。
+> - **如确需启用**(自行承担合规责任):
+>   ```bash
+>   docker compose build --build-arg INCLUDE_STOCKSDK=1
+>   docker compose up -d
+>   ```
+> - 启用后镜像会额外内置 Node.js 运行时并预装 stock-sdk 依赖,插件开箱即用。
+> - **建议优先使用 TickFlow 等正规授权数据源。**
 
 更新到新版本:
 
@@ -105,13 +118,15 @@ Fork 本仓库后，手动触发 [Release 打包工作流](https://github.com/tc
 
 如果运行时报 `avx2`/`fma` 缺失,或进程 `exit 132`,说明 CPU 不支持 AVX2 指令集(常见于老 VPS)。解决:
 
-- **桌面客户端**:安装包已内置兼容内核,新老 CPU 通吃
-- **Docker / 源码**:在 `.env` 打开 `BACKEND_EXTRAS=legacy-cpu` 后重建,会给 Polars 切到 `rtcompat` 运行时
+- **Dev 源码启动**:在根目录 `.env` 设置后运行 `./dev.sh` 或 Windows 的 `.\dev.ps1`;即使已有 `.venv`,启动器也会同步兼容内核
+- **Docker**:在根目录 `.env` 设置后执行 `docker compose up --build`
 
 ```ini
 BACKEND_EXTRAS=legacy-cpu          # 兼容老 CPU
 BACKEND_EXTRAS=legacy-cpu backtest # 兼容老 CPU + 回测依赖
 ```
+
+手动启动源码时，也可以在 `backend/` 目录直接执行 `uv sync --extra legacy-cpu`。不要设置 `POLARS_SKIP_CPU_CHECK`，它只会隐藏警告，实际执行不支持的指令时仍可能崩溃。
 
 ### 回测依赖说明
 
@@ -161,7 +176,7 @@ tar -czf athenaquant-data-$(date +%F).tar.gz data
 在 `.env` 文件(或 Docker / 系统环境变量)里设置 `AUTH_PASSWORD`:
 
 ```bash
-AUTH_PASSWORD=你的密码
+AUTH_PASSWORD='你的密码'
 ```
 
 然后重启服务。启动时会自动:
@@ -176,6 +191,7 @@ AUTH_PASSWORD=你的密码
 
 - **密码至少 6 位**,否则会被跳过并记一条 warning 日志
 - **仅在未设过密码时生效**。已设过密码后,改这里不会覆盖(避免重启时重置你在 UI 改的密码)
+- 密码建议使用单引号包裹，避免 Docker Compose 插值 `$VAR`；启动时也会从只读挂载的原始 `.env` 初始化，兼容已有的未加引号配置
 - `.env` 文件权限保持 `600`,**不要提交到 Git**
 - 明文密码只存在于 `.env` / 环境变量中,落盘的是哈希,安全性等同 `auth.json`
 

@@ -6,15 +6,22 @@
  * score、signals、candle、ext 列。其余纯数据列（价格/指标/财务…）交给共享原语。
  */
 import { useState, type CSSProperties, type ReactNode } from 'react'
-import { Check, Plus, Eye, EyeOff } from 'lucide-react'
-import type { KlineRow } from '@/lib/api'
-import { fmtPrice } from '@/lib/format'
+import { Check, Plus, Eye, EyeOff, RefreshCw } from 'lucide-react'
+import type { KlineRow, MinuteKlineRow } from '@/lib/api'
+import { fmtPrice, formatExtNumber } from '@/lib/format'
 import type { ColumnConfig } from '@/lib/screener-columns'
 import { getSignals, signalCls } from '@/lib/stock-table'
 import { boardTag, renderBuiltinDataCell } from '@/components/stock-table/primitives'
-import { resolveCandleConfig } from '@/lib/list-columns'
+import { resolveCandleConfig, resolveIntradayConfig } from '@/lib/list-columns'
 import { MiniCandlestick } from '@/components/stock-table/MiniCandlestick'
+import { MiniIntraday } from '@/components/stock-table/MiniIntraday'
 import { StockDataTable, type SortState } from '@/components/stock-table/StockDataTable'
+import { WatchlistAddMenu } from '@/components/WatchlistAddMenu'
+import {
+  DimensionMembersDialog,
+  dimensionKindForSourceField,
+  type DimensionMembersTarget,
+} from '@/components/DimensionMembersDialog'
 
 interface ScreenerTableProps {
   rows: any[]
@@ -24,13 +31,25 @@ interface ScreenerTableProps {
   activeStrategy: string | null
   watchlistSet: Set<string>
   onPreview: (symbol: string, name: string) => void
-  onToggleWatchlist: (symbol: string, inList: boolean) => void
+  onAddToWatchlist: (symbol: string, groupId: string | null) => void
+  onRemoveFromWatchlist: (symbol: string) => void
   watchlistPending: boolean
   /** symbol → 日k 数据，仅当启用日k列时传入 */
   klineData?: Record<string, KlineRow[]>
   /** 日k蜡烛图是否显示（表头眼睛开关） */
   dailyKChartVisible?: boolean
   onToggleDailyKChart?: () => void
+  /** symbol → 分时数据，仅当启用分时列时传入 */
+  minuteData?: Record<string, MinuteKlineRow[]>
+  /** 分时图是否显示（表头眼睛开关） */
+  intradayChartVisible?: boolean
+  onToggleIntradayChart?: () => void
+  /** 分时是否正在自动轮询 (true 时隐藏手动刷新按钮, 避免重复请求) */
+  intradayAutoRefresh?: boolean
+  /** 手动刷新分时数据 */
+  onRefreshIntraday?: () => void
+  /** 分时数据正在刷新中 (按钮 loading 态) */
+  intradayRefreshing?: boolean
   /** 表头排序（受控，由 Screener.tsx 传入） */
   sort?: SortState | null
   onSortToggle?: (colId: string) => void
@@ -43,6 +62,7 @@ function renderTagList(
   expanded: boolean,
   onToggle: () => void,
   tagClassName: string,
+  onTagClick?: (tag: string) => void,
 ): ReactNode {
   if (tags.length === 0) return <span className="text-muted">—</span>
 
@@ -59,7 +79,16 @@ function renderTagList(
 
   return (
     <div className={isVertical ? 'flex flex-col items-start gap-0.5' : 'flex flex-wrap gap-0.5'}>
-      {visibleTags.map((tag, i) => (
+      {visibleTags.map((tag, i) => onTagClick ? (
+        <button
+          key={i}
+          type="button"
+          onClick={event => { event.stopPropagation(); onTagClick(tag) }}
+          className={`${tagClassName} hover:brightness-95`}
+        >
+          {tag}
+        </button>
+      ) : (
         <span key={i} className={tagClassName}>{tag}</span>
       ))}
       {!showAll && hiddenCount > 0 && (
@@ -90,10 +119,16 @@ function renderExtValue(
   col: ColumnConfig,
   expanded: boolean,
   onToggle: () => void,
+  onTagClick?: (tag: string) => void,
 ): ReactNode {
   if (val == null || Number.isNaN(val)) return <span className="text-muted">—</span>
   if (typeof val === 'number') {
-    const displayVal = Number.isInteger(val) ? fmtPrice(val, 0) : fmtPrice(val)
+    // 数字格式化: 千分位 + 单位换算 + 小数位(由列配置控制)
+    const cfg = col.extDisplay
+    const hasNumFmt = cfg?.thousandSeparator || (cfg?.unitConvert && cfg.unitConvert !== 'none')
+    const displayVal = hasNumFmt
+      ? formatExtNumber(val, { thousandSeparator: cfg?.thousandSeparator, unitConvert: cfg?.unitConvert, unitDecimals: cfg?.unitDecimals })
+      : (Number.isInteger(val) ? fmtPrice(val, 0) : fmtPrice(val))
     return <span className="tabular-nums">{displayVal}</span>
   }
   if (typeof val === 'boolean') {
@@ -109,16 +144,19 @@ function renderExtValue(
     ? str.split(separator).map(s => s.trim()).filter(Boolean)
     : str.split(/[、,，;；-]/).map(s => s.trim()).filter(Boolean)
 
-  return renderTagList(tags, col, expanded, onToggle, EXT_TAG_CLS)
+  return renderTagList(tags, col, expanded, onToggle, EXT_TAG_CLS, onTagClick)
 }
 
 export function ScreenerTable({
   rows, columns, strategyIdToName, symbolStrategyMap, activeStrategy,
-  watchlistSet, onPreview, onToggleWatchlist, watchlistPending, klineData = {},
+  watchlistSet, onPreview, onAddToWatchlist, onRemoveFromWatchlist, watchlistPending, klineData = {},
   dailyKChartVisible = true, onToggleDailyKChart,
+  minuteData = {}, intradayChartVisible = true, onToggleIntradayChart,
+  intradayAutoRefresh = false, onRefreshIntraday, intradayRefreshing = false,
   sort, onSortToggle,
 }: ScreenerTableProps) {
   const [expandedCells, setExpandedCells] = useState<Set<string>>(new Set())
+  const [dimensionTarget, setDimensionTarget] = useState<DimensionMembersTarget | null>(null)
 
   // 日k列渲染尺寸（按眼睛开关取开启/收起尺寸）
   const candleCol = columns.find(c => c.source.type === 'builtin' && c.source.key === 'candle' && c.visible)
@@ -126,6 +164,13 @@ export function ScreenerTable({
   const candleSize = dailyKChartVisible
     ? { width: candleResolved.enabledWidth, height: candleResolved.enabledHeight }
     : { width: candleResolved.disabledWidth, height: candleResolved.disabledHeight }
+
+  // 分时列渲染尺寸（开启用配置宽高，收起用 40×40 占位，与自选页一致）
+  const intradayCol = columns.find(c => c.source.type === 'builtin' && c.source.key === 'intraday' && c.visible)
+  const intradayResolved = resolveIntradayConfig(intradayCol?.intradayConfig)
+  const intradaySize = intradayChartVisible
+    ? { width: intradayResolved.width, height: intradayResolved.height }
+    : { width: 40, height: 40 }
 
   const toggleExpand = (key: string) => {
     setExpandedCells(prev => {
@@ -143,6 +188,8 @@ export function ScreenerTable({
       const val = r[`${configId}__${fieldName}`]
       const cellKey = `${r.symbol}::${col.id}`
       const expanded = expandedCells.has(cellKey)
+      const sourceField = `${configId}.${fieldName}`
+      const dimensionKind = dimensionKindForSourceField(sourceField)
       const tdClass = val == null || Number.isNaN(val)
         ? 'px-3 py-2 text-center text-muted'
         : typeof val === 'number'
@@ -152,7 +199,13 @@ export function ScreenerTable({
       if (col.extDisplay?.maxWidth) style.maxWidth = col.extDisplay.maxWidth
       return (
         <td key={col.id} className={tdClass} style={style}>
-          {renderExtValue(val, col, expanded, () => toggleExpand(cellKey))}
+          {renderExtValue(
+            val,
+            col,
+            expanded,
+            () => toggleExpand(cellKey),
+            dimensionKind ? value => setDimensionTarget({ kind: dimensionKind, value, sourceField }) : undefined,
+          )}
         </td>
       )
     }
@@ -194,20 +247,27 @@ export function ScreenerTable({
                   失效
                 </span>
               ) : (
-                <button
-                  type="button"
-                  onClick={() => onToggleWatchlist(r.symbol, inWatchlist)}
-                  disabled={watchlistPending}
-                  className={`shrink-0 inline-flex items-center justify-center w-5 h-5 rounded-full border transition-colors cursor-pointer max-md:h-11 max-md:w-11
-                    disabled:opacity-50
-                    ${inWatchlist
-                      ? 'border-accent/40 bg-accent/10 text-accent'
-                      : 'border-border text-muted hover:border-accent/40 hover:text-accent'
-                    }`}
-                  title={inWatchlist ? '移出自选' : '加入自选'}
-                >
-                  {inWatchlist ? <Check className="h-3 w-3" /> : <Plus className="h-3 w-3" />}
-                </button>
+                inWatchlist ? (
+                  <button
+                    type="button"
+                    onClick={() => onRemoveFromWatchlist(r.symbol)}
+                    disabled={watchlistPending}
+                    className="shrink-0 inline-flex h-5 w-5 cursor-pointer items-center justify-center rounded-full border border-accent/40 bg-accent/10 text-accent transition-colors disabled:opacity-50"
+                    title="移出自选"
+                    aria-label={`将 ${r.symbol} 移出自选`}
+                  >
+                    <Check className="h-3 w-3" />
+                  </button>
+                ) : (
+                  <WatchlistAddMenu
+                    onSelect={groupId => onAddToWatchlist(r.symbol, groupId)}
+                    disabled={watchlistPending}
+                    triggerClassName="shrink-0 inline-flex h-5 w-5 cursor-pointer items-center justify-center rounded-full border border-border text-muted transition-colors hover:border-accent/40 hover:text-accent disabled:opacity-50"
+                    ariaLabel={`将 ${r.symbol} 加入自选`}
+                  >
+                    <Plus className="h-3 w-3" />
+                  </WatchlistAddMenu>
+                )
               )}
             </div>
           </td>
@@ -262,13 +322,33 @@ export function ScreenerTable({
       case 'candle': {
         const candleRows = klineData[r.symbol] ?? []
         // 锁定列宽与行高：minWidth=maxWidth 防止 kline 加载前后整列宽度跳动（闪烁）
+        // padding/宽度与自选页一致（width+4 留内边距余量）
         return (
           <td
             key={col.id}
-            className="px-3 py-2"
-            style={{ width: candleSize.width, minWidth: candleSize.width, maxWidth: candleSize.width, height: candleSize.height }}
+            className="pl-2 pr-3 py-1.5"
+            style={{ width: candleSize.width + 4, minWidth: candleSize.width + 4, maxWidth: candleSize.width + 4, height: candleSize.height }}
           >
             <MiniCandlestick rows={candleRows} width={candleSize.width} height={candleSize.height} />
+          </td>
+        )
+      }
+      case 'intraday': {
+        const rows: MinuteKlineRow[] = minuteData[r.symbol] ?? []
+        const iw = intradaySize.width
+        const ih = intradaySize.height
+        // border-l 与自选页一致：当日k/分时相邻时提供视觉分隔
+        return (
+          <td
+            key={col.id}
+            className="pl-3 pr-2 py-1.5 border-l border-border/30"
+            style={{ width: iw + 4, minWidth: iw + 4, maxWidth: iw + 4, height: ih }}
+          >
+            <div className="flex items-center justify-center">
+              {intradayChartVisible
+                ? <MiniIntraday rows={rows} prevClose={r.prev_close} changePct={r.change_pct} width={iw - 4} height={ih} />
+                : <span className="text-[10px] text-muted">分时</span>}
+            </div>
           </td>
         )
       }
@@ -279,21 +359,25 @@ export function ScreenerTable({
   }
 
   return (
-    <StockDataTable
-      columns={columns}
-      rows={rows}
-      renderCell={renderCell}
-      sort={sort}
-      onSortToggle={onSortToggle}
-      minWidth={Math.max(900, columns.filter(c => c.visible).length * 110)}
-      rowKey={(r: any) => `${r.symbol}${r._expired ? '-expired' : ''}`}
-      rowClassName={(r: any) => r._expired
-        ? 'border-border/50 opacity-40'
-        : 'border-border hover:bg-elevated/50'
-      }
-      // 日k列表头：标签 + 显示/隐藏蜡烛图眼睛按钮（与自选页一致）
-      renderHeaderContent={onToggleDailyKChart ? (col) => {
-        if (col.source.type === 'builtin' && col.source.key === 'candle') {
+    <>
+      <StockDataTable
+        columns={columns}
+        rows={rows}
+        renderCell={renderCell}
+        sort={sort}
+        onSortToggle={onSortToggle}
+        minWidth={Math.max(900, columns.filter(c => c.visible).length * 110)}
+        rowKey={(r: any) => `${r.symbol}${r._expired ? '-expired' : ''}`}
+        rowClassName={(r: any) => r._expired
+          ? 'border-border/50 opacity-40'
+          : 'border-border hover:bg-elevated/50'
+        }
+        // 日k / 分时列表头：标签 + 显示/隐藏的眼睛按钮（与自选页一致）
+        renderHeaderContent={(col) => {
+        if (col.source.type !== 'builtin') return undefined
+        const key = col.source.key
+        // 日k 蜡烛图开关
+        if (key === 'candle' && onToggleDailyKChart) {
           return (
             <span className="inline-flex items-center justify-center gap-1.5">
               <span>{col.label}</span>
@@ -313,8 +397,55 @@ export function ScreenerTable({
             </span>
           )
         }
+        // 分时图开关 + 手动刷新按钮 (自动轮询开启时不显示, 避免重复请求)
+        if (key === 'intraday' && onToggleIntradayChart) {
+          return (
+            <span className="inline-flex items-center justify-center gap-1.5">
+              <span>{col.label}</span>
+              <button
+                type="button"
+                onClick={(event) => { event.stopPropagation(); onToggleIntradayChart() }}
+                className={`inline-flex items-center justify-center w-5 h-5 rounded transition-colors ${
+                  intradayChartVisible
+                    ? 'text-accent bg-accent/10 hover:bg-accent/20'
+                    : 'text-muted hover:text-foreground hover:bg-elevated'
+                }`}
+                title={intradayChartVisible ? '隐藏分时图' : '显示分时图'}
+                aria-label={intradayChartVisible ? '隐藏分时图' : '显示分时图'}
+              >
+                {intradayChartVisible ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
+              </button>
+              {/* 分时图显示 且 未开自动轮询时, 提供手动刷新按钮 */}
+              {intradayChartVisible && !intradayAutoRefresh && onRefreshIntraday && (
+                <button
+                  type="button"
+                  onClick={(event) => { event.stopPropagation(); onRefreshIntraday() }}
+                  disabled={intradayRefreshing}
+                  className="inline-flex items-center justify-center w-5 h-5 rounded text-muted hover:text-accent hover:bg-accent/10 transition-colors disabled:opacity-40"
+                  title="刷新分时数据"
+                  aria-label="刷新分时数据"
+                >
+                  <RefreshCw className={`h-3.5 w-3.5 ${intradayRefreshing ? 'animate-spin' : ''}`} />
+                </button>
+              )}
+              {/* 自动轮询中: 显示旋转图标提示正在实时刷新 */}
+              {intradayChartVisible && intradayAutoRefresh && (
+                <RefreshCw className="h-3 w-3 text-accent/60 animate-spin" aria-label="实时刷新中" />
+              )}
+            </span>
+          )
+        }
         return undefined
-      } : undefined}
-    />
+        }}
+      />
+      <DimensionMembersDialog
+        target={dimensionTarget}
+        onClose={() => setDimensionTarget(null)}
+        onStockClick={(symbol, name) => {
+          setDimensionTarget(null)
+          onPreview(symbol, name ?? '')
+        }}
+      />
+    </>
   )
 }

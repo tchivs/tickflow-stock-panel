@@ -2,14 +2,17 @@
 from __future__ import annotations
 
 import logging
+import math
 from datetime import date, timedelta
+from functools import lru_cache
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from app.indicators.pipeline import compute_enriched, compute_enriched_single
 from app.db_safe import is_valid_ext_ident, quote_ident
-from app.market_time import cn_today
+from app.market_time import cn_now, cn_today
+from app.price_limits import is_risk_warning_name, price_limit_pct
 from app.services import kline_sync
 
 logger = logging.getLogger(__name__)
@@ -18,8 +21,63 @@ router = APIRouter(prefix="/api/kline", tags=["kline"])
 
 
 def _minute_allowed(capset) -> bool:
-    """Whether the selected provider can fetch minute bars."""
-    return kline_sync.can_sync_minute(capset)
+    """是否有分钟K权限 (TickFlow Pro+ 或 custom minute 源)。"""
+    from app.tickflow.capabilities import Cap
+    if capset.has(Cap.KLINE_MINUTE_BATCH):
+        return True
+    from app.services import preferences
+    provider = preferences.get_minute_data_provider()
+    _, fallback, error = kline_sync._resolve_minute_provider(provider)
+    if error is not None:
+        logger.warning("minute provider resolution failed while checking access: %s", error)
+    return not fallback
+
+
+@lru_cache(maxsize=8192)
+def _name_pinyin_keys(name: str) -> tuple[str, ...]:
+    """返回中文名称所有可能的拼音首字母串 (多音字展开为笛卡尔积)。
+
+    '平安银行' -> ('PAYH',); '重庆百货' -> ('CQBH', 'CQMH', 'ZQBH', 'ZQMH')。
+    非汉字字符原样保留: '万科A' -> ('WKA',)。
+    股票名总量有限且不变, lru_cache 命中后单次查询 ≈ dict 查找, 全市场遍历 < 1ms。
+    """
+    from pypinyin import pinyin, Style
+    if not name:
+        return ()
+    keys = [""]
+    for group in pinyin(name, style=Style.FIRST_LETTER, heteronym=True):
+        keys = [k + g.upper() for k in keys for g in group]
+    return tuple(keys)
+
+
+def _init_pinyin_dict() -> None:
+    """加载 A 股高频多音字地名/词组词典, 使常见误读也能命中。
+
+    pypinyin 默认词典对部分地名取常见读音 (如「重」→ chóng), 补充后「重庆」
+    同时接受 zhòng/qìng (zq) 与 chóng/qīng (cq) 两种首字母, 与同花顺行为一致。
+    幂等: 多次调用安全。
+    """
+    try:
+        from pypinyin import load_phrases_dict
+        # value 用二维 list: 每个字给一个或多个读音
+        load_phrases_dict({
+            "重庆": [["zhòng", "chóng"], ["qīng"]],
+            "长安": [["cháng", "zhǎng"], ["ān"]],
+            "长春": [["cháng", "zhǎng"], ["chūn"]],
+            "长沙": [["cháng", "zhǎng"], ["shā"]],
+            "长城": [["cháng", "zhǎng"], ["chéng"]],
+            "长江": [["cháng", "zhǎng"], ["jiāng"]],
+        })
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("pypinyin phrases dict load failed (polyphone coverage may degrade): %s", exc)
+
+
+_init_pinyin_dict()
+
+
+def _match_pinyin(name: str, keyword: str) -> bool:
+    """keyword 是否匹配 name 任一拼音首字母串的前缀 (支持多音字)。"""
+    return any(k.startswith(keyword) for k in _name_pinyin_keys(name))
 
 
 @router.get("/instruments/search")
@@ -65,6 +123,7 @@ def search_instruments(
 
     keyword = q.strip().upper()
     keyword_norm = _norm(keyword)
+    is_pinyin_query = keyword.isalpha() and keyword.isascii()
 
     # 归一化名称列仅用于匹配 (不出现在结果里)
     df = df.with_columns(
@@ -82,23 +141,45 @@ def search_instruments(
         | pl.col("_name_norm").str.contains(keyword_norm, literal=True)
     )
 
-    # 前缀匹配优先，剩余名额用包含匹配补充
+    # 分层匹配: ① code/symbol 前缀 → ② 拼音首字母前缀(纯字母输入) → ③ 包含匹配
     prefix_hits = df.filter(prefix_mask).head(limit)
     if prefix_hits.height >= limit:
         matched = prefix_hits
     else:
+        collected = [prefix_hits] if prefix_hits.height else []
+        seen = set(prefix_hits["symbol"].to_list()) if prefix_hits.height else set()
         remaining = limit - prefix_hits.height
-        # 排除已匹配的 symbol
-        prefix_symbols = set(prefix_hits["symbol"].to_list()) if not prefix_hits.is_empty() else set()
-        contain_hits = df.filter(contains_mask & ~pl.col("symbol").is_in(prefix_symbols)).head(remaining)
-        matched = pl.concat([prefix_hits, contain_hits]) if not prefix_hits.is_empty() else contain_hits
+
+        # ② 拼音首字母前缀: 仅纯字母输入触发 (如 payh → 平安银行); 中文/代码输入零开销跳过
+        if is_pinyin_query and remaining > 0:
+            pinyin_rows = []
+            for row in df.filter(~pl.col("symbol").is_in(seen)).iter_rows(named=True):
+                if _match_pinyin(row["name"], keyword):
+                    pinyin_rows.append(row)
+                    if len(pinyin_rows) >= remaining:
+                        break
+            if pinyin_rows:
+                collected.append(pl.DataFrame(pinyin_rows))
+                seen.update(r["symbol"] for r in pinyin_rows)
+                remaining -= len(pinyin_rows)
+
+        # ③ 包含匹配补充
+        if remaining > 0:
+            contain_hits = df.filter(contains_mask & ~pl.col("symbol").is_in(seen)).head(remaining)
+            if contain_hits.height:
+                collected.append(contain_hits)
+
+        matched = (
+            pl.concat(collected, how="vertical") if len(collected) > 1
+            else (collected[0] if collected else df.head(0))
+        )
     rows = matched.select(["symbol", "name", "code", "asset_type"]).to_dicts()
     return {"results": rows}
 
 
 @router.post("/instruments/names")
 def instruments_names(request: Request, symbols: list[str]):
-    """批量查标的名称 (股票 + ETF)。传入 symbol 列表, 返回 {symbol: name}。"""
+    """批量查标的名称 (股票 + ETF + 指数)。传入 symbol 列表, 返回 {symbol: name}。"""
     if not symbols:
         return {"names": {}}
     repo = request.app.state.repo
@@ -106,21 +187,28 @@ def instruments_names(request: Request, symbols: list[str]):
 
 
 def _get_stock_info(repo, symbol: str) -> dict:
-    """从 instruments 视图查标的名称 + 股本。"""
+    """从 instruments 内存缓存查标的名称 + 股本。
+
+    该接口在个股弹窗打开时每秒被调用 (SSE invalidate 触发重拉), 走
+    repo.get_instruments() 的 Polars 内存缓存按 symbol 过滤, 不再每请求
+    DuckDB 扫 instruments parquet。列缺失时返回空 dict, 与旧 SQL 报错路径一致。
+    """
+    import polars as pl
     try:
-        row = repo.execute_one(
-            "SELECT name, total_shares, float_shares FROM instruments WHERE symbol = ? LIMIT 1",
-            [symbol],
-        )
+        df = repo.get_instruments()
+        needed = ("symbol", "name", "total_shares", "float_shares")
+        if df.is_empty() or not all(c in df.columns for c in needed):
+            return {}
+        hit = df.filter(pl.col("symbol") == symbol).head(1)
+        if hit.is_empty():
+            return {}
+        return {
+            "name": hit["name"][0],
+            "total_shares": hit["total_shares"][0],
+            "float_shares": hit["float_shares"][0],
+        }
     except Exception:  # noqa: BLE001
         return {}
-    if not row:
-        return {}
-    return {
-        "name": row[0],
-        "total_shares": row[1],
-        "float_shares": row[2],
-    }
 
 
 def _get_asset_info(repo, symbol: str, asset_type: str) -> dict:
@@ -136,6 +224,108 @@ def _get_asset_info(repo, symbol: str, asset_type: str) -> dict:
         return {"name": hit["name"][0]}
     except Exception:
         return {}
+
+
+def _get_price_limit_info(
+    repo,
+    symbol: str,
+    trade_date: date,
+    asset_type: str,
+    instrument_name: str | None,
+) -> dict | None:
+    """Return the date-aware limit rule and today's authoritative prices."""
+    if asset_type == "index":
+        return None
+
+    info = {
+        "rate": price_limit_pct(
+            symbol,
+            trade_date,
+            is_risk_warning=(
+                asset_type == "stock" and is_risk_warning_name(instrument_name)
+            ),
+        ),
+        "limit_up": None,
+        "limit_down": None,
+        "source": "rule",
+    }
+    if trade_date != cn_today():
+        return info
+
+    try:
+        import polars as pl
+
+        instruments = repo.get_instruments_asset(asset_type)
+        available = [
+            column
+            for column in ("symbol", "limit_up", "limit_down")
+            if column in instruments.columns
+        ]
+        if "symbol" not in available or len(available) == 1:
+            return info
+        hit = instruments.filter(pl.col("symbol") == symbol).select(available).head(1)
+        row = hit.to_dicts()[0] if not hit.is_empty() else None
+    except Exception:
+        return info
+    if row is None:
+        return info
+
+    has_authoritative_price = False
+    for field in ("limit_up", "limit_down"):
+        value = row.get(field)
+        if value is None:
+            continue
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(numeric) and 0 < numeric < 10_000:
+            info[field] = numeric
+            has_authoritative_price = True
+    if has_authoritative_price:
+        info["source"] = "instrument"
+    return info
+
+
+def _get_previous_closes(
+    repo,
+    symbol: str,
+    trade_dates: list[date],
+    asset_type: str,
+) -> dict[date, float | None]:
+    """Return the previous trading day's adjusted close for each session."""
+    if not trade_dates:
+        return {}
+    start = min(trade_dates) - timedelta(days=45)
+    end = max(trade_dates)
+    try:
+        daily = repo.get_daily_asset(
+            asset_type,
+            symbol,
+            start,
+            end,
+            columns=["date", "close"],
+        ).sort("date")
+    except Exception:
+        daily = None
+    if daily is None or daily.is_empty():
+        return {trade_date: None for trade_date in trade_dates}
+
+    closes: list[tuple[date, float]] = []
+    for daily_date, close in daily.select(["date", "close"]).iter_rows():
+        if close is None:
+            continue
+        numeric = float(close)
+        if math.isfinite(numeric) and numeric > 0:
+            closes.append((daily_date, numeric))
+
+    result: dict[date, float | None] = {}
+    for trade_date in trade_dates:
+        result[trade_date] = next(
+            (close for daily_date, close in reversed(closes) if daily_date < trade_date),
+            None,
+        )
+    return result
 
 
 @router.get("/daily")
@@ -207,7 +397,8 @@ def _attach_ext(resp: dict, repo, symbol: str, ext_columns: Optional[str]) -> di
     """按 ext_columns 规格为单只股票 LEFT JOIN 扩展数据，平铺到 stock_info['ext']。
 
     key 形如 "{config_id}__{field_name}"，与自选列表 enriched 接口保持一致。
-    JOIN 逻辑参考 watchlist.watchlist_enriched；任何 ext 表/字段缺失都静默跳过。
+    委托 screener._load_ext_value_maps 取值: 复用其 (路径,mtime) 签名缓存,
+    个股弹窗每秒重拉时不再重复读 ext parquet; 任何 ext 表/字段缺失都静默跳过。
     """
     if not ext_columns or not ext_columns.strip():
         return resp
@@ -224,15 +415,11 @@ def _attach_ext(resp: dict, repo, symbol: str, ext_columns: Optional[str]) -> di
     if not specs:
         return resp
 
-    import polars as pl
-    data_dir = repo.store.data_dir
     try:
-        from app.services.ext_data import ExtConfigStore
-        from app.api.ext_data import _read_ext_dataframe
-        ext_store = ExtConfigStore(data_dir)
-        configs = {c.id: c for c in ext_store.load_all()}
+        from app.api.screener import _load_ext_value_maps
+        value_maps = _load_ext_value_maps(repo, ext_columns)
     except Exception:  # noqa: BLE001
-        configs = {}
+        value_maps = {}
 
     ext_values: dict = {}
     for config_id, field_name in specs:
@@ -373,17 +560,45 @@ def get_daily_batch(request: Request, body: dict):
     start = end - timedelta(days=days * 2)  # 多取一些确保交易日够
 
     cols = ["symbol", "date", "open", "high", "low", "close", "volume"]
-    df = repo.get_daily_batch(symbols, start, end, columns=cols)
 
-    if df.is_empty():
-        return {"data": {}}
+    # 按资产类型分组: stock 走批量缓存; etf/index 逐只查独立存储 (数量少, 成本可忽略)
+    stock_symbols: list[str] = []
+    etf_symbols: list[str] = []
+    index_symbols: list[str] = []
+    for s in symbols:
+        t = repo.resolve_asset_type(s)
+        if t == "etf":
+            etf_symbols.append(s)
+        elif t == "index":
+            index_symbols.append(s)
+        else:
+            stock_symbols.append(s)
 
-    # 按 symbol 分组, 每只取最近 N 条
-    result: dict[str, list[dict]] = {}
-    for sym in symbols:
-        sub = df.filter(pl.col("symbol") == sym).sort("date").tail(days)
+    frames: list[pl.DataFrame] = []
+    if stock_symbols:
+        df_stock = repo.get_daily_batch(stock_symbols, start, end, columns=cols)
+        if not df_stock.is_empty():
+            frames.append(df_stock)
+    for sym in etf_symbols:
+        sub = repo.get_etf_daily(sym, start, end, columns=cols)
         if not sub.is_empty():
-            result[sym] = sub.to_dicts()
+            frames.append(sub)
+    for sym in index_symbols:
+        sub = repo.get_index_daily(sym, start, end, columns=cols)
+        if not sub.is_empty():
+            frames.append(sub)
+
+    if not frames:
+        return {"data": {}}
+    df = pl.concat(frames, how="diagonal_relaxed")
+
+    # 按 symbol 分组, 每只取最近 N 条。
+    # partition_by 一次切分, 避免 N 只自选时对同一批数据做 N 次全帧过滤。
+    result: dict[str, list[dict]] = {}
+    for part in df.partition_by("symbol", maintain_order=True):
+        sub = part.sort("date").tail(days)
+        if not sub.is_empty():
+            result[sub["symbol"][0]] = sub.to_dicts()
 
     return {"data": result}
 
@@ -412,17 +627,30 @@ def get_minute_batch(request: Request, body: dict):
     if not kline_sync.can_sync_minute(capset):
         raise HTTPException(status_code=403, detail="当前数据源不支持分钟 K")
 
-    trade_date = date.fromisoformat(trade_date_str) if trade_date_str else date.today()
+    trade_date = date.fromisoformat(trade_date_str) if trade_date_str else cn_today()
 
-    # 非交易日(周末/节假日)回退到最近有数据的交易日, 否则前端显示空白。
-    # 优先用本地分钟K最近日期; 本地从未同步过分钟K时, 回退到日K最近交易日
-    # (enriched 最新日一定有, 作为兜底), 确保 TickFlow 能拉到有效数据。
-    if trade_date == date.today():
-        recent_date = repo.latest_minute_date_global()
-        if recent_date is None:
-            recent_date = repo.latest_daily_date()
-        if recent_date is not None:
-            trade_date = recent_date
+    # 非交易日(周末/节假日)才回退到最近有数据的交易日; 否则盘中会显示昨天而非今天。
+    # 注意: 不能用 latest_minute_date_global() 判断盘中是否为交易日 —— 批量实时补拉
+    # 不落库 (见下方 sync_minute_batch 无 on_segment), 盘中它恒返回上次全量同步日,
+    # 用它做判据会导致 trade_date 永久回退到昨天, 再因 expected=240 判定昨日"完整"
+    # 而不再补拉今天, 形成永远显示昨日的死循环。
+    # 判据改为: 周末必回退; 工作日收盘后(>=15:30)仍无今日日K → 节假日, 回退。
+    if not trade_date_str:
+        today = cn_today()
+        need_fallback = today.weekday() >= 5  # 周六/周日必非交易日
+        if not need_fallback:
+            now_cn = cn_now()
+            after_close = now_cn.hour > 15 or (now_cn.hour == 15 and now_cn.minute >= 30)
+            if after_close:
+                latest_daily = repo.latest_daily_date()
+                if latest_daily is None or latest_daily < today:
+                    need_fallback = True
+        if need_fallback:
+            recent_date = repo.latest_minute_date_global()
+            if recent_date is None:
+                recent_date = repo.latest_daily_date()
+            if recent_date is not None:
+                trade_date = recent_date
 
     # Step 1: 本地优先 — 一次 scan 读全部 symbol 当日分钟K (股票 / ETF 分钟数据分开存储)
     etf_set = repo.get_etf_symbol_set()
@@ -437,9 +665,9 @@ def get_minute_batch(request: Request, body: dict):
             df_local = pl.concat([df_local, df_etf], how="diagonal_relaxed")
 
     # 期望条数 (盘中按当前时刻估算, 盘后 240)
-    now = datetime.now()
+    now = cn_now()
     h, m = now.hour, now.minute
-    if trade_date != date.today():
+    if trade_date != cn_today():
         expected = 240
     elif h < 9 or (h == 9 and m < 30):
         expected = 0
@@ -452,14 +680,15 @@ def get_minute_batch(request: Request, body: dict):
     else:
         expected = 240
 
-    # 按 symbol 分组, 判定哪些不完整需要补拉
+    # 按 symbol 分组, 判定哪些不完整需要补拉 (partition_by 一次切分, 同 daily-batch)
     result: dict[str, list[dict]] = {}
     incomplete: list[str] = []
+    local_parts: dict[str, pl.DataFrame] = {}
+    if not df_local.is_empty():
+        for part in df_local.partition_by("symbol", maintain_order=True):
+            local_parts[part["symbol"][0]] = part.sort("datetime")
     for sym in symbols:
-        if df_local.is_empty():
-            sub = pl.DataFrame()
-        else:
-            sub = df_local.filter(pl.col("symbol") == sym).sort("datetime")
+        sub = local_parts.get(sym, pl.DataFrame())
         if expected > 0 and (sub.is_empty() or len(sub) < expected * 0.9):
             incomplete.append(sym)
         elif not sub.is_empty():
@@ -470,63 +699,49 @@ def get_minute_batch(request: Request, body: dict):
         start_time = datetime(trade_date.year, trade_date.month, trade_date.day, 9, 25, 0)
         end_time = datetime(trade_date.year, trade_date.month, trade_date.day, 15, 5, 0)
         lim = capset.limits(Cap.KLINE_MINUTE_BATCH)
-        live_df = kline_sync.sync_minute_batch(
-            incomplete,
-            start_time=start_time,
-            end_time=end_time,
-            batch_size=lim.batch if lim else None,
-            rpm=lim.rpm if lim else None,
-        )
-        if not live_df.is_empty():
+        # etf_set 已在上方获取, 直接复用 — 按 asset_type 拆分调用 sync_minute_batch
+        # (自定义源 / TickFlow 路由均依赖 asset_type 正确传递)
+        # 契约: 本端点只接受 stock/ETF (指数分钟K走 /api/index/minute 独立路径),
+        # 故两分支已覆盖全部 incomplete。若未来放开指数支持, 需额外加 index 分支
+        # 以避免被误路由为 stock。
+        stock_incomplete = [s for s in incomplete if s not in etf_set]
+        etf_incomplete = [s for s in incomplete if s in etf_set]
+        live_parts: list[pl.DataFrame] = []
+        if stock_incomplete:
+            df_s = kline_sync.sync_minute_batch(
+                stock_incomplete,
+                start_time=start_time,
+                end_time=end_time,
+                batch_size=lim.batch if lim else None,
+                rpm=lim.rpm if lim else None,
+                asset_type="stock",
+            )
+            if not df_s.is_empty():
+                live_parts.append(df_s)
+        if etf_incomplete:
+            df_e = kline_sync.sync_minute_batch(
+                etf_incomplete,
+                start_time=start_time,
+                end_time=end_time,
+                batch_size=lim.batch if lim else None,
+                rpm=lim.rpm if lim else None,
+                asset_type="etf",
+            )
+            if not df_e.is_empty():
+                live_parts.append(df_e)
+        if live_parts:
+            live_df = pl.concat(live_parts, how="diagonal_relaxed")
+            live_map: dict[str, pl.DataFrame] = {
+                part["symbol"][0]: part.sort("datetime")
+                for part in live_df.partition_by("symbol", maintain_order=True)
+            }
             for sym in incomplete:
-                sub = live_df.filter(pl.col("symbol") == sym).sort("datetime")
-                if not sub.is_empty():
+                sub = live_map.get(sym)
+                if sub is not None and not sub.is_empty():
                     result[sym] = sub.to_dicts()
 
     return {"data": result}
 
-
-def _get_previous_closes(
-    repo,
-    symbol: str,
-    trade_dates: list[date],
-    asset_type: str,
-) -> dict[date, float | None]:
-    """每个交易日的前一交易日收盘价 (多日分时图昨收线用)。"""
-    from math import isfinite
-
-    if not trade_dates:
-        return {}
-    start = min(trade_dates) - timedelta(days=45)
-    end = max(trade_dates)
-    try:
-        daily = repo.get_daily_asset(
-            asset_type,
-            symbol,
-            start,
-            end,
-            columns=["date", "close"],
-        ).sort("date")
-    except Exception:
-        daily = None
-    if daily is None or daily.is_empty():
-        return {trade_date: None for trade_date in trade_dates}
-
-    closes: list[tuple[date, float]] = []
-    for daily_date, close in daily.select(["date", "close"]).iter_rows():
-        if close is None:
-            continue
-        numeric = float(close)
-        if isfinite(numeric) and numeric > 0:
-            closes.append((daily_date, numeric))
-
-    result: dict[date, float | None] = {}
-    for trade_date in trade_dates:
-        result[trade_date] = next(
-            (close for daily_date, close in reversed(closes) if daily_date < trade_date),
-            None,
-        )
-    return result
 
 
 @router.get("/minute-range")
@@ -595,7 +810,6 @@ def get_minute_range(
         "source": "local" if sessions else "none",
     }
 
-
 @router.get("/minute")
 def get_minute(
     request: Request,
@@ -617,7 +831,24 @@ def get_minute(
     stock_name = stock_info.get("name")
 
     if trade_date is None:
-        trade_date = repo.latest_minute_date(symbol, asset_type=asset_type)
+        # 默认看今天, 而不是本地落盘的最近日 (盘中后者是昨天)。
+        # 非交易日(周末/节假日)才回退到本地最近有数据的交易日。
+        today = cn_today()
+        need_fallback = today.weekday() >= 5  # 周六/周日必非交易日
+        if not need_fallback:
+            now_cn = cn_now()
+            after_close = now_cn.hour > 15 or (now_cn.hour == 15 and now_cn.minute >= 30)
+            if after_close:
+                latest_daily = repo.latest_daily_date()
+                if latest_daily is None or latest_daily < today:
+                    need_fallback = True
+        if need_fallback:
+            recent = repo.latest_minute_date(symbol, asset_type=asset_type)
+            if recent is None:
+                recent = repo.latest_daily_date()
+            trade_date = recent if recent is not None else today
+        else:
+            trade_date = today
     if trade_date is None:
         # 本地无任何分钟K，尝试从当前数据源拉取当天
         trade_date = date.today()
@@ -625,16 +856,24 @@ def get_minute(
         return {
             "symbol": symbol, "name": stock_name, "stock_info": stock_info,
             "date": str(trade_date), "rows": df.to_dicts(), "source": "live",
+            "asset_type": asset_type,
+            "price_limit": price_limit,
+            "prev_close": prev_close,
         }
 
+    prev_close = _get_previous_closes(
+        repo, symbol, [trade_date], asset_type,
+    ).get(trade_date)
+    price_limit = _get_price_limit_info(
+        repo, symbol, trade_date, asset_type, stock_name,
+    )
     df = repo.get_minute(symbol, trade_date, asset_type=asset_type)
 
     # 完整交易日应有 240 条分钟K；如果是今天(盘中)，期望条数按已交易分钟估算
     expected = 240
-    today = date.today()
+    today = cn_today()
     if trade_date == today:
-        from datetime import datetime as _dt
-        now = _dt.now()
+        now = cn_now()
         h, m = now.hour, now.minute
         if h < 9 or (h == 9 and m < 30):
             expected = 0  # 还没开盘
@@ -652,14 +891,20 @@ def get_minute(
         return {
             "symbol": symbol, "name": stock_name, "stock_info": stock_info,
             "date": str(trade_date), "rows": df.to_dicts(), "source": "local",
+            "asset_type": asset_type,
+            "price_limit": price_limit,
+            "prev_close": prev_close,
         }
 
-    # 本地不完整或无数据 → 从当前分钟数据源实时拉取
+    # 本地不完整或无数据 → 从当前分钟数据源实时拉取 (custom 源或 TickFlow)
     live_df = kline_sync.fetch_minute_single(symbol, trade_date, asset_type=asset_type)
     return {
         "symbol": symbol, "name": stock_name, "stock_info": stock_info,
         "date": str(trade_date), "rows": live_df.to_dicts(),
         "source": "live" if not live_df.is_empty() else "none",
+        "asset_type": asset_type,
+        "price_limit": price_limit,
+        "prev_close": prev_close,
     }
 
 @router.post("/sync")
@@ -698,7 +943,10 @@ def refresh_views(request: Request):
 
 @router.post("/sync_minute")
 async def sync_minute(request: Request):
-    """手动触发分钟 K 同步(全市场)。返回 pipeline job_id 可轮询进度。"""
+    """手动触发分钟 K 同步(全市场)。返回 pipeline job_id 可轮询进度。
+
+    body 可选: { "days": int } — 指定拉取天数 (不传则用偏好设置)。
+    """
     import asyncio
 
     from app.services.pipeline_jobs import job_store, release_run_slot, try_acquire_run_slot
@@ -711,7 +959,18 @@ async def sync_minute(request: Request):
     if not _minute_allowed(capset):
         raise HTTPException(status_code=403, detail="当前数据源不支持分钟 K")
 
-    job_id, is_new = job_store.create()
+    # 可选 body: { "days": int, "extend": bool }
+    # days: 拉取天数; extend: 向前扩展模式 (从最早数据往前补)
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        pass
+    override_days = body.get("days")
+    extend_flag = body.get("extend")
+
+    # 分钟K全市场同步是长任务(数据量是日K的 ~240 倍),用更宽松的卡死阈值
+    job_id, is_new = job_store.create(long_running=True)
     if not is_new:
         return {"status": "reused", "job_id": job_id}
 
@@ -728,12 +987,26 @@ async def sync_minute(request: Request):
             job_store.start(job_id)
             progress("sync_minute", 5, "解析标的池…")
             universe = _resolve_minute_universe(capset, repo)
+            # 剔除指数 symbol: 指数分钟K无本地存储, 落库会污染 kline_minute (upstream v0.2)
+            index_set = repo.get_index_symbol_set()
+            universe = [s for s in universe if s not in index_set]
             progress("sync_minute", 10, f"标的池 {len(universe)} 只")
 
-            days = get_minute_sync_days()
+            days = override_days if override_days else get_minute_sync_days()
+            # extend=1 → 向前扩展; days>=365 也自动向前扩展
+            extend_backward = bool(extend_flag) or days >= 365
+
+            def _on_chunk(done: int, total: int, seg_label: str) -> None:
+                # 进度映射: 10% (标的池解析完) → 95%, 留 5% 给写入+刷新
+                pct = 10 + int((done / max(total, 1)) * 85)
+                progress("sync_minute", pct, f"拉取分钟K… {done}/{total} 批 [{seg_label}]")
 
             def _run():
-                return kline_sync.sync_and_persist_minute(universe, repo, capset, days=days)
+                return kline_sync.sync_and_persist_minute(
+                    universe, repo, capset, days=days,
+                    extend_backward=extend_backward,
+                    on_chunk_done=_on_chunk,
+                )
 
             written = await loop.run_in_executor(_long_task_executor, _run)
 
@@ -800,7 +1073,6 @@ async def sync_minute_single(request: Request, body: dict):
     _refresh_single_view(repo, "kline_minute")
 
     return {"status": "ok", "symbol": symbol, "rows": written}
-
 
 @router.post("/extend_history")
 async def extend_history(request: Request):

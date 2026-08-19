@@ -25,8 +25,13 @@ def list_alerts(
     type: str | None = None,
     severity: str | None = None,
     delivery_status: str | None = None,
+    ext_columns: str | None = None,
 ):
-    """Return durable operational history and credential-safe delivery summaries."""
+    """Return durable operational history with credential-safe delivery summaries.
+
+    ext_columns: 逗号分隔的 "configId.fieldName", 传入后按 symbol 富化行业/概念等 ext 字段,
+    每条记录附带 {configId}__{fieldName} 键 (与 watchlist/screener 一致)。
+    """
     operational = getattr(request.app.state, "operational", None)
     if operational is not None:
         events, total = operational.list_alert_events(
@@ -37,11 +42,21 @@ def list_alerts(
             severity=severity,
             delivery_status=delivery_status,
         )
-        return {"alerts": events, "total": total}
-    events = alert_store.list_recent(
-        _data_dir(request), days=days, limit=limit, source=source, type=type,
-    )
-    total = alert_store.count(_data_dir(request))
+    else:
+        events = alert_store.list_recent(
+            _data_dir(request), days=days, limit=limit, source=source, type=type,
+        )
+        total = alert_store.count(_data_dir(request))
+    if ext_columns and events:
+        try:
+            from app.api.screener import _load_ext_value_maps, _rows_with_ext
+
+            repo = request.app.state.repo
+            value_maps = _load_ext_value_maps(repo, ext_columns)
+            if value_maps:
+                events = _rows_with_ext(events, value_maps)
+        except Exception:  # noqa: BLE001
+            pass
     return {"alerts": events, "total": total}
 
 @router.get("/{event_id}/deliveries")

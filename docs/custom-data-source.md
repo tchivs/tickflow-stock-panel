@@ -22,7 +22,7 @@
 data/data_sources/*.yaml
 ```
 
-在桌面版中,`data/` 位于程序目录旁;在开发环境中,通常是项目根目录的 `data/`。
+Dev 模式下，默认位置是项目根目录的 `data/`；Docker 部署中，项目的 `data/` 会挂载为容器内的 `/app/data`。可通过 `DATA_DIR` 覆盖。
 
 修改 YAML 后可在「设置 -> 数据源」点击「重新加载」,或调用:
 
@@ -139,6 +139,25 @@ symbols_param: symbols
 start_param: start_time
 end_param: end_time
 ```
+
+分钟数据源如果需要区分资产类型或周期，可继续配置：
+
+```yaml
+asset_type_param: asset_type
+freq_param: period
+```
+
+配置后，分钟请求会分别传入 `stock` / `etf` / `index` 和 `1m`；留空时不向上游发送这两个参数，以兼容已有数据源。
+
+### 请求超时
+
+每个数据集可单独配置请求超时（秒），默认 30：
+
+```yaml
+timeout: 60
+```
+
+留空或省略时用默认 30 秒，可配置范围为大于 0 且不超过 300 秒；该值对数据同步与「试拉测试」均生效。在设置页编辑数据源时可在「超时」输入框修改（与 批量 / RPM / 响应路径 同行）。「试拉测试」直接使用当前表单内容，新建数据源或尚未保存的修改也可测试。
 
 ## 鉴权
 
@@ -295,4 +314,3 @@ datasets:
 ```
 
 把这段 YAML 保存为 `data/data_sources/my_source.yaml`,然后在设置页重新加载即可。
-

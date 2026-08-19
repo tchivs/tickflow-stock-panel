@@ -31,6 +31,7 @@ import type { DimensionGroup, QuoteMap } from '@/lib/analysis-adapter'
 import { computeQuoteMetrics } from '@/lib/analysis-adapter'
 import { fmtPct, priceColorClass } from '@/lib/format'
 import { useModalA11y } from '@/lib/useModalA11y'
+import { useDialogBackdrop } from '@/lib/useDialogBackdrop'
 
 // ===== 配置类型 =====
 
@@ -66,6 +67,7 @@ export function AnalysisConfigDialog({
   // 已有 window ESC 处理, 仅补焦点陷阱 (closeOnEscape: false 避免双触发)
   useModalA11y(panelRef, { onClose, closeOnEscape: false })
   const [draft, setDraft] = useState<AnalysisFieldConfig>(currentConfig)
+  const backdrop = useDialogBackdrop(onClose)
   const { data: extList } = useQuery({
     queryKey: QK.extData,
     queryFn: api.extDataList,
@@ -96,7 +98,7 @@ export function AnalysisConfigDialog({
   }, [onClose])
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" {...backdrop}>
       <motion.div
         ref={panelRef}
         tabIndex={-1}

@@ -15,7 +15,7 @@ import logging
 import os
 import threading
 import uuid
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -27,10 +27,15 @@ JobStatus = Literal["pending", "running", "succeeded", "failed"]
 # 由 reap_stale() 在 /run 和 /jobs/{id} 轮询端点检查 — 保证卡死后能自愈,
 # 无需用户再次点击「同步」。
 #
-# 该值同时是 reap_stale 的缺省超时 (fallback): 单个 job 可用 create(timeout_s=...)
-# 声明自己的超时 (如竞价回填的 6h 豁免, FA-01) —— reap 时 ``j.get("timeout_s",
-# timeout_s)`` 优先 per-job 值; 缺省 job 仍按 600s 回收, EOD/手动 run_all 语义不变。
-STALE_JOB_TIMEOUT_S = 600
+# 默认超时阈值按任务类型区分,可在 Web 数据源设置中调整:
+#   - 普通任务(日K管道/扩展/修正/重算): 1200s (20 分钟)
+#   - 长任务(分钟K全市场同步,数据量是日K的 ~240 倍): 1800s (30 分钟)
+# 分钟K即使流式落盘后仍可能跑十几到数十分钟(限速 sleep 是主因),
+# 用 600s 会误杀正常任务并留下写盘僵尸线程。
+DEFAULT_JOB_TIMEOUT_S = 1200
+LONG_JOB_TIMEOUT_S = 1800
+# 向后兼容: 旧调用方引用 STALE_JOB_TIMEOUT_S
+STALE_JOB_TIMEOUT_S = DEFAULT_JOB_TIMEOUT_S
 
 
 def _default_store_dir() -> Path:
@@ -100,7 +105,13 @@ class JobStore:
 
     # ===== lifecycle =====
 
-    def create(self, timeout_s: int | None = None, *, label: str | None = None) -> tuple[str, bool]:
+    def create(
+        self,
+        timeout_s: int | None = None,
+        *,
+        long_running: bool = False,
+        label: str | None = None,
+    ) -> tuple[str, bool]:
         """单飞创建任务。返回 (job_id, is_new)。
 
         去重条件为 **pending ∨ running**(而非仅 running):`/run` 先 create() 再在
@@ -110,18 +121,19 @@ class JobStore:
 
         is_new=False 表示复用了已有活跃任务,调用方**不得**再调度新的后台任务。
 
-        label: 可选任务标识 (如 "premarket_pool_preview")。给定后去重范围**收窄到
-        同 label**: 不同 label 的活跃任务互不挤占, 供「写面不相交」的同槽位 job
-        (如 09:26 盘前预览只写 premarket_results/ 独立根 与 竞价采集写 kline_auction
-        暂存) 并行, 不再被全局单飞静默跳过。label 任务**不写** ``_active_id``
-        (不污染全局单飞指针), 由同 label 去重 + 重任务槽 (调用方按需) 各自保障。
-
-        timeout_s: 可选 per-job 超时豁免 (秒)。非 None 时持久化到 job 记录,由
-        reap_stale() 优先采用 (``j.get("timeout_s", timeout_s)``); 缺省 None → 记录
-        不含该键 → 回收仍按调用方的 timeout_s (默认 STALE_JOB_TIMEOUT_S=600)。
-        长时间任务 (如竞价回填全量, FA-01) 用它声明 6h 豁免, 绕开 600s 自愈回收;
-        succeed()/fail() 整 dict 落盘, 该键随磁盘 round-trip 保留。
+        timeout_s: reap_stale 判定卡死的阈值。None 时读取用户配置。
+        long_running: timeout_s 为 None 时,是否读取长任务配置;普通任务默认
+            1200s,分钟K全市场同步等长任务默认 1800s。
+        label: 可选任务标识。给定后去重范围收窄到同 label (写面不相交的同槽位
+            job 并行, 如盘前预览独立根); label 任务不写 _active_id。
         """
+        if timeout_s is None:
+            from app.services import preferences
+            if long_running:
+                timeout_s = preferences.get_data_source_long_job_timeout_s()
+            else:
+                timeout_s = preferences.get_data_source_job_timeout_s()
+
         with self._lock:
             if label is not None:
                 for jid, active in self._active_jobs.items():
@@ -133,7 +145,7 @@ class JobStore:
                     return self._active_id, False
 
             job_id = uuid.uuid4().hex[:10]
-            job = {
+            self._active_jobs[job_id] = {
                 "id": job_id,
                 "status": "pending",
                 "stage": "init",
@@ -145,12 +157,9 @@ class JobStore:
                 "duration_s": None,
                 "result": None,
                 "error": None,
+                "timeout_s": timeout_s,
+                "label": label,
             }
-            if label is not None:
-                job["label"] = label
-            if timeout_s is not None:
-                job["timeout_s"] = timeout_s
-            self._active_jobs[job_id] = job
             if label is None:
                 self._active_id = job_id
             return job_id, True
@@ -161,12 +170,7 @@ class JobStore:
             if not j:
                 return
             j["status"] = "running"
-            # naive UTC + "Z" (文档契约, 与 fail() 一致): reap_stale/_duration_s 均按
-            # "…Z" 解析 —— datetime.now(UTC) (aware) 会产出 "+00:00Z" 双偏移,
-            # fromisoformat 解析失败 → reap 静默失效 (修复: FA-01 路径实测发现)。
-            j["started_at"] = datetime.now(UTC).replace(tzinfo=None).isoformat(
-                timespec="seconds",
-            ) + "Z"
+            j["started_at"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
 
     def succeed(self, job_id: str, result: Any) -> None:
         with self._lock:
@@ -174,9 +178,7 @@ class JobStore:
             if not j:
                 return
             j["status"] = "succeeded"
-            j["finished_at"] = datetime.now(UTC).replace(tzinfo=None).isoformat(
-                timespec="seconds",
-            ) + "Z"
+            j["finished_at"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
             j["progress"] = 100
             j["result"] = result
             j["duration_s"] = _duration_s(j)
@@ -257,40 +259,53 @@ class JobStore:
     def active_id(self) -> str | None:
         return self._active_id
 
-    def reap_stale(self, timeout_s: int = STALE_JOB_TIMEOUT_S) -> None:
-        """回收运行超过 timeout_s 的卡死 running job(标记为 failed)。
+    def reap_stale(self, timeout_s: int | None = None) -> None:
+        """回收运行超过阈值(卡死)的 running job(标记为 failed)。
 
         在 /run 和 /jobs/{id} 轮询端点都会调用 — 保证卡死后任意轮询都能自愈,
         无需用户再次手动触发同步。reload 后的孤儿 task(内存里已无 job 记录)
         不在此处理:它们没有 active_id,只能靠 executor 线程自然结束或进程重启。
 
-        扫描 **全部** running job (含 label 并行任务, 如独立盘前预览), 而非仅
-        ``_active_id``: 同槽位并行 job 卡死时同样能被自愈回收, 不再阻塞后续同
-        label 去重 (不重启进程)。
-
-        超时判定 per-job 优先 (FA-01): job 记录含 ``timeout_s`` 键 (create 时声明)
-        → 用该值豁免至其声明的上限 (如竞价回填 6h, 不再被 600s 缺省误杀);
-        记录无该键 → 用本参数 (缺省 STALE_JOB_TIMEOUT_S=600, EOD/手动 run_all 语义不变)。
+        timeout_s: 显式覆盖。None 时用 job 自身 create() 时存的 timeout_s,
+        缺省回退 DEFAULT_JOB_TIMEOUT_S; 分钟K长任务在 create 时存了更大阈值,
+        不被普通任务的 1200s 误杀。
         """
         with self._lock:
+            # 扫描 **全部** running job (含 label 并行任务, 如独立盘前预览),
+            # 而非仅 ``_active_id``: 同槽位并行 job 卡死时同样能被自愈回收,
+            # 不再阻塞后续同 label 去重 (不重启进程)。
             candidates = [
                 (jid, j) for jid, j in self._active_jobs.items()
                 if j.get("status") == "running" and j.get("started_at")
             ]
+            active_id = self._active_id
         # 时间计算放到锁外(避免 datetime 解析持锁)。
         # started_at 形如 "2026-07-04T12:00:00Z"(start() 用 datetime.utcnow 存)。
         # 两端都用 timezone-aware UTC 比较,避免 naive/aware 混用导致 TypeError。
+        # 超时判定 per-job 优先: 显式传入 > job 自身 timeout_s > 默认值。
         for jid, j in candidates:
-            per_job_timeout = j.get("timeout_s", timeout_s)
+            effective_timeout = (
+                timeout_s if timeout_s is not None
+                else j.get("timeout_s", DEFAULT_JOB_TIMEOUT_S)
+            )
             try:
                 start_dt = datetime.fromisoformat(j["started_at"].replace("Z", "+00:00"))
                 elapsed = (datetime.now(start_dt.tzinfo) - start_dt).total_seconds()
             except Exception:  # noqa: BLE001
                 continue
-            if elapsed > per_job_timeout:
-                logger.warning("reap_stale: 强制取消卡死 job %s (已运行 %.0fs)",
-                               jid, elapsed)
+            if elapsed > effective_timeout:
+                logger.warning("reap_stale: 强制取消卡死 job %s (已运行 %.0fs, 阈值 %ss)",
+                               jid, elapsed, effective_timeout)
                 self.fail(jid, f"超时自动取消 (运行 {int(elapsed)}s, 疑似卡死)")
+                # 强制释放重任务锁: 卡死的线程无法被中断, 锁永远不会自然释放。
+                # 仅全局单飞 job (持有执行槽) 释放; label 并行任务不占槽,
+                # 释放反而会打断他人持锁。job 已标记 failed, 即使僵尸线程后续
+                # 写入 parquet, 下次拉取会覆盖, 安全。
+                if jid == active_id:
+                    try:
+                        _heavy_run_lock.release()
+                    except RuntimeError:
+                        pass
 
     def clear(self) -> None:
         """清空所有任务（内存 + 磁盘文件）。"""

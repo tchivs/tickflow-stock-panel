@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-import polars as pl
 import pytest
 
 from app.api.strategy import (
@@ -31,7 +30,6 @@ ENTRY_SIGNALS = []
 EXIT_SIGNALS = []
 STOP_LOSS = -0.05
 MAX_HOLD_DAYS = 20
-ALERTS = []
 
 RULES = """
 1. 测试规则一
@@ -47,10 +45,7 @@ def filter(df: pl.DataFrame, params: dict) -> pl.Expr:
 def _request(tmp_path):
     ai_dir = tmp_path / "strategies" / "ai"
     custom_dir = tmp_path / "strategies" / "custom"
-    engine = StrategyEngine(
-        enriched_loader=lambda _date: pl.DataFrame(),
-        strategy_dirs=[custom_dir, ai_dir],
-    )
+    engine = StrategyEngine(strategy_dirs=[custom_dir, ai_dir])
     repo = SimpleNamespace(store=SimpleNamespace(data_dir=tmp_path))
     return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(repo=repo, strategy_engine=engine)))
 
@@ -62,6 +57,19 @@ def test_prepare_strategy_code_rejects_forbidden_import():
     )
 
     with pytest.raises(ValueError, match="禁止 import os"):
+        _prepare_strategy_code(req)
+
+
+def test_prepare_strategy_code_rejects_unknown_scoring_field():
+    req = StrategyCodeValidateRequest(
+        strategy_id="custom_bad_score",
+        code=_code("custom_bad_score").replace(
+            '"scoring": {},',
+            '"scoring": {"volume_surge": 1.0},',
+        ),
+    )
+
+    with pytest.raises(ValueError, match="volume_surge"):
         _prepare_strategy_code(req)
 
 

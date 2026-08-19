@@ -217,7 +217,11 @@ def _read_ext_rows(data_dir, config: ExtConfig, dimension_field: str) -> list[di
 def _dimension_values(raw: Any) -> list[str]:
     if raw is None:
         return []
-    values = [v.strip() for v in _DIMENSION_SEP.split(str(raw).strip()) if v.strip()]
+    values = [
+        v.strip()
+        for v in _DIMENSION_SEP.split(str(raw).strip())
+        if v.strip() and v.strip().casefold() not in {"nan", "none", "null"}
+    ]
     return values
 
 
@@ -500,11 +504,26 @@ def build_market_overview(
         b["up_pct"] = b["up"] / count * 100
 
     tiers_map: dict[int, int] = {}
+    tiers_stocks: dict[int, list] = {}
     for r in rows:
         n = int(_finite(r.get("consecutive_limit_ups")) or 0)
         if n > 0:
             tiers_map[n] = tiers_map.get(n, 0) + 1
-    tiers = [{"boards": k, "count": v} for k, v in sorted(tiers_map.items(), key=lambda item: -item[0])]
+            sym = str(r.get("symbol") or "")
+            if sym:
+                tiers_stocks.setdefault(n, []).append({
+                    "symbol": sym,
+                    "name": r.get("name") or "",
+                    "amount": _finite(r.get("amount")) or 0.0,
+                })
+    tiers = [
+        {
+            "boards": k,
+            "count": v,
+            "stocks": sorted(tiers_stocks.get(k, []), key=lambda x: x["amount"], reverse=True)[:5],
+        }
+        for k, v in sorted(tiers_map.items(), key=lambda item: -item[0])
+    ]
 
     index_changes = [_finite(r.get("change_pct")) for r in indices]
     index_changes = [v for v in index_changes if v is not None]

@@ -307,6 +307,8 @@ export function startBacktest(params: {
   mode?: 'position' | 'full'
   holding_days?: number
   asset_type?: 'stock' | 'etf'
+  minute_fill?: boolean
+  regime_filter?: { states?: string[]; min_score?: number } | null
 }): void {
   const previousQs = localStorage.getItem(RECONNECT_KEY)
 
@@ -344,6 +346,8 @@ export function startBacktest(params: {
     mode: params.mode,
     holding_days: params.holding_days,
     asset_type: params.asset_type,
+    minute_fill: params.minute_fill,
+    regime_filter: params.regime_filter ? JSON.stringify(params.regime_filter) : undefined,
   })
 
   // 存 reconnect 信息 (刷新后用)

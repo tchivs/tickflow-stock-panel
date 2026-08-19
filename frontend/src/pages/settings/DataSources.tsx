@@ -11,6 +11,7 @@ import { usePreferences } from '@/lib/useSharedQueries'
 import { toast } from '@/components/Toast'
 import { DataSourceEditor } from './DataSourceEditor'
 import { DATASET_LABELS, providerDatasets, providerDisplayName } from '@/lib/dataSources'
+import { TickFlowKeyConfig } from './Keys'
 
 // 参与启用/禁用 + 排序的数据集 (financial 无免费源, 仍纳入以便统一管理)
 const DATASETS: { key: keyof NonNullable<Preferences['provider_chains']>; label: string }[] = [
@@ -624,25 +625,30 @@ function PluginDetail({ plugin }: { plugin: PluginDataSourceItem }) {
 
 function TickFlowDetail() {
   return (
-    <section className="rounded-card border border-border bg-surface p-6">
-      <div className="flex items-start gap-4 mb-5">
-        <div className="h-11 w-11 rounded-xl bg-accent/10 flex items-center justify-center shrink-0">
-          <Database className="h-5 w-5 text-accent" />
-        </div>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <h2 className="text-base font-semibold text-foreground">TickFlow</h2>
-            <span className="text-[10px] text-muted/60 uppercase tracking-wider border border-border rounded px-1.5 py-0.5">内置默认</span>
-            <span className="inline-flex items-center gap-1 text-[10px] text-muted/70 bg-elevated px-1.5 py-0.5 rounded">
-              <Shield className="h-2.5 w-2.5" /> 兜底源
-            </span>
+    <div className="space-y-5">
+      <section className="rounded-card border border-border bg-surface p-6">
+        <div className="flex items-start gap-4 mb-5">
+          <div className="h-11 w-11 rounded-xl bg-accent/10 flex items-center justify-center shrink-0">
+            <Database className="h-5 w-5 text-accent" />
           </div>
-          <p className="text-xs text-secondary mt-1.5 leading-relaxed">
-            项目默认数据源。日K、除权因子、实时行情、分钟K、财务均由 TickFlow 提供。
-            在「数据源」启用链中始终作为最终兜底, 无需额外配置。
-          </p>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <h2 className="text-base font-semibold text-foreground">TickFlow</h2>
+              <span className="text-[10px] text-muted/60 uppercase tracking-wider border border-border rounded px-1.5 py-0.5">内置默认</span>
+              <span className="inline-flex items-center gap-1 text-[10px] text-muted/70 bg-elevated px-1.5 py-0.5 rounded">
+                <Shield className="h-2.5 w-2.5" /> 兜底源
+              </span>
+            </div>
+            <p className="text-xs text-secondary mt-1.5 leading-relaxed">
+              项目默认数据源。日K、除权因子、实时行情、分钟K、财务均由 TickFlow 提供。
+              在「数据源」启用链中始终作为最终兜底, 无需额外配置。
+            </p>
+          </div>
         </div>
-      </div>
-    </section>
+      </section>
+
+      {/* TickFlow API Key 配置 + 订阅档位 + 可用功能 (原 account tab 内容) */}
+      <TickFlowKeyConfig />
+    </div>
   )
 }

@@ -1,18 +1,34 @@
 import React, { useState, useCallback, useRef, useEffect, useMemo, useLayoutEffect } from 'react'
 import { createPortal } from 'react-dom'
+import { useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Trash2, RefreshCw, Star, X, Search, LayoutGrid, List, Settings2, Plus, Check, Filter, Eye, EyeOff, Minus, ChevronsUp, Clock, RotateCcw, TriangleAlert } from 'lucide-react'
-import { api, type KlineRow, type MinuteKlineRow, type WatchlistGroupColor } from '@/lib/api'
+import { Trash2, RefreshCw, Star, X, Search, LayoutGrid, List, Settings2, Plus, Check, Filter, Eye, EyeOff, Minus, ChevronsUp, Clock, RotateCcw, TriangleAlert, ImagePlus, FolderOpen, FolderMinus } from 'lucide-react'
+import { api, type KlineRow, type MinuteKlineRow, type WatchlistGroup, type WatchlistGroupColor } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { storage } from '@/lib/storage'
-import { fmtPrice, fmtPct, fmtBigNum, priceColorClass } from '@/lib/format'
+import { fmtPrice, fmtPct, fmtBigNum, priceColorClass, formatExtNumber } from '@/lib/format'
+import { computeGroupPcts } from '@/lib/watchlistGroupStats'
 import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
 import { StockPreviewDialog } from '@/components/StockPreviewDialog'
-import { WatchlistGroupBar, WatchlistGroupPicker, type WatchlistGroupFilter } from '@/components/WatchlistGroups'
+import {
+  DimensionMembersDialog,
+  dimensionKindForSourceField,
+  type DimensionMembersTarget,
+} from '@/components/DimensionMembersDialog'
+import { WatchlistImportDialog } from '@/components/WatchlistImportDialog'
+import { WatchlistAddMenu } from '@/components/WatchlistAddMenu'
+import {
+  WatchlistGroupBar,
+  WatchlistGroupPicker,
+  type WatchlistGroupFilter,
+} from '@/components/WatchlistGroups'
+import { getOcrInstallHint } from '@/lib/ocrInstallHint'
 import { ColumnCustomizer } from '@/components/ColumnCustomizer'
 import { StockDataTable } from '@/components/stock-table/StockDataTable'
+import { VIRTUAL_LIST_THRESHOLD, useParentScroll } from '@/components/virtual-list/useParentScroll'
 import { useTableSort } from '@/components/stock-table/useTableSort'
 import { MiniCandlestick } from '@/components/stock-table/MiniCandlestick'
 import { MiniIntraday } from '@/components/stock-table/MiniIntraday'
@@ -68,11 +84,16 @@ function renderExtValue(
   expanded: boolean,
   onToggle: () => void,
   inline?: boolean,
+  onTagClick?: (tag: string) => void,
 ): React.ReactNode {
   if (val == null || Number.isNaN(val)) return <span className="text-muted">—</span>
   if (typeof val === 'number') {
-    // int 类型不显示小数
-    const displayVal = Number.isInteger(val) ? fmtPrice(val, 0) : fmtPrice(val)
+    // 数字格式化: 千分位 + 单位换算 + 小数位(由列配置控制)
+    const cfg = col.extDisplay
+    const hasNumFmt = cfg?.thousandSeparator || (cfg?.unitConvert && cfg.unitConvert !== 'none')
+    const displayVal = hasNumFmt
+      ? formatExtNumber(val, { thousandSeparator: cfg?.thousandSeparator, unitConvert: cfg?.unitConvert, unitDecimals: cfg?.unitDecimals })
+      : (Number.isInteger(val) ? fmtPrice(val, 0) : fmtPrice(val))
     return <span className="tabular-nums">{displayVal}</span>
   }
   if (typeof val === 'boolean') {
@@ -110,7 +131,16 @@ function renderExtValue(
 
   const tagEls = (
     <>
-      {visibleTags.map((tag, i) => (
+      {visibleTags.map((tag, i) => onTagClick ? (
+        <button
+          key={i}
+          type="button"
+          onClick={event => { event.stopPropagation(); onTagClick(tag) }}
+          className="inline-block px-1.5 py-px rounded text-[10px] font-medium leading-tight text-yellow-500 bg-yellow-500/10 hover:brightness-95"
+        >
+          {tag}
+        </button>
+      ) : (
         <span key={i} className="inline-block px-1.5 py-px rounded text-[10px] font-medium leading-tight text-yellow-500 bg-yellow-500/10">
           {tag}
         </span>
@@ -148,12 +178,15 @@ function renderExtCell(
   col: ColumnConfig,
   expandedCells: Set<string>,
   onToggleExpand: (key: string) => void,
+  onDimensionClick: (target: DimensionMembersTarget) => void,
 ): React.ReactNode {
   if (col.source.type !== 'ext') return null
   const { configId, fieldName } = col.source
   const val = r[`${configId}__${fieldName}`]
   const cellKey = `${r.symbol}::${col.id}`
   const expanded = expandedCells.has(cellKey)
+  const sourceField = `${configId}.${fieldName}`
+  const dimensionKind = dimensionKindForSourceField(sourceField)
 
   const style: React.CSSProperties = {}
   if (col.extDisplay?.maxWidth) {
@@ -171,7 +204,14 @@ function renderExtCell(
 
   return (
     <td className={tdClass} style={style}>
-      {renderExtValue(val, col, expanded, () => onToggleExpand(cellKey))}
+      {renderExtValue(
+        val,
+        col,
+        expanded,
+        () => onToggleExpand(cellKey),
+        false,
+        dimensionKind ? value => onDimensionClick({ kind: dimensionKind, value, sourceField }) : undefined,
+      )}
     </td>
   )
 }
@@ -182,10 +222,14 @@ function StockSearchBox({
   onPreview,
   existingSymbols,
   onAdd,
+  preferredGroupId,
+  addPending,
 }: {
   onPreview: (symbol: string, name: string) => void
   existingSymbols: string[]
-  onAdd: (symbol: string) => void
+  onAdd: (symbol: string, groupId: string | null) => void
+  preferredGroupId: string | null
+  addPending: boolean
 }) {
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
@@ -196,8 +240,8 @@ function StockSearchBox({
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null)
 
   const search = useQuery({
-    queryKey: QK.instrumentSearch(query, 'stock,etf'),
-    queryFn: () => api.instrumentSearch(query, 20, 'stock,etf'),
+    queryKey: QK.instrumentSearch(query, 'stock,etf,index'),
+    queryFn: () => api.instrumentSearch(query, 20, 'stock,etf,index'),
     enabled: query.trim().length > 0,
     staleTime: 30_000,
   })
@@ -230,6 +274,8 @@ function StockSearchBox({
 
   useEffect(() => {
     function handleClick(e: MouseEvent) {
+      // 分组菜单内的点击不关闭 (上游: 分组选择子菜单挂在外层)
+      if (e.target instanceof Element && e.target.closest('[data-watchlist-group-menu]')) return
       const t = e.target as Node
       if (containerRef.current?.contains(t)) return
       if (dropdownRef.current?.contains(t)) return
@@ -320,21 +366,36 @@ function StockSearchBox({
                       {r.asset_type === 'etf' && (
                         <span className="shrink-0 px-1 py-0.5 rounded text-[10px] leading-none bg-accent/10 text-accent">ETF</span>
                       )}
+                      {r.asset_type === 'index' && (
+                        <span className="shrink-0 px-1 py-0.5 rounded text-[10px] leading-none bg-sky-500/10 text-sky-400">指数</span>
+                      )}
+                      {(() => {
+                        const b = boardTag(r.symbol)
+                        return b && (
+                          <span className={`shrink-0 px-1 py-0.5 rounded text-[10px] leading-none border ${b.color}`}>{b.label}</span>
+                        )
+                      })()}
                     </button>
-                    <button
-                      type="button"
-                      onClick={e => { e.stopPropagation(); onAdd(r.symbol) }}
-                      disabled={inWatchlist}
-                      className={`shrink-0 p-1 rounded transition-colors ${
-                        inWatchlist
-                          ? 'text-accent bg-accent/10 cursor-default'
-                          : 'text-muted hover:text-accent hover:bg-accent/10'
-                      }`}
-                      title={inWatchlist ? '已加自选' : '加入自选'}
-                      aria-label={inWatchlist ? '已加自选' : '加入自选'}
-                    >
-                      {inWatchlist ? <Check className="h-3.5 w-3.5" /> : <Plus className="h-3.5 w-3.5" />}
-                    </button>
+                    {inWatchlist ? (
+                      <button
+                        type="button"
+                        disabled
+                        className="shrink-0 rounded p-1 text-accent bg-accent/10 cursor-default"
+                        title="已加自选"
+                        aria-label="已加自选"
+                      >
+                        <Check className="h-3.5 w-3.5" />
+                      </button>
+                    ) : (
+                      <WatchlistAddMenu
+                        onSelect={groupId => onAdd(r.symbol, groupId)}
+                        preferredGroupId={preferredGroupId}
+                        disabled={addPending}
+                        triggerClassName="shrink-0 rounded p-1 text-muted transition-colors hover:bg-accent/10 hover:text-accent disabled:opacity-50"
+                      >
+                        <Plus className="h-3.5 w-3.5" />
+                      </WatchlistAddMenu>
+                    )}
                   </div>
                 )
               })}
@@ -373,6 +434,26 @@ function RealtimeDot({ title = '实时监控中' }: { title?: string }) {
 // 共享的空 K 线数组常量 — 避免每次渲染传入新的 [] 破坏 StockCard 的 memo
 const EMPTY_KLINE: KlineRow[] = []
 
+function cardColumnCount(viewportWidth: number): number {
+  if (viewportWidth >= 1536) return 6
+  if (viewportWidth >= 1280) return 5
+  if (viewportWidth >= 768) return 4
+  if (viewportWidth >= 640) return 3
+  return 2
+}
+
+function useCardColumnCount(): number {
+  const [count, setCount] = useState(() => cardColumnCount(window.innerWidth))
+
+  useEffect(() => {
+    const update = () => setCount(cardColumnCount(window.innerWidth))
+    window.addEventListener('resize', update)
+    return () => window.removeEventListener('resize', update)
+  }, [])
+
+  return count
+}
+
 const StockCard = React.memo(function StockCard({
   r,
   candleRows,
@@ -385,7 +466,11 @@ const StockCard = React.memo(function StockCard({
   extCols,
   expandedCells,
   onToggleExpand,
+  onDimensionClick,
   isMonitored,
+  groups,
+  onGroupChange,
+  groupChangePending,
 }: {
   r: any
   candleRows: KlineRow[]
@@ -398,7 +483,11 @@ const StockCard = React.memo(function StockCard({
   extCols: ColumnConfig[]
   expandedCells: Set<string>
   onToggleExpand: (key: string) => void
+  onDimensionClick: (target: DimensionMembersTarget) => void
   isMonitored?: boolean
+  groups: WatchlistGroup[]
+  onGroupChange: (symbol: string, groupId: string | null) => void
+  groupChangePending: boolean
 }) {
   const board = boardTag(r.symbol)
   const price = r.rt_price ?? r.close
@@ -427,7 +516,7 @@ const StockCard = React.memo(function StockCard({
       {/* 左侧彩色指示条 */}
       <div className={`absolute left-0 top-0 bottom-0 w-[3px] rounded-l-lg ${barColor}`} />
 
-      {/* 删除按钮 / 确认区 */}
+      {/* 分组与删除入口 */}
       <div className="absolute top-1.5 right-1.5 z-10">
         {isConfirming ? (
           <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
@@ -442,20 +531,29 @@ const StockCard = React.memo(function StockCard({
             </button>
           </div>
         ) : (
-          <button
-            onClick={e => { e.stopPropagation(); onRequestRemove(r.symbol) }}
-            className="opacity-0 group-hover:opacity-100 text-muted hover:text-danger transition-all duration-150 p-0.5 rounded hover:bg-elevated"
-            aria-label="移除"
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-          </button>
+          <div className="flex items-center gap-0.5" onClick={e => e.stopPropagation()}>
+            <WatchlistGroupPicker
+              groups={groups}
+              groupId={r.group_id}
+              symbol={r.symbol}
+              disabled={groupChangePending}
+              onChange={onGroupChange}
+            />
+            <button
+              onClick={() => onRequestRemove(r.symbol)}
+              className="opacity-0 group-hover:opacity-100 text-muted hover:text-danger transition-all duration-150 p-0.5 rounded hover:bg-elevated"
+              aria-label="移除"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </button>
+          </div>
         )}
       </div>
 
       {/* 卡片内容 */}
       <div className="pl-4 pr-2.5 pt-2.5 pb-0">
         {/* 第一行: 代码 + 名称 + 板块标识 */}
-        <div className="flex items-center gap-1.5 min-w-0 mb-2">
+        <div className="flex items-center gap-1.5 min-w-0 mb-2 pr-8">
           <span className="shrink-0 font-mono text-foreground text-xs tracking-wide">
             {r.symbol}
           </span>
@@ -510,12 +608,21 @@ const StockCard = React.memo(function StockCard({
 
             const cellKey = `${r.symbol}::${col.id}`
             const expanded = expandedCells.has(cellKey)
+            const sourceField = `${configId}.${fieldName}`
+            const dimensionKind = dimensionKindForSourceField(sourceField)
 
             return (
               <span key={col.id} title={col.label}>
                 <span className="text-secondary">{fieldName}</span>
                 <span className="font-mono ml-0.5">
-                  {renderExtValue(val, col, expanded, () => onToggleExpand(cellKey), true)}
+                  {renderExtValue(
+                    val,
+                    col,
+                    expanded,
+                    () => onToggleExpand(cellKey),
+                    true,
+                    dimensionKind ? value => onDimensionClick({ kind: dimensionKind, value, sourceField }) : undefined,
+                  )}
                 </span>
               </span>
             )
@@ -566,12 +673,42 @@ export function Watchlist() {
   // 列配置 — 从后端/localStorage 异步加载
   const [columns, setColumns] = useState<ColumnConfig[]>([...BUILTIN_COLUMNS])
   const [customizerOpen, setCustomizerOpen] = useState(false)
+  const [importOpen, setImportOpen] = useState(false)
+  const [searchParams] = useSearchParams()
+  const initialGroup = (searchParams.get('group') as WatchlistGroupFilter | null) ?? 'all'
+  const [selectedGroup, setSelectedGroup] = useState<WatchlistGroupFilter>(initialGroup)
+  // URL ?group= 变化时同步选中分组 (侧边栏二级菜单切换分组时触发)
+  useEffect(() => {
+    const g = (searchParams.get('group') as WatchlistGroupFilter | null) ?? 'all'
+    setSelectedGroup(g)
+  }, [searchParams])
+  const [ocrAvailable, setOcrAvailable] = useState<boolean | null>(null)
+  const [ocrInstallHint, setOcrInstallHint] = useState('')
   const columnsLoaded = useRef(false)
 
   useEffect(() => {
     if (columnsLoaded.current) return
     columnsLoaded.current = true
     loadColumnConfig().then(setColumns)
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    void api.watchlistOcrStatus().then(
+      res => {
+        if (cancelled) return
+        setOcrAvailable(res.available)
+        if (!res.available) setOcrInstallHint(getOcrInstallHint())
+      },
+      () => {
+        if (cancelled) return
+        setOcrAvailable(false)
+        setOcrInstallHint(getOcrInstallHint())
+      },
+    )
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   const handleColumnsChange = useCallback((next: ColumnConfig[]) => {
@@ -636,6 +773,7 @@ export function Watchlist() {
   }, [])
   const [previewSymbol, setPreviewSymbol] = useState<string | null>(null)
   const [previewName, setPreviewName] = useState<string>('')
+  const [dimensionTarget, setDimensionTarget] = useState<DimensionMembersTarget | null>(null)
   const [expandedCells, setExpandedCells] = useState<Set<string>>(new Set())
   const closePreview = useCallback(() => {
     setPreviewSymbol(null)
@@ -656,6 +794,26 @@ export function Watchlist() {
     queryFn: api.watchlistList,
   })
 
+  const groupList = useQuery({
+    queryKey: QK.watchlistGroups,
+    queryFn: api.watchlistGroups,
+  })
+  const groups = groupList.data?.groups ?? []
+  const activeGroupId = selectedGroup === 'all' || selectedGroup === 'ungrouped'
+    ? null
+    : selectedGroup
+
+  useEffect(() => {
+    if (
+      selectedGroup !== 'all'
+      && selectedGroup !== 'ungrouped'
+      && groupList.isSuccess
+      && !groups.some(group => group.id === selectedGroup)
+    ) {
+      setSelectedGroup('all')
+    }
+  }, [groupList.isSuccess, groups, selectedGroup])
+
   // enriched 数据 — 传入 ext_columns 参数
   const enriched = useQuery({
     queryKey: QK.watchlistEnriched(extColumnsParam),
@@ -665,6 +823,13 @@ export function Watchlist() {
 
   const symbols = enriched.data?.rows?.map((r: any) => r.symbol) ?? []
   const symbolsKey = symbols.join(',')
+
+  // 指数无本地分钟K数据, 分时批量请求剔除指数 symbol (省请求, 避免逐只 404)
+  const minuteSymbols = useMemo(
+    () => symbols.filter((s: string) => (enriched.data?.rows ?? []).find((r: any) => r.symbol === s)?.asset_type !== 'index'),
+    [symbols, enriched.data],
+  )
+  const minuteSymbolsKey = minuteSymbols.join(',')
 
   // 实时行情状态 (提前到此处: 分时轮询判断需要 realtimeRunning)
   const quoteStatus = useQuoteStatus()
@@ -678,19 +843,45 @@ export function Watchlist() {
     staleTime: 5 * 60_000,  // 5 分钟内不重请求
   })
 
-  const klineData = dailyKVisible ? (klineBatch.data?.data ?? {}) : {}
+  // 当日蜡烛实时修补: 历史 K 线按 staleTime 周期拉取 (见 queryKeys 注释), 最后一根
+  // 蜡烛用每 tick 刷新的 enriched 当日 OHLC 前端覆盖/追加, 蜡烛随实时行情跳动, 零额外请求。
+  const klineData = useMemo(() => {
+    const base = dailyKVisible ? (klineBatch.data?.data ?? {}) : {}
+    const liveRows = enriched.data?.rows
+    const asOf = enriched.data?.as_of
+    if (!dailyKVisible || !liveRows?.length || !asOf) return base
+    const liveBySymbol = new Map<string, any>(liveRows.map((r: any) => [r.symbol, r]))
+    const patched: Record<string, KlineRow[]> = {}
+    for (const sym of Object.keys(base)) {
+      const arr = base[sym]
+      if (!Array.isArray(arr) || arr.length === 0) { patched[sym] = arr; continue }
+      const live = liveBySymbol.get(sym)
+      const { open, high, low, close } = live ?? {}
+      if (open == null || high == null || low == null || close == null) { patched[sym] = arr; continue }
+      const last = arr[arr.length - 1]
+      if (last.date === asOf) {
+        patched[sym] = [...arr.slice(0, -1), { ...last, open, high, low, close }]
+      } else if (last.date < asOf) {
+        patched[sym] = [...arr, { date: asOf, open, high, low, close }]
+      } else {
+        patched[sym] = arr
+      }
+    }
+    return patched
+  }, [dailyKVisible, klineBatch.data, enriched.data])
 
   // 批量分时数据 (Pro+ 用户, 列可见时才拉)
-  // 刷新策略: 实时行情运行中自动按 15s 轮询 (不接 SSE 高频, 避免每秒拉 TickFlow 触限流);
-  // 用户也可在实时监控设置里单独开启 minute_intraday_refresh 强制刷新 (即使未开实时行情)
+  // 刷新策略: 仅当实时行情运行 且 用户在实时监控设置里开启 minute_intraday_refresh 时
+  // 按用户设定的间隔轮询 (不接 SSE 高频, 避免每秒拉 TickFlow 触限流); 与 Screener / 设置卡片描述一致。
   const { data: prefsData } = usePreferences()
   const intradayRefreshEnabled = prefsData?.minute_intraday_refresh ?? false
+  const intradayRefreshInterval = prefsData?.minute_intraday_refresh_interval ?? 6
   const minuteBatch = useQuery({
-    queryKey: QK.minuteBatch(symbolsKey),
-    queryFn: () => api.klineMinuteBatch(symbols),
-    enabled: intradayVisible && symbols.length > 0,
+    queryKey: QK.minuteBatch(minuteSymbolsKey),
+    queryFn: () => api.klineMinuteBatch(minuteSymbols),
+    enabled: intradayVisible && minuteSymbols.length > 0,
     staleTime: 10_000,
-    refetchInterval: (realtimeRunning || intradayRefreshEnabled) ? 15_000 : false,
+    refetchInterval: (intradayRefreshEnabled && realtimeRunning) ? intradayRefreshInterval * 1000 : false,
   })
   const minuteData = intradayVisible ? (minuteBatch.data?.data ?? {}) : {}
 
@@ -701,7 +892,7 @@ export function Watchlist() {
       qc.setQueryData(QK.watchlist, data)
       qc.invalidateQueries({ queryKey: QK.watchlist })
       qc.invalidateQueries({ queryKey: ['watchlist-enriched'] })
-      qc.invalidateQueries({ queryKey: ['watchlist-kline-batch'] })
+      qc.invalidateQueries({ queryKey: ['kline-batch'] })
     },
   })
 
@@ -715,8 +906,8 @@ export function Watchlist() {
       })
       // 2. 清除 list 缓存，触发后台 refetch
       qc.invalidateQueries({ queryKey: QK.watchlist })
-      qc.invalidateQueries({ queryKey: QK.watchlistEnriched() })
-      qc.invalidateQueries({ queryKey: ['watchlist-kline-batch'] })
+      qc.invalidateQueries({ queryKey: ['watchlist-enriched'] })
+      qc.invalidateQueries({ queryKey: ['kline-batch'] })
     },
   })
 
@@ -726,7 +917,7 @@ export function Watchlist() {
       qc.setQueryData(QK.watchlist, data)
       qc.invalidateQueries({ queryKey: QK.watchlist })
       qc.invalidateQueries({ queryKey: ['watchlist-enriched'] })
-      qc.invalidateQueries({ queryKey: ['watchlist-kline-batch'] })
+      qc.invalidateQueries({ queryKey: ['kline-batch'] })
       qc.invalidateQueries({ queryKey: QK.preferences })
       qc.invalidateQueries({ queryKey: QK.quoteStatus })
     },
@@ -739,9 +930,44 @@ export function Watchlist() {
       // 立即清空 enriched 缓存
       qc.setQueryData(['watchlist-enriched', extColumnsParam], { rows: [], as_of: null, elapsed_ms: 0 })
       qc.invalidateQueries({ queryKey: QK.watchlist })
-      qc.invalidateQueries({ queryKey: QK.watchlistEnriched() })
-      qc.invalidateQueries({ queryKey: ['watchlist-kline-batch'] })
+      qc.invalidateQueries({ queryKey: ['watchlist-enriched'] })
+      qc.invalidateQueries({ queryKey: ['kline-batch'] })
     },
+  })
+
+  const createGroup = useMutation({
+    mutationFn: ({ name, color }: { name: string; color: WatchlistGroupColor }) =>
+      api.watchlistGroupCreate(name, color),
+    onSuccess: data => {
+      qc.setQueryData(QK.watchlistGroups, { groups: data.groups })
+      setSelectedGroup(data.group.id)
+    },
+  })
+
+  const renameGroup = useMutation({
+    mutationFn: ({ groupId, name, color }: { groupId: string; name: string; color: WatchlistGroupColor }) =>
+      api.watchlistGroupRename(groupId, name, color),
+    onSuccess: data => qc.setQueryData(QK.watchlistGroups, data),
+  })
+
+  const deleteGroup = useMutation({
+    mutationFn: (groupId: string) => api.watchlistGroupDelete(groupId),
+    onSuccess: (data, groupId) => {
+      qc.setQueryData(QK.watchlistGroups, { groups: data.groups })
+      qc.setQueryData(QK.watchlist, { symbols: data.symbols })
+      if (selectedGroup === groupId) setSelectedGroup('all')
+    },
+  })
+
+  const clearGroup = useMutation({
+    mutationFn: (groupId: string) => api.watchlistGroupClear(groupId),
+    onSuccess: data => qc.setQueryData(QK.watchlist, data),
+  })
+
+  const assignGroup = useMutation({
+    mutationFn: ({ symbol, groupId }: { symbol: string; groupId: string | null }) =>
+      api.watchlistSetGroup(symbol, groupId),
+    onSuccess: data => qc.setQueryData(QK.watchlist, data),
   })
 
   // 二次确认状态
@@ -759,69 +985,43 @@ export function Watchlist() {
   }, [remove])
   const handleCardCancelRemove = useCallback(() => setConfirmRemove(null), [])
   const handleCardRequestRemove = useCallback((sym: string) => setConfirmRemove(sym), [])
+  const handleGroupChange = useCallback((symbol: string, groupId: string | null) => {
+    assignGroup.mutate({ symbol, groupId })
+  }, [assignGroup])
 
-  const allSymbols = useMemo(() => list.data?.symbols?.map(s => s.symbol) ?? [], [list.data?.symbols])
-  const rows = useMemo(() => enriched.data?.rows ?? [], [enriched.data?.rows])
-
-  // ===== 自选分组 (B2) =====
-  const [groupFilter, setGroupFilter] = useState<WatchlistGroupFilter>('all')
-  const groupsQuery = useQuery({
-    queryKey: QK.watchlistGroups,
-    // silent: 分组接口不可用(如旧版后端未部署该路由)时降级为"未分组"视图,
-    // 不弹全局错误 toast; 页面顶部显示可关闭的说明条。
-    queryFn: () => api.watchlistGroups(),
-  })
-  const groups = groupsQuery.data?.groups ?? []
-  const groupIdBySymbol = useMemo(() => {
-    const map = new Map<string, string | null>()
-    for (const entry of list.data?.symbols ?? []) map.set(entry.symbol, entry.group_id ?? null)
-    return map
-  }, [list.data?.symbols])
+  const listEntries = list.data?.symbols ?? []
+  const allSymbols = listEntries.map(s => s.symbol)
+  const rows = enriched.data?.rows ?? []
+  const groupBySymbol = useMemo(
+    () => new Map(listEntries.map(entry => [entry.symbol, entry.group_id ?? null])),
+    [listEntries],
+  )
+  // 分组等权平均涨跌幅 (实时优先 rt_pct, 收盘兜底 change_pct; 与表格同源)
+  const groupPcts = useMemo(
+    () => computeGroupPcts(
+      listEntries,
+      new Map(rows.map((r: any) => [r.symbol as string, r])),
+    ),
+    [listEntries, rows],
+  )
   const groupCounts = useMemo(() => {
     const counts: Record<string, number> = { ungrouped: 0 }
-    for (const entry of list.data?.symbols ?? []) {
-      if (entry.group_id) counts[entry.group_id] = (counts[entry.group_id] ?? 0) + 1
-      else counts.ungrouped = (counts.ungrouped ?? 0) + 1
+    for (const entry of listEntries) {
+      const groupId = entry.group_id ?? 'ungrouped'
+      counts[groupId] = (counts[groupId] ?? 0) + 1
     }
     return counts
-  }, [list.data?.symbols])
-  const activeGroupId = groupFilter === 'all' || groupFilter === 'ungrouped' ? null : groupFilter
-
-  const invalidateGroups = useCallback(() => {
-    qc.invalidateQueries({ queryKey: QK.watchlistGroups })
-    qc.invalidateQueries({ queryKey: QK.watchlist })
-  }, [qc])
-
-  const createGroup = useCallback(async (name: string, color: WatchlistGroupColor) => {
-    await api.watchlistGroupCreate(name, color)
-    invalidateGroups()
-  }, [invalidateGroups])
-
-  const renameGroup = useCallback(async (groupId: string, name: string, color: WatchlistGroupColor) => {
-    await api.watchlistGroupRename(groupId, name, color)
-    invalidateGroups()
-  }, [invalidateGroups])
-
-  const deleteGroup = useCallback(async (groupId: string) => {
-    await api.watchlistGroupDelete(groupId)
-    if (groupFilter === groupId) setGroupFilter('all')
-    invalidateGroups()
-    qc.invalidateQueries({ queryKey: QK.watchlistEnriched() })
-  }, [invalidateGroups, groupFilter, qc])
-
-  const clearGroup = useCallback(async (groupId: string) => {
-    await api.watchlistGroupClear(groupId)
-    invalidateGroups()
-    qc.invalidateQueries({ queryKey: QK.watchlistEnriched() })
-  }, [invalidateGroups, qc])
-
-  // 单股分组分配 (行内选择器)
-  const setGroup = useCallback((symbol: string, groupId: string | null) => {
-    void api.watchlistSetGroup(symbol, groupId).then(() => {
-      qc.invalidateQueries({ queryKey: QK.watchlist })
-      qc.invalidateQueries({ queryKey: QK.watchlistGroups })
-    })
-  }, [qc])
+  }, [listEntries])
+  const rowsInSelectedGroup = useMemo(() => {
+    const rowsWithGroup = rows.map(row => ({ ...row, group_id: groupBySymbol.get(row.symbol) ?? null }))
+    if (selectedGroup === 'all') return rowsWithGroup
+    if (selectedGroup === 'ungrouped') return rowsWithGroup.filter(row => row.group_id == null)
+    return rowsWithGroup.filter(row => row.group_id === selectedGroup)
+  }, [groupBySymbol, rows, selectedGroup])
+  const activeGroup = activeGroupId
+    ? groups.find(group => group.id === activeGroupId)
+    : undefined
+  const watchlistContentLoading = list.isLoading || (allSymbols.length > 0 && enriched.isLoading)
 
   // 实时监控圆点: 仅 Free/低档 "按自选股实时监控" 模式 (mode === 'watchlist') 下显示;
   // Starter+ 全市场模式 (mode === 'full_market') 全部标的都在监控, 标圆点无意义, 故不显示。
@@ -899,15 +1099,12 @@ export function Watchlist() {
 
   // 筛选 + 排序
   const filteredRows = useMemo(() => {
-    // 分组筛选 (全部/未分组/具体分组)
-    let result = rows
-    if (groupFilter !== 'all') {
-      const targetGroup = groupFilter === 'ungrouped' ? null : groupFilter
-      result = result.filter(r => groupIdBySymbol.get(r.symbol) === targetGroup)
-    }
-    // 板块筛选（全选时跳过）
+    // 板块筛选（全选时跳过; 分组筛选已由 rowsInSelectedGroup 完成）
+    let result = rowsInSelectedGroup
     if (boardFilter.size > 0 && boardFilter.size < BOARDS.length) {
       result = result.filter(r => {
+        // 非股票 (指数/ETF) 无板块语义, 不受板块筛选影响 (顺带修复 ETF 行被误过滤)
+        if (r.asset_type && r.asset_type !== 'stock') return true
         const board = getBoardType(r.symbol)
         return board != null && boardFilter.has(board)
       })
@@ -932,7 +1129,7 @@ export function Watchlist() {
       })
     }
     return result
-  }, [rows, filters, columns, boardFilter, groupFilter, groupIdBySymbol])
+  }, [rowsInSelectedGroup, filters, columns, boardFilter])
 
   const activeFilterCount = Object.values(filters).filter(v => v.min || v.max || v.text).length
   const hasBoardFilter = boardFilter.size > 0 && boardFilter.size < BOARDS.length
@@ -945,6 +1142,24 @@ export function Watchlist() {
     () => sortRows(filteredRows, columns),
     [filteredRows, sortRows, columns],
   )
+
+  const cardColumns = useCardColumnCount()
+  const cardGridRef = useRef<HTMLDivElement>(null)
+  const virtualizeCards = viewMode === 'card' && sortedRows.length > VIRTUAL_LIST_THRESHOLD
+  const cardRowCount = Math.ceil(sortedRows.length / cardColumns)
+  const { getScrollElement: getCardScrollElement, scrollMargin: cardScrollMargin } = useParentScroll(
+    cardGridRef,
+    virtualizeCards,
+  )
+  const cardRowVirtualizer = useVirtualizer({
+    count: virtualizeCards ? cardRowCount : 0,
+    getScrollElement: getCardScrollElement,
+    estimateSize: () => dailyKVisible ? 180 : 140,
+    getItemKey: index => `${cardColumns}:${(sortedRows[index * cardColumns] as any)?.symbol ?? index}`,
+    gap: 12,
+    overscan: 3,
+    scrollMargin: cardScrollMargin,
+  })
 
   // 可见的 ext 列（卡片视图使用）
   const visibleExtCols = useMemo(
@@ -961,8 +1176,30 @@ export function Watchlist() {
   )
 
   // "被筛选条件隐藏" 的个股数: 后端返回的行数 vs 经过前端筛选后的行数.
-  // rows.length 是后端实际返回 (含 pending 行), 减去 sortedRows (筛选后) 才是真正的筛选隐藏.
-  const hiddenCount = Math.max(0, rows.length - sortedRows.length)
+  // 分组切换不计入筛选隐藏，只比较当前分组内的数据。
+  const hiddenCount = Math.max(0, rowsInSelectedGroup.length - sortedRows.length)
+
+  const renderStockCard = (r: any) => (
+    <StockCard
+      key={r.symbol}
+      r={r}
+      candleRows={klineData[r.symbol] ?? EMPTY_KLINE}
+      showCandle={dailyKVisible}
+      onPreview={handleCardPreview}
+      onConfirmRemove={handleCardConfirmRemove}
+      onCancelRemove={handleCardCancelRemove}
+      onRequestRemove={handleCardRequestRemove}
+      isConfirming={confirmRemove === r.symbol}
+      extCols={visibleExtCols}
+      expandedCells={expandedCells}
+      onToggleExpand={handleToggleExpand}
+      onDimensionClick={setDimensionTarget}
+      isMonitored={monitoredSymbols.has(r.symbol)}
+      groups={groups}
+      onGroupChange={handleGroupChange}
+      groupChangePending={assignGroup.isPending}
+    />
+  )
 
   return (
     <div className="flex flex-col h-full">
@@ -974,7 +1211,7 @@ export function Watchlist() {
             <span className="inline-flex items-baseline gap-0.5 px-2 py-0.5 rounded-md bg-elevated/70 text-[11px]">
               <span className="font-mono font-semibold text-secondary tabular-nums">{sortedRows.length}</span>
               <span className="text-muted/50">/</span>
-              <span className="font-mono text-muted tabular-nums">{allSymbols.length}</span>
+              <span className="font-mono text-muted tabular-nums">{rowsInSelectedGroup.length}</span>
               <span className="text-muted/60 ml-0.5">只</span>
             </span>
             {/* 数据未就绪提示: 自选了但 enriched 缓存未覆盖 (新股/冷门/新用户未同步), 指标全为 null */}
@@ -1028,8 +1265,25 @@ export function Watchlist() {
             <StockSearchBox
               onPreview={(sym, name) => { setPreviewSymbol(sym); setPreviewName(name) }}
               existingSymbols={allSymbols as string[]}
-              onAdd={(sym) => addMutation.mutate({ symbol: sym, groupId: activeGroupId })}
+              onAdd={(symbol, groupId) => addMutation.mutate({ symbol, groupId })}
+              preferredGroupId={activeGroupId}
+              addPending={addMutation.isPending}
             />
+            <button
+              onClick={() => {
+                if (ocrAvailable === false) return
+                setImportOpen(true)
+              }}
+              disabled={ocrAvailable === false}
+              className="inline-flex items-center justify-center h-8 w-8 rounded-btn bg-elevated hover:bg-elevated/80 text-secondary hover:text-foreground transition-colors duration-150 ease-smooth disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-elevated disabled:hover:text-secondary"
+              title={
+                ocrAvailable === false
+                  ? ocrInstallHint || 'OCR 不可用，请先安装 Tesseract'
+                  : '从截图导入自选'
+              }
+            >
+              <ImagePlus className="h-4 w-4" />
+            </button>
             <div className="w-px h-5 bg-border" />
             {/* 视图 */}
             <button
@@ -1076,7 +1330,7 @@ export function Watchlist() {
         }
       />
       {/* 分组服务不可用降级条: 后端缺分组路由(部署漂移)时明确告知而非静默失效 */}
-      {groupsQuery.isError && (
+      {groupList.isError && (
         <div className="mx-4 mt-2 mb-1 flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/[0.06] px-3 py-2 text-xs text-secondary sm:mx-5">
           <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
           <span className="flex-1">
@@ -1084,7 +1338,7 @@ export function Watchlist() {
           </span>
           <button
             type="button"
-            onClick={() => groupsQuery.refetch()}
+            onClick={() => groupList.refetch()}
             className="shrink-0 rounded-md px-2 py-1 font-medium text-accent hover:bg-accent/10"
           >
             重试
@@ -1092,17 +1346,18 @@ export function Watchlist() {
         </div>
       )}
 
-      {/* 自选分组 tab 栏 */}
+
       <WatchlistGroupBar
         groups={groups}
         counts={groupCounts}
-        selected={groupFilter}
-        total={list.data?.symbols.length ?? 0}
-        onSelect={setGroupFilter}
-        onCreate={createGroup}
-        onRename={renameGroup}
-        onDelete={deleteGroup}
-        onClearGroup={clearGroup}
+        selected={selectedGroup}
+        total={allSymbols.length}
+        pcts={groupPcts}
+        onSelect={setSelectedGroup}
+        onCreate={(name, color) => createGroup.mutateAsync({ name, color }).then(() => undefined)}
+        onRename={(groupId, name, color) => renameGroup.mutateAsync({ groupId, name, color }).then(() => undefined)}
+        onDelete={groupId => deleteGroup.mutateAsync(groupId).then(() => undefined)}
+        onClearGroup={groupId => clearGroup.mutateAsync(groupId).then(() => undefined)}
       />
 
       {/* 筛选栏 */}
@@ -1184,14 +1439,23 @@ export function Watchlist() {
       <div className="flex-1 min-h-0 overflow-y-auto">
         <div className="px-5 py-3">
           {/* 列表 */}
-          {list.isLoading && <div className="text-sm text-muted">加载中…</div>}
-          {list.isError && <div className="text-sm text-danger">读取自选失败</div>}
-
-          {allSymbols.length === 0 ? (
+          {watchlistContentLoading ? (
+            <div className="text-sm text-muted">加载中…</div>
+          ) : list.isError ? (
+            <div className="text-sm text-danger">读取自选失败</div>
+          ) : enriched.isError ? (
+            <div className="text-sm text-danger">读取自选行情失败</div>
+          ) : allSymbols.length === 0 ? (
             <EmptyState
               icon={Star}
               title="自选股为空"
-              hint="点击右上角搜索按钮查找并预览标的，进入个股详情后可添加到自选。"
+              hint="点击右上角搜索添加标的，或点击图片图标从券商自选截图批量导入。"
+            />
+          ) : rowsInSelectedGroup.length === 0 ? (
+            <EmptyState
+              icon={FolderOpen}
+              title="该分组暂无标的"
+              hint="使用右上角搜索添加，或通过股票旁的分组按钮移入当前分组。"
             />
           ) : viewMode === 'table' ? (
             <StockDataTable
@@ -1225,6 +1489,7 @@ export function Watchlist() {
                   )
                 }
                 if (col.source.type === 'builtin' && col.source.key === 'intraday') {
+                  const intradayAutoRefresh = intradayRefreshEnabled && realtimeRunning
                   return (
                     <span className="inline-flex items-center justify-center gap-1.5">
                       <span>{col.label}</span>
@@ -1241,6 +1506,23 @@ export function Watchlist() {
                       >
                         {intradayChartVisible ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
                       </button>
+                      {/* 分时图显示 且 未开自动轮询时, 提供手动刷新按钮 */}
+                      {intradayChartVisible && !intradayAutoRefresh && (
+                        <button
+                          type="button"
+                          onClick={(event) => { event.stopPropagation(); minuteBatch.refetch() }}
+                          disabled={minuteBatch.isFetching}
+                          className="inline-flex items-center justify-center w-5 h-5 rounded text-muted hover:text-accent hover:bg-accent/10 transition-colors disabled:opacity-40"
+                          title="刷新分时数据"
+                          aria-label="刷新分时数据"
+                        >
+                          <RefreshCw className={`h-3.5 w-3.5 ${minuteBatch.isFetching ? 'animate-spin' : ''}`} />
+                        </button>
+                      )}
+                      {/* 自动轮询中: 显示旋转图标提示正在实时刷新 */}
+                      {intradayChartVisible && intradayAutoRefresh && (
+                        <RefreshCw className="h-3 w-3 text-accent/60 animate-spin" aria-label="实时刷新中" />
+                      )}
                     </span>
                   )
                 }
@@ -1249,7 +1531,7 @@ export function Watchlist() {
               renderCell={(r: any, col: ColumnConfig) => {
                 // ext 列
                 if (col.source.type === 'ext') {
-                  return renderExtCell(r, col, expandedCells, handleToggleExpand)
+                  return renderExtCell(r, col, expandedCells, handleToggleExpand, setDimensionTarget)
                 }
                 const key = col.source.key
                 const price = r.rt_price ?? r.close
@@ -1281,14 +1563,7 @@ export function Watchlist() {
                           ) : null}
                           {monitoredSymbols.has(r.symbol) && <span className="ml-2"><RealtimeDot /></span>}
                         </button>
-                        {/* 单股分组选择器 */}
-                        <WatchlistGroupPicker
-                          groups={groups}
-                          groupId={groupIdBySymbol.get(r.symbol) ?? null}
-                          symbol={r.symbol}
-                          onChange={setGroup}
-                        />
-                        {/* 删除入口：默认减号图标，二次确认时替换为确定按钮 */}
+                        {/* 删除入口：从分组移除 + 从自选移除(二次确认) + 移到顶部 */}
                         <div className="ml-auto pl-1 shrink-0">
                           {confirmRemove === r.symbol ? (
                             <div className="flex items-center gap-1">
@@ -1307,11 +1582,29 @@ export function Watchlist() {
                             </div>
                           ) : (
                             <div className="flex items-center gap-1">
+                              <WatchlistGroupPicker
+                                groups={groups}
+                                groupId={r.group_id}
+                                symbol={r.symbol}
+                                disabled={assignGroup.isPending}
+                                onChange={handleGroupChange}
+                              />
+                              {r.group_id && (
+                                <button
+                                  onClick={() => handleGroupChange(r.symbol, null)}
+                                  disabled={assignGroup.isPending}
+                                  className="p-0.5 text-muted hover:text-warning transition-colors duration-150 ease-smooth disabled:opacity-50"
+                                  aria-label="从分组移除"
+                                  title="从分组移除"
+                                >
+                                  <FolderMinus className="h-3.5 w-3.5" />
+                                </button>
+                              )}
                               <button
                                 onClick={() => setConfirmRemove(r.symbol)}
                                 className="p-0.5 text-muted hover:text-danger transition-colors duration-150 ease-smooth"
                                 aria-label="移除"
-                                title="移除"
+                                title="从自选移除"
                               >
                                 <Minus className="h-3.5 w-3.5" />
                               </button>
@@ -1391,6 +1684,18 @@ export function Watchlist() {
                 }
                 // 分时列
                 if (key === 'intraday') {
+                  // 指数无本地分钟K数据, 分时列降级为占位符
+                  if (r.asset_type === 'index') {
+                    const iw = intradayChartVisible ? intradayResolved.width : 40
+                    const ih = intradayChartVisible ? intradayResolved.height : 40
+                    return (
+                      <td className="pl-3 pr-2 py-1.5 border-l border-border/30" style={{ width: iw + 4, minWidth: iw + 4, maxWidth: iw + 4, height: ih }}>
+                        <div className="flex items-center justify-center">
+                          <span className="text-[10px] text-muted">—</span>
+                        </div>
+                      </td>
+                    )
+                  }
                   const rows: MinuteKlineRow[] = minuteData[r.symbol] ?? []
                   // 眼睛关闭(收起)时用小尺寸 (和日k收起态一致 40x40); 开启时用配置值
                   const iw = intradayChartVisible ? intradayResolved.width : 40
@@ -1410,25 +1715,31 @@ export function Watchlist() {
               }}
               className="rounded-card overflow-x-auto"
             />
-          ) : (
+          ) : !virtualizeCards ? (
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3">
-              {sortedRows.map((r: any) => (
-                <StockCard
-                  key={r.symbol}
-                  r={r}
-                  candleRows={klineData[r.symbol] ?? EMPTY_KLINE}
-                  showCandle={dailyKVisible}
-                  onPreview={handleCardPreview}
-                  onConfirmRemove={handleCardConfirmRemove}
-                  onCancelRemove={handleCardCancelRemove}
-                  onRequestRemove={handleCardRequestRemove}
-                  isConfirming={confirmRemove === r.symbol}
-                  extCols={visibleExtCols}
-                  expandedCells={expandedCells}
-                  onToggleExpand={handleToggleExpand}
-                  isMonitored={monitoredSymbols.has(r.symbol)}
-                />
-              ))}
+              {sortedRows.map(renderStockCard)}
+            </div>
+          ) : (
+            <div
+              ref={cardGridRef}
+              className="relative"
+              style={{ height: cardRowVirtualizer.getTotalSize() }}
+            >
+              {cardRowVirtualizer.getVirtualItems().map(virtualRow => {
+                const start = virtualRow.index * cardColumns
+                const row = sortedRows.slice(start, start + cardColumns)
+                return (
+                  <div
+                    key={virtualRow.key}
+                    ref={cardRowVirtualizer.measureElement}
+                    data-index={virtualRow.index}
+                    className="absolute left-0 top-0 w-full grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3"
+                    style={{ transform: `translateY(${virtualRow.start - cardScrollMargin}px)` }}
+                  >
+                    {row.map(renderStockCard)}
+                  </div>
+                )
+              })}
             </div>
           )}
         </div>
@@ -1491,6 +1802,24 @@ export function Watchlist() {
         symbol={previewSymbol}
         name={previewName}
         onClose={closePreview}
+      />
+
+      <DimensionMembersDialog
+        target={dimensionTarget}
+        onClose={() => setDimensionTarget(null)}
+        onStockClick={(symbol, name) => {
+          setDimensionTarget(null)
+          setPreviewSymbol(symbol)
+          setPreviewName(name ?? '')
+        }}
+      />
+
+      <WatchlistImportDialog
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        groupId={activeGroupId}
+        groupName={activeGroup?.name}
+        groupColor={activeGroup?.color}
       />
     </div>
   )

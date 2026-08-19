@@ -5,11 +5,18 @@
 """
 from __future__ import annotations
 
+import copy
 import json
 import logging
+import re
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+# 进程内缓存: 行情轮询线程一轮会调用 8~12 次 getter, 每次读盘+parse 是纯重复;
+# 文件仅在用户改设置时变化, 以 (mtime_ns, size) 签名判断是否重读。
+_cache: dict | None = None
+_cache_sig: tuple[int, int] | None = None
 
 
 def _path() -> Path:
@@ -19,14 +26,32 @@ def _path() -> Path:
     return p
 
 
+def _invalidate_cache() -> None:
+    global _cache, _cache_sig
+    _cache = None
+    _cache_sig = None
+
+
 def load() -> dict:
+    """读取 preferences.json (带 mtime 签名缓存)。返回深拷贝, 调用方可自由修改。"""
+    global _cache, _cache_sig
     p = _path()
-    if p.exists():
-        try:
-            return json.loads(p.read_text(encoding="utf-8"))
-        except Exception as e:  # noqa: BLE001
-            logger.warning("preferences.json malformed: %s", e)
-    return {}
+    try:
+        sig = (p.stat().st_mtime_ns, p.stat().st_size)
+    except OSError:
+        return {}
+    if _cache is not None and sig == _cache_sig:
+        return copy.deepcopy(_cache)
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except Exception as e:
+        logger.warning("preferences.json malformed: %s", e)
+        return {}
+    _cache = data
+    _cache_sig = sig
+    return copy.deepcopy(_cache)
 
 
 def save(updates: dict) -> dict:
@@ -36,6 +61,7 @@ def save(updates: dict) -> dict:
     _path().write_text(
         json.dumps(current, indent=2, ensure_ascii=False), encoding="utf-8",
     )
+    _invalidate_cache()
     return current
 
 
@@ -72,8 +98,13 @@ def get_indices_nav_pinned() -> bool:
     return load().get("indices_nav_pinned", True)
 
 
+def get_watchlist_groups_in_nav() -> bool:
+    """自选分组是否显示在侧边栏（可展开二级子菜单）。默认 False。"""
+    return load().get("watchlist_groups_in_nav", False)
+
+
 def get_realtime_quote_interval() -> float:
-    return load().get("realtime_quote_interval", 10.0)
+    return load().get("realtime_quote_interval", 6.0)
 
 
 def get_realtime_watchlist_symbols() -> list[str]:
@@ -106,6 +137,7 @@ def set_realtime_quote_interval(interval: float) -> float:
     _path().write_text(
         json.dumps(current, indent=2, ensure_ascii=False), encoding="utf-8",
     )
+    _invalidate_cache()
     return interval
 
 
@@ -114,8 +146,82 @@ def get_minute_sync_enabled() -> bool:
 
 
 def get_minute_intraday_refresh() -> bool:
-    """自选列表分时图是否跟随实时行情刷新 (默认关闭, 开启后盘中按 SSE 频率刷新)。"""
-    return load().get("minute_intraday_refresh", False)
+    """自选列表分时图是否跟随实时行情刷新。
+
+    默认值随权限: 有实时行情权限 (Pro+) 的用户默认开启, 否则关闭。
+    用户主动设置过的 (key 存在) 以用户选择为准, 即使是 False 也尊重。
+    """
+    data = load()
+    if "minute_intraday_refresh" in data:
+        return bool(data["minute_intraday_refresh"])
+    # 未设置过: 有权限默认开, 无权限默认关。
+    try:
+        from app.services.quote_service import QuoteService
+        return QuoteService.is_realtime_allowed()
+    except Exception:
+        return False
+
+
+# 分时图实时刷新间隔允许范围 (秒)。下限 3s, 上限 60s。
+_INTRADAY_REFRESH_INTERVAL_MIN = 3
+_INTRADAY_REFRESH_INTERVAL_MAX = 60
+
+
+def get_minute_intraday_refresh_interval() -> int:
+    """分时图实时刷新轮询间隔 (秒)。默认 6s, 范围 [3, 60]。"""
+    return max(_INTRADAY_REFRESH_INTERVAL_MIN,
+               min(_INTRADAY_REFRESH_INTERVAL_MAX,
+                   int(load().get("minute_intraday_refresh_interval", 6))))
+
+
+# 监控中心个股通知 ext 字段默认配置 (与 ext_presets 内置预设对齐)
+_MONITOR_EXT_FIELDS_DEFAULT = {
+    "concept": "ext_gn_ths.所属概念",
+    "industry": "ext_hy_ths.所属同话顺行业",
+}
+
+
+def _normalize_ext_field(raw) -> dict | None:
+    """规范化单个 ext 字段配置, 兼容旧字符串格式 ("id.field") 和新对象格式。
+
+    新格式: {"field": "id.field", "maxTags": N, "hiddenIndices": [...]}
+    maxTags=0 或缺省=不限制; hiddenIndices 指定要隐藏的位置 (0-based)。
+    """
+    if raw is None:
+        return None
+    # 旧格式: 纯字符串 "configId.fieldName"
+    if isinstance(raw, str):
+        return {"field": raw}
+    if isinstance(raw, dict):
+        field = raw.get("field")
+        if not field:
+            return None
+        return {
+            "field": field,
+            "maxTags": int(raw["maxTags"]) if raw.get("maxTags") else 0,
+            "hiddenIndices": [int(i) for i in raw["hiddenIndices"]] if raw.get("hiddenIndices") else [],
+        }
+    return None
+
+
+def get_monitor_ext_fields() -> dict:
+    """监控中心个股通知要展示的 ext 字段 (concept/industry)。
+
+    返回 {"concept": {"field", "maxTags", "hiddenIndices"} | None, ...}。
+    后端只需读 .field 构建 ext_columns; maxTags/hiddenIndices 供前端渲染裁剪。
+    兼容旧字符串格式 ("id.field") 自动升级。
+    """
+    data = load()
+    raw = data.get("monitor_ext_fields")
+    if raw is None:
+        return {
+            "concept": {"field": _MONITOR_EXT_FIELDS_DEFAULT["concept"]},
+            "industry": {"field": _MONITOR_EXT_FIELDS_DEFAULT["industry"]},
+        }
+    return {
+        "concept": _normalize_ext_field(raw.get("concept")),
+        "industry": _normalize_ext_field(raw.get("industry")),
+    }
 
 
 def get_minute_sync_days() -> int:
@@ -147,6 +253,18 @@ def set_minute_sync_symbols(symbols: list[str]) -> list[str]:
     clean = _normalize_symbol_list(symbols)
     save({"minute_sync_symbols": clean})
     return clean
+
+def get_minute_sync_segment_days() -> int:
+    """分钟 K 拉取的单段大小(交易日)。默认 20,范围 [5, 30]。
+
+    每段拉完后立即落盘(流式),避免全量攒内存导致 OOM。
+    段越小内存峰值越低但总耗时越长(限速 sleep 随段数线性增加);
+    物理上限 ~41 交易日(TickFlow 单次 10000 根 / 一天 241 根 ≈ 41 天),max=30 留出余量。
+    """
+    return max(5, min(30, load().get("minute_sync_segment_days", 20)))
+
+
+# ===== 数据源选择 (默认 TickFlow；第一阶段仅日K切换入口) =====
 
 
 def get_auction_sync_enabled() -> bool:
@@ -201,6 +319,34 @@ _LEGACY_PROVIDER_KEYS = {
     "realtime": "realtime_data_provider",
     "financial": "financial_data_provider",
 }
+
+_ALLOWED_DATA_PROVIDERS = {"tickflow"}
+DATA_SOURCE_JOB_TIMEOUT_MIN_S = 60
+
+
+def get_data_source_job_timeout_s() -> int:
+    """返回普通数据后台任务的卡死判定时间(秒)。"""
+    from app.services.pipeline_jobs import DEFAULT_JOB_TIMEOUT_S
+    raw = load().get("data_source_job_timeout_s", DEFAULT_JOB_TIMEOUT_S)
+    try:
+        timeout_s = int(raw)
+    except (TypeError, ValueError):
+        timeout_s = DEFAULT_JOB_TIMEOUT_S
+    return max(DATA_SOURCE_JOB_TIMEOUT_MIN_S, timeout_s)
+
+
+def get_data_source_long_job_timeout_s() -> int:
+    """返回分钟 K 全市场等长任务的卡死判定时间(秒)。"""
+    from app.services.pipeline_jobs import LONG_JOB_TIMEOUT_S
+    raw = load().get(
+        "data_source_long_job_timeout_s",
+        LONG_JOB_TIMEOUT_S,
+    )
+    try:
+        timeout_s = int(raw)
+    except (TypeError, ValueError):
+        timeout_s = LONG_JOB_TIMEOUT_S
+    return max(DATA_SOURCE_JOB_TIMEOUT_MIN_S, timeout_s)
 
 
 def _allowed_data_providers() -> set[str]:
@@ -328,6 +474,137 @@ def get_pipeline_pull_index() -> bool:
     return load().get("pipeline_pull_index", True)
 
 
+def get_pipeline_regime_enabled() -> bool:
+    """盘后管道是否自动计算市场环境(regime)。默认 False。
+
+    regime 是本地聚合计算(非拉取), 首次/regime 表为空时需全量回填多日,
+    内存与耗时较高, 故默认关闭; 用户可在数据页「市场环境」卡片设置里开启,
+    或直接在该页面点「重算」手动触发(不受此开关影响)。
+    """
+    return load().get("pipeline_regime_enabled", False)
+
+
+# regime 全量回填分批参数范围:
+# - batch_days: 每批目标交易日数。越小内存越省、批次越多越慢; ma20 需 20 交易日,
+#   故下限 25(留 warmup 余量), 上限 500(约 2 年)。
+# - warmup_days: 每批前缀预热天数(日历日), 必须 > ma20 的 20 交易日(≈28 日历日),
+#   下限 35 留余量, 上限 90。
+_REGIME_BATCH_DAYS_MIN = 25
+_REGIME_BATCH_DAYS_MAX = 500
+_REGIME_WARMUP_DAYS_MIN = 35
+_REGIME_WARMUP_DAYS_MAX = 90
+
+
+def get_regime_batch_days() -> int:
+    """regime 全量回填每批目标交易日数。默认 60(约一季度)。
+
+    超过此天数的范围会被切成多批, 每批独立算指标后拼接, 控制内存峰值。
+    """
+    v = load().get("regime_batch_days", 60)
+    try:
+        return max(_REGIME_BATCH_DAYS_MIN, min(_REGIME_BATCH_DAYS_MAX, int(v)))
+    except (TypeError, ValueError):
+        return 60
+
+
+def get_regime_warmup_days() -> int:
+    """regime 分批每批的 warmup 前缀日历天数。默认 40。
+
+    用于预热 ma20 等滚动窗口指标, 使每批边界计算正确。必须 > 20 交易日。
+    """
+    v = load().get("regime_warmup_days", 40)
+    try:
+        return max(_REGIME_WARMUP_DAYS_MIN, min(_REGIME_WARMUP_DAYS_MAX, int(v)))
+    except (TypeError, ValueError):
+        return 40
+
+
+# ── 市场主线(概念/行业涨停梯队)过滤 ──
+# 宽基/风格标签(融资融券 ~7700 成分、深股通/沪股通 ~3300-3700、国企改革 ~2900)
+# 会按"家数"霸占主线榜首, 但它们不是可操作的题材主线。默认按成分股数上限过滤。
+# 标定(2026-08 THS 概念): 成员 >600 的 55 个概念几乎全是此类风格标签,
+# 真实题材(华为概念 2006/人工智能 2166/固态电池等)均在 600 以下或可自行调整。
+_MAINLINE_MAX_MEMBERS_MIN = 50
+_MAINLINE_MAX_MEMBERS_MAX = 5000
+_MAINLINE_MIN_MEMBERS_MIN = 1
+_MAINLINE_MIN_MEMBERS_MAX = 200
+
+
+def get_mainline_max_members() -> int:
+    """主线维度成员数上限, 超过视为宽基/风格标签被过滤。默认 600。"""
+    v = load().get("mainline_max_members", 600)
+    try:
+        return max(_MAINLINE_MAX_MEMBERS_MIN, min(_MAINLINE_MAX_MEMBERS_MAX, int(v)))
+    except (TypeError, ValueError):
+        return 600
+
+
+def get_mainline_min_members() -> int:
+    """主线维度成员数下限, 过滤微型标签。默认 4。"""
+    v = load().get("mainline_min_members", 4)
+    try:
+        return max(_MAINLINE_MIN_MEMBERS_MIN, min(_MAINLINE_MIN_MEMBERS_MAX, int(v)))
+    except (TypeError, ValueError):
+        return 4
+
+
+def get_mainline_blacklist() -> list[str]:
+    """用户自定义屏蔽的维度成员名(不论成员数大小)。默认空。
+
+    保存时接受 list 或逗号/顿号/分号/空白分隔的字符串。
+    """
+    v = load().get("mainline_blacklist", [])
+    if isinstance(v, str):
+        v = [part for part in re.split(r"[,，、;；\s]+", v) if part]  # noqa: RUF001
+    if not isinstance(v, list):
+        return []
+    return [str(x).strip() for x in v if str(x).strip()]
+
+
+def get_sentiment_exclude_st() -> bool:
+    """市场环境/主线统计是否剔除风险警示(ST)股。默认 True。
+
+    口径: 主板 ST 在 2026-07 前享 5% 涨跌幅(封板成本减半), 且 ST 是跨行业的
+    状态桶而非投资题材, 混入会系统性抬高涨停宽度/高度(弱市尤甚)。剔除后
+    涨跌家数等宽度占比几乎不受影响。修改后需重算 regime 与主线生效。
+    """
+    return bool(load().get("sentiment_exclude_st", True))
+
+
+def set_sentiment_exclude_st(v: bool) -> bool:
+    save({"sentiment_exclude_st": bool(v)})
+    return get_sentiment_exclude_st()
+
+
+def get_mainline_filter_config() -> dict:
+    """主线过滤配置汇总(供 API 返回与计算读取)。"""
+    return {
+        "min_members": get_mainline_min_members(),
+        "max_members": get_mainline_max_members(),
+        "blacklist": get_mainline_blacklist(),
+        "exclude_st": get_sentiment_exclude_st(),
+    }
+
+
+def set_mainline_filter_config(cfg: dict) -> dict:
+    """保存主线过滤配置(白名单字段, 部分更新)。修改后需重算主线生效。"""
+    updates: dict = {}
+    if "min_members" in cfg and cfg["min_members"] is not None:
+        updates["mainline_min_members"] = cfg["min_members"]
+    if "max_members" in cfg and cfg["max_members"] is not None:
+        updates["mainline_max_members"] = cfg["max_members"]
+    if "exclude_st" in cfg and cfg["exclude_st"] is not None:
+        updates["sentiment_exclude_st"] = bool(cfg["exclude_st"])
+    if "blacklist" in cfg and cfg["blacklist"] is not None:
+        raw = cfg["blacklist"]
+        if isinstance(raw, str):
+            raw = [part for part in re.split(r"[,，、;；\s]+", raw) if part]  # noqa: RUF001
+        updates["mainline_blacklist"] = [str(x).strip() for x in (raw or []) if str(x).strip()]
+    if updates:
+        save(updates)
+    return get_mainline_filter_config()
+
+
 _PIPELINE_PULL_KEYS = ("pipeline_pull_etf", "pipeline_pull_index")
 
 
@@ -425,8 +702,8 @@ def get_limit_ladder_monitor_enabled() -> bool:
 
 
 def get_depth_polling_interval() -> float:
-    """depth 盘中轮询间隔(秒)。默认 20(Pro/Expert 都适用)。"""
-    return float(load().get("depth_polling_interval", 20.0))
+    """depth 盘中轮询间隔(秒)。默认 10(Pro/Expert 都适用)。"""
+    return float(load().get("depth_polling_interval", 10.0))
 
 
 def set_depth_polling_interval(interval: float) -> float:
@@ -493,6 +770,43 @@ def set_review_schedule(enabled: bool, hour: int, minute: int) -> dict:
         h, m = 15, 0
     save({"review_schedule": {"enabled": bool(enabled), "hour": h, "minute": m}})
     return {"enabled": bool(enabled), "hour": h, "minute": m}
+
+
+MINING_BUDGET_PROFILES = frozenset({"balanced", "strict"})
+
+
+def get_mining_schedule() -> dict:
+    """返回周度自动 mining 配置。历史配置缺字段时默认关闭。"""
+    data = load()
+    weekday = data.get("mining_schedule_weekday", 4)
+    if isinstance(weekday, bool) or not isinstance(weekday, int) or not 0 <= weekday <= 4:
+        weekday = 4
+    profile = data.get("mining_budget_profile", "balanced")
+    if not isinstance(profile, str) or profile not in MINING_BUDGET_PROFILES:
+        profile = "balanced"
+    enabled = data.get("mining_schedule_enabled", False)
+    if not isinstance(enabled, bool):
+        enabled = False
+    return {
+        "mining_schedule_enabled": enabled,
+        "mining_schedule_weekday": weekday,
+        "mining_budget_profile": profile,
+    }
+
+
+def set_mining_schedule(enabled: bool, weekday: int, profile: str) -> dict:
+    """校验并一次写入周度自动 mining 的整组配置。"""
+    if isinstance(weekday, bool) or not isinstance(weekday, int) or not 0 <= weekday <= 4:
+        raise ValueError("mining schedule weekday must be between 0 and 4")
+    if profile not in MINING_BUDGET_PROFILES:
+        raise ValueError("mining budget profile must be balanced or strict")
+    result = {
+        "mining_schedule_enabled": bool(enabled),
+        "mining_schedule_weekday": weekday,
+        "mining_budget_profile": profile,
+    }
+    save(result)
+    return result
 
 
 def get_review_push_channels() -> list[str]:
@@ -822,6 +1136,17 @@ def set_realtime_monitor_config(cfg: dict) -> dict:
         updates["screener_auto_run"] = bool(cfg["screener_auto_run"])
     if "minute_intraday_refresh" in cfg:
         updates["minute_intraday_refresh"] = bool(cfg["minute_intraday_refresh"])
+    if "minute_intraday_refresh_interval" in cfg:
+        # clamp 到 [5, 60], 与 getter 一致, 防前端传越界值
+        updates["minute_intraday_refresh_interval"] = max(
+            _INTRADAY_REFRESH_INTERVAL_MIN,
+            min(_INTRADAY_REFRESH_INTERVAL_MAX, int(cfg["minute_intraday_refresh_interval"])))
+    if "monitor_ext_fields" in cfg:
+        raw = cfg["monitor_ext_fields"] or {}
+        updates["monitor_ext_fields"] = {
+            "concept": _normalize_ext_field(raw.get("concept")),
+            "industry": _normalize_ext_field(raw.get("industry")),
+        }
     if updates:
         save(updates)
     return get_realtime_monitor_config()
@@ -836,6 +1161,8 @@ def get_realtime_monitor_config() -> dict:
         "sidebar_index_symbols": get_sidebar_index_symbols(),
         "screener_auto_run": get_screener_auto_run(),
         "minute_intraday_refresh": get_minute_intraday_refresh(),
+        "minute_intraday_refresh_interval": get_minute_intraday_refresh_interval(),
+        "monitor_ext_fields": get_monitor_ext_fields(),
     }
 
 

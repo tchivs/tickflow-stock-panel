@@ -73,6 +73,7 @@ export const SCREENER_BUILTIN_COLUMNS: ColumnConfig[] = [
   // 信号 & 图表
   { id: 'builtin:signals', source: { type: 'builtin', key: 'signals' }, label: '信号', visible: true, align: 'left' },
   { id: 'builtin:candle', source: { type: 'builtin', key: 'candle' }, label: '日k', visible: false, align: 'center' },
+  { id: 'builtin:intraday', source: { type: 'builtin', key: 'intraday' }, label: '分时', visible: false, align: 'center' },
   // 财务指标 (与自选页对齐; 当前后端 enriched 未返回这些字段，默认隐藏)
   { id: 'builtin:eps', source: { type: 'builtin', key: 'eps' }, label: 'EPS', visible: false, align: 'right' },
   { id: 'builtin:bps', source: { type: 'builtin', key: 'bps' }, label: 'BPS', visible: false, align: 'right' },
@@ -95,7 +96,7 @@ export const SCREENER_COLUMN_GROUPS: ColumnGroup[] = [
   { id: 'tech', label: '技术指标', icon: createElement(Microscope, { className: 'h-4 w-4 text-secondary' }), keys: ['rsi6', 'rsi14', 'rsi24', 'macd_dif', 'macd_dea', 'macd_hist', 'kdj_k', 'kdj_d', 'kdj_j', 'boll_upper', 'boll_lower', 'atr14', 'vol_ma5', 'vol_ma10'] },
   { id: 'momentum', label: '动量', icon: createElement(Rocket, { className: 'h-4 w-4 text-secondary' }), keys: ['momentum_5d', 'momentum_10d', 'momentum_20d', 'momentum_30d', 'momentum_60d'] },
   { id: 'limit', label: '连板', icon: createElement(Flame, { className: 'h-4 w-4 text-secondary' }), keys: ['limit_ups', 'limit_downs'] },
-  { id: 'signal', label: '信号', icon: createElement(Satellite, { className: 'h-4 w-4 text-secondary' }), keys: ['signals', 'candle'] },
+  { id: 'signal', label: '信号', icon: createElement(Satellite, { className: 'h-4 w-4 text-secondary' }), keys: ['signals', 'candle', 'intraday'] },
   { id: 'finance', label: '财务', icon: createElement(ClipboardList, { className: 'h-4 w-4 text-secondary' }), keys: ['eps', 'bps', 'roe', 'pe_ttm', 'pb', 'gross_margin', 'net_margin', 'revenue_yoy', 'net_income_yoy', 'debt_ratio'] },
 ]
 

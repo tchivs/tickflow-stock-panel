@@ -279,7 +279,6 @@ def clear_group(group_id: str) -> list[dict]:
         _write_entries(df)
         return df.to_dicts()
 
-
 def set_group(symbol: str, group_id: str | None) -> list[dict]:
     with _LOCK:
         groups = _read_groups()
@@ -295,6 +294,7 @@ def set_group(symbol: str, group_id: str | None) -> list[dict]:
         )
         _write_entries(df)
         return df.to_dicts()
+
 
 
 def fetch_quotes(symbols: list[str], capset: CapabilitySet, timeout_s: float = 8.0) -> list[dict]:

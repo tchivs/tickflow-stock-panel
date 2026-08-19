@@ -3,23 +3,18 @@
 给定策略 + 参数网格, 遍历所有参数组合各跑一次回测, 按目标指标排序, 返回最优参数。
 
 - 参数网格校验对齐 StrategyDef.meta["params"] (类型/范围/选项)。
-- 多线程并行执行, 复用 PanelCache: 同一 symbols/日期的面板只加载一次, 其余组合命中缓存。
+- 单个优化任务在一个 worker 内串行执行; matrix_native 策略共享一份 MarketDataMatrix。
 - 支持进度回调 (第 i/N 组完成) 与取消。
 """
 from __future__ import annotations
 
-import hashlib
 import itertools
-import json
 import logging
-import statistics
 import threading
 import time
-import uuid
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, is_dataclass
 from datetime import date
-from typing import Any
+from typing import Protocol
 
 logger = logging.getLogger(__name__)
 
@@ -195,10 +190,19 @@ class OptimizeConfig:
     base_params: dict = field(default_factory=dict)   # 不扫的固定策略参数
     overrides: dict | None = None
     backtest_kwargs: dict = field(default_factory=dict)  # matching/fees/mode/initial_capital 等
+    matrix_cache_max_mb: int = 512
+
+
+class PhaseRssSampler(Protocol):
+    """Resource probe supplied by the outer worker process."""
+
+    def reset_phase(self) -> None: ...
+
+    def phase_peak_rss_bytes(self) -> int: ...
 
 
 class StrategyOptimizer:
-    """遍历参数组合并行回测, 按目标排序。"""
+    """在单 worker 内遍历参数组合, 并按目标排序。"""
 
     def __init__(self, service, strategy_engine) -> None:
         self.service = service
@@ -209,14 +213,19 @@ class StrategyOptimizer:
         cfg: OptimizeConfig,
         progress_cb=None,
         cancel_event: threading.Event | None = None,
+        *,
+        rss_sampler: PhaseRssSampler | None = None,
+        prepared_market_data=None,
     ) -> dict:
-        from app.backtest.strategy import StrategyBacktestConfig
+        from app.backtest.strategy import BacktestResultPolicy, StrategyBacktestConfig
 
         t0 = time.perf_counter()
         if cfg.objective not in VALID_OBJECTIVES:
             raise ValueError(f"不支持的优化目标 '{cfg.objective}', 可选: {sorted(VALID_OBJECTIVES)}")
         direction = cfg.direction or default_direction(cfg.objective)
         _validate_backtest_kwargs(cfg.backtest_kwargs)
+        if int(cfg.matrix_cache_max_mb) <= 0:
+            raise ValueError("matrix_cache_max_mb 必须为正整数")
 
         s = self.strategy_engine.get(cfg.strategy_id)  # 可能抛 ValueError
         params_meta = s.meta.get("params", [])
@@ -224,36 +233,69 @@ class StrategyOptimizer:
         n_total = len(combos)
 
         results: list[dict] = []
-        done = 0
-        lock = threading.Lock()
+        backtest_configs = [
+            StrategyBacktestConfig(
+                strategy_id=cfg.strategy_id,
+                symbols=cfg.symbols,
+                start=cfg.start,
+                end=cfg.end,
+                params={**cfg.base_params, **combo},
+                overrides=cfg.overrides,
+                **cfg.backtest_kwargs,
+            )
+            for combo in combos
+        ]
 
-        def _run_one(idx: int, combo: dict) -> dict | None:
+        prepared = None
+        prepare_ms = 0.0
+        trials_ms = 0.0
+        final_backtest_ms = 0.0
+        trial_peak_rss_bytes = None
+        final_backtest_peak_rss_bytes = None
+        cache_summary = None
+        output: dict = {}
+        trial_policy = BacktestResultPolicy.optimizer_trial(cfg.objective)
+
+        def _run_one(combo: dict, bt_cfg: StrategyBacktestConfig) -> dict | None:
             if cancel_event is not None and cancel_event.is_set():
                 return None
-            # 单组异常必须隔离: 加了并行后, 一组抛异常若冒泡会拖垮整批 (丢弃全部已完成结果)。
+            # 单组异常必须隔离: 一组失败不能丢弃全部已完成结果。
             try:
-                merged = {**cfg.base_params, **combo}
-                bt_cfg = StrategyBacktestConfig(
-                    strategy_id=cfg.strategy_id,
-                    symbols=cfg.symbols,
-                    start=cfg.start,
-                    end=cfg.end,
-                    params=merged,
-                    overrides=cfg.overrides,
-                    **cfg.backtest_kwargs,
-                )
-                res = self.service.run(bt_cfg, cancel_event=cancel_event)
+                if prepared is None:
+                    res = self.service.run(
+                        bt_cfg,
+                        cancel_event=cancel_event,
+                        result_policy=trial_policy,
+                    )
+                else:
+                    res = self.service.run(
+                        bt_cfg,
+                        cancel_event=cancel_event,
+                        prepared=prepared,
+                        result_policy=trial_policy,
+                    )
             except Exception as e:  # 隔离单组失败, 记录后继续, 不拖垮整批
                 logger.warning("参数组 %s 回测异常: %r", combo, e)
                 return {"params": combo, "error": repr(e), "objective_raw": None, "_sort": float("-inf")}
             if res.error:
                 return {"params": combo, "error": res.error, "objective_raw": None, "_sort": float("-inf")}
+            if cfg.objective not in res.stats:
+                return {
+                    "params": combo,
+                    "error": f"回测结果缺少优化目标字段 '{cfg.objective}'",
+                    "objective_raw": None,
+                    "_sort": float("-inf"),
+                }
             # _sort: 内部排序键 (统一"越大越好"); objective_raw: 原始展示值 (不受方向取负污染)。
+            objective_started = time.perf_counter()
+            sort_value = objective_value(res.stats, cfg.objective, direction)
+            objective_ms = round((time.perf_counter() - objective_started) * 1000, 3)
             return {
                 "params": combo,
                 "objective_raw": res.stats.get(cfg.objective),
-                "_sort": objective_value(res.stats, cfg.objective, direction),
+                "_sort": sort_value,
                 "stats": res.stats,
+                "objective_evaluation_ms": objective_ms,
             }
 
         def _best_raw() -> float | None:
@@ -262,315 +304,138 @@ class StrategyOptimizer:
             top = max(results, key=lambda x: x["_sort"])
             return None if top["_sort"] == float("-inf") else top.get("objective_raw")
 
-        max_workers = max(1, min(int(cfg.max_workers), n_total))
-        with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            futures = {pool.submit(_run_one, i, c): i for i, c in enumerate(combos)}
-            for fut in as_completed(futures):
-                r = fut.result()  # _run_one 内部已兜底, 不会 re-raise 业务异常
-                with lock:
-                    done += 1
-                    if r is not None:
-                        results.append(r)
-                    if progress_cb is not None:
-                        br = _best_raw()
-                        progress_cb({
-                            "type": "optimizer_progress",
-                            "done": done,
-                            "total": n_total,
-                            "best_score": round(br, 4) if br is not None else None,
-                        })
-
-        # 排序: 内部 _sort 降序 (越大越好); -inf (失败/无效) 沉底。展示层用 objective_raw。
-        ranked = sorted(results, key=lambda x: x["_sort"], reverse=True)
-        for i, r in enumerate(ranked):
-            r["rank"] = i + 1
-            r.pop("_sort", None)  # 不外露内部排序键, 避免展示层误用取负值
-
-        best = ranked[0] if ranked and ranked[0].get("objective_raw") is not None else None
-        best_raw = best["objective_raw"] if best else None
-        return {
-            "objective": cfg.objective,
-            "direction": direction,
-            "n_combinations": n_total,
-            "n_completed": len(results),
-            "best_params": best["params"] if best else None,
-            "best_score": round(best_raw, 4) if best_raw is not None else None,
-            "results": ranked,
-            "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1),
-        }
-
-
-# ================================================================
-# WFWD-02: OOS-scored walk-forward 参数搜索 (复用上面全部网格机制)
-# ================================================================
-
-
-class WalkForwardOptimizer:
-    """基于 walk-forward 折的 OOS-scored 参数搜索。
-
-    与 :class:`StrategyOptimizer` 相同的 DI (``service`` + ``strategy_engine``),
-    复用 ``expand_param_grid`` / ``count_combinations`` / ``GRID_MAX_COMBINATIONS`` /
-    ``objective_value`` / ``default_direction`` — 不重写网格机制。
-
-    WFWD-02 多重比较守卫:
-      - 每个 trial 只对搜索折的 **test 段** 打分 (绝不 in-sample, 绝不碰保留 OOS)。
-      - ``plan.folds`` 按构造永不包含 ``plan.oos_fold``; optimize 收到含 ``is_oos``
-        的折即 fail-closed (ValueError)。
-      - 完成后把 n_trials / search_space / score_distribution 连同
-        ``oos_excluded=1`` 记入 wf_search_runs (插入时强制)。
-    """
-
-    def __init__(self, service: Any, strategy_engine: Any) -> None:
-        self.service = service
-        self.strategy_engine = strategy_engine
-
-    def optimize(
-        self,
-        *,
-        plan: Any,
-        strategy_id: str,
-        param_grid: dict,
-        objective: str = "sharpe",
-        max_workers: int = 4,
-        progress_cb=None,
-        cancel_event: threading.Event | None = None,
-        repo=None,
-        resolver=None,
-    ) -> dict:
-        """OOS-scored 网格搜索: 只打 test 段; OOS 结构性排除; 记录多重比较簿记。
-
-        传入 ``repo`` (ResearchRepository) 时把 n_trials/search_space/
-        score_distribution 连同 ``oos_excluded=1`` 持久化到 wf_search_runs;
-        否则 ``search_run_id`` 为 None (绝不伪造未持久化的 id)。
-
-        传入 ``resolver`` (universe resolver) 时, 每个 search trial 使用与折/OOS
-        评分器相同的 per-fold PIT 成员符号集 (``_fold_symbols(membership)``) —
-        绝不 ``symbols=None`` (全湖 universe) (BL-01); 并把搜索 universe
-        (符号计数 / 指纹) 记入 ``search_space["universe"]`` 供审计。
-
-        返回 dict 含 ``n_trials`` / ``search_space`` / ``score_distribution`` /
-        ``best_params`` / ``best_score`` / ``results`` / ``search_run_id``。
-        """
-        from app.backtest.strategy import StrategyBacktestConfig
-
-        t0 = time.perf_counter()
-        if objective not in VALID_OBJECTIVES:
-            raise ValueError(f"不支持的优化目标 '{objective}', 可选: {sorted(VALID_OBJECTIVES)}")
-        direction = default_direction(objective)
-        search_folds = [f for f in plan.folds if not f.is_oos]
-        if not search_folds:
-            raise ValueError("walk-forward plan has no search folds")
-        if any(getattr(f, "is_oos", False) for f in plan.folds):
-            raise ValueError("search folds must not include the reserved OOS")
-
-        s = self.strategy_engine.get(strategy_id)  # 可能抛 ValueError
-        params_meta = s.meta.get("params", [])
-        combos = expand_param_grid(params_meta, param_grid)  # GRID_MAX_COMBINATIONS 上限
-        n_total = len(combos)
-
-        # WR-04: 先把 plan 钉入 wf_plans (幂等) — 之后 record_wf_search 的 FK 才能
-        # 解析; 未预先钉 plan 的调用不再撞原始 sqlite3.IntegrityError。
-        if repo is not None:
-            repo.create_wf_plan(plan)
-
-        results: list[dict] = []
-        done = 0
-        lock = threading.Lock()
-
-        # BL-01: 每折的 PIT 成员符号集 — 与折/OOS 评分器 (walkforward._default_fold_score
-        # 的 _fold_symbols(membership)) 完全一致, 搜索绝不 symbols=None (全湖 universe)。
-        if resolver is None:
-            logger.warning(
-                "walk-forward 搜索未传 resolver: 用全湖 universe 打分, "
-                "best_params 可能与 OOS PIT 成员集不可比 (BL-01)"
-            )
-
-        def _fold_trial_symbols(fold: Any) -> list[str]:
-            """解析折窗口的 PIT 成员并集 (与 walkforward._run_fold 同窗解析)。"""
-            if resolver is None:
-                return []
-            from app.backtest.walkforward import _calendar_days_before, _fold_symbols
-
-            chain_config = getattr(fold, "chain_config", None)
-            if chain_config is not None:
-                compute_end = chain_config.end
-                warmup = getattr(chain_config, "warmup_days", 0) or 0
-            else:
-                # 鸭子类型折 (测试替身): 回退到日历日标签缓冲, 与几何契约一致。
-                import datetime as _dt
-
-                compute_end = fold.test_end + _dt.timedelta(days=plan.horizon)
-                warmup = 0
-            membership = resolver.resolve_universe_daily(
-                universe_name=plan.universe,
-                start=_calendar_days_before(fold.train_start, warmup),
-                end=compute_end,
-                asset_type=plan.asset_type,
-            )
-            return _fold_symbols(membership)
-
-        def _run_one(idx: int, combo: dict) -> dict | None:
-            if cancel_event is not None and cancel_event.is_set():
-                return None
-            per_fold: list[dict] = []
-            try:
-                # 只打搜索折的 test 段 — 绝不打 train 窗, 绝不碰 OOS。
-                for fold in search_folds:
-                    bt_cfg = StrategyBacktestConfig(
-                        strategy_id=strategy_id,
-                        symbols=_fold_trial_symbols(fold),
-                        start=fold.test_start,
-                        end=fold.test_end,
-                        params=dict(combo),
-                        asset_type=plan.asset_type,
-                    )
-                    res = self.service.run(bt_cfg, cancel_event=cancel_event)
-                    if res.error:
-                        per_fold.append(
-                            {"fold_index": fold.fold_index, "score": None, "error": res.error}
-                        )
-                    else:
-                        per_fold.append(
-                            {
-                                "fold_index": fold.fold_index,
-                                "score": objective_value(res.stats, objective, direction),
-                                "objective_raw": res.stats.get(objective),
-                            }
-                        )
-            except Exception as e:  # 隔离单组失败, 记录后继续, 不拖垮整批
-                logger.warning("walk-forward 参数组 %s 回测异常: %r", combo, e)
-                return {
-                    "params": combo,
-                    "error": repr(e),
-                    "per_fold": per_fold,
-                    "_sort": float("-inf"),
+        try:
+            cancelled_before_prepare = cancel_event is not None and cancel_event.is_set()
+            if (
+                getattr(s, "execution_backend", "polars_expr") == "matrix_native"
+                and not cancelled_before_prepare
+            ):
+                prepare_started = time.perf_counter()
+                prepare_kwargs = {
+                    "matrix_cache_max_bytes": int(cfg.matrix_cache_max_mb) * 1024 * 1024,
                 }
-            scores = [pf["score"] for pf in per_fold if pf.get("score") is not None]
-            pooled = statistics.fmean(scores) if scores else None
-            # WR-05: objective_raw 保留原始指标空间的 pooled 均值 (min 方向不取负),
-            # 供展示/持久化; _sort 只用带符号可比分数排序。
-            raw_scores = [
-                pf["objective_raw"] for pf in per_fold if pf.get("objective_raw") is not None
-            ]
-            pooled_raw = statistics.fmean(raw_scores) if raw_scores else None
-            return {
-                "params": combo,
-                "per_fold": per_fold,
-                "pooled_score": pooled,
-                "objective_raw": pooled_raw,
-                "_sort": float(pooled) if pooled is not None else float("-inf"),
-            }
+                if prepared_market_data is not None:
+                    prepare_kwargs["market_data_override"] = prepared_market_data
+                prepared = self.service.prepare_matrix_optimization(
+                    backtest_configs,
+                    **prepare_kwargs,
+                )
+                prepare_ms = round((time.perf_counter() - prepare_started) * 1000, 1)
+                if progress_cb is not None:
+                    progress_cb({
+                        "type": "optimizer_prepare",
+                        "done": 0,
+                        "total": n_total,
+                        "best_score": None,
+                        "shared_matrix_bytes": prepared.market_data.nbytes,
+                        "elapsed_ms": prepare_ms,
+                    })
 
-        max_workers = max(1, min(int(max_workers), n_total))
-        with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            futures = {pool.submit(_run_one, i, c): i for i, c in enumerate(combos)}
-            for fut in as_completed(futures):
-                r = fut.result()  # _run_one 内部已兜底, 不会 re-raise 业务异常
-                with lock:
-                    done += 1
-                    if r is not None:
-                        results.append(r)
-                    if progress_cb is not None:
-                        best = next((x for x in results if x["_sort"] != float("-inf")), None)
-                        br = best.get("objective_raw") if best is not None else None
-                        progress_cb({
-                            "type": "optimizer_progress",
-                            "done": done,
-                            "total": n_total,
-                            "best_score": round(br, 4) if br is not None else None,
-                        })
+            trials_started = time.perf_counter()
+            if rss_sampler is not None:
+                rss_sampler.reset_phase()
+            for done, (combo, bt_cfg) in enumerate(
+                zip(combos, backtest_configs, strict=True),
+                start=1,
+            ):
+                r = _run_one(combo, bt_cfg)
+                if r is not None:
+                    results.append(r)
+                if progress_cb is not None:
+                    br = _best_raw()
+                    progress_cb({
+                        "type": "optimizer_progress",
+                        "done": done,
+                        "total": n_total,
+                        "best_score": round(br, 4) if br is not None else None,
+                    })
+                if cancel_event is not None and cancel_event.is_set():
+                    break
+            trials_ms = round((time.perf_counter() - trials_started) * 1000, 1)
+            if rss_sampler is not None:
+                trial_peak_rss_bytes = rss_sampler.phase_peak_rss_bytes()
 
-        ranked = sorted(results, key=lambda x: x["_sort"], reverse=True)
-        for i, r in enumerate(ranked):
-            r["rank"] = i + 1
-            r.pop("_sort", None)
+            ranked = sorted(results, key=lambda x: x["_sort"], reverse=True)
+            for i, result_row in enumerate(ranked):
+                result_row["rank"] = i + 1
+                result_row.pop("_sort", None)
 
-        best = ranked[0] if ranked and ranked[0].get("objective_raw") is not None else None
-        best_score = best["objective_raw"] if best else None  # WR-05: 原始指标空间
-        per_trial = [
-            {"params": r["params"], "score": r.get("objective_raw"), "error": r.get("error")}
-            for r in ranked
-        ]
-        per_fold_summary: dict[str, list[float]] = {}
-        for r in ranked:
-            for pf in r.get("per_fold", []):
-                raw = pf.get("objective_raw")
-                if raw is not None:
-                    per_fold_summary.setdefault(f"fold_{pf['fold_index']}", []).append(raw)
-        per_fold_dist = {
-            key: _dist(values, round_to=4)
-            for key, values in per_fold_summary.items()
-        }
-        score_values = [pt["score"] for pt in per_trial if pt["score"] is not None]
-        score_distribution = {
-            "per_trial": per_trial,
-            "per_fold": per_fold_dist,
-            **_dist(score_values, round_to=4),
-        }
-        search_space = {"param_grid": param_grid, "params_meta": params_meta}
-        # BL-01: 审计搜索 universe — 符号计数 + 每折 PIT 成员指纹 (写入 wf_search_runs.search_space_json)。
-        if resolver is not None:
-            per_fold_counts: dict[str, int] = {}
-            union_symbols: set[str] = set()
-            for fold in search_folds:
-                syms = _fold_trial_symbols(fold)
-                per_fold_counts[f"fold_{fold.fold_index}"] = len(syms)
-                union_symbols.update(syms)
-            search_space["universe"] = {
-                "n_symbols": len(union_symbols),
-                "symbols": sorted(union_symbols),
-                "per_fold_symbol_counts": per_fold_counts,
-                "fingerprint": hashlib.sha256(
-                    json.dumps(
-                        per_fold_counts, sort_keys=True, separators=(",", ":"), ensure_ascii=False
-                    ).encode("utf-8")
-                ).hexdigest(),
-            }
-        search_run_id = uuid.uuid4().hex
+            best = ranked[0] if ranked and ranked[0].get("objective_raw") is not None else None
+            best_raw = best["objective_raw"] if best else None
+            best_backtest = None
+            if best is not None and not (cancel_event is not None and cancel_event.is_set()):
+                if progress_cb is not None:
+                    progress_cb({
+                        "type": "optimizer_finalize",
+                        "done": len(results),
+                        "total": n_total,
+                        "best_score": round(best_raw, 4) if best_raw is not None else None,
+                    })
+                best_config = StrategyBacktestConfig(
+                    strategy_id=cfg.strategy_id,
+                    symbols=cfg.symbols,
+                    start=cfg.start,
+                    end=cfg.end,
+                    params={**cfg.base_params, **best["params"]},
+                    overrides=cfg.overrides,
+                    **cfg.backtest_kwargs,
+                )
+                final_started = time.perf_counter()
+                if rss_sampler is not None:
+                    rss_sampler.reset_phase()
+                final_result = self.service.run(
+                    best_config,
+                    cancel_event=cancel_event,
+                    prepared=prepared,
+                )
+                final_backtest_ms = round((time.perf_counter() - final_started) * 1000, 1)
+                if rss_sampler is not None:
+                    final_backtest_peak_rss_bytes = rss_sampler.phase_peak_rss_bytes()
+                best_backtest = asdict(final_result) if is_dataclass(final_result) else dict(final_result)
 
-        if repo is not None:
-            repo.record_wf_search(
-                id=search_run_id,
-                plan_id=plan.plan_id,
-                strategy_id=strategy_id,
-                objective=objective,
-                direction=direction,
-                search_space=search_space,
-                n_trials=n_total,
-                n_completed=len(results),
-                score_distribution=score_distribution,
-                best_params=dict(best["params"]) if best is not None else {},
-                best_score=round(float(best_score), 6) if best_score is not None else None,
-                oos_excluded=1,
+            trials_per_second = (
+                round(len(results) / (trials_ms / 1000.0), 4)
+                if trials_ms > 0
+                else 0.0
             )
-        else:
-            # WR-10: repo=None 时绝不伪造未持久化的 search_run_id — 把它传给
-            # evaluate_best_params(search_run_id=…) 会撞 FK 并得到误导性错误。
-            search_run_id = None
+            output = {
+                "objective": cfg.objective,
+                "direction": direction,
+                "n_combinations": n_total,
+                "n_completed": len(results),
+                "best_params": best["params"] if best else None,
+                "best_score": round(best_raw, 4) if best_raw is not None else None,
+                "best_backtest": best_backtest,
+                "results": ranked,
+                "requested_max_workers": int(cfg.max_workers),
+                "effective_workers": 1,
+                "shared_market_data": prepared is not None,
+                "shared_market_data_bytes": prepared.market_data.nbytes if prepared is not None else 0,
+                "prepare_ms": prepare_ms,
+                "timing_ms": {
+                    "prepare": prepare_ms,
+                    "trials": trials_ms,
+                    "best_backtest": final_backtest_ms,
+                },
+                "performance": {
+                    "mode": "serial",
+                    "trials_per_second": trials_per_second,
+                    "trial_peak_rss_bytes": trial_peak_rss_bytes,
+                    "best_backtest_peak_rss_bytes": final_backtest_peak_rss_bytes,
+                    "parallel_evaluated": False,
+                },
+            }
+        finally:
+            if prepared is not None:
+                try:
+                    cache_summary = prepared.compute_cache.snapshot()
+                finally:
+                    prepared.compute_cache.close()
 
-        return {
-            "objective": objective,
-            "direction": direction,
-            "n_trials": n_total,
-            "n_completed": len(results),
-            "search_space": search_space,
-            "score_distribution": score_distribution,
-            "best_params": best["params"] if best is not None else None,
-            "best_score": round(float(best_score), 4) if best_score is not None else None,
-            "results": ranked,
-            "search_run_id": search_run_id,
-            "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1),
-        }
-
-
-def _dist(values: list[float], *, round_to: int = 6) -> dict:
-    """score 分布的 min/median/max/mean/std (空序列时全为 None)。"""
-    if not values:
-        return {"min": None, "median": None, "max": None, "mean": None, "std": None}
-    return {
-        "min": round(min(values), round_to),
-        "median": round(statistics.median(values), round_to),
-        "max": round(max(values), round_to),
-        "mean": round(statistics.fmean(values), round_to),
-        "std": round(statistics.pstdev(values), round_to),
-    }
+        if cache_summary is not None:
+            cache_summary["released"] = True
+            cache_summary["current_bytes_after_close"] = 0
+            output["matrix_compute_cache"] = cache_summary
+        output["elapsed_ms"] = round((time.perf_counter() - t0) * 1000, 1)
+        output["timing_ms"]["total"] = output["elapsed_ms"]
+        return output

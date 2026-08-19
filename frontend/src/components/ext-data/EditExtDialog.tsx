@@ -5,11 +5,13 @@ import { X, Loader2, Upload } from 'lucide-react'
 import { api, type ExtDataConfig, type ExtDataField } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { useModalA11y } from '@/lib/useModalA11y'
+import { useDialogBackdrop } from '@/lib/useDialogBackdrop'
 
 export function EditExtDialog({ config, onClose }: { config: ExtDataConfig; onClose: () => void }) {
   const qc = useQueryClient()
   const panelRef = useRef<HTMLDivElement>(null)
   useModalA11y(panelRef, { onClose })
+  const backdrop = useDialogBackdrop(onClose)
   const [label, setLabel] = useState(config.label)
   const [description, setDescription] = useState(config.description ?? '')
   const [fields, setFields] = useState<ExtDataField[]>([...config.fields])
@@ -82,7 +84,7 @@ export function EditExtDialog({ config, onClose }: { config: ExtDataConfig; onCl
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" {...backdrop} />
       <motion.div
         ref={panelRef}
         role="dialog"
