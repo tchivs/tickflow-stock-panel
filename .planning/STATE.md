@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v3.1
 milestone_name: 可信工作台与运维闭环
-status: in_progress
-last_updated: "2026-08-19T21:15:00.000Z"
-last_activity: 2026-08-19
+status: complete
+last_updated: "2026-08-20T06:30:00.000Z"
+last_activity: 2026-08-20
 progress:
   total_phases: 4
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 0
   completed_plans: 0
-  percent: 75
+  percent: 100
 ---
 
 # Project State
@@ -20,15 +20,15 @@ progress:
 See: .planning/PROJECT.md (updated 2026-08-18)
 
 **Core value:** An investor can turn reliable market data and their own holdings into an auditable, actionable research and monitoring workflow without operating multiple disconnected tools.
-**Current focus:** Phase 54 — 监控与报告闭环 (v3.1 可信工作台与运维闭环)
+**Current focus:** v3.1 milestone complete — ready for v3.2 planning
 
 ## Current Position
 
-Phase: 54 of 54 (监控与报告闭环)
+Phase: 54 of 54 (监控与报告闭环) — Complete
 Plan: —
-Status: Phase 53 complete — ready to plan Phase 54
-Last activity: 2026-08-20 — Phase 53 今日工作台与统一待办 delivered (WORK-01..06)
-Progress: [█████░░░░░] 75%
+Status: v3.1 milestone complete (Phase 51-54 all delivered)
+Last activity: 2026-08-20 — Phase 54 监控与报告闭环 delivered (MON-01..06)
+Progress: [██████████] 100%
 
 ### Phase 51 Completion (2026-08-19)
 
@@ -58,7 +58,17 @@ Progress: [█████░░░░░] 75%
 | WORK-03 recent reports | Done — WorkbenchPanel lists financial + market recap reports |
 | WORK-04 monitor triggers | Done — WorkbenchPanel lists recent alert events |
 | WORK-05 pending inbox | Done — PendingInbox groups lifecycle/promotion/signal/paper_rebalance |
-| WORK-06 shared data quality banner | Done — DataQualityBanner uses /api/workbench, not Alpha-only |
+
+### Phase 54 Completion (2026-08-20)
+
+| Requirement | Status |
+|-------------|--------|
+| MON-01 test-fire | Done — POST /api/monitor-ops/test-fire + TestFireDialog |
+| MON-02 budget + cooldown | Done — GET /api/monitor-ops/rule-status + RuleStatusBadge |
+| MON-03 digest preview | Done — POST /api/monitor-ops/digest-preview + DigestPreviewDialog |
+| MON-04 evidence cards | Done — GET /api/report-ops/evidence + EvidenceCards |
+| MON-05 conflict + failure | Done — GET /api/report-ops/conflicts + ConflictPaths |
+| MON-06 run page | Done — AlphaWorkbench unified with EvidenceCards + ConflictPaths + SSE reconnect |
 
 ## v3.0 Milestone Summary (shipped 2026-08-09)
 
@@ -104,8 +114,8 @@ None.
 ## Session Continuity
 
 Last session: 2026-08-20
-Stopped at: Phase 53 complete (WORK-01..06 delivered) — ready to plan Phase 54
+Stopped at: v3.1 milestone complete (Phase 51-54 all delivered) — ready for v3.2 planning
 Resume file: None
 
 ---
-*Last updated: 2026-08-20 — Phase 53 今日工作台与统一待办 complete; Phase 54 ready to plan*
+*Last updated: 2026-08-20 — v3.1 milestone complete (Phase 51-54: BASE + AUDIT + WORK + MON all delivered)*

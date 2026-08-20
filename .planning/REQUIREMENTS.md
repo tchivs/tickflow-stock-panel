@@ -43,12 +43,12 @@ Locked boundaries:
 
 ### 监控与报告闭环 (Phase 54)
 
-- [ ] **MON-01**: 用户可对任一监控规则执行 synthetic test-fire 并看到与真实触发一致的通知预览
-- [ ] **MON-02**: 用户可查看每个监控的预算消耗、冷却剩余时间与通知渠道健康状态
-- [ ] **MON-03**: 用户可预览 digest 汇总内容后再启用定期投递
-- [ ] **MON-04**: 每份报告带数据质量 Banner、证据卡与引用回链, 读者可从结论跳转到原始证据
-- [ ] **MON-05**: 报告可展示多空冲突观点与失败路径(哪些数据/步骤不可用), 不隐藏坏消息
-- [ ] **MON-06**: 运行页统一展示 Timeline、参数、工具调用、产物, 失败可重试, SSE 断连可恢复
+- [x] **MON-01**: 用户可对任一监控规则执行 synthetic test-fire 并看到与真实触发一致的通知预览
+- [x] **MON-02**: 用户可查看每个监控的预算消耗、冷却剩余时间与通知渠道健康状态
+- [x] **MON-03**: 用户可预览 digest 汇总内容后再启用定期投递
+- [x] **MON-04**: 每份报告带数据质量 Banner、证据卡与引用回链, 读者可从结论跳转到原始证据
+- [x] **MON-05**: 报告可展示多空冲突观点与失败路径(哪些数据/步骤不可用), 不隐藏坏消息
+- [x] **MON-06**: 运行页统一展示 Timeline、参数、工具调用、产物, 失败可重试, SSE 断连可恢复
 
 ## v2 Requirements
 
@@ -85,12 +85,12 @@ Locked boundaries:
 | WORK-04 | Phase 53 | Complete |
 | WORK-05 | Phase 53 | Complete |
 | WORK-06 | Phase 53 | Complete |
-| MON-01 | Phase 54 | Pending |
-| MON-02 | Phase 54 | Pending |
-| MON-03 | Phase 54 | Pending |
-| MON-04 | Phase 54 | Pending |
-| MON-05 | Phase 54 | Pending |
-| MON-06 | Phase 54 | Pending |
+| MON-01 | Phase 54 | Complete |
+| MON-02 | Phase 54 | Complete |
+| MON-03 | Phase 54 | Complete |
+| MON-04 | Phase 54 | Complete |
+| MON-05 | Phase 54 | Complete |
+| MON-06 | Phase 54 | Complete |
 
 **Coverage:**
 - v1 requirements: 21 total
