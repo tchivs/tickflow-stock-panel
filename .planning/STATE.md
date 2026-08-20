@@ -7,10 +7,10 @@ last_updated: "2026-08-19T21:15:00.000Z"
 last_activity: 2026-08-19
 progress:
   total_phases: 4
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 0
   completed_plans: 0
-  percent: 50
+  percent: 75
 ---
 
 # Project State
@@ -20,15 +20,15 @@ progress:
 See: .planning/PROJECT.md (updated 2026-08-18)
 
 **Core value:** An investor can turn reliable market data and their own holdings into an auditable, actionable research and monitoring workflow without operating multiple disconnected tools.
-**Current focus:** Phase 53 — 今日工作台与统一待办 (v3.1 可信工作台与运维闭环)
+**Current focus:** Phase 54 — 监控与报告闭环 (v3.1 可信工作台与运维闭环)
 
 ## Current Position
 
-Phase: 53 of 54 (今日工作台与统一待办)
+Phase: 54 of 54 (监控与报告闭环)
 Plan: —
-Status: Phase 52 complete — ready to plan Phase 53
-Last activity: 2026-08-19 — Phase 52 全局可信度与工具审计 delivered (AUDIT-01..05)
-Progress: [████░░░░░░] 50%
+Status: Phase 53 complete — ready to plan Phase 54
+Last activity: 2026-08-20 — Phase 53 今日工作台与统一待办 delivered (WORK-01..06)
+Progress: [█████░░░░░] 75%
 
 ### Phase 51 Completion (2026-08-19)
 
@@ -48,6 +48,17 @@ Progress: [████░░░░░░] 50%
 | AUDIT-03 Provider Doctor | Done — /api/audit/provider-doctor read-only diagnosis with health grades |
 | AUDIT-04 data quality API | Done — /api/audit/data-quality freshness + defects + alerts |
 | AUDIT-05 sanitization | Done — sensitive keys masked, raw_hash only, params whitelist |
+
+### Phase 53 Completion (2026-08-20)
+
+| Requirement | Status |
+|-------------|--------|
+| WORK-01 data freshness + provider health | Done — DataQualityBanner on homepage |
+| WORK-02 running/failed jobs | Done — WorkbenchPanel shows pipeline jobs with failure reason |
+| WORK-03 recent reports | Done — WorkbenchPanel lists financial + market recap reports |
+| WORK-04 monitor triggers | Done — WorkbenchPanel lists recent alert events |
+| WORK-05 pending inbox | Done — PendingInbox groups lifecycle/promotion/signal/paper_rebalance |
+| WORK-06 shared data quality banner | Done — DataQualityBanner uses /api/workbench, not Alpha-only |
 
 ## v3.0 Milestone Summary (shipped 2026-08-09)
 
@@ -92,9 +103,9 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-08-19
-Stopped at: Phase 52 complete (AUDIT-01..05 delivered, committed 740a3fc) — ready to plan Phase 53
+Last session: 2026-08-20
+Stopped at: Phase 53 complete (WORK-01..06 delivered) — ready to plan Phase 54
 Resume file: None
 
 ---
-*Last updated: 2026-08-19 — Phase 52 全局可信度与工具审计 complete; Phase 53 ready to plan*
+*Last updated: 2026-08-20 — Phase 53 今日工作台与统一待办 complete; Phase 54 ready to plan*

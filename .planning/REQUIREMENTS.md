@@ -34,12 +34,12 @@ Locked boundaries:
 
 ### 今日工作台与统一待办 (Phase 53)
 
-- [ ] **WORK-01**: 用户在首页一屏看到数据新鲜度与 Provider 健康总览
-- [ ] **WORK-02**: 用户在首页看到运行中/失败任务及失败原因
-- [ ] **WORK-03**: 用户在首页看到最近报告与研究产物入口
-- [ ] **WORK-04**: 用户在首页看到最近监控触发记录
-- [ ] **WORK-05**: 用户在统一「待确认」收件箱处理生命周期、论点、因子晋升、纸面调仓四类待办, 每项有明确下一步入口
-- [ ] **WORK-06**: 数据质量告警不再只出现在 Alpha 工作台, 首页与相关页面共享同一 Banner 数据源
+- [x] **WORK-01**: 用户在首页一屏看到数据新鲜度与 Provider 健康总览
+- [x] **WORK-02**: 用户在首页看到运行中/失败任务及失败原因
+- [x] **WORK-03**: 用户在首页看到最近报告与研究产物入口
+- [x] **WORK-04**: 用户在首页看到最近监控触发记录
+- [x] **WORK-05**: 用户在统一「待确认」收件箱处理生命周期、论点、因子晋升、纸面调仓四类待办, 每项有明确下一步入口
+- [x] **WORK-06**: 数据质量告警不再只出现在 Alpha 工作台, 首页与相关页面共享同一 Banner 数据源
 
 ### 监控与报告闭环 (Phase 54)
 
@@ -79,12 +79,12 @@ Locked boundaries:
 | AUDIT-03 | Phase 52 | Complete |
 | AUDIT-04 | Phase 52 | Complete |
 | AUDIT-05 | Phase 52 | Complete |
-| WORK-01 | Phase 53 | Pending |
-| WORK-02 | Phase 53 | Pending |
-| WORK-03 | Phase 53 | Pending |
-| WORK-04 | Phase 53 | Pending |
-| WORK-05 | Phase 53 | Pending |
-| WORK-06 | Phase 53 | Pending |
+| WORK-01 | Phase 53 | Complete |
+| WORK-02 | Phase 53 | Complete |
+| WORK-03 | Phase 53 | Complete |
+| WORK-04 | Phase 53 | Complete |
+| WORK-05 | Phase 53 | Complete |
+| WORK-06 | Phase 53 | Complete |
 | MON-01 | Phase 54 | Pending |
 | MON-02 | Phase 54 | Pending |
 | MON-03 | Phase 54 | Pending |

@@ -36,7 +36,7 @@
 
 - [x] **Phase 51: 发布基线收口** - 统一 STATE/PROJECT/ROADMAP/REQUIREMENTS 状态, 执行并纳入 Vitest, 补真实 LLM/Provider 降级/SSE 重连部署冒烟, 处理或明确关闭 v3.0 技债。
 - [x] **Phase 52: 全局可信度与工具审计** - Provider/AI/通知/外部工具统一 ToolCallEnvelope, 统一 Provider Doctor 与数据质量 API, 审计脱敏与前端来源/日期/缓存/降级/schema/失败原因展示。
-- [ ] **Phase 53: 今日工作台与统一待办** - 首页集中展示数据新鲜度、Provider 健康、运行中/失败任务、最近报告与产物、监控触发、统一待确认收件箱, 每项有明确下一步入口。
+- [x] **Phase 53: 今日工作台与统一待办** - 首页集中展示数据新鲜度、Provider 健康、运行中/失败任务、最近报告与产物、监控触发、统一待确认收件箱, 每项有明确下一步入口。
 - [ ] **Phase 54: 监控与报告闭环** - synthetic test-fire、预算、冷却剩余、渠道健康与 digest 预览; 报告统一数据质量 Banner、证据卡、引用回链、多空冲突与失败路径; 运行页统一 Timeline、参数、工具调用、产物、失败重试与 SSE 恢复。
 
 ## Phase Details
@@ -137,7 +137,7 @@
 |-------|----------------|--------|-----------|
 | 51. 发布基线收口 | 4/4 | Complete | 2026-08-19 |
 | 52. 全局可信度与工具审计 | 5/5 | Complete | 2026-08-19 |
-| 53. 今日工作台与统一待办 | 0/TBD | Not started | - |
+| 53. 今日工作台与统一待办 | 6/6 | Complete | 2026-08-20 |
 | 54. 监控与报告闭环 | 0/TBD | Not started | - |
 
 **Execution order:** 51 → 52 → 53 → 54. Each phase consumes its predecessors' unified audit/quality/inbox contracts; no phase gains execution or repair authority.
@@ -147,4 +147,4 @@
 21/21 v1 requirements mapped, no orphans, no duplicates: BASE-01..04 → Phase 51; AUDIT-01..05 → Phase 52; WORK-01..06 → Phase 53; MON-01..06 → Phase 54. Per-requirement traceability lives in `.planning/REQUIREMENTS.md`.
 
 ---
-*Last updated: 2026-08-19 — Phase 51-52 complete (BASE-01..04, AUDIT-01..05); Phase 53 next.*
+*Last updated: 2026-08-20 — Phase 51-53 complete (BASE-01..04, AUDIT-01..05, WORK-01..06); Phase 54 next.*
