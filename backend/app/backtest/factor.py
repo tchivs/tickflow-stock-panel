@@ -169,6 +169,8 @@ class FactorResult:
     yearly_ic: list[dict] = field(default_factory=list)
     ic_decay: list[dict] = field(default_factory=list)
     regime_stats: list[dict] = field(default_factory=list)
+    rank_ic_series: list[dict] = field(default_factory=list)
+    rank_ic_mean: float | None = None
 
 
 @dataclass
@@ -613,8 +615,12 @@ class FactorBacktestService:
             )
             if column in source_panel.columns
         ]
+        select_columns: list[str] = []
+        for column in ["symbol", "date", "close", factor_col, *return_columns]:
+            if column not in select_columns:
+                select_columns.append(column)
         price_panel = (
-            source_panel.select(["symbol", "date", "close", factor_col, *return_columns])
+            source_panel.select(select_columns)
             .filter((pl.col("date") >= config.start) & (pl.col("date") <= config.end))
             .filter(pl.col("close").is_not_null() & (pl.col("close") > 0))
         )
@@ -643,6 +649,14 @@ class FactorBacktestService:
         ic_std = float(np.std(ic_values)) if ic_values.size else None
         ir = (ic_mean / ic_std) if (ic_mean is not None and ic_std and ic_std > 1e-8) else None
         ic_win_rate = float(np.mean(ic_values > 0)) if ic_values.size else None
+        # Spearman Rank IC 系列
+        valid_rank_df = ic_df.filter(pl.col("rank_ic").is_not_null() & pl.col("rank_ic").is_finite())
+        rank_ic_series = [
+            {"date": str(row["date"]), "rank_ic": round(float(row["rank_ic"]), 4)}
+            for row in valid_rank_df.iter_rows(named=True)
+        ]
+        rank_ic_values = valid_rank_df["rank_ic"].to_numpy() if not valid_rank_df.is_empty() else np.array([])
+        rank_ic_mean = float(np.mean(rank_ic_values)) if rank_ic_values.size else None
         yearly_ic = self._calc_yearly_ic(valid_ic_df)
         ic_decay = self._calc_ic_decay(panel, factor_col)
         regime_stats = self._calc_regime_stats(
@@ -683,6 +697,8 @@ class FactorBacktestService:
             yearly_ic=yearly_ic,
             ic_decay=ic_decay,
             regime_stats=regime_stats,
+            rank_ic_series=rank_ic_series,
+            rank_ic_mean=round(rank_ic_mean, 4) if rank_ic_mean is not None else None,
             elapsed_ms=round(elapsed, 1),
             n_symbols=n_symbols,
             n_dates=n_dates,
@@ -736,15 +752,20 @@ class FactorBacktestService:
 
     @staticmethod
     def _calc_ic(panel: pl.DataFrame, factor_col: str) -> pl.DataFrame:
-        """计算截面 Rank IC (因子值 rank vs 下期收益 rank 的相关系数)。"""
+        """计算截面 Pearson IC 和 Spearman Rank IC。
+
+        - ic: Pearson 相关 (因子原值 vs 下期收益原值)
+        - rank_ic: Spearman 相关 (因子 rank vs 下期收益 rank)
+        """
         return (
             panel.filter(pl.col("_next_return").is_not_null())
             .group_by("date")
             .agg(
+                pl.corr(factor_col, "_next_return").alias("ic"),
                 pl.corr(
                     pl.col(factor_col).rank(method="average"),
                     pl.col("_next_return").rank(method="average"),
-                ).alias("ic")
+                ).alias("rank_ic"),
             )
             .sort("date")
         )
