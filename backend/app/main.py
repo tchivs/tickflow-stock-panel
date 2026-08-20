@@ -66,6 +66,7 @@ from app.api import (
     strategy,
     walkforward_sse,
     watchlist,
+    workbench,
 )
 from app.api import analysis as analysis_menus
 from app.api import auth as auth_api
@@ -302,6 +303,7 @@ app.include_router(walkforward_sse.router)
 app.include_router(alerts.router)
 app.include_router(rps.router)
 app.include_router(audit.router)
+app.include_router(workbench.router)
 
 if phase5_real_host.telemetry_enabled():
     app.include_router(phase5_real_host.router)

@@ -243,6 +243,7 @@ export const QK = {
   auditSummary:         ['audit', 'summary'] as const,
   auditProviderDoctor:  ['audit', 'provider-doctor'] as const,
   auditDataQuality:     ['audit', 'data-quality'] as const,
+  workbench:            ['workbench'] as const,
 } as const
 
 // ===== SSE 应该 invalidate 的 key 前缀列表 =====

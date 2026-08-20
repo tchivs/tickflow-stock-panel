@@ -18,6 +18,9 @@ import { cnSignal } from '@/lib/signals'
 import { strategyEventMeta, strategyName } from '@/lib/strategyMonitorEvents'
 import { boardTag } from '@/components/stock-table/primitives'
 import { PlaybookInspector } from '@/components/decision/PlaybookInspector'
+import { DataQualityBanner } from '@/components/workbench/DataQualityBanner'
+import { WorkbenchPanel } from '@/components/workbench/WorkbenchPanel'
+import { PendingInbox } from '@/components/workbench/PendingInbox'
 
 function n(v: number | null | undefined) {
   return typeof v === 'number' && Number.isFinite(v) ? v : null
@@ -795,6 +798,7 @@ export function Dashboard() {
 
       {/* 数据不完整 (M003): 该日仅覆盖部分标的时, 涨跌家数/情绪/榜单均不可作为全市场结论 */}
       <CoverageBanner coverage={data.coverage} subject="涨跌家数、情绪与榜单" />
+      <DataQualityBanner />
 
       <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
         {data.indices.map(item => <IndexTicker key={item.symbol} item={item} />)}
@@ -896,6 +900,8 @@ export function Dashboard() {
               if (event.symbol) setPreviewStock({ symbol: event.symbol, name: event.name ?? undefined, alert: event })
             }} />
           </section>
+          <WorkbenchPanel />
+          <PendingInbox />
         </aside>
       </div>
 

@@ -4949,3 +4949,30 @@ export async function fetchProviderDoctor(): Promise<ProviderDoctorResponse> {
 export async function fetchDataQuality(): Promise<DataQualityResponse> {
   return request<DataQualityResponse>('/api/audit/data-quality')
 }
+export interface WorkbenchResponse {
+  data_quality: {
+    sources: Array<{ name: string; display_name: string; health: string; last_sync: string | null; datasets: string[]; detail: string }>
+    alerts: Array<{ level: string; source: string; message: string }>
+    summary: { total: number; ok: number; warn: number; error: number; daily_latest_date: string | null; overall: string }
+  } | null
+  provider_health: {
+    verdicts: Array<{ name: string; display_name: string; health: string; datasets: string[]; detail: string; recommendation: string }>
+    summary: { total: number; ok: number; warn: number; error: number; overall: string }
+  } | null
+  jobs: {
+    active_id: string | null
+    running: Array<{ id: string; status: string; stage: string; progress: number; stage_pct: number; started_at: string; error: string | null }>
+    failed: Array<{ id: string; status: string; stage: string; error: string; started_at: string; finished_at: string }>
+    total_recent: number
+  } | null
+  recent_reports: { items: Array<Record<string, unknown> & { created_at: string; type: string }>; total: number } | null
+  recent_alerts: { items: Array<Record<string, unknown> & { occurred_at: string }>; total: number } | null
+  pending: {
+    items: Array<Record<string, unknown> & { type: string; link: string }>
+    counts: { lifecycle: number; promotion: number; signals: number; paper_rebalance: number; total: number }
+  } | null
+}
+
+export async function fetchWorkbench(): Promise<WorkbenchResponse> {
+  return request<WorkbenchResponse>('/api/workbench')
+}
