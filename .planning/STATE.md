@@ -68,7 +68,28 @@ Progress: [██████████] 100%
 | MON-03 digest preview | Done — POST /api/monitor-ops/digest-preview + DigestPreviewDialog |
 | MON-04 evidence cards | Done — GET /api/report-ops/evidence + EvidenceCards |
 | MON-05 conflict + failure | Done — GET /api/report-ops/conflicts + ConflictPaths |
-| MON-06 run page | Done — AlphaWorkbench unified with EvidenceCards + ConflictPaths + SSE reconnect |
+
+### v3.1 Acceptance Walkthrough (2026-08-20)
+
+主链路端到端验证 (浏览器 + live API):
+
+| 环节 | 验证 | 结果 |
+|------|------|------|
+| Provider 降级 | 首页 DataQualityBanner 显示 free_stockdb + xyz 降级 | PASS |
+| 数据质量 API | GET /api/workbench 返回 8 sources, 6 ok, 2 warn | PASS |
+| 工作台面板 | WorkbenchPanel 渲染运行中/失败任务 + 最近报告 3 + 监控触发 | PASS |
+| 待确认收件箱 | PendingInbox 4 类 0 待办, 空状态不渲染空列表 | PASS |
+| MON-01 test-fire | POST /api/monitor-ops/test-fire 200 | PASS |
+| MON-02 rule-status | GET /api/monitor-ops/rule-status 200, total_rules=0, channel_health ok | PASS |
+| MON-03 digest-preview | POST /api/monitor-ops/digest-preview 200, digest_text 可读 | PASS |
+| MON-04 evidence | GET /api/report-ops/evidence 200, data_quality=healthy, run_context 返回 | PASS |
+| MON-05 conflicts | GET /api/report-ops/conflicts 200, failure_paths=2 (与降级源一致) | PASS |
+| 报告证据回链 | 复盘报告页 EvidenceCards "暂无关联证据卡" (旧报告) + ConflictPaths 渲染 2 降级失败路径 | PASS |
+| e2e 回归 | 101 passed / 0 failed / 4 skipped (desktop, 排除 3 个预存环境失败) | PASS |
+
+预存失败 (非 Phase 54 回归, 已在 commit eb48436 确认同样失败):
+- monitor.spec.ts MON-07 x2 (RuleEditor preopen selectOption 超时, 数据/mock 环境问题)
+- phase1.spec.ts 新建账户 (Portfolio 页按钮不可见, Docker 后端状态)
 
 ## v3.0 Milestone Summary (shipped 2026-08-09)
 
