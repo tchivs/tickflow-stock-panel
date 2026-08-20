@@ -95,6 +95,8 @@ def test_plan21_host_with_missing_benchmark_fails_during_fastapi_startup(
     monkeypatch.setenv("ADVANCED_HOST_FIXTURE", str(advanced_fixture))
     monkeypatch.setattr(settings, "data_dir", tmp_path / "governed-data")
     monkeypatch.setattr(settings, "auth_password", "host-test-password")
+    import app.config as _cfg
+    monkeypatch.setattr(_cfg, "_ENV_FILE", tmp_path / "nonexistent.env")
     monkeypatch.setattr(auth_service, "_configured_cache", None)
     auth_service._sessions.clear()
 

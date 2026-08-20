@@ -515,6 +515,8 @@ class StrategyBacktestConfig:
     # 市场环境过滤: {"states": ["strong",...], "min_score": 60}。
     # 强制 T-1: regime[T-1] 决定 entry[T](防未来函数)。None=不过滤。
     regime_filter: dict | None = None
+    # 治理实验冻结面板 artifact (governed runner 传递, 回测引擎本身不消费)
+    frozen_panel_artifact: dict | None = None
 
     def __post_init__(self) -> None:
         if self.entry_fill is None:

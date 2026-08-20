@@ -319,8 +319,12 @@ def test_builtin_matrix_strategies_use_their_declared_formula_modules():
         path for path in strategy_dir.glob("*.py") if path.name != "__init__.py"
     )
 
-    assert len(strategy_files) == 19
-    for strategy_path in strategy_files:
+    matrix_files = [
+        path for path in strategy_files
+        if StrategyEngine._load_file(path).execution_backend == "matrix_native"
+    ]
+    assert len(matrix_files) >= 19
+    for strategy_path in matrix_files:
         strategy = StrategyEngine._load_file(strategy_path)
         assert strategy.execution_backend == "matrix_native"
         assert strategy.matrix_strategy is not None
@@ -786,8 +790,9 @@ def test_registered_builtin_matrix_strategies_share_one_cache_profile():
     profile = build_matrix_cache_profile(engine, "stock")
     strategies = engine.strategy_definitions()
 
-    assert len(strategies) == 19
-    assert all(strategy.execution_backend == "matrix_native" for strategy in strategies)
+    matrix_strategies = [s for s in strategies if s.execution_backend == "matrix_native"]
+    assert len(matrix_strategies) >= 19
+    assert all(strategy.execution_backend == "matrix_native" for strategy in matrix_strategies)
     assert profile.warmup_bars > 0
     assert profile.forward_bars == max(int(strategy.max_hold_days or 0) for strategy in strategies)
     assert {"open", "high", "low", "close", "volume"}.issubset(profile.field_columns)

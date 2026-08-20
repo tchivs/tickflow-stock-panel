@@ -1989,6 +1989,7 @@ class BacktestEngine:
             for pos in positions.values():
                 pos["hold_days"] += 1
 
+            risk_blocked_today: set[int] = set()
             for asset_id in list(positions):
                 pos = positions.get(asset_id)
                 # 挂单待执行 (pending_exit) 不清空风控: 止损/移损/止盈仍是硬保护。
@@ -2020,7 +2021,8 @@ class BacktestEngine:
                     elif _valid_price(low_price) and low_price <= stop_price:
                         override = stop_price
                     if override is not None:
-                        _try_sell(time_id, asset_id, reason, date_text, sold_today, override)
+                        if not _try_sell(time_id, asset_id, reason, date_text, sold_today, override):
+                            risk_blocked_today.add(asset_id)
                         continue
                 if config.take_profit_pct is not None:
                     take_profit = entry_price * (1 + abs(float(config.take_profit_pct)))
@@ -2032,6 +2034,10 @@ class BacktestEngine:
             for asset_id in list(positions):
                 pos = positions.get(asset_id)
                 if pos is None:
+                    continue
+                # 风控已触发 (即使被涨跌停/停牌挡住) 时不再重复尝试计划出场,
+                # 否则同一天挂单待执行 + 风控被挡会双计 blocked_exit_days。
+                if asset_id in risk_blocked_today:
                     continue
                 reason = ""
                 signal_date = date_text
@@ -2138,6 +2144,9 @@ class BacktestEngine:
                             }
 
             for asset_id, pos in positions.items():
+                # close_t 建仓: 信号日收盘成交, 当日盘中高点在建仓之前, 不计入峰值。
+                if config.entry_fill == "close_t" and pos.get("entry_date") == date_text:
+                    continue
                 high_price = float(matrix.high[time_id, asset_id])
                 if _valid_price(high_price):
                     pos["max_high"] = max(float(pos["max_high"]), high_price)
@@ -2526,7 +2535,8 @@ class BacktestEngine:
                 if reason:
                     _try_sell(sym, idx, reason, signal_date, sold_today)
 
-        def _process_risk_exits(d_str: str, row_by_symbol: dict[str, int], sold_today: set[str]) -> None:
+        def _process_risk_exits(d_str: str, row_by_symbol: dict[str, int], sold_today: set[str]) -> set[str]:
+            risk_blocked: set[str] = set()
             for sym in list(positions.keys()):
                 pos = positions.get(sym)
                 if pos is None:
@@ -2688,7 +2698,7 @@ class BacktestEngine:
                     "pending_exit_signal_date": None,
                     "blocked_exit_days": 0,
                 }
-
+        peak = cash
         for d_idx, d_str in enumerate(all_dates):
             if d_idx % 20 == 0:
                 if cancel_event is not None and cancel_event.is_set():
@@ -2726,6 +2736,9 @@ class BacktestEngine:
                     last_close[str(panel_symbols[i])] = c
 
             market_value = _market_value()
+            equity = cash + market_value
+            peak = max(peak, equity)
+            dd = (equity - peak) / peak if peak > 0 else 0.0
             for sym, pos in positions.items():
                 idx = row_by_symbol.get(sym)
                 if idx is not None:

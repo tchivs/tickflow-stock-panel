@@ -25,6 +25,8 @@ def _client(tmp_path: Path, monkeypatch) -> TestClient:
     monkeypatch.setattr(app.main, "_static", dist)
     monkeypatch.setattr(settings, "data_dir", tmp_path / "data")
     monkeypatch.setattr(settings, "auth_password", "host-test-password")
+    import app.config as _cfg
+    monkeypatch.setattr(_cfg, "_ENV_FILE", tmp_path / "nonexistent.env")
     monkeypatch.setattr(auth_service, "_configured_cache", None)
     auth_service._sessions.clear()
 

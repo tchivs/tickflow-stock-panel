@@ -78,6 +78,8 @@ def test_authenticated_main_host_completes_governed_analysis_and_persists_immuta
     monkeypatch.setenv("PHASE1_FIXTURE_DIR", str(fixture_dir))
     monkeypatch.setattr(settings, "data_dir", data_dir)
     monkeypatch.setattr(settings, "auth_password", "host-test-password")
+    import app.config as _cfg
+    monkeypatch.setattr(_cfg, "_ENV_FILE", tmp_path / "nonexistent.env")
     monkeypatch.setattr(auth_service, "_configured_cache", None)
     auth_service._sessions.clear()
     monkeypatch.setattr(

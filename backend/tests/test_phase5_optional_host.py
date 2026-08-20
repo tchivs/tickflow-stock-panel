@@ -315,6 +315,8 @@ def _real_host(
     monkeypatch.setenv("PHASE1_FIXTURE_DIR", str(fixture_dir))
     monkeypatch.setattr(settings, "data_dir", data_dir)
     monkeypatch.setattr(settings, "auth_password", "host-test-password" if configured else "")
+    import app.config as _cfg
+    monkeypatch.setattr(_cfg, "_ENV_FILE", data_dir / "nonexistent.env")
     monkeypatch.setattr(auth_service, "_configured_cache", None)
     if production_scheduler:
         from app.jobs import daily_pipeline

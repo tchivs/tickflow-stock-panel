@@ -243,6 +243,8 @@ def test_main_host_installs_only_the_fail_closed_linux_isolation_launcher(tmp_pa
     monkeypatch.setenv("PHASE1_FIXTURE_DIR", str(fixture_dir))
     monkeypatch.setattr(settings, "data_dir", data_dir)
     monkeypatch.setattr(settings, "auth_password", "host-test-password")
+    import app.config as _cfg
+    monkeypatch.setattr(_cfg, "_ENV_FILE", data_dir / "nonexistent.env")
     monkeypatch.setattr(auth_service, "_configured_cache", None)
     auth_service._sessions.clear()
 
@@ -290,6 +292,8 @@ def test_main_host_exposes_governed_viewpoint_snapshot_from_the_lifespan(tmp_pat
     monkeypatch.setenv("PHASE1_FIXTURE_DIR", str(fixture_dir))
     monkeypatch.setattr(settings, "data_dir", data_dir)
     monkeypatch.setattr(settings, "auth_password", "host-test-password")
+    import app.config as _cfg
+    monkeypatch.setattr(_cfg, "_ENV_FILE", data_dir / "nonexistent.env")
     monkeypatch.setattr(auth_service, "_configured_cache", None)
     auth_service._sessions.clear()
 
@@ -320,6 +324,8 @@ def test_main_host_accepts_valid_fixture_readiness_before_public_work(tmp_path, 
     monkeypatch.setenv("ADVANCED_HOST_FIXTURE", str(advanced_fixture))
     monkeypatch.setattr(settings, "data_dir", data_dir)
     monkeypatch.setattr(settings, "auth_password", "host-test-password")
+    import app.config as _cfg
+    monkeypatch.setattr(_cfg, "_ENV_FILE", data_dir / "nonexistent.env")
     monkeypatch.setattr(auth_service, "_configured_cache", None)
     auth_service._sessions.clear()
 
@@ -369,6 +375,8 @@ def test_main_host_rejects_invalid_fixture_readiness_before_lake_sync(tmp_path, 
     monkeypatch.setenv("ADVANCED_HOST_FIXTURE", str(advanced_fixture))
     monkeypatch.setattr(settings, "data_dir", data_dir)
     monkeypatch.setattr(settings, "auth_password", "host-test-password")
+    import app.config as _cfg
+    monkeypatch.setattr(_cfg, "_ENV_FILE", data_dir / "nonexistent.env")
     monkeypatch.setattr(auth_service, "_configured_cache", None)
     auth_service._sessions.clear()
 
@@ -395,6 +403,8 @@ def test_main_host_rejects_same_provenance_stale_research_asset_binding(tmp_path
     monkeypatch.setenv("ADVANCED_HOST_FIXTURE", str(advanced_fixture))
     monkeypatch.setattr(settings, "data_dir", data_dir)
     monkeypatch.setattr(settings, "auth_password", "host-test-password")
+    import app.config as _cfg
+    monkeypatch.setattr(_cfg, "_ENV_FILE", data_dir / "nonexistent.env")
     monkeypatch.setattr(auth_service, "_configured_cache", None)
     auth_service._sessions.clear()
 
@@ -436,6 +446,8 @@ def test_main_host_fixture_revokes_selected_job_before_execution(tmp_path, monke
     monkeypatch.setenv("ADVANCED_HOST_FIXTURE", str(advanced_fixture))
     monkeypatch.setattr(settings, "data_dir", data_dir)
     monkeypatch.setattr(settings, "auth_password", "host-test-password")
+    import app.config as _cfg
+    monkeypatch.setattr(_cfg, "_ENV_FILE", data_dir / "nonexistent.env")
     monkeypatch.setattr(auth_service, "_configured_cache", None)
     auth_service._sessions.clear()
 
@@ -469,6 +481,8 @@ def test_authenticated_main_host_repeated_viewpoint_evaluation_is_canonical(tmp_
     monkeypatch.setenv("PHASE1_FIXTURE_DIR", str(fixture_dir))
     monkeypatch.setattr(settings, "data_dir", data_dir)
     monkeypatch.setattr(settings, "auth_password", "host-test-password")
+    import app.config as _cfg
+    monkeypatch.setattr(_cfg, "_ENV_FILE", data_dir / "nonexistent.env")
     monkeypatch.setattr(auth_service, "_configured_cache", None)
     auth_service._sessions.clear()
 
@@ -697,6 +711,8 @@ def test_authorized_main_host_job_runs_fixed_workflow_and_persists_audit(tmp_pat
     monkeypatch.setenv("PHASE1_FIXTURE_DIR", str(fixture_dir))
     monkeypatch.setattr(settings, "data_dir", data_dir)
     monkeypatch.setattr(settings, "auth_password", "host-test-password")
+    import app.config as _cfg
+    monkeypatch.setattr(_cfg, "_ENV_FILE", data_dir / "nonexistent.env")
     monkeypatch.setattr(auth_service, "_configured_cache", None)
     auth_service._sessions.clear()
 
@@ -735,6 +751,8 @@ def test_main_host_publishes_committed_scoped_advanced_progress_only(tmp_path, m
     monkeypatch.setenv("PHASE1_FIXTURE_DIR", str(fixture_dir))
     monkeypatch.setattr(settings, "data_dir", data_dir)
     monkeypatch.setattr(settings, "auth_password", "host-test-password")
+    import app.config as _cfg
+    monkeypatch.setattr(_cfg, "_ENV_FILE", data_dir / "nonexistent.env")
     monkeypatch.setattr(auth_service, "_configured_cache", None)
     auth_service._sessions.clear()
 
@@ -804,6 +822,8 @@ def test_main_host_enforces_public_binding_and_task_specific_quota_boundaries(tm
     monkeypatch.setenv("ADVANCED_HOST_FIXTURE", str(advanced_fixture))
     monkeypatch.setattr(settings, "data_dir", data_dir)
     monkeypatch.setattr(settings, "auth_password", "host-test-password")
+    import app.config as _cfg
+    monkeypatch.setattr(_cfg, "_ENV_FILE", data_dir / "nonexistent.env")
     monkeypatch.setattr(auth_service, "_configured_cache", None)
     auth_service._sessions.clear()
 
@@ -924,6 +944,8 @@ def test_main_host_policy_transition_rejects_preserved_queued_job_without_progre
     monkeypatch.setenv("ADVANCED_HOST_FIXTURE", str(advanced_fixture))
     monkeypatch.setattr(settings, "data_dir", data_dir)
     monkeypatch.setattr(settings, "auth_password", "host-test-password")
+    import app.config as _cfg
+    monkeypatch.setattr(_cfg, "_ENV_FILE", data_dir / "nonexistent.env")
     monkeypatch.setattr(auth_service, "_configured_cache", None)
     auth_service._sessions.clear()
 
