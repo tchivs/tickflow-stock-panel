@@ -1,16 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v3.1
-milestone_name: 可信工作台与运维闭环
-status: complete
-last_updated: "2026-08-20T06:30:00.000Z"
+milestone: v3.2
+milestone_name: TBD (not yet planned)
+status: not_started
+last_updated: "2026-08-20T07:00:00.000Z"
 last_activity: 2026-08-20
 progress:
-  total_phases: 4
-  completed_phases: 4
+  total_phases: 0
+  completed_phases: 0
   total_plans: 0
   completed_plans: 0
-  percent: 100
+  percent: 0
 ---
 
 # Project State
@@ -20,15 +20,15 @@ progress:
 See: .planning/PROJECT.md (updated 2026-08-18)
 
 **Core value:** An investor can turn reliable market data and their own holdings into an auditable, actionable research and monitoring workflow without operating multiple disconnected tools.
-**Current focus:** v3.1 milestone complete — ready for v3.2 planning
+**Current focus:** v3.1 milestone complete — run `/gsd-new-milestone` to plan v3.2
 
 ## Current Position
 
-Phase: 54 of 54 (监控与报告闭环) — Complete
+Phase: — (v3.2 not yet planned)
 Plan: —
-Status: v3.1 milestone complete (Phase 51-54 all delivered)
-Last activity: 2026-08-20 — Phase 54 监控与报告闭环 delivered (MON-01..06)
-Progress: [██████████] 100%
+Status: v3.1 milestone complete (Phase 51-54, 21/21 requirements)
+Last activity: 2026-08-20 — v3.1 milestone archived + Pearson/Spearman IC fix
+Progress: [░░░░░░░░░░] 0%
 
 ### Phase 51 Completion (2026-08-19)
 
