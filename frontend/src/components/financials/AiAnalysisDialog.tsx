@@ -12,6 +12,8 @@ import {
   type ActiveTask, type HistoryReport,
   minimizeDialog, closeDialog, startAnalysis,
 } from '@/lib/aiReportStore'
+import { EvidenceCards } from '@/components/report/EvidenceCards'
+import { ConflictPaths } from '@/components/report/ConflictPaths'
 import { useDialogBackdrop } from '@/lib/useDialogBackdrop'
 
 interface Props {
@@ -206,9 +208,21 @@ export function AiAnalysisDialog({ task, mode, minimized }: Props) {
                 )}
               </div>
             )}
-          </div>
+            {/* Phase 54: 历史报告的证据卡 + 冲突观点 */}
+            {isHistory && task && phase === 'done' && (
+              <div className="mt-3 space-y-4 border-t border-border/40 pt-3">
+                <div>
+                  <h4 className="mb-2 text-xs font-semibold text-secondary">证据卡</h4>
+                  <EvidenceCards reportType="financial" reportId={task.id} />
+                </div>
+                <div>
+                  <h4 className="mb-2 text-xs font-semibold text-secondary">冲突观点与失败路径</h4>
+                  <ConflictPaths reportType="financial" reportId={task.id} />
+                </div>
+              </div>
+            )}
 
-          {/* ===== 底部:自定义关注点输入 ===== */}
+          </div>
           <div className="border-t border-border bg-surface px-5 py-3">
             <div className="flex items-center gap-2">
               <div className="flex items-center gap-1.5 text-[10px] text-muted shrink-0">

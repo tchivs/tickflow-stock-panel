@@ -4976,3 +4976,51 @@ export interface WorkbenchResponse {
 export async function fetchWorkbench(): Promise<WorkbenchResponse> {
   return request<WorkbenchResponse>('/api/workbench')
 }
+
+// ===== Phase 54: monitor ops + report ops =====
+export interface TestFireResponse {
+  rule_id: string
+  rule_name: string
+  events: Array<{ symbol: string; name: string; type: string; message: string; severity: string; conditions: unknown[]; logic: string }>
+  would_notify: boolean
+  error?: string
+}
+export interface RuleStatusResponse {
+  rules: Array<{ rule_id: string; rule_name: string; cooldown_seconds: number; last_fire: number | null; cooldown_remaining: number; channel_health: { sent: number; failed: number; skipped: number } }>
+  summary: { total_rules: number; with_active_cooldown: number; channel_health: { sent: number; failed: number; skipped: number } }
+}
+export interface DigestPreviewResponse {
+  as_of: string
+  total_alerts: number
+  digest_text: string
+  alerts: Array<{ symbol: string; name: string; type: string; message: string; severity: string; occurred_at: string }>
+}
+export interface EvidenceResponse {
+  evidence_cards: Array<{ title: string; raw_hash: string; tool: string; category: string; response_summary: string; duration_ms: number; error: string | null; created_at: string }>
+  data_quality: Record<string, unknown> | null
+}
+export interface ConflictResponse {
+  conflicts: Array<{ bullish: string; bearish: string; source: string }>
+  failure_paths: Array<{ step: string; reason: string; data_source: string }>
+}
+export async function testFireRule(ruleId: string): Promise<TestFireResponse> {
+  return request(`/api/monitor-ops/test-fire?rule_id=${encodeURIComponent(ruleId)}`, { method: 'POST' })
+}
+export async function fetchRuleStatus(): Promise<RuleStatusResponse> {
+  return request('/api/monitor-ops/rule-status')
+}
+export async function digestPreview(): Promise<DigestPreviewResponse> {
+  return request('/api/monitor-ops/digest-preview', { method: 'POST' })
+}
+export async function fetchEvidence(params: { run_id?: string; report_type?: string; report_id?: string }): Promise<EvidenceResponse> {
+  const qs = new URLSearchParams(
+    Object.entries(params).filter(([, v]) => v != null).map(([k, v]) => [k, String(v)]),
+  ).toString()
+  return request(`/api/report-ops/evidence?${qs}`)
+}
+export async function fetchConflicts(params: { run_id?: string; report_type?: string; report_id?: string }): Promise<ConflictResponse> {
+  const qs = new URLSearchParams(
+    Object.entries(params).filter(([, v]) => v != null).map(([k, v]) => [k, String(v)]),
+  ).toString()
+  return request(`/api/report-ops/conflicts?${qs}`)
+}

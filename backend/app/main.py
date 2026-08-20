@@ -44,6 +44,7 @@ from app.api import (
     market_recap,
     market_recap_auction,
     mining,
+    monitor_ops,
     monitor_rules,
     overview,
     phase5_real_host,
@@ -52,6 +53,7 @@ from app.api import (
     portfolio,
     portfolio_panels,
     regime,
+    report_ops,
     research,
     research_alpha,
     research_alpha_sse,
@@ -304,6 +306,8 @@ app.include_router(alerts.router)
 app.include_router(rps.router)
 app.include_router(audit.router)
 app.include_router(workbench.router)
+app.include_router(monitor_ops.router)
+app.include_router(report_ops.router)
 
 if phase5_real_host.telemetry_enabled():
     app.include_router(phase5_real_host.router)

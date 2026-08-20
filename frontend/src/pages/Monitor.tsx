@@ -1,21 +1,26 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { RadioTower, Plus, Trash2, Settings2, Zap, Bell, ListChecks, BellRing, TrendingUp, TrendingDown, Flame, Check, Clock3, AlertTriangle, Moon, Tags, FileText, Send, XCircle, MinusCircle } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { RadioTower, Plus, Trash2, Settings2, Zap, Bell, ListChecks, BellRing, TrendingUp, TrendingDown, Flame, Check, Clock3, AlertTriangle, Moon, Tags } from 'lucide-react'
+
 import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
-import { Skeleton } from '@/components/data/Skeleton'
 import { Modal } from '@/components/Modal'
-import { api, type MonitorRule, type AlertEvent, type MonitorCondition, type DeliveryStatus, type DeliveryOutcome, type WsAlertEvent, type MonitorExtFieldItem } from '@/lib/api'
+import { Skeleton } from '@/components/data/Skeleton'
+import { api, type MonitorRule, type AlertEvent, type MonitorCondition, type DeliveryStatus, type DeliveryOutcome, type WsAlertEvent, type MonitorExtFieldItem, fetchRuleStatus, type RuleStatusResponse } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
+import { TestFireDialog } from '@/components/monitor/TestFireDialog'
+import { RuleStatusBadge } from '@/components/monitor/RuleStatusBadge'
+import { DigestPreviewDialog } from '@/components/monitor/DigestPreview'
 import { fmtPrice, fmtPct } from '@/lib/format'
 import { useDialogBackdrop } from '@/lib/useDialogBackdrop'
 import { cn } from '@/lib/cn'
-import { cnSignal } from '@/lib/signals'
-import { LEGACY_STRATEGY_NOTIFY_EVENTS, STRATEGY_NOTIFY_EVENT_OPTIONS, strategyEventMeta, strategyName } from '@/lib/strategyMonitorEvents'
 import { boardTag } from '@/components/stock-table/primitives'
 import { markSeen, resetBadge, leaveMonitorPage } from '@/lib/monitorBadge'
+import { cnSignal } from '@/lib/signals'
+import { LEGACY_STRATEGY_NOTIFY_EVENTS, STRATEGY_NOTIFY_EVENT_OPTIONS, strategyEventMeta, strategyName } from '@/lib/strategyMonitorEvents'
+
 import { RuleEditor } from '@/components/monitor/RuleEditor'
 import { DeliveryDetailDialog } from '@/components/monitor/DeliveryDetailDialog'
 import { StockPreviewDialog } from '@/components/StockPreviewDialog'
@@ -179,6 +184,24 @@ export function Monitor() {
   // 规则个数
   const rulesQuery = useQuery({ queryKey: QK.monitorRules, queryFn: api.monitorRulesList })
   const rulesCount = rulesQuery.data?.rules.length ?? 0
+  // Phase 54: 规则冷却状态 + 渠道健康 (MON-02)
+  const ruleStatusQuery = useQuery<RuleStatusResponse>({
+    queryKey: QK.monitorRuleStatus,
+    queryFn: fetchRuleStatus,
+    staleTime: 30000,
+    refetchInterval: 30000,
+  })
+  // rule_id → status 映射, RulesList 用它渲染冷却徽标
+  const ruleStatusMap = useMemo(() => {
+    const map = new Map<string, RuleStatusResponse['rules'][number]>()
+    for (const r of ruleStatusQuery.data?.rules ?? []) map.set(r.rule_id, r)
+    return map
+  }, [ruleStatusQuery.data])
+  const channelSummary = ruleStatusQuery.data?.summary.channel_health
+
+  // 试触 / 摘要预览对话框状态
+  const [testFireRule, setTestFireRule] = useState<{ id: string; name: string } | null>(null)
+  const [digestOpen, setDigestOpen] = useState(false)
 
   // 清除全部规则 (逐条删除)
   const clearRulesMut = useMutation({
@@ -245,6 +268,14 @@ export function Monitor() {
               <SectionHeader icon={ListChecks} title="监控规则" />
               <span className="rounded-md bg-elevated/50 px-1.5 py-0.5 text-[10px] font-medium text-muted">{rulesCount}</span>
               <div className="ml-auto flex items-center gap-1">
+
+                <button
+                  onClick={() => setDigestOpen(true)}
+                  title="通知摘要预览 (近 24 小时)"
+                  className="inline-flex h-6 w-6 items-center justify-center rounded-lg border border-border/60 bg-surface text-muted transition-all hover:border-accent/40 hover:text-accent hover:shadow-sm cursor-pointer max-md:min-h-11 max-md:min-w-11"
+                >
+                  <FileText className="h-3.5 w-3.5" />
+                </button>
                 <button
                   onClick={() => { setEditingRule(null); setEditorOpen(true) }}
                   title="新建规则"
@@ -262,12 +293,34 @@ export function Monitor() {
                 </button>
               </div>
             </div>
+            {/* Phase 54: 渠道健康汇总 (sent/failed/skipped 近 7 天) */}
+            {channelSummary && (channelSummary.sent || channelSummary.failed || channelSummary.skipped) ? (
+              <div className="flex items-center gap-2 border-b border-border/40 bg-base/30 px-4 py-1.5 text-[10px] text-muted">
+                <span>渠道健康 (近 7 天)</span>
+                <span className="inline-flex items-center gap-0.5 text-emerald-600 dark:text-emerald-400">
+                  <Send className="h-2.5 w-2.5" />{channelSummary.sent}
+                </span>
+                {channelSummary.failed > 0 && (
+                  <span className="inline-flex items-center gap-0.5 text-red-600 dark:text-red-400">
+                    <XCircle className="h-2.5 w-2.5" />{channelSummary.failed}
+                  </span>
+                )}
+                {channelSummary.skipped > 0 && (
+                  <span className="inline-flex items-center gap-0.5">
+                    <MinusCircle className="h-2.5 w-2.5" />{channelSummary.skipped}
+                  </span>
+                )}
+              </div>
+            ) : null}
             <div className="min-h-0 flex-1 overflow-auto p-3.5">
               <RulesList
                 rulesQuery={rulesQuery}
+                ruleStatusMap={ruleStatusMap}
+                onTestFire={(r) => setTestFireRule({ id: r.id, name: r.name })}
                 onEdit={(r) => { setEditingRule(r); setEditorOpen(true) }}
               />
             </div>
+
           </section>
         </div>
       </div>
@@ -295,6 +348,15 @@ export function Monitor() {
         fields={monitorExtFields}
         onClose={() => setExtConfigOpen(false)}
       />
+      {testFireRule && (
+        <TestFireDialog
+          ruleId={testFireRule.id}
+          ruleName={testFireRule.name}
+          onClose={() => setTestFireRule(null)}
+        />
+      )}
+      {digestOpen && <DigestPreviewDialog onClose={() => setDigestOpen(false)} />}
+
     </div>
   )
 }
@@ -665,8 +727,10 @@ function AlertsList({ alertsQuery, confirmClear, setConfirmClear, total, enterTs
 }
 
 // ── 监控规则列表 ──────────────────────────────────────
-function RulesList({ rulesQuery, onEdit }: {
+function RulesList({ rulesQuery, ruleStatusMap, onTestFire, onEdit }: {
   rulesQuery: ReturnType<typeof useQuery>
+  ruleStatusMap: Map<string, RuleStatusResponse['rules'][number]>
+  onTestFire: (rule: MonitorRule) => void
   onEdit: (rule: MonitorRule) => void
 }) {
   const qc = useQueryClient()
@@ -793,6 +857,13 @@ function RulesList({ rulesQuery, onEdit }: {
                     <Zap className="h-3.5 w-3.5" />
                   </button>
                   <button
+                    onClick={() => onTestFire(r)}
+                    title="试触 (synthetic 评估, 不落盘)"
+                    className="p-1 rounded-md text-secondary transition-all hover:bg-accent/10 hover:text-accent cursor-pointer max-md:min-h-11 max-md:min-w-11"
+                  >
+                    <Flame className="h-3.5 w-3.5" />
+                  </button>
+                  <button
                     onClick={() => onEdit(r)}
                     className="p-1 rounded-md text-secondary transition-all hover:bg-accent/10 hover:text-accent cursor-pointer max-md:min-h-11 max-md:min-w-11"
                     title="编辑"
@@ -875,6 +946,17 @@ function RulesList({ rulesQuery, onEdit }: {
                     ))}
                     {r.conditions.length > 3 && <span className="text-secondary">+{r.conditions.length - 3}</span>}
                   </span>
+                </div>
+              )}
+              {/* Phase 54 (MON-02): 冷却状态 + 渠道健康徽标 */}
+
+              {r.enabled && ruleStatusMap.get(r.id) && (
+                <div className="mt-1 pl-0.5">
+                  <RuleStatusBadge
+                    cooldownRemaining={ruleStatusMap.get(r.id)!.cooldown_remaining}
+                    lastFire={ruleStatusMap.get(r.id)!.last_fire}
+                    channelHealth={ruleStatusMap.get(r.id)!.channel_health}
+                  />
                 </div>
               )}
             </motion.div>

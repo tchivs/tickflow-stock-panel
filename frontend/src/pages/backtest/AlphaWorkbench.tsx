@@ -36,6 +36,8 @@ import {
 } from '@/lib/api'
 import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
+import { EvidenceCards } from '@/components/report/EvidenceCards'
+import { ConflictPaths } from '@/components/report/ConflictPaths'
 import { toast } from '@/components/Toast'
 
 // ---------------------------------------------------------------------------
@@ -253,7 +255,7 @@ function ConnChip({ status, polling }: { status: ConnStatus; polling: boolean })
     running: polling ? '轮询中' : '运行中',
     done: '完成',
     error: '错误',
-    reconnecting: '重连中',
+    reconnecting: '连接恢复中',
   }
   return (
     <span
@@ -811,6 +813,17 @@ export function AlphaWorkbench() {
                 {tab === 'compare' && <ComparePanel runId={selectedRun.id} candidates={candidates} />}
                 {tab === 'stress' && <StressMatrixView runId={selectedRun.id} candidates={candidates} />}
                 {tab === 'quality' && <DataQualityBanner runId={selectedRun.id} candidates={candidates} />}
+                {/* Phase 54: 证据卡 + 冲突观点 (运行维度) */}
+                <div className="space-y-4 rounded-card border border-border bg-surface p-4">
+                  <div>
+                    <h3 className="mb-2 text-xs font-semibold text-secondary">证据卡</h3>
+                    <EvidenceCards runId={selectedRun.id} />
+                  </div>
+                  <div>
+                    <h3 className="mb-2 text-xs font-semibold text-secondary">冲突观点与失败路径</h3>
+                    <ConflictPaths runId={selectedRun.id} />
+                  </div>
+                </div>
               </>
             )}
           </section>

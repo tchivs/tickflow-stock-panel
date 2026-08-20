@@ -20,6 +20,8 @@ import { QK } from '@/lib/queryKeys'
 import { cn } from '@/lib/cn'
 import { fmtBigNum } from '@/lib/format'
 import { PageHeader } from '@/components/PageHeader'
+import { EvidenceCards } from '@/components/report/EvidenceCards'
+import { ConflictPaths } from '@/components/report/ConflictPaths'
 import { MarkdownRenderer } from '@/components/financials/MarkdownRenderer'
 import { toast } from '@/components/Toast'
 import { usePreferences } from '@/lib/useSharedQueries'
@@ -751,6 +753,19 @@ function ReportPanel({
             )}
           </div>
         )}
+        {/* Phase 54: 证据卡 + 冲突观点 (仅查看已归档报告时, 有 report_id) */}
+        {!isGenerating && viewing?.id ? (
+          <div className="mt-4 space-y-4 border-t border-border/40 pt-4">
+            <div>
+              <h4 className="mb-2 text-xs font-semibold text-secondary">证据卡</h4>
+              <EvidenceCards reportType="market_recap" reportId={viewing.id} />
+            </div>
+            <div>
+              <h4 className="mb-2 text-xs font-semibold text-secondary">冲突观点与失败路径</h4>
+              <ConflictPaths reportType="market_recap" reportId={viewing.id} />
+            </div>
+          </div>
+        ) : null}
         <div ref={reportEndRef} />
       </div>
     </motion.div>

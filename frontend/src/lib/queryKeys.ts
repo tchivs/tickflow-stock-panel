@@ -241,6 +241,9 @@ export const QK = {
   // 审计 (Audit)
   auditToolCalls:       (params: Record<string, unknown> = {}) => ['audit', 'tool-calls', params] as const,
   auditSummary:         ['audit', 'summary'] as const,
+  // Phase 54: monitor ops + report ops
+  monitorRuleStatus:   ['monitor-ops', 'rule-status'] as const,
+  reportOps:           (params: Record<string, unknown>) => ['report-ops', params] as const,
   auditProviderDoctor:  ['audit', 'provider-doctor'] as const,
   auditDataQuality:     ['audit', 'data-quality'] as const,
   workbench:            ['workbench'] as const,
