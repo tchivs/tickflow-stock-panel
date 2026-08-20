@@ -7,10 +7,10 @@ last_updated: "2026-08-19T21:15:00.000Z"
 last_activity: 2026-08-19
 progress:
   total_phases: 4
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 0
   completed_plans: 0
-  percent: 25
+  percent: 50
 ---
 
 # Project State
@@ -20,15 +20,15 @@ progress:
 See: .planning/PROJECT.md (updated 2026-08-18)
 
 **Core value:** An investor can turn reliable market data and their own holdings into an auditable, actionable research and monitoring workflow without operating multiple disconnected tools.
-**Current focus:** Phase 52 — 全局可信度与工具审计 (v3.1 可信工作台与运维闭环)
+**Current focus:** Phase 53 — 今日工作台与统一待办 (v3.1 可信工作台与运维闭环)
 
 ## Current Position
 
-Phase: 52 of 54 (全局可信度与工具审计)
+Phase: 53 of 54 (今日工作台与统一待办)
 Plan: —
-Status: Phase 51 complete — ready to plan Phase 52
-Last activity: 2026-08-19 — Phase 51 发布基线收口 delivered (BASE-01..04)
-Progress: [██░░░░░░░░] 25%
+Status: Phase 52 complete — ready to plan Phase 53
+Last activity: 2026-08-19 — Phase 52 全局可信度与工具审计 delivered (AUDIT-01..05)
+Progress: [████░░░░░░] 50%
 
 ### Phase 51 Completion (2026-08-19)
 
@@ -38,6 +38,16 @@ Progress: [██░░░░░░░░] 25%
 | BASE-02 vitest setup | Done — vitest 3.2.7, 51 tests pass, wired into Docker build |
 | BASE-03 smoke scripts | Done — LLM/provider/SSE smoke scripts (stdlib, explicit PASS/FAIL) |
 | BASE-04 tech debt registry | Done — .planning/TECH-DEBT-v3.0.md: 4 closed + 1 in progress |
+
+### Phase 52 Completion (2026-08-19)
+
+| Requirement | Status |
+|-------------|--------|
+| AUDIT-01 ToolCallEnvelope | Done — SQLite append-only table + repository + 3 audit seams (AI/provider/notify) |
+| AUDIT-02 audit query API | Done — /api/audit/tool-calls paginated + filtered + summary |
+| AUDIT-03 Provider Doctor | Done — /api/audit/provider-doctor read-only diagnosis with health grades |
+| AUDIT-04 data quality API | Done — /api/audit/data-quality freshness + defects + alerts |
+| AUDIT-05 sanitization | Done — sensitive keys masked, raw_hash only, params whitelist |
 
 ## v3.0 Milestone Summary (shipped 2026-08-09)
 
@@ -83,8 +93,8 @@ None.
 ## Session Continuity
 
 Last session: 2026-08-19
-Stopped at: Phase 51 complete (BASE-01..04 delivered, committed 9bbdbd9) — ready to plan Phase 52
+Stopped at: Phase 52 complete (AUDIT-01..05 delivered, committed 740a3fc) — ready to plan Phase 53
 Resume file: None
 
 ---
-*Last updated: 2026-08-19 — Phase 51 发布基线收口 complete; Phase 52 ready to plan*
+*Last updated: 2026-08-19 — Phase 52 全局可信度与工具审计 complete; Phase 53 ready to plan*

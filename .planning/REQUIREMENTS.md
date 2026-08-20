@@ -26,11 +26,11 @@ Locked boundaries:
 
 ### 全局可信度与工具审计 (Phase 52)
 
-- [ ] **AUDIT-01**: 开发者通过统一 ToolCallEnvelope 结构(tool/params/version/scope/response_shape/raw_hash/duration/error)记录 Provider、AI、通知与外部工具调用
-- [ ] **AUDIT-02**: 用户可在统一审计页面按来源/日期/缓存/降级/schema/失败原因筛选查看全部工具调用
-- [ ] **AUDIT-03**: 用户可对任一 Provider 执行 Doctor 诊断并看到分级结论(健康/降级/不可用)与建议动作
-- [ ] **AUDIT-04**: 用户可通过统一数据质量 API 拉取各数据源新鲜度与缺陷摘要, 前端据此渲染质量告警
-- [ ] **AUDIT-05**: 审计展示内容经过脱敏, 不暴露密钥、完整报文或个人数据
+- [x] **AUDIT-01**: 开发者通过统一 ToolCallEnvelope 结构(tool/params/version/scope/response_shape/raw_hash/duration/error)记录 Provider、AI、通知与外部工具调用
+- [x] **AUDIT-02**: 用户可在统一审计页面按来源/日期/缓存/降级/schema/失败原因筛选查看全部工具调用
+- [x] **AUDIT-03**: 用户可对任一 Provider 执行 Doctor 诊断并看到分级结论(健康/降级/不可用)与建议动作
+- [x] **AUDIT-04**: 用户可通过统一数据质量 API 拉取各数据源新鲜度与缺陷摘要, 前端据此渲染质量告警
+- [x] **AUDIT-05**: 审计展示内容经过脱敏, 不暴露密钥、完整报文或个人数据
 
 ### 今日工作台与统一待办 (Phase 53)
 
@@ -74,11 +74,11 @@ Locked boundaries:
 | BASE-02 | Phase 51 | Complete |
 | BASE-03 | Phase 51 | Complete |
 | BASE-04 | Phase 51 | Complete |
-| AUDIT-01 | Phase 52 | Pending |
-| AUDIT-02 | Phase 52 | Pending |
-| AUDIT-03 | Phase 52 | Pending |
-| AUDIT-04 | Phase 52 | Pending |
-| AUDIT-05 | Phase 52 | Pending |
+| AUDIT-01 | Phase 52 | Complete |
+| AUDIT-02 | Phase 52 | Complete |
+| AUDIT-03 | Phase 52 | Complete |
+| AUDIT-04 | Phase 52 | Complete |
+| AUDIT-05 | Phase 52 | Complete |
 | WORK-01 | Phase 53 | Pending |
 | WORK-02 | Phase 53 | Pending |
 | WORK-03 | Phase 53 | Pending |
