@@ -2488,7 +2488,44 @@ MIGRATIONS: tuple[str, ...] = (
         OR OLD.created_at IS NOT NEW.created_at
     BEGIN SELECT RAISE(ABORT, 'alpha promotion ticket identity columns are immutable'); END;
     """,
-)
+    """
+    -- Phase 52 AUDIT-01: ToolCallEnvelope — append-only tool call audit ledger.
+    -- Every Provider/AI/notification/external-tool call appends one immutable record
+    -- with tool/params_hash/version/scope/response_shape/raw_hash/duration_ms/error.
+    -- Raw payloads are never stored; only their SHA-256 hash + sanitized summary.
+    CREATE TABLE tool_call_envelopes (
+        id TEXT PRIMARY KEY,
+        seq INTEGER NOT NULL UNIQUE,
+        tool TEXT NOT NULL CHECK (length(trim(tool)) > 0),
+        category TEXT NOT NULL CHECK (category IN ('provider', 'ai', 'notification', 'external')),
+        params_hash TEXT NOT NULL CHECK (length(params_hash) = 64),
+        params_summary TEXT NOT NULL,
+        version TEXT,
+        scope TEXT,
+        principal TEXT,
+        response_shape TEXT,
+        response_summary TEXT,
+        raw_hash TEXT CHECK (raw_hash IS NULL OR length(raw_hash) = 64),
+        duration_ms REAL NOT NULL DEFAULT 0,
+        error TEXT,
+        cached INTEGER NOT NULL DEFAULT 0 CHECK (cached IN (0, 1)),
+        degraded INTEGER NOT NULL DEFAULT 0 CHECK (degraded IN (0, 1)),
+        schema_valid INTEGER NOT NULL DEFAULT 1 CHECK (schema_valid IN (0, 1)),
+        created_at TEXT NOT NULL,
+        CHECK (length(trim(tool)) > 0)
+    );
+    CREATE INDEX idx_tool_calls_seq ON tool_call_envelopes(seq);
+    CREATE INDEX idx_tool_calls_tool ON tool_call_envelopes(tool, created_at);
+    CREATE INDEX idx_tool_calls_category ON tool_call_envelopes(category, created_at);
+    CREATE INDEX idx_tool_calls_scope ON tool_call_envelopes(scope, created_at);
+    CREATE INDEX idx_tool_calls_principal ON tool_call_envelopes(principal, created_at);
+    CREATE INDEX idx_tool_calls_degraded ON tool_call_envelopes(degraded, cached, schema_valid);
+    CREATE TRIGGER tool_call_envelopes_no_update BEFORE UPDATE ON tool_call_envelopes
+    BEGIN SELECT RAISE(ABORT, 'tool call audit records are immutable'); END;
+    CREATE TRIGGER tool_call_envelopes_no_delete BEFORE DELETE ON tool_call_envelopes
+    BEGIN SELECT RAISE(ABORT, 'tool call audit records are immutable'); END;
+    """,
+ )
 
 
 def _migration_statements(script: str) -> tuple[str, ...]:

@@ -78,18 +78,38 @@ def notify(title: str, message: str, icon: Path | None = None) -> bool:
     if backend is None:
         return False
 
+    from app.audit.service import get_audit_repo
+    import time as _time
+    audit_repo = get_audit_repo()
+    t0 = _time.monotonic()
+    error: str | None = None
+    success = False
     try:
         if backend == "winotify":
-            return _notify_winotify(title, message)
-        if backend == "osascript":
-            return _notify_osascript(title, message)
-        if backend == "notify-send":
-            return _notify_notify_send(title, message, icon)
+            success = _notify_winotify(title, message)
+        elif backend == "osascript":
+            success = _notify_osascript(title, message)
+        elif backend == "notify-send":
+            success = _notify_notify_send(title, message, icon)
     except Exception as e:  # noqa: BLE001
+        error = str(e)
         logger.debug("系统通知失败 (%s): %s", backend, e)
-        return False
-
-    return False
+        success = False
+    finally:
+        if audit_repo is not None:
+            try:
+                audit_repo.append(
+                    tool=f"notify.{backend or 'none'}",
+                    category="notification",
+                    params={"title": title, "message": message, "backend": backend},
+                    response_shape="bool",
+                    response_summary=f"delivered={success}",
+                    duration_ms=(_time.monotonic() - t0) * 1000,
+                    error=error,
+                )
+            except Exception:
+                pass
+    return success
 
 
 def _notify_winotify(title: str, message: str) -> bool:

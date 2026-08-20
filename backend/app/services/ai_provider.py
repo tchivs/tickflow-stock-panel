@@ -225,14 +225,44 @@ async def generate_ai_text(
     (如 deepseek reasoner 系)的思考 token 计入 max_tokens 预算, 显式限制
     会挤占正文甚至全部吃光(正文 0 字 + finish=length), 长分析类调用应放开。
     """
-    if is_codex_cli_provider():
-        return await _run_codex_cli(messages, max_tokens=max_tokens, timeout=max(timeout, 600.0))
-    return await _run_openai_once(
-        messages,
-        temperature=temperature,
-        max_tokens=max_tokens,
-        timeout=timeout,
-    )
+    from app.audit.service import get_audit_repo
+    audit_repo = get_audit_repo()
+    t0 = time.monotonic()
+    error: str | None = None
+    result_text = ""
+    try:
+        if is_codex_cli_provider():
+            result_text = await _run_codex_cli(messages, max_tokens=max_tokens, timeout=max(timeout, 600.0))
+        else:
+            result_text = await _run_openai_once(
+                messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                timeout=timeout,
+            )
+        return result_text
+    except Exception as exc:
+        error = str(exc)
+        raise
+    finally:
+        if audit_repo is not None:
+            try:
+                audit_repo.append(
+                    tool=f"ai.{current_ai_provider()}.generate",
+                    category="ai",
+                    params={"model": current_ai_model(), "temperature": temperature,
+                            "max_tokens": max_tokens, "timeout": timeout,
+                            "message_count": len(messages)},
+                    version=current_ai_provider(),
+                    scope="ai_text",
+                    response_shape="text",
+                    response_summary=result_text[:200] if result_text else None,
+                    raw=result_text if result_text else None,
+                    duration_ms=(time.monotonic() - t0) * 1000,
+                    error=error,
+                )
+            except Exception:
+                pass  # 审计失败不阻塞业务
 
 
 async def stream_ai_text(

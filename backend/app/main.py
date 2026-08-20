@@ -32,6 +32,7 @@ from app.api import (
     alerts,
     auction_backfill,
     auction_history,
+    audit,
     backtest,
     data,
     decision,
@@ -300,6 +301,7 @@ app.include_router(portfolio_panels.router)
 app.include_router(walkforward_sse.router)
 app.include_router(alerts.router)
 app.include_router(rps.router)
+app.include_router(audit.router)
 
 if phase5_real_host.telemetry_enabled():
     app.include_router(phase5_real_host.router)

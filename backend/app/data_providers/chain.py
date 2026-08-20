@@ -161,7 +161,43 @@ def fetch_with_chain(
 
 
 def health_check(name: str) -> str:
-    """Lightweight health probe for a chain provider. Returns ok/warn/error."""
+    """Lightweight health probe for a chain provider. Returns ok/warn/error.
+
+    每次调用追加一条 ToolCallEnvelope 审计记录 (Phase 52)。
+    """
+    import time as _time
+    from app.audit.service import get_audit_repo
+    audit_repo = get_audit_repo()
+    t0 = _time.monotonic()
+    result = "unknown"
+    error: str | None = None
+    try:
+        result = _health_check_impl(name)
+    except Exception as exc:
+        error = str(exc)
+        result = "error"
+        raise
+    finally:
+        if audit_repo is not None:
+            try:
+                audit_repo.append(
+                    tool=f"provider.{name}.health_check",
+                    category="provider",
+                    params={"provider": name},
+                    response_shape="str",
+                    response_summary=result,
+                    duration_ms=(_time.monotonic() - t0) * 1000,
+                    error=error,
+                    degraded=(result == "warn"),
+                )
+            except Exception:
+                pass
+    return result
+
+
+def _health_check_impl(name: str) -> str:
+    """Original health_check implementation (renamed for audit wrapper)."""
+
     if name == "tickflow":
         return "ok"
     if name in {"free_stockdb", "local_stockdb", "xyz"}:

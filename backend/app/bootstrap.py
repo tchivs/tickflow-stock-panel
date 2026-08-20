@@ -102,6 +102,15 @@ def init_app_state(app: FastAPI) -> None:
     operational = OperationalRepository(store.data_dir / "operational.db")
     operational.migrate()
     app.state.operational = operational
+
+    # Phase 52: 注入全局审计 repository (ToolCallEnvelope)
+    import sqlite3 as _sqlite3
+    from app.audit.envelope import ToolCallAuditRepository
+    from app.audit.service import set_audit_repo
+    _audit_conn = _sqlite3.connect(str(operational.database_path), check_same_thread=False)
+    _audit_conn.row_factory = _sqlite3.Row
+    _audit_conn.execute("PRAGMA foreign_keys = ON")
+    set_audit_repo(ToolCallAuditRepository(_audit_conn))
     from app.analysis.api import SubjectScope
     from app.analysis.evidence import EvidencePreparationService
     from app.analysis.evidence_loader import GovernedEvidenceLoader
