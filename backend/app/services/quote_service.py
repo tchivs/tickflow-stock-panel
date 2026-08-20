@@ -1248,6 +1248,7 @@ class QuoteService:
         返回状态: "ok"=已取数更新; "empty"=源可达但无数据; "error"=源连接错误;
         "skip"=配置原因未拉取(无标的/无key), 不计入连通性失败。供 _resolve_probe 判定。
         """
+        from app.services import preferences
         symbols = preferences.get_realtime_watchlist_symbols()
         # 指数监控规则标的并入轮询 (与股票共享 batch 额度)
         engine = getattr(self._app_state, "monitor_engine", None) if self._app_state else None
