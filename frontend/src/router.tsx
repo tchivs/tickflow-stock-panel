@@ -67,6 +67,7 @@ const Settings = lazyPage(() => import('./pages/Settings').then(m => ({ default:
 const Indices = lazyPage(() => import('./pages/Indices').then(m => ({ default: m.Indices })))
 const Regime = lazyPage(() => import('./pages/Regime').then(m => ({ default: m.Regime })))
 const Dev = lazyPage(() => import('./pages/Dev').then(m => ({ default: m.Dev })))
+const Audit = lazyPage(() => import('./pages/Audit').then(m => ({ default: m.Audit })))
 
 // 内置路由全集 — 前端扩展注册时据此拒绝冲突路径
 const CORE_ROUTE_PATHS = new Set([
@@ -99,8 +100,8 @@ const CORE_ROUTE_PATHS = new Set([
   '/indices',
   '/regime',
   '/branding',
+  '/audit',
   '/settings',
-  '/dev',
   '/settings/keys',
   '/settings/ai',
   '/settings/queries',
@@ -179,6 +180,7 @@ export const router = createBrowserRouter([
       { path: 'indices', element: <Indices /> },
       { path: 'regime', element: <Regime /> },
       { path: 'branding', element: <Branding /> },
+      { path: 'audit', element: <Audit /> },
       { path: 'settings', element: <Settings /> },
       // 隐藏路由：开发者工具（不暴露在菜单，仅供调试）
       { path: 'dev', element: <Dev /> },

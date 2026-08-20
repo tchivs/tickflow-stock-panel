@@ -237,6 +237,12 @@ export const QK = {
   panelWfValidated:     () => ['research-panel', 'wf', 'validated'] as const,
   panelWfEnsembles:     () => ['research-panel', 'wf', 'ensembles'] as const,
   wfPlanStream:         (planId: string) => ['research-panel', 'wf', 'stream', planId] as const,
+
+  // 审计 (Audit)
+  auditToolCalls:       (params: Record<string, unknown> = {}) => ['audit', 'tool-calls', params] as const,
+  auditSummary:         ['audit', 'summary'] as const,
+  auditProviderDoctor:  ['audit', 'provider-doctor'] as const,
+  auditDataQuality:     ['audit', 'data-quality'] as const,
 } as const
 
 // ===== SSE 应该 invalidate 的 key 前缀列表 =====

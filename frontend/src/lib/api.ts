@@ -4809,3 +4809,143 @@ export interface WfEnsembleDTO {
   output_snapshot_sha256: string | null
   created_at: string
 }
+
+// ===== 审计 (Audit) =====
+
+export type AuditCategory = 'provider' | 'ai' | 'notification' | 'external'
+export type AuditHealth = 'ok' | 'warn' | 'error'
+export type AuditAlertLevel = 'ok' | 'warn' | 'error'
+
+/** 工具调用审计记录 */
+export interface ToolCallEnvelope {
+  id: string
+  seq: number
+  tool: string
+  category: AuditCategory
+  params_hash: string
+  params_summary: Record<string, unknown>
+  version: string | null
+  scope: string | null
+  principal: string | null
+  response_shape: string | null
+  response_summary: Record<string, unknown> | null
+  raw_hash: string | null
+  duration_ms: number | null
+  error: string | null
+  cached: boolean
+  degraded: boolean
+  schema_valid: boolean
+  created_at: string
+}
+
+export interface ToolCallListResponse {
+  items: ToolCallEnvelope[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export interface ToolCallSummaryByCategory {
+  total: number
+  errors: number
+  degraded: number
+  cached: number
+}
+
+export interface ToolCallSummaryByTool {
+  total: number
+  errors: number
+}
+
+export interface ToolCallSummary {
+  total_calls: number
+  total_errors: number
+  error_rate: number
+  by_category: Record<string, ToolCallSummaryByCategory>
+  by_tool: Record<string, ToolCallSummaryByTool>
+}
+
+export interface ProviderDoctorVerdict {
+  name: string
+  display_name: string
+  health: AuditHealth
+  datasets: string[]
+  detail: string
+  recommendation: string | null
+}
+
+export interface ProviderDoctorResponse {
+  verdicts: ProviderDoctorVerdict[]
+  summary: {
+    total: number
+    ok: number
+    warn: number
+    error: number
+    overall: AuditHealth
+  }
+}
+
+export interface DataQualitySource {
+  name: string
+  display_name: string
+  health: AuditHealth
+  last_sync: string | null
+  datasets: string[]
+  detail: string
+}
+
+export interface DataQualityAlert {
+  level: AuditAlertLevel
+  source: string
+  message: string
+}
+
+export interface DataQualityResponse {
+  sources: DataQualitySource[]
+  alerts: DataQualityAlert[]
+  summary: {
+    total: number
+    ok: number
+    warn: number
+    error: number
+    daily_latest_date: string | null
+    overall: AuditHealth
+  }
+}
+
+export interface AuditToolCallParams {
+  category?: string
+  tool?: string
+  scope?: string
+  principal?: string
+  cached?: boolean
+  degraded?: boolean
+  schema_valid?: boolean
+  has_error?: boolean
+  date_from?: string
+  date_to?: string
+  limit?: number
+  offset?: number
+}
+
+export async function fetchAuditToolCalls(params: AuditToolCallParams = {}): Promise<ToolCallListResponse> {
+  const qs = new URLSearchParams()
+  for (const [k, v] of Object.entries(params)) {
+    if (v === undefined || v === null || v === '') continue
+    qs.set(k, String(v))
+  }
+  const q = qs.toString()
+  return request<ToolCallListResponse>(`/api/audit/tool-calls${q ? `?${q}` : ''}`)
+}
+
+export async function fetchAuditSummary(): Promise<ToolCallSummary> {
+  return request<ToolCallSummary>('/api/audit/tool-calls-summary/summary')
+}
+
+export async function fetchProviderDoctor(): Promise<ProviderDoctorResponse> {
+  return request<ProviderDoctorResponse>('/api/audit/provider-doctor')
+}
+
+export async function fetchDataQuality(): Promise<DataQualityResponse> {
+  return request<DataQualityResponse>('/api/audit/data-quality')
+}

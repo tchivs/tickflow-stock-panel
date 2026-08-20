@@ -55,6 +55,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Key,
+  Shield,
 } from 'lucide-react'
 import { Logo } from './Logo'
 import { api, type IndexQuote } from '@/lib/api'
@@ -97,6 +98,7 @@ const nav = [
   { to: '/review',      label: '复盘',   icon: BookOpenCheck },
   { to: '/indices', label: '指数', icon: BarChart3 },
   { to: '/data',       label: '数据',   icon: Database },
+  { to: '/audit', label: '审计', icon: Shield },
 ] as const
 
 const FOCUSABLE_SELECTOR = [
