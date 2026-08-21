@@ -23,6 +23,16 @@ from fastapi.responses import StreamingResponse
 router = APIRouter(prefix="/api/research/wf", tags=["research-panels"])
 
 
+def _ws_broadcast(request: Request, channel: str, msg_type: str, data: dict) -> None:
+    """Phase 55: WS 频道广播 walk-forward 事件到 run:{plan_id} 频道。"""
+    from app.ws.broadcast import broadcast_from_thread
+
+    ws_manager = getattr(request.app.state, "ws_manager", None)
+    if ws_manager is None:
+        return
+    broadcast_from_thread(ws_manager, channel, msg_type, data)
+
+
 class _WfJob:
     """One walk-forward job's state, kept module-level for reconnect replay.
 
@@ -31,17 +41,18 @@ class _WfJob:
     stream already holds — never a per-stream copy that would miss the run.
     """
 
-    __slots__ = ("key", "progress", "result", "error", "done", "started", "created_ts", "finish_ts")
+    __slots__ = ("key", "progress", "result", "error", "done", "started", "created_ts", "finish_ts", "principal")
 
     def __init__(self, key: str):
         self.key = key
         self.progress: list[dict] = []   # fold progress history (replay on reconnect)
         self.result: dict | None = None
-        self.error: str | None = None
+        self.error = None
         self.done = False
         self.started = False
         self.created_ts: float = time.time()
         self.finish_ts: float = 0.0
+        self.principal: str | None = None  # T-55-02: 频道所有权验证
 
 
 # Module-level job table: plan_id -> _WfJob
@@ -152,6 +163,7 @@ async def stream_walk_forward(request: Request, plan_id: str):
       - error: {message}
     """
     key = _job_key(plan_id, None)
+    ws_channel = f"run:{plan_id}"
 
     def event_generator():
         _cleanup_stale_wf_jobs()
@@ -173,11 +185,14 @@ async def stream_walk_forward(request: Request, plan_id: str):
                     msg = prog[cursor]
                     cursor += 1
                     if msg.get("type") == "done":
+                        _ws_broadcast(request, ws_channel, "wf_done", msg)
                         yield f"event: done\ndata: {json.dumps(msg, ensure_ascii=False, default=str)}\n\n"
                         return
+                    _ws_broadcast(request, ws_channel, "wf_progress", msg)
                     yield f"event: progress\ndata: {json.dumps(msg, ensure_ascii=False, default=str)}\n\n"
 
                 if job.error is not None:
+                    _ws_broadcast(request, ws_channel, "wf_error", {"message": job.error})
                     yield f"event: error\ndata: {json.dumps({'message': job.error})}\n\n"
                     return
                 yield ": keepalive\n\n"

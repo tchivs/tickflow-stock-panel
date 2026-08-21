@@ -34,6 +34,19 @@ BACKTEST_SERVER_GUARD_MESSAGE = (
     "更长周期容易触发 OOM，建议在 8GB 以上内存环境或本机运行。"
 )
 
+# Phase 55: WS 频道广播辅助 — 任务流事件通过 run:{job_key} 频道推送
+def _ws_broadcast(request: Request, channel: str, msg_type: str, data: dict) -> None:
+    """通过 WS ConnectionManager 广播任务流事件到 run: 频道。
+
+    后台线程内调用: 通过 run_coroutine_threadsafe 投递到主事件循环。
+    """
+    from app.ws.broadcast import broadcast_from_thread
+
+    ws_manager = getattr(request.app.state, "ws_manager", None)
+    if ws_manager is None:
+        return
+    broadcast_from_thread(ws_manager, channel, msg_type, data)
+
 
 def _get_engine(request: Request):
     """获取或创建 BacktestEngine (单例，PanelCache 跨请求生效)。"""
@@ -407,17 +420,18 @@ import hashlib
 
 class _BacktestJob:
     """单个回测任务的状态, 存模块级供重连使用。"""
-    __slots__ = ("key", "cancel_event", "progress", "result", "error", "done", "finish_ts", "research_execution_handle")
+    __slots__ = ("key", "cancel_event", "progress", "result", "error", "done", "finish_ts", "research_execution_handle", "principal")
 
-    def __init__(self, key: str):
+    def __init__(self, key: str, principal: str | None = None):
         self.key = key
         self.cancel_event = threading.Event()
         self.progress: list[dict] = []   # 进度历史 (新连接可回放)
         self.result = None               # 完成后的结果
-        self.error: str | None = None
+        self.error = None
         self.done = False
         self.finish_ts: float = 0.0
         self.research_execution_handle: str | None = None
+        self.principal = principal       # T-55-02: 频道所有权验证
 
 
 # 模块级任务表: key -> _BacktestJob
@@ -664,7 +678,10 @@ async def strategy_stream(
     with _jobs_lock:
         job = _running_jobs.get(job_key)
         if job is None:
-            job = _BacktestJob(job_key)
+            job = _BacktestJob(
+                job_key,
+                principal=getattr(request.state, "reviewer_principal", None),
+            )
             _running_jobs[job_key] = job
             is_new = True
         else:
@@ -673,9 +690,12 @@ async def strategy_stream(
     if not guard_violated and job.research_execution_handle is None:
         job.research_execution_handle = _begin_strategy_experiment(request, strategy_id)
 
+    ws_channel = f"run:{job_key}"
+
     async def event_generator():
         # 范围保护: 直接报错
         if guard_violated:
+            _ws_broadcast(request, ws_channel, "job_error", {"message": BACKTEST_SERVER_GUARD_MESSAGE})
             yield f"event: error\ndata: {json.dumps({'message': BACKTEST_SERVER_GUARD_MESSAGE}, ensure_ascii=False)}\n\n"
             return
 
@@ -684,6 +704,7 @@ async def strategy_stream(
             capset = request.app.state.capabilities
             from app.tickflow.capabilities import Cap
             if not capset.has(Cap.KLINE_MINUTE_BATCH):
+                _ws_broadcast(request, ws_channel, "job_error", {"message": "分钟K精确回测需要 Pro+ 权限 (kline.minute.batch)"})
                 yield f"event: error\ndata: {json.dumps({'message': '分钟K精确回测需要 Pro+ 权限 (kline.minute.batch)'}, ensure_ascii=False)}\n\n"
                 return
             # 检查本地分钟K历史是否覆盖回测区间
@@ -692,12 +713,16 @@ async def strategy_stream(
             if earliest_minute is not None and start_date < earliest_minute:
                 msg = (f"本地分钟K历史最早到 {earliest_minute}, 无法覆盖回测起始日 {start_date}。"
                        f"请先用「扩展分钟K历史」功能拉取更多数据, 或缩小回测区间。")
+                _ws_broadcast(request, ws_channel, "job_error", {"message": msg})
                 yield f"event: error\ndata: {json.dumps({'message': msg}, ensure_ascii=False)}\n\n"
                 return
 
 
         if job.research_execution_handle is not None:
             yield f"event: research\ndata: {json.dumps({'execution_handle': job.research_execution_handle}, ensure_ascii=False)}\n\n"
+
+        # 回吐 job_key (等价 SSE event: job) — 前端存下供 cancel 引用
+        _ws_broadcast(request, ws_channel, "job", {"key": job_key})
 
         # 如果是新任务, 启动回测线程
         if is_new and not job.done:
@@ -732,6 +757,10 @@ async def strategy_stream(
                     shared_heavy_job_limiter,
                 )
 
+                def _emit_progress(d: dict) -> None:
+                    job.progress.append(d)
+                    _ws_broadcast(request, ws_channel, "job_progress", d)
+
                 try:
                     with shared_heavy_job_limiter.slot(
                         "normal",
@@ -740,14 +769,19 @@ async def strategy_stream(
                         task = make_worker_task("backtest", settings.data_dir, cfg)
                         result = run_worker_task(
                             task,
-                            lambda d: job.progress.append(d),
+                            _emit_progress,
                             job.cancel_event,
                         )
                     _finalize_strategy_experiment(
                         request, getattr(job, "research_execution_handle", None), result)
                     _finish_job(job, result=result)
+                    payload = result if isinstance(result, dict) else asdict(result)
+                    if job.research_execution_handle is not None:
+                        payload["research_execution_handle"] = job.research_execution_handle
+                    _ws_broadcast(request, ws_channel, "job_done", payload)
                 except HeavyJobCancelledError:
                     _finish_job(job, error="回测已取消")
+                    _ws_broadcast(request, ws_channel, "job_error", {"message": "回测已取消"})
                 except Exception as e:
                     from app.backtest.strategy import StrategyBacktestResult
 
@@ -755,6 +789,7 @@ async def strategy_stream(
                         request, getattr(job, "research_execution_handle", None),
                         StrategyBacktestResult(run_id="", config={}, error=str(e)))
                     _finish_job(job, error=str(e))
+                    _ws_broadcast(request, ws_channel, "job_error", {"message": str(e)})
 
             # 启动后台线程 (不阻塞事件循环)
             threading.Thread(target=_run_backtest, daemon=True).start()
@@ -768,18 +803,22 @@ async def strategy_stream(
                 # 已完成: 推送最终结果/错误并退出
                 if job.done:
                     if job.error:
+                        _ws_broadcast(request, ws_channel, "job_error", {"message": job.error})
                         yield f"event: error\ndata: {json.dumps({'message': job.error}, ensure_ascii=False)}\n\n"
                     elif job.result is not None:
                         r = job.result
                         error = r.get("error") if isinstance(r, dict) else getattr(r, "error", None)
                         if error == "cancelled":
+                            _ws_broadcast(request, ws_channel, "job_error", {"message": "回测已取消"})
                             yield f"event: error\ndata: {json.dumps({'message': '回测已取消'}, ensure_ascii=False)}\n\n"
                         elif error:
+                            _ws_broadcast(request, ws_channel, "job_error", {"message": error})
                             yield f"event: error\ndata: {json.dumps({'message': error}, ensure_ascii=False)}\n\n"
                         else:
                             payload = r if isinstance(r, dict) else asdict(r)
                             if job.research_execution_handle is not None:
                                 payload["research_execution_handle"] = job.research_execution_handle
+                            _ws_broadcast(request, ws_channel, "job_done", payload)
                             yield f"event: done\ndata: {json.dumps(payload, ensure_ascii=False, default=str)}\n\n"
                     return
 
@@ -793,6 +832,7 @@ async def strategy_stream(
                 while cursor < len(prog_list):
                     msg = prog_list[cursor]
                     cursor += 1
+                    _ws_broadcast(request, ws_channel, "job_progress", msg)
                     yield f"event: progress\ndata: {json.dumps(msg, ensure_ascii=False, default=str)}\n\n"
 
                 await asyncio.sleep(0.5)
@@ -985,20 +1025,26 @@ async def optimize_stream(
     with _jobs_lock:
         job = _running_jobs.get(job_key)
         if job is None:
-            job = _BacktestJob(job_key)
+            job = _BacktestJob(
+                job_key,
+                principal=getattr(request.state, "reviewer_principal", None),
+            )
             _running_jobs[job_key] = job
             is_new = True
         else:
             is_new = False
 
+    ws_channel = f"run:{job_key}"
+
     async def event_generator():
         # 首个事件回吐 job_key, 前端存下供 cancel 直接引用 (消除两侧重算契约)。
+        _ws_broadcast(request, ws_channel, "job", {"key": job_key})
         yield f"event: job\ndata: {json.dumps({'key': job_key}, ensure_ascii=False)}\n\n"
 
         if guard_violated:
+            _ws_broadcast(request, ws_channel, "job_error", {"message": BACKTEST_SERVER_GUARD_MESSAGE})
             yield f"event: error\ndata: {json.dumps({'message': BACKTEST_SERVER_GUARD_MESSAGE}, ensure_ascii=False)}\n\n"
             return
-
         if is_new and not job.done:
             try:
                 grid = json.loads(param_grid)
@@ -1045,6 +1091,10 @@ async def optimize_stream(
                         shared_heavy_job_limiter,
                     )
 
+                    def _emit_progress(d: dict) -> None:
+                        job.progress.append(d)
+                        _ws_broadcast(request, ws_channel, "job_progress", d)
+
                     try:
                         with shared_heavy_job_limiter.slot(
                             "normal",
@@ -1053,14 +1103,17 @@ async def optimize_stream(
                             task = make_worker_task("optimize", settings.data_dir, ocfg)
                             result = run_worker_task(
                                 task,
-                                lambda d: job.progress.append(d),
+                                _emit_progress,
                                 job.cancel_event,
                             )
                         _finish_job(job, result=result)
+                        _ws_broadcast(request, ws_channel, "job_done", _json_safe(result))
                     except HeavyJobCancelledError:
                         _finish_job(job, error="优化已取消")
+                        _ws_broadcast(request, ws_channel, "job_error", {"message": "优化已取消"})
                     except Exception as e:
                         _finish_job(job, error=str(e))
+                        _ws_broadcast(request, ws_channel, "job_error", {"message": str(e)})
 
                 threading.Thread(target=_run_opt, daemon=True).start()
 
@@ -1070,11 +1123,13 @@ async def optimize_stream(
             while True:
                 if job.done:
                     if job.error:
+                        _ws_broadcast(request, ws_channel, "job_error", {"message": job.error})
                         yield f"event: error\ndata: {json.dumps({'message': job.error}, ensure_ascii=False)}\n\n"
                     elif job.cancel_event.is_set():
-                        # 取消时优化器把每组记为 cancelled 并正常返回, 需在此分流为取消提示而非"完成"。
+                        _ws_broadcast(request, ws_channel, "job_error", {"message": "优化已取消"})
                         yield f"event: error\ndata: {json.dumps({'message': '优化已取消'}, ensure_ascii=False)}\n\n"
                     elif job.result is not None:
+                        _ws_broadcast(request, ws_channel, "job_done", _json_safe(job.result))
                         yield f"event: done\ndata: {json.dumps(_json_safe(job.result), ensure_ascii=False, default=str)}\n\n"
                     return
                 tick += 1
@@ -1083,6 +1138,7 @@ async def optimize_stream(
                 while cursor < len(job.progress):
                     msg = job.progress[cursor]
                     cursor += 1
+                    _ws_broadcast(request, ws_channel, "job_progress", msg)
                     yield f"event: progress\ndata: {json.dumps(msg, ensure_ascii=False, default=str)}\n\n"
                 await asyncio.sleep(0.5)
         except asyncio.CancelledError:
@@ -1210,17 +1266,25 @@ async def walkforward_stream(
     with _jobs_lock:
         job = _running_jobs.get(job_key)
         if job is None:
-            job = _BacktestJob(job_key)
+            job = _BacktestJob(
+                job_key,
+                principal=getattr(request.state, "reviewer_principal", None),
+            )
             _running_jobs[job_key] = job
             is_new = True
         else:
             is_new = False
 
+    ws_channel = f"run:{job_key}"
+
     async def event_generator():
+        # 回吐 job_key (等价 SSE event: job)
+        _ws_broadcast(request, ws_channel, "job", {"key": job_key})
         yield f"event: job\ndata: {json.dumps({'key': job_key}, ensure_ascii=False)}\n\n"
 
         if wf_guard_violated:
             msg = f"单折窗口最多 {BACKTEST_MAX_SERVER_DAYS} 天 (当前 train/test 更大), 请减小训练/测试窗口或在更大内存环境运行。"
+            _ws_broadcast(request, ws_channel, "job_error", {"message": msg})
             yield f"event: error\ndata: {json.dumps({'message': msg}, ensure_ascii=False)}\n\n"
             return
 
@@ -1271,6 +1335,10 @@ async def walkforward_stream(
                         shared_heavy_job_limiter,
                     )
 
+                    def _emit_progress(d: dict) -> None:
+                        job.progress.append(d)
+                        _ws_broadcast(request, ws_channel, "job_progress", d)
+
                     try:
                         with shared_heavy_job_limiter.slot(
                             "normal",
@@ -1279,14 +1347,17 @@ async def walkforward_stream(
                             task = make_worker_task("walkforward", settings.data_dir, wf_cfg)
                             result = run_worker_task(
                                 task,
-                                lambda d: job.progress.append(d),
+                                _emit_progress,
                                 job.cancel_event,
                             )
                         _finish_job(job, result=result)
+                        _ws_broadcast(request, ws_channel, "job_done", _json_safe(result))
                     except HeavyJobCancelledError:
                         _finish_job(job, error="walk-forward 已取消")
+                        _ws_broadcast(request, ws_channel, "job_error", {"message": "walk-forward 已取消"})
                     except Exception as e:
                         _finish_job(job, error=str(e))
+                        _ws_broadcast(request, ws_channel, "job_error", {"message": str(e)})
 
                 threading.Thread(target=_run_wf, daemon=True).start()
 
@@ -1296,10 +1367,13 @@ async def walkforward_stream(
             while True:
                 if job.done:
                     if job.error:
+                        _ws_broadcast(request, ws_channel, "job_error", {"message": job.error})
                         yield f"event: error\ndata: {json.dumps({'message': job.error}, ensure_ascii=False)}\n\n"
                     elif job.cancel_event.is_set():
+                        _ws_broadcast(request, ws_channel, "job_error", {"message": "walk-forward 已取消"})
                         yield f"event: error\ndata: {json.dumps({'message': 'walk-forward 已取消'}, ensure_ascii=False)}\n\n"
                     elif job.result is not None:
+                        _ws_broadcast(request, ws_channel, "job_done", _json_safe(job.result))
                         yield f"event: done\ndata: {json.dumps(_json_safe(job.result), ensure_ascii=False, default=str)}\n\n"
                     return
                 tick += 1
@@ -1308,6 +1382,7 @@ async def walkforward_stream(
                 while cursor < len(job.progress):
                     msg = job.progress[cursor]
                     cursor += 1
+                    _ws_broadcast(request, ws_channel, "job_progress", msg)
                     yield f"event: progress\ndata: {json.dumps(msg, ensure_ascii=False, default=str)}\n\n"
                 await asyncio.sleep(0.5)
         except asyncio.CancelledError:

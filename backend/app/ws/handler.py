@@ -106,7 +106,32 @@ async def _message_loop(conn) -> None:
                     })
                 )
                 continue
-            conn.channels.update(channels)
+            # T-55-02: run:{run_id} 频道所有权验证 — 防止跨 principal 订阅
+            rejected = []
+            allowed = []
+            for ch in new_channels:
+                if ch.startswith("run:"):
+                    run_id = ch[len("run:"):]
+                    if not _verify_run_ownership(conn.principal, run_id):
+                        rejected.append(ch)
+                    else:
+                        allowed.append(ch)
+                else:
+                    allowed.append(ch)
+            if rejected:
+                await conn.ws.send_json(
+                    make_msg("error", 0, {
+                        "reason": f"频道无权订阅: {', '.join(rejected)}"
+                    })
+                )
+                # 只加入通过验证的频道
+                conn.channels.update(allowed)
+                if allowed:
+                    await conn.ws.send_json(
+                        make_msg("subscribed", 0, {"channels": sorted(conn.channels)})
+                    )
+                continue
+            conn.channels.update(allowed)
             await conn.ws.send_json(
                 make_msg("subscribed", 0, {"channels": sorted(conn.channels)})
             )
@@ -155,3 +180,36 @@ async def _keepalive(conn, interval: float = 30.0) -> None:
             await conn.ws.send_json(msg)
         except Exception:  # noqa: BLE001 — 连接断开, 退出心跳
             break
+
+def _verify_run_ownership(principal: str, run_id: str) -> bool:
+    """T-55-02: 验证 principal 对 run_id 频道的所有权。
+
+    检查 backtest._running_jobs / walkforward_sse._wf_jobs 中对应 job 的
+    principal 字段; 若 job 存在且 principal 不匹配则拒绝。
+    未知 run_id (未入表) 允许订阅 — 任务可能在别的模块或刚创建尚未入表。
+    """
+    # backtest job 表: 检查 job_key → principal
+    try:
+        from app.api import backtest as bt_mod
+        job = bt_mod._running_jobs.get(run_id)
+        if job is not None:
+            job_principal = getattr(job, "principal", None)
+            if job_principal is not None and job_principal != principal:
+                return False
+            return True
+    except Exception:  # noqa: BLE001
+        pass
+    # walkforward_sse job 表
+    try:
+        from app.api import walkforward_sse as wf_mod
+        wf_key = f"wf:{run_id}"
+        job = wf_mod._wf_jobs.get(wf_key)
+        if job is not None:
+            wf_principal = getattr(job, "principal", None)
+            if wf_principal is not None and wf_principal != principal:
+                return False
+            return True
+    except Exception:  # noqa: BLE001
+        pass
+    # 未知 run_id: 允许订阅
+    return True

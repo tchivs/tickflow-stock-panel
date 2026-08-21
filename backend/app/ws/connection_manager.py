@@ -59,6 +59,19 @@ class ConnectionManager:
         # per-principal 持久状态 (跨重连)
         self._principal_rings: dict[str, deque[dict]] = {}
         self._principal_seq: dict[str, int] = {}
+        # 主事件循环引用 (bootstrap lifespan 捕获, 供后台线程 run_coroutine_threadsafe 投递)
+        self._main_loop: asyncio.AbstractEventLoop | None = None
+
+    def set_main_loop(self, loop: asyncio.AbstractEventLoop) -> None:
+        """记录主事件循环 (bootstrap lifespan 内调用)。
+
+        后台线程 (QuoteService 轮询 / backtest job 线程) 无法直接 await,
+        需通过 run_coroutine_threadsafe 投递到主循环 — 必须先拿到引用。
+        """
+        self._main_loop = loop
+
+    def get_main_loop(self) -> asyncio.AbstractEventLoop | None:
+        return self._main_loop
 
     async def connect(self, ws: "WebSocket", principal: str) -> WsConnection:
         """接受 WS 握手, 创建 WsConnection 并加入连接列表。

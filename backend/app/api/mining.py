@@ -45,6 +45,16 @@ _SSE_POLL_SECONDS = 0.5
 _SSE_HEARTBEAT_SECONDS = 15.0
 
 
+def _ws_broadcast(request: Request, channel: str, msg_type: str, data: dict) -> None:
+    """通过 WS ConnectionManager 广播 mining 事件到 run:{run_id} 频道。"""
+    from app.ws.broadcast import broadcast_from_thread
+
+    ws_manager = getattr(request.app.state, "ws_manager", None)
+    if ws_manager is None:
+        return
+    broadcast_from_thread(ws_manager, channel, msg_type, data)
+
+
 class MiningStartRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
@@ -268,6 +278,7 @@ def stream_events(
     store = _manager(request).store
     _required_manifest(store, run_id)
     cursor = _event_cursor(last_event_id)
+    ws_channel = f"run:{run_id}"
 
     async def generate() -> AsyncIterator[dict[str, str]]:
         nonlocal cursor
@@ -280,6 +291,7 @@ def stream_events(
                 summary = await asyncio.to_thread(store.read_summary, run_id)
                 progress = summary.get("progress")
                 if isinstance(progress, Mapping):
+                    _ws_broadcast(request, ws_channel, "progress", dict(progress))
                     yield {
                         "id": str(cursor),
                         "event": "progress",
@@ -294,6 +306,7 @@ def stream_events(
                 if event_type in TERMINAL_RUN_STATUSES:
                     payload.setdefault("status", event_type)
                     terminal_sent = True
+                _ws_broadcast(request, ws_channel, event_type, payload)
                 yield {
                     "id": str(cursor),
                     "event": event_type,
@@ -307,13 +320,12 @@ def stream_events(
             if status in TERMINAL_RUN_STATUSES:
                 if not terminal_sent:
                     event_type = "failed" if status == "failed" else status
+                    terminal_payload = {"status": status, "message": manifest.get("error")}
+                    _ws_broadcast(request, ws_channel, event_type, terminal_payload)
                     yield {
                         "id": str(cursor),
                         "event": event_type,
-                        "data": json.dumps(
-                            {"status": status, "message": manifest.get("error")},
-                            ensure_ascii=False,
-                        ),
+                        "data": json.dumps(terminal_payload, ensure_ascii=False),
                     }
                 return
             now = asyncio.get_running_loop().time()

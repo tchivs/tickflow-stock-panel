@@ -20,6 +20,16 @@ from app.forecast import projections
 
 router = APIRouter(prefix="/api/forecast", tags=["forecast"])
 _INSTRUMENT = re.compile(r"^[0-9A-Z.-]{1,32}$")
+
+
+def _ws_broadcast(request: Request, channel: str, msg_type: str, data: dict) -> None:
+    """Phase 55: WS 频道广播 forecast 事件到 run:{job_id} 频道。"""
+    from app.ws.broadcast import broadcast_from_thread
+
+    ws_manager = getattr(request.app.state, "ws_manager", None)
+    if ws_manager is None:
+        return
+    broadcast_from_thread(ws_manager, channel, msg_type, data)
 _TERMINAL = {
     "completed",
     "validation_failed",
@@ -439,6 +449,7 @@ async def _event_stream(
 ) -> AsyncIterator[str]:
     hub = _hub(request)
     repository = _repository(request)
+    ws_channel = f"run:{job_id}"
     try:
         for _poll in range(120):
             if await request.is_disconnected():
@@ -457,6 +468,8 @@ async def _event_stream(
                     continue
                 event = projections.progress(persisted)
                 event_name = "done" if event["status"] in _TERMINAL else "forecast_progress"
+                # Phase 55: WS 广播 (transition_version 作为 seq 语义保留)
+                _ws_broadcast(request, ws_channel, event_name, dict(event))
                 yield _sse(event_name, event, event_id=str(version))
                 after_version = version
                 if event_name == "done":

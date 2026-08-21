@@ -461,6 +461,11 @@ def init_app_state(app: FastAPI) -> None:
     # Phase 55: WebSocket ConnectionManager — 行情/告警/持仓等实时推送通道
     from app.ws.connection_manager import ConnectionManager
     ws_manager = ConnectionManager()
+    import asyncio
+    try:
+        ws_manager.set_main_loop(asyncio.get_running_loop())
+    except RuntimeError:
+        pass  # 非事件循环上下文 (测试等): 后台广播降级为 no-op
     app.state.ws_manager = ws_manager
     qs.attach_ws_manager(ws_manager)
     app.state.advanced_job_service.set_progress_publisher(qs.notify_advanced_progress)

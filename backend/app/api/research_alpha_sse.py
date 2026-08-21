@@ -42,6 +42,35 @@ _PAGE = 500  # bounded page size for the durable-ledger poll (limits in-flight r
 _POLL_INTERVAL = 1.0  # seconds between empty-poll keepalives
 
 
+def _ws_broadcast(request: Request, channel: str, msg_type: str, data: dict) -> None:
+    """Phase 55: WS 频道广播 alpha 事件到 run:{run_id} 频道。"""
+    from app.ws.broadcast import broadcast_from_thread
+
+    ws_manager = getattr(request.app.state, "ws_manager", None)
+    if ws_manager is None:
+        return
+    broadcast_from_thread(ws_manager, channel, msg_type, data)
+
+
+def _safe_seq(raw: str | None) -> int:
+    """解析 SSE id (seq) 为 int, 非法回退 0。"""
+    if raw is None:
+        return 0
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _parse_sse_data(raw: str) -> dict:
+    """解析 SSE data JSON 为 dict, 解析失败回退空 dict。"""
+    try:
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, dict) else {}
+    except (json.JSONDecodeError, TypeError):
+        return {}
+
+
 def _service(request: Request) -> ResearchRunService:
     """Resolve the shared run service from ``app.state`` (mirrors research_alpha)."""
     service = getattr(request.app.state, "research_run_service", None)
@@ -135,11 +164,19 @@ async def stream_run_events(request: Request, run_id: str) -> EventSourceRespons
     if run is None:
         raise HTTPException(status_code=404, detail="run not found")
     cursor = _parse_last_event_id(request.headers.get("last-event-id"))
-    return EventSourceResponse(
-        _stream_events(
+    ws_channel = f"run:{run_id}"
+
+    async def _stream_with_ws() -> AsyncIterator[ServerSentEvent]:
+        async for sse in _stream_events(
             service, run_id, principal, cursor,
             is_disconnected=request.is_disconnected,
-        ),
+        ):
+            # 同步广播到 WS 频道 (alpha 事件 + seq 语义)
+            _ws_broadcast(request, ws_channel, sse.event, {"seq": _safe_seq(sse.id), "data": _parse_sse_data(sse.data)})
+            yield sse
+
+    return EventSourceResponse(
+        _stream_with_ws(),
         # The generator owns the keepalive cadence; disable the library's
         # automatic ping so the two never compete.
         ping=None,
