@@ -209,7 +209,8 @@ describe('useWsStream', () => {
       data: JSON.stringify({ type: 'quotes_updated', seq: 1, data }),
     })
 
-    expect(handler).toHaveBeenCalledWith(data)
+    // handler 签名 (data, type) — 消费方按事件类型分发
+    expect(handler).toHaveBeenCalledWith(data, 'quotes_updated')
 
     unsub()
     result.unmount()
@@ -230,5 +231,196 @@ describe('useWsStream', () => {
 
     streamHook.unmount()
     statusHook.unmount()
+  })
+})
+
+// ── AsyncQueue + ndjson stream tests (Plan 03 Task 2) ──────────────
+
+describe('AsyncQueue', () => {
+  it('test_async_queue_basic: push and iterate items in order', async () => {
+    const { AsyncQueue } = await import('./useWsStream')
+    const queue = new AsyncQueue<{ type: string; content?: string }>()
+    queue.push({ type: 'meta' })
+    queue.push({ type: 'delta', content: 'a' })
+    queue.push({ type: 'done' })
+    queue.close()
+
+    const results: { type: string; content?: string }[] = []
+    for await (const item of queue) {
+      results.push(item)
+    }
+    expect(results).toEqual([
+      { type: 'meta' },
+      { type: 'delta', content: 'a' },
+      { type: 'done' },
+    ])
+  })
+
+  it('test_async_queue_close_stops_iteration: close after push yields all items then ends', async () => {
+    const { AsyncQueue } = await import('./useWsStream')
+    const queue = new AsyncQueue<number>()
+    queue.push(1)
+    queue.push(2)
+    queue.close()
+
+    const results: number[] = []
+    for await (const item of queue) {
+      results.push(item)
+    }
+    expect(results).toEqual([1, 2])
+  })
+
+  it('test_async_queue_async_push: push after consumer starts waiting', async () => {
+    const { AsyncQueue } = await import('./useWsStream')
+    const queue = new AsyncQueue<string>()
+
+    const consume = (async () => {
+      const items: string[] = []
+      for await (const item of queue) {
+        items.push(item)
+      }
+      return items
+    })()
+
+    queue.push('hello')
+    queue.push('world')
+    queue.close()
+
+    const items = await consume
+    expect(items).toEqual(['hello', 'world'])
+  })
+
+  it('test_async_queue_close_wakes_waiting_consumer: close with no items ends iteration', async () => {
+    const { AsyncQueue } = await import('./useWsStream')
+    const queue = new AsyncQueue<number>()
+
+    const consume = (async () => {
+      const items: number[] = []
+      for await (const item of queue) {
+        items.push(item)
+      }
+      return items
+    })()
+
+    queue.close()
+    const items = await consume
+    expect(items).toEqual([])
+  })
+
+  it('test_async_queue_push_after_close_ignored: push after close does nothing', async () => {
+    const { AsyncQueue } = await import('./useWsStream')
+    const queue = new AsyncQueue<number>()
+    queue.close()
+    queue.push(42)
+
+    const items: number[] = []
+    for await (const item of queue) {
+      items.push(item)
+    }
+    expect(items).toEqual([])
+  })
+})
+
+describe('useWsStream channel routing (run/analysis/review)', () => {
+  let mockWs: {
+    onopen: (() => void) | null
+    onmessage: ((e: { data: string }) => void) | null
+    onclose: (() => void) | null
+    onerror: (() => void) | null
+    send: ReturnType<typeof vi.fn>
+    close: ReturnType<typeof vi.fn>
+    readyState: number
+  }
+
+  beforeEach(() => {
+    vi.resetModules()
+    vi.useFakeTimers()
+    mockWs = {
+      onopen: null, onmessage: null, onclose: null, onerror: null,
+      send: vi.fn(), close: vi.fn(), readyState: 1,
+    }
+    const WSConstructor = Object.assign(vi.fn(() => mockWs), { OPEN: 1, CLOSED: 3 })
+    vi.stubGlobal('WebSocket', WSConstructor)
+    vi.stubGlobal('location', { protocol: 'http:', host: 'localhost:3011' })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  async function setupHook() {
+    const mod = await import('./useWsStream')
+    const wrapper = createWrapper()
+    const result = renderHook(() => mod.useWsStream(true), { wrapper })
+    mockWs.onopen!()
+    return { mod, result }
+  }
+
+  it('test_run_channel_routing: job_progress routes to run:{id} channel', async () => {
+    const { mod, result } = await setupHook()
+    const handler = vi.fn()
+
+    const unsub = mod.subscribe('run:abc123', handler)
+    mockWs.onmessage!({ data: JSON.stringify({ type: 'job_progress', seq: 1, data: { day: 1 } }) })
+    expect(handler).toHaveBeenCalledWith({ day: 1 }, 'job_progress')
+
+    handler.mockClear()
+    mockWs.onmessage!({ data: JSON.stringify({ type: 'quotes_updated', seq: 2, data: {} }) })
+    expect(handler).not.toHaveBeenCalled()
+
+    unsub()
+    result.unmount()
+  })
+
+  it('test_analysis_channel_routing: analysis_delta routes to analysis:{symbol} channel', async () => {
+    const { mod, result } = await setupHook()
+    const handler = vi.fn()
+
+    const unsub = mod.subscribe('analysis:600519.SH', handler)
+    mockWs.onmessage!({ data: JSON.stringify({ type: 'analysis_delta', seq: 1, data: { content: 'chunk' } }) })
+    expect(handler).toHaveBeenCalledWith({ content: 'chunk' }, 'analysis_delta')
+
+    handler.mockClear()
+    mockWs.onmessage!({ data: JSON.stringify({ type: 'job_progress', seq: 2, data: {} }) })
+    expect(handler).not.toHaveBeenCalled()
+
+    unsub()
+    result.unmount()
+  })
+
+  it('test_review_channel_routing: review_delta routes to review channel', async () => {
+    const { mod, result } = await setupHook()
+    const handler = vi.fn()
+
+    const unsub = mod.subscribe('review', handler)
+    mockWs.onmessage!({ data: JSON.stringify({ type: 'review_delta', seq: 1, data: { content: 'text' } }) })
+    expect(handler).toHaveBeenCalledWith({ content: 'text' }, 'review_delta')
+
+    unsub()
+    result.unmount()
+  })
+
+  it('test_static_channel_routing: strategy_alert routes to alerts channel', async () => {
+    const { mod, result } = await setupHook()
+    const handler = vi.fn()
+
+    const unsub = mod.subscribe('alerts', handler)
+    mockWs.onmessage!({ data: JSON.stringify({ type: 'strategy_alert', seq: 1, data: { alert: 'test' } }) })
+    expect(handler).toHaveBeenCalledWith({ alert: 'test' }, 'strategy_alert')
+
+    unsub()
+    result.unmount()
+  })
+
+  it('test_request_sends_message: request sends {type:"request", channel, params}', async () => {
+    const { mod, result } = await setupHook()
+    mockWs.send.mockClear()
+
+    mod.request('analysis:600519.SH', { symbol: '600519.SH', focus: '盈利' })
+    expect(mockWs.send).toHaveBeenCalledWith(
+      JSON.stringify({ type: 'request', channel: 'analysis:600519.SH', params: { symbol: '600519.SH', focus: '盈利' } }),
+    )
+
+    result.unmount()
   })
 })

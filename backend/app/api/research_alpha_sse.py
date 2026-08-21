@@ -171,8 +171,9 @@ async def stream_run_events(request: Request, run_id: str) -> EventSourceRespons
             service, run_id, principal, cursor,
             is_disconnected=request.is_disconnected,
         ):
-            # 同步广播到 WS 频道 (alpha 事件 + seq 语义)
-            _ws_broadcast(request, ws_channel, sse.event, {"seq": _safe_seq(sse.id), "data": _parse_sse_data(sse.data)})
+            # 同步广播到 WS 频道 (alpha 事件 + seq 语义); 跳过 ping comment (无 event 名)
+            if sse.event is not None:
+                _ws_broadcast(request, ws_channel, sse.event, {"seq": _safe_seq(sse.id), "data": _parse_sse_data(sse.data)})
             yield sse
 
     return EventSourceResponse(

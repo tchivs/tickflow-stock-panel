@@ -218,3 +218,8 @@ export function groupPctTitle(info: GroupPctInfo | undefined): string {
   if (!info || info.pct == null) return '暂无涨跌幅数据'
   return `等权平均 ${fmtPct(info.pct)} · 上涨${info.up} 下跌${info.down} 平${info.flat} (共${info.sampled}只)`
 }
+
+/** 分组涨跌幅紧凑显示 (等权平均), 复用全站 fmtPct */
+export function formatGroupPct(pct: number | null | undefined): string {
+  return fmtPct(pct)
+}

@@ -3,6 +3,7 @@
 // Dev: Vite 按启动脚本解析出的 BACKEND_HOST/BACKEND_PORT 代理 /api
 // Prod:同源(FastAPI 托管前端 dist)
 
+import { AsyncQueue, subscribe, request as wsRequest } from './useWsStream'
 import { toast } from '@/components/Toast'
 
 const BASE = ''
@@ -3448,46 +3449,24 @@ export const api = {
     content?: string
     message?: string
   }> {
-    const res = await fetch('/api/financials/analyze', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ symbol, focus: focus ?? '' }),
+    // WS: useWsStream.request(`analysis:${symbol}`, {symbol, focus, source: "financial"})
+    // 后端 dispatcher 路由到 financials 流式生成 → 频道推送 analysis_meta/delta/done/error
+    const channel = `analysis:${symbol}`
+    type FinMsg = { type: 'meta' | 'delta' | 'error' | 'done'; symbol?: string; summary?: string; periods?: number; content?: string; message?: string }
+    const queue = new AsyncQueue<FinMsg>()
+    const unsub = subscribe(channel, (data, type) => {
+      if (type === 'analysis_meta') { queue.push({ type: 'meta', symbol: data.symbol as string | undefined, summary: data.summary as string | undefined, periods: data.periods as number | undefined }) }
+      else if (type === 'analysis_delta') { queue.push({ type: 'delta', content: data.content as string }) }
+      else if (type === 'analysis_done') { queue.push({ type: 'done' }); queue.close() }
+      else if (type === 'analysis_error') { queue.push({ type: 'error', message: data.reason as string }); queue.close() }
     })
-    if (!res.ok) {
-      let detail = ''
-      try { const j = JSON.parse(await res.text()); detail = j.detail ?? j.message ?? '' } catch { /* ignore */ }
-      const msg = detail || `${res.status} ${res.statusText}`
-      toast(msg, 'error')
-      throw new Error(msg)
-    }
-    if (!res.body) throw new Error('响应无 body')
-
-    const reader = res.body.getReader()
-    const decoder = new TextDecoder()
-    let buf = ''
-    for (;;) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buf += decoder.decode(value, { stream: true })
-      // 按行分割(保留最后不完整的行在 buf)
-      const lines = buf.split('\n')
-      buf = lines.pop() ?? ''
-      for (const line of lines) {
-        const s = line.trim()
-        if (!s) continue
-        try {
-          yield JSON.parse(s)
-        } catch {
-          // 忽略无法解析的行
-        }
-      }
-    }
-    // 处理残余
-    if (buf.trim()) {
-      try { yield JSON.parse(buf.trim()) } catch { /* ignore */ }
+    wsRequest(channel, { symbol, focus: focus ?? '', source: 'financial' })
+    try {
+      for await (const msg of queue) { yield msg }
+    } finally {
+      unsub()
     }
   },
-
   // ===== 个股分析 =====
   stockAnalysisLevels: (symbol: string, days = 120) =>
     request<StockLevels>(`/api/stock-analysis/levels?symbol=${encodeURIComponent(symbol)}&days=${days}`),
@@ -3520,37 +3499,21 @@ export const api = {
     content?: string
     message?: string
   }> {
-    const res = await fetch('/api/stock-analysis/analyze', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ symbol, focus: focus ?? '' }),
+    // WS: useWsStream.request(`analysis:${symbol}`, {symbol, focus}) — 默认路由到个股分析
+    const channel = `analysis:${symbol}`
+    type StockMsg = { type: 'meta' | 'delta' | 'error' | 'done'; symbol?: string; summary?: string; levels?: Record<LevelType, PriceLevel[]>; close?: number | null; content?: string; message?: string }
+    const queue = new AsyncQueue<StockMsg>()
+    const unsub = subscribe(channel, (data, type) => {
+      if (type === 'analysis_meta') { queue.push({ type: 'meta', symbol: data.symbol as string | undefined, summary: data.summary as string | undefined, levels: data.levels as Record<LevelType, PriceLevel[]> | undefined, close: data.close as number | null | undefined }) }
+      else if (type === 'analysis_delta') { queue.push({ type: 'delta', content: data.content as string }) }
+      else if (type === 'analysis_done') { queue.push({ type: 'done' }); queue.close() }
+      else if (type === 'analysis_error') { queue.push({ type: 'error', message: data.reason as string }); queue.close() }
     })
-    if (!res.ok) {
-      let detail = ''
-      try { const j = JSON.parse(await res.text()); detail = j.detail ?? j.message ?? '' } catch { /* ignore */ }
-      const msg = detail || `${res.status} ${res.statusText}`
-      toast(msg, 'error')
-      throw new Error(msg)
-    }
-    if (!res.body) throw new Error('响应无 body')
-
-    const reader = res.body.getReader()
-    const decoder = new TextDecoder()
-    let buf = ''
-    for (;;) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buf += decoder.decode(value, { stream: true })
-      const lines = buf.split('\n')
-      buf = lines.pop() ?? ''
-      for (const line of lines) {
-        const s = line.trim()
-        if (!s) continue
-        try { yield JSON.parse(s) } catch { /* ignore */ }
-      }
-    }
-    if (buf.trim()) {
-      try { yield JSON.parse(buf.trim()) } catch { /* ignore */ }
+    wsRequest(channel, { symbol, focus: focus ?? '' })
+    try {
+      for await (const msg of queue) { yield msg }
+    } finally {
+      unsub()
     }
   },
 
@@ -3582,37 +3545,20 @@ export const api = {
     content?: string
     message?: string
   }> {
-    const res = await fetch('/api/market-recap/analyze', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ as_of: asOf ?? null, focus: focus ?? '' }),
+    // WS: useWsStream.request("review", {as_of, focus, kind: "market_recap"}) — 默认路由到大盘复盘
+    type ReviewMsg = { type: 'meta' | 'delta' | 'error' | 'done'; as_of?: string; emotion_score?: number; emotion_label?: string; summary?: string; content?: string; message?: string }
+    const queue = new AsyncQueue<ReviewMsg>()
+    const unsub = subscribe('review', (data, type) => {
+      if (type === 'review_meta') { queue.push({ type: 'meta', as_of: data.as_of as string | undefined, emotion_score: data.emotion_score as number | undefined, emotion_label: data.emotion_label as string | undefined, summary: data.summary as string | undefined }) }
+      else if (type === 'review_delta') { queue.push({ type: 'delta', content: data.content as string }) }
+      else if (type === 'review_done') { queue.push({ type: 'done' }); queue.close() }
+      else if (type === 'review_error') { queue.push({ type: 'error', message: data.reason as string }); queue.close() }
     })
-    if (!res.ok) {
-      let detail = ''
-      try { const j = JSON.parse(await res.text()); detail = j.detail ?? j.message ?? '' } catch { /* ignore */ }
-      const msg = detail || `${res.status} ${res.statusText}`
-      toast(msg, 'error')
-      throw new Error(msg)
-    }
-    if (!res.body) throw new Error('响应无 body')
-
-    const reader = res.body.getReader()
-    const decoder = new TextDecoder()
-    let buf = ''
-    for (;;) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buf += decoder.decode(value, { stream: true })
-      const lines = buf.split('\n')
-      buf = lines.pop() ?? ''
-      for (const line of lines) {
-        const s = line.trim()
-        if (!s) continue
-        try { yield JSON.parse(s) } catch { /* ignore */ }
-      }
-    }
-    if (buf.trim()) {
-      try { yield JSON.parse(buf.trim()) } catch { /* ignore */ }
+    wsRequest('review', { as_of: asOf ?? null, focus: focus ?? '', kind: 'market_recap' })
+    try {
+      for await (const msg of queue) { yield msg }
+    } finally {
+      unsub()
     }
   },
 
@@ -3624,40 +3570,22 @@ export const api = {
     content?: string
     message?: string
   }> {
-    const res = await fetch('/api/rps/rotation-analyze', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ days, focus: focus ?? '', kind: kind ?? 'concept', level: level ?? null }),
+    // WS: useWsStream.request("review", {days, focus, kind, level, source: "rps"}) — 路由到 RPS 轮动分析
+    type RotMsg = { type: 'meta' | 'delta' | 'error' | 'done'; days?: number; summary?: string; content?: string; message?: string }
+    const queue = new AsyncQueue<RotMsg>()
+    const unsub = subscribe('review', (data, type) => {
+      if (type === 'review_meta') { queue.push({ type: 'meta', days: data.days as number | undefined, summary: data.summary as string | undefined }) }
+      else if (type === 'review_delta') { queue.push({ type: 'delta', content: data.content as string }) }
+      else if (type === 'review_done') { queue.push({ type: 'done' }); queue.close() }
+      else if (type === 'review_error') { queue.push({ type: 'error', message: data.reason as string }); queue.close() }
     })
-    if (!res.ok) {
-      let detail = ''
-      try { const j = JSON.parse(await res.text()); detail = j.detail ?? j.message ?? '' } catch { /* ignore */ }
-      const msg = detail || `${res.status} ${res.statusText}`
-      toast(msg, 'error')
-      throw new Error(msg)
-    }
-    if (!res.body) throw new Error('响应无 body')
-
-    const reader = res.body.getReader()
-    const decoder = new TextDecoder()
-    let buf = ''
-    for (;;) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buf += decoder.decode(value, { stream: true })
-      const lines = buf.split('\n')
-      buf = lines.pop() ?? ''
-      for (const line of lines) {
-        const s = line.trim()
-        if (!s) continue
-        try { yield JSON.parse(s) } catch { /* ignore */ }
-      }
-    }
-    if (buf.trim()) {
-      try { yield JSON.parse(buf.trim()) } catch { /* ignore */ }
+    wsRequest('review', { days, focus: focus ?? '', kind: kind ?? 'concept', level: level ?? null, source: 'rps' })
+    try {
+      for await (const msg of queue) { yield msg }
+    } finally {
+      unsub()
     }
   },
-
   // ===== Strategy Engine =====
   strategyList: (assetType?: 'stock' | 'etf', timeframe = '1d') => {
     const params = new URLSearchParams()
@@ -3994,37 +3922,30 @@ export const api = {
     ),
 
   async *strategyBuildStream(step: number, payload: Record<string, any>): AsyncGenerator<StrategyBuildStreamEvent> {
-    const res = await fetch('/api/strategies/build/stream', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ step, ...payload }),
-    })
-    if (!res.ok) {
-      let detail = ''
-      try { const j = JSON.parse(await res.text()); detail = j.detail ?? j.message ?? '' } catch { /* ignore */ }
-      const msg = detail || `${res.status} ${res.statusText}`
-      toast(msg, 'error')
-      throw new Error(msg)
-    }
-    if (!res.body) throw new Error('响应无 body')
-
-    const reader = res.body.getReader()
-    const decoder = new TextDecoder()
-    let buf = ''
-    for (;;) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buf += decoder.decode(value, { stream: true })
-      const lines = buf.split('\n')
-      buf = lines.pop() ?? ''
-      for (const line of lines) {
-        const s = line.trim()
-        if (!s) continue
-        try { yield JSON.parse(s) } catch { /* ignore */ }
+    // WS: useWsStream.request(`analysis:${strategy_id}`, {step, ...payload, source: "strategy"})
+    // 后端 dispatcher 检测 strategy_id/step → 路由到 strategy build 流式生成
+    const strategyId = payload.strategy_id as string
+    const channel = `analysis:${strategyId}`
+    const queue = new AsyncQueue<StrategyBuildStreamEvent>()
+    const unsub = subscribe(channel, (data, type) => {
+      if (type === 'analysis_meta') {
+        queue.push({ type: 'meta', strategy_id: data.strategy_id as string | undefined, step: data.step as number | undefined })
+      } else if (type === 'analysis_delta') {
+        queue.push({ type: 'delta', content: data.content as string })
+      } else if (type === 'analysis_done') {
+        const result = data.result as StrategyBuildResult
+        queue.push({ type: 'result', ...result })
+        queue.close()
+      } else if (type === 'analysis_error') {
+        queue.push({ type: 'error', message: data.reason as string })
+        queue.close()
       }
-    }
-    if (buf.trim()) {
-      try { yield JSON.parse(buf.trim()) } catch { /* ignore */ }
+    })
+    wsRequest(channel, { step, ...payload })
+    try {
+      for await (const msg of queue) { yield msg }
+    } finally {
+      unsub()
     }
   },
 

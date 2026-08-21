@@ -55,6 +55,17 @@ def _ws_broadcast(request: Request, channel: str, msg_type: str, data: dict) -> 
     broadcast_from_thread(ws_manager, channel, msg_type, data)
 
 
+async def _ws_broadcast_async(request: Request, channel: str, msg_type: str, data: dict) -> None:
+    """async 上下文内直接 await broadcast_to_channel (避免 run_coroutine_threadsafe 排队延迟)。"""
+    ws_manager = getattr(request.app.state, "ws_manager", None)
+    if ws_manager is None:
+        return
+    try:
+        await ws_manager.broadcast_to_channel(channel, msg_type, data)
+    except Exception:  # noqa: BLE001 — 广播尽力而为, 不阻断 SSE 流
+        return
+
+
 class MiningStartRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
@@ -291,7 +302,7 @@ def stream_events(
                 summary = await asyncio.to_thread(store.read_summary, run_id)
                 progress = summary.get("progress")
                 if isinstance(progress, Mapping):
-                    _ws_broadcast(request, ws_channel, "progress", dict(progress))
+                    await _ws_broadcast_async(request, ws_channel, "progress", dict(progress))
                     yield {
                         "id": str(cursor),
                         "event": "progress",
@@ -306,7 +317,7 @@ def stream_events(
                 if event_type in TERMINAL_RUN_STATUSES:
                     payload.setdefault("status", event_type)
                     terminal_sent = True
-                _ws_broadcast(request, ws_channel, event_type, payload)
+                await _ws_broadcast_async(request, ws_channel, event_type, payload)
                 yield {
                     "id": str(cursor),
                     "event": event_type,
@@ -321,7 +332,7 @@ def stream_events(
                 if not terminal_sent:
                     event_type = "failed" if status == "failed" else status
                     terminal_payload = {"status": status, "message": manifest.get("error")}
-                    _ws_broadcast(request, ws_channel, event_type, terminal_payload)
+                    await _ws_broadcast_async(request, ws_channel, event_type, terminal_payload)
                     yield {
                         "id": str(cursor),
                         "event": event_type,

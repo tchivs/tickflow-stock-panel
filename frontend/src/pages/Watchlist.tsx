@@ -469,7 +469,7 @@ const StockCard = React.memo(function StockCard({
   onDimensionClick,
   isMonitored,
   groups,
-  onGroupChange,
+  onToggleMember,
   groupChangePending,
 }: {
   r: any
@@ -486,7 +486,7 @@ const StockCard = React.memo(function StockCard({
   onDimensionClick: (target: DimensionMembersTarget) => void
   isMonitored?: boolean
   groups: WatchlistGroup[]
-  onGroupChange: (symbol: string, groupId: string | null) => void
+  onToggleMember: (symbol: string, groupId: string, member: boolean) => void
   groupChangePending: boolean
 }) {
   const board = boardTag(r.symbol)
@@ -534,10 +534,10 @@ const StockCard = React.memo(function StockCard({
           <div className="flex items-center gap-0.5" onClick={e => e.stopPropagation()}>
             <WatchlistGroupPicker
               groups={groups}
-              groupId={r.group_id}
+              groupIds={r.group_ids ?? []}
               symbol={r.symbol}
               disabled={groupChangePending}
-              onChange={onGroupChange}
+              onToggleMember={onToggleMember}
             />
             <button
               onClick={() => onRequestRemove(r.symbol)}
@@ -964,9 +964,15 @@ export function Watchlist() {
     onSuccess: data => qc.setQueryData(QK.watchlist, data),
   })
 
-  const assignGroup = useMutation({
-    mutationFn: ({ symbol, groupId }: { symbol: string; groupId: string | null }) =>
-      api.watchlistSetGroup(symbol, groupId),
+  const addGroupMember = useMutation({
+    mutationFn: ({ groupId, symbol }: { groupId: string; symbol: string }) =>
+      api.watchlistGroupAddMember(groupId, symbol),
+    onSuccess: data => qc.setQueryData(QK.watchlist, data),
+  })
+
+  const removeGroupMember = useMutation({
+    mutationFn: ({ groupId, symbol }: { groupId: string; symbol: string }) =>
+      api.watchlistGroupRemoveMember(groupId, symbol),
     onSuccess: data => qc.setQueryData(QK.watchlist, data),
   })
 
@@ -985,15 +991,18 @@ export function Watchlist() {
   }, [remove])
   const handleCardCancelRemove = useCallback(() => setConfirmRemove(null), [])
   const handleCardRequestRemove = useCallback((sym: string) => setConfirmRemove(sym), [])
-  const handleGroupChange = useCallback((symbol: string, groupId: string | null) => {
-    assignGroup.mutate({ symbol, groupId })
-  }, [assignGroup])
+
+  // M:N 分组: 勾选=加入分组, 取消勾选=仅移出该分组 (标的保留在自选中)
+  const handleToggleMember = useCallback((symbol: string, groupId: string, member: boolean) => {
+    if (member) addGroupMember.mutate({ groupId, symbol })
+    else removeGroupMember.mutate({ groupId, symbol })
+  }, [addGroupMember, removeGroupMember])
 
   const listEntries = list.data?.symbols ?? []
   const allSymbols = listEntries.map(s => s.symbol)
   const rows = enriched.data?.rows ?? []
   const groupBySymbol = useMemo(
-    () => new Map(listEntries.map(entry => [entry.symbol, entry.group_id ?? null])),
+    () => new Map(listEntries.map(entry => [entry.symbol, entry.group_ids ?? []])),
     [listEntries],
   )
   // 分组等权平均涨跌幅 (实时优先 rt_pct, 收盘兜底 change_pct; 与表格同源)
@@ -1005,18 +1014,20 @@ export function Watchlist() {
     [listEntries, rows],
   )
   const groupCounts = useMemo(() => {
+    // 多组并存: 一股计入每个所属分组的计数; 不属于任何分组才计未分组
     const counts: Record<string, number> = { ungrouped: 0 }
     for (const entry of listEntries) {
-      const groupId = entry.group_id ?? 'ungrouped'
-      counts[groupId] = (counts[groupId] ?? 0) + 1
+      const gids = entry.group_ids ?? []
+      if (gids.length === 0) counts.ungrouped += 1
+      else for (const gid of gids) counts[gid] = (counts[gid] ?? 0) + 1
     }
     return counts
   }, [listEntries])
   const rowsInSelectedGroup = useMemo(() => {
-    const rowsWithGroup = rows.map(row => ({ ...row, group_id: groupBySymbol.get(row.symbol) ?? null }))
+    const rowsWithGroup = rows.map(row => ({ ...row, group_ids: groupBySymbol.get(row.symbol) ?? [] }))
     if (selectedGroup === 'all') return rowsWithGroup
-    if (selectedGroup === 'ungrouped') return rowsWithGroup.filter(row => row.group_id == null)
-    return rowsWithGroup.filter(row => row.group_id === selectedGroup)
+    if (selectedGroup === 'ungrouped') return rowsWithGroup.filter(row => row.group_ids.length === 0)
+    return rowsWithGroup.filter(row => row.group_ids.includes(selectedGroup))
   }, [groupBySymbol, rows, selectedGroup])
   const activeGroup = activeGroupId
     ? groups.find(group => group.id === activeGroupId)
@@ -1196,8 +1207,8 @@ export function Watchlist() {
       onDimensionClick={setDimensionTarget}
       isMonitored={monitoredSymbols.has(r.symbol)}
       groups={groups}
-      onGroupChange={handleGroupChange}
-      groupChangePending={assignGroup.isPending}
+      onToggleMember={handleToggleMember}
+      groupChangePending={addGroupMember.isPending || removeGroupMember.isPending}
     />
   )
 
@@ -1584,18 +1595,18 @@ export function Watchlist() {
                             <div className="flex items-center gap-1">
                               <WatchlistGroupPicker
                                 groups={groups}
-                                groupId={r.group_id}
+                                groupIds={r.group_ids ?? []}
                                 symbol={r.symbol}
-                                disabled={assignGroup.isPending}
-                                onChange={handleGroupChange}
+                                disabled={addGroupMember.isPending || removeGroupMember.isPending}
+                                onToggleMember={handleToggleMember}
                               />
-                              {r.group_id && (
+                              {selectedGroup !== 'all' && selectedGroup !== 'ungrouped' && r.group_ids?.includes(selectedGroup) && (
                                 <button
-                                  onClick={() => handleGroupChange(r.symbol, null)}
-                                  disabled={assignGroup.isPending}
+                                  onClick={() => handleToggleMember(r.symbol, selectedGroup, false)}
+                                  disabled={addGroupMember.isPending || removeGroupMember.isPending}
                                   className="p-0.5 text-muted hover:text-warning transition-colors duration-150 ease-smooth disabled:opacity-50"
-                                  aria-label="从分组移除"
-                                  title="从分组移除"
+                                  aria-label="移出当前分组"
+                                  title="移出当前分组（仍保留在自选中）"
                                 >
                                   <FolderMinus className="h-3.5 w-3.5" />
                                 </button>

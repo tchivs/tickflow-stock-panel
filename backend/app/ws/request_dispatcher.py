@@ -28,6 +28,7 @@ MAX_PENDING_REQUESTS = 5
 _ALLOWED_PARAMS = {
     "focus", "symbol", "strategy_id", "days", "kind", "level",
     "as_of", "source", "step", "name", "description",
+    "direction", "rules", "execution_backend", "current_code", "instruction",
 }
 
 
@@ -178,7 +179,7 @@ async def _dispatch_stock_analysis(
 async def _dispatch_strategy_build(
     ws_manager: Any, channel: str, params: dict
 ) -> None:
-    from app.api.strategy import AIStrategyGenerator, _build_prompt
+    from app.api.strategy import AIStrategyGenerator, BuildRequest, _build_prompt
 
     meta = {
         "strategy_id": params.get("strategy_id"),
@@ -190,12 +191,17 @@ async def _dispatch_strategy_build(
     gen = AIStrategyGenerator()
     chunks: list[str] = []
     try:
-        req = type("_Req", (), {
-            "strategy_id": params.get("strategy_id"),
+        req = BuildRequest(**{
+            "step": int(params.get("step", 1)),
             "name": params.get("name") or "",
             "description": params.get("description") or "",
-            "step": params.get("step", 1),
-        })()
+            "direction": params.get("direction") or "long",
+            "rules": params.get("rules") or "",
+            "strategy_id": params.get("strategy_id") or "",
+            "execution_backend": params.get("execution_backend") or "polars_expr",
+            "current_code": params.get("current_code") or "",
+            "instruction": params.get("instruction") or "",
+        })
         prompt = _build_prompt(req)
         async for chunk in gen.stream(prompt):
             chunks.append(chunk)
@@ -223,7 +229,9 @@ async def _dispatch_review(
     source = params.get("source") or ""
 
     if kind in ("industry", "rps") or source == "rps":
-        await _dispatch_rps(ws_manager, channel, days, focus, kind, level, app_state)
+        # rps 端点 kind 归一化: concept/industry 传给分析器 (rps 是路由语义)
+        stream_kind = "industry" if kind == "industry" else "concept"
+        await _dispatch_rps(ws_manager, channel, days, focus, stream_kind, level, app_state)
         return
 
     # 默认: 大盘复盘 (kind=concept/market_recap)

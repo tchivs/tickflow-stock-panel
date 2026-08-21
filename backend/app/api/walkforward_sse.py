@@ -43,7 +43,7 @@ class _WfJob:
 
     __slots__ = ("key", "progress", "result", "error", "done", "started", "created_ts", "finish_ts", "principal")
 
-    def __init__(self, key: str):
+    def __init__(self, key: str, principal: str | None = None):
         self.key = key
         self.progress: list[dict] = []   # fold progress history (replay on reconnect)
         self.result: dict | None = None
@@ -52,7 +52,7 @@ class _WfJob:
         self.started = False
         self.created_ts: float = time.time()
         self.finish_ts: float = 0.0
-        self.principal: str | None = None  # T-55-02: 频道所有权验证
+        self.principal: str | None = principal  # T-55-02: 频道所有权验证
 
 
 # Module-level job table: plan_id -> _WfJob
@@ -100,7 +100,7 @@ async def run_walk_forward(request: Request, plan_id: str) -> dict:
     with _wf_jobs_lock:
         job = _wf_jobs.get(key)
         if job is None:
-            job = _WfJob(key)
+            job = _WfJob(key, principal=getattr(request.state, "reviewer_principal", None))
             _wf_jobs[key] = job
         elif job.started and not job.done:
             raise HTTPException(status_code=409, detail="walk-forward already running for this plan")
@@ -174,7 +174,7 @@ async def stream_walk_forward(request: Request, plan_id: str):
                 # idle placeholder so a later POST run records into the very
                 # object this stream is already watching (a per-stream local
                 # copy would never see the run's progress).
-                job = _WfJob(key)
+                job = _WfJob(key, principal=getattr(request.state, "reviewer_principal", None))
                 _wf_jobs[key] = job
 
         cursor = 0

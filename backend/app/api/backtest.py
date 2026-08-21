@@ -775,7 +775,7 @@ async def strategy_stream(
                     _finalize_strategy_experiment(
                         request, getattr(job, "research_execution_handle", None), result)
                     _finish_job(job, result=result)
-                    payload = result if isinstance(result, dict) else asdict(result)
+                    payload = _json_safe(result if isinstance(result, dict) else asdict(result))
                     if job.research_execution_handle is not None:
                         payload["research_execution_handle"] = job.research_execution_handle
                     _ws_broadcast(request, ws_channel, "job_done", payload)

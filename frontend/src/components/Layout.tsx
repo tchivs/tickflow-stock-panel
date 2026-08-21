@@ -57,7 +57,6 @@ import {
   WalletCards,
   PanelLeftClose,
   PanelLeftOpen,
-  Key,
   Shield,
 } from 'lucide-react'
 import { Logo } from './Logo'

@@ -280,6 +280,7 @@ export function Data() {
   const jobStatus = job.data?.status
   useEffect(() => {
     if (jobStatus === 'succeeded' || jobStatus === 'failed') {
+      const jobData = job.data
       qc.invalidateQueries({ queryKey: QK.dataStatus })
       qc.invalidateQueries({ queryKey: QK.pipelineJobs })
       // 同步任务结束后 regime 覆盖范围可能变化, 一并刷新画像
@@ -287,7 +288,7 @@ export function Data() {
       // 同步重写了指数日K/enriched/日K → 失效消费这些数据的查询。
       // 侧边栏指数查询挂在 Layout 常驻不重挂载 (refetchOnWindowFocus 已关),
       // 不失效会一直显示同步前的旧值; 自选相关查询在页面正打开时同理。
-      if (job.data.status === 'succeeded') {
+      if (jobData?.status === 'succeeded') {
         qc.invalidateQueries({ queryKey: QK.indexQuotes })
         qc.invalidateQueries({ queryKey: ['index-daily'] })
         qc.invalidateQueries({ queryKey: ['watchlist-enriched'] })
