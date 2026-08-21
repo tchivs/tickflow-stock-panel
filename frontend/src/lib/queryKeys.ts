@@ -257,10 +257,12 @@ export const QK = {
 // 重算完成后刷新)。若加入 'screener', 会导致每个行情 tick 双重刷新策略页,
 // 且在 monitor "重算" 窗口内读到空结果, 造成策略列表闪烁 (变 0 → 空失效 → 又出现)。
 
-export const SSE_INVALIDATE_PREFIXES = [
+// Phase 55: SSE → WebSocket 迁移, 重命名 SSE_INVALIDATE_PREFIXES → WS_INVALIDATE_PREFIXES
+// (值不变; 保留 SSE_INVALIDATE_PREFIXES 别名供过渡期引用, Plan 03/04 清理)
+export const WS_INVALIDATE_PREFIXES = [
   // 精确前缀: 只命中自选页的实时数据 (quotes/enriched)。不能用宽泛的 'watchlist' ——
   // 会误伤 ['watchlist'] (自选列表) 和 ['watchlist-groups'] (分组配置, 只随手动操作变化)。
-  // 旧设置里的 'watchlist' 单开关由 useQuoteStream 兼容读取。
+  // 旧设置里的 'watchlist' 单开关由 useWsStream 兼容读取。
   'watchlist-quotes',
   'watchlist-enriched',
   'quote-status',
@@ -273,3 +275,6 @@ export const SSE_INVALIDATE_PREFIXES = [
   'rebalance-plans',
   'paper',
 ] as const
+
+// 别名 (Plan 03/04 清理后移除)
+export const SSE_INVALIDATE_PREFIXES = WS_INVALIDATE_PREFIXES

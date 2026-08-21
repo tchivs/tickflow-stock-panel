@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, Suspense } from 'react'
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
-import { useQuoteStream, useQuoteStreamStatus } from '@/lib/useQuoteStream'
+import { useWsStream, useWsStreamStatus, _reconnect, getCurrentBackoffSeconds } from '@/lib/useWsStream'
 import { ToastContainer } from '@/components/Toast'
 import { AlertToastContainer } from '@/components/AlertToast'
 import { AiAnalysisHost } from '@/components/financials/AiAnalysisHost'
@@ -30,6 +30,7 @@ import {
   FileText,
   Settings,
 
+  DatabaseZap,
   Database,
   Loader2,
   LayoutDashboard,
@@ -51,6 +52,7 @@ import {
   Moon,
   X,
   WifiOff,
+  AlertCircle,
   Menu,
   WalletCards,
   PanelLeftClose,
@@ -479,9 +481,32 @@ export function Layout() {
   })
 
   // SSE: 行情更新时自动刷新相关 queries + 告警通知
-  useQuoteStream(realtimeEnabled, prefs?.sse_refresh_pages)
-  // 实时 SSE 连接状态 — 断开时底部显示提示, 提示可能漏策略告警
-  const streamStatus = useQuoteStreamStatus()
+  // Phase 55: WebSocket 全局单连接 — 行情更新自动刷新 + 告警通知 + 连接状态
+  useWsStream(realtimeEnabled, prefs?.sse_refresh_pages)
+  // 实时 WS 连接状态 — 断开时底部显示提示, 提示可能漏策略告警
+  const streamStatus = useWsStreamStatus()
+
+  // Phase 55: WS 连接状态三态指示器 (UI-SPEC Connection Status UI Specification)
+  const wsDotClass = streamStatus === 'connected'
+    ? 'bg-accent'
+    : streamStatus === 'reconnecting'
+      ? 'bg-warning animate-pulse'
+      : 'bg-danger'
+  const wsStatusLabel = streamStatus === 'connected'
+    ? '已连接'
+    : streamStatus === 'reconnecting'
+      ? `正在重连 (${getCurrentBackoffSeconds()}s)`
+      : '连接已断开'
+  const wsStatusClass = streamStatus === 'connected'
+    ? 'text-accent'
+    : streamStatus === 'reconnecting'
+      ? 'text-warning/80'
+      : 'text-danger'
+  const wsDotAriaLabel = streamStatus === 'connected'
+    ? '实时连接正常'
+    : streamStatus === 'reconnecting'
+      ? '正在重连'
+      : '连接已断开'
 
   const toggleQuote = useToggleRealtimeQuotes()
   const isRunning = quoteStatus?.running ?? false
@@ -947,6 +972,12 @@ export function Layout() {
                 )}
               </div>
             )}
+
+          {/* Phase 55: WS 连接状态指示器 (UI-SPEC) */}
+          <div className="mt-1.5 flex items-center gap-2" aria-label={wsDotAriaLabel}>
+            <span className={`inline-block h-2 w-2 shrink-0 rounded-full ${wsDotClass}`} />
+            <span className={`text-xs font-semibold leading-none ${wsStatusClass}`}>{wsStatusLabel}</span>
+          </div>
           {showSidebarQuotes && !isWatchlistMode && (!isNoneTier || !!realtimeProviderName) && (
             <SidebarIndexQuotes rows={sidebarIndexQuotes?.rows} items={sidebarIndexes} />
           )}
@@ -1015,10 +1046,29 @@ export function Layout() {
           <div
             role="status"
             aria-live="polite"
-            className="fixed bottom-4 left-1/2 z-[9998] flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-warning/30 bg-warning/10 px-2.5 py-1 text-[11px] font-medium text-warning shadow-lg backdrop-blur-md"
+            className="fixed bottom-4 left-1/2 z-[9998] flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-warning/30 bg-warning/10 px-2.5 py-1 text-xs font-semibold text-warning shadow-lg backdrop-blur-md animate-in fade-in slide-in-from-bottom-2 duration-200"
           >
             <WifiOff className="h-3 w-3 shrink-0 animate-pulse" />
-            与服务连接已断开 · 正在重连
+            {getCurrentBackoffSeconds() <= 4
+              ? `与服务连接已断开 · 正在重连 (${getCurrentBackoffSeconds()}s)`
+              : `实时数据可能延迟 · 正在重连 (${getCurrentBackoffSeconds()}s)`}
+          </div>
+        )}
+        {streamStatus === 'disconnected' && (
+          <div
+            role="alert"
+            aria-live="assertive"
+            className="fixed bottom-4 left-1/2 z-[9998] flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-danger/30 bg-danger/10 px-2.5 py-1 text-xs font-semibold text-danger shadow-lg backdrop-blur-md"
+          >
+            <AlertCircle className="h-3 w-3 shrink-0" />
+            连接已断开
+            <button
+              type="button"
+              onClick={() => _reconnect()}
+              className="text-danger underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger ml-0.5"
+            >
+              重新连接
+            </button>
           </div>
         )}
         <Suspense
