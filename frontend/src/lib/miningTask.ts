@@ -213,7 +213,7 @@ function connect(runId: string) {
     }
   })
 
-  // 降级: WS 断连时启动轮询 (与 AlphaWorkbench EventSource===undefined 相同模式)
+  // 降级: WS 断连时启动轮询 (Phase 55 迁移后保留的兜底模式)
   // useWsStream 内部退避重连; 当 status === 'disconnected' (重连耗尽) 时启动轮询
   // 这里简化: 直接在订阅后启动轮询作为 fallback, WS 收到消息时停止
   // 但为避免无谓轮询, 仅在 WS 状态非 connected 时启动

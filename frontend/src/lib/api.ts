@@ -3431,7 +3431,7 @@ export const api = {
     request<{ ok: boolean }>(`/api/financials/reports/${encodeURIComponent(reportId)}`, { method: 'DELETE' }),
 
   /**
-   * AI 财务分析 — 流式调用。
+   * AI 财务分析 — 流式调用 (Phase 55: WS request → 频道流式推送)。
    *
    * 返回一个可逐行读取的 async generator,每行是 JSON:
    *   {type:"meta",symbol,summary,periods}
@@ -3439,7 +3439,9 @@ export const api = {
    *   {type:"error",message:"..."}
    *   {type:"done"}
    *
-   * 用 ReadableStream 解析(而非 SSE EventSource),支持 POST body 且更简单。
+   * 经 useWsStream.request(`analysis:{symbol}`) 触发, 后端 dispatcher 路由到
+   * 流式生成, 逐 chunk 经 analysis_delta 频道推送 (原 POST StreamingResponse
+   * application/x-ndjson 已删除, D-03)。
    */
   async *financialAnalyzeStream(symbol: string, focus?: string): AsyncGenerator<{
     type: 'meta' | 'delta' | 'error' | 'done'
@@ -4080,9 +4082,8 @@ export const api = {
 
 // ===== Phase 50: Replay Workbench (AF-REQ-18/20/22/24) =====
 // Typed fetchers + shared interfaces mirroring the backend DTOs from 50-01/02.
-// Each fetcher wraps the existing request<T> transport (api.ts:22-52); the live
-// progress stream uses native EventSource over alphaRunStreamUrl (no new
-// transport/dependency — WalkForward.tsx native-EventSource precedent).
+// Each fetcher wraps the existing request<T> transport (api.ts:22-52). Live
+// progress is delivered via WS run: 频道 (Phase 55) — SSE removed (D-03).
 
 export type AlphaRunStatus =
   | 'queued'
@@ -4266,15 +4267,8 @@ export interface StressAxes {
 }
 
 /**
- * The durable Last-Event-ID SSE stream URL for native EventSource (SC1 UI half).
- * The browser auto-sends Last-Event-ID on every reconnect; the server honors it
- * durably (50-01-04), so reconnect resumes from the acknowledged seq losslessly.
+ * List the principal's runs (runs-list selector).
  */
-export function alphaRunStreamUrl(runId: string): string {
-  return `/api/research/alpha/runs/${encodeURIComponent(runId)}/stream`
-}
-
-/** List the principal's runs (runs-list selector). */
 export function fetchAlphaRuns(): Promise<AlphaRunRead[]> {
   return request<AlphaRunRead[]>('/api/research/alpha/runs')
 }

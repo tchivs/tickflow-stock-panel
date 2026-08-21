@@ -98,7 +98,7 @@ function _typeBelongsToChannel(type: string, channel: string): boolean {
   return type === channel || type.startsWith(channel)
 }
 
-// ── 连接状态 store (仿 useQuoteStream.ts:41-78) ─────────────────
+// ── 连接状态 store ─────────────────
 
 let _streamStatus: WsStatus = 'disconnected'
 const _statusListeners = new Set<() => void>()
