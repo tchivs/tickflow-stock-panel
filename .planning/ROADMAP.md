@@ -2,7 +2,7 @@
 
 ## Phases
 
-- [ ] **Phase 55: WebSocket 全量迁移** - 服务端 WS 端点 + 现有 SSE 流全量迁移 + 连接复用 + 心跳自动重连, 保留 Last-Event-ID 语义。
+- [x] **Phase 55: WebSocket 全量迁移** - 服务端 WS 端点 + 现有 SSE 流全量迁移 + 连接复用 + 心跳自动重连, 保留 Last-Event-ID 语义。 (completed 2026-08-22)
 - [ ] **Phase 56: Server酱微信推送** - SCT API 接入 + 统一通知投递管道 + 推送审计 + 频率限制与去重。
 - [ ] **Phase 57: 客户端实时规则引擎** - 浏览器端价格阈值规则 (localStorage) + WebSocket 实时行情评估 + 命中弹窗 + 与服务端规则共存。
 - [ ] **Phase 58: 推送审计与运维** - WebSocket 连接审计 + 推送投递审计 + 首页推送质量面板, 复用 v3.1 ToolCallEnvelope 与 workbench API。
@@ -110,7 +110,7 @@
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 55. WebSocket 全量迁移 | 4/4 | In Progress|  |
+| 55. WebSocket 全量迁移 | 4/4 | Complete    | 2026-08-22 |
 | 56. Server酱微信推送 | 0/TBD | Not started | - |
 | 57. 客户端实时规则引擎 | 0/TBD | Not started | - |
 | 58. 推送审计与运维 | 0/TBD | Not started | - |
