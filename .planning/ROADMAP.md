@@ -28,7 +28,7 @@
 
 **Explicit non-goals**: 不新增消息队列或外部 broker, 不做跨进程广播 (单进程多连接即可), 不改变现有运行进度的业务语义。
 
-**Plans**: 2/4 plans executed
+**Plans**: 3/4 plans executed
 **Wave 1**
 
 - [x] 55-01-PLAN.md — WS 传输层核心 + quotes 行情流 tracer (后端 ws/ 模块 + /ws/stream 端点 + ConnectionManager + 前端 useWsStream + 连接状态 UI)
@@ -36,7 +36,7 @@
 **Wave 2** *(blocked on Wave 1 completion)*
 
 - [x] 55-02-PLAN.md — 后端 SSE/ndjson 全量迁移 (8 处 SSE + 5 处 ndjson 广播迁移到 WS 频道 + request_dispatcher)
-- [ ] 55-03-PLAN.md — 前端消费者全量迁移 (7 处 EventSource + 5 处 ndjson + 1 处 fetch SSE → useWsStream)
+- [x] 55-03-PLAN.md — 前端消费者全量迁移 (7 处 EventSource + 5 处 ndjson + 1 处 fetch SSE → useWsStream)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
@@ -110,7 +110,7 @@
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 55. WebSocket 全量迁移 | 2/4 | In Progress|  |
+| 55. WebSocket 全量迁移 | 3/4 | In Progress|  |
 | 56. Server酱微信推送 | 0/TBD | Not started | - |
 | 57. 客户端实时规则引擎 | 0/TBD | Not started | - |
 | 58. 推送审计与运维 | 0/TBD | Not started | - |

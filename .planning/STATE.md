@@ -5,15 +5,15 @@ milestone_name: 实时推送平台
 current_phase: 55
 current_phase_name: websocket
 status: executing
-stopped_at: Completed 55-02-PLAN.md
-last_updated: "2026-08-21T16:47:41.732Z"
+stopped_at: Completed 55-03-PLAN.md
+last_updated: "2026-08-21T17:31:38.327Z"
 last_activity: 2026-08-21
 last_activity_desc: "Plan 01: WS transport layer core + quotes stream"
 progress:
   total_phases: 4
   completed_phases: 0
   total_plans: 4
-  completed_plans: 2
+  completed_plans: 3
   percent: 0
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-08-18)
 ## Current Position
 
 Phase: 55 (websocket) — EXECUTING
-Plan: 2 of 4
+Plan: 3 of 4
 Status: Ready to execute
 Last activity: 2026-08-21 — Plan 01: WS transport layer core + quotes stream
 Progress: [██░░░░░░░░] 25% (1/4 plans)
@@ -137,11 +137,12 @@ None.
 | Feature | Moderator 多 Agent 研究会议室 (MODR-01) | Deferred to v3.2 — 复用 v3.1 工具审计与证据回链 |
 | Feature | v2.2 遗留延期项(PIT 概念映射/竞价历史验证/盘前监控/竞价复盘) | 已由 v2.x Phase 28-31 交付 — 见 `.planning/milestones/` 归档 |
 | Phase 55 P02 | 33min | 3 tasks | 15 files |
+| Phase 55 P03 | 36 | 3 tasks | 13 files |
 
 ## Session Continuity
 
-Last session: 2026-08-21T16:47:41.725Z
-Stopped at: Completed 55-02-PLAN.md
+Last session: 2026-08-21T17:31:38.319Z
+Stopped at: Completed 55-03-PLAN.md
 Resume file: None
 
 ---
@@ -150,3 +151,5 @@ Resume file: None
 ## Decisions
 
 - [Phase ?]: WS 频道广播用共享 _ws_broadcast helper (DRY), 频道所有权验证通过 _BacktestJob.principal 字段
+- [Phase ?]: 频道事件类型反向路由: WS 消息 type 不以频道名开头, 需维护频道前缀→事件类型集映射
+- [Phase ?]: AsyncQueue: ndjson async generator 接口不变, 底层从 fetch+ReadableStream 换成 WS subscribe + queue 缓冲
