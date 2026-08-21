@@ -1,9 +1,9 @@
 ---
 gsd_state_version: 1.0
 milestone: v3.2
-milestone_name: TBD (not yet planned)
-status: not_started
-last_updated: "2026-08-20T07:00:00.000Z"
+milestone_name: 实时推送平台
+status: planning
+last_updated: "2026-08-20T07:30:00.000Z"
 last_activity: 2026-08-20
 progress:
   total_phases: 0

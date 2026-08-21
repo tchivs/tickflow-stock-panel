@@ -26,9 +26,20 @@ An investor can turn reliable market data and their own holdings into an auditab
 
 </details>
 
-## Next Milestone Goals
+## Next Milestone: v3.2 实时推送平台
 
-v3.2 not yet planned — run `/gsd-new-milestone` to define requirements and roadmap.
+**Goal:** 从单向 SSE 轮询升级为双向实时推送平台 — 服务端可主动推送告警/任务完成/报告就绪等事件到浏览器 (WebSocket), 统一通知投递管道到外部渠道 (微信/邮件/Slack), 客户端实时规则引擎在浏览器端评估价格阈值并立即弹窗。
+
+**Target features:**
+- WebSocket 双向通信: 服务端主动推送, 浏览器实时接收 (复用 `websockets` + FastAPI `@app.websocket`)
+- 统一通知投递管道: 微信企业号/邮件/Slack 多渠道 (扩展现有 `wecom_bot_service.py`)
+- 客户端实时规则引擎: 浏览器端价格阈值评估 + 即时弹窗
+- 实时推送审计: 复用 v3.1 `ToolCallEnvelope` 审计推送投递
+
+**Existing dependencies (no new packages):**
+- Backend: `websockets` (uvicorn[standard]), `sse-starlette`, FastAPI WebSocket
+- Frontend: native `EventSource` → 升级为 `WebSocket` (浏览器原生)
+- Notification: `wecom_bot_service.py` (WeCom 长连接), `winotify` (Windows)
 
 ## Success Metric
 

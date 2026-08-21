@@ -1,0 +1,53 @@
+# Requirements: AthenaQuant v3.2
+
+## v3.2 Requirements (实时推送平台)
+
+### WebSocket 全量迁移
+
+- [ ] **WS-01**: 服务端 WebSocket 端点 (`/ws/stream`) 支持多客户端连接, 按 principal 鉴权, 替代现有 SSE 端点
+- [ ] **WS-02**: 现有 SSE 流 (walkforward / optimizer / mining / quoteStream) 全部迁移到 WebSocket 传输, 保留 Last-Event-ID 语义 (断连重连不丢失事件)
+- [ ] **WS-03**: WebSocket 连接复用 — 多个实时流 (运行进度 + 行情 + 告警) 共享同一连接, 通过消息类型路由, 不为每类流新建连接
+- [ ] **WS-04**: WebSocket 连接心跳与自动重连 — 服务端 ping/keepalive, 客户端断连指数退避重连, 连接状态对用户可见
+
+### Server酱微信推送
+
+- [ ] **SCT-01**: Server酱 (sct.ftqq.com) 通知渠道接入 — 用户配置 SCT SendKey, 后端按 SendKey 推送
+- [ ] **SCT-02**: Server酱推送接入统一通知投递管道 — 与现有 WeCom bot 共享通知触发点, 可选渠道
+- [ ] **SCT-03**: Server酱推送结果审计 — 复用 v3.1 ToolCallEnvelope 记录推送投递 (raw_hash + response_summary)
+- [ ] **SCT-04**: Server酱推送频率限制与去重 — 相同告警 5 分钟内不重复推送, 支持每日推送上限
+
+### 客户端实时规则引擎
+
+- [ ] **CR-01**: 浏览器端价格阈值规则引擎 — 用户在浏览器配置标的 + 价格阈值 (涨跌幅/绝对价格), 规则存 localStorage 不落盘后端
+- [ ] **CR-02**: 客户端规则通过 WebSocket 接收实时行情, 本地评估命中后立即弹窗提醒 (Notification API + 页内 toast)
+- [ ] **CR-03**: 客户端规则与现有服务端监控规则共存 — 服务端规则走后端评估 + 通知渠道, 客户端规则走浏览器评估 + 弹窗, 两者独立不互扰
+
+### 推送审计与运维
+
+- [ ] **PA-01**: WebSocket 连接审计 — 记录连接/断连/重连事件, 复用 ToolCallEnvelope (scope=ws)
+- [ ] **PA-02**: 推送投递审计 — Server酱/WeCom 每次投递记录 raw_hash + response_summary + duration
+- [ ] **PA-03**: 推送质量面板 — 首页工作台新增推送投递统计 (成功/失败/去重跳过), 复用 v3.1 workbench API
+
+## Requirement Summary
+
+| Requirement | Phase | Status |
+|-------------|-------|--------|
+| WS-01 | Phase 55 | Pending |
+| WS-02 | Phase 55 | Pending |
+| WS-03 | Phase 55 | Pending |
+| WS-04 | Phase 55 | Pending |
+| SCT-01 | Phase 56 | Pending |
+| SCT-02 | Phase 56 | Pending |
+| SCT-03 | Phase 56 | Pending |
+| SCT-04 | Phase 56 | Pending |
+| CR-01 | Phase 57 | Pending |
+| CR-02 | Phase 57 | Pending |
+| CR-03 | Phase 57 | Pending |
+| PA-01 | Phase 58 | Pending |
+| PA-02 | Phase 58 | Pending |
+| PA-03 | Phase 58 | Pending |
+
+**Coverage:** 14 requirements, no orphans, no duplicates.
+
+---
+*Created: 2026-08-20 — v3.2 实时推送平台 requirements defined*
