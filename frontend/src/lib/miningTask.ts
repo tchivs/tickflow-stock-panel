@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react'
 import { api, type MiningResult, type MiningRun, type MiningRunProgress, type MiningRunStatus } from './api'
+import * as wsStream from './useWsStream'
 
 export interface MiningTask {
   runId: string | null
@@ -39,7 +40,7 @@ let current: MiningTask = {
   previousResult: null,
   error: null,
 }
-let eventSource: EventSource | null = null
+let unsubFn: (() => void) | null = null
 let connectionToken = 0
 let statusPoll: {
   runId: string
@@ -70,19 +71,19 @@ function stopStatusPolling() {
 function closeEvents() {
   connectionToken += 1
   stopStatusPolling()
-  eventSource?.close()
-  eventSource = null
+  if (unsubFn) {
+    unsubFn()
+    unsubFn = null
+  }
 }
 
-function eventPayload(event: MessageEvent): Record<string, any> {
-  try {
-    const parsed = JSON.parse(event.data)
-    if (parsed && typeof parsed === 'object') {
-      return parsed.payload && typeof parsed.payload === 'object'
-        ? { ...parsed, ...parsed.payload }
-        : parsed
-    }
-  } catch { /* ignore malformed progress events */ }
+// WS 事件 data 载荷与原 SSE event.data 结构相同 (后端广播时直接传 payload)
+function wsPayload(data: Record<string, unknown>): Record<string, any> {
+  if (data && typeof data === 'object') {
+    return data.payload && typeof data.payload === 'object'
+      ? { ...data, ...data.payload as Record<string, unknown> }
+      : data
+  }
   return {}
 }
 
@@ -161,7 +162,7 @@ function startStatusPolling(runId: string, token: number, restart = false) {
         return
       }
     } catch {
-      // EventSource keeps reconnecting; polling is only a bounded status fallback.
+      // WS keeps reconnecting; polling is only a bounded status fallback.
     }
 
     if (
@@ -179,58 +180,46 @@ function startStatusPolling(runId: string, token: number, restart = false) {
   void pollStatus()
 }
 
+/** 连接 WS 频道 — 订阅 run:{run_id} */
 function connect(runId: string) {
   closeEvents()
   const token = connectionToken
-  const source = new EventSource(`/api/backtest/mining/runs/${encodeURIComponent(runId)}/events`)
-  eventSource = source
-
-  source.onopen = () => {
+  const channel = `run:${runId}`
+  unsubFn = wsStream.subscribe(channel, (data, type) => {
     if (token !== connectionToken) return
-    update({ reconnecting: false })
-    if (!current.cancelling) stopStatusPolling()
-  }
 
-  source.addEventListener('progress', event => {
-    if (token !== connectionToken) return
-    update({
-      progress: eventPayload(event as MessageEvent) as unknown as MiningRunProgress,
-      reconnecting: false,
-    })
-    if (!current.cancelling) stopStatusPolling()
+    if (type === 'progress') {
+      update({
+        progress: wsPayload(data) as unknown as MiningRunProgress,
+        reconnecting: false,
+      })
+      if (!current.cancelling) stopStatusPolling()
+      return
+    }
+
+    // 终端事件: type 即状态名 (succeeded/failed/cancelled/interrupted/...)
+    if (TERMINAL_STATES.has(type as MiningRunStatus)) {
+      const payload = wsPayload(data)
+      const status = (payload.status || type) as MiningRunStatus
+      closeEvents()
+      const terminalToken = connectionToken
+      void refreshTerminalRun(
+        runId,
+        status,
+        undefined,
+        terminalToken,
+        typeof payload.message === 'string' ? payload.message : undefined,
+      )
+    }
   })
 
-  const onTerminal = (event: Event) => {
-    if (token !== connectionToken) return
-    const payload = eventPayload(event as MessageEvent)
-    const eventType = (event as MessageEvent).type
-    const status = (payload.status || eventType) as MiningRunStatus
-    closeEvents()
-    const terminalToken = connectionToken
-    void refreshTerminalRun(
-      runId,
-      status,
-      undefined,
-      terminalToken,
-      typeof payload.message === 'string' ? payload.message : undefined,
-    )
-  }
-  for (const type of [
-    'succeeded',
-    'succeeded_with_budget_exhausted',
-    'failed',
-    'cancelled',
-    'interrupted',
-    'skipped_prerequisite',
-  ]) {
-    source.addEventListener(type, onTerminal)
-  }
-
-  source.onerror = () => {
-    if (token !== connectionToken || !current.isPending) return
-    update({ reconnecting: true })
-    startStatusPolling(runId, token)
-  }
+  // 降级: WS 断连时启动轮询 (与 AlphaWorkbench EventSource===undefined 相同模式)
+  // useWsStream 内部退避重连; 当 status === 'disconnected' (重连耗尽) 时启动轮询
+  // 这里简化: 直接在订阅后启动轮询作为 fallback, WS 收到消息时停止
+  // 但为避免无谓轮询, 仅在 WS 状态非 connected 时启动
+  // 实际: useWsStream 断连会自动重连, 这里仅在初次连接前启动一个短轮询兜底
+  // 后续 WS 连上后 onmessage 停止轮询
+  startStatusPolling(runId, token)
 }
 
 export async function startMining(payload: Parameters<typeof api.miningStart>[0]) {

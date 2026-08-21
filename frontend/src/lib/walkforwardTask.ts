@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react'
+import * as wsStream from './useWsStream'
 
-/** Walk-forward 任务管理 (SSE + job_key 回吐 + 重连)。镜像 optimizerTask。 */
+/** Walk-forward 任务管理 (WS 频道 + job_key 回吐 + 重连)。镜像 optimizerTask。 */
 
 export interface WFProgress {
   type: string
@@ -70,11 +71,9 @@ export interface StartWalkForwardParams {
 let current: WalkForwardTask | null = null
 const listeners = new Set<() => void>()
 let taskSeq = 0
-let eventSource: EventSource | null = null
+let unsubFn: (() => void) | null = null
 let currentJobKey: string | null = null
 let cancelRequested = false
-let reconnectAttempts = 0
-const MAX_RECONNECT = 5
 
 const RECONNECT_KEY = 'walkforward_reconnect'
 const JOB_KEY_KEY = 'walkforward_job_key'
@@ -96,116 +95,155 @@ function buildQuery(params: Record<string, string | number | boolean | undefined
   return sp.toString()
 }
 
-function connectSSE(url: string): void {
-  const id = current?.id ?? ++taskSeq
-
-  if (eventSource) {
-    eventSource.close()
-    eventSource = null
+/** 退订当前 WS 频道 */
+function unsubscribeChannel(): void {
+  if (unsubFn) {
+    unsubFn()
+    unsubFn = null
   }
+}
 
-  const es = new EventSource(url)
-  eventSource = es
+/** 连接 WS 频道 */
+function connectChannel(jobKey: string): void {
+  const id = current?.id ?? ++taskSeq
+  unsubscribeChannel()
 
-  es.addEventListener('job', (e: MessageEvent) => {
-    reconnectAttempts = 0
-    try {
-      const key = JSON.parse(e.data)?.key
-      if (key) {
+  const channel = `run:${jobKey}`
+  unsubFn = wsStream.subscribe(channel, (data, type) => {
+    if (current?.id !== id) return
+
+    if (type === 'job') {
+      const key = data.key
+      if (typeof key === 'string' && key) {
         currentJobKey = key
         localStorage.setItem(JOB_KEY_KEY, key)
-        // 竞态: stop 在拿到 key 前被点过 -> 补发 cancel 真正停后端任务, 再收尾关闭。
         if (cancelRequested) {
           postCancel(key)
-          es.close()
-          eventSource = null
+          unsubscribeChannel()
           currentJobKey = null
           localStorage.removeItem(RECONNECT_KEY)
           localStorage.removeItem(JOB_KEY_KEY)
         }
       }
-    } catch { /* ignore */ }
-  })
-
-  es.addEventListener('progress', (e: MessageEvent) => {
-    if (current?.id !== id) return
-    reconnectAttempts = 0
-    try {
-      const prog = JSON.parse(e.data) as WFProgress
-      current = { ...current, progress: prog }
-      emit()
-    } catch { /* ignore */ }
-  })
-
-  es.addEventListener('done', (e: MessageEvent) => {
-    if (current?.id !== id) return
-    try {
-      const result = JSON.parse(e.data) as WalkForwardResult
-      current = { ...current, isPending: false, result, error: null }
-      emit()
-    } catch {
-      current = { ...current, isPending: false, error: '结果解析失败' }
-      emit()
+      return
     }
-    es.close()
-    eventSource = null
-    currentJobKey = null
-    localStorage.removeItem(RECONNECT_KEY)
-    localStorage.removeItem(JOB_KEY_KEY)
-  })
 
-  es.addEventListener('error', (e: MessageEvent) => {
-    if (current?.id !== id) return
-    if (e.data) {
+    if (type === 'job_progress' || type === 'progress') {
       try {
-        const msg = JSON.parse(e.data)?.message ?? 'walk-forward 出错'
-        current = { ...current, isPending: false, error: msg }
+        const prog = data as unknown as WFProgress
+        current = { ...current, progress: prog }
+        emit()
+      } catch { /* ignore */ }
+      return
+    }
+
+    if (type === 'job_done' || type === 'done') {
+      try {
+        const result = data as unknown as WalkForwardResult
+        current = { ...current, isPending: false, result, error: null }
         emit()
       } catch {
-        current = { ...current, isPending: false, error: 'walk-forward 出错' }
+        current = { ...current, isPending: false, error: '结果解析失败' }
         emit()
       }
-      es.close()
-      eventSource = null
+      unsubscribeChannel()
       currentJobKey = null
       localStorage.removeItem(RECONNECT_KEY)
       localStorage.removeItem(JOB_KEY_KEY)
       return
     }
-    // 无 data: 连接异常断开。EventSource 自动重连, 设上限避免网络长断时无限 pending。
-    if (current?.id === id) {
-      reconnectAttempts += 1
-      if (reconnectAttempts > MAX_RECONNECT) {
-        es.close()
-        eventSource = null
-        // 清 localStorage: 否则刷新页面 tryReconnect 会重连到这个已放弃的任务。
-        localStorage.removeItem(RECONNECT_KEY)
-        localStorage.removeItem(JOB_KEY_KEY)
-        current = { ...current, isPending: false, error: '连接中断, 重连多次失败' }
-        emit()
-      }
+
+    if (type === 'job_error' || type === 'error') {
+      const msg = (data as Record<string, unknown>)?.message ?? 'walk-forward 出错'
+      current = { ...current, isPending: false, error: typeof msg === 'string' ? msg : 'walk-forward 出错' }
+      emit()
+      unsubscribeChannel()
+      currentJobKey = null
+      localStorage.removeItem(RECONNECT_KEY)
+      localStorage.removeItem(JOB_KEY_KEY)
     }
   })
 }
 
-/** 调后端 cancel (按回吐的 job_key)。 */
+/** 调后端 cancel (按回吐的 job_key)。cancel 仍走 POST, 不通过 WS。 */
 function postCancel(jobKey: string): void {
-  fetch('/api/backtest/walkforward/cancel', {
+  void fetch('/api/backtest/walkforward/cancel', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ job_key: jobKey }),
   }).catch(() => {})
 }
 
-export function startWalkForward(params: StartWalkForwardParams): void {
-  if (eventSource) {
-    eventSource.close()
-    eventSource = null
+/** GET stream 获取 job_key, 然后订阅 WS 频道 */
+async function startWalkForwardStream(qs: string): Promise<void> {
+  try {
+    const res = await fetch(`/api/backtest/walkforward/stream?${qs}`, {
+      headers: { Accept: 'text/event-stream' },
+    })
+    if (!res.ok || !res.body) {
+      const taskId = current?.id
+      if (taskId != null && current?.isPending) {
+        current = { ...current, isPending: false, error: `walk-forward 启动失败: ${res.status}` }
+        emit()
+      }
+      return
+    }
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    let gotJobKey = false
+    while (!gotJobKey) {
+      const chunk = await reader.read()
+      if (chunk.done) break
+      buffer += decoder.decode(chunk.value, { stream: true })
+      let boundary = buffer.indexOf('\n\n')
+      while (boundary >= 0) {
+        const frame = buffer.slice(0, boundary)
+        buffer = buffer.slice(boundary + 2)
+        let eventType = 'message'
+        const dataLines: string[] = []
+        for (const line of frame.split('\n')) {
+          if (line.startsWith('event:')) eventType = line.slice(6).trim()
+          else if (line.startsWith('data:')) dataLines.push(line.slice(5).trimStart())
+        }
+        if (eventType === 'job') {
+          try {
+            const key = JSON.parse(dataLines.join('\n'))?.key
+            if (typeof key === 'string' && key) {
+              gotJobKey = true
+              currentJobKey = key
+              localStorage.setItem(JOB_KEY_KEY, key)
+              reader.cancel()
+              connectChannel(key)
+              break
+            }
+          } catch { /* ignore */ }
+        }
+        boundary = buffer.indexOf('\n\n')
+      }
+    }
+    if (!gotJobKey) {
+      reader.cancel()
+      const taskId = current?.id
+      if (taskId != null && current?.isPending) {
+        current = { ...current, isPending: false, error: '未收到任务 ID' }
+        emit()
+      }
+    }
+  } catch {
+    const taskId = current?.id
+    if (taskId != null && current?.isPending) {
+      current = { ...current, isPending: false, error: 'walk-forward 启动失败' }
+      emit()
+    }
   }
+}
+
+export function startWalkForward(params: StartWalkForwardParams): void {
+  unsubscribeChannel()
 
   cancelRequested = false
   currentJobKey = null
-  reconnectAttempts = 0
   const id = ++taskSeq
   current = { id, isPending: true, result: null, progress: null, error: null }
   emit()
@@ -226,30 +264,22 @@ export function startWalkForward(params: StartWalkForwardParams): void {
   })
 
   localStorage.setItem(RECONNECT_KEY, qs)
-  connectSSE(`/api/backtest/walkforward/stream?${qs}`)
+  void startWalkForwardStream(qs)
 }
 
 export function stopWalkForward(): void {
-  // 竞态: job_key 未到手时保持 SSE 打开, 等 job 事件补发 cancel (关 SSE 不停后端 daemon 线程)。
   cancelRequested = true
   const jobKey = currentJobKey ?? localStorage.getItem(JOB_KEY_KEY)
   if (jobKey) {
     postCancel(jobKey)
-    if (eventSource) { eventSource.close(); eventSource = null }
+    unsubscribeChannel()
     currentJobKey = null
     localStorage.removeItem(RECONNECT_KEY)
     localStorage.removeItem(JOB_KEY_KEY)
-  } else if (eventSource) {
-    const es = eventSource
-    // job_key 始终没到手(job 事件未达): 5 秒后放弃并清 localStorage, 避免刷新重连到未取消任务。
-    // (若期间 job 到达, job handler 已 postCancel+清storage 并置 eventSource=null, 下面条件不成立跳过)
-    setTimeout(() => {
-      if (es === eventSource) {
-        es.close(); eventSource = null
-        localStorage.removeItem(RECONNECT_KEY)
-        localStorage.removeItem(JOB_KEY_KEY)
-      }
-    }, 5000)
+  } else {
+    unsubscribeChannel()
+    localStorage.removeItem(RECONNECT_KEY)
+    localStorage.removeItem(JOB_KEY_KEY)
   }
   if (current?.isPending) {
     current = { ...current, isPending: false, error: '已取消' }
@@ -258,17 +288,29 @@ export function stopWalkForward(): void {
 }
 
 export function clearWalkForward(): void {
+  unsubscribeChannel()
+  currentJobKey = null
+  localStorage.removeItem(RECONNECT_KEY)
+  localStorage.removeItem(JOB_KEY_KEY)
   current = null
   emit()
 }
 
 export function tryReconnectWalkForward(): boolean {
-  const qs = localStorage.getItem(RECONNECT_KEY)
-  if (!qs) return false
+  const jobKey = localStorage.getItem(JOB_KEY_KEY)
+  if (!jobKey) {
+    const qs = localStorage.getItem(RECONNECT_KEY)
+    if (!qs) return false
+    const id = ++taskSeq
+    current = { id, isPending: true, result: null, progress: null, error: null }
+    emit()
+    void startWalkForwardStream(qs)
+    return true
+  }
   const id = ++taskSeq
   current = { id, isPending: true, result: null, progress: null, error: null }
   emit()
-  connectSSE(`/api/backtest/walkforward/stream?${qs}`)
+  connectChannel(jobKey)
   return true
 }
 

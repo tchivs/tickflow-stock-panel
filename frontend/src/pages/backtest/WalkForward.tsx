@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { ChevronDown, ChevronRight, FlaskConical, GitBranch, CheckCircle2, Play, RefreshCw } from 'lucide-react'
-import { api, type WfPlanDTO, type WfFoldDTO, type WfSearchRunDTO, type WfValidatedStrategyDTO, type WfEnsembleDTO } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
+import { api, type WfPlanDTO, type WfFoldDTO, type WfSearchRunDTO, type WfValidatedStrategyDTO, type WfEnsembleDTO } from '@/lib/api'
+import * as wsStream from '@/lib/useWsStream'
 import { toast } from '@/components/Toast'
 
 interface WfStreamState {
@@ -18,7 +19,7 @@ interface WfStreamState {
 function useWfStream(planId: string | undefined) {
   const [state, setState] = useState<WfStreamState>({ status: 'idle', foldIndex: 0, totalFolds: 0, isOos: false })
   const [running, setRunning] = useState(false)
-  const esRef = useRef<EventSource | null>(null)
+  const unsubRef = useRef<(() => void) | null>(null)
   const planRef = useRef(planId)
   planRef.current = planId
 
@@ -26,37 +27,53 @@ function useWfStream(planId: string | undefined) {
     const current = planRef.current
     if (!current) return
     setState({ status: 'idle', foldIndex: 0, totalFolds: 0, isOos: false })
-    esRef.current?.close()
-    const es = new EventSource(`/api/research/wf/plans/${encodeURIComponent(current)}/stream`)
-    esRef.current = es
-
-    es.onopen = () => { /* no-op: opening the stream proves nothing about job
-      state.  'running' is only claimed on a real progress event; otherwise the
-      idle chip would lie ("运行中" with 0 folds) whenever no run is active. */ }
-    es.addEventListener('progress', (e: MessageEvent) => {
-      try {
-        const data = JSON.parse(e.data)
-        setState({
-          status: 'running',
-          foldIndex: data.fold_index ?? 0,
-          totalFolds: data.total_folds ?? 0,
-          isOos: Boolean(data.is_oos),
-        })
-      } catch { /* ignore malformed */ }
-    })
-    es.addEventListener('done', () => {
-      setState(prev => ({ ...prev, status: 'done' }))
-      setRunning(false)
-      es.close()
-    })
-    es.onerror = () => {
-      setState(prev => prev.status === 'done' ? prev : { ...prev, status: 'reconnecting' })
+    if (unsubRef.current) {
+      unsubRef.current()
+      unsubRef.current = null
     }
+    // 订阅 WS 频道 run:{plan_id}
+    const channel = `run:${current}`
+    unsubRef.current = wsStream.subscribe(channel, (data, type) => {
+      // wf_progress / progress 事件
+      if (type === 'wf_progress' || type === 'progress') {
+        try {
+          setState({
+            status: 'running',
+            foldIndex: Number(data.fold_index ?? 0),
+            totalFolds: Number(data.total_folds ?? 0),
+            isOos: Boolean(data.is_oos),
+          })
+        } catch { /* ignore malformed */ }
+        return
+      }
+      // wf_done / done 事件
+      if (type === 'wf_done' || type === 'done') {
+        setState(prev => ({ ...prev, status: 'done' }))
+        setRunning(false)
+        if (unsubRef.current) {
+          unsubRef.current()
+          unsubRef.current = null
+        }
+        return
+      }
+      // wf_error 事件
+      if (type === 'wf_error' || type === 'error') {
+        const msg = (data as Record<string, unknown>)?.message
+        setState(prev => ({ ...prev, status: 'error', error: typeof msg === 'string' ? msg : '前推验证出错' }))
+        setRunning(false)
+        return
+      }
+    })
   }
 
   useEffect(() => {
     open()
-    return () => esRef.current?.close()
+    return () => {
+      if (unsubRef.current) {
+        unsubRef.current()
+        unsubRef.current = null
+      }
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [planId])
 
@@ -70,10 +87,8 @@ function useWfStream(planId: string | undefined) {
       setRunning(false)
       return
     }
-    // The previous run's ``done`` closed the stream.  Reopen AFTER the POST
-    // so the replay carries the fresh run (a reopen before the reset would
-    // replay the stale completed history and close again).
-    if (!esRef.current || esRef.current.readyState === EventSource.CLOSED) {
+    // Reopen AFTER the POST so the replay carries the fresh run.
+    if (!unsubRef.current) {
       open()
     }
   }

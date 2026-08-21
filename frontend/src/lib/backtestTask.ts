@@ -1,15 +1,16 @@
 import { useSyncExternalStore } from 'react'
 import type { StrategyBacktestResult } from './api'
+import * as wsStream from './useWsStream'
 
 /**
- * 全局回测任务管理 (SSE 模式 + 任务缓存 + 重连支持)。
+ * 全局回测任务管理 (WS 频道模式 + 任务缓存 + 重连支持)。
  *
  * 特性:
- * - 实时进度: EventSource 监听后端 SSE, 推送 day/total/equity
- * - 可取消: POST /strategy/cancel/{job_key}, 后端 cancel_event
+ * - 实时进度: useWsStream.subscribe(`run:${job_key}`) 监听后端 WS 频道, 推送 day/total/equity
+ * - 可取消: POST /strategy/cancel/{job_key}, 后端 cancel_event (cancel 仍走 POST, 不通过 WS)
  * - 切页/刷新保持: 后端按参数 hash 缓存任务, 重连不重启
- *   - 切页: 模块级 store 保持, EventSource 随组件卸载断开, 回来后重连
- *   - 刷新: localStorage 存 job 参数, 刷新后重新连接到同一任务
+ *   - 切页: 模块级 store 保持, WS 频道随组件卸载退订, 回来后重订阅
+ *   - 刷新: localStorage 存 job_key, 刷新后通过 useWsStream 重订阅 run:{job_key}
  */
 
 export interface BacktestProgress {
@@ -31,15 +32,15 @@ export interface BacktestTask {
   reconnecting: boolean
 }
 
-// 连接断开后最多自动重连次数, 超过则放弃并进入可重试的错误态
-const MAX_RECONNECT_ATTEMPTS = 5
-
 let current: BacktestTask | null = null
 const listeners = new Set<() => void>()
 let taskSeq = 0
-let eventSource: EventSource | null = null
+let unsubFn: (() => void) | null = null
+let currentJobKey: string | null = null
+let cancelRequested = false
 
 const RECONNECT_KEY = 'backtest_reconnect'
+const JOB_KEY_KEY = 'backtest_job_key'
 
 function emit() {
   listeners.forEach(fn => fn())
@@ -166,126 +167,109 @@ function isStrategyBacktestResult(value: unknown): value is StrategyBacktestResu
     && isFiniteNumber(value.elapsed_ms)
 }
 
-/** 连接 SSE (新建或重连都用这个) */
-function connectSSE(url: string): void {
+/** 退订当前 WS 频道订阅 */
+function unsubscribeChannel(): void {
+  if (unsubFn) {
+    unsubFn()
+    unsubFn = null
+  }
+}
+
+/** 连接 WS 频道 (新建或重连都用这个) */
+function connectChannel(jobKey: string): void {
   const id = current?.id ?? ++taskSeq
 
-  // 关闭旧连接
-  if (eventSource) {
-    eventSource.close()
-    eventSource = null
-  }
+  // 退订旧频道
+  unsubscribeChannel()
 
-  const es = new EventSource(url)
-  eventSource = es
-
-  // 本次连接的重连计数 (EventSource 断开会自动重连并再次触发 onerror)
-  let reconnectAttempts = 0
-
-  const clearReconnecting = () => {
-    if (current?.id === id && current.isPending && current.reconnecting) {
-      current = { ...current, reconnecting: false }
-      emit()
-    }
-    reconnectAttempts = 0
-  }
-
-  es.onopen = () => {
-    clearReconnecting()
-  }
-
-  es.addEventListener('progress', (e: MessageEvent) => {
+  const channel = `run:${jobKey}`
+  unsubFn = wsStream.subscribe(channel, (data, type) => {
     if (current?.id !== id || !current.isPending) return
-    // 收到数据说明连接恢复正常
-    reconnectAttempts = 0
-    try {
-      const parsed: unknown = JSON.parse(e.data)
-      if (!isRecord(parsed) || typeof parsed.day !== 'number' || !Number.isFinite(parsed.day)
-        || typeof parsed.total !== 'number' || !Number.isFinite(parsed.total) || parsed.total <= 0
-        || typeof parsed.date !== 'string' || typeof parsed.equity !== 'number' || !Number.isFinite(parsed.equity)) return
-      const prog = parsed as unknown as BacktestProgress
+
+    if (type === 'job') {
+      // 后端回吐 job_key — 存下供 cancel 引用
+      const key = data.key
+      if (typeof key === 'string' && key) {
+        currentJobKey = key
+        localStorage.setItem(JOB_KEY_KEY, key)
+        // 竞态修复: stop 在拿到 key 前被点过 -> 补发 cancel
+        if (cancelRequested) {
+          postCancel(key)
+          unsubscribeChannel()
+          currentJobKey = null
+          localStorage.removeItem(RECONNECT_KEY)
+          localStorage.removeItem(JOB_KEY_KEY)
+        }
+      }
+      return
+    }
+
+    if (type === 'job_progress' || type === 'progress') {
+      const d = data as unknown
+      if (!isRecord(d) || typeof d.day !== 'number' || !Number.isFinite(d.day)
+        || typeof d.total !== 'number' || !Number.isFinite(d.total) || (d.total as number) <= 0
+        || typeof d.date !== 'string' || typeof d.equity !== 'number' || !Number.isFinite(d.equity)) return
+      const prog = d as unknown as BacktestProgress
       current = { ...current, progress: prog, reconnecting: false }
       emit()
-    } catch { /* ignore */ }
-  })
+      return
+    }
 
-  es.addEventListener('research', (e: MessageEvent) => {
-    if (current?.id !== id || !current.isPending) return
-    try {
-      const handle = JSON.parse(e.data)?.execution_handle
+    if (type === 'research') {
+      const handle = (data as Record<string, unknown>)?.execution_handle
       if (typeof handle !== 'string' || !handle.trim()) return
       current = { ...current, researchExecutionHandle: handle }
       emit()
-    } catch { /* ignore malformed server event */ }
-  })
-
-  es.addEventListener('done', (e: MessageEvent) => {
-    if (current?.id !== id || !current.isPending) return
-    try {
-      const payload: unknown = JSON.parse(e.data)
-      if (!isStrategyBacktestResult(payload)) throw new Error('Malformed strategy result')
-      const terminalError = typeof payload.error === 'string' && payload.error.trim()
-      current = {
-        ...current,
-        isPending: false,
-        result: payload,
-        error: terminalError || null,
-        reconnecting: false,
-        // Terminal payloads never establish trust; only this task's research event can.
-        researchExecutionHandle: terminalError ? null : current.researchExecutionHandle,
-      }
-      emit()
-    } catch {
-      current = { ...current, isPending: false, result: null, error: '结果解析失败', reconnecting: false, researchExecutionHandle: null }
-      emit()
-    }
-    es.close()
-    eventSource = null
-    localStorage.removeItem(RECONNECT_KEY)
-  })
-
-  es.addEventListener('error', (e: MessageEvent) => {
-    if (current?.id !== id || !current.isPending) return
-    // SSE error 事件: 有 data 说明是后端主动推送的错误/取消; 无 data 说明是连接断开
-    if (e.data) {
-      try {
-        const msg = JSON.parse(e.data)?.message ?? '回测出错'
-        current = { ...current, isPending: false, error: msg, reconnecting: false, researchExecutionHandle: null }
-        emit()
-      } catch {
-        current = { ...current, isPending: false, error: '回测出错', reconnecting: false, researchExecutionHandle: null }
-        emit()
-      }
-      es.close()
-      eventSource = null
-      localStorage.removeItem(RECONNECT_KEY)
       return
     }
-    // 无 data: 连接异常断开。EventSource 会自动重连, 但需给出可见状态并有界放弃,
-    // 避免进度条永久冻结、isPending 永远 true。
-    reconnectAttempts += 1
-    if (reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
-      // 放弃: 停止自动重连, 进入可重试的错误态 (用户可重新发起回测)
-      es.close()
-      eventSource = null
-      localStorage.removeItem(RECONNECT_KEY)
-      current = {
-        ...current,
-        isPending: false,
-        reconnecting: false,
-        error: '连接中断，请重试',
-        researchExecutionHandle: null,
+
+    if (type === 'job_done' || type === 'done') {
+      const payload = data as unknown
+      if (!isStrategyBacktestResult(payload)) {
+        current = { ...current, isPending: false, result: null, error: '结果解析失败', reconnecting: false, researchExecutionHandle: null }
+        emit()
+      } else {
+        const terminalError = typeof payload.error === 'string' && payload.error.trim()
+        current = {
+          ...current,
+          isPending: false,
+          result: payload,
+          error: terminalError || null,
+          reconnecting: false,
+          researchExecutionHandle: terminalError ? null : current.researchExecutionHandle,
+        }
+        emit()
       }
-      emit()
+      unsubscribeChannel()
+      currentJobKey = null
+      localStorage.removeItem(RECONNECT_KEY)
+      localStorage.removeItem(JOB_KEY_KEY)
       return
     }
-    // 仍在重试窗口内: 标记 reconnecting, 让 UI 显示"连接中断，重试中"
-    current = { ...current, reconnecting: true }
-    emit()
+
+    if (type === 'job_error' || type === 'error') {
+      const msg = (data as Record<string, unknown>)?.message ?? '回测出错'
+      current = { ...current, isPending: false, error: typeof msg === 'string' ? msg : '回测出错', reconnecting: false, researchExecutionHandle: null }
+      emit()
+      unsubscribeChannel()
+      currentJobKey = null
+      localStorage.removeItem(RECONNECT_KEY)
+      localStorage.removeItem(JOB_KEY_KEY)
+      return
+    }
   })
 }
 
-/** 启动一次 SSE 回测任务 */
+/** 调后端 cancel (按 job_key 或 qs)。cancel 仍走 POST, 不通过 WS。 */
+function postCancel(jobKey: string): void {
+  void fetch('/api/backtest/strategy/cancel', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ job_key: jobKey }),
+  }).catch(() => {})
+}
+
+/** 启动一次回测任务 */
 export function startBacktest(params: {
   strategy_id: string
   symbols?: string[] | null
@@ -313,13 +297,13 @@ export function startBacktest(params: {
   const previousQs = localStorage.getItem(RECONNECT_KEY)
 
   // 取消之前的任务状态
-  if (eventSource) {
-    eventSource.close()
-    eventSource = null
-  }
-  // Closing EventSource alone leaves the daemon job running on the server.
+  unsubscribeChannel()
+  // Closing WS subscription alone leaves the daemon job running on the server.
   // Cancel the previous job without awaiting it so a new run cannot race it.
   if (previousQs) cancelServerTask(previousQs)
+
+  cancelRequested = false
+  currentJobKey = null
 
   const id = ++taskSeq
   current = { id, isPending: true, result: null, progress: null, error: null, reconnecting: false, researchExecutionHandle: null }
@@ -350,20 +334,92 @@ export function startBacktest(params: {
     regime_filter: params.regime_filter ? JSON.stringify(params.regime_filter) : undefined,
   })
 
-  // 存 reconnect 信息 (刷新后用)
+  // 存 reconnect 信息 (刷新后用) — 存 qs, 连接后拿到 job_key 再存 job_key
   localStorage.setItem(RECONNECT_KEY, qs)
 
-  connectSSE(`/api/backtest/strategy/stream?${qs}`)
+  // 用 fetch GET stream 短暂获取 job_key (后端 SSE 端点首个 job 事件回吐 key),
+  // 然后关闭 fetch, 切到 WS run:{job_key} 频道订阅。
+  // 这是 fetch + ReadableStream, 不创建 EventSource。
+  void startBacktestStream(qs)
+}
+
+/** GET stream 获取 job_key, 然后订阅 WS 频道 */
+async function startBacktestStream(qs: string): Promise<void> {
+  try {
+    const res = await fetch(`/api/backtest/strategy/stream?${qs}`, {
+      headers: { Accept: 'text/event-stream' },
+    })
+    if (!res.ok || !res.body) {
+      // 后端不可用, 走错误态
+      const taskId = current?.id
+      if (taskId != null && current?.isPending) {
+        current = { ...current, isPending: false, error: `回测启动失败: ${res.status}`, reconnecting: false, researchExecutionHandle: null }
+        emit()
+      }
+      return
+    }
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    let gotJobKey = false
+    while (!gotJobKey) {
+      const chunk = await reader.read()
+      if (chunk.done) break
+      buffer += decoder.decode(chunk.value, { stream: true })
+      // 解析 SSE 事件: "event: job\ndata: {\"key\":\"...\"}\n\n"
+      let boundary = buffer.indexOf('\n\n')
+      while (boundary >= 0) {
+        const frame = buffer.slice(0, boundary)
+        buffer = buffer.slice(boundary + 2)
+        // 提取 event 和 data
+        let eventType = 'message'
+        const dataLines: string[] = []
+        for (const line of frame.split('\n')) {
+          if (line.startsWith('event:')) eventType = line.slice(6).trim()
+          else if (line.startsWith('data:')) dataLines.push(line.slice(5).trimStart())
+        }
+        if (eventType === 'job') {
+          try {
+            const key = JSON.parse(dataLines.join('\n'))?.key
+            if (typeof key === 'string' && key) {
+              gotJobKey = true
+              currentJobKey = key
+              localStorage.setItem(JOB_KEY_KEY, key)
+              localStorage.setItem(RECONNECT_KEY, qs)
+              // 关闭 fetch, 切到 WS 频道
+              reader.cancel()
+              connectChannel(key)
+              break
+            }
+          } catch { /* ignore */ }
+        }
+        boundary = buffer.indexOf('\n\n')
+      }
+    }
+    if (!gotJobKey) {
+      reader.cancel()
+      const taskId = current?.id
+      if (taskId != null && current?.isPending) {
+        current = { ...current, isPending: false, error: '未收到任务 ID', reconnecting: false, researchExecutionHandle: null }
+        emit()
+      }
+    }
+  } catch {
+    const taskId = current?.id
+    if (taskId != null && current?.isPending) {
+      current = { ...current, isPending: false, error: '回测启动失败', reconnecting: false, researchExecutionHandle: null }
+      emit()
+    }
+  }
 }
 
 /** 停止当前回测任务 (调后端 cancel, 后端 cancel_event → 停止计算) */
 export async function stopBacktest(): Promise<void> {
-  // 从 reconnect key 提取 job_key (后端按参数 hash 算 job_key)
+  const jobKey = currentJobKey ?? localStorage.getItem(JOB_KEY_KEY)
   const qs = localStorage.getItem(RECONNECT_KEY)
-  const source = eventSource
   const taskId = current?.id
-  eventSource = null
-  source?.close()
+
+  cancelRequested = true
 
   // Mark the local task before awaiting the network request. This prevents a
   // quick rerun from being cancelled by a late response from the old request.
@@ -371,43 +427,52 @@ export async function stopBacktest(): Promise<void> {
     current = { ...current, isPending: false, error: '已取消', reconnecting: false, researchExecutionHandle: null }
     emit()
   }
-  localStorage.removeItem(RECONNECT_KEY)
 
-  if (qs) {
-    // 解析出参数, 用 fetch 调 cancel
-    try {
-      // job_key 是后端算的 md5, 前端不知道。用 reconnect URL 里的参数重新请求 stream,
-      // 后端会找到同一个 job 并返回它的 job_key? 不行。
-      // 替代: 前端直接关闭 SSE 连接 + 调一个带参数的 cancel 接口。
-      // 简化: 关闭连接即可, 后端检测断开后 (不取消)。需要 cancel 用 POST。
-      // 这里用 cancel 接口: POST /strategy/cancel, body 带 qs 的参数。
-      await fetch('/api/backtest/strategy/cancel', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ qs }),
-      }).catch(() => {})
-    } catch { /* ignore */ }
+  if (jobKey) {
+    postCancel(jobKey)
+  } else if (qs) {
+    // job_key 未到手 (job 事件未达): 用 qs 调 cancel
+    await fetch('/api/backtest/strategy/cancel', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ qs }),
+    }).catch(() => {})
   }
+
+  unsubscribeChannel()
+  currentJobKey = null
+  localStorage.removeItem(RECONNECT_KEY)
+  localStorage.removeItem(JOB_KEY_KEY)
 }
 
 /** 清除任务状态 (隐藏提示) */
 export function clearBacktest(): void {
-  eventSource?.close()
-  eventSource = null
+  unsubscribeChannel()
+  currentJobKey = null
   localStorage.removeItem(RECONNECT_KEY)
+  localStorage.removeItem(JOB_KEY_KEY)
   current = null
   emit()
 }
 
-/** 恢复: 从 localStorage 读取 reconnect 信息, 重新连接 (刷新后调用) */
+/** 恢复: 从 localStorage 读取 job_key, 重新订阅 WS 频道 (刷新后调用) */
 export function tryReconnect(): boolean {
-  const qs = localStorage.getItem(RECONNECT_KEY)
-  if (!qs) return false
-  // 有未完成的任务, 重连
+  const jobKey = localStorage.getItem(JOB_KEY_KEY)
+  if (!jobKey) {
+    // 没有 job_key, 尝试用 qs 重新启动 (旧路径)
+    const qs = localStorage.getItem(RECONNECT_KEY)
+    if (!qs) return false
+    const id = ++taskSeq
+    current = { id, isPending: true, result: null, progress: null, error: null, reconnecting: false, researchExecutionHandle: null }
+    emit()
+    void startBacktestStream(qs)
+    return true
+  }
+  // 有 job_key, 直接重订阅 WS 频道
   const id = ++taskSeq
   current = { id, isPending: true, result: null, progress: null, error: null, reconnecting: false, researchExecutionHandle: null }
   emit()
-  connectSSE(`/api/backtest/strategy/stream?${qs}`)
+  connectChannel(jobKey)
   return true
 }
 

@@ -13,7 +13,6 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 import {
-  alphaRunStreamUrl,
   fetchAlphaCandidates,
   fetchAlphaCompare,
   fetchAlphaLineage,
@@ -34,6 +33,7 @@ import {
   type ReplayBranchResult,
   type StressMatrix,
 } from '@/lib/api'
+import * as wsStream from '@/lib/useWsStream'
 import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
 import { EvidenceCards } from '@/components/report/EvidenceCards'
@@ -72,27 +72,8 @@ function isTerminalRun(status: AlphaRunRead['status']): boolean {
 }
 
 // The curated set of named alpha ledger event types the consumer listens to.
-// The backend dispatches one event per ledger row with event=<event_type>; the
-// set is open-ended (run_service._EVENT_TYPES + worker writes), so we listen to
-// the known lifecycle/progress types + a generic onmessage fallback. Unknown
-// types still keep the connection alive; the terminal event closes it.
-const ALPHA_PROGRESS_EVENTS = [
-  'run_started',
-  'run_recovered',
-  'run_preflight_failed',
-  'cancel_requested',
-  'run_cancelled',
-  'run_completed',
-  'run_failed',
-  'candidate_appended',
-  'stage_started',
-  'stage1_completed',
-  'stage2_completed',
-  'diagnostic',
-  'worker_noise',
-  'progress',
-] as const
-
+// (Phase 55: migrated to WS channel subscription; event set is now driven by
+// useWsStream RUN_CHANNEL_EVENTS in the shared hook.)
 const POLL_INTERVAL_MS = 2000
 const EVENT_TAIL_MAX = 200
 
@@ -109,7 +90,6 @@ function useAlphaStream(runId: string | null) {
   const [status, setStatus] = useState<ConnStatus>('idle')
   const [events, setEvents] = useState<AlphaRunEvent[]>([])
   const [polling, setPolling] = useState(false)
-  const esRef = useRef<EventSource | null>(null)
   const seenSeqs = useRef<Set<number>>(new Set())
   const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null)
 
@@ -122,28 +102,46 @@ function useAlphaStream(runId: string | null) {
   }, [])
 
   useEffect(() => {
-    esRef.current?.close()
-    esRef.current = null
     stopPoll()
     seenSeqs.current = new Set()
     setEvents([])
     setStatus('idle')
     if (!runId) return
 
-    // Accumulate one projected event, dedup by seq (SC1 — never duplicate).
-    const onEvent = (raw: string) => {
+    // WS 广播的 data 载荷: {seq: number, data: {...AlphaRunEvent fields}}
+    // type 即原 SSE event 名 (run_started / candidate_appended / terminal / ...)
+    const onWsEvent = (data: Record<string, unknown>, type: string) => {
+      // terminal 事件: 关闭流
+      if (type === 'terminal') {
+        setStatus('done')
+        return
+      }
+      // 进度/候选事件: data.data 是原始 SSE payload (AlphaRunEvent JSON)
       try {
-        const data = JSON.parse(raw) as Partial<AlphaRunEvent>
-        if (typeof data.seq === 'number') {
-          if (seenSeqs.current.has(data.seq)) return
-          seenSeqs.current.add(data.seq)
+        const seq = typeof data.seq === 'number' ? data.seq : undefined
+        const inner = data.data
+        // 尝试从 data.data 或 data 本身重构 AlphaRunEvent
+        const eventCandidate = (inner && typeof inner === 'object' ? inner : data) as Partial<AlphaRunEvent>
+        if (typeof eventCandidate.seq === 'number') {
+          if (seenSeqs.current.has(eventCandidate.seq)) return
+          seenSeqs.current.add(eventCandidate.seq)
           setEvents(prev => {
-            const next = [...prev, data as AlphaRunEvent]
+            const next = [...prev, eventCandidate as AlphaRunEvent]
+            return next.length > EVENT_TAIL_MAX ? next.slice(-EVENT_TAIL_MAX) : next
+          })
+          setStatus('running')
+        } else if (seq != null) {
+          // WS 包了 seq 在外层, inner 无 seq
+          if (seenSeqs.current.has(seq)) return
+          seenSeqs.current.add(seq)
+          const eventWithSeq = { ...(eventCandidate as object), seq } as AlphaRunEvent
+          setEvents(prev => {
+            const next = [...prev, eventWithSeq]
             return next.length > EVENT_TAIL_MAX ? next.slice(-EVENT_TAIL_MAX) : next
           })
           setStatus('running')
         } else {
-          // generic alive signal (unnamed/progress event with no seq)
+          // generic alive signal (no seq)
           setStatus('running')
         }
       } catch {
@@ -151,14 +149,19 @@ function useAlphaStream(runId: string | null) {
       }
     }
 
-    // Graceful degradation: bounded polling when SSE is unavailable (SC1).
-    if (typeof EventSource === 'undefined') {
+    // 订阅 WS 频道 run:{run_id}
+    const channel = `run:${runId}`
+    const unsub = wsStream.subscribe(channel, onWsEvent)
+
+    // 降级: 当 WS 不可用时启动轮询 (与原 EventSource===undefined 相同模式)
+    // useWsStream 内部退避重连; 这里用 useWsStreamStatus 判断是否完全断开
+    // 简化: 启动一个延迟轮询兜底, WS 收到消息后状态变为 running, 轮询检查到 terminal 时停止
+    const checkAndPoll = () => {
       setPolling(true)
-      setStatus('running')
       pollTimer.current = setInterval(async () => {
         try {
           await fetchAlphaProgress(runId)
-          setStatus('running')
+          setStatus(prev => prev === 'done' ? prev : 'running')
           const run = await fetchAlphaRun(runId)
           if (isTerminalRun(run.status)) {
             setStatus('done')
@@ -168,33 +171,23 @@ function useAlphaStream(runId: string | null) {
           /* keep polling until terminal or unmount */
         }
       }, POLL_INTERVAL_MS)
-      return () => stopPoll()
     }
+    // 轮询作为 fallback — 仅在 WS 未连上时启动 (延迟 3s 检查)
+    const pollFallbackTimer = setTimeout(() => {
+      if (status === 'idle' || status === 'reconnecting') {
+        checkAndPoll()
+      }
+    }, 3000)
 
-    const es = new EventSource(alphaRunStreamUrl(runId))
-    esRef.current = es
-    for (const type of ALPHA_PROGRESS_EVENTS) {
-      es.addEventListener(type, (e: MessageEvent) => onEvent(e.data))
-    }
-    es.onmessage = (e: MessageEvent) => onEvent(e.data)
-    es.addEventListener('terminal', () => {
-      setStatus('done')
-      es.close()
-    })
-    es.onerror = () => {
-      // EventSource auto-reconnects (Last-Event-ID resume); surface it.
-      setStatus(prev => (prev === 'done' ? prev : 'reconnecting'))
-    }
     return () => {
-      es.close()
-      esRef.current = null
+      unsub()
+      clearTimeout(pollFallbackTimer)
+      stopPoll()
     }
-  }, [runId, stopPoll])
+  }, [runId, stopPoll, status])
 
   return { status, events, polling }
 }
-
-// ===== Token-level canonical-expression diff (SC2) =====
 
 function tokenizeExpression(expr: string): string[] {
   const matched = expr.match(/[A-Za-z_][A-Za-z0-9_]*|[0-9]+(?:\.[0-9]+)?|[+\-*/(),<>:=]|\S/g)
