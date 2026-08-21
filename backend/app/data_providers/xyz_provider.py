@@ -8,7 +8,8 @@ remote JSON-RPC MCP endpoint (https://a.123128.xyz homepage, 07-27 entry):
 This provider is the historical complement for minute K (and daily) that the
 self-hosted free-stockdb HTTP server lacks (it only carries synced recent
 data). It implements the JSON-RPC 2.0 streamable MCP client for the tools we
-consume: stockdb_get_price (bars window) and stockdb_get_bars.
+consume: stockdb_get_price (bars window), stockdb_get_bars, and the current
+StockDB optional tools indicators/push_alerts.
 
 Protocol facts verified live against the endpoint:
   - POST JSON-RPC; respond with a single JSON object (HTTP, not stdio).
@@ -30,6 +31,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 import uuid
 from datetime import date, datetime
@@ -59,6 +61,17 @@ def _is_policy_block(status: int, text: str) -> bool:
         return True
     lowered = text.lower()
     return any(m in lowered for m in _POLICY_BLOCK_MARKERS)
+
+
+def _mcp_symbol(symbol: str) -> str:
+    """Normalize app symbols to the strict prefix form required by StockDB MCP."""
+    text = str(symbol).upper()
+    match = re.fullmatch(r"(\d{6})\.(SH|SZ|BJ)", text)
+    if match:
+        return f"{match.group(2)}{match.group(1)}"
+    if re.fullmatch(r"(SH|SZ|BJ)\d{6}", text):
+        return text
+    return text
 
 
 class XYZProvider:
@@ -122,6 +135,36 @@ class XYZProvider:
         symbols: list[str] | None = None,
     ) -> pl.DataFrame:
         return pl.DataFrame()
+
+    def get_indicators(
+        self,
+        symbol: str,
+        name: str = "ma",
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
+        adjust: str = "none",
+        **params: int | float,
+    ) -> list[dict[str, Any]]:
+        """Call the StockDB MCP ``indicators`` tool when exposed by the endpoint."""
+        arguments: dict[str, Any] = {
+            "symbol": _mcp_symbol(symbol),
+            "name": name,
+            "start": start_time.strftime("%Y-%m-%d") if start_time else None,
+            "end": end_time.strftime("%Y-%m-%d") if end_time else None,
+            "adjust": adjust,
+            **params,
+        }
+        payload = self._call_tool("indicators", arguments)
+        return [row for row in _parse_payload(payload) if isinstance(row, dict)]
+
+    def get_push_alerts(
+        self, *, threshold: float = 5.0, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        """Call the StockDB MCP ``push_alerts`` tool when exposed by the endpoint."""
+        payload = self._call_tool(
+            "push_alerts", {"threshold": threshold, "limit": limit}
+        )
+        return [row for row in _parse_payload(payload) if isinstance(row, dict)]
 
     # -- MCP protocol -----------------------------------------------------------
 

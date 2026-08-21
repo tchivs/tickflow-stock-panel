@@ -155,6 +155,49 @@ def test_xyz_get_auction_omits_optional_col_when_absent():
     assert "auction_unmatched_volume" not in df.columns
 
 
+def test_xyz_mcp_indicators_uses_new_tool_and_prefix_symbol():
+    provider = _provider_with(json.dumps([{"date": "2026-08-05", "ma20": 1300.0}]))
+    captured: list[tuple[str, dict]] = []
+
+    def capture(name, args):
+        captured.append((name, args))
+        return json.dumps([{"date": "2026-08-05", "ma20": 1300.0}])
+
+    provider._call_tool = capture
+    rows = provider.get_indicators(
+        "600519.SH", name="ma", start_time=datetime(2026, 8, 1), period=20
+    )
+    assert rows == [{"date": "2026-08-05", "ma20": 1300.0}]
+    assert captured == [
+        (
+            "indicators",
+            {
+                "symbol": "SH600519",
+                "name": "ma",
+                "start": "2026-08-01",
+                "end": None,
+                "adjust": "none",
+                "period": 20,
+            },
+        )
+    ]
+
+
+def test_xyz_mcp_push_alerts_uses_new_tool():
+    provider = _provider_with(json.dumps([{"symbol": "SH600519", "level": 2}]))
+    captured: list[tuple[str, dict]] = []
+
+    def capture(name, args):
+        captured.append((name, args))
+        return json.dumps([{"symbol": "SH600519", "level": 2}])
+
+    provider._call_tool = capture
+    assert provider.get_push_alerts(threshold=7.0, limit=20) == [
+        {"symbol": "SH600519", "level": 2}
+    ]
+    assert captured == [("push_alerts", {"threshold": 7.0, "limit": 20})]
+
+
 # ================================================================
 # Test 6 — 三态化 (HON-01): HTTP 403 / 配额窗文案 → SourceBlockedError
 # ================================================================

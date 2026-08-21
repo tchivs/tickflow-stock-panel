@@ -1,7 +1,9 @@
 """Local stockdb (docker :8000) market data provider.
 
 HTTP adapter for the local stockdb service: X-API-Key header auth over the
-REST batch endpoints ``/v1/query/daily`` / ``/v1/minute``. The current
+REST batch endpoints ``/v1/query/daily`` / ``/v1/minute`` plus the optional
+derived-data endpoints ``/v1/indicators/{symbol}`` and ``/v1/push/alerts``.
+The current
 ``/v1/query/daily`` response uses StockDB's ``DataResponse`` envelope
 (``ok/state/data`` plus quality metadata); the parser keeps the data plane
 backward-compatible with the earlier wrapped response and rejects explicit
@@ -269,6 +271,47 @@ class StockDBProvider:
         return pl.DataFrame(rows).select(
             ["symbol", "datetime", "open", "high", "low", "close", "volume", "amount", "freq"]
         )
+
+    def get_indicators(
+        self,
+        symbol: str,
+        name: str = "ma",
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
+        adjust: str = "none",
+        **params: int | float,
+    ) -> list[dict[str, Any]]:
+        """Read StockDB's derived daily indicators without changing the lake."""
+        query: dict[str, Any] = {
+            "name": name,
+            "start": start_time.strftime("%Y-%m-%d") if start_time else None,
+            "end": end_time.strftime("%Y-%m-%d") if end_time else None,
+            "adjust": adjust,
+            **params,
+        }
+        payload = self._get_json(f"/v1/indicators/{_to_prefix(symbol)}", query)
+        if not isinstance(payload, list) or any(not isinstance(row, dict) for row in payload):
+            raise StockDBProtocolError("stockdb indicators response must be a list of objects")
+        return payload
+
+    def get_push_alerts(
+        self, *, threshold: float = 5.0, limit: int = 100
+    ) -> list[dict[str, Any]] | None:
+        """Read optional THS push alerts; 404 means the upstream feature is disabled."""
+        try:
+            payload = self._get_json(
+                "/v1/push/alerts", {"threshold": threshold, "limit": limit}
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                return None
+            raise
+        if not isinstance(payload, dict) or not isinstance(payload.get("alerts"), list):
+            raise StockDBProtocolError("stockdb push alerts response must contain alerts[]")
+        alerts = payload["alerts"]
+        if any(not isinstance(alert, dict) for alert in alerts):
+            raise StockDBProtocolError("stockdb push alerts must contain objects")
+        return alerts
 
     def get_ticks(self, symbol: str, trade_date: date) -> list[dict]:
         """GET /v1/ticks/{symbol}?date=YYYYMMDD — 单 symbol 全天分笔 (原始 TickBar list)。

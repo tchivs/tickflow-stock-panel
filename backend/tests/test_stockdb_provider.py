@@ -289,6 +289,32 @@ def test_minute_accepts_current_data_response_envelope():
     assert df["symbol"][0] == "600519.SH"
 
 
+def test_indicators_uses_stockdb_sdk_route_and_numeric_params():
+    p = _provider({
+        "/v1/indicators/SH600519": [{"date": "2026-08-05", "ma20": 1300.0}]
+    })
+    rows = p.get_indicators(
+        "600519.SH",
+        name="ma",
+        start_time=datetime(2026, 8, 1),
+        end_time=datetime(2026, 8, 5),
+        period=20,
+    )
+    assert rows == [{"date": "2026-08-05", "ma20": 1300.0}]
+    assert p._client.calls[0][1] == {
+        "name": "ma",
+        "start": "2026-08-01",
+        "end": "2026-08-05",
+        "adjust": "none",
+        "period": 20,
+    }
+
+
+def test_push_alerts_returns_none_when_feature_is_disabled():
+    p = _provider({"/v1/push/alerts": [(404, {"detail": "disabled"}, {})]})
+    assert p.get_push_alerts(threshold=7.0, limit=20) is None
+
+
 def test_429_retry_after_header_controls_wait(monkeypatch):
     """Retry-After 头 (50s) 决定重试前等待; 重试成功后返回正常帧."""
     sleeps: list[float] = []
