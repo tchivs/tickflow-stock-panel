@@ -1,10 +1,8 @@
-"""Durable Last-Event-ID SSE stream over the monotonic Alpha event ledger (SC1).
+"""Durable Last-Event-ID stream over the monotonic Alpha event ledger (SC1).
 
-Phase 50-01 (AF-REQ-18).  This module is a NEW sibling of ``research_alpha.py``
-(Phase 45 explicitly defers SSE to Phase 50 — ``test_phase45_guard.py:198-206``
-asserts ``StreamingResponse``/``text/event-stream`` absent from
-``research_alpha.py``; that assertion stays GREEN unamended because this file
-is out of its module scope).
+Phase 50-01 (AF-REQ-18).  Phase 55 D-03 removed the SSE endpoint; this module
+now provides only the durable-ledger cursor generator (``_stream_events``)
+for WS request_dispatcher consumption.
 
 Design — the decisive difference from ``walkforward_sse.py``:
 
@@ -30,7 +28,20 @@ import json
 from typing import Any, AsyncIterator, Awaitable, Callable
 
 from fastapi import APIRouter, HTTPException, Request
-from sse_starlette import EventSourceResponse, ServerSentEvent
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True, slots=True)
+class ServerSentEvent:
+    """Lightweight SSE event container (sse-starlette dependency removed, Phase 55 D-03).
+
+    Preserves the .data/.event/.id/.comment attributes that the durable-ledger
+    cursor generator yields; consumed by the WS request_dispatcher and tests.
+    """
+    data: str | None = None
+    event: str | None = None
+    id: str | None = None
+    comment: str | None = None
 
 from app.research import projections
 from app.research.run_contract import TERMINAL_STATUSES
@@ -149,36 +160,3 @@ async def _stream_events(
         await asyncio.sleep(poll_interval)
 
 
-@router.get("/runs/{run_id}/stream")
-async def stream_run_events(request: Request, run_id: str) -> EventSourceResponse:
-    """Durable ``Last-Event-ID`` SSE stream over the monotonic event ledger.
-
-    Resumes from the client's last-acknowledged ``seq`` on reconnect/restart,
-    holds no module-level state, and terminates on terminal run status.  The
-    bounded-poll fallback (``GET /progress``, ``GET /events?after_sequence=``)
-    remains available.
-    """
-    service = _service(request)
-    principal = _principal(request)
-    run = service.get(run_id, principal=principal)
-    if run is None:
-        raise HTTPException(status_code=404, detail="run not found")
-    cursor = _parse_last_event_id(request.headers.get("last-event-id"))
-    ws_channel = f"run:{run_id}"
-
-    async def _stream_with_ws() -> AsyncIterator[ServerSentEvent]:
-        async for sse in _stream_events(
-            service, run_id, principal, cursor,
-            is_disconnected=request.is_disconnected,
-        ):
-            # 同步广播到 WS 频道 (alpha 事件 + seq 语义); 跳过 ping comment (无 event 名)
-            if sse.event is not None:
-                _ws_broadcast(request, ws_channel, sse.event, {"seq": _safe_seq(sse.id), "data": _parse_sse_data(sse.data)})
-            yield sse
-
-    return EventSourceResponse(
-        _stream_with_ws(),
-        # The generator owns the keepalive cadence; disable the library's
-        # automatic ping so the two never compete.
-        ping=None,
-    )

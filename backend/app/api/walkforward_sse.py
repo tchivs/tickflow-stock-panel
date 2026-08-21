@@ -18,7 +18,6 @@ import threading
 import time
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import StreamingResponse
 
 router = APIRouter(prefix="/api/research/wf", tags=["research-panels"])
 
@@ -153,51 +152,3 @@ async def run_walk_forward(request: Request, plan_id: str) -> dict:
     return {"ok": True, "key": key, "plan_id": plan_id, "folds": total_folds, "oos": 1}
 
 
-@router.get("/plans/{plan_id}/stream")
-async def stream_walk_forward(request: Request, plan_id: str):
-    """SSE stream: replay recorded fold progress, then push live events.
-
-    Event types:
-      - progress: {type: "fold", fold_index, total_folds, is_oos, status}
-      - done: {type: "done", plan_id}
-      - error: {message}
-    """
-    key = _job_key(plan_id, None)
-    ws_channel = f"run:{plan_id}"
-
-    def event_generator():
-        _cleanup_stale_wf_jobs()
-        with _wf_jobs_lock:
-            job = _wf_jobs.get(key)
-            if job is None:
-                # No run has started for this plan yet — register a SHARED
-                # idle placeholder so a later POST run records into the very
-                # object this stream is already watching (a per-stream local
-                # copy would never see the run's progress).
-                job = _WfJob(key, principal=getattr(request.state, "reviewer_principal", None))
-                _wf_jobs[key] = job
-
-        cursor = 0
-        try:
-            while True:
-                prog = list(job.progress)
-                while cursor < len(prog):
-                    msg = prog[cursor]
-                    cursor += 1
-                    if msg.get("type") == "done":
-                        _ws_broadcast(request, ws_channel, "wf_done", msg)
-                        yield f"event: done\ndata: {json.dumps(msg, ensure_ascii=False, default=str)}\n\n"
-                        return
-                    _ws_broadcast(request, ws_channel, "wf_progress", msg)
-                    yield f"event: progress\ndata: {json.dumps(msg, ensure_ascii=False, default=str)}\n\n"
-
-                if job.error is not None:
-                    _ws_broadcast(request, ws_channel, "wf_error", {"message": job.error})
-                    yield f"event: error\ndata: {json.dumps({'message': job.error})}\n\n"
-                    return
-                yield ": keepalive\n\n"
-                time.sleep(0.5)
-        except GeneratorExit:
-            return
-
-    return StreamingResponse(event_generator(), media_type="text/event-stream")

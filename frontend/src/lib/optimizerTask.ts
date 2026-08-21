@@ -95,6 +95,34 @@ function subscribe(fn: () => void) {
   return () => listeners.delete(fn)
 }
 
+/** 构建 POST /optimize/start 的 JSON 参数 */
+function buildOptStartParams(params: StartOptimizeParams): Record<string, unknown> {
+  return {
+    strategy_id: params.strategy_id,
+    param_grid: JSON.stringify(params.param_grid),
+    objective: params.objective,
+    direction: params.direction,
+    max_workers: params.max_workers,
+    matrix_cache_max_mb: params.matrix_cache_max_mb,
+    params: params.params ? JSON.stringify(params.params) : undefined,
+    overrides: params.overrides ? JSON.stringify(params.overrides) : undefined,
+    symbols: params.symbols?.join(','),
+    start: params.start ?? undefined,
+    end: params.end ?? undefined,
+    matching: params.matching,
+    fees_pct: params.fees_pct,
+    commission_pct: params.commission_pct,
+    stamp_tax_pct: params.stamp_tax_pct,
+    slippage_bps: params.slippage_bps,
+    max_positions: params.max_positions,
+    max_exposure_pct: params.max_exposure_pct,
+    initial_capital: params.initial_capital,
+    position_sizing: params.position_sizing,
+    mode: params.mode,
+    holding_days: params.holding_days,
+  }
+}
+
 function buildQuery(params: Record<string, string | number | boolean | undefined | null>): string {
   const sp = new URLSearchParams()
   for (const [k, v] of Object.entries(params)) {
@@ -183,13 +211,15 @@ function postCancel(jobKey: string): void {
   }).catch(() => {})
 }
 
-/** GET stream 获取 job_key, 然后订阅 WS 频道 */
-async function startOptimizeStream(qs: string): Promise<void> {
+/** POST /optimize/start 获取 job_key, 然后订阅 WS 频道 (Phase 55 D-03: SSE 端点已删除) */
+async function startOptimizePost(params: Record<string, unknown>, qs: string): Promise<void> {
   try {
-    const res = await fetch(`/api/backtest/optimize/stream?${qs}`, {
-      headers: { Accept: 'text/event-stream' },
+    const res = await fetch('/api/backtest/optimize/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
     })
-    if (!res.ok || !res.body) {
+    if (!res.ok) {
       const taskId = current?.id
       if (taskId != null && current?.isPending) {
         current = { ...current, isPending: false, error: `优化启动失败: ${res.status}` }
@@ -197,42 +227,21 @@ async function startOptimizeStream(qs: string): Promise<void> {
       }
       return
     }
-    const reader = res.body.getReader()
-    const decoder = new TextDecoder()
-    let buffer = ''
-    let gotJobKey = false
-    while (!gotJobKey) {
-      const chunk = await reader.read()
-      if (chunk.done) break
-      buffer += decoder.decode(chunk.value, { stream: true })
-      let boundary = buffer.indexOf('\n\n')
-      while (boundary >= 0) {
-        const frame = buffer.slice(0, boundary)
-        buffer = buffer.slice(boundary + 2)
-        let eventType = 'message'
-        const dataLines: string[] = []
-        for (const line of frame.split('\n')) {
-          if (line.startsWith('event:')) eventType = line.slice(6).trim()
-          else if (line.startsWith('data:')) dataLines.push(line.slice(5).trimStart())
+    const data = await res.json()
+    const key = data?.key
+    if (typeof key === 'string' && key) {
+      currentJobKey = key
+      localStorage.setItem(JOB_KEY_KEY, key)
+      if (data?.error) {
+        const taskId = current?.id
+        if (taskId != null && current?.isPending) {
+          current = { ...current, isPending: false, error: data.error }
+          emit()
         }
-        if (eventType === 'job') {
-          try {
-            const key = JSON.parse(dataLines.join('\n'))?.key
-            if (typeof key === 'string' && key) {
-              gotJobKey = true
-              currentJobKey = key
-              localStorage.setItem(JOB_KEY_KEY, key)
-              reader.cancel()
-              connectChannel(key)
-              break
-            }
-          } catch { /* ignore */ }
-        }
-        boundary = buffer.indexOf('\n\n')
+      } else {
+        connectChannel(key)
       }
-    }
-    if (!gotJobKey) {
-      reader.cancel()
+    } else {
       const taskId = current?.id
       if (taskId != null && current?.isPending) {
         current = { ...current, isPending: false, error: '未收到任务 ID' }
@@ -283,7 +292,7 @@ export function startOptimize(params: StartOptimizeParams): void {
   })
 
   localStorage.setItem(RECONNECT_KEY, qs)
-  void startOptimizeStream(qs)
+  void startOptimizePost(buildOptStartParams(params), qs)
 }
 
 export function stopOptimize(): void {
@@ -323,11 +332,8 @@ export function tryReconnectOptimize(): boolean {
   if (!jobKey) {
     const qs = localStorage.getItem(RECONNECT_KEY)
     if (!qs) return false
-    const id = ++taskSeq
-    current = { id, isPending: true, result: null, progress: null, error: null }
-    emit()
-    void startOptimizeStream(qs)
-    return true
+    // Phase 55 D-03: SSE 端点已删除, 无 job_key 时无法用 qs 重启动
+    return false
   }
   const id = ++taskSeq
   current = { id, isPending: true, result: null, progress: null, error: null }

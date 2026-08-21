@@ -5,7 +5,6 @@ import logging
 
 import polars as pl
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.services.financial_sync import FINANCIAL_TABLES, get_financial_df
@@ -171,31 +170,6 @@ class AnalyzeRequest(BaseModel):
     focus: str = ""  # 可选:用户追加的分析关注点
 
 
-@router.post("/analyze")
-async def analyze_financials(request: Request, req: AnalyzeRequest):
-    """AI 财务分析 — SSE 流式返回。
-
-    后端读取该标的财务报表与股本表 → 注入 CFA 分析师级提示词 → 流式调用 LLM →
-    逐 chunk 以 SSE 形式推给前端(JSON per line, 非 text/event-stream,
-    以便前端用 ReadableStream 逐行解析,更简单可靠)。
-    """
-    capset = request.app.state.capabilities
-    _require_financial(capset)
-
-    if not req.symbol:
-        raise HTTPException(400, "symbol 不能为空")
-
-    data_dir = request.app.state.repo.store.data_dir
-
-    async def stream_gen():
-        async for chunk in analyze_financials_stream(data_dir, req.symbol, req.focus):
-            yield chunk + "\n"
-
-    return StreamingResponse(
-        stream_gen(),
-        media_type="application/x-ndjson",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
 
 
 # ================================================================

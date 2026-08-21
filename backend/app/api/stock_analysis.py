@@ -17,7 +17,6 @@ from datetime import date, timedelta
 
 import polars as pl
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.indicators.levels import compute_levels, summarize_levels
@@ -151,28 +150,6 @@ class AnalyzeRequest(BaseModel):
     focus: str = ""  # 可选:用户追加的分析关注点
 
 
-@router.post("/analyze")
-async def analyze_stock(request: Request, req: AnalyzeRequest):
-    """AI 个股四维分析 — NDJSON 流式返回。
-
-    组合 K 线(技术指标)+ 财务表 + 关键价位 → 客观技术分析提示词 →
-    流式调用 LLM → 逐 chunk 以 NDJSON 推给前端(每行一个 JSON)。
-    """
-    if not req.symbol:
-        raise HTTPException(400, "symbol 不能为空")
-
-    repo = request.app.state.repo
-    data_dir = repo.store.data_dir
-
-    async def stream_gen():
-        async for chunk in analyze_stock_stream(repo, data_dir, req.symbol, req.focus):
-            yield chunk + "\n"
-
-    return StreamingResponse(
-        stream_gen(),
-        media_type="application/x-ndjson",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
 
 
 # ================================================================

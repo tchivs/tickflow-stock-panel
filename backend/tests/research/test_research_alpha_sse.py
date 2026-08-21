@@ -18,10 +18,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
 
-from app.api import research_alpha_sse
+import app.api.research_alpha_sse as research_alpha_sse
 from app.api.research_alpha_sse import _parse_last_event_id, _stream_events
 from app.research.repository import ResearchRepository
 from app.research.run_contract import freeze_input_snapshot
@@ -90,50 +88,6 @@ def _make_terminal_run(
     )
     assert completed is not None
     return run["id"]
-
-
-@pytest.fixture
-def sse_client(
-    tmp_path: Path, deterministic_clock: DeterministicClock,
-) -> TestClient:
-    repository = ResearchRepository(
-        tmp_path / "op.db", clock=deterministic_clock, artifact_root=tmp_path / "art",
-    )
-    repository.migrate()
-    app = FastAPI()
-
-    @app.middleware("http")
-    async def inject_test_principal(request, call_next):
-        principal = request.headers.get("X-Test-Principal")
-        if principal:
-            request.state.reviewer_principal = principal
-        return await call_next(request)
-
-    app.state.research_run_service = ResearchRunService(repository)
-    app.include_router(research_alpha_sse.router)
-    client = TestClient(app)
-    client._repo = repository  # type: ignore[attr-defined]
-    client._clock = deterministic_clock  # type: ignore[attr-defined]
-    return client
-
-
-def _parse_sse(text: str) -> list[dict[str, str]]:
-    """Parse SSE-formatted text into a list of event dicts."""
-    events: list[dict[str, str]] = []
-    for block in text.replace("\r\n", "\n").split("\n\n"):
-        block = block.strip()
-        if not block:
-            continue
-        entry: dict[str, str] = {}
-        for line in block.split("\n"):
-            if line.startswith(":"):
-                entry["comment"] = line[1:].strip()
-            elif ":" in line:
-                field, _, value = line.partition(":")
-                # SSE spec: a leading space after the colon is stripped.
-                entry[field] = value[1:] if value.startswith(" ") else value
-        events.append(entry)
-    return events
 
 
 # ---------------------------------------------------------------------
@@ -317,60 +271,3 @@ class TestNoModuleStateAndWriteSafety:
             pass  # drain to terminal
 
 
-# ---------------------------------------------------------------------
-# Endpoint-level tests via TestClient
-# ---------------------------------------------------------------------
-
-
-class TestStreamEndpoint:
-    def test_stream_fresh_connect_endpoint(
-        self, sse_client: TestClient,
-    ) -> None:
-        repo: ResearchRepository = sse_client._repo  # type: ignore[attr-defined]
-        clock: DeterministicClock = sse_client._clock  # type: ignore[attr-defined]
-        run_id = _make_terminal_run(repo, clock, run_id="run-ep-fresh")
-        resp = sse_client.get(
-            f"/api/research/alpha/runs/{run_id}/stream",
-            headers={"X-Test-Principal": _PRINCIPAL},
-        )
-        assert resp.status_code == 200
-        events = _parse_sse(resp.text)
-        ids = [e.get("id") for e in events if e.get("id")]
-        # run_created(1) + run_started(2) + run_completed(3) + terminal
-        assert ids[-1] == "3"
-        assert events[-1].get("event") == "terminal"
-
-    def test_stream_last_event_id_endpoint(
-        self, sse_client: TestClient,
-    ) -> None:
-        repo: ResearchRepository = sse_client._repo  # type: ignore[attr-defined]
-        clock: DeterministicClock = sse_client._clock  # type: ignore[attr-defined]
-        run_id = _make_terminal_run(repo, clock, run_id="run-ep-lei")
-        resp = sse_client.get(
-            f"/api/research/alpha/runs/{run_id}/stream",
-            headers={"X-Test-Principal": _PRINCIPAL, "Last-Event-ID": "2"},
-        )
-        assert resp.status_code == 200
-        events = _parse_sse(resp.text)
-        ids = [e.get("id") for e in events if e.get("id")]
-        # Resumed from seq 2 → only seq 3 + terminal (no 1 or 2).
-        assert "1" not in ids
-        assert "2" not in ids
-        assert "3" in ids
-
-    def test_stream_unknown_run_404(self, sse_client: TestClient) -> None:
-        resp = sse_client.get(
-            "/api/research/alpha/runs/no-such-run/stream",
-            headers={"X-Test-Principal": _PRINCIPAL},
-        )
-        assert resp.status_code == 404
-
-    def test_stream_cross_principal_404(self, sse_client: TestClient) -> None:
-        repo: ResearchRepository = sse_client._repo  # type: ignore[attr-defined]
-        clock: DeterministicClock = sse_client._clock  # type: ignore[attr-defined]
-        run_id = _make_terminal_run(repo, clock, run_id="run-ep-xp")
-        resp = sse_client.get(
-            f"/api/research/alpha/runs/{run_id}/stream",
-            headers={"X-Test-Principal": "attacker@example.com"},
-        )
-        assert resp.status_code == 404

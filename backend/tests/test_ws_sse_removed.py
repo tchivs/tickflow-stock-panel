@@ -17,9 +17,9 @@ _API = _APP / "api"
 
 
 def _grep_count(directory: Path, pattern: str) -> int:
-    """Count occurrences of a regex pattern in .py files under directory."""
+    """Count occurrences of a regex pattern in .py files under directory (excluding __pycache__)."""
     result = subprocess.run(
-        ["grep", "-rc", pattern, str(directory)],
+        ["grep", "-rc", "--include=*.py", pattern, str(directory)],
         capture_output=True, text=True,
     )
     total = 0
@@ -60,9 +60,21 @@ class TestSseCodeRemoved:
         )
 
     def test_no_text_event_stream(self) -> None:
-        """No text/event-stream media_type remains in backend/app/."""
-        assert _grep_count(_APP, "text/event-stream") == 0, (
-            "text/event-stream still found in backend/app/ — SSE endpoint not fully removed"
+        """No text/event-stream media_type remains in backend/app/ (except external API headers)."""
+        # Exclude data_providers which use text/event-stream in Accept headers for external APIs
+        result = subprocess.run(
+            ["grep", "-rc", "--include=*.py", "text/event-stream", str(_APP)],
+            capture_output=True, text=True,
+        )
+        total = 0
+        for line in result.stdout.strip().splitlines():
+            if ":" in line and "data_providers" not in line:
+                try:
+                    total += int(line.rsplit(":", 1)[1])
+                except ValueError:
+                    pass
+        assert total == 0, (
+            "text/event-stream still found in backend/app/ (excluding external API headers) — SSE endpoint not fully removed"
         )
 
     def test_no_ndjson_endpoint(self) -> None:

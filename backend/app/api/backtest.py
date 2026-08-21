@@ -11,7 +11,6 @@ import uuid
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.config import settings
@@ -605,55 +604,48 @@ def _finalize_strategy_experiment(request: Request, execution_handle: str | None
     state["experiment_id"] = snapshot.id
 
 
-@router.get("/strategy/stream")
-async def strategy_stream(
-    request: Request,
-    strategy_id: str,
-    symbols: str | None = None,
-    start: str | None = None,
-    end: str | None = None,
-    matching: str = "open_t+1",
-    entry_fill: str | None = None,
-    exit_fill: str | None = None,
-    fees_pct: float = 0.0002,
-    commission_pct: float | None = None,
-    stamp_tax_pct: float | None = None,
-    slippage_bps: float = 5.0,
-    max_positions: int = 10,
-    max_exposure_pct: float = 1.0,
-    initial_capital: float = 1_000_000.0,
-    position_sizing: str = "equal",
-    params: str | None = None,
-    overrides: str | None = None,
-    mode: str = "position",
-    holding_days: int = 5,
-    asset_type: str = "stock",
-    minute_fill: bool = False,
-    regime_filter: str | None = None,
-):
-    """SSE 流式策略回测: 实时推送进度, 完成后推送结果, 支持重连 (刷新/切页后恢复)。
 
-    - 相同参数的任务只启动一次, 多次连接订阅同一个任务
-    - 断开连接不会取消任务 (除非显式调用 cancel)
-    - 结果保留 5 分钟供重连
+@router.post("/strategy/start")
+async def strategy_start(request: Request):
+    """启动策略回测任务, 返回 job_key, 进度通过 WS run:{job_key} 频道推送。
 
-    事件类型:
-      - progress: {day, total, date, equity}
-      - done: {result} (完整回测结果)
-      - error: {message}
+    Phase 55 D-03: 替代原 GET /strategy/stream SSE 端点 — 任务启动与进度推送分离,
+    启动走 POST, 进度走 WS 频道订阅。
     """
     from app.backtest.strategy import StrategyBacktestConfig
     from app.backtest.worker import make_worker_task, run_worker_task
+
+    body = await request.json()
+    strategy_id = body.get("strategy_id", "")
+    symbols = body.get("symbols")
+    start = body.get("start")
+    end = body.get("end")
+    matching = body.get("matching", "open_t+1")
+    entry_fill = body.get("entry_fill")
+    exit_fill = body.get("exit_fill")
+    fees_pct = float(body.get("fees_pct", 0.0002))
+    commission_pct = body.get("commission_pct")
+    stamp_tax_pct = body.get("stamp_tax_pct")
+    slippage_bps = float(body.get("slippage_bps", 5.0))
+    max_positions = int(body.get("max_positions", 10))
+    max_exposure_pct = float(body.get("max_exposure_pct", 1.0))
+    initial_capital = float(body.get("initial_capital", 1_000_000.0))
+    position_sizing = body.get("position_sizing", "equal")
+    params = body.get("params")
+    overrides = body.get("overrides")
+    mode = body.get("mode", "position")
+    holding_days = int(body.get("holding_days", 5))
+    asset_type = body.get("asset_type", "stock")
+    minute_fill = bool(body.get("minute_fill", False))
+    regime_filter = body.get("regime_filter")
 
     end_date = date.fromisoformat(end) if end else date.today()
     if start:
         start_date = date.fromisoformat(start)
     else:
-        # 空 start = 全部历史: 用本地最早日K日期, 查不到再回退到默认窗口
         earliest = request.app.state.repo.earliest_daily_date()
         start_date = earliest or (end_date - timedelta(days=FACTOR_DEFAULT_DAYS))
 
-    # 服务端范围保护
     guard_violated = False
     if settings.backtest_range_guard:
         days = (end_date - start_date).days + 1
@@ -674,7 +666,6 @@ async def strategy_stream(
 
     _cleanup_stale_jobs()
 
-    # 获取或创建任务
     with _jobs_lock:
         job = _running_jobs.get(job_key)
         if job is None:
@@ -692,66 +683,195 @@ async def strategy_stream(
 
     ws_channel = f"run:{job_key}"
 
-    async def event_generator():
-        # 范围保护: 直接报错
-        if guard_violated:
-            _ws_broadcast(request, ws_channel, "job_error", {"message": BACKTEST_SERVER_GUARD_MESSAGE})
-            yield f"event: error\ndata: {json.dumps({'message': BACKTEST_SERVER_GUARD_MESSAGE}, ensure_ascii=False)}\n\n"
-            return
+    if guard_violated:
+        _ws_broadcast(request, ws_channel, "job_error", {"message": BACKTEST_SERVER_GUARD_MESSAGE})
+        return {"key": job_key, "error": BACKTEST_SERVER_GUARD_MESSAGE}
 
-        # 分钟K精确回测: Pro+ 门控 + 数据范围检查
-        if minute_fill:
-            capset = request.app.state.capabilities
-            from app.tickflow.capabilities import Cap
-            if not capset.has(Cap.KLINE_MINUTE_BATCH):
-                _ws_broadcast(request, ws_channel, "job_error", {"message": "分钟K精确回测需要 Pro+ 权限 (kline.minute.batch)"})
-                yield f"event: error\ndata: {json.dumps({'message': '分钟K精确回测需要 Pro+ 权限 (kline.minute.batch)'}, ensure_ascii=False)}\n\n"
-                return
-            # 检查本地分钟K历史是否覆盖回测区间
-            repo = request.app.state.repo
-            earliest_minute = repo.earliest_minute_date() if hasattr(repo, "earliest_minute_date") else None
-            if earliest_minute is not None and start_date < earliest_minute:
-                msg = (f"本地分钟K历史最早到 {earliest_minute}, 无法覆盖回测起始日 {start_date}。"
-                       f"请先用「扩展分钟K历史」功能拉取更多数据, 或缩小回测区间。")
-                _ws_broadcast(request, ws_channel, "job_error", {"message": msg})
-                yield f"event: error\ndata: {json.dumps({'message': msg}, ensure_ascii=False)}\n\n"
-                return
+    # 广播 job_key (等价原 SSE event: job)
+    _ws_broadcast(request, ws_channel, "job", {"key": job_key})
 
+    if is_new and not job.done:
+        cfg = StrategyBacktestConfig(
+            strategy_id=strategy_id,
+            symbols=[s.strip() for s in symbols.split(",")] if symbols else None,
+            start=start_date,
+            end=end_date,
+            params=json.loads(params) if params else None,
+            overrides=json.loads(overrides) if overrides else None,
+            matching=matching,
+            entry_fill=entry_fill,
+            exit_fill=exit_fill,
+            fees_pct=fees_pct,
+            commission_pct=commission_pct,
+            stamp_tax_pct=stamp_tax_pct,
+            slippage_bps=slippage_bps,
+            max_positions=max_positions,
+            max_exposure_pct=max_exposure_pct,
+            initial_capital=initial_capital,
+            position_sizing=position_sizing,
+            mode=mode,
+            holding_days=holding_days,
+            asset_type=asset_type,
+            minute_fill=minute_fill,
+            regime_filter=json.loads(regime_filter) if regime_filter else None,
+        )
 
-        if job.research_execution_handle is not None:
-            yield f"event: research\ndata: {json.dumps({'execution_handle': job.research_execution_handle}, ensure_ascii=False)}\n\n"
-
-        # 回吐 job_key (等价 SSE event: job) — 前端存下供 cancel 引用
-        _ws_broadcast(request, ws_channel, "job", {"key": job_key})
-
-        # 如果是新任务, 启动回测线程
-        if is_new and not job.done:
-            cfg = StrategyBacktestConfig(
-                strategy_id=strategy_id,
-                symbols=[s.strip() for s in symbols.split(",") if s.strip()] if symbols else None,
-                start=start_date,
-                end=end_date,
-                params=json.loads(params) if params else None,
-                overrides=json.loads(overrides) if overrides else None,
-                matching=matching,
-                entry_fill=entry_fill,
-                exit_fill=exit_fill,
-                fees_pct=fees_pct,
-                commission_pct=commission_pct,
-                stamp_tax_pct=stamp_tax_pct,
-                slippage_bps=slippage_bps,
-                max_positions=int(max_positions),
-                max_exposure_pct=float(max_exposure_pct),
-                initial_capital=float(initial_capital),
-                position_sizing=position_sizing,
-                mode=mode,
-                holding_days=int(holding_days),
-                asset_type=asset_type,
-                minute_fill=minute_fill,
-                regime_filter=json.loads(regime_filter) if regime_filter else None,
+        def _run_backtest():
+            from app.services.heavy_job_limiter import (
+                HeavyJobCancelledError,
+                shared_heavy_job_limiter,
             )
 
-            def _run_backtest():
+            def _emit_progress(d: dict) -> None:
+                job.progress.append(d)
+                _ws_broadcast(request, ws_channel, "job_progress", d)
+
+            try:
+                with shared_heavy_job_limiter.slot(
+                    "normal",
+                    cancel_event=job.cancel_event,
+                ):
+                    task = make_worker_task("backtest", settings.data_dir, cfg)
+                    result = run_worker_task(
+                        task,
+                        _emit_progress,
+                        job.cancel_event,
+                    )
+                _finalize_strategy_experiment(
+                    request, getattr(job, "research_execution_handle", None), result)
+                _finish_job(job, result=result)
+                payload = _json_safe(result if isinstance(result, dict) else asdict(result))
+                if job.research_execution_handle is not None:
+                    payload["research_execution_handle"] = job.research_execution_handle
+                _ws_broadcast(request, ws_channel, "job_done", payload)
+            except HeavyJobCancelledError:
+                _finish_job(job, error="回测已取消")
+                _ws_broadcast(request, ws_channel, "job_error", {"message": "回测已取消"})
+            except Exception as e:
+                from app.backtest.strategy import StrategyBacktestResult
+
+                _finalize_strategy_experiment(
+                    request, getattr(job, "research_execution_handle", None),
+                    StrategyBacktestResult(run_id="", config={}, error=str(e)))
+                _finish_job(job, error=str(e))
+                _ws_broadcast(request, ws_channel, "job_error", {"message": str(e)})
+
+        threading.Thread(target=_run_backtest, daemon=True).start()
+
+    return {"key": job_key}
+
+
+
+@router.post("/optimize/start")
+async def optimize_start(request: Request):
+    """启动参数优化任务, 返回 job_key, 进度通过 WS run:{job_key} 频道推送。
+
+    Phase 55 D-03: 替代原 GET /optimize/stream SSE 端点。
+    """
+    from app.backtest.optimizer import OptimizeConfig
+    from app.backtest.worker import make_worker_task, run_worker_task
+
+    body = await request.json()
+    strategy_id = body.get("strategy_id", "")
+    param_grid = body.get("param_grid", "")
+    objective = body.get("objective", "sortino")
+    direction = body.get("direction") or None
+    max_workers = int(body.get("max_workers", 4))
+    matrix_cache_max_mb = int(body.get("matrix_cache_max_mb", 512))
+    params = body.get("params")
+    overrides = body.get("overrides")
+    symbols = body.get("symbols")
+    start = body.get("start")
+    end = body.get("end")
+    matching = body.get("matching", "open_t+1")
+    fees_pct = float(body.get("fees_pct", 0.0002))
+    commission_pct = body.get("commission_pct")
+    stamp_tax_pct = body.get("stamp_tax_pct")
+    slippage_bps = float(body.get("slippage_bps", 5.0))
+    max_positions = int(body.get("max_positions", 10))
+    max_exposure_pct = float(body.get("max_exposure_pct", 1.0))
+    initial_capital = float(body.get("initial_capital", 1_000_000.0))
+    position_sizing = body.get("position_sizing", "equal")
+    mode = body.get("mode", "position")
+    holding_days = int(body.get("holding_days", 5))
+
+    end_date = date.fromisoformat(end) if end else date.today()
+    if start:
+        start_date = date.fromisoformat(start)
+    else:
+        earliest = request.app.state.repo.earliest_daily_date()
+        start_date = earliest or (end_date - timedelta(days=FACTOR_DEFAULT_DAYS))
+
+    guard_violated = False
+    if settings.backtest_range_guard and (end_date - start_date).days + 1 > BACKTEST_MAX_SERVER_DAYS:
+        guard_violated = True
+
+    bt_kwargs = _opt_backtest_kwargs(
+        matching, fees_pct, commission_pct, stamp_tax_pct, slippage_bps,
+        max_positions, max_exposure_pct, initial_capital, position_sizing, mode, holding_days,
+    )
+    bt_sig = "|".join(f"{k}={bt_kwargs[k]}" for k in _OPT_BT_FIELDS)
+    job_key = _make_opt_job_key(
+        strategy_id, symbols, start, end, param_grid, objective, direction,
+        bt_sig, params, overrides, matrix_cache_max_mb,
+    )
+
+    _cleanup_stale_jobs()
+    with _jobs_lock:
+        job = _running_jobs.get(job_key)
+        if job is None:
+            job = _BacktestJob(
+                job_key,
+                principal=getattr(request.state, "reviewer_principal", None),
+            )
+            _running_jobs[job_key] = job
+            is_new = True
+        else:
+            is_new = False
+
+    ws_channel = f"run:{job_key}"
+    _ws_broadcast(request, ws_channel, "job", {"key": job_key})
+
+    if guard_violated:
+        _ws_broadcast(request, ws_channel, "job_error", {"message": BACKTEST_SERVER_GUARD_MESSAGE})
+        return {"key": job_key, "error": BACKTEST_SERVER_GUARD_MESSAGE}
+
+    if is_new and not job.done:
+        try:
+            grid = json.loads(param_grid)
+        except (json.JSONDecodeError, TypeError):
+            grid = None
+        if not isinstance(grid, dict) or not grid:
+            _finish_job(job, error="param_grid 必须是非空的参数网格对象")
+            grid = None
+
+        if grid is not None:
+            try:
+                base_params = json.loads(params) if params else {}
+            except (json.JSONDecodeError, TypeError):
+                logger.warning("optimize: params JSON 解析失败, 降级为空 params: %r", params)
+                base_params = {}
+            try:
+                ov = json.loads(overrides) if overrides else None
+            except (json.JSONDecodeError, TypeError):
+                logger.warning("optimize: overrides JSON 解析失败, 降级为 None: %r", overrides)
+                ov = None
+            ocfg = OptimizeConfig(
+                strategy_id=strategy_id,
+                symbols=[s.strip() for s in symbols.split(",")] if symbols else None,
+                start=start_date,
+                end=end_date,
+                param_grid=grid,
+                objective=objective,
+                direction=direction,
+                max_workers=max_workers,
+                matrix_cache_max_mb=matrix_cache_max_mb,
+                base_params=base_params if isinstance(base_params, dict) else {},
+                overrides=ov if isinstance(ov, dict) else None,
+                backtest_kwargs=bt_kwargs,
+            )
+
+            def _run_opt():
                 from app.services.heavy_job_limiter import (
                     HeavyJobCancelledError,
                     shared_heavy_job_limiter,
@@ -766,81 +886,182 @@ async def strategy_stream(
                         "normal",
                         cancel_event=job.cancel_event,
                     ):
-                        task = make_worker_task("backtest", settings.data_dir, cfg)
+                        task = make_worker_task("optimize", settings.data_dir, ocfg)
                         result = run_worker_task(
                             task,
                             _emit_progress,
                             job.cancel_event,
                         )
-                    _finalize_strategy_experiment(
-                        request, getattr(job, "research_execution_handle", None), result)
                     _finish_job(job, result=result)
-                    payload = _json_safe(result if isinstance(result, dict) else asdict(result))
-                    if job.research_execution_handle is not None:
-                        payload["research_execution_handle"] = job.research_execution_handle
-                    _ws_broadcast(request, ws_channel, "job_done", payload)
+                    _ws_broadcast(request, ws_channel, "job_done", _json_safe(result))
                 except HeavyJobCancelledError:
-                    _finish_job(job, error="回测已取消")
-                    _ws_broadcast(request, ws_channel, "job_error", {"message": "回测已取消"})
+                    _finish_job(job, error="优化已取消")
+                    _ws_broadcast(request, ws_channel, "job_error", {"message": "优化已取消"})
                 except Exception as e:
-                    from app.backtest.strategy import StrategyBacktestResult
-
-                    _finalize_strategy_experiment(
-                        request, getattr(job, "research_execution_handle", None),
-                        StrategyBacktestResult(run_id="", config={}, error=str(e)))
                     _finish_job(job, error=str(e))
                     _ws_broadcast(request, ws_channel, "job_error", {"message": str(e)})
 
-            # 启动后台线程 (不阻塞事件循环)
-            threading.Thread(target=_run_backtest, daemon=True).start()
+            threading.Thread(target=_run_opt, daemon=True).start()
 
-        # 订阅进度: 用读指针读 job.progress 列表 (多连接互不干扰)
-        cursor = 0
-        tick = 0
+    return {"key": job_key}
 
+
+
+@router.post("/walkforward/start")
+async def walkforward_start(request: Request):
+    """启动 walk-forward 任务, 返回 job_key, 进度通过 WS run:{job_key} 频道推送。
+
+    Phase 55 D-03: 替代原 GET /walkforward/stream SSE 端点。
+    """
+    from app.backtest.walkforward import WalkForwardConfig
+    from app.backtest.worker import make_worker_task, run_worker_task
+
+    body = await request.json()
+    strategy_id = body.get("strategy_id", "")
+    param_grid = body.get("param_grid", "")
+    objective = body.get("objective", "sortino")
+    direction = body.get("direction") or None
+    train_days = int(body.get("train_days", 252))
+    test_days = int(body.get("test_days", 63))
+    step_days = int(body.get("step_days", 63))
+    max_workers = int(body.get("max_workers", 4))
+    matrix_cache_max_mb = int(body.get("matrix_cache_max_mb", 512))
+    params = body.get("params")
+    overrides = body.get("overrides")
+    symbols = body.get("symbols")
+    start = body.get("start")
+    end = body.get("end")
+    matching = body.get("matching", "open_t+1")
+    fees_pct = float(body.get("fees_pct", 0.0002))
+    commission_pct = body.get("commission_pct")
+    stamp_tax_pct = body.get("stamp_tax_pct")
+    slippage_bps = float(body.get("slippage_bps", 5.0))
+    max_positions = int(body.get("max_positions", 10))
+    max_exposure_pct = float(body.get("max_exposure_pct", 1.0))
+    initial_capital = float(body.get("initial_capital", 1_000_000.0))
+    position_sizing = body.get("position_sizing", "equal")
+    mode = body.get("mode", "position")
+    holding_days = int(body.get("holding_days", 5))
+
+    direction = direction or None
+
+    end_date = date.fromisoformat(end) if end else date.today()
+    if start:
+        start_date = date.fromisoformat(start)
+    else:
+        earliest = request.app.state.repo.earliest_daily_date()
+        start_date = earliest or (end_date - timedelta(days=STRATEGY_DEFAULT_DAYS))
+
+    bt_kwargs = _opt_backtest_kwargs(
+        matching, fees_pct, commission_pct, stamp_tax_pct, slippage_bps,
+        max_positions, max_exposure_pct, initial_capital, position_sizing, mode, holding_days,
+    )
+    bt_sig = "|".join(f"{k}={bt_kwargs[k]}" for k in _OPT_BT_FIELDS)
+    windows = f"{train_days}/{test_days}/{step_days}"
+    job_key = _make_wf_job_key(
+        strategy_id, symbols, start, end, param_grid, objective, direction,
+        windows, bt_sig, params, overrides, matrix_cache_max_mb,
+    )
+
+    wf_guard_violated = (
+        settings.backtest_range_guard
+        and max(int(train_days), int(test_days)) > BACKTEST_MAX_SERVER_DAYS
+    )
+
+    _cleanup_stale_jobs()
+    with _jobs_lock:
+        job = _running_jobs.get(job_key)
+        if job is None:
+            job = _BacktestJob(
+                job_key,
+                principal=getattr(request.state, "reviewer_principal", None),
+            )
+            _running_jobs[job_key] = job
+            is_new = True
+        else:
+            is_new = False
+
+    ws_channel = f"run:{job_key}"
+    _ws_broadcast(request, ws_channel, "job", {"key": job_key})
+
+    if wf_guard_violated:
+        msg = f"单折窗口最多 {BACKTEST_MAX_SERVER_DAYS} 天 (当前 train/test 更大), 请减小训练/测试窗口或在更大内存环境运行。"
+        _ws_broadcast(request, ws_channel, "job_error", {"message": msg})
+        return {"key": job_key, "error": msg}
+
+    if is_new and not job.done:
         try:
-            while True:
-                # 已完成: 推送最终结果/错误并退出
-                if job.done:
-                    if job.error:
-                        _ws_broadcast(request, ws_channel, "job_error", {"message": job.error})
-                        yield f"event: error\ndata: {json.dumps({'message': job.error}, ensure_ascii=False)}\n\n"
-                    elif job.result is not None:
-                        r = job.result
-                        error = r.get("error") if isinstance(r, dict) else getattr(r, "error", None)
-                        if error == "cancelled":
-                            _ws_broadcast(request, ws_channel, "job_error", {"message": "回测已取消"})
-                            yield f"event: error\ndata: {json.dumps({'message': '回测已取消'}, ensure_ascii=False)}\n\n"
-                        elif error:
-                            _ws_broadcast(request, ws_channel, "job_error", {"message": error})
-                            yield f"event: error\ndata: {json.dumps({'message': error}, ensure_ascii=False)}\n\n"
-                        else:
-                            payload = r if isinstance(r, dict) else asdict(r)
-                            if job.research_execution_handle is not None:
-                                payload["research_execution_handle"] = job.research_execution_handle
-                            _ws_broadcast(request, ws_channel, "job_done", payload)
-                            yield f"event: done\ndata: {json.dumps(payload, ensure_ascii=False, default=str)}\n\n"
-                    return
+            grid = json.loads(param_grid)
+        except (json.JSONDecodeError, TypeError):
+            grid = None
+        if not isinstance(grid, dict) or not grid:
+            job.error = "param_grid 必须是非空的参数网格对象"
+            job.done = True
+            job.finish_ts = time.time()
+            grid = None
 
-                # 断开检测: 每 4 轮检查一次 (降低 GIL 抢占频率)
-                tick += 1
-                if tick % 4 == 0 and await request.is_disconnected():
-                    break
+        if grid is not None:
+            try:
+                base_params = json.loads(params) if params else {}
+            except (json.JSONDecodeError, TypeError):
+                logger.warning("walkforward: params JSON 解析失败, 降级为空 params: %r", params)
+                base_params = {}
+            try:
+                ov = json.loads(overrides) if overrides else None
+            except (json.JSONDecodeError, TypeError):
+                logger.warning("walkforward: overrides JSON 解析失败, 降级为 None: %r", overrides)
+                ov = None
+            wf_cfg = WalkForwardConfig(
+                strategy_id=strategy_id,
+                symbols=[s.strip() for s in symbols.split(",")] if symbols else None,
+                start=start_date,
+                end=end_date,
+                param_grid=grid,
+                objective=objective,
+                direction=direction,
+                train_days=train_days,
+                test_days=test_days,
+                step_days=step_days,
+                max_workers=max_workers,
+                base_params=base_params if isinstance(base_params, dict) else {},
+                overrides=ov if isinstance(ov, dict) else None,
+                backtest_kwargs=bt_kwargs,
+                matrix_cache_max_mb=matrix_cache_max_mb,
+            )
 
-                # 推送新进度 (从 cursor 开始读)
-                prog_list = job.progress
-                while cursor < len(prog_list):
-                    msg = prog_list[cursor]
-                    cursor += 1
-                    _ws_broadcast(request, ws_channel, "job_progress", msg)
-                    yield f"event: progress\ndata: {json.dumps(msg, ensure_ascii=False, default=str)}\n\n"
+            def _run_wf():
+                from app.services.heavy_job_limiter import (
+                    HeavyJobCancelledError,
+                    shared_heavy_job_limiter,
+                )
 
-                await asyncio.sleep(0.5)
+                def _emit_progress(d: dict) -> None:
+                    job.progress.append(d)
+                    _ws_broadcast(request, ws_channel, "job_progress", d)
 
-        except asyncio.CancelledError:
-            raise
+                try:
+                    with shared_heavy_job_limiter.slot(
+                        "normal",
+                        cancel_event=job.cancel_event,
+                    ):
+                        task = make_worker_task("walkforward", settings.data_dir, wf_cfg)
+                        result = run_worker_task(
+                            task,
+                            _emit_progress,
+                            job.cancel_event,
+                        )
+                    _finish_job(job, result=result)
+                    _ws_broadcast(request, ws_channel, "job_done", _json_safe(result))
+                except HeavyJobCancelledError:
+                    _finish_job(job, error="walk-forward 已取消")
+                    _ws_broadcast(request, ws_channel, "job_error", {"message": "walk-forward 已取消"})
+                except Exception as e:
+                    _finish_job(job, error=str(e))
+                    _ws_broadcast(request, ws_channel, "job_error", {"message": str(e)})
 
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+            threading.Thread(target=_run_wf, daemon=True).start()
+
+    return {"key": job_key}
 
 
 @router.post("/strategy/cancel")
@@ -953,200 +1174,6 @@ def _opt_backtest_kwargs(
     }
 
 
-@router.get("/optimize/stream")
-async def optimize_stream(
-    request: Request,
-    strategy_id: str,
-    param_grid: str,                 # JSON: {param_id: [values] | {min,max,step}}
-    objective: str = "sortino",
-    direction: str | None = None,
-    max_workers: int = 4,
-    matrix_cache_max_mb: int = 512,
-    params: str | None = None,       # JSON: 未扫描参数固定为用户当前值 (base_params)
-    overrides: str | None = None,    # JSON: 策略当前的 basic_filter/signals/风控等覆盖
-    symbols: str | None = None,
-    start: str | None = None,
-    end: str | None = None,
-    matching: str = "open_t+1",
-    fees_pct: float = 0.0002,
-    commission_pct: float | None = None,
-    stamp_tax_pct: float | None = None,
-    slippage_bps: float = 5.0,
-    max_positions: int = 10,
-    max_exposure_pct: float = 1.0,
-    initial_capital: float = 1_000_000.0,
-    position_sizing: str = "equal",
-    mode: str = "position",
-    holding_days: int = 5,
-):
-    """SSE 流式参数优化: 并行跑各参数组回测, 按 objective 排序。
-
-    事件类型:
-      - progress: {type: "optimizer_progress", done, total, best_score}
-      - done: {result} (含 best_params / results 排名)
-      - error: {message}
-    """
-    from app.backtest.optimizer import OptimizeConfig
-    from app.backtest.worker import make_worker_task, run_worker_task
-
-    end_date = date.fromisoformat(end) if end else date.today()
-    if start:
-        start_date = date.fromisoformat(start)
-    else:
-        earliest = request.app.state.repo.earliest_daily_date()
-        start_date = earliest or (end_date - timedelta(days=FACTOR_DEFAULT_DAYS))
-
-    guard_violated = False
-    if settings.backtest_range_guard and (end_date - start_date).days + 1 > BACKTEST_MAX_SERVER_DAYS:
-        guard_violated = True
-
-    # 空串归一为 None, 与 cancel 侧 `_get("direction") or None` 口径一致, 避免 job_key 失配。
-    direction = direction or None
-    bt_kwargs = _opt_backtest_kwargs(
-        matching, fees_pct, commission_pct, stamp_tax_pct, slippage_bps,
-        max_positions, max_exposure_pct, initial_capital, position_sizing, mode, holding_days,
-    )
-    bt_sig = "|".join(f"{k}={bt_kwargs[k]}" for k in _OPT_BT_FIELDS)
-    job_key = _make_opt_job_key(
-        strategy_id,
-        symbols,
-        start,
-        end,
-        param_grid,
-        objective,
-        direction,
-        bt_sig,
-        params,
-        overrides,
-        matrix_cache_max_mb,
-    )
-
-    _cleanup_stale_jobs()
-    with _jobs_lock:
-        job = _running_jobs.get(job_key)
-        if job is None:
-            job = _BacktestJob(
-                job_key,
-                principal=getattr(request.state, "reviewer_principal", None),
-            )
-            _running_jobs[job_key] = job
-            is_new = True
-        else:
-            is_new = False
-
-    ws_channel = f"run:{job_key}"
-
-    async def event_generator():
-        # 首个事件回吐 job_key, 前端存下供 cancel 直接引用 (消除两侧重算契约)。
-        _ws_broadcast(request, ws_channel, "job", {"key": job_key})
-        yield f"event: job\ndata: {json.dumps({'key': job_key}, ensure_ascii=False)}\n\n"
-
-        if guard_violated:
-            _ws_broadcast(request, ws_channel, "job_error", {"message": BACKTEST_SERVER_GUARD_MESSAGE})
-            yield f"event: error\ndata: {json.dumps({'message': BACKTEST_SERVER_GUARD_MESSAGE}, ensure_ascii=False)}\n\n"
-            return
-        if is_new and not job.done:
-            try:
-                grid = json.loads(param_grid)
-            except (json.JSONDecodeError, TypeError):
-                grid = None
-            # grid 必须是非空 dict; null/[]/"" 等合法 JSON 但结构错误也在此拦下,
-            # 否则会跳过线程启动却不置 done -> event_generator 永久空转、job 挂死。
-            if not isinstance(grid, dict) or not grid:
-                _finish_job(job, error="param_grid 必须是非空的参数网格对象")
-                grid = None
-
-            if grid is not None:
-                # 未扫描参数固定为用户当前值 (base_params); overrides 让策略的 basic_filter/
-                # 信号/风控按用户当前配置参与, 保证优化的就是用户实际回测的策略。
-                try:
-                    base_params = json.loads(params) if params else {}
-                except (json.JSONDecodeError, TypeError):
-                    # 静默降级会让"用户配置丢失"变成无声 bug: 至少 warn 供诊断 (前端应传合法 JSON)。
-                    logger.warning("optimize: params JSON 解析失败, 降级为空 params: %r", params)
-                    base_params = {}
-                try:
-                    ov = json.loads(overrides) if overrides else None
-                except (json.JSONDecodeError, TypeError):
-                    logger.warning("optimize: overrides JSON 解析失败, 降级为 None: %r", overrides)
-                    ov = None
-                ocfg = OptimizeConfig(
-                    strategy_id=strategy_id,
-                    symbols=[s.strip() for s in symbols.split(",") if s.strip()] if symbols else None,
-                    start=start_date,
-                    end=end_date,
-                    param_grid=grid,
-                    objective=objective,
-                    direction=direction,
-                    max_workers=int(max_workers),
-                    matrix_cache_max_mb=int(matrix_cache_max_mb),
-                    base_params=base_params if isinstance(base_params, dict) else {},
-                    overrides=ov if isinstance(ov, dict) else None,
-                    backtest_kwargs=bt_kwargs,
-                )
-
-                def _run_opt():
-                    from app.services.heavy_job_limiter import (
-                        HeavyJobCancelledError,
-                        shared_heavy_job_limiter,
-                    )
-
-                    def _emit_progress(d: dict) -> None:
-                        job.progress.append(d)
-                        _ws_broadcast(request, ws_channel, "job_progress", d)
-
-                    try:
-                        with shared_heavy_job_limiter.slot(
-                            "normal",
-                            cancel_event=job.cancel_event,
-                        ):
-                            task = make_worker_task("optimize", settings.data_dir, ocfg)
-                            result = run_worker_task(
-                                task,
-                                _emit_progress,
-                                job.cancel_event,
-                            )
-                        _finish_job(job, result=result)
-                        _ws_broadcast(request, ws_channel, "job_done", _json_safe(result))
-                    except HeavyJobCancelledError:
-                        _finish_job(job, error="优化已取消")
-                        _ws_broadcast(request, ws_channel, "job_error", {"message": "优化已取消"})
-                    except Exception as e:
-                        _finish_job(job, error=str(e))
-                        _ws_broadcast(request, ws_channel, "job_error", {"message": str(e)})
-
-                threading.Thread(target=_run_opt, daemon=True).start()
-
-        cursor = 0
-        tick = 0
-        try:
-            while True:
-                if job.done:
-                    if job.error:
-                        _ws_broadcast(request, ws_channel, "job_error", {"message": job.error})
-                        yield f"event: error\ndata: {json.dumps({'message': job.error}, ensure_ascii=False)}\n\n"
-                    elif job.cancel_event.is_set():
-                        _ws_broadcast(request, ws_channel, "job_error", {"message": "优化已取消"})
-                        yield f"event: error\ndata: {json.dumps({'message': '优化已取消'}, ensure_ascii=False)}\n\n"
-                    elif job.result is not None:
-                        _ws_broadcast(request, ws_channel, "job_done", _json_safe(job.result))
-                        yield f"event: done\ndata: {json.dumps(_json_safe(job.result), ensure_ascii=False, default=str)}\n\n"
-                    return
-                tick += 1
-                if tick % 4 == 0 and await request.is_disconnected():
-                    break
-                while cursor < len(job.progress):
-                    msg = job.progress[cursor]
-                    cursor += 1
-                    _ws_broadcast(request, ws_channel, "job_progress", msg)
-                    yield f"event: progress\ndata: {json.dumps(msg, ensure_ascii=False, default=str)}\n\n"
-                await asyncio.sleep(0.5)
-        except asyncio.CancelledError:
-            raise
-
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
-
-
 @router.post("/optimize/cancel")
 async def optimize_cancel(request: Request):
     """取消优化任务 — 前端传 stream 首事件回吐的 job_key, 后端直接查表。
@@ -1187,208 +1214,6 @@ def _make_wf_job_key(
         f"{direction}|{windows}|{bt_sig}|{params}|{overrides}|cache={matrix_cache_max_mb}"
     )
     return hashlib.md5(raw.encode()).hexdigest()[:12]
-
-
-@router.get("/walkforward/stream")
-async def walkforward_stream(
-    request: Request,
-    strategy_id: str,
-    param_grid: str,
-    objective: str = "sortino",
-    direction: str | None = None,
-    train_days: int = 252,
-    test_days: int = 63,
-    step_days: int = 63,
-    max_workers: int = 4,
-    matrix_cache_max_mb: int = 512,
-    params: str | None = None,       # JSON: 未扫描参数固定为用户当前值 (base_params)
-    overrides: str | None = None,    # JSON: 策略当前的 basic_filter/signals/风控等覆盖
-    symbols: str | None = None,
-    start: str | None = None,
-    end: str | None = None,
-    matching: str = "open_t+1",
-    fees_pct: float = 0.0002,
-    commission_pct: float | None = None,
-    stamp_tax_pct: float | None = None,
-    slippage_bps: float = 5.0,
-    max_positions: int = 10,
-    max_exposure_pct: float = 1.0,
-    initial_capital: float = 1_000_000.0,
-    position_sizing: str = "equal",
-    mode: str = "position",
-    holding_days: int = 5,
-):
-    """SSE 流式 walk-forward: 每折训练区间网格优化 -> 测试区间 OOS 回测。
-
-    事件: job {key} / progress {type:walkforward_progress,done,total,fold} / done {result} / error {message}
-    """
-    from app.backtest.walkforward import WalkForwardConfig
-    from app.backtest.worker import make_worker_task, run_worker_task
-
-    direction = direction or None
-
-    end_date = date.fromisoformat(end) if end else date.today()
-    if start:
-        start_date = date.fromisoformat(start)
-    else:
-        earliest = request.app.state.repo.earliest_daily_date()
-        start_date = earliest or (end_date - timedelta(days=STRATEGY_DEFAULT_DAYS))
-
-    bt_kwargs = _opt_backtest_kwargs(
-        matching, fees_pct, commission_pct, stamp_tax_pct, slippage_bps,
-        max_positions, max_exposure_pct, initial_capital, position_sizing, mode, holding_days,
-    )
-    bt_sig = "|".join(f"{k}={bt_kwargs[k]}" for k in _OPT_BT_FIELDS)
-    windows = f"{train_days}/{test_days}/{step_days}"
-    job_key = _make_wf_job_key(
-        strategy_id,
-        symbols,
-        start,
-        end,
-        param_grid,
-        objective,
-        direction,
-        windows,
-        bt_sig,
-        params,
-        overrides,
-        matrix_cache_max_mb,
-    )
-
-    # guard 作用于单折窗口 (每折训练/测试各是一次回测), 而非总区间 —— WF 总区间可长达数年,
-    # 按总区间拦会误杀; 真正的 OOM 风险在单折窗口过大。
-    wf_guard_violated = (
-        settings.backtest_range_guard
-        and max(int(train_days), int(test_days)) > BACKTEST_MAX_SERVER_DAYS
-    )
-
-    _cleanup_stale_jobs()
-    with _jobs_lock:
-        job = _running_jobs.get(job_key)
-        if job is None:
-            job = _BacktestJob(
-                job_key,
-                principal=getattr(request.state, "reviewer_principal", None),
-            )
-            _running_jobs[job_key] = job
-            is_new = True
-        else:
-            is_new = False
-
-    ws_channel = f"run:{job_key}"
-
-    async def event_generator():
-        # 回吐 job_key (等价 SSE event: job)
-        _ws_broadcast(request, ws_channel, "job", {"key": job_key})
-        yield f"event: job\ndata: {json.dumps({'key': job_key}, ensure_ascii=False)}\n\n"
-
-        if wf_guard_violated:
-            msg = f"单折窗口最多 {BACKTEST_MAX_SERVER_DAYS} 天 (当前 train/test 更大), 请减小训练/测试窗口或在更大内存环境运行。"
-            _ws_broadcast(request, ws_channel, "job_error", {"message": msg})
-            yield f"event: error\ndata: {json.dumps({'message': msg}, ensure_ascii=False)}\n\n"
-            return
-
-        if is_new and not job.done:
-            try:
-                grid = json.loads(param_grid)
-            except (json.JSONDecodeError, TypeError):
-                grid = None
-            if not isinstance(grid, dict) or not grid:
-                job.error = "param_grid 必须是非空的参数网格对象"
-                job.done = True
-                job.finish_ts = time.time()
-                grid = None
-
-            if grid is not None:
-                try:
-                    base_params = json.loads(params) if params else {}
-                except (json.JSONDecodeError, TypeError):
-                    # 静默降级会让"用户配置丢失"变成无声 bug: 至少 warn 供诊断 (前端应传合法 JSON)。
-                    logger.warning("walkforward: params JSON 解析失败, 降级为空 params: %r", params)
-                    base_params = {}
-                try:
-                    ov = json.loads(overrides) if overrides else None
-                except (json.JSONDecodeError, TypeError):
-                    logger.warning("walkforward: overrides JSON 解析失败, 降级为 None: %r", overrides)
-                    ov = None
-                wf_cfg = WalkForwardConfig(
-                    strategy_id=strategy_id,
-                    symbols=[s.strip() for s in symbols.split(",") if s.strip()] if symbols else None,
-                    start=start_date,
-                    end=end_date,
-                    param_grid=grid,
-                    objective=objective,
-                    direction=direction,
-                    train_days=int(train_days),
-                    test_days=int(test_days),
-                    step_days=int(step_days),
-                    max_workers=int(max_workers),
-                    base_params=base_params if isinstance(base_params, dict) else {},
-                    overrides=ov if isinstance(ov, dict) else None,
-                    backtest_kwargs=bt_kwargs,
-                    matrix_cache_max_mb=int(matrix_cache_max_mb),
-                )
-
-                def _run_wf():
-                    from app.services.heavy_job_limiter import (
-                        HeavyJobCancelledError,
-                        shared_heavy_job_limiter,
-                    )
-
-                    def _emit_progress(d: dict) -> None:
-                        job.progress.append(d)
-                        _ws_broadcast(request, ws_channel, "job_progress", d)
-
-                    try:
-                        with shared_heavy_job_limiter.slot(
-                            "normal",
-                            cancel_event=job.cancel_event,
-                        ):
-                            task = make_worker_task("walkforward", settings.data_dir, wf_cfg)
-                            result = run_worker_task(
-                                task,
-                                _emit_progress,
-                                job.cancel_event,
-                            )
-                        _finish_job(job, result=result)
-                        _ws_broadcast(request, ws_channel, "job_done", _json_safe(result))
-                    except HeavyJobCancelledError:
-                        _finish_job(job, error="walk-forward 已取消")
-                        _ws_broadcast(request, ws_channel, "job_error", {"message": "walk-forward 已取消"})
-                    except Exception as e:
-                        _finish_job(job, error=str(e))
-                        _ws_broadcast(request, ws_channel, "job_error", {"message": str(e)})
-
-                threading.Thread(target=_run_wf, daemon=True).start()
-
-        cursor = 0
-        tick = 0
-        try:
-            while True:
-                if job.done:
-                    if job.error:
-                        _ws_broadcast(request, ws_channel, "job_error", {"message": job.error})
-                        yield f"event: error\ndata: {json.dumps({'message': job.error}, ensure_ascii=False)}\n\n"
-                    elif job.cancel_event.is_set():
-                        _ws_broadcast(request, ws_channel, "job_error", {"message": "walk-forward 已取消"})
-                        yield f"event: error\ndata: {json.dumps({'message': 'walk-forward 已取消'}, ensure_ascii=False)}\n\n"
-                    elif job.result is not None:
-                        _ws_broadcast(request, ws_channel, "job_done", _json_safe(job.result))
-                        yield f"event: done\ndata: {json.dumps(_json_safe(job.result), ensure_ascii=False, default=str)}\n\n"
-                    return
-                tick += 1
-                if tick % 4 == 0 and await request.is_disconnected():
-                    break
-                while cursor < len(job.progress):
-                    msg = job.progress[cursor]
-                    cursor += 1
-                    _ws_broadcast(request, ws_channel, "job_progress", msg)
-                    yield f"event: progress\ndata: {json.dumps(msg, ensure_ascii=False, default=str)}\n\n"
-                await asyncio.sleep(0.5)
-        except asyncio.CancelledError:
-            raise
-
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 @router.post("/walkforward/cancel")

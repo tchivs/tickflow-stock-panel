@@ -13,7 +13,6 @@ from __future__ import annotations
 import logging
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.services import market_recap_reports
@@ -30,41 +29,6 @@ class AnalyzeRequest(BaseModel):
     focus: str = ""           # 可选:用户追加的复盘关注点
 
 
-@router.post("/analyze")
-async def analyze_market(request: Request, req: AnalyzeRequest):
-    """AI 大盘复盘 — NDJSON 流式返回。
-
-    装配市场总览(指数/涨跌/连板/封板/板块/情绪雷达)→ 复盘提示词 →
-    流式调用 LLM → 逐 chunk 以 NDJSON 推给前端(每行一个 JSON)。
-
-    协议:
-      {"type":"meta","as_of","emotion_score","emotion_label","summary"}
-      {"type":"delta","content":"..."}
-      {"type":"error","message":"..."}
-      {"type":"done"}
-    """
-    from datetime import date as date_cls
-
-    repo = request.app.state.repo
-    quote_service = getattr(request.app.state, "quote_service", None)
-    depth_service = getattr(request.app.state, "depth_service", None)
-
-    as_of = None
-    if req.as_of:
-        try:
-            as_of = date_cls.fromisoformat(req.as_of)
-        except ValueError:
-            raise HTTPException(400, f"as_of 格式应为 YYYY-MM-DD,收到: {req.as_of}")
-
-    async def stream_gen():
-        async for chunk in recap_market_stream(repo, quote_service, depth_service, as_of, req.focus):
-            yield chunk + "\n"
-
-    return StreamingResponse(
-        stream_gen(),
-        media_type="application/x-ndjson",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
 
 
 # ================================================================

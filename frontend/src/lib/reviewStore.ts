@@ -168,17 +168,18 @@ export function resetReview(): void {
 }
 
 /**
- * 喂入一条来自 SSE 的复盘事件(定时生成时后端推来的)。
+ * 喂入一条来自 WS 的复盘事件(定时生成时后端推来的)。
  *
- * 用途: 定时复盘在后端流式生成, 通过 /api/intraday/stream 的 review_progress 事件
- * 把 meta/delta/done 等实时推给前端, 前端调本函数把事件写进 store ——
+ * 用途: 定时复盘在后端流式生成, 通过 review 频道 (Phase 55 WS 迁移, 原
+ * /api/intraday/stream SSE) 的 review_progress 事件把 meta/delta/done 等
+ * 实时推给前端, 前端调本函数把事件写进 store ——
  * 这样开着复盘页的用户能看到「边生成边显示」, 和手动点生成完全一致。
  *
  * 事件格式与 recap_market_stream 产出一致:
  *   {type:'meta'|'delta'|'error'|'done'|'retry', ...}
  *
  * 与手动生成的并发:
- *  - 若手动正在生成(isReviewGenerating), 忽略 SSE 事件(手动流优先, 避免冲突)。
+ *  - 若手动正在生成(isReviewGenerating), 忽略 WS 事件(手动流优先, 避免冲突)。
  *  - done 带 archived=true(定时场景后端已归档): 不重复调归档接口, 仅切到 done 态。
  *  - retry: 后端 LLM 断流重试, 清空已累积内容重新开始。
  */

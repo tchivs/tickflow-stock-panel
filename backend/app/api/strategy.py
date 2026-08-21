@@ -15,7 +15,6 @@ from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.backtest.minute_trigger import MINUTE_EXIT_TRIGGER_SIGNALS
@@ -832,35 +831,6 @@ async def build_strategy(req: BuildRequest, request: Request):
     return result
 
 
-@router.post("/build/stream")
-async def build_strategy_stream(req: BuildRequest, request: Request):
-    try:
-        prompt = _build_prompt(req)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
-
-    async def event_generator():
-        gen = AIStrategyGenerator()
-        chunks: list[str] = []
-        yield json.dumps({"type": "meta", "strategy_id": req.strategy_id, "step": req.step}, ensure_ascii=False) + "\n"
-        try:
-            async for chunk in gen.stream(prompt):
-                chunks.append(chunk)
-                yield json.dumps({"type": "delta", "content": chunk}, ensure_ascii=False) + "\n"
-            result = gen.validate_code("".join(chunks))
-            if gen.needs_structural_repair(result):
-                result = await gen.repair_code(result["code"], result["error"])
-            if req.step == 1:
-                result = _normalize_build_result(result, req.strategy_id, req.name, req.description)
-            elif req.strategy_id:
-                result = _normalize_build_result(result, req.strategy_id)
-            yield json.dumps({"type": "result", **result}, ensure_ascii=False) + "\n"
-        except RuntimeError as e:
-            yield json.dumps({"type": "error", "message": str(e)}, ensure_ascii=False) + "\n"
-        except Exception as e:
-            yield json.dumps({"type": "error", "message": f"AI生成失败: {e}"}, ensure_ascii=False) + "\n"
-
-    return StreamingResponse(event_generator(), media_type="application/x-ndjson")
 
 
 

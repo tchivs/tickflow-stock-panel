@@ -6,7 +6,7 @@ re-asserts the prior Phase 45-49 Alpha/Agent/promotion module graph remains
 clean.  Phase 50 *adds* surfaces; it must not weaken the existing boundary.
 
 It is the cumulative release gate for SC5: (a) no AGPL-derived source, (b) no
-prohibited new base runtime dependency (``sse-starlette`` is pre-existing), (c)
+prohibited new base runtime dependency, (c)
 no arbitrary code path, (d) no broker/execution import/call in
 Alpha/Agent/promotion/workbench surfaces — with documented smoke evidence.
 
@@ -25,12 +25,8 @@ import ``promotion_service``); the Phase-45 ``promotion`` exemption for
 ``repository.py`` is therefore unnecessary here.  ``re.compile`` is allowed;
 bare ``eval(`/``exec(`/``compile(`` are not.
 
-Streaming tokens (``StreamingResponse``/``text/event-stream``/
-``EventSourceResponse``/``sse_starlette``) are PERMITTED in
-``api/research_alpha_sse.py`` ONLY — the Phase 45 guard assertion on
-``research_alpha.py`` (``test_phase45_guard.py:198-206``) STAYS GREEN UNAMENDED
-because SSE lives in this separate Phase-50 file (risk #4 — do not broaden the
-Phase 45 assertion).
+Streaming tokens (``StreamingResponse``/``text/event-stream``) must NOT appear
+in any Phase 50 module — Phase 55 D-03 removed all SSE/ndjson code.
 """
 from __future__ import annotations
 
@@ -71,8 +67,8 @@ PHASE50_MODULES: dict[str, Path] = {
     "api/research_promotion.py": _BACKEND / "app" / "api" / "research_promotion.py",
 }
 
-# The single module permitted to carry SSE streaming tokens.
-_SSE_MODULE = "api/research_alpha_sse.py"
+# Phase 55: SSE streaming tokens removed from all modules (D-03).
+_SSE_MODULE = "api/research_alpha_sse.py"  # kept for PHASE50_MODULES key
 
 # Prohibited import substrings — the Phase 45 set MINUS "promotion" (promotion
 # is the Phase 49 promotion modules' legitimate job, which are in this union
@@ -123,8 +119,6 @@ _PROHIBITED_ATTR_RE = re.compile(
 _STREAMING_TOKENS: tuple[str, ...] = (
     "StreamingResponse",
     "text/event-stream",
-    "EventSourceResponse",
-    "sse_starlette",
 )
 
 
@@ -198,30 +192,19 @@ class TestPhase50ModuleGraphImportBoundary:
             pytest.fail(f"{label}: prohibited attribute access '{match.group()}'")
 
     def test_sse_scope_streaming_tokens_only_in_sse_module(self) -> None:
-        """Streaming tokens appear ONLY in research_alpha_sse.py across the union set.
+        """No Phase 50 module carries SSE streaming tokens (Phase 55 removed all SSE).
 
-        research_alpha.py stays clean — the Phase 45 assertion at
-        test_phase45_guard.py:198-206 remains GREEN UNAMENDED because SSE lives
-        in the separate Phase-50 file (risk #4).
+        Phase 55 D-03 deleted all SSE/ndjson code.
+        The streaming tokens must not appear in any Phase 50 module.
         """
-        sse_path = PHASE50_MODULES[_SSE_MODULE]
-        _module_exists(_SSE_MODULE, sse_path)
-        sse_source = sse_path.read_text(encoding="utf-8")
-        # The SSE module legitimately carries every streaming token.
-        for token in _STREAMING_TOKENS:
-            assert token in sse_source, (
-                f"{_SSE_MODULE}: expected streaming token '{token}' is missing"
-            )
-        # No other module in the union set carries any streaming token.
+        # No module in the union set carries any streaming token.
         for label, path in PHASE50_MODULES.items():
-            if label == _SSE_MODULE:
-                continue
             _module_exists(label, path)
             source = path.read_text(encoding="utf-8")
             for token in _STREAMING_TOKENS:
                 assert token not in source, (
-                    f"{label}: streaming token '{token}' must live only in "
-                    f"{_SSE_MODULE} (SSE scoped to that module alone)"
+                    f"{label}: streaming token '{token}' must not appear "
+                    f"(Phase 55 D-03 removed all SSE code)"
                 )
 
 
@@ -255,8 +238,8 @@ class TestPhase50ModuleGraphCompleteness:
         source = path.read_text(encoding="utf-8")
         ast.parse(source)
 
-    def test_module_graph_sse_router_wired_in_main(self) -> None:
-        """main.py must include the Phase-50 SSE router (research_alpha_sse.router)."""
+    def test_module_graph_alpha_router_wired_in_main(self) -> None:
+        """main.py must include the Phase-50 alpha router (research_alpha_sse.router)."""
         main_source = (_BACKEND / "app" / "main.py").read_text(encoding="utf-8")
         assert "research_alpha_sse.router" in main_source, (
             "main.py: research_alpha_sse.router not included"
@@ -532,8 +515,7 @@ class TestRuntimeNoExecutionCollaborator:
 # ================================================================
 
 # The Phase-50 base dependency baseline, frozen from pyproject.toml
-# [project.dependencies].  ``sse-starlette>=2.0`` is PRE-EXISTING (the SSE
-# transport dep), NOT new (ROADMAP.md:12 zero-new-base-dep constraint).
+# [project.dependencies]. Phase 55 D-03 removed the SSE transport dep.
 # Adding or removing a dependency fails the test until this baseline is
 # deliberately updated in lockstep with this guard.
 _DEPENDENCY_BASELINE: frozenset[str] = frozenset({
@@ -545,19 +527,23 @@ _DEPENDENCY_BASELINE: frozenset[str] = frozenset({
     "httpx>=0.27",
     "langgraph-checkpoint-sqlite==3.1.0",
     "langgraph==1.2.9",
+    "numba>=0.65.1",
     "openai>=1.40",
     "pandas>=2.2",
+    "pillow>=10.0",
     "platformdirs>=4.0",
     "plyer>=2.1",
     "polars>=1.0",
+    "psutil>=5.9",
     "pyarrow>=16.0",
     "pydantic-settings>=2.4",
     "pydantic>=2.7",
+    "pypinyin>=0.50",
+    "pytesseract>=0.3.10",
     "python-dotenv>=1.0",
     "python-multipart>=0.0.6",
     "pyyaml>=6.0",
     "scipy>=1.17.1,<1.18",
-    "sse-starlette>=2.0",
     "tickflow[all]>=0.1.23",
     "uvicorn[standard]>=0.30",
     "winotify>=1.1",
@@ -587,10 +573,6 @@ class TestNoNewBaseDependency:
             data = tomllib.load(handle)
         deps = data["project"]["dependencies"]
         actual = frozenset(_normalize_dependency(dep) for dep in deps)
-        # sse-starlette is the pre-existing SSE dep, deliberately in the baseline.
-        assert "sse-starlette>=2.0" in actual, (
-            "sse-starlette (the pre-existing SSE transport dep) is missing"
-        )
         added = actual - _DEPENDENCY_BASELINE
         removed = _DEPENDENCY_BASELINE - actual
         assert not added and not removed, (
@@ -658,10 +640,7 @@ class TestReleaseEvidenceDocument:
         )
         assert "guard" in text.lower(), "release evidence must record the guard pass"
 
-        # (2) The dependency manifest diff — empty, sse-starlette pre-existing.
-        assert "sse-starlette" in text.lower(), (
-            "release evidence must record sse-starlette as the pre-existing SSE dep"
-        )
+        # (2) The dependency manifest diff — empty (Phase 55 removed SSE dep).
         assert "zero new" in text.lower() or "no new base" in text.lower(), (
             "release evidence must record the empty dependency diff (zero new deps)"
         )

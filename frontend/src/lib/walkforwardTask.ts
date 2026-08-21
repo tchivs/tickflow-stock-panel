@@ -87,6 +87,24 @@ function subscribe(fn: () => void) {
   return () => listeners.delete(fn)
 }
 
+/** 构建 POST /walkforward/start 的 JSON 参数 */
+function buildWfStartParams(params: StartWalkForwardParams): Record<string, unknown> {
+  return {
+    strategy_id: params.strategy_id,
+    param_grid: JSON.stringify(params.param_grid),
+    objective: params.objective,
+    train_days: params.train_days,
+    test_days: params.test_days,
+    step_days: params.step_days,
+    params: params.params ? JSON.stringify(params.params) : undefined,
+    overrides: params.overrides ? JSON.stringify(params.overrides) : undefined,
+    symbols: params.symbols?.join(','),
+    start: params.start ?? undefined,
+    end: params.end ?? undefined,
+    mode: params.mode,
+  }
+}
+
 function buildQuery(params: Record<string, string | number | boolean | undefined | null>): string {
   const sp = new URLSearchParams()
   for (const [k, v] of Object.entries(params)) {
@@ -174,13 +192,15 @@ function postCancel(jobKey: string): void {
   }).catch(() => {})
 }
 
-/** GET stream 获取 job_key, 然后订阅 WS 频道 */
-async function startWalkForwardStream(qs: string): Promise<void> {
+/** POST /walkforward/start 获取 job_key, 然后订阅 WS 频道 (Phase 55 D-03: SSE 端点已删除) */
+async function startWalkForwardPost(params: Record<string, unknown>, qs: string): Promise<void> {
   try {
-    const res = await fetch(`/api/backtest/walkforward/stream?${qs}`, {
-      headers: { Accept: 'text/event-stream' },
+    const res = await fetch('/api/backtest/walkforward/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
     })
-    if (!res.ok || !res.body) {
+    if (!res.ok) {
       const taskId = current?.id
       if (taskId != null && current?.isPending) {
         current = { ...current, isPending: false, error: `walk-forward 启动失败: ${res.status}` }
@@ -188,42 +208,21 @@ async function startWalkForwardStream(qs: string): Promise<void> {
       }
       return
     }
-    const reader = res.body.getReader()
-    const decoder = new TextDecoder()
-    let buffer = ''
-    let gotJobKey = false
-    while (!gotJobKey) {
-      const chunk = await reader.read()
-      if (chunk.done) break
-      buffer += decoder.decode(chunk.value, { stream: true })
-      let boundary = buffer.indexOf('\n\n')
-      while (boundary >= 0) {
-        const frame = buffer.slice(0, boundary)
-        buffer = buffer.slice(boundary + 2)
-        let eventType = 'message'
-        const dataLines: string[] = []
-        for (const line of frame.split('\n')) {
-          if (line.startsWith('event:')) eventType = line.slice(6).trim()
-          else if (line.startsWith('data:')) dataLines.push(line.slice(5).trimStart())
+    const data = await res.json()
+    const key = data?.key
+    if (typeof key === 'string' && key) {
+      currentJobKey = key
+      localStorage.setItem(JOB_KEY_KEY, key)
+      if (data?.error) {
+        const taskId = current?.id
+        if (taskId != null && current?.isPending) {
+          current = { ...current, isPending: false, error: data.error }
+          emit()
         }
-        if (eventType === 'job') {
-          try {
-            const key = JSON.parse(dataLines.join('\n'))?.key
-            if (typeof key === 'string' && key) {
-              gotJobKey = true
-              currentJobKey = key
-              localStorage.setItem(JOB_KEY_KEY, key)
-              reader.cancel()
-              connectChannel(key)
-              break
-            }
-          } catch { /* ignore */ }
-        }
-        boundary = buffer.indexOf('\n\n')
+      } else {
+        connectChannel(key)
       }
-    }
-    if (!gotJobKey) {
-      reader.cancel()
+    } else {
       const taskId = current?.id
       if (taskId != null && current?.isPending) {
         current = { ...current, isPending: false, error: '未收到任务 ID' }
@@ -264,7 +263,7 @@ export function startWalkForward(params: StartWalkForwardParams): void {
   })
 
   localStorage.setItem(RECONNECT_KEY, qs)
-  void startWalkForwardStream(qs)
+  void startWalkForwardPost(buildWfStartParams(params), qs)
 }
 
 export function stopWalkForward(): void {
@@ -301,11 +300,8 @@ export function tryReconnectWalkForward(): boolean {
   if (!jobKey) {
     const qs = localStorage.getItem(RECONNECT_KEY)
     if (!qs) return false
-    const id = ++taskSeq
-    current = { id, isPending: true, result: null, progress: null, error: null }
-    emit()
-    void startWalkForwardStream(qs)
-    return true
+    // Phase 55 D-03: SSE 端点已删除, 无 job_key 时无法用 qs 重启动
+    return false
   }
   const id = ++taskSeq
   current = { id, isPending: true, result: null, progress: null, error: null }

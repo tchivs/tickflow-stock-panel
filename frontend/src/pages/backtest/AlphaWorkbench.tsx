@@ -45,14 +45,14 @@ import { toast } from '@/components/Toast'
 //
 // A single NEW page (sibling to WalkForward.tsx) projecting every backend seam
 // from 50-01/02 to the researcher:
-//   • durable live progress over native EventSource (Last-Event-ID reconnect)
-//     with a bounded-polling fallback (SC1);
+//   • durable live progress over WS run: 频道 (Phase 55 migration; seq 去重保留)
+//     with a bounded-polling fallback when the WS is fully disconnected;
 //   • the parent→child lineage tree with expression diffs + replay/clone (SC2);
 //   • the side-by-side compare panel + Tier-1 stress matrix — no opaque winner (SC3);
 //   • the data-quality banner bound to evidence_classification.clean (SC4).
 //
 // All server state flows through the existing request<T> fetcher + React Query;
-// the live stream uses native EventSource (no new transport/dependency).
+// the live stream uses useWsStream.subscribe(run:{runId}) — no EventSource (D-03).
 // ---------------------------------------------------------------------------
 
 type ConnStatus = 'idle' | 'running' | 'done' | 'error' | 'reconnecting'
@@ -78,13 +78,11 @@ const POLL_INTERVAL_MS = 2000
 const EVENT_TAIL_MAX = 200
 
 /**
- * Durable live progress over native EventSource (SC1 UI half).
+ * Durable live progress over WS run: 频道 (Phase 55).
  *
- * The browser auto-sends Last-Event-ID on every reconnect; the server honors it
- * durably (50-01-04), so reconnect resumes from the acknowledged seq. We dedup
- * by seq client-side so any reconnect overlap can never duplicate a rendered
- * event. When EventSource is unavailable we degrade to bounded polling of
- * GET /progress (+ GET /runs/{id} for the terminal check).
+ * We dedup by seq client-side so any reconnect overlap can never duplicate a
+ * rendered event. When the WS is fully disconnected we degrade to bounded
+ * polling of GET /progress (+ GET /runs/{id} for the terminal check).
  */
 function useAlphaStream(runId: string | null) {
   const [status, setStatus] = useState<ConnStatus>('idle')
@@ -273,7 +271,7 @@ function LiveProgress({ runId }: { runId: string }) {
           <Activity className="h-4 w-4 text-accent" />
           <h3 className="text-sm font-semibold text-foreground">实时进度</h3>
           <span className="font-mono text-[10px] text-muted">
-            {polling ? 'SSE 不可用 · 轮询 /progress' : 'EventSource · Last-Event-ID 恢复'}
+            {polling ? 'WS 断开 · 轮询 /progress' : 'WS 实时推送'}
           </span>
         </div>
         <ConnChip status={status} polling={polling} />

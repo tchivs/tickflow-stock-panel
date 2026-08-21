@@ -13,7 +13,6 @@ from typing import Any, Literal, Protocol
 from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
-from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.forecast import projections
@@ -346,39 +345,6 @@ def refresh_record_calibration(
     return _calibration_payload(request, record)
 
 
-@router.get("/jobs/{job_id}/events")
-@router.get("/jobs/{job_id}/stream")
-def job_events(job_id: str, request: Request) -> StreamingResponse:
-    job = _owned_job(request, job_id)
-    last_event_id = request.headers.get("last-event-id")
-    if last_event_id is None:
-        after_version = -1
-    elif re.fullmatch(r"0|[1-9][0-9]{0,18}", last_event_id) is None:
-        raise HTTPException(status_code=400, detail="Forecast Last-Event-ID is invalid")
-    else:
-        after_version = int(last_event_id)
-    if after_version > int(job["transition_version"]):
-        raise HTTPException(status_code=409, detail="Forecast Last-Event-ID is ahead of the job")
-    principal = _principal(request)
-    hub = _hub(request)
-    try:
-        queue = hub.subscribe(principal=principal, job_id=job_id)
-    except ForecastSubscriptionCapacityError as error:
-        raise HTTPException(
-            status_code=429,
-            detail={"code": "forecast_subscription_capacity", "retryable": True},
-        ) from error
-    return StreamingResponse(
-        _event_stream(
-            request,
-            job_id=job_id,
-            principal=principal,
-            after_version=after_version,
-            queue=queue,
-        ),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
 
 
 @router.post("/testing/terminal-jobs", status_code=status.HTTP_201_CREATED)
@@ -437,60 +403,6 @@ def create_terminal_job(payload: TerminalJobRequest, request: Request) -> dict[s
         )
     _hub(request).publish(job)
     return {"job": projections.job(job)}
-
-
-async def _event_stream(
-    request: Request,
-    *,
-    job_id: str,
-    principal: str,
-    after_version: int,
-    queue: deque[dict[str, str]],
-) -> AsyncIterator[str]:
-    hub = _hub(request)
-    repository = _repository(request)
-    ws_channel = f"run:{job_id}"
-    try:
-        for _poll in range(120):
-            if await request.is_disconnected():
-                return
-            current = _owned_job(request, job_id)
-            transitions = repository.owned_job_transitions_after(
-                job_id,
-                principal=principal,
-                instrument_id=str(current["instrument_id"]),
-                after_version=after_version,
-                limit=128,
-            )
-            for persisted in transitions:
-                version = int(persisted["transition_version"])
-                if version <= after_version:
-                    continue
-                event = projections.progress(persisted)
-                event_name = "done" if event["status"] in _TERMINAL else "forecast_progress"
-                # Phase 55: WS 广播 (transition_version 作为 seq 语义保留)
-                _ws_broadcast(request, ws_channel, event_name, dict(event))
-                yield _sse(event_name, event, event_id=str(version))
-                after_version = version
-                if event_name == "done":
-                    return
-            while queue:
-                wake = queue.popleft()
-                if wake.get("stage") == "transport_overflow":
-                    return
-            current = _owned_job(request, job_id)
-            if (
-                int(current["transition_version"]) <= after_version
-                and projections.progress(current)["status"] in _TERMINAL
-            ):
-                return
-            await asyncio.sleep(0.25)
-    finally:
-        hub.unsubscribe(principal=principal, job_id=job_id, queue=queue)
-
-
-def _sse(event: str, payload: Mapping[str, str], *, event_id: str) -> str:
-    return f"id: {event_id}\nevent: {event}\ndata: {json.dumps(dict(payload), separators=(',', ':'))}\n\n"
 
 
 def _latest_governed_session_id(request: Request) -> str | None:

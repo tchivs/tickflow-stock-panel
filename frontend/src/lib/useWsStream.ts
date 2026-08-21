@@ -8,7 +8,7 @@
  *
  * 连接状态 (connected/reconnecting/disconnected) 通过 useWsStreamStatus() 对外可见。
  *
- * 参考模式: useQuoteStream.ts 状态 store + stockdb_ws.py 重连/resume 模式。
+ * 参考模式: stockdb_ws.py 重连/resume 模式。
  */
 import { useEffect, useSyncExternalStore } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
@@ -291,7 +291,7 @@ export function getCurrentBackoffSeconds(): number {
   return BACKOFF_STEPS[Math.min(_backoffIndex - 1, BACKOFF_STEPS.length - 1)] / 1000
 }
 
-// ── 焦点股票注册 (从 useQuoteStream.ts 迁移, 供 Plan 04 删除 useQuoteStream) ──
+// ── 焦点股票注册 (供行情订阅使用) ─────────────────
 
 let _focusSymbol: string | null = null
 

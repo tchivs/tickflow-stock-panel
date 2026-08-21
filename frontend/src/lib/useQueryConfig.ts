@@ -33,7 +33,6 @@ function loadConfig(): QueryConfig {
 
 /**
  * 轻量版：只读取当前配置。
- * 供 useQuoteStream 使用。
  */
 export function getQueryConfig(): QueryConfig {
   return loadConfig()

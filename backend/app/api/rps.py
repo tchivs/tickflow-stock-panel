@@ -10,7 +10,6 @@ from datetime import date as date_type
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.services import rps_rotation
@@ -59,34 +58,3 @@ class AnalyzeRequest(BaseModel):
     level: int | None = None  # 行业层级(1/2/3), 仅 kind=industry 有效
 
 
-@router.post("/rotation-analyze")
-async def analyze_rotation(request: Request, req: AnalyzeRequest):
-    """AI 维度轮动分析 — NDJSON 流式返回。
-
-    装配轮动矩阵信号 + 大盘背景 → 分析提示词 → 流式调用 LLM →
-    逐 chunk 以 NDJSON 推给前端(每行一个 JSON)。
-
-    协议:
-      {"type":"meta","days","summary"}
-      {"type":"delta","content":"..."}
-      {"type":"error","message":"..."}
-      {"type":"done"}
-    """
-    repo = request.app.state.repo
-    quote_service = getattr(request.app.state, "quote_service", None)
-    depth_service = getattr(request.app.state, "depth_service", None)
-    days = max(7, min(30, req.days))
-    kind = "industry" if req.kind == "industry" else "concept"
-    level = req.level if (kind == "industry" and req.level in (1, 2, 3)) else None
-
-    async def stream_gen():
-        async for chunk in analyze_rotation_stream(
-            repo, days, req.focus, quote_service, depth_service, kind, level,
-        ):
-            yield chunk + "\n"
-
-    return StreamingResponse(
-        stream_gen(),
-        media_type="application/x-ndjson",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )

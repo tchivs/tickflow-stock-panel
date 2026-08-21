@@ -67,6 +67,57 @@ function cancelServerTask(qs: string): void {
   }).catch(() => {})
 }
 
+'/** 构建 POST /strategy/start 的 JSON 参数 */
+function buildStartParams(params: {
+  strategy_id: string
+  symbols?: string[]
+  start?: string | null
+  end?: string | null
+  matching?: string
+  entry_fill?: string | null
+  exit_fill?: string | null
+  fees_pct?: number
+  commission_pct?: number | null
+  stamp_tax_pct?: number | null
+  slippage_bps?: number
+  max_positions?: number
+  max_exposure_pct?: number
+  initial_capital?: number
+  position_sizing?: string
+  params?: Record<string, any> | null
+  overrides?: Record<string, any> | null
+  mode?: string
+  holding_days?: number
+  asset_type?: string
+  minute_fill?: boolean
+  regime_filter?: { states?: string[]; min_score?: number } | null
+}): Record<string, unknown> {
+  return {
+    strategy_id: params.strategy_id,
+    symbols: params.symbols?.join(','),
+    start: params.start ?? undefined,
+    end: params.end ?? undefined,
+    matching: params.matching,
+    entry_fill: params.entry_fill,
+    exit_fill: params.exit_fill,
+    fees_pct: params.fees_pct,
+    commission_pct: params.commission_pct,
+    stamp_tax_pct: params.stamp_tax_pct,
+    slippage_bps: params.slippage_bps,
+    max_positions: params.max_positions,
+    max_exposure_pct: params.max_exposure_pct,
+    initial_capital: params.initial_capital,
+    position_sizing: params.position_sizing,
+    params: params.params ? JSON.stringify(params.params) : undefined,
+    overrides: params.overrides ? JSON.stringify(params.overrides) : undefined,
+    mode: params.mode,
+    holding_days: params.holding_days,
+    asset_type: params.asset_type,
+    minute_fill: params.minute_fill,
+    regime_filter: params.regime_filter ? JSON.stringify(params.regime_filter) : undefined,
+  }
+}
+
 /** 查询字符串构建 */
 function buildQuery(params: Record<string, string | number | boolean | undefined | null>): string {
   const sp = new URLSearchParams()
@@ -337,20 +388,19 @@ export function startBacktest(params: {
   // 存 reconnect 信息 (刷新后用) — 存 qs, 连接后拿到 job_key 再存 job_key
   localStorage.setItem(RECONNECT_KEY, qs)
 
-  // 用 fetch GET stream 短暂获取 job_key (后端 SSE 端点首个 job 事件回吐 key),
-  // 然后关闭 fetch, 切到 WS run:{job_key} 频道订阅。
-  // 这是 fetch + ReadableStream, 不创建 EventSource。
-  void startBacktestStream(qs)
+  // Phase 55 D-03: POST /strategy/start 启动任务, 返回 job_key, 然后 WS 订阅
+  void startBacktestPost(buildStartParams(params), qs)
 }
 
-/** GET stream 获取 job_key, 然后订阅 WS 频道 */
-async function startBacktestStream(qs: string): Promise<void> {
+/** POST /strategy/start 获取 job_key, 然后订阅 WS 频道 (Phase 55 D-03: SSE 端点已删除) */
+async function startBacktestPost(params: Record<string, unknown>, qs: string): Promise<void> {
   try {
-    const res = await fetch(`/api/backtest/strategy/stream?${qs}`, {
-      headers: { Accept: 'text/event-stream' },
+    const res = await fetch('/api/backtest/strategy/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
     })
-    if (!res.ok || !res.body) {
-      // 后端不可用, 走错误态
+    if (!res.ok) {
       const taskId = current?.id
       if (taskId != null && current?.isPending) {
         current = { ...current, isPending: false, error: `回测启动失败: ${res.status}`, reconnecting: false, researchExecutionHandle: null }
@@ -358,46 +408,22 @@ async function startBacktestStream(qs: string): Promise<void> {
       }
       return
     }
-    const reader = res.body.getReader()
-    const decoder = new TextDecoder()
-    let buffer = ''
-    let gotJobKey = false
-    while (!gotJobKey) {
-      const chunk = await reader.read()
-      if (chunk.done) break
-      buffer += decoder.decode(chunk.value, { stream: true })
-      // 解析 SSE 事件: "event: job\ndata: {\"key\":\"...\"}\n\n"
-      let boundary = buffer.indexOf('\n\n')
-      while (boundary >= 0) {
-        const frame = buffer.slice(0, boundary)
-        buffer = buffer.slice(boundary + 2)
-        // 提取 event 和 data
-        let eventType = 'message'
-        const dataLines: string[] = []
-        for (const line of frame.split('\n')) {
-          if (line.startsWith('event:')) eventType = line.slice(6).trim()
-          else if (line.startsWith('data:')) dataLines.push(line.slice(5).trimStart())
+    const data = await res.json()
+    const key = data?.key
+    if (typeof key === 'string' && key) {
+      currentJobKey = key
+      localStorage.setItem(JOB_KEY_KEY, key)
+      localStorage.setItem(RECONNECT_KEY, qs)
+      if (data?.error) {
+        const taskId = current?.id
+        if (taskId != null && current?.isPending) {
+          current = { ...current, isPending: false, error: data.error, reconnecting: false, researchExecutionHandle: null }
+          emit()
         }
-        if (eventType === 'job') {
-          try {
-            const key = JSON.parse(dataLines.join('\n'))?.key
-            if (typeof key === 'string' && key) {
-              gotJobKey = true
-              currentJobKey = key
-              localStorage.setItem(JOB_KEY_KEY, key)
-              localStorage.setItem(RECONNECT_KEY, qs)
-              // 关闭 fetch, 切到 WS 频道
-              reader.cancel()
-              connectChannel(key)
-              break
-            }
-          } catch { /* ignore */ }
-        }
-        boundary = buffer.indexOf('\n\n')
+      } else {
+        connectChannel(key)
       }
-    }
-    if (!gotJobKey) {
-      reader.cancel()
+    } else {
       const taskId = current?.id
       if (taskId != null && current?.isPending) {
         current = { ...current, isPending: false, error: '未收到任务 ID', reconnecting: false, researchExecutionHandle: null }
@@ -462,11 +488,8 @@ export function tryReconnect(): boolean {
     // 没有 job_key, 尝试用 qs 重新启动 (旧路径)
     const qs = localStorage.getItem(RECONNECT_KEY)
     if (!qs) return false
-    const id = ++taskSeq
-    current = { id, isPending: true, result: null, progress: null, error: null, reconnecting: false, researchExecutionHandle: null }
-    emit()
-    void startBacktestStream(qs)
-    return true
+    // Phase 55 D-03: SSE 端点已删除, 无 job_key 时无法用 qs 重启动
+    return false
   }
   // 有 job_key, 直接重订阅 WS 频道
   const id = ++taskSeq

@@ -1,20 +1,15 @@
-"""行情状态 / SSE 推送 API。
+"""行情状态 API。
 
 盘中选股相关端点已迁移至策略页面，此处仅保留全局行情基础设施。
-SSE 推送四种事件 (使用标准 SSE event 字段):
-  - quotes_updated: 行情数据刷新，前端 invalidate 对应 query
-  - strategy_results_updated: 策略监控已写入最新结果，前端刷新策略个股列表
-  - strategy_alert: 策略监控/告警触发，前端弹通知
-  - depth_updated: 五档盘口修正完成，前端刷新连板梯队/看板封单数据
+实时推送已迁移到 WebSocket (Phase 55 /ws/stream 端点)。
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import time
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from sse_starlette.sse import EventSourceResponse
+
 
 router = APIRouter(prefix="/api/intraday", tags=["quotes"])
 
@@ -154,109 +149,6 @@ def index_quotes(
         rows = _fallback_index_quotes_from_daily(request, symbol_list)
         return {"rows": rows, "count": len(rows), "source": "index_daily"}
     return {"rows": rows, "count": len(rows), "source": "realtime"}
-
-
-@router.get("/stream")
-async def quote_stream(request: Request):
-    """SSE 端点: 行情更新 + 告警推送 + 五档修正 + 复盘进度。
-
-    使用 sse-starlette EventSourceResponse:
-    - 标准 SSE event 字段，前端按 event name 监听
-    - 内置断线检测，客户端断开立即终止 generator
-    - 内置 ping 心跳，保持连接活跃
-
-    每个连接注册一个独立订阅者 (QuoteSubscriber: 独立事件 + 独立队列),
-    事件由 QuoteService 广播 — 多客户端 (多标签页/设备) 各自收到全量事件。
-    此前四通道共用服务级 Event + pop 取走语义, 告警只会被先醒的连接消费。
-    """
-    qs = _get_quote_service(request)
-    analysis_scope = _analysis_scope(request) if qs is not None else None
-    advanced_scope = _advanced_scope(request) if qs is not None else None
-
-    async def event_generator():
-        if qs is None:
-            # 无行情服务: 保持连接 (EventSourceResponse 自带 ping), 不推事件
-            while True:
-                await asyncio.sleep(30)
-
-        sub = qs.subscribe(analysis_scope=analysis_scope, advanced_scope=advanced_scope)
-        try:
-            yield {"event": "stream_ready", "data": "{}"}
-            while True:
-                # 等待任一通道有新信号 (5s 超时保持循环, 便于断线时尽快退出)
-                await asyncio.to_thread(sub.wait, 5.0)
-                data = sub.pop()
-
-                # 告警 (分片推送, 避免单条 SSE 过大)
-                alerts = data["alerts"]
-                for chunk_start in range(0, len(alerts), 20):
-                    chunk = alerts[chunk_start:chunk_start + 20]
-                    yield {
-                        "event": "strategy_alert",
-                        "data": json.dumps({
-                            "ts": int(time.time() * 1000),
-                            "alerts": chunk,
-                        }, ensure_ascii=False),
-                    }
-
-                if data["portfolio_updated"]:
-                    yield {
-                        "event": "portfolio_updated",
-                        "data": json.dumps({
-                            "ts": int(time.time() * 1000),
-                            "account_ids": data["portfolio_account_ids"],
-                        }),
-                    }
-
-                # 复盘进度 (定时复盘流式生成时) — 前端 reviewStore 直接消费
-                # 事件已是 recap_market_stream 产出的 JSON 字符串, 逐条转发
-                for evt_json in data["reviews"]:
-                    yield {
-                        "event": "review_progress",
-                        "data": evt_json,
-                    }
-
-                for progress in data["analysis_progress"]:
-                    yield {
-                        "event": "analysis_progress",
-                        "data": json.dumps(progress),
-                    }
-
-                for progress in data["advanced_progress"]:
-                    yield {
-                        "event": "advanced_progress",
-                        "data": json.dumps(progress),
-                    }
-
-                # 行情更新
-                if data["quote_updated"]:
-                    yield {
-                        "event": "quotes_updated",
-                        "data": json.dumps({
-                            "ts": int(time.time() * 1000),
-                            "symbol_count": qs._symbol_count,
-                        }),
-                    }
-
-                # 策略监控完成后, 结果已写入内存缓存; 独立通知只刷新策略个股列表。
-                if data["strategy_results_updated"]:
-                    yield {
-                        "event": "strategy_results_updated",
-                        "data": json.dumps({"ts": int(time.time() * 1000)}),
-                    }
-
-                # 五档修正完成 — 前端刷新连板梯队封单数据
-                if data["depth_updated"]:
-                    yield {
-                        "event": "depth_updated",
-                        "data": json.dumps({
-                            "ts": int(time.time() * 1000),
-                        }),
-                    }
-        finally:
-            qs.unsubscribe(sub)
-
-    return EventSourceResponse(event_generator())
 
 
 @router.post("/refresh")

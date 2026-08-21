@@ -11,7 +11,6 @@ from typing import Annotated, Any, Literal
 import polars as pl
 from fastapi import APIRouter, Header, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-from sse_starlette.sse import EventSourceResponse
 
 from app.backtest.factor import FACTOR_COLUMNS
 from app.backtest.mining import (
@@ -42,7 +41,6 @@ router = APIRouter(prefix="/api/backtest/mining", tags=["backtest"])
 _FACTOR_IDS = frozenset(str(item["id"]) for item in FACTOR_COLUMNS)
 _MAX_ARTIFACT_BYTES = 64 * 1024 * 1024
 _SSE_POLL_SECONDS = 0.5
-_SSE_HEARTBEAT_SECONDS = 15.0
 
 
 def _ws_broadcast(request: Request, channel: str, msg_type: str, data: dict) -> None:
@@ -278,74 +276,6 @@ def get_result(run_id: str, request: Request) -> dict[str, Any]:
             status_code=500,
             detail="mining result artifacts are unavailable",
         ) from exc
-
-
-@router.get("/runs/{run_id}/events")
-def stream_events(
-    run_id: str,
-    request: Request,
-    last_event_id: str | None = Header(None, alias="Last-Event-ID"),
-) -> EventSourceResponse:
-    store = _manager(request).store
-    _required_manifest(store, run_id)
-    cursor = _event_cursor(last_event_id)
-    ws_channel = f"run:{run_id}"
-
-    async def generate() -> AsyncIterator[dict[str, str]]:
-        nonlocal cursor
-        last_emit = asyncio.get_running_loop().time()
-        terminal_sent = False
-        first_batch = True
-        while not await request.is_disconnected():
-            events = await asyncio.to_thread(store.read_events, run_id, after_id=cursor)
-            if first_batch and events and int(events[0]["id"]) > cursor + 1:
-                summary = await asyncio.to_thread(store.read_summary, run_id)
-                progress = summary.get("progress")
-                if isinstance(progress, Mapping):
-                    await _ws_broadcast_async(request, ws_channel, "progress", dict(progress))
-                    yield {
-                        "id": str(cursor),
-                        "event": "progress",
-                        "data": json.dumps(progress, ensure_ascii=False, allow_nan=False),
-                    }
-                    last_emit = asyncio.get_running_loop().time()
-            first_batch = False
-            for event in events:
-                cursor = int(event["id"])
-                event_type = "failed" if event.get("type") == "error" else str(event["type"])
-                payload = dict(event.get("payload") or {})
-                if event_type in TERMINAL_RUN_STATUSES:
-                    payload.setdefault("status", event_type)
-                    terminal_sent = True
-                await _ws_broadcast_async(request, ws_channel, event_type, payload)
-                yield {
-                    "id": str(cursor),
-                    "event": event_type,
-                    "data": json.dumps(payload, ensure_ascii=False, allow_nan=False),
-                }
-                last_emit = asyncio.get_running_loop().time()
-            manifest = await asyncio.to_thread(store.get, run_id)
-            if manifest is None:
-                return
-            status = str(manifest["status"])
-            if status in TERMINAL_RUN_STATUSES:
-                if not terminal_sent:
-                    event_type = "failed" if status == "failed" else status
-                    terminal_payload = {"status": status, "message": manifest.get("error")}
-                    await _ws_broadcast_async(request, ws_channel, event_type, terminal_payload)
-                    yield {
-                        "id": str(cursor),
-                        "event": event_type,
-                        "data": json.dumps(terminal_payload, ensure_ascii=False),
-                    }
-                return
-            now = asyncio.get_running_loop().time()
-            if now - last_emit >= _SSE_HEARTBEAT_SECONDS:
-                yield {"event": "heartbeat", "data": "{}"}
-                last_emit = now
-            await asyncio.sleep(_SSE_POLL_SECONDS)
-
-    return EventSourceResponse(generate(), ping=_SSE_HEARTBEAT_SECONDS)
 
 
 @router.post("/runs/{run_id}/candidates/{signature}/promote")

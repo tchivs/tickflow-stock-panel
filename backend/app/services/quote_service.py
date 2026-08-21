@@ -41,147 +41,6 @@ logger = logging.getLogger(__name__)
 
 
 
-class QuoteSubscriber:
-    """一个 SSE 连接对应一个订阅者: 独立事件 + 独立队列。
-
-    此前四个通道共用服务级 Event + pending 列表, pop 是「取走」语义:
-    多客户端 (多标签页/多设备) 时告警只会被先醒来的连接消费, 其余永远
-    收不到; 共享 Event 的 clear/wait 也存在互相吞信号的竞态。
-    改为每连接独立订阅者后, 事件对所有客户端广播。
-    """
-
-    def __init__(
-        self,
-        max_alerts: int = 1000,
-        max_reviews: int = 200,
-        analysis_scope: Any | None = None,
-        max_analysis_progress: int = 200,
-        advanced_scope: Any | None = None,
-        max_advanced_progress: int = 200,
-    ) -> None:
-        self._event = threading.Event()
-        self._lock = threading.Lock()
-        self._max_alerts = max_alerts
-        self._max_reviews = max_reviews
-        self._max_analysis_progress = max_analysis_progress
-        self._max_advanced_progress = max_advanced_progress
-        self._analysis_scope = analysis_scope
-        self._advanced_scope = advanced_scope
-        self._quote_updated = False
-        self._strategy_results_updated = False
-        self._depth_updated = False
-        self._portfolio_account_ids: list[str] = []
-        self._alerts: list[dict] = []
-        self._reviews: list[str] = []
-        self._analysis_progress: list[dict[str, str]] = []
-        self._advanced_progress: list[dict[str, str]] = []
-
-    # ── 消费侧 (SSE generator 线程) ──────────────────────
-    def wait(self, timeout: float = 5.0) -> bool:
-        """阻塞等待任一通道有新信号。"""
-        return self._event.wait(timeout=timeout)
-
-    def pop(self) -> dict:
-        """原子取走全部待推送内容并复位事件。"""
-        with self._lock:
-            out = {
-                "quote_updated": self._quote_updated,
-                "strategy_results_updated": self._strategy_results_updated,
-                "depth_updated": self._depth_updated,
-                "portfolio_updated": bool(self._portfolio_account_ids),
-                "portfolio_account_ids": self._portfolio_account_ids,
-                "alerts": self._alerts,
-                "reviews": self._reviews,
-                "analysis_progress": self._analysis_progress,
-                "advanced_progress": self._advanced_progress,
-            }
-            self._quote_updated = False
-            self._strategy_results_updated = False
-            self._depth_updated = False
-            self._alerts = []
-            self._reviews = []
-            self._analysis_progress = []
-            self._advanced_progress = []
-            self._portfolio_account_ids = []
-            self._event.clear()
-            return out
-
-    # ── 生产侧 (行情轮询 / depth / 复盘线程) ─────────────
-    def push_alerts(self, alerts: list[dict]) -> None:
-        with self._lock:
-            self._alerts.extend(alerts)
-            if len(self._alerts) > self._max_alerts:  # 背压: 丢弃最旧
-                self._alerts = self._alerts[-self._max_alerts:]
-            self._event.set()
-
-    def push_review(self, event_json: str) -> None:
-        with self._lock:
-            self._reviews.append(event_json)
-            if len(self._reviews) > self._max_reviews:
-                self._reviews = self._reviews[-self._max_reviews:]
-            self._event.set()
-
-    def clear_alerts(self) -> None:
-        with self._lock:
-            self._alerts = []
-            if (
-                not self._quote_updated
-                and not self._strategy_results_updated
-                and not self._depth_updated
-                and not self._reviews
-                and not self._analysis_progress
-                and not self._advanced_progress
-                and not self._portfolio_account_ids
-            ):
-                self._event.clear()
-
-    def notify_quote(self) -> None:
-        with self._lock:
-            self._quote_updated = True
-            self._event.set()
-
-    def notify_strategy_results(self) -> None:
-        with self._lock:
-            self._strategy_results_updated = True
-            self._event.set()
-
-    def notify_depth(self) -> None:
-        with self._lock:
-            self._depth_updated = True
-            self._event.set()
-
-    def notify_portfolio_updated(self, account_ids: list[str | int]) -> None:
-        with self._lock:
-            for account_id in account_ids:
-                normalized = str(account_id)
-                if normalized and normalized not in self._portfolio_account_ids:
-                    self._portfolio_account_ids.append(normalized)
-            if self._portfolio_account_ids:
-                self._event.set()
-
-    def push_analysis_progress(self, progress: dict[str, str]) -> None:
-        """Queue only persisted coarse state for the server-bound subject scope."""
-        scope = self._analysis_scope
-        if scope is None or not scope.allows(progress["subject_kind"], progress["subject_key"]):
-            return
-        with self._lock:
-            self._analysis_progress.append(progress)
-            if len(self._analysis_progress) > self._max_analysis_progress:
-                self._analysis_progress = self._analysis_progress[-self._max_analysis_progress:]
-            self._event.set()
-
-    def push_advanced_progress(self, progress: dict[str, str]) -> None:
-        """Queue only committed, allowlisted advanced state for the bound scope."""
-        scope = self._advanced_scope
-        if scope is None or not scope.allows(progress["subject_kind"], progress["subject_key"]):
-            return
-        with self._lock:
-            self._advanced_progress.append(progress)
-            if len(self._advanced_progress) > self._max_advanced_progress:
-                self._advanced_progress = self._advanced_progress[-self._max_advanced_progress:]
-            self._event.set()
-
-
 
 # 落盘节流间隔: last_fetch_ms 仅在进程重启后用于显示"最后获取时间"(运行中读内存值),
 # 每 30s 持久化一次足够, 避免 expert 档每秒一轮的全量 preferences 重写磁盘。
@@ -247,8 +106,6 @@ class QuoteService:
         self._interval = self.DEFAULT_INTERVAL
         self._thread: threading.Thread | None = None
         self._repo = None          # 延迟注入, 避免循环导入
-        # SSE 订阅者集合: 每个 /stream 连接一个 QuoteSubscriber, 事件广播到所有订阅者
-        self._subscribers: set[QuoteSubscriber] = set()
         self._strategy_monitor = None            # 延迟注入
         self._app_state = None                   # 延迟注入 (FastAPI app.state)
 
@@ -439,26 +296,8 @@ class QuoteService:
         return self._tier_min_interval()
 
     # ================================================================
-    # SSE 订阅管理 — 每个 /stream 连接一个订阅者, 事件广播
+    # 广播 — 事件推送 (Phase 55: 仅 WS 广播, SSE 订阅者已删除)
     # ================================================================
-
-    def subscribe(
-        self, *, analysis_scope: Any | None = None, advanced_scope: Any | None = None
-    ) -> QuoteSubscriber:
-        """注册一个 SSE 订阅者 (连接建立时调用)。"""
-        sub = QuoteSubscriber(analysis_scope=analysis_scope, advanced_scope=advanced_scope)
-        with self._lock:
-            self._subscribers.add(sub)
-        return sub
-
-    def unsubscribe(self, sub: QuoteSubscriber) -> None:
-        """注销订阅者 (连接断开时调用)。"""
-        with self._lock:
-            self._subscribers.discard(sub)
-
-    def _snapshot_subscribers(self) -> list[QuoteSubscriber]:
-        with self._lock:
-            return list(self._subscribers)
 
     def _broadcast_quote_updated(self) -> None:
         # 实时行情刷新后清空总览聚合缓存, 使看板 (overview-market) 在 SSE 触发的
@@ -468,8 +307,6 @@ class QuoteService:
         from app.api.overview import invalidate_overview_cache
 
         invalidate_overview_cache()
-        for sub in self._snapshot_subscribers():
-            sub.notify_quote()
         # Phase 55: WebSocket quotes 频道广播 (QuoteService 运行在后台线程,
         # 需通过 run_coroutine_threadsafe 投递到事件循环)
         self._ws_broadcast_quotes()
@@ -497,8 +334,6 @@ class QuoteService:
 
     def notify_strategy_results_updated(self) -> None:
         """策略监控完成实时结果更新后调用，仅刷新策略页结果缓存。"""
-        for sub in self._snapshot_subscribers():
-            sub.notify_strategy_results()
         import time
         self._ws_broadcast(
             "quotes", "strategy_results_updated", {"ts": int(time.time() * 1000)}
@@ -509,14 +344,10 @@ class QuoteService:
 
         与行情/告警通道独立 — 只刷新连板梯队, 不连带刷新 watchlist 等。
         """
-        for sub in self._snapshot_subscribers():
-            sub.notify_depth()
         import time
         self._ws_broadcast("depth", "depth_updated", {"ts": int(time.time() * 1000)})
 
     def _broadcast_alerts(self, alerts: list[dict]) -> None:
-        for sub in self._snapshot_subscribers():
-            sub.push_alerts(alerts)
         import time
         self._ws_broadcast(
             "alerts",
@@ -526,8 +357,6 @@ class QuoteService:
 
     def notify_portfolio_updated(self, account_ids: list[str | int]) -> None:
         """Fan out coalesced account changes through the existing SSE subscribers."""
-        for sub in self._snapshot_subscribers():
-            sub.notify_portfolio_updated(account_ids)
         import time
         self._ws_broadcast(
             "portfolio",
@@ -548,8 +377,6 @@ class QuoteService:
             "subject_key": subject_key,
             "status": status,
         }
-        for sub in self._snapshot_subscribers():
-            sub.push_analysis_progress(progress)
         self._ws_broadcast(f"analysis:{subject_key}", "analysis_progress", progress)
 
     def notify_advanced_progress(
@@ -591,8 +418,6 @@ class QuoteService:
             "occurred_at": occurred_at,
             "audit_reference": audit_reference,
         }
-        for sub in self._snapshot_subscribers():
-            sub.push_advanced_progress(progress)
         self._ws_broadcast(f"analysis:{subject_key}", "advanced_progress", progress)
 
 
@@ -629,8 +454,7 @@ class QuoteService:
         self._broadcast_alerts(alerts)
 
     def clear_pending_alerts(self) -> None:
-        for sub in self._snapshot_subscribers():
-            sub.clear_alerts()
+        """No-op: SSE subscribers removed (Phase 55 D-03)."""
 
     def push_review_event(self, event_json: str) -> None:
         """广播一条复盘进度事件(JSON 字符串), 唤醒所有 SSE generator。
@@ -638,8 +462,6 @@ class QuoteService:
         事件格式与 recap_market_stream 的产出一致(meta/delta/error/done),
         前端 reviewStore 直接消费。背压在订阅者队列内做 (丢弃最旧)。
         """
-        for sub in self._snapshot_subscribers():
-            sub.push_review(event_json)
         import json
         try:
             data = json.loads(event_json)

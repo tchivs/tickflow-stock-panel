@@ -55,12 +55,12 @@ Phase 49 guards remain green alongside it.
 equals the frozen Phase-50 baseline captured in the guard. The diff is
 **empty** — **zero new base runtime deps** (ROADMAP.md:12 hard constraint).
 
-`sse-starlette>=2.0` is the **pre-existing** SSE transport dep
-(`pyproject.toml:15`), **not new**; it is deliberately in the baseline. The
-workbench uses native browser `EventSource` + React Query already in the tree —
+Phase 55 D-03 removed the SSE transport dep (`sse-starlette`) from the
+baseline — all SSE/ndjson code deleted, WebSocket transport replaces it.
+The workbench uses native browser WebSocket + React Query already in the tree —
 no new npm/Python dependency was introduced.
 
-**Result:** PASS — empty dependency diff; `sse-starlette` pre-existing.
+**Result:** PASS — empty dependency diff (Phase 55 removed sse-starlette).
 
 ---
 
