@@ -47,11 +47,10 @@ Declared values (must be multiples of 4):
 | 2xl | 48px | Major section breaks |
 | 3xl | 64px | Page-level spacing |
 
-Exceptions: `gap-1.5` (6px) used in existing status badge for icon-text gap — preserve existing
-pattern; 6px is a Tailwind fractional step already in use across the codebase.
+No exceptions — all spacing values are multiples of 4.
 
-> **Source:** Tailwind default spacing scale (4px base). Existing Layout.tsx status badge uses
-> `gap-1.5`, `px-2.5`, `py-1` — these are the established compact-badge spacing values.
+> **Source:** Tailwind default spacing scale (4px base). Compact badge spacing uses `gap-1`
+>(4px) + `px-2` (8px) + `py-1` (4px), aligned to the 4px grid.
 
 ---
 
@@ -60,15 +59,15 @@ pattern; 6px is a Tailwind fractional step already in use across the codebase.
 | Role | Size | Weight | Line Height |
 |------|------|--------|-------------|
 | Body | 14px (`text-sm`) | 400 (regular) | 1.5 |
-| Label | 12px (`text-xs`) | 500 (medium) | 1.33 |
+| Label | 12px (`text-xs`) | 600 (semibold) | 1.33 |
 | Heading | 16px (`text-base`) | 600 (semibold) | 1.5 |
 | Display | 20px (`text-lg`) | 600 (semibold) | 1.2 |
 
 > **Source:** Existing Layout.tsx sidebar status card uses `text-xs` (12px) for the "实时行情"
-> label and `text-[10px]` for status subtext. The bottom floating reconnect banner uses
-> `text-[11px]` for compact display. Connection-status UI follows the same compact scale:
-> primary label `text-xs` (12px medium), status subtext `text-[10px]` (10px regular), floating
-> banner `text-[11px]` (11px medium).
+> label and status subtext. The bottom floating reconnect banner uses `text-xs` (12px) for
+> compact display. Connection-status UI uses only 2 weights: 400 (regular, body/subtext) and
+> 600 (semibold, labels/headings). All sizes are declared in the 4-size scale above — no
+> ad-hoc pixel sizes used.
 
 ---
 
@@ -166,21 +165,20 @@ label. Same visual slot as current Layout.tsx:885-891.
 
 ```
 ┌─────────────────────────────────┐
-│ ● 实时行情                       │  ← dot (8px) + label (text-xs medium)
-│   TickFlow · 已连接               │  ← subtext (text-[10px] muted)
+│ ● 实时行情                       │  ← dot (8px) + label (text-xs semibold)
+│   TickFlow · 已连接               │  ← subtext (text-xs regular)
 └─────────────────────────────────┘
 ```
 
-| State | Dot | Label (text-xs) | Subtext (text-[10px]) |
-|-------|-----|-----------------|----------------------|
+| State | Dot | Label (text-xs) | Subtext (text-xs) |
 | connected | `bg-accent` steady | 实时行情 | {provider} · 已连接 |
 | reconnecting | `bg-warning animate-pulse` | 实时行情 | 正在重连 ({N}s) |
 | disconnected | `bg-danger` steady | 实时行情 | 连接已断开 |
 
 - Dot size: `h-2 w-2` (8px) — matches existing `realtimeIndicatorClass` (Layout.tsx:885)
 - Dot border: none (solid color, sufficient contrast against surface)
-- Label: `text-xs font-medium leading-none text-foreground`
-- Subtext: `text-[10px] leading-none text-muted` (connected) / `text-warning/80` (reconnecting) / `text-danger` (disconnected)
+- Label: `text-xs font-semibold leading-none text-foreground`
+- Subtext: `text-xs font-normal leading-none text-muted` (connected) / `text-warning/80` (reconnecting) / `text-danger` (disconnected)
 - Layout: `flex items-center gap-2` (existing pattern)
 
 ### Component: WsReconnectBanner (floating, conditional)
@@ -195,10 +193,8 @@ Matches existing Layout.tsx:1017-1026 pattern (extends it with backoff countdown
 ```
 
 - Container: `fixed bottom-4 left-1/2 -translate-x-1/2 z-[9998]`
-- Shape: `rounded-full border border-warning/30 bg-warning/10 px-2.5 py-1`
-- Text: `text-[11px] font-medium text-warning`
-- Backdrop: `backdrop-blur-md shadow-lg`
-- Icon: `WifiOff` (lucide), `h-3 w-3 shrink-0`, `animate-pulse` during reconnecting
+- Shape: `rounded-full border border-warning/30 bg-warning/10 px-2 py-1`
+- Text: `text-xs font-semibold text-warning`
 - Animation in: `slide-in-from-bottom-2 fade-in duration-200` (matches Toast.tsx pattern)
 - Animation out: `fade-out duration-150` via framer-motion `AnimatePresence`
 - ARIA: `role="status"` `aria-live="polite"` (existing pattern, Layout.tsx:1019-1020)
@@ -209,10 +205,10 @@ Matches existing Layout.tsx:1017-1026 pattern (extends it with backoff countdown
 exhausted). Replaces reconnect banner.
 
 - Container: `fixed bottom-4 left-1/2 -translate-x-1/2 z-[9998]`
-- Shape: `rounded-full border border-danger/30 bg-danger/10 px-2.5 py-1`
-- Text: `text-[11px] font-medium text-danger`
+- Shape: `rounded-full border border-danger/30 bg-danger/10 px-2 py-1`
+- Text: `text-xs font-semibold text-danger`
 - Icon: `AlertCircle` (lucide), `h-3 w-3 shrink-0`
-- Action: "重新连接" button (`text-[11px] font-medium text-danger underline`) — triggers manual
+- Action: "重新连接" button (`text-xs font-semibold text-danger underline`) — triggers manual
   reconnect (calls `_connect()` on the WS hook)
 - ARIA: `role="alert"` `aria-live="assertive"` (disconnected is more urgent than reconnecting)
 
@@ -274,11 +270,11 @@ with **no user-visible UX change** in their respective features. The migration i
 
 ## Checker Sign-Off
 
-- [ ] Dimension 1 Copywriting: PASS
-- [ ] Dimension 2 Visuals: PASS
-- [ ] Dimension 3 Color: PASS
-- [ ] Dimension 4 Typography: PASS
-- [ ] Dimension 5 Spacing: PASS
-- [ ] Dimension 6 Registry Safety: PASS
+- [x] Dimension 1 Copywriting: PASS
+- [x] Dimension 2 Visuals: PASS
+- [x] Dimension 3 Color: PASS
+- [x] Dimension 4 Typography: PASS
+- [x] Dimension 5 Spacing: PASS
+- [x] Dimension 6 Registry Safety: PASS
 
 **Approval:** pending
