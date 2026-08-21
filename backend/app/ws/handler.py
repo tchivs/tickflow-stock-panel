@@ -15,6 +15,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 from app.api.auth import COOKIE_NAME
 from app.services import auth
 from app.ws.protocol import KEEPALIVE_INTERVAL, MAX_CHANNELS_PER_CONNECTION, make_msg
+from app.ws.request_dispatcher import MAX_PENDING_REQUESTS
 
 
 async def ws_stream(websocket: WebSocket) -> None:
@@ -73,6 +74,11 @@ async def ws_stream(websocket: WebSocket) -> None:
             await keepalive_task
         except asyncio.CancelledError:
             pass
+        # T-55-07: 断连时取消所有在跑的 request 后台 task
+        pending = getattr(conn, "_pending_requests", None)
+        if pending:
+            for task in list(pending):
+                task.cancel()
         manager.disconnect(conn)
 
 
@@ -157,8 +163,36 @@ async def _message_loop(conn) -> None:
                 make_msg("resumed", 0, {"replayed": len(replay)})
             )
         elif msg_type == "request":
-            # 保留给 Plan 02 ndjson 流; 此 plan 留 dispatch 分支但 no-op
-            pass
+            # Phase 55 Plan 02: ndjson LLM 流 — request 消息触发 + 频道流式推送
+            channel = msg.get("channel")
+            params = msg.get("params", {})
+            if not isinstance(channel, str):
+                await conn.ws.send_json(
+                    make_msg("error", 0, {"reason": "channel 必须是字符串"})
+                )
+                continue
+            if channel not in ("review",) and not channel.startswith("analysis:"):
+                await conn.ws.send_json(
+                    make_msg("error", 0, {"reason": f"不支持的频道: {channel!r}"})
+                )
+                continue
+            # T-55-07: per-connection 并发 request 上限
+            pending = getattr(conn, "_pending_requests", None)
+            if pending is None:
+                pending = set()
+                conn._pending_requests = pending
+            if len(pending) >= MAX_PENDING_REQUESTS:
+                await conn.ws.send_json(
+                    make_msg("error", 0, {"reason": f"并发 request 超过上限 {MAX_PENDING_REQUESTS}"})
+                )
+                continue
+            from app.ws.request_dispatcher import dispatch as _dispatch_request
+
+            task = asyncio.create_task(
+                _dispatch_request(conn, channel, params, conn.ws.app.state)
+            )
+            pending.add(task)
+            task.add_done_callback(pending.discard)
         else:
             await conn.ws.send_json(
                 make_msg("error", 0, {"reason": f"unknown type: {msg_type}"})

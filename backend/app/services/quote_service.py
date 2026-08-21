@@ -478,15 +478,19 @@ class QuoteService:
         """通过 WebSocket 频道广播事件 (Phase 55 通用入口)。
 
         QuoteService 运行在后台线程, 需通过 run_coroutine_threadsafe
-        投递到事件循环; 若无运行中事件循环则跳过 (no-op)。
+        投递到主事件循环; 无可用事件循环时跳过 (no-op)。
+        优先用 bootstrap 捕获的主循环 (后台线程 get_event_loop 会失败),
+        回退到当前线程的 get_event_loop (测试/事件循环线程内调用)。
         """
         if self._ws_manager is None:
             return
         import asyncio
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            return  # 无事件循环, 跳过
+        loop = getattr(self._ws_manager, "get_main_loop", lambda: None)()
+        if loop is None:
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                return  # 无事件循环, 跳过
         if loop.is_closed():
             return
         asyncio.run_coroutine_threadsafe(
