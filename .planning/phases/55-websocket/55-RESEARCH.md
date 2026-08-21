@@ -555,27 +555,15 @@ async def _handle_connection(conn: WsConnection):
 | A5 | strategy.py /build/stream 也需迁移 (未在 CONTEXT.md 中列出) | Migration Scope | 如遗漏该端点, 会残留 ndjson 代码; 已在本研究中补充 |
 | A6 | forecast/api.py 路径在 backend/app/forecast/ 而非 backend/app/api/forecast/ | Migration Scope | 如路径理解错误, 迁移时遗漏 forecast SSE 端点 |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **uvicorn WebSocket ping interval 支持**
-   - What we know: Starlette WebSocket API 没有 `ping_interval` 参数 [CITED: starlette docs/websockets.md]
-   - What's unclear: uvicorn 0.47.0 是否支持 `--ws-ping-interval` 命令行参数或 ASGI 配置
-   - Recommendation: 实现阶段验证 `uvicorn --help | grep ping`; 如不支持则用应用层 keepalive
+1. **uvicorn WebSocket ping interval 支持** — RESOLVED: Use application-layer keepalive (Starlette 1.0.1 has no ping_interval). `asyncio.sleep(30) + send_json({type:'ping'})` in handler.py. uvicorn 0.47.0 does not expose `--ws-ping-interval`.
 
-2. **ndjson 流的频道设计细节 (Claude's Discretion)**
-   - What we know: ndjson 是 POST 请求 + 流式响应; WS 是订阅 + 推送
-   - What's unclear: 是否需要 `request` 消息触发流式推送, 还是纯订阅 + 后端自动触发
-   - Recommendation: 用 `request` 消息 — 客户端发 `{type: "request", channel: "analysis:{symbol}", params: {focus: "..."}}` 触发后端启动 LLM 生成; 后端通过同一频道推送 `analysis_meta`/`analysis_delta`/`analysis_done` 消息。这样保留了 POST 请求的"触发"语义。
+2. **ndjson 流的频道设计细节** — RESOLVED: Use `request` message — client sends `{type: "request", channel: "analysis:{symbol}", params: {focus: "..."}}` to trigger backend LLM generation; backend pushes `analysis_meta`/`analysis_delta`/`analysis_done` via same channel. Preserves POST request trigger semantics.
 
-3. **mining SSE 的 SQLite event ledger 与 seq 环形缓冲区的关系**
-   - What we know: mining SSE 用 SQLite event ledger + Last-Event-ID 实现持久化恢复 [VERIFIED: backend/app/api/mining.py:266-325]; WS 用内存环形缓冲区
-   - What's unclear: WS 重连后 seq 恢复是否能完全替代 SQLite ledger; 进程重启后内存缓冲区丢失
-   - Recommendation: 对于 mining/alpha 等有持久化 ledger 的端点, resume 时如果环形缓冲区 miss (seq 太旧或进程重启), 应回退到 SQLite ledger 查询; 否则用环形缓冲区快速重放。但这可能超出 Phase 55 范围 — 如果用户接受 "进程重启后丢失未推送的事件" 语义 (与 SSE 的 SQLite 恢复不同), 则纯内存方案即可。
+3. **mining SSE SQLite event ledger vs seq ring buffer** — RESOLVED: Accept "process restart loses unpushed events" semantics. In-memory ring buffer (1000 entries) handles reconnect resume. Process restart = fresh seq sequence, client gets full re-subscribe. SQLite ledger remains for mining/alpha historical queries but is NOT used for WS seq recovery.
 
-4. **前端 ndjson 消费者 (financialAnalyzeStream 等) 的迁移方式**
-   - What we know: 5 处 ndjson 消费者用 `fetch + ReadableStream + getReader` 解析 [VERIFIED: frontend/src/lib/api.ts:3427-3473]
-   - What's unclear: 迁移后这些 async generator 是否改为 WS 消息回调, 还是保持 async generator 接口但底层换 WS
-   - Recommendation: 保持 async generator 接口不变, 底层从 fetch+ReadableStream 换成 WS 频道订阅 + 异步队列缓冲。这样消费方代码 (UI 组件) 无需改动。
+4. **前端 ndjson 消费者迁移方式** — RESOLVED: Keep async generator interface unchanged, swap underlying transport from fetch+ReadableStream to WS channel subscribe + async queue buffer. Consumer code (UI components) needs no changes.
 
 ## Environment Availability
 
