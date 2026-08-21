@@ -5,13 +5,13 @@ milestone_name: 实时推送平台
 current_phase_name: v3.2 not yet planned
 status: planning
 stopped_at: Phase 55 context gathered
-last_updated: "2026-08-21T06:59:51.790Z"
+last_updated: "2026-08-21T15:22:56.812Z"
 last_activity: 2026-08-20
 last_activity_desc: v3.1 milestone archived + Pearson/Spearman IC fix
 progress:
   total_phases: 4
   completed_phases: 0
-  total_plans: 0
+  total_plans: 4
   completed_plans: 0
   percent: 0
 ---
