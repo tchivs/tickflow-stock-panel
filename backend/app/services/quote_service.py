@@ -474,8 +474,8 @@ class QuoteService:
         # 需通过 run_coroutine_threadsafe 投递到事件循环)
         self._ws_broadcast_quotes()
 
-    def _ws_broadcast_quotes(self) -> None:
-        """Phase 55: 通过 WebSocket quotes 频道广播行情更新。
+    def _ws_broadcast(self, channel: str, msg_type: str, data: dict) -> None:
+        """通过 WebSocket 频道广播事件 (Phase 55 通用入口)。
 
         QuoteService 运行在后台线程, 需通过 run_coroutine_threadsafe
         投递到事件循环; 若无运行中事件循环则跳过 (no-op)。
@@ -483,23 +483,34 @@ class QuoteService:
         if self._ws_manager is None:
             return
         import asyncio
-        import time
         try:
             loop = asyncio.get_event_loop()
         except RuntimeError:
             return  # 无事件循环, 跳过
         if loop.is_closed():
             return
-        data = {"ts": int(time.time() * 1000), "symbol_count": self._symbol_count}
         asyncio.run_coroutine_threadsafe(
-            self._ws_manager.broadcast_to_channel("quotes", "quotes_updated", data),
+            self._ws_manager.broadcast_to_channel(channel, msg_type, data),
             loop,
+        )
+
+    def _ws_broadcast_quotes(self) -> None:
+        """Phase 55: 通过 WebSocket quotes 频道广播行情更新。"""
+        import time
+        self._ws_broadcast(
+            "quotes",
+            "quotes_updated",
+            {"ts": int(time.time() * 1000), "symbol_count": self._symbol_count},
         )
 
     def notify_strategy_results_updated(self) -> None:
         """策略监控完成实时结果更新后调用，仅刷新策略页结果缓存。"""
         for sub in self._snapshot_subscribers():
             sub.notify_strategy_results()
+        import time
+        self._ws_broadcast(
+            "quotes", "strategy_results_updated", {"ts": int(time.time() * 1000)}
+        )
 
     def notify_depth_updated(self) -> None:
         """五档盘口修正完成后调用: 通知 SSE 推送 depth_updated, 触发连板梯队刷新。
@@ -508,15 +519,32 @@ class QuoteService:
         """
         for sub in self._snapshot_subscribers():
             sub.notify_depth()
+        import time
+        self._ws_broadcast("depth", "depth_updated", {"ts": int(time.time() * 1000)})
 
     def _broadcast_alerts(self, alerts: list[dict]) -> None:
         for sub in self._snapshot_subscribers():
             sub.push_alerts(alerts)
+        import time
+        self._ws_broadcast(
+            "alerts",
+            "strategy_alert",
+            {"ts": int(time.time() * 1000), "alerts": alerts},
+        )
 
     def notify_portfolio_updated(self, account_ids: list[str | int]) -> None:
         """Fan out coalesced account changes through the existing SSE subscribers."""
         for sub in self._snapshot_subscribers():
             sub.notify_portfolio_updated(account_ids)
+        import time
+        self._ws_broadcast(
+            "portfolio",
+            "portfolio_updated",
+            {
+                "ts": int(time.time() * 1000),
+                "account_ids": [str(a) for a in account_ids],
+            },
+        )
 
     def notify_analysis_progress(
         self, *, run_id: str, subject_kind: str, subject_key: str, status: str
@@ -530,6 +558,7 @@ class QuoteService:
         }
         for sub in self._snapshot_subscribers():
             sub.push_analysis_progress(progress)
+        self._ws_broadcast(f"analysis:{subject_key}", "analysis_progress", progress)
 
     def notify_advanced_progress(
         self,
@@ -572,6 +601,7 @@ class QuoteService:
         }
         for sub in self._snapshot_subscribers():
             sub.push_advanced_progress(progress)
+        self._ws_broadcast(f"analysis:{subject_key}", "advanced_progress", progress)
 
 
     def persist_stream_and_enqueue_alerts(
@@ -618,6 +648,12 @@ class QuoteService:
         """
         for sub in self._snapshot_subscribers():
             sub.push_review(event_json)
+        import json
+        try:
+            data = json.loads(event_json)
+        except (json.JSONDecodeError, TypeError):
+            return
+        self._ws_broadcast("review", "review_progress", data)
 
     # ================================================================
     # 档位感知间隔限制
