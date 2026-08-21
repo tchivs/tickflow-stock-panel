@@ -31,7 +31,7 @@
 **Plans**: 4 plans
 **Wave 1**
 
-- [ ] 55-01-PLAN.md — WS 传输层核心 + quotes 行情流 tracer (后端 ws/ 模块 + /ws/stream 端点 + ConnectionManager + 前端 useWsStream + 连接状态 UI)
+- [x] 55-01-PLAN.md — WS 传输层核心 + quotes 行情流 tracer (后端 ws/ 模块 + /ws/stream 端点 + ConnectionManager + 前端 useWsStream + 连接状态 UI)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
