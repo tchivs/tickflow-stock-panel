@@ -5,7 +5,7 @@
 ### WebSocket 全量迁移
 
 - [x] **WS-01**: 服务端 WebSocket 端点 (`/ws/stream`) 支持多客户端连接, 按 principal 鉴权, 替代现有 SSE 端点
-- [ ] **WS-02**: 现有 SSE 流 (walkforward / optimizer / mining / quoteStream) 全部迁移到 WebSocket 传输, 保留 Last-Event-ID 语义 (断连重连不丢失事件)
+- [x] **WS-02**: 现有 SSE 流 (walkforward / optimizer / mining / quoteStream) 全部迁移到 WebSocket 传输, 保留 Last-Event-ID 语义 (断连重连不丢失事件)
 - [x] **WS-03**: WebSocket 连接复用 — 多个实时流 (运行进度 + 行情 + 告警) 共享同一连接, 通过消息类型路由, 不为每类流新建连接
 - [x] **WS-04**: WebSocket 连接心跳与自动重连 — 服务端 ping/keepalive, 客户端断连指数退避重连, 连接状态对用户可见
 
@@ -33,7 +33,7 @@
 | Requirement | Phase | Status |
 |-------------|-------|--------|
 | WS-01 | Phase 55 | Done (55-01) |
-| WS-02 | Phase 55 | Pending |
+| WS-02 | Phase 55 | Complete |
 | WS-03 | Phase 55 | Done (55-01) |
 | WS-04 | Phase 55 | Done (55-01) |
 | SCT-01 | Phase 56 | Pending |
