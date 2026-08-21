@@ -2,7 +2,7 @@
  * 集中管理所有 React Query key。
  *
  * - 新增查询只需在此加一行，所有消费方自动引用。
- * - SSE invalidation 基于 SSE_INVALIDATE_PREFIXES 列表，新增 key 无需改 useQuoteStream。
+ * - SSE invalidation 基于 WS_INVALIDATE_PREFIXES 列表，新增 key 无需改 useWsStream。
  */
 
 // ===== Query Key 工厂 =====
@@ -27,7 +27,7 @@ export const QK = {
   watchlistQuotes:      ['watchlist-quotes'] as const,
   watchlistEnriched:    (ext?: string) => ['watchlist-enriched', ext] as const,
   // 日K批量 = 历史静态数据: 盘中几乎不变, 不随 SSE quotes_updated 高频失效
-  // (SSE_INVALIDATE_PREFIXES 已用精确前缀, useQuoteStream 里另有静态批量守卫)。
+  // (WS_INVALIDATE_PREFIXES 已用精确前缀, useWsStream 里另有静态批量守卫)。
   // 刷新点: staleTime 过期 + Watchlist 增删自选/改蜡烛天数时的手动失效;
   // 当日最后一根蜡烛由 Watchlist 用 enriched 实时 OHLC 前端修补 (零额外请求)。
   watchlistKlineBatch:  (symbols: string) => ['watchlist-kline-batch', symbols] as const,
@@ -50,7 +50,7 @@ export const QK = {
   // (历史必走 /api/pool/history, PIT-1: /hub?as_of= 反漂移会静默返回最新日)。
   poolDates:          ['pool-dates'] as const,
   poolHistory:        (asOf: string) => ['pool-history', asOf] as const,
-  // Phase 27 (PM-04): 盘前预览 — 今日固定键; 不入 SSE_INVALIDATE_PREFIXES (定时快照,
+  // Phase 27 (PM-04): 盘前预览 — 今日固定键; 不入 WS_INVALIDATE_PREFIXES (定时快照,
   // 行情 tick 不无效刷新; 盘前时段易变 → 中等 staleTime; 15:35 EOD 后由 hasTodayEod 判定失效)
   poolPremarket:      ['pool-premarket'] as const,
 
@@ -170,7 +170,7 @@ export const QK = {
                              ['kline-minute', symbol, date] as const,
   klineMinuteRange:     (symbol: string, days: number) =>
                              ['kline-minute-range', symbol, days] as const,
-  // 竞价历史聚合 (CHART-02): 历史不可变, 不入 SSE_INVALIDATE_PREFIXES (行情 tick 不无效刷新)
+  // 竞价历史聚合 (CHART-02): 历史不可变, 不入 WS_INVALIDATE_PREFIXES (行情 tick 不无效刷新)
   auctionHistory:       (symbol: string, days: number) =>
                              ['kline-auction-history', symbol, days] as const,
   indexDaily:           (symbol: string, start: string, end: string) =>
@@ -256,9 +256,8 @@ export const QK = {
 // (非监控策略读盘后静态缓存, 监控策略由独立的 strategy_results_updated 事件在
 // 重算完成后刷新)。若加入 'screener', 会导致每个行情 tick 双重刷新策略页,
 // 且在 monitor "重算" 窗口内读到空结果, 造成策略列表闪烁 (变 0 → 空失效 → 又出现)。
-
-// Phase 55: SSE → WebSocket 迁移, 重命名 SSE_INVALIDATE_PREFIXES → WS_INVALIDATE_PREFIXES
-// (值不变; 保留 SSE_INVALIDATE_PREFIXES 别名供过渡期引用, Plan 03/04 清理)
+// Phase 55: SSE → WebSocket 迁移, 原 SSE invalidation 前缀列表重命名为 WS_INVALIDATE_PREFIXES
+// (别名已移除, 全部引用 WS_INVALIDATE_PREFIXES)
 export const WS_INVALIDATE_PREFIXES = [
   // 精确前缀: 只命中自选页的实时数据 (quotes/enriched)。不能用宽泛的 'watchlist' ——
   // 会误伤 ['watchlist'] (自选列表) 和 ['watchlist-groups'] (分组配置, 只随手动操作变化)。
@@ -277,4 +276,3 @@ export const WS_INVALIDATE_PREFIXES = [
 ] as const
 
 // 别名 (Plan 03/04 清理后移除)
-export const SSE_INVALIDATE_PREFIXES = WS_INVALIDATE_PREFIXES

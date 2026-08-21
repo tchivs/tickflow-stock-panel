@@ -1,6 +1,6 @@
 import { useEffect, useRef, useCallback, useSyncExternalStore } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { SSE_INVALIDATE_PREFIXES, QK } from './queryKeys'
+import { WS_INVALIDATE_PREFIXES as WS_INVALIDATE_PREFIXES, QK } from './queryKeys'
 import { getQueryConfig } from './useQueryConfig'
 import { toast } from '@/components/Toast'
 import { pushAlertToasts } from '@/components/AlertToast'
@@ -80,7 +80,7 @@ export function useQuoteStreamStatus(): QuoteStreamStatus {
 // ===== 焦点股票注册表 (个股对话框用) =====
 // 个股对话框打开时注册当前 symbol, SSE quotes_updated 推送时精准 invalidate
 // 该 symbol 的日K查询 (['kline', symbol]), 让日K最后一根蜡烛随实时价变化。
-// 不加进 SSE_INVALIDATE_PREFIXES 全局列表 —— 避免回测弹窗等也每秒重拉。
+// 不加进 WS_INVALIDATE_PREFIXES 全局列表 —— 避免回测弹窗等也每秒重拉。
 let _focusSymbol: string | null = null
 
 /** 注册当前焦点股票 (个股对话框打开时调用)。 */
@@ -218,7 +218,7 @@ export function useQuoteStream(
         const pages = pagesRef.current
         if (pages) {
           // 只 invalidate 开启的页面对应的 prefix
-          const activePrefixes = SSE_INVALIDATE_PREFIXES.filter((p) => {
+          const activePrefixes = WS_INVALIDATE_PREFIXES.filter((p) => {
             // 'quote-status' 始终刷新 (全局状态)
             if (p === 'quote-status') return true
             // 兼容旧配置: 'watchlist' 拆成两个精确前缀后, 未单独设置时沿用旧 'watchlist' 开关
@@ -242,7 +242,7 @@ export function useQuoteStream(
           qc.invalidateQueries({
             predicate: (query) =>
               !isStaticKlineBatch(query) &&
-              SSE_INVALIDATE_PREFIXES.some(
+              WS_INVALIDATE_PREFIXES.some(
                 (prefix) => String(query.queryKey[0]).startsWith(prefix),
               ),
           })
