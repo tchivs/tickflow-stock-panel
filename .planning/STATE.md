@@ -2,11 +2,14 @@
 gsd_state_version: 1.0
 milestone: v3.2
 milestone_name: 实时推送平台
+current_phase_name: v3.2 not yet planned
 status: planning
-last_updated: "2026-08-20T07:30:00.000Z"
+stopped_at: Phase 55 context gathered
+last_updated: "2026-08-21T06:59:51.790Z"
 last_activity: 2026-08-20
+last_activity_desc: v3.1 milestone archived + Pearson/Spearman IC fix
 progress:
-  total_phases: 0
+  total_phases: 4
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -88,6 +91,7 @@ Progress: [░░░░░░░░░░] 0%
 | e2e 回归 | 101 passed / 0 failed / 4 skipped (desktop, 排除 3 个预存环境失败) | PASS |
 
 预存失败 (非 Phase 54 回归, 已在 commit eb48436 确认同样失败):
+
 - monitor.spec.ts MON-07 x2 (RuleEditor preopen selectOption 超时, 数据/mock 环境问题)
 - phase1.spec.ts 新建账户 (Portfolio 页按钮不可见, Docker 后端状态)
 
@@ -134,9 +138,9 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-08-20
-Stopped at: v3.1 milestone complete (Phase 51-54 all delivered) — ready for v3.2 planning
-Resume file: None
+Last session: 2026-08-21T06:59:51.775Z
+Stopped at: Phase 55 context gathered
+Resume file: .planning/phases/55-websocket/55-CONTEXT.md
 
 ---
 *Last updated: 2026-08-20 — v3.1 milestone complete (Phase 51-54: BASE + AUDIT + WORK + MON all delivered)*
