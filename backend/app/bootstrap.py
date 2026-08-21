@@ -458,6 +458,11 @@ def init_app_state(app: FastAPI) -> None:
     app.state.stockdb_ws = ws_client
     qs.attach_stockdb_ws(ws_client)
     ws_client.start()  # lifespan 事件循环内启动; 未配 key 时内部 no-op
+    # Phase 55: WebSocket ConnectionManager — 行情/告警/持仓等实时推送通道
+    from app.ws.connection_manager import ConnectionManager
+    ws_manager = ConnectionManager()
+    app.state.ws_manager = ws_manager
+    qs.attach_ws_manager(ws_manager)
     app.state.advanced_job_service.set_progress_publisher(qs.notify_advanced_progress)
     from app.advanced.workflow import AdvancedWorkflowServices, build_advanced_graph
 

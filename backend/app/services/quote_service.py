@@ -279,6 +279,8 @@ class QuoteService:
         # 自选实时 + 指数实时, WS 断线自动回退腾讯 HTTP 轮询
         self._ws = None
         self._ws_last_submitted: set[str] = set()
+        # Phase 55: WebSocket 连接管理器 (None = 未接入; attach 后由 WS 广播推送)
+        self._ws_manager = None
 
     # ================================================================
     # 生命周期
@@ -468,6 +470,31 @@ class QuoteService:
         invalidate_overview_cache()
         for sub in self._snapshot_subscribers():
             sub.notify_quote()
+        # Phase 55: WebSocket quotes 频道广播 (QuoteService 运行在后台线程,
+        # 需通过 run_coroutine_threadsafe 投递到事件循环)
+        self._ws_broadcast_quotes()
+
+    def _ws_broadcast_quotes(self) -> None:
+        """Phase 55: 通过 WebSocket quotes 频道广播行情更新。
+
+        QuoteService 运行在后台线程, 需通过 run_coroutine_threadsafe
+        投递到事件循环; 若无运行中事件循环则跳过 (no-op)。
+        """
+        if self._ws_manager is None:
+            return
+        import asyncio
+        import time
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            return  # 无事件循环, 跳过
+        if loop.is_closed():
+            return
+        data = {"ts": int(time.time() * 1000), "symbol_count": self._symbol_count}
+        asyncio.run_coroutine_threadsafe(
+            self._ws_manager.broadcast_to_channel("quotes", "quotes_updated", data),
+            loop,
+        )
 
     def notify_strategy_results_updated(self) -> None:
         """策略监控完成实时结果更新后调用，仅刷新策略页结果缓存。"""
@@ -770,6 +797,14 @@ class QuoteService:
         self._ws = ws
         ws.on("quotes", self._on_ws_quotes)
         self._sync_ws_subscriptions()
+
+    def attach_ws_manager(self, mgr) -> None:
+        """接入 WebSocket 连接管理器 (Phase 55): 行情广播通过 WS 频道推送。
+
+        仿 attach_stockdb_ws 模式; _broadcast_quote_updated 末尾调
+        ws_manager.broadcast_to_channel("quotes", "quotes_updated", data)。
+        """
+        self._ws_manager = mgr
 
     def _ws_index_symbol_set(self) -> set[str]:
         """指数判定集: 核心指数 ∪ 本地指数维表 (后缀形态)。"""

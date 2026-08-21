@@ -308,6 +308,10 @@ app.include_router(audit.router)
 app.include_router(workbench.router)
 app.include_router(monitor_ops.router)
 app.include_router(report_ops.router)
+# Phase 55: WebSocket /ws/stream 端点
+from app.ws.handler import ws_stream
+
+app.websocket("/ws/stream")(ws_stream)
 
 if phase5_real_host.telemetry_enabled():
     app.include_router(phase5_real_host.router)

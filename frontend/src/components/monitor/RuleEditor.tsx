@@ -1,11 +1,12 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Activity, Building2, ChartNoAxesCombined, Check, Layers3, Plus, RadioTower, Save, Search, Tags, TrendingUp, Waypoints, X } from 'lucide-react'
+import { Activity, Building2, ChartNoAxesCombined, Check, ChevronDown, ChevronUp, Eraser, Layers3, ListPlus, Plus, RadioTower, Save, Search, Tags, TrendingUp, Waypoints, X } from 'lucide-react'
 import { api, genRuleId, type MonitorRule, type MonitorCondition, type SectorKind, type SectorMonitorTarget, type StrategyNotifyEvent } from '@/lib/api'
 import { DEFAULT_STRATEGY_NOTIFY_EVENTS, LEGACY_STRATEGY_NOTIFY_EVENTS, STRATEGY_NOTIFY_EVENT_OPTIONS } from '@/lib/strategyMonitorEvents'
 import { QK } from '@/lib/queryKeys'
 import { boardTag } from '@/components/stock-table/primitives'
+import { resolveWatchlistGroupColor } from '@/lib/watchlist-group-colors'
 import { SignalPicker } from '@/components/screener/SignalPicker'
 import { MONITOR_INTRADAY_SIGNAL_OPTIONS, SIGNAL_OPTIONS, cnSignal } from '@/lib/signals'
 import { usePreferences } from '@/lib/useSharedQueries'
@@ -120,6 +121,29 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
   })
   const [error, setError] = useState('')
   const [symbolQuery, setSymbolQuery] = useState('')
+  // 「自选导入」下拉: 从自选/自选分组批量并入标的 (与自选页共用查询缓存)
+  const [watchMenuOpen, setWatchMenuOpen] = useState(false)
+  const watchMenuRef = useRef<HTMLDivElement>(null)
+  const watchlistQ = useQuery({
+    queryKey: QK.watchlist,
+    queryFn: api.watchlistList,
+    enabled: watchMenuOpen,
+  })
+  const watchGroupsQ = useQuery({
+    queryKey: QK.watchlistGroups,
+    queryFn: api.watchlistGroups,
+    enabled: watchMenuOpen,
+  })
+  useEffect(() => {
+    if (!watchMenuOpen) return
+    const handleClick = (e: MouseEvent) => {
+      if (watchMenuRef.current && !watchMenuRef.current.contains(e.target as Node)) {
+        setWatchMenuOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [watchMenuOpen])
   const [sectorQuery, setSectorQuery] = useState('')
   const [industryLevel, setIndustryLevel] = useState<1 | 2 | 3>(() => {
     const level = rule?.sector_targets?.[0]?.level
@@ -227,6 +251,63 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
     }
     setSymbolQuery('')
   }
+
+  // 并入一组标的 (去重); 选择后关闭自选导入下拉
+  const importSymbols = (syms: string[]) => {
+    setDraft(d => {
+      const merged = [...d.symbols]
+      for (const s of syms) {
+        if (!merged.includes(s)) merged.push(s)
+      }
+      return { ...d, symbols: merged }
+    })
+    setWatchMenuOpen(false)
+  }
+
+  // ── 标的标签: 名称 + 板标(创/科/北) + 代码, 可逐个删除 ──
+  const [symbolsExpanded, setSymbolsExpanded] = useState(false)
+  const symbolsKey = draft.symbols.join(',')
+  // 名称映射: 本地即时缓存(搜索/自选数据) 优先, 缺失的由批量名称接口补齐
+  // (覆盖编辑旧规则等本地无名称的场景)。key 随标的集变化, staleTime 长防抖。
+  const localNamesRef = useRef<Record<string, string>>({})
+  const recordLocalNames = (pairs: { symbol: string; name?: string | null }[]) => {
+    for (const p of pairs) {
+      if (p.name) localNamesRef.current[p.symbol] = p.name
+    }
+  }
+  if (watchlistQ.data?.symbols) recordLocalNames(watchlistQ.data.symbols)
+  if (symbolSearch.data?.results) recordLocalNames(symbolSearch.data.results)
+  const namesQ = useQuery({
+    queryKey: ['instrument-names', symbolsKey],
+    queryFn: () => api.instrumentNames(draft.symbols),
+    enabled: draft.symbols.length > 0,
+    staleTime: 5 * 60_000,
+  })
+  const nameBySymbol = useMemo(
+    () => ({ ...localNamesRef.current, ...(namesQ.data?.names ?? {}) }),
+    [symbolsKey, namesQ.data],
+  )
+  // 自选导入选项: 全部自选 + 各分组 (空分组隐藏) + 未分组
+  const watchImportOptions = (() => {
+    const entries = watchlistQ.data?.symbols ?? []
+    if (entries.length === 0) return []
+    const options = [{
+      key: 'all',
+      name: '全部自选',
+      dot: 'bg-muted/60',
+      symbols: entries.map(e => e.symbol),
+    }]
+    for (const group of watchGroupsQ.data?.groups ?? []) {
+      const syms = entries.filter(e => e.group_ids?.includes(group.id)).map(e => e.symbol)
+      if (syms.length === 0) continue
+      options.push({ key: group.id, name: group.name, dot: resolveWatchlistGroupColor(group.color).dot, symbols: syms })
+    }
+    const ungrouped = entries.filter(e => !(e.group_ids?.length)).map(e => e.symbol)
+    if (ungrouped.length > 0) {
+      options.push({ key: 'ungrouped', name: '未分组', dot: 'bg-muted/60', symbols: ungrouped })
+    }
+    return options
+  })()
 
   const selectSectorKind = (kind: SectorKind) => {
     setDraft(d => ({ ...d, sector_kind: kind, sector_targets: [] }))
@@ -747,40 +828,125 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
       {/* 作用范围 */}
       {draft.type !== 'sector' && draft.type !== 'position' && <div className="space-y-2">
         <span className="text-[11px] text-muted">作用范围</span>
-        <div className="flex items-center gap-2">
-          <select value={draft.scope} onChange={e => setDraft(d => ({ ...d, scope: e.target.value as MonitorRule['scope'] }))} className="h-9 w-32 rounded-btn border border-border bg-base px-3 text-xs text-foreground">
+        <div className="flex items-start gap-1.5">
+          <select value={draft.scope} onChange={e => setDraft(d => ({ ...d, scope: e.target.value as MonitorRule['scope'] }))} className="h-7 w-32 shrink-0 rounded border border-border bg-base px-2 text-[11px] text-foreground">
             {visibleScopes.map(s => <option key={s.key} value={s.key} disabled={hasIntradaySignal && s.key !== 'symbols'}>{s.label}</option>)}
           </select>
           {draft.scope === 'symbols' && (
-            <div className="flex-1 flex flex-wrap items-center gap-1.5">
-              {draft.symbols.map(sym => (
-                <span key={sym} className="inline-flex items-center gap-1 rounded bg-elevated px-1.5 py-0.5 text-[10px] text-secondary">
-                  {sym}
-                  <button onClick={() => setDraft(d => ({ ...d, symbols: d.symbols.filter(s => s !== sym) }))} className="text-muted hover:text-danger cursor-pointer">
-                    <X className="h-2.5 w-2.5" />
+            <div className="min-w-0 flex-1 space-y-1.5">
+              {/* 导入与搜索: 与范围下拉同一行等高(h-7), 不换行, 搜索框占满剩余宽度 */}
+              <div className="flex items-center gap-1.5">
+                <div className="relative" ref={watchMenuRef}>
+                  <button
+                    type="button"
+                    onClick={() => setWatchMenuOpen(v => !v)}
+                    title="从自选 / 自选分组导入标的 (导入当前成员, 后续增删自选不影响本规则)"
+                    className={`inline-flex h-7 shrink-0 items-center gap-1 rounded border px-2 text-[11px] transition-colors cursor-pointer ${
+                      watchMenuOpen
+                        ? 'border-accent/40 bg-accent/10 text-accent'
+                        : 'border-border bg-base text-secondary hover:border-accent/30 hover:text-foreground'
+                    }`}
+                  >
+                    <ListPlus className="h-3 w-3" />自选导入
                   </button>
-                </span>
-              ))}
-              <div className="relative">
-                <input
-                  value={symbolQuery}
-                  onChange={e => setSymbolQuery(e.target.value)}
-                  placeholder="搜索代码或名称..."
-                  className="h-7 w-32 rounded border border-border bg-base pl-6 pr-2 text-[11px] text-foreground focus:outline-none focus:border-accent/50"
-                />
-                <Search className="absolute left-1.5 top-1.5 h-3.5 w-3.5 text-muted" />
-                {symbolSearch.data && symbolSearch.data.results.length > 0 && (
-                  <div className="absolute z-10 mt-1 max-h-48 w-48 overflow-auto rounded border border-border bg-surface shadow-lg">
-                    {symbolSearch.data.results.map(r => (
-                      <button key={r.symbol} onClick={() => addSymbol(r.symbol)} className="block w-full px-2 py-1 text-left text-[11px] hover:bg-elevated cursor-pointer">
-                        <span className="font-mono text-foreground/80">{r.symbol}</span>
-                        {(() => { const b = boardTag(r.symbol); return b && <span className={`ml-1 inline-flex items-center justify-center rounded px-0.5 text-[9px] font-bold leading-tight border ${b.color}`}>{b.label}</span> })()}
-                        <span className="ml-1 text-muted">{r.name}</span>
-                      </button>
-                    ))}
-                  </div>
-                )}
+                  {watchMenuOpen && (
+                    <div className="absolute z-10 mt-1 max-h-56 w-44 overflow-y-auto rounded border border-border bg-surface py-1 shadow-lg">
+                      {watchlistQ.isLoading ? (
+                        <div className="px-2.5 py-2 text-[11px] text-muted">正在加载自选...</div>
+                      ) : watchImportOptions.length === 0 ? (
+                        <div className="px-2.5 py-2 text-[11px] text-muted">自选列表为空</div>
+                      ) : watchImportOptions.map(option => (
+                        <button
+                          key={option.key}
+                          type="button"
+                          onClick={() => importSymbols(option.symbols)}
+                          className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left text-[11px] text-secondary transition-colors hover:bg-elevated hover:text-foreground cursor-pointer"
+                        >
+                          <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${option.dot}`} />
+                          <span className="min-w-0 flex-1 truncate">{option.name}</span>
+                          <span className="shrink-0 font-mono text-[9px] tabular-nums text-muted">{option.symbols.length}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <div className="relative min-w-0 flex-1">
+                  <input
+                    value={symbolQuery}
+                    onChange={e => setSymbolQuery(e.target.value)}
+                    placeholder="搜索代码或名称添加标的..."
+                    className="h-7 w-full rounded border border-border bg-base pl-6 pr-2 text-[11px] text-foreground focus:outline-none focus:border-accent/50"
+                  />
+                  <Search className="absolute left-1.5 top-1.5 h-3.5 w-3.5 text-muted" />
+                  {symbolSearch.data && symbolSearch.data.results.length > 0 && (
+                    <div className="absolute z-10 mt-1 max-h-48 w-full overflow-auto rounded border border-border bg-surface shadow-lg">
+                      {symbolSearch.data.results.map(r => (
+                        <button key={r.symbol} onClick={() => addSymbol(r.symbol)} className="block w-full px-2 py-1 text-left text-[11px] hover:bg-elevated cursor-pointer">
+                          <span className="font-mono text-foreground/80">{r.symbol}</span>
+                          {(() => { const b = boardTag(r.symbol); return b && <span className={`ml-1 inline-flex items-center justify-center rounded px-0.5 text-[9px] font-bold leading-tight border ${b.color}`}>{b.label}</span> })()}
+                          <span className="ml-1 text-muted">{r.name}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
+              {/* 「已加入 N 只」单独成行(收起态, 与控件列左对齐) / 标签管理区(展开态) */}
+              {draft.symbols.length > 0 && !symbolsExpanded && (
+                <button
+                  type="button"
+                  onClick={() => setSymbolsExpanded(true)}
+                  title="展开管理标的列表"
+                  className="inline-flex items-center gap-1 rounded border border-accent/30 bg-accent/10 px-2 py-0.5 text-[10px] text-accent transition-colors hover:bg-accent/20 cursor-pointer"
+                >
+                  已加入 <span className="font-mono font-semibold tabular-nums">{draft.symbols.length}</span> 只
+                  <ChevronDown className="h-3 w-3" />
+                </button>
+              )}
+              {draft.symbols.length > 0 && symbolsExpanded && (
+                <>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] text-muted">已加入 <span className="font-mono tabular-nums text-secondary">{draft.symbols.length}</span> 只</span>
+                    <span className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setDraft(d => ({ ...d, symbols: [] }))}
+                        className="inline-flex items-center gap-0.5 text-[10px] text-muted transition-colors hover:text-warning cursor-pointer"
+                        title="移除全部标的"
+                      >
+                        <Eraser className="h-3 w-3" />清空
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSymbolsExpanded(false)}
+                        className="inline-flex items-center gap-0.5 text-[10px] text-muted transition-colors hover:text-foreground cursor-pointer"
+                      >
+                        收起<ChevronUp className="h-3 w-3" />
+                      </button>
+                    </span>
+                  </div>
+                  <div className="flex max-h-40 flex-wrap gap-1 overflow-y-auto rounded border border-border/60 bg-base/40 p-1.5">
+                    {draft.symbols.map(sym => {
+                      const b = boardTag(sym)
+                      const name = nameBySymbol[sym]
+                      return (
+                        <span key={sym} className="inline-flex items-center gap-1 rounded border border-border bg-elevated px-1.5 py-0.5 text-[10px] text-secondary">
+                          <span className="max-w-24 truncate text-foreground/90" title={name ? `${name} ${sym}` : sym}>{name ?? sym}</span>
+                          {b && <span className={`inline-flex items-center justify-center rounded px-0.5 text-[9px] font-bold leading-tight border ${b.color}`}>{b.label}</span>}
+                          <span className="font-mono text-[9px] tabular-nums text-muted">{sym}</span>
+                          <button
+                            onClick={() => setDraft(d => ({ ...d, symbols: d.symbols.filter(s => s !== sym) }))}
+                            className="text-muted transition-colors hover:text-danger cursor-pointer"
+                            title={name ? `移除 ${name}` : `移除 ${sym}`}
+                          >
+                            <X className="h-2.5 w-2.5" />
+                          </button>
+                        </span>
+                      )
+                    })}
+                  </div>
+                </>
+              )}
             </div>
           )}
           {draft.scope === 'all' && <span className="text-[11px] text-muted">对全市场所有标的生效</span>}

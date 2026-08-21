@@ -29,6 +29,7 @@ import {
   Pickaxe,
   FileText,
   Settings,
+
   Database,
   Loader2,
   LayoutDashboard,
@@ -61,7 +62,8 @@ import { Logo } from './Logo'
 import { api, type IndexQuote } from '@/lib/api'
 import { cn } from '@/lib/cn'
 import { resolveWatchlistGroupColor } from '@/lib/watchlist-group-colors'
-import { computeGroupPcts, formatGroupPct, groupPctColor, groupPctTitle } from '@/lib/watchlistGroupStats'
+import { computeGroupPcts, groupPctColor, groupPctTitle } from '@/lib/watchlistGroupStats'
+import { fmtPct } from '@/lib/format'
 import { toggleTheme, useTheme } from '@/lib/theme'
 import { setCurrentTotal as setAlertTotal, useUnreadAlerts } from '@/lib/monitorBadge'
 import { ExtensionSlot } from '@/extensions/ExtensionSlot'
@@ -243,7 +245,7 @@ function TierBadge({ label, hasKey, providerName, isTickflow }: { label: string;
         className="pointer-events-none absolute inset-y-1.5 left-0 w-[2px] rounded-full bg-accent/50 transition-colors group-hover:bg-accent"
         style={base === 'expert' ? { background: 'linear-gradient(180deg, #60a5fa, #c084fc, #fbbf24)' } : undefined}
       />
-      <Key className="h-3.5 w-3.5 shrink-0 text-muted group-hover:text-accent transition-colors" />
+      <DatabaseZap className="h-3.5 w-3.5 shrink-0 text-muted group-hover:text-accent transition-colors" />
       <span className="min-w-0 truncate text-[11px] font-medium text-secondary group-hover:text-foreground transition-colors">
         {providerName || '数据源'}
       </span>
@@ -317,18 +319,29 @@ export function Layout() {
     staleTime: 60_000,
   })
   const watchlistGroups = watchlistGroupsData?.groups ?? []
+  // 自选二级菜单展开状态 — 默认当前在自选页时展开
+  const [watchlistNavExpanded, setWatchlistNavExpanded] = useState(location.pathname === '/watchlist')
+
+  // 侧边栏收起状态 — 持久化到 localStorage
+  const [navCollapsed, setNavCollapsed] = useState(() => {
+    if (typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches) return true
+    try { return localStorage.getItem('tf-nav-collapsed') === '1' } catch { return false }
+  })
+
   // 分组等权平均涨跌幅 — 复用 watchlist/enriched 查询缓存(与自选页同 key,
-  // 盘中随 SSE 刷新); 侧栏开启分组时才拉取
+  // 盘中随 SSE 刷新)。可见性门控: 子菜单实际可见(侧栏展开 + 二级菜单展开)
+  // 时才拉取, 收起状态下不为隐藏 UI 发请求。
+  const navGroupPctVisible = groupsInNav && !navCollapsed && watchlistNavExpanded
   const { data: navWatchlist } = useQuery({
     queryKey: QK.watchlist,
     queryFn: api.watchlistList,
-    enabled: groupsInNav,
+    enabled: navGroupPctVisible,
     staleTime: 60_000,
   })
   const { data: navEnriched } = useQuery({
     queryKey: QK.watchlistEnriched(undefined),
     queryFn: () => api.watchlistEnriched(),
-    enabled: groupsInNav,
+    enabled: navGroupPctVisible,
     staleTime: 60_000,
   })
   const navGroupPcts = useMemo(
@@ -338,8 +351,6 @@ export function Layout() {
     ),
     [navWatchlist, navEnriched],
   )
-  // 自选二级菜单展开状态 — 默认当前在自选页时展开
-  const [watchlistNavExpanded, setWatchlistNavExpanded] = useState(location.pathname === '/watchlist')
 
   // 数据同步状态轮询: 有活跃 job 时「数据」菜单项显示转圈
   const { data: pipelineJobs } = useQuery({
@@ -435,11 +446,6 @@ export function Layout() {
   const realtimeEnabled = prefs?.realtime_quotes_enabled ?? false
   // Free 档监控限制提示: 可手动关闭, 不持久化 (刷新后恢复显示)
   const [dismissFreeHint, setDismissFreeHint] = useState(false)
-  // 侧边栏收起状态 — 持久化到 localStorage
-  const [navCollapsed, setNavCollapsed] = useState(() => {
-    if (typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches) return true
-    try { return localStorage.getItem('tf-nav-collapsed') === '1' } catch { return false }
-  })
   useEffect(() => {
     const compact = window.matchMedia('(max-width: 767px)')
     const syncSidebarWithViewport = (event: MediaQueryListEvent | MediaQueryList) => {
@@ -787,7 +793,7 @@ export function Layout() {
                         const info = navGroupPcts['all']
                         return info && info.pct != null ? (
                           <span className={`ml-auto font-mono text-[10px] tabular-nums ${groupPctColor(info.pct)}`} title={groupPctTitle(info)}>
-                            {formatGroupPct(info.pct)}
+                            {fmtPct(info.pct)}
                           </span>
                         ) : null
                       })()}
@@ -813,7 +819,7 @@ export function Layout() {
                           <span className="truncate">{group.name}</span>
                           {pctInfo && pctInfo.pct != null && (
                             <span className={`ml-auto font-mono text-[10px] tabular-nums ${groupPctColor(pctInfo.pct)}`} title={groupPctTitle(pctInfo)}>
-                              {formatGroupPct(pctInfo.pct)}
+                              {fmtPct(pctInfo.pct)}
                             </span>
                           )}
                         </NavLink>
