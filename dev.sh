@@ -174,6 +174,7 @@ echo
 (
   cd "$BACKEND_DIR"
   # --no-sync: 跳过依赖解析, 直接用已安装的 .venv 环境。
+  # --no-sync: 跳过依赖解析, 直接用已安装的 .venv 环境。
   # 比 --frozen 更彻底: 不校验 lockfile, 避免镜像源 403/网络抖动导致后端起不来。
   uv run --no-sync uvicorn app.main:app "${UVICORN_ENV_ARGS[@]}" --reload \
     --host "$BACKEND_HOST" --port "$BACKEND_PORT" 2>&1 \
