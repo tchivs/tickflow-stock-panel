@@ -1,8 +1,12 @@
 """Local stockdb (docker :8000) market data provider.
 
 HTTP adapter for the local stockdb service: X-API-Key header auth over the
-REST batch endpoints ``/v1/query/daily`` / ``/v1/minute``. Mirrors
-FreeStockDBProvider's httpx client pattern but with typed error
+REST batch endpoints ``/v1/query/daily`` / ``/v1/minute``. The current
+``/v1/query/daily`` response uses StockDB's ``DataResponse`` envelope
+(``ok/state/data`` plus quality metadata); the parser keeps the data plane
+backward-compatible with the earlier wrapped response and rejects explicit
+unavailable/invalid states instead of returning a false empty frame.
+Mirrors FreeStockDBProvider's httpx client pattern but with typed error
 classification — never the catch-all empty-frame swallow (PITFALLS P2) — and
 single-point normalization of the three wire differences (measured
 2026-08-07, see .planning/phases/40-stockdb-local-channel/RESEARCH.md):
@@ -11,11 +15,12 @@ single-point normalization of the three wire differences (measured
   * ``volume_hand`` (手) is identity (x1) — the lake stores 手, never x100
   * aware Asia/Shanghai ``date``/``bar_time`` -> naive lake wall clock
 
-Wire contract: daily returns ``{"ok": true, "state": "ok", "data":
-{sym: [bars]}}`` with <=200 symbols per request; minute returns
-``{sym: [bars]}``; daily window includes the end date; minute window excludes
-the end date (must pass ``end + 1day``); 401/429/400 classified by status
-code only (body is log-only, Pitfall 5).
+Wire contract: daily returns a ``DataResponse`` whose ``data`` is
+``{sym: [bars]}`` with <=200 symbols per request; minute batch currently
+returns ``{sym: [bars]}`` (and the parser also accepts a DataResponse envelope);
+daily window includes the end date; minute window excludes the end date (must
+pass ``end + 1day``); 401/429/400 classified by status code only (body is
+log-only, Pitfall 5).
 """
 from __future__ import annotations
 
@@ -160,8 +165,17 @@ class StockDBProvider:
 
     @staticmethod
     def _extract_symbol_bars(payload: Any) -> dict[str, Any]:
-        """Return the symbol map from direct or ``data``-wrapped responses."""
-        if isinstance(payload, dict) and isinstance(payload.get("data"), dict):
+        """Return the symbol map from direct or current ``DataResponse`` payloads.
+
+        ``state=empty`` remains a valid zero-row result. Explicit service
+        failure states must surface as protocol errors so provider-chain code
+        can decide whether to fall back, rather than mistaking an outage for a
+        legitimate data vacuum.
+        """
+        if isinstance(payload, dict) and "data" in payload:
+            state = payload.get("state")
+            if payload.get("ok") is False or state in {"unavailable", "invalid"}:
+                raise StockDBProtocolError(f"stockdb response state={state!r}")
             payload = payload["data"]
         if not isinstance(payload, dict) or any(
             not isinstance(bars, list) for bars in payload.values()
@@ -242,12 +256,12 @@ class StockDBProvider:
         rows: list[dict] = []
         for i, chunk in enumerate(chunked(list(symbols), self.batch_size)):
             sleep_between_batches(i, self.rpm)  # rpm=120 对齐服务端 minute 档位
-            payload = self._get_json("/v1/minute", {
+            payload = self._extract_symbol_bars(self._get_json("/v1/minute", {
                 "symbols": ",".join(_to_prefix(s) for s in chunk),
                 "start": start_time.strftime("%Y-%m-%d") if start_time else None,
                 "end": end_param,
                 "freq": _MINUTE_UNIT.get(freq, 1),  # 服务端 freq 为 int 枚举
-            })
+            }))
             for _sym, bars in payload.items():
                 rows.extend(self._map_minute_row(b, freq) for b in bars)
         if not rows:

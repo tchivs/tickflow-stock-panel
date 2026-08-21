@@ -10,9 +10,10 @@ Locks the three wire normalization differences (measured 2026-08-07):
   * aware Asia/Shanghai date/bar_time -> naive lake wall clock
 
 plus the typed error contract (401 no-retry / 429 Retry-After single retry
-then raise / 400 typed / 200+[] legitimate vacuum), daily response semantics
-(`{"ok": true, "state": "ok", "data": {sym: [bars]}}`, chunked <=
-batch_size) and rate-limit alignment (rpm=120).
+then raise / 400 typed / 200+[] legitimate vacuum), current DataResponse daily
+semantics (`{"ok": true, "state": "ok", "data": {sym: [bars]}}`, chunked <=
+batch_size), direct/enveloped minute responses, and rate-limit alignment
+(rpm=120).
 
 Import of the provider module fails today (classes not yet implemented) —
 that red state is the contract-first acceptance step.
@@ -199,6 +200,19 @@ def test_200_malformed_daily_payload_raises_protocol_error():
         p.get_daily(["SH600519"])
 
 
+def test_data_response_failure_state_does_not_become_empty_frame():
+    p = _provider({
+        "/v1/query/daily": {
+            "ok": False,
+            "state": "unavailable",
+            "data": {},
+            "error": "local lake unavailable",
+        }
+    })
+    with pytest.raises(StockDBProtocolError):
+        p.get_daily(["SH600519"])
+
+
 # -- 批语义 + 限频对齐 + 分钟端日语义 (LOCAL-01) ------------------------------
 
 
@@ -259,6 +273,20 @@ def test_minute_bar_time_is_naive():
     assert dt == datetime(2026, 8, 5, 9, 30)
     assert dt.tzinfo is None
     assert "freq" in df.columns and df["freq"][0] == "1m"
+
+
+def test_minute_accepts_current_data_response_envelope():
+    p = _provider({
+        "/v1/minute": {
+            "ok": True,
+            "state": "ok",
+            "data": _load_fixture("minute_sh600519_20260805.json"),
+            "schema": {"schema_version": 1, "contract_version": "1.1"},
+        }
+    })
+    df = p.get_minute(["SH600519"])
+    assert df.height == 2
+    assert df["symbol"][0] == "600519.SH"
 
 
 def test_429_retry_after_header_controls_wait(monkeypatch):
