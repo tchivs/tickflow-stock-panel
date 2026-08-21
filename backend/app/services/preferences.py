@@ -320,7 +320,6 @@ _LEGACY_PROVIDER_KEYS = {
     "financial": "financial_data_provider",
 }
 
-_ALLOWED_DATA_PROVIDERS = {"tickflow"}
 DATA_SOURCE_JOB_TIMEOUT_MIN_S = 60
 
 

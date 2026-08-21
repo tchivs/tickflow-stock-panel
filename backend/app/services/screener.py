@@ -811,17 +811,19 @@ class ScreenerService:
         from app.strategy import config as strategy_config
         all_overrides = strategy_config.list_overrides(data_dir)
 
-        # 历史策略: 只在需要时加载 (只加载 all_ids 中包含的 filter_history 策略)
-        shared_history = None
-        id_set = set(all_ids)
-        if engine:
-            history_strats = [
-                (sid, s) for sid, s in engine._strategies.items()
-                if s.filter_history_fn and sid in id_set
-            ]
-            if history_strats:
-                max_lb = min(max(s.lookback_days for _, s in history_strats), 30)
-                shared_history = self._load_enriched_history(as_of, max(1, max_lb))
+        # 扩展策略通过统一的 StrategyDataContext 执行。StrategyEngine.run
+        # 已不再接受旧版的 as_of/precomputed 参数，且 context 负责按策略
+        # 预热需求装载历史窗口。
+        engine_ids = [sid for sid in all_ids if sid not in PRESET_STRATEGIES]
+        strategy_context = None
+        if engine and engine_ids:
+            strategy_context = self.build_strategy_context(
+                engine,
+                as_of,
+                engine_ids,
+                current=precomputed,
+                overrides_map=all_overrides,
+            )
 
         for sid in all_ids:
             try:
@@ -838,8 +840,9 @@ class ScreenerService:
                     )
                 else:
                     r = engine.run(
-                        sid, as_of, overrides=overrides or None,
-                        precomputed=precomputed, precomputed_history=shared_history,
+                        sid,
+                        strategy_context,
+                        overrides=overrides or None,
                     )
                     if dl is not None and dl > 0:
                         r.rows = r.rows[:dl]
