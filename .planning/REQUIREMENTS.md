@@ -13,7 +13,7 @@
 
 - [x] **SCT-01**: Server酱 (sct.ftqq.com) 通知渠道接入 — 用户配置 SCT SendKey, 后端按 SendKey 推送
 - [x] **SCT-02**: Server酱推送接入统一通知投递管道 — 与现有 WeCom bot 共享通知触发点, 可选渠道
-- [ ] **SCT-03**: Server酱推送结果审计 — 复用 v3.1 ToolCallEnvelope 记录推送投递 (raw_hash + response_summary)
+- [x] **SCT-03**: Server酱推送结果审计 — 复用 v3.1 ToolCallEnvelope 记录推送投递 (raw_hash + response_summary)
 - [x] **SCT-04**: Server酱推送频率限制与去重 — 相同告警 5 分钟内不重复推送, 支持每日推送上限
 
 ### 客户端实时规则引擎
@@ -38,7 +38,7 @@
 | WS-04 | Phase 55 | Done (55-01) |
 | SCT-01 | Phase 56 | Complete |
 | SCT-02 | Phase 56 | Complete |
-| SCT-03 | Phase 56 | Pending |
+| SCT-03 | Phase 56 | Complete |
 | SCT-04 | Phase 56 | Complete |
 | CR-01 | Phase 57 | Pending |
 | CR-02 | Phase 57 | Pending |
