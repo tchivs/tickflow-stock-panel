@@ -55,7 +55,6 @@ class ConnectionManager:
 
     def __init__(self) -> None:
         self._connections: list[WsConnection] = []
-        self._lock = asyncio.Lock()
         # per-principal 持久状态 (跨重连)
         self._principal_rings: dict[str, deque[dict]] = {}
         self._principal_seq: dict[str, int] = {}
