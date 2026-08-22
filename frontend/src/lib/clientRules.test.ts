@@ -89,3 +89,63 @@ describe('debounce', () => {
     expect(isDebounced('r1', now + DEBOUNCE_MS + 1)).toBe(false)
   })
 })
+
+// ── 评估引擎边界用例 (Task 3 TDD) ─────────────────────────────
+
+describe('evaluateRules — edge cases', () => {
+  it('pct 边界: change_pct <= value → 命中 (相等)', () => {
+    const rule = makeRule({ type: 'pct', op: '<=', value: 0.05 })
+    const quote = makeQuote({ change_pct: 0.05 })
+    const hits = evaluateRules([quote], [rule])
+    expect(hits).toHaveLength(1)
+  })
+
+  it('price 边界: price > value → 不命中 (严格大于)', () => {
+    const rule = makeRule({ type: 'price', op: '>', value: 50 })
+    const quote = makeQuote({ price: 50 })
+    const hits = evaluateRules([quote], [rule])
+    expect(hits).toHaveLength(0)
+  })
+
+  it('quote 缺 price/close 字段 → 不命中', () => {
+    const rule = makeRule({ type: 'price', op: '>', value: 100 })
+    const quote = makeQuote({ symbol: '600519.SH' })
+    const hits = evaluateRules([quote], [rule])
+    expect(hits).toHaveLength(0)
+  })
+
+  it('pct 优先取 pct 字段 (pct > change_pct)', () => {
+    const rule = makeRule({ type: 'pct', op: '>', value: 0.04 })
+    const quote = makeQuote({ pct: 0.05, change_pct: 0.03 })
+    const hits = evaluateRules([quote], [rule])
+    expect(hits).toHaveLength(1)
+    expect(hits[0].matchedValue).toBe(0.05)
+  })
+
+  it('多规则同 tick 命中: 3 条 enabled 规则匹配同一 quotes → 返回 3 Hit', () => {
+    const rules = [
+      makeRule({ id: 'r1', name: '涨超3%', type: 'pct', op: '>', value: 0.03 }),
+      makeRule({ id: 'r2', name: '价格超100', type: 'price', op: '>', value: 100 }),
+      makeRule({ id: 'r3', name: '涨超1%', type: 'pct', op: '>', value: 0.01 }),
+    ]
+    const quote = makeQuote({ change_pct: 0.05, price: 120 })
+    const hits = evaluateRules([quote], rules)
+    expect(hits).toHaveLength(3)
+  })
+})
+
+// ── 防抖重置 ──────────────────────────────────────────────────
+
+describe('debounce reset', () => {
+  beforeEach(() => {
+    clearTriggered('r-reset')
+  })
+
+  it('markTriggered → isDebounced = true; clearTriggered → isDebounced = false', () => {
+    const now = 1_000_000
+    markTriggered('r-reset', now)
+    expect(isDebounced('r-reset', now + 10_000)).toBe(true)
+    clearTriggered('r-reset')
+    expect(isDebounced('r-reset', now + 10_000)).toBe(false)
+  })
+})
