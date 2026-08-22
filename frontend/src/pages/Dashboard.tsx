@@ -2,9 +2,9 @@ import { useState, useEffect, useRef, type ReactNode } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Activity, ArrowDownRight, ArrowUpRight, BarChart3, BellRing, Database, Flame, Gauge, Info, LineChart, Loader2, Play, RefreshCw, Sparkles, Target, Timer } from 'lucide-react'
+import { Activity, AlertTriangle, ArrowDownRight, ArrowUpRight, BarChart3, BellRing, Database, Flame, Gauge, Info, LineChart, Loader2, Play, RefreshCw, Sparkles, Target, Timer } from 'lucide-react'
 import { DatePicker } from '@/components/DatePicker'
-import { api, type MarketSnapshotRow, type OverviewDimensionRankItem, type OverviewMarket, type AlertEvent } from '@/lib/api'
+import { api, fetchWorkbench, type MarketSnapshotRow, type OverviewDimensionRankItem, type OverviewMarket, type AlertEvent } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { fmtBigNum, fmtPct } from '@/lib/format'
 import { useDataStatus, useCapabilities, useSettings } from '@/lib/useSharedQueries'
@@ -574,6 +574,9 @@ export function Dashboard() {
     placeholderData: (prev) => prev,
   })
   const data = overview.data
+  const workbench = useQuery({ queryKey: QK.workbench, queryFn: fetchWorkbench, staleTime: 30_000, refetchInterval: 60_000 })
+  const pushStats = workbench.data?.push_stats ?? null
+  const pushStatsFailed = pushStats?.today.failed ?? 0
   const caps = useCapabilities()
   const settings = useSettings()
   const hasDepth = !!caps.data?.capabilities?.['depth5.batch']
@@ -799,6 +802,18 @@ export function Dashboard() {
       {/* 数据不完整 (M003): 该日仅覆盖部分标的时, 涨跌家数/情绪/榜单均不可作为全市场结论 */}
       <CoverageBanner coverage={data.coverage} subject="涨跌家数、情绪与榜单" />
       <DataQualityBanner />
+
+      {/* 推送失败告警 (PA-03, D-04): 失败 >= 1 时首页显示红色告警 banner */}
+      {pushStatsFailed > 0 && (
+        <div className="mb-1.5 flex items-center gap-2 rounded-card border border-red-500/30 bg-red-500/8 px-3 py-1.5 text-[11px] leading-relaxed">
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-red-500" />
+          <div className="min-w-0 flex-1 text-secondary">
+            推送失败 <strong className="text-red-600 dark:text-red-400">{pushStatsFailed}</strong> 条,
+            最近失败: {pushStats?.recent_failures?.[0]?.error ?? '未知原因'}
+            <Link to="/audit" className="ml-2 text-red-500 transition-colors hover:text-red-600">查看审计 →</Link>
+          </div>
+        </div>
+      )}
 
       <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
         {data.indices.map(item => <IndexTicker key={item.symbol} item={item} />)}
