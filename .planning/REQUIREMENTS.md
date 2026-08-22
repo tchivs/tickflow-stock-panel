@@ -20,7 +20,7 @@
 
 - [x] **CR-01**: 浏览器端价格阈值规则引擎 — 用户在浏览器配置标的 + 价格阈值 (涨跌幅/绝对价格), 规则存 localStorage 不落盘后端
 - [x] **CR-02**: 客户端规则通过 WebSocket 接收实时行情, 本地评估命中后立即弹窗提醒 (Notification API + 页内 toast)
-- [ ] **CR-03**: 客户端规则与现有服务端监控规则共存 — 服务端规则走后端评估 + 通知渠道, 客户端规则走浏览器评估 + 弹窗, 两者独立不互扰
+- [x] **CR-03**: 客户端规则与现有服务端监控规则共存 — 服务端规则走后端评估 + 通知渠道, 客户端规则走浏览器评估 + 弹窗, 两者独立不互扰
 
 ### 推送审计与运维
 
@@ -42,7 +42,7 @@
 | SCT-04 | Phase 56 | Complete |
 | CR-01 | Phase 57 | Complete |
 | CR-02 | Phase 57 | Complete |
-| CR-03 | Phase 57 | Pending |
+| CR-03 | Phase 57 | Complete |
 | PA-01 | Phase 58 | Pending |
 | PA-02 | Phase 58 | Pending |
 | PA-03 | Phase 58 | Pending |

@@ -88,13 +88,13 @@ Plans:
 
 **Explicit non-goals**: 不做客户端规则云同步, 不做规则市场/分享, 不改变服务端监控规则评估语义。
 
-**Plans**: 1/2 plans executed
+**Plans**: 2/2 plans executed
 **UI hint**: yes
 
 Plans:
 
 - [x] 57-01-PLAN.md — 核心引擎: localStorage 规则存储 + WS quotes 订阅 + 本地评估 + Notification API 弹窗 + toast + 声效
-- [ ] 57-02-PLAN.md — 监控页 UI: 客户端规则 CRUD 面板 + 命中列表 + Notification 权限管理 + 服务端/客户端规则 badge 标注
+- [x] 57-02-PLAN.md — 监控页 UI: 客户端规则 CRUD 面板 + 命中列表 + Notification 权限管理 + 服务端/客户端规则 badge 标注
 
 ### Phase 58: 推送审计与运维
 
@@ -122,7 +122,7 @@ Plans:
 |-------|----------------|--------|-----------|
 | 55. WebSocket 全量迁移 | 4/4 | Complete    | 2026-08-22 |
 | 56. Server酱微信推送 | 2/2 | Complete    | 2026-08-22 |
-| 57. 客户端实时规则引擎 | 1/2 | In Progress|  |
+| 57. 客户端实时规则引擎 | 2/2 | In Progress|  |
 | 58. 推送审计与运维 | 0/TBD | Not started | - |
 
 **Execution order:** 55 → 56 → 57 → 58. Phase 55 (WebSocket 传输层) 是其余三者的基础设施; 56/57 可在 55 完成后并行, 58 收口审计与运维。
