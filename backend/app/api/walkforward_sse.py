@@ -22,15 +22,6 @@ from fastapi import APIRouter, HTTPException, Request
 router = APIRouter(prefix="/api/research/wf", tags=["research-panels"])
 
 
-def _ws_broadcast(request: Request, channel: str, msg_type: str, data: dict) -> None:
-    """Phase 55: WS 频道广播 walk-forward 事件到 run:{plan_id} 频道。"""
-    from app.ws.broadcast import broadcast_from_thread
-
-    ws_manager = getattr(request.app.state, "ws_manager", None)
-    if ws_manager is None:
-        return
-    broadcast_from_thread(ws_manager, channel, msg_type, data)
-
 
 class _WfJob:
     """One walk-forward job's state, kept module-level for reconnect replay.
