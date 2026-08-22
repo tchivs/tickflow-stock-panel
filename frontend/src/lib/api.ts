@@ -2146,6 +2146,7 @@ export interface Preferences {
   telegram_chat_id?: string
   wecom_bot_id?: string
   wecom_bot_secret?: string
+  sct_sendkey?: string
   wecom_bot_enabled?: boolean
   webhook_enabled_default?: boolean
   webhook_default_channels?: string[]
@@ -2572,6 +2573,13 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ bot_token: botToken, chat_id: chatId }),
     }),
+  updateSctSendkey: (sendkey: string) =>
+    request<{ sct_sendkey: string; has_sct_sendkey: boolean }>('/api/settings/preferences/sct-sendkey', {
+      method: 'PUT',
+      body: JSON.stringify({ sendkey }),
+    }),
+  testSctPush: () =>
+    request<{ ok: boolean; error?: string }>('/api/settings/sct-test', { method: 'POST' }),
   updateWecomBot: (botId: string, secret: string, enabled: boolean = true) =>
     request<{
       wecom_bot_id: string

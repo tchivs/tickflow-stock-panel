@@ -39,6 +39,14 @@ vi.mock('./useWsStream', () => ({
 // Mock global fetch for cancel/start
 const mockFetch = vi.fn()
 
+/** POST /strategy/start 返回 {key}, 然后订阅 run:{key} 频道 (Phase 55 D-03 流程). */
+function mockStartFetch(jobKey: string): void {
+  mockFetch.mockResolvedValue({
+    ok: true,
+    json: async () => ({ key: jobKey }),
+  })
+}
+
 describe('backtestTask', () => {
   beforeEach(() => {
     vi.resetModules()
@@ -63,34 +71,28 @@ describe('backtestTask', () => {
     vi.restoreAllMocks()
   })
 
-  it('test_subscribe_run_channel: startBacktest 订阅 run: 频道, 不创建 new EventSource', async () => {
+  it('test_subscribe_run_channel: startBacktest POST start 拿 job_key 后订阅 run: 频道, 不创建 new EventSource', async () => {
     const { startBacktest, useBacktestTask, clearBacktest } = await import('./backtestTask')
     const { result } = renderHook(() => useBacktestTask(), { wrapper: await createWrapper() })
     expect(result.current).toBeNull()
 
-    // Mock fetch to return a readable stream with SSE job event
-    const encoder = new TextEncoder()
-    const jobEvent = 'event: job\ndata: {"key":"test_job_key_123"}\n\n'
-    mockFetch.mockResolvedValue({
-      ok: true,
-      body: {
-        getReader: () => ({
-          read: vi.fn()
-            .mockResolvedValueOnce({ done: false, value: encoder.encode(jobEvent) })
-            .mockResolvedValue({ done: true }),
-          cancel: vi.fn(),
-        }),
-      },
-    })
+    mockStartFetch('test_job_key_123')
 
     act(() => {
       startBacktest({ strategy_id: 'test_strategy' })
     })
 
-    // Wait for async startBacktestStream to resolve
+    // Wait for async startBacktestPost to resolve
     await act(async () => {
       await vi.advanceTimersByTimeAsync(100)
     })
+
+    // Should POST to /strategy/start (not GET stream)
+    const startCall = mockFetch.mock.calls.find(
+      (call: unknown[]) => typeof call[0] === 'string' && (call[0] as string).includes('/api/backtest/strategy/start'),
+    )
+    expect(startCall).toBeDefined()
+    expect(startCall?.[1]?.method).toBe('POST')
 
     // Should have subscribed to run:{job_key} channel
     expect(subscribedChannel).toBe('run:test_job_key_123')
@@ -104,19 +106,7 @@ describe('backtestTask', () => {
     const { startBacktest, useBacktestTask, clearBacktest } = await import('./backtestTask')
     const { result } = renderHook(() => useBacktestTask(), { wrapper: await createWrapper() })
 
-    const encoder = new TextEncoder()
-    const jobEvent = 'event: job\ndata: {"key":"key_456"}\n\n'
-    mockFetch.mockResolvedValue({
-      ok: true,
-      body: {
-        getReader: () => ({
-          read: vi.fn()
-            .mockResolvedValueOnce({ done: false, value: encoder.encode(jobEvent) })
-            .mockResolvedValue({ done: true }),
-          cancel: vi.fn(),
-        }),
-      },
-    })
+    mockStartFetch('key_456')
 
     act(() => {
       startBacktest({ strategy_id: 'test_strategy' })
@@ -141,19 +131,7 @@ describe('backtestTask', () => {
     const { startBacktest, useBacktestTask, clearBacktest } = await import('./backtestTask')
     const { result } = renderHook(() => useBacktestTask(), { wrapper: await createWrapper() })
 
-    const encoder = new TextEncoder()
-    const jobEvent = 'event: job\ndata: {"key":"key_789"}\n\n'
-    mockFetch.mockResolvedValue({
-      ok: true,
-      body: {
-        getReader: () => ({
-          read: vi.fn()
-            .mockResolvedValueOnce({ done: false, value: encoder.encode(jobEvent) })
-            .mockResolvedValue({ done: true }),
-          cancel: vi.fn(),
-        }),
-      },
-    })
+    mockStartFetch('key_789')
 
     act(() => {
       startBacktest({ strategy_id: 'test_strategy' })
@@ -199,19 +177,7 @@ describe('backtestTask', () => {
     const { startBacktest, useBacktestTask, clearBacktest } = await import('./backtestTask')
     const { result } = renderHook(() => useBacktestTask(), { wrapper: await createWrapper() })
 
-    const encoder = new TextEncoder()
-    const jobEvent = 'event: job\ndata: {"key":"key_err"}\n\n'
-    mockFetch.mockResolvedValue({
-      ok: true,
-      body: {
-        getReader: () => ({
-          read: vi.fn()
-            .mockResolvedValueOnce({ done: false, value: encoder.encode(jobEvent) })
-            .mockResolvedValue({ done: true }),
-          cancel: vi.fn(),
-        }),
-      },
-    })
+    mockStartFetch('key_err')
 
     act(() => {
       startBacktest({ strategy_id: 'test_strategy' })
@@ -234,19 +200,7 @@ describe('backtestTask', () => {
   it('test_cancel_still_post: cancel 调用 fetch POST /api/backtest/strategy/cancel', async () => {
     const { startBacktest, stopBacktest, clearBacktest } = await import('./backtestTask')
 
-    const encoder = new TextEncoder()
-    const jobEvent = 'event: job\ndata: {"key":"cancel_key"}\n\n'
-    mockFetch.mockResolvedValue({
-      ok: true,
-      body: {
-        getReader: () => ({
-          read: vi.fn()
-            .mockResolvedValueOnce({ done: false, value: encoder.encode(jobEvent) })
-            .mockResolvedValue({ done: true }),
-          cancel: vi.fn(),
-        }),
-      },
-    })
+    mockStartFetch('cancel_key')
 
     act(() => {
       startBacktest({ strategy_id: 'test_strategy' })
@@ -274,19 +228,7 @@ describe('backtestTask', () => {
     const { startBacktest, tryReconnect, useBacktestTask, clearBacktest } = await import('./backtestTask')
     const { result } = renderHook(() => useBacktestTask(), { wrapper: await createWrapper() })
 
-    const encoder = new TextEncoder()
-    const jobEvent = 'event: job\ndata: {"key":"reconnect_key"}\n\n'
-    mockFetch.mockResolvedValue({
-      ok: true,
-      body: {
-        getReader: () => ({
-          read: vi.fn()
-            .mockResolvedValueOnce({ done: false, value: encoder.encode(jobEvent) })
-            .mockResolvedValue({ done: true }),
-          cancel: vi.fn(),
-        }),
-      },
-    })
+    mockStartFetch('reconnect_key')
 
     act(() => {
       startBacktest({ strategy_id: 'test_strategy' })

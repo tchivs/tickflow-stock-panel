@@ -212,7 +212,7 @@ function postCancel(jobKey: string): void {
 }
 
 /** POST /optimize/start 获取 job_key, 然后订阅 WS 频道 (Phase 55 D-03: SSE 端点已删除) */
-async function startOptimizePost(params: Record<string, unknown>, qs: string): Promise<void> {
+async function startOptimizePost(params: Record<string, unknown>): Promise<void> {
   try {
     const res = await fetch('/api/backtest/optimize/start', {
       method: 'POST',
@@ -292,7 +292,7 @@ export function startOptimize(params: StartOptimizeParams): void {
   })
 
   localStorage.setItem(RECONNECT_KEY, qs)
-  void startOptimizePost(buildOptStartParams(params), qs)
+  void startOptimizePost(buildOptStartParams(params))
 }
 
 export function stopOptimize(): void {

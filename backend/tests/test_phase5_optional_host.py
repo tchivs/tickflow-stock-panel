@@ -376,16 +376,11 @@ def _assert_completed_v1_loop(app: Any, client: TestClient) -> None:
     assert missing_decision.status_code == 404
     assert isinstance(portfolio.json()["accounts"], list)
     assert isinstance(monitor.json()["rules"], list)
-    assert any(route.path == "/api/intraday/stream" for route in app.routes)
-    subscriber = app.state.quote_service.subscribe(
-        analysis_scope=app.state.resolve_analysis_subject_scope(None),
-        advanced_scope=app.state.resolve_advanced_subject_scope(None),
-    )
-    try:
-        snapshot = subscriber.pop()
-        assert set(snapshot) >= {"alerts", "analysis_progress", "advanced_progress"}
-    finally:
-        app.state.quote_service.unsubscribe(subscriber)
+    # Phase 55 D-03: intraday SSE stream endpoint removed — WS quote broadcast path
+    # must remain wired (QuoteService.attach_ws_manager is invoked at bootstrap).
+    qs = app.state.quote_service
+    assert hasattr(qs, "attach_ws_manager")
+    assert hasattr(qs, "notify_portfolio_updated")
 
 
 @pytest.mark.parametrize("enabled", MODULE_COMBINATIONS)

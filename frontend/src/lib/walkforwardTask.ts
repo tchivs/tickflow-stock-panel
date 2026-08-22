@@ -193,7 +193,7 @@ function postCancel(jobKey: string): void {
 }
 
 /** POST /walkforward/start 获取 job_key, 然后订阅 WS 频道 (Phase 55 D-03: SSE 端点已删除) */
-async function startWalkForwardPost(params: Record<string, unknown>, qs: string): Promise<void> {
+async function startWalkForwardPost(params: Record<string, unknown>): Promise<void> {
   try {
     const res = await fetch('/api/backtest/walkforward/start', {
       method: 'POST',
@@ -263,7 +263,7 @@ export function startWalkForward(params: StartWalkForwardParams): void {
   })
 
   localStorage.setItem(RECONNECT_KEY, qs)
-  void startWalkForwardPost(buildWfStartParams(params), qs)
+  void startWalkForwardPost(buildWfStartParams(params))
 }
 
 export function stopWalkForward(): void {

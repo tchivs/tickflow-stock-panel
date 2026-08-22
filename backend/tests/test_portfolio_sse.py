@@ -1,44 +1,62 @@
-"""CORE-05 contract tests for portfolio updates on the existing QuoteService stream."""
+"""CORE-05 contract tests for portfolio updates over WS broadcast (Phase 55).
+
+Portfolio refreshes are pushed through the WS ``portfolio`` channel via
+``QuoteService.notify_portfolio_updated`` — the SSE subscriber mode was removed
+in Phase 55 D-03. These tests verify the WS fan-out contract: each connected
+client receives its own coalesced portfolio update, and account IDs are
+preserved.
+"""
 from __future__ import annotations
 
-from app.api.intraday import router
-from app.services.quote_service import QuoteService, QuoteSubscriber
+from tests.test_ws_quotes import (
+    COOKIE_NAME,
+    VALID_TOKEN,
+    _call_service,
+    _setup_app,
+)
 
 
-def test_two_subscribers_independently_receive_alerts_and_portfolio_updates():
-    """One QuoteService fan-out must not let either client consume the other's events."""
-    service = QuoteService()
-    first = service.subscribe()
-    second = service.subscribe()
+def test_portfolio_ws_broadcast(monkeypatch):
+    """notify_portfolio_updated 触发后, 订阅 portfolio 频道的连接收到 portfolio_updated。"""
+    _app, ws_manager, qs, client = _setup_app(monkeypatch)
 
-    service.push_alerts([{"id": "alert_01", "symbol": "600519.SH"}])
-    service.notify_portfolio_updated(["account_cash", "account_margin"])
+    with client.websocket_connect(
+        "/ws/stream", cookies={COOKIE_NAME: VALID_TOKEN}
+    ) as ws:
+        ws.receive_json()  # connected
+        ws.send_json({"type": "subscribe", "channels": ["portfolio"]})
+        ws.receive_json()  # subscribed
 
-    first_data = first.pop()
-    second_data = second.pop()
-    assert first_data["alerts"] == [{"id": "alert_01", "symbol": "600519.SH"}]
-    assert second_data["alerts"] == [{"id": "alert_01", "symbol": "600519.SH"}]
-    assert first_data["portfolio_updated"] is True
-    assert second_data["portfolio_updated"] is True
-    assert first_data["portfolio_account_ids"] == ["account_cash", "account_margin"]
-    assert second_data["portfolio_account_ids"] == ["account_cash", "account_margin"]
+        _call_service(qs, "notify_portfolio_updated", ["account_cash", "account_margin"])
 
-
-def test_portfolio_updates_coalesce_per_subscriber_without_dropping_affected_accounts():
-    subscriber = QuoteSubscriber()
-
-    subscriber.notify_portfolio_updated(["account_cash"])
-    subscriber.notify_portfolio_updated(["account_margin", "account_cash"])
-
-    data = subscriber.pop()
-    assert data["portfolio_updated"] is True
-    assert data["portfolio_account_ids"] == ["account_cash", "account_margin"]
-    assert subscriber.wait(timeout=0.01) is False
+        msg = ws.receive_json()
+        assert msg["type"] == "portfolio_updated"
+        assert msg["data"]["account_ids"] == ["account_cash", "account_margin"]
 
 
-def test_existing_intraday_endpoint_is_the_only_portfolio_stream_route():
-    """Portfolio refreshes share the named-event pipeline rather than opening another SSE route."""
+def test_portfolio_account_ids_preserved_across_calls(monkeypatch):
+    """连续两次 notify_portfolio_updated 各自独立广播, 账户 ID 不丢失。"""
+    _app, ws_manager, qs, client = _setup_app(monkeypatch)
+
+    with client.websocket_connect(
+        "/ws/stream", cookies={COOKIE_NAME: VALID_TOKEN}
+    ) as ws:
+        ws.receive_json()  # connected
+        ws.send_json({"type": "subscribe", "channels": ["portfolio"]})
+        ws.receive_json()  # subscribed
+
+        _call_service(qs, "notify_portfolio_updated", ["account_cash"])
+        _call_service(qs, "notify_portfolio_updated", ["account_margin", "account_cash"])
+
+        first = ws.receive_json()
+        second = ws.receive_json()
+        assert first["data"]["account_ids"] == ["account_cash"]
+        assert second["data"]["account_ids"] == ["account_margin", "account_cash"]
+
+
+def test_portfolio_is_only_portfolio_stream_route(monkeypatch):
+    """Portfolio refreshes go through the WS channel — no portfolio SSE route remains."""
+    from app.api.intraday import router
+
     routes = {route.path for route in router.routes}
-
-    assert "/api/intraday/stream" in routes
     assert not any("portfolio" in path and "stream" in path for path in routes)

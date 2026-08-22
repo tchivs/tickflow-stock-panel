@@ -599,8 +599,6 @@ def test_cr03_same_instrument_cross_principal_matrix_denies_every_surface(
     foreign_requests = (
         ("get", f"/api/forecast/jobs/{foreign_job_id}", None),
         ("post", f"/api/forecast/jobs/{foreign_job_id}/retry", {"idempotency_key": "foreign"}),
-        ("get", f"/api/forecast/jobs/{foreign_job_id}/events", None),
-        ("get", f"/api/forecast/jobs/{foreign_job_id}/stream", None),
         ("get", f"/api/forecast/records/{foreign_record_id}", None),
         ("get", f"/api/forecast/records/{foreign_record_id}/paths", None),
         ("get", f"/api/forecast/records/{foreign_record_id}/calibration", None),
@@ -626,13 +624,7 @@ def test_cr03_same_instrument_cross_principal_matrix_denies_every_surface(
         "/api/forecast/instruments/600000.SH/records?offset=0&limit=1", headers=owner_a
     )
     assert [item["id"] for item in owner_records.json()["records"]] == [foreign_record_id]
-    resumed = client.get(
-        f"/api/forecast/jobs/{foreign_job_id}/events",
-        headers={**owner_a, "Last-Event-ID": "0"},
-    )
-    assert resumed.status_code == 200
-    assert "id: 1" in resumed.text
-    assert "event: done" in resumed.text
+    # Phase 55: SSE /events 端点已删除; 进度改由 WS run:{job_id} 广播。
     retry = client.post(
         f"/api/forecast/jobs/{foreign_job_id}/retry",
         headers=owner_a,
@@ -657,7 +649,7 @@ def test_cr03_same_instrument_cross_principal_matrix_denies_every_surface(
     assert refreshed.status_code == 200
     assert path_reader.calls == 1
     assert scanner.calls == 1
-    assert hub.subscribe_calls == 1
+    assert hub.subscribe_calls == 0  # Phase 55: SSE /events 删除, 不再触发 hub.subscribe
     assert hub.active_count == 0
     assert hub.publish_calls == 1
     assert runner.calls == 0
@@ -711,6 +703,7 @@ def _sse_client(tmp_path: Path):
     application.include_router(router)
     application.state.forecast_repository = repository
     application.state.forecast_progress_hub = ForecastProgressHub()
+    application.state.ws_manager = object()  # Phase 55: 使 _ws_broadcast 走 broadcast_from_thread
     application.state.resolve_forecast_subject_scope = lambda _request: Scope()
 
     @application.middleware("http")
@@ -732,33 +725,46 @@ def test_persisted_sse_event_id_tracks_every_job_transition(tmp_path: Path) -> N
     ]
 
 
-def test_last_event_id_resume_emits_only_persisted_transitions_after_version(
-    tmp_path: Path,
-) -> None:
+def test_forecast_ws_broadcast_carries_transition_version(tmp_path: Path) -> None:
+    """Phase 55: SSE /events 已删除; 作业转换通过 WS run:{job_id} 广播 forecast_event,
+    保留 transition_version (替代旧 SSE Last-Event-ID resume 语义)。"""
+    from unittest.mock import patch
+    import os
+
     client, hub, terminal = _sse_client(tmp_path)
-    response = client.get(
-        f"/api/forecast/jobs/{terminal['id']}/events",
-        headers={"Last-Event-ID": "0"},
-    )
-    assert response.status_code == 200
-    ids = [
-        line.removeprefix("id: ") for line in response.text.splitlines() if line.startswith("id: ")
-    ]
-    payloads = [
-        __import__("json").loads(line.removeprefix("data: "))
-        for line in response.text.splitlines()
-        if line.startswith("data: ")
-    ]
-    assert ids == ["1", "2"]
-    assert [payload["status"] for payload in payloads] == ["running", "validation_failed"]
+
+    broadcast_calls = []
+
+    def _capture(ws_manager, channel, msg_type, data):
+        broadcast_calls.append((channel, msg_type, data))
+
+    with patch("app.ws.broadcast.broadcast_from_thread", _capture):
+        os.environ["PHASE1_FIXTURE_MODE"] = "1"
+        try:
+            resp = client.post("/api/forecast/testing/terminal-jobs", json={
+                "instrument": "600000.SH",
+                "terminal": "validation_failed",
+            })
+        finally:
+            os.environ.pop("PHASE1_FIXTURE_MODE", None)
+
+    assert resp.status_code == 201
+    job_id = resp.json()["job"]["id"]
+    assert len(broadcast_calls) == 1
+    channel, msg_type, data = broadcast_calls[0]
+    assert channel == f"run:{job_id}"
+    assert msg_type == "forecast_event"
+    assert "transition_version" in data
     assert hub.active_count == 0
 
 
-def test_last_event_id_resume_rejects_invalid_or_future_versions(tmp_path: Path) -> None:
+def test_forecast_sse_events_endpoint_removed(tmp_path: Path) -> None:
+    """Phase 55-04: SSE /events 和 /stream 端点已删除, 返回 404。"""
     client, hub, terminal = _sse_client(tmp_path)
-    path = f"/api/forecast/jobs/{terminal['id']}/events"
-    assert client.get(path, headers={"Last-Event-ID": "foreign-job:1"}).status_code == 400
-    assert client.get(path, headers={"Last-Event-ID": "999"}).status_code == 409
+    events = client.get(f"/api/forecast/jobs/{terminal['id']}/events")
+    stream = client.get(f"/api/forecast/jobs/{terminal['id']}/stream")
+    assert events.status_code == 404
+    assert stream.status_code == 404
     assert hub.active_count == 0
 
 

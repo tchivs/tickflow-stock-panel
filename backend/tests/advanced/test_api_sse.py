@@ -173,46 +173,46 @@ def test_session_bound_job_start_accepts_only_object_identifier_and_task_type():
 
 
 def test_advanced_progress_is_committed_allowlisted_and_filtered_before_subscriber_queueing():
-    from app.advanced.api import AdvancedSubjectScope
-
+    """Phase 55: QuoteService.subscribe/advanced_scope 已删除;
+    notify_advanced_progress 广播到 analysis:{subject_key} 频道, 过滤未提交/非白名单事件。"""
     from app.services.quote_service import QuoteService
 
     quote_service = QuoteService()
-    allowed = quote_service.subscribe(
-        advanced_scope=AdvancedSubjectScope(frozenset({("instrument", "600519.SH")}))
-    )
-    denied = quote_service.subscribe(
-        advanced_scope=AdvancedSubjectScope(frozenset({("instrument", "000001.SZ")}))
-    )
+    calls = []
 
-    quote_service.notify_advanced_progress(
-        job_id="owned-job",
-        subject_kind="instrument",
-        subject_key="600519.SH",
-        stage="awaiting_review",
-        occurred_at="2026-07-12T00:00:00+00:00",
-        committed=True,
-        human_label="Awaiting review",
-        audit_reference="audit-allowed",
-    )
-    quote_service.notify_advanced_progress(
-        job_id="owned-job",
-        subject_kind="instrument",
-        subject_key="600519.SH",
-        stage="drafted",
-        occurred_at="2026-07-12T00:00:01+00:00",
-        committed=False,
-        human_label="Uncommitted draft",
-        audit_reference="audit-allowed",
-    )
+    def _capture(ws_manager, channel, msg_type, data):
+        calls.append((channel, msg_type, data))
 
-    assert allowed.pop()["advanced_progress"] == [{
-        "job_id": "owned-job",
-        "subject_kind": "instrument",
-        "subject_key": "600519.SH",
-        "stage": "awaiting_review",
-        "label": "Awaiting review",
-        "occurred_at": "2026-07-12T00:00:00+00:00",
-        "audit_reference": "audit-allowed",
-    }]
-    assert denied.pop()["advanced_progress"] == []
+    quote_service.attach_ws_manager(object())
+
+    import unittest.mock as _mock
+    with _mock.patch("app.ws.broadcast.broadcast_from_thread", _capture):
+        quote_service.notify_advanced_progress(
+            job_id="owned-job",
+            subject_kind="instrument",
+            subject_key="600519.SH",
+            stage="awaiting_review",
+            occurred_at="2026-07-12T00:00:00+00:00",
+            committed=True,
+            human_label="Awaiting review",
+            audit_reference="audit-allowed",
+        )
+        quote_service.notify_advanced_progress(
+            job_id="owned-job",
+            subject_kind="instrument",
+            subject_key="600519.SH",
+            stage="drafted",
+            occurred_at="2026-07-12T00:00:01+00:00",
+            committed=False,
+            human_label="Uncommitted draft",
+            audit_reference="audit-allowed",
+        )
+
+    # 只有已提交 + 白名单 stage 的事件广播; 未提交的被过滤。
+    assert len(calls) == 1
+    channel, msg_type, data = calls[0]
+    assert channel == "analysis:600519.SH"
+    assert msg_type == "advanced_progress"
+    assert data["stage"] == "awaiting_review"
+    assert data["label"] == "Awaiting review"
+    assert data["audit_reference"] == "audit-allowed"

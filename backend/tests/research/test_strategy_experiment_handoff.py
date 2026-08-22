@@ -163,13 +163,22 @@ def test_failed_cancelled_and_sse_strategy_runs_never_bypass_handoff_gates(tmp_p
     assert client.post(f"/api/research/strategy-executions/{failed.json()['research_execution_handle']}/retain").status_code == 409
     assert client.get("/api/research/comparison/candidates").json()["experiments"] == []
 
-    stream = client.get("/api/backtest/strategy/stream?strategy_id=streamed&start=2024-01-02&end=2024-01-03")
-    assert stream.status_code == 200
-    assert "event: research" in stream.text
-    assert "event: done" in stream.text
-    matched = re.search(r'event: research\ndata: (\{[^\n]+\})', stream.text)
-    assert matched is not None
-    streamed_handle = json.loads(matched.group(1))["execution_handle"]
+    streamed = client.post("/api/backtest/strategy/start", json={
+        "strategy_id": "streamed", "start": "2024-01-02", "end": "2024-01-03",
+    })
+    assert streamed.status_code == 200
+    job_key = streamed.json()["key"]
+    # 后台线程执行完 _run_backtest 后, job 完成并携带 execution_handle
+    job = backtest_api._running_jobs.get(job_key)
+    assert job is not None
+    for _ in range(100):
+        if job.done:
+            break
+        import time
+        time.sleep(0.01)
+    assert job.done
+    assert job.research_execution_handle is not None
+    streamed_handle = job.research_execution_handle
     streamed = client.post(f"/api/research/strategy-executions/{streamed_handle}/retain")
     assert streamed.status_code == 200
     assert streamed.json()["input_manifest"]["revision"] == "governed-revision-v1"

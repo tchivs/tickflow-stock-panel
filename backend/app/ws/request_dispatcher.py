@@ -209,6 +209,13 @@ async def _dispatch_strategy_build(
         result = gen.validate_code("".join(chunks))
         if gen.needs_structural_repair(result):
             result = await gen.repair_code(result["code"], result["error"])
+        # Phase 55: 与旧 SSE build_strategy_stream 一致, 对 step1 用 name/description
+        # 规范化 META; 其他 step 或仅提供 strategy_id 时用 strategy_id 规范化。
+        from app.api.strategy import _normalize_build_result
+        if req.step == 1:
+            result = _normalize_build_result(result, req.strategy_id, req.name, req.description)
+        elif req.strategy_id:
+            result = _normalize_build_result(result, req.strategy_id)
         await _broadcast(ws_manager, channel, "analysis_done", {"result": result})
     except RuntimeError as exc:
         await _broadcast(ws_manager, channel, "analysis_error", {"reason": str(exc)})

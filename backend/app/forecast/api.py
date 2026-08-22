@@ -29,6 +29,15 @@ def _ws_broadcast(request: Request, channel: str, msg_type: str, data: dict) -> 
     if ws_manager is None:
         return
     broadcast_from_thread(ws_manager, channel, msg_type, data)
+
+def _publish_progress(request: Request, record: Mapping[str, object]) -> None:
+    """Phase 55: 既保留 ForecastProgressHub 内存队列 (兼容), 又通过 WS run:{job_id} 频道广播。"""
+    _hub(request).publish(record)
+    event = projections.progress(record)
+    version = record.get("transition_version")
+    if isinstance(version, int) and not isinstance(version, bool):
+        event["transition_version"] = str(version)
+    _ws_broadcast(request, f"run:{record['id']}", "forecast_event", dict(event))
 _TERMINAL = {
     "completed",
     "validation_failed",
@@ -208,7 +217,7 @@ def create_job(instrument: str, payload: ForecastJobRequest, request: Request) -
             status_code=422, detail="Forecast request failed governed validation"
         ) from error
     result = projections.job(record, record_id=_record_id_for_job(request, record))
-    _hub(request).publish(record)
+    _publish_progress(request, record)
     return {"job": result}
 
 
@@ -227,7 +236,7 @@ def retry_job(job_id: str, payload: ForecastRetryRequest, request: Request) -> d
         raise HTTPException(
             status_code=409, detail="Forecast retry conflicts with persisted state"
         ) from error
-    _hub(request).publish(record)
+    _publish_progress(request, record)
     return {"job": projections.job(record)}
 
 
@@ -401,7 +410,7 @@ def create_terminal_job(payload: TerminalJobRequest, request: Request) -> dict[s
             status=persisted_status,
             reason=f"fixture_{persisted_status}",
         )
-    _hub(request).publish(job)
+    _publish_progress(request, job)
     return {"job": projections.job(job)}
 
 

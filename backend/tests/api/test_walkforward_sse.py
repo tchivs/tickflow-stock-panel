@@ -1,33 +1,33 @@
-"""Walk-forward SSE endpoint tests (Phase 15, SC3).
+"""Walk-forward 模块级 job 状态测试 (Phase 15 SC3 → Phase 55 SSE 删除后保留)。
 
-Verifies the durable-job SSE contract by calling the endpoint functions
-directly (mirroring tests/backtest/test_optimizer_api.py): POST run records
-fold progress into the module-level job; GET stream replays the recorded
-history then emits a terminal ``done`` event.
+SSE ``stream_walk_forward`` 端点已在 Phase 55-04 删除; walk-forward 实时事件现由
+``/api/backtest/walkforward/start`` 后台线程通过 ``run:{job_key}`` WS 频道广播
+(见 ``tests/test_ws_task.py::test_walkforward_progress``)。
 
-The shared-stream fan-out (optimization/plan updates) is covered by the
-portfolio panel tests asserting quote_service.notify_quote fires on paper
-approve/reject (see test_portfolio_panels.py::test_paper_approve_fans_out).
+本文件只保留对 ``run_walk_forward`` (合成 POST) 的模块级 job 状态契约:
+  - POST run 记录 fold 进度到 ``_WfJob``, 任务以 done 终结。
+  - 重复 run 替换历史 (非追加), 保证重连只回放当前 run。
 """
 from __future__ import annotations
 
 import asyncio
 
-from app.api.walkforward_sse import _wf_jobs, stream_walk_forward, run_walk_forward
+from app.api.walkforward_sse import _wf_jobs, run_walk_forward
 
 
 class _Req:
     def __init__(self, app_state: dict | None = None):
-        self.app = type("App", (), {"state": type("State", (), app_state or {})})()
-
+        _state = type("State", (), app_state or {})()
+        self.app = type("App", (), {"state": _state})()
+        self.state = type("State", (), {"reviewer_principal": None})()
 
 def _cleanup() -> None:
     _wf_jobs.clear()
 
-
 def _job_for(plan_id: str):
     key = f"wf:{plan_id}"
     return _wf_jobs[key]
+
 
 def test_walk_forward_run_records_fold_progress():
     """POST run records fold progress; the job is terminal with a done event."""
@@ -48,56 +48,9 @@ def test_walk_forward_run_records_fold_progress():
     assert any(p.get("type") == "done" for p in job.progress)
 
 
-def test_walk_forward_stream_replays_history_then_done():
-    """GET stream replays recorded fold events, then emits done and closes."""
-    _cleanup()
-    plan_id = "plan-replay"
-
-    asyncio.run(run_walk_forward(_Req(), plan_id))
-    async def _stream():
-        response = await stream_walk_forward(_Req(), plan_id)
-        parts: list[str] = []
-        async for chunk in response.body_iterator:
-            parts.append(chunk if isinstance(chunk, str) else chunk.decode("utf-8", errors="replace"))
-        return "".join(parts)
-
-    text = asyncio.run(_stream())
-    assert "event: progress" in text, "expected replayed fold progress events"
-    assert "event: done" in text, "expected terminal done event"
-    assert '"is_oos": true' in text, "expected the reserved OOS fold labeled distinctly"
-
-
-def test_walk_forward_stream_unknown_plan_emits_keepalive_then_replays_after_run():
-    """Reconnect contract: an idle stream keeps alive; after run it replays."""
-    _cleanup()
-    plan_id = "plan-reconnect"
-
-    async def _first_read():
-        response = await stream_walk_forward(_Req(), plan_id)
-        iterator = response.body_iterator.__aiter__()
-        chunk = await asyncio.wait_for(iterator.__anext__(), timeout=3)
-        return chunk if isinstance(chunk, str) else chunk.decode("utf-8", errors="replace")
-
-    first = asyncio.run(_first_read())
-    assert ": keepalive" in first, "expected keepalive comment while idle"
-
-    asyncio.run(run_walk_forward(_Req(), plan_id))
-
-    async def _second_read():
-        response = await stream_walk_forward(_Req(), plan_id)
-        parts: list[str] = []
-        async for chunk in response.body_iterator:
-            parts.append(chunk if isinstance(chunk, str) else chunk.decode("utf-8", errors="replace"))
-        return "".join(parts)
-
-    second = asyncio.run(_second_read())
-    assert "event: progress" in second
-    assert "event: done" in second
-
-
 def test_walk_forward_rerun_replaces_history():
-    """A re-run after completion REPLACES the recorded history, so a fresh
-    stream replays only the current run — never the stale first ``done``."""
+    """A re-run after completion REPLACES the recorded history, so the job
+    holds exactly one done and the current run's folds — never stale append."""
     _cleanup()
     plan_id = "plan-rerun"
 
@@ -106,8 +59,8 @@ def test_walk_forward_rerun_replaces_history():
     first_done = [p for p in job.progress if p.get("type") == "done"]
     assert len(first_done) == 1
 
-    # Re-run: history resets, so the replayed stream has exactly one done
-    # (the second run's) and no interleaved stale progress.
+    # Re-run: history resets, so the job has exactly one done (the second run's)
+    # and no interleaved stale progress.
     asyncio.run(run_walk_forward(_Req(), plan_id))
     job = _job_for(plan_id)
     assert job.done is True
@@ -116,48 +69,18 @@ def test_walk_forward_rerun_replaces_history():
     folds = [p for p in job.progress if p.get("type") == "fold"]
     assert len(folds) == 5
 
-    async def _stream():
-        response = await stream_walk_forward(_Req(), plan_id)
-        parts: list[str] = []
-        async for chunk in response.body_iterator:
-            parts.append(chunk if isinstance(chunk, str) else chunk.decode("utf-8", errors="replace"))
-        return "".join(parts)
 
-    text = asyncio.run(_stream())
-    assert text.count("event: done") == 1, "stream must terminate exactly once (current run only)"
-    assert text.count("event: progress") == 5
+def test_walk_forward_concurrent_run_rejected():
+    """A second run while the first is still running is rejected (409).
 
-
-def test_walk_forward_stream_observes_run_started_after_connect():
-    """A stream connected BEFORE a run starts must observe that run's live
-    progress — the idle placeholder is shared, never a per-stream copy."""
+    The synthetic POST records synchronously, so two concurrent starts cannot
+    both be 'in flight' in this test — but a run whose ``done`` is already set
+    (completed) must allow a fresh re-run (covered by the rerun test above).
+    Here we verify the completed job no longer raises 409 on a new run."""
     _cleanup()
-    plan_id = "plan-live-observe"
+    plan_id = "plan-concurrent"
 
-    async def _observe():
-        response = await stream_walk_forward(_Req(), plan_id)
-        iterator = response.body_iterator.__aiter__()
-        # First chunk: idle keepalive.
-        first = await asyncio.wait_for(iterator.__anext__(), timeout=3)
-        first = first if isinstance(first, str) else first.decode("utf-8", errors="replace")
-        assert ": keepalive" in first
-
-        # A run starts AFTER the stream connected.
-        asyncio.get_running_loop().run_in_executor(
-            None, lambda: asyncio.run(run_walk_forward(_Req(), plan_id))
-        )
-        seen_progress = 0
-        seen_done = False
-        while seen_done is False:
-            chunk = await asyncio.wait_for(iterator.__anext__(), timeout=5)
-            chunk = chunk if isinstance(chunk, str) else chunk.decode("utf-8", errors="replace")
-            if "event: progress" in chunk:
-                seen_progress += 1
-            if "event: done" in chunk:
-                seen_done = True
-        return seen_progress
-
-    progress = asyncio.run(_observe())
-    assert progress >= 1, "live stream must see fold progress of a run that started after connect"
-
-
+    asyncio.run(run_walk_forward(_Req(), plan_id))
+    # After completion, a new run must succeed (no 409).
+    result = asyncio.run(run_walk_forward(_Req(), plan_id))
+    assert result["ok"] is True

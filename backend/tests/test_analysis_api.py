@@ -261,21 +261,33 @@ def test_main_registers_analysis_domain_without_replacing_analysis_menus_router(
 
 
 def test_analysis_progress_is_limited_to_the_server_bound_subscriber_scope():
+    """Phase 55: QuoteService.subscribe/analysis_scope 订阅已删除;
+    notify_analysis_progress 广播到 analysis:{subject_key} 频道 (频道级 scope 隔离)。"""
     from app.services.quote_service import QuoteService
 
     service = QuoteService()
-    allowed = service.subscribe(analysis_scope=SubjectScope(frozenset({("instrument", "600519.SH")})))
-    denied = service.subscribe(analysis_scope=SubjectScope(frozenset({("instrument", "000001.SZ")})))
+    calls = []
 
-    service.notify_analysis_progress(
-        run_id="run-600519", subject_kind="instrument", subject_key="600519.SH", status="completed"
-    )
+    def _capture(ws_manager, channel, msg_type, data):
+        calls.append((channel, msg_type, data))
 
-    assert allowed.pop()["analysis_progress"] == [{
-        "run_id": "run-600519", "subject_kind": "instrument", "subject_key": "600519.SH", "status": "completed",
-    }]
-    assert denied.pop()["analysis_progress"] == []
+    service.attach_ws_manager(object())
 
-    service._broadcast_quote_updated()
-    assert allowed.pop()["quote_updated"] is True
-    assert denied.pop()["quote_updated"] is True
+    import unittest.mock as _mock
+    with _mock.patch("app.ws.broadcast.broadcast_from_thread", _capture):
+        service.notify_analysis_progress(
+            run_id="run-600519", subject_kind="instrument", subject_key="600519.SH", status="completed"
+        )
+        service.notify_analysis_progress(
+            run_id="run-000001", subject_kind="instrument", subject_key="000001.SZ", status="completed"
+        )
+
+    analysis_events = [(ch, d) for ch, t, d in calls if ch.startswith("analysis:")]
+    channels = {ch for ch, _ in analysis_events}
+    assert channels == {"analysis:600519.SH", "analysis:000001.SZ"}
+    # 验证每个频道只含对应 subject 的事件 (频道级 scope 隔离)
+    by_channel = {}
+    for ch, data in analysis_events:
+        by_channel.setdefault(ch, []).append(data)
+    assert by_channel["analysis:600519.SH"][0]["subject_key"] == "600519.SH"
+    assert by_channel["analysis:000001.SZ"][0]["subject_key"] == "000001.SZ"

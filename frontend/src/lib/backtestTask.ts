@@ -67,10 +67,10 @@ function cancelServerTask(qs: string): void {
   }).catch(() => {})
 }
 
-'/** 构建 POST /strategy/start 的 JSON 参数 */
+/** 构建 POST /strategy/start 的 JSON 参数 */
 function buildStartParams(params: {
   strategy_id: string
-  symbols?: string[]
+  symbols?: string[] | null
   start?: string | null
   end?: string | null
   matching?: string

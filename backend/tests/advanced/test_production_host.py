@@ -763,38 +763,54 @@ def test_main_host_publishes_committed_scoped_advanced_progress_only(tmp_path, m
         allowed_scope = advanced_api.AdvancedSubjectScope(frozenset({("instrument", "600519.SH")}))
         denied_scope = advanced_api.AdvancedSubjectScope(frozenset({("instrument", "000001.SZ")}))
         app.state.resolve_advanced_subject_scope = lambda _request: allowed_scope
-        allowed = app.state.quote_service.subscribe(advanced_scope=allowed_scope)
-        denied = app.state.quote_service.subscribe(advanced_scope=denied_scope)
+        # Phase 55: SSE subscribe/advanced_scope 已删除; 进度通过 analysis:{subject_key} WS 频道广播。
+        broadcasts = []
+
+        def _capture(ws_manager, channel, msg_type, data):
+            broadcasts.append((channel, msg_type, data))
+
+        import app.ws.broadcast as _wb
+        monkeypatch.setattr(_wb, "broadcast_from_thread", _capture)
         try:
             started = client.post(
                 "/api/advanced/subjects/600519.SH/jobs", json={"task_type": "research_draft"}
             )
             assert started.status_code == 200
             job = started.json()["job"]
-            events = allowed.pop()["advanced_progress"]
-            assert events and events[-1]["stage"] == job["stage"]
-            assert events[-1]["audit_reference"] == job["audit_reference"]
-            assert denied.pop()["advanced_progress"] == []
+            # allowed scope (600519.SH) 收到 advanced_progress 广播
+            allowed_events = [
+                d for ch, t, d in broadcasts
+                if ch == "analysis:600519.SH" and t == "advanced_progress"
+            ]
+            assert allowed_events, "allowed scope 应收到 advanced_progress 广播"
+            assert allowed_events[-1]["stage"] == job["stage"]
+            assert allowed_events[-1]["audit_reference"] == job["audit_reference"]
+            # denied scope (000001.SZ) 不收到 600519.SH 的事件 (频道级隔离)
+            denied_events = [
+                d for ch, t, d in broadcasts
+                if ch == "analysis:000001.SZ" and t == "advanced_progress"
+            ]
+            assert denied_events == []
             persisted = client.get(f"/api/advanced/jobs/{job['id']}")
             audit = client.get(f"/api/advanced/audits/{job['audit_reference']}")
             assert persisted.status_code == audit.status_code == 200
-            assert persisted.json()["job"]["stage_recorded_at"] == events[-1]["occurred_at"]
+            assert persisted.json()["job"]["stage_recorded_at"] == allowed_events[-1]["occurred_at"]
             assert all(set(event) == {
                 "job_id", "subject_kind", "subject_key", "stage", "label", "occurred_at", "audit_reference"
-            } for event in events)
-            for event in events:
+            } for event in allowed_events)
+            for event in allowed_events:
                 assert "advanced job" in event["label"].lower()
 
+            broadcasts.clear()
             app.state.resolve_advanced_subject_scope = lambda _request: denied_scope
             rejected = client.post(
                 "/api/advanced/subjects/600519.SH/jobs", json={"task_type": "research_draft"}
             )
             assert rejected.status_code == 404
-            assert allowed.pop()["advanced_progress"] == []
-            assert denied.pop()["advanced_progress"] == []
+            # 拒绝后无新广播
+            assert broadcasts == []
         finally:
-            app.state.quote_service.unsubscribe(allowed)
-            app.state.quote_service.unsubscribe(denied)
+            pass
 
 
 def test_main_host_enforces_public_binding_and_task_specific_quota_boundaries(tmp_path, monkeypatch):
@@ -850,7 +866,18 @@ def test_main_host_enforces_public_binding_and_task_specific_quota_boundaries(tm
         assert client.post("/api/auth/login", json={"password": "host-test-password"}).status_code == 200
         allowed_scope = advanced_api.AdvancedSubjectScope(frozenset({("instrument", "600000.SH")}))
         app.state.resolve_advanced_subject_scope = lambda _request: allowed_scope
-        subscriber = app.state.quote_service.subscribe(advanced_scope=allowed_scope)
+        # Phase 55: SSE subscribe 已删除; 捕获 analysis:600000.SH WS 广播。
+        broadcasts: list[tuple[str, str, dict]] = []
+
+        def _capture(ws_manager, channel, msg_type, data):
+            broadcasts.append((channel, msg_type, data))
+
+        import app.ws.broadcast as _wb
+        monkeypatch.setattr(_wb, "broadcast_from_thread", _capture)
+        def _allowed_events():
+            events = [d for ch, t, d in broadcasts if ch == "analysis:600000.SH" and t == "advanced_progress"]
+            broadcasts.clear()
+            return events
         binding = client.get("/api/advanced/research-assets/strategies/bullish_alignment").json()["binding"]
         assert binding["strategy_id"] == "bullish_alignment"
         baseline_evidence = experiment_evidence_counts()
@@ -882,7 +909,7 @@ def test_main_host_enforces_public_binding_and_task_specific_quota_boundaries(tm
             assert app.state.advanced_repository.list_sandbox_validations() == []
             assert app.state.advanced_repository.list_sandbox_runs() == []
             assert sorted(data_dir.rglob("*.parquet")) == lake_before
-            assert subscriber.pop()["advanced_progress"] == []
+            assert _allowed_events() == []
 
             first_experiment = client.post(
                 "/api/advanced/subjects/600000.SH/jobs", json={"task_type": "experiment"}
@@ -891,7 +918,7 @@ def test_main_host_enforces_public_binding_and_task_specific_quota_boundaries(tm
                 "/api/advanced/subjects/600000.SH/jobs", json={"task_type": "strategy_evaluation"}
             )
             assert first_experiment.status_code == first_strategy.status_code == 200
-            experiment_events = subscriber.pop()["advanced_progress"]
+            experiment_events = _allowed_events()
             assert {first_experiment.json()["job"]["id"], first_strategy.json()["job"]["id"]} <= {
                 event["job_id"] for event in experiment_events
             }
@@ -907,7 +934,7 @@ def test_main_host_enforces_public_binding_and_task_specific_quota_boundaries(tm
             assert denied_experiment.status_code == denied_strategy.status_code == 409
             assert experiment_evidence_counts() == baseline_evidence
             assert app.state.advanced_repository.list_runnable_jobs() == runnable_before
-            assert subscriber.pop()["advanced_progress"] == []
+            assert _allowed_events() == []
             audits = app.state.advanced_repository.list_security_audits()
             assert [audit["reason"] for audit in audits[-2:]] == ["quota_exhausted", "quota_exhausted"]
 
@@ -915,10 +942,10 @@ def test_main_host_enforces_public_binding_and_task_specific_quota_boundaries(tm
                 "/api/advanced/subjects/600000.SH/jobs", json={"task_type": "research_draft"}
             )
             assert permitted_research.status_code == 200
-            research_events = subscriber.pop()["advanced_progress"]
+            research_events = _allowed_events()
             assert any(event["job_id"] == permitted_research.json()["job"]["id"] for event in research_events)
         finally:
-            app.state.quote_service.unsubscribe(subscriber)
+            pass
 
 
 def test_main_host_policy_transition_rejects_preserved_queued_job_without_progress(tmp_path, monkeypatch):
@@ -982,7 +1009,14 @@ def test_main_host_policy_transition_rejects_preserved_queued_job_without_progre
     with TestClient(app):
         service = app.state.advanced_job_service
         scope = advanced_api.AdvancedSubjectScope(frozenset({("instrument", "600000.SH")}))
-        subscriber = app.state.quote_service.subscribe(advanced_scope=scope)
+        # Phase 55: SSE subscribe 已删除; 捕获 analysis:600000.SH WS 广播。
+        broadcasts: list[tuple[str, str, dict]] = []
+
+        def _capture(ws_manager, channel, msg_type, data):
+            broadcasts.append((channel, msg_type, data))
+
+        import app.ws.broadcast as _wb
+        monkeypatch.setattr(_wb, "broadcast_from_thread", _capture)
         provider_calls: list[dict[str, object]] = []
         sandbox_calls: list[dict[str, object]] = []
         workflow = WorkflowSpy()
@@ -1025,6 +1059,6 @@ def test_main_host_policy_transition_rejects_preserved_queued_job_without_progre
                 app.state.advanced_repository.list_sandbox_validations(),
                 app.state.advanced_repository.list_sandbox_runs(),
             ) == sandbox_before
-            assert subscriber.pop()["advanced_progress"] == []
+            assert [d for ch, t, d in broadcasts if ch == "analysis:600000.SH" and t == "advanced_progress"] == []
         finally:
-            app.state.quote_service.unsubscribe(subscriber)
+            pass

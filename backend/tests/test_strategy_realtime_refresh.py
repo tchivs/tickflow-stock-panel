@@ -10,7 +10,7 @@ import polars as pl
 
 from app.market_time import cn_today
 from app.services import quote_service
-from app.services.quote_service import QuoteService, QuoteSubscriber
+from app.services.quote_service import QuoteService
 from app.strategy.engine import StrategyEngine
 from app.strategy.monitor import MonitorRuleEngine
 
@@ -36,30 +36,45 @@ def _quote_df() -> pl.DataFrame:
     })
 
 
-def test_strategy_result_subscriber_notification_is_coalesced():
-    sub = QuoteSubscriber()
+def test_strategy_result_ws_broadcast_is_typed(monkeypatch):
+    """QuoteService.notify_strategy_results_updated 广播到 quotes 频道,
+    事件类型为 strategy_results_updated (Phase 55: SSE → WS 迁移)。"""
+    calls = []
 
-    sub.notify_strategy_results()
-    sub.notify_strategy_results()
+    def _fake_broadcast(ws_manager, channel, msg_type, data):
+        calls.append((channel, msg_type, data))
 
-    assert sub.wait(timeout=0.01) is True
-    data = sub.pop()
-    assert data["strategy_results_updated"] is True
-    assert data["quote_updated"] is False
-    assert data["depth_updated"] is False
-    assert sub.wait(timeout=0.01) is False
-
-
-def test_strategy_result_notification_fans_out_to_all_subscribers():
+    monkeypatch.setattr("app.ws.broadcast.broadcast_from_thread", _fake_broadcast)
     service = QuoteService()
-    first = service.subscribe()
-    second = service.subscribe()
+    service.attach_ws_manager(object())  # 非空 ws_manager 才会广播
 
     service.notify_strategy_results_updated()
 
-    assert first.pop()["strategy_results_updated"] is True
-    assert second.pop()["strategy_results_updated"] is True
+    assert len(calls) == 1
+    channel, msg_type, data = calls[0]
+    assert channel == "quotes"
+    assert msg_type == "strategy_results_updated"
+    assert "ts" in data
 
+
+def test_strategy_result_ws_broadcast_fans_out_to_channel(monkeypatch):
+    """quotes 频道广播对每个订阅连接扇出 — 由 ConnectionManager 保证。
+    这里验证 QuoteService 在 notify 时只发一次频道广播 (而非每连接一次)。"""
+    calls = []
+
+    def _fake_broadcast(ws_manager, channel, msg_type, data):
+        calls.append((channel, msg_type, data))
+
+    monkeypatch.setattr("app.ws.broadcast.broadcast_from_thread", _fake_broadcast)
+    service = QuoteService()
+    service.attach_ws_manager(object())
+
+    service.notify_strategy_results_updated()
+    service.notify_strategy_results_updated()
+
+    assert len(calls) == 2, "每次 notify 发一次频道广播 (扇出由 ConnectionManager 负责)"
+    assert all(c[0] == "quotes" for c in calls)
+    assert all(c[1] == "strategy_results_updated" for c in calls)
 
 class _EmptyResultStrategyEngine:
     def get(self, strategy_id: str):
@@ -195,25 +210,40 @@ class _MonitorWithUpdate:
         return self.updated
 
 
-def test_quote_service_notifies_only_after_strategy_result_update():
+def test_quote_service_notifies_only_after_strategy_result_update(monkeypatch):
+    """monitor 标记有结果更新时, _evaluate_monitors 触发一次 strategy_results_updated 广播。"""
+    calls = []
+
+    def _fake_broadcast(ws_manager, channel, msg_type, data):
+        calls.append((channel, msg_type, data))
+
+    monkeypatch.setattr("app.ws.broadcast.broadcast_from_thread", _fake_broadcast)
     service = QuoteService()
-    subscriber = service.subscribe()
+    service.attach_ws_manager(object())
     service.set_app_state(SimpleNamespace(monitor_engine=_MonitorWithUpdate(updated=True)))
     service.get_enriched_today = lambda: (_quote_df(), quote_service.cn_today())
 
     with patch.object(QuoteService, "_is_continuous_trading", return_value=True):
         service._evaluate_monitors(pl.DataFrame(), None)
 
-    assert subscriber.pop()["strategy_results_updated"] is True
+    assert len(calls) == 1
+    assert calls[0][1] == "strategy_results_updated"
 
 
-def test_quote_service_skips_notification_without_strategy_result_update():
+def test_quote_service_skips_notification_without_strategy_result_update(monkeypatch):
+    """monitor 无结果更新时, _evaluate_monitors 不触发 strategy_results_updated 广播。"""
+    calls = []
+
+    def _fake_broadcast(ws_manager, channel, msg_type, data):
+        calls.append((channel, msg_type, data))
+
+    monkeypatch.setattr("app.ws.broadcast.broadcast_from_thread", _fake_broadcast)
     service = QuoteService()
-    subscriber = service.subscribe()
+    service.attach_ws_manager(object())
     service.set_app_state(SimpleNamespace(monitor_engine=_MonitorWithUpdate(updated=False)))
     service.get_enriched_today = lambda: (_quote_df(), quote_service.cn_today())
 
     with patch.object(QuoteService, "_is_continuous_trading", return_value=True):
         service._evaluate_monitors(pl.DataFrame(), None)
 
-    assert subscriber.pop()["strategy_results_updated"] is False
+    assert calls == [], "无策略结果更新时不应广播 strategy_results_updated"
