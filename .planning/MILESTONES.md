@@ -1,5 +1,23 @@
 # Milestones
 
+## v3.2 v3.2 (Shipped: 2026-08-22)
+
+**Phases completed:** 4 phases, 10 plans, 26 tasks
+
+**Key accomplishments:**
+
+- 1. [Rule 1 - Bug] Per-principal ring buffer persistence
+- 1. [Rule 1 - Bug] QuoteService WS 广播已在 Plan 01 或先前 session 部分实现
+- 1. [Rule 1 - Bug] useWsStream 频道路由不匹配动态频道
+- 1. [Rule 3 - Blocking] SSE 端点删除破坏任务启动路径
+- Complete
+- 设置页 Server酱 SendKey 配置区 (输入 + 保存 + 测试推送) + 监控规则/复盘推送渠道新增 sct 选项, 对称飞书/Telegram 模式
+- localStorage 规则存储 + WS quotes 订阅本地评估 + Notification API 弹窗 + toast + 声效 + 5 分钟防抖的端到端 tracer 切片
+- 客户端规则 CRUD 面板 + 命中列表 + Notification 权限区, 监控中心页面客户端规则与服务端规则并列 badge 区分
+- 1. [Rule 3 - Blocking] Pre-existing test failure in test_notification_delivery.py
+
+---
+
 ## v3.0 v3.0 (Shipped: 2026-08-09)
 
 **Phases completed:** 6 phases, 22 plans, 20 tasks

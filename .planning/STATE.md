@@ -2,18 +2,18 @@
 gsd_state_version: 1.0
 milestone: v3.2
 milestone_name: 实时推送平台
-current_phase: 58
-status: completed
+status: Awaiting next milestone
 stopped_at: Completed 58-02-PLAN.md
-last_updated: "2026-08-22T10:25:17.610Z"
+last_updated: "2026-08-22T10:27:08.804Z"
 last_activity: 2026-08-22
-last_activity_desc: Phase 58 complete
+last_activity_desc: Milestone v3.2 completed and archived
 progress:
   total_phases: 4
   completed_phases: 4
   total_plans: 10
   completed_plans: 10
   percent: 100
+current_phase: 58
 current_phase_name: push-audit
 ---
 
@@ -28,11 +28,10 @@ See: .planning/PROJECT.md (updated 2026-08-18)
 
 ## Current Position
 
-Phase: 58
-Plan: Not started
-Status: All phases complete
-Last activity: 2026-08-22 — Phase 58 complete
-Progress: [██░░░░░░░░] 25% (1/4 plans)
+Phase: Milestone v3.2 complete
+Plan: —
+Status: Awaiting next milestone
+Last activity: 2026-08-22 — Milestone v3.2 completed and archived
 
 ### Phase 51 Completion (2026-08-19)
 
@@ -173,3 +172,7 @@ Resume file: None
 - [Phase ?]: push_stats queries tool_call_envelopes + notification_deliveries, fail-soft via _safe() (D-03, 58-01)
 - [Phase ?]: D-04: PushQualityPanel as 4th CollapsibleSection, badge replaces count when failures exist (58-02)
 - [Phase ?]: D-05: TOOL_OPTIONS dropdown reuses existing selectCls + resetAndApply pattern from category filter (58-02)
+
+## Operator Next Steps
+
+- Start the next milestone with /gsd-new-milestone
