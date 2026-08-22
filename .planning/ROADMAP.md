@@ -63,7 +63,11 @@
 
 **Explicit non-goals**: 不新增微信企业号以外的新渠道 (邮件/Slack 留到后续), 不做推送模板编辑器。
 
-**Plans**: TBD
+**Plans**: 2 plans
+
+Plans:
+- [ ] 56-01-PLAN.md — 后端: SctChannel + preferences 凭证存储 + settings API + 审计 + 去重 + 每日上限
+- [ ] 56-02-PLAN.md — 前端: 设置页 SCT 配置区 + 监控规则/复盘渠道新增 sct
 
 ### Phase 57: 客户端实时规则引擎
 
