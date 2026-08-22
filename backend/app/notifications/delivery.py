@@ -1,4 +1,4 @@
-"""Bounded Feishu and Telegram delivery with durable, credential-safe outcomes."""
+"""Bounded Feishu, Telegram, and Server酱 (SCT) delivery with durable, credential-safe outcomes."""
 from __future__ import annotations
 
 import os
@@ -122,6 +122,38 @@ class TelegramChannel:
             raise RuntimeError("Telegram rejected the notification")
         return {"status": "sent"}
 
+class SctChannel:
+    name = "sct"
+
+    def __init__(self, delivery_config: DeliveryConfig, *, timeout_seconds: float = 2.0) -> None:
+        if delivery_config.channel != self.name:
+            raise ValueError("SCT delivery config must use the sct channel")
+        self._fixture_url = ""
+        self._sendkey = str(delivery_config.config.get("sendkey") or "").strip()
+        if _fixture_mode():
+            self._fixture_url = _fixture_receiver_url(delivery_config.config.get("fixture_url"))
+        elif not self._sendkey:
+            raise ValueError("SCT requires a sendkey")
+        self._timeout = httpx.Timeout(timeout_seconds, connect=timeout_seconds)
+
+    def deliver(self, event: Mapping[str, Any]) -> Mapping[str, str]:
+        title, body = _message(event)
+        url = self._fixture_url or f"https://sctapi.ftqq.com/{self._sendkey}.send"
+        response = httpx.post(
+            url,
+            data={"title": title, "desp": body},
+            timeout=self._timeout,
+        )
+        if response.status_code != 200:
+            raise RuntimeError(f"SCT returned HTTP {response.status_code}")
+        try:
+            body_json = response.json()
+        except ValueError:
+            return {"status": "sent"}
+        if isinstance(body_json, dict) and body_json.get("code", 0) != 0:
+            raise RuntimeError("Server酱 rejected the notification")
+        return {"status": "sent"}
+
 
 def _safe_error(error: Exception, config: Mapping[str, Any]) -> str:
     """Return bounded diagnostics without retaining credentials or endpoint details."""
@@ -198,6 +230,8 @@ class NotificationDeliveryService:
             return FeishuChannel(delivery_config, timeout_seconds=self._timeout_seconds)
         if delivery_config.channel == TelegramChannel.name:
             return TelegramChannel(delivery_config, timeout_seconds=self._timeout_seconds)
+        if delivery_config.channel == SctChannel.name:
+            return SctChannel(delivery_config, timeout_seconds=self._timeout_seconds)
         raise ValueError("unsupported notification channel")
 
     def _deliver(self, event_id: str, event: Mapping[str, Any], delivery_config: DeliveryConfig) -> None:

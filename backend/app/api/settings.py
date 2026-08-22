@@ -483,7 +483,7 @@ def get_preferences() -> dict:
         "feishu_webhook_url": preferences.get_feishu_webhook_url(),
         "feishu_webhook_secret": preferences.get_feishu_webhook_secret(),
         "wecom_webhook_url": preferences.get_wecom_webhook_url(),
-        "telegram_bot_token": preferences.get_telegram_bot_token(),
+        "sct_sendkey": preferences.get_sct_sendkey(),
         "telegram_chat_id": preferences.get_telegram_chat_id(),
         "wecom_bot_id": preferences.get_wecom_bot_id(),
         "wecom_bot_secret": preferences.get_wecom_bot_secret(),
@@ -1162,6 +1162,52 @@ def update_telegram_bot(req: TelegramBotPrefsIn) -> dict:
         )
     saved_token, saved_chat_id = preferences.set_telegram_bot(token, chat_id)
     return {"telegram_bot_token": saved_token, "telegram_chat_id": saved_chat_id}
+
+class SctSendkeyPrefsIn(BaseModel):
+    sendkey: str
+
+
+@router.put("/preferences/sct-sendkey")
+def update_sct_sendkey(req: SctSendkeyPrefsIn) -> dict:
+    """Server酱 SendKey 配置 — 微信推送渠道凭证, 全局一处配置。
+
+    传入空串表示清空配置。返回值用 secrets_store.mask 脱敏 (D-01, T-56-01)。
+    """
+    from app.services import preferences
+
+    sendkey = (req.sendkey or "").strip()
+    saved = preferences.set_sct_sendkey(sendkey)
+    return {
+        "sct_sendkey": secrets_store.mask(saved),
+        "has_sct_sendkey": bool(saved),
+    }
+
+
+@router.post("/sct-test")
+def test_sct_push() -> dict:
+    """Server酱推送测试 — 发送一条测试消息验证 SendKey 配置正确性。
+
+    未配置 SendKey 时返回 ok=False + 错误提示; 发送成功返回 ok=True。
+    """
+    from app.services import preferences
+
+    sendkey = preferences.get_sct_sendkey()
+    if not sendkey:
+        return {"ok": False, "error": "未配置 Server酱 SendKey"}
+
+    from app.notifications.delivery import DeliveryConfig, SctChannel, _safe_error
+
+    try:
+        channel = SctChannel(DeliveryConfig(channel="sct", config={"sendkey": sendkey}))
+        channel.deliver({
+            "source": "test",
+            "symbol": "",
+            "message": "AthenaQuant Server酱推送测试",
+            "severity": "info",
+        })
+        return {"ok": True}
+    except Exception as error:  # noqa: BLE001
+        return {"ok": False, "error": _safe_error(error, {"sendkey": sendkey})}
 
 
 class WecomBotPrefsIn(BaseModel):

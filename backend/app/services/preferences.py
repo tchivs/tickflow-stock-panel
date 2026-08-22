@@ -731,14 +731,14 @@ def set_depth_finalize_time(hour: int, minute: int) -> dict:
     return {"hour": h, "minute": m}
 
 
-# 复盘推送可选渠道白名单 (企业微信已实现, 与飞书并列)
+# 复盘推送可选渠道白名单 (企业微信已实现, 与飞书并列; Server酱 D-03)
 # 多选: 不推送 = 空数组, 而非 'none'
-REVIEW_PUSH_CHANNELS = {"feishu", "wecom"}
+REVIEW_PUSH_CHANNELS = {"feishu", "wecom", "sct"}
 
 # 监控规则告警投递渠道白名单 — 与复盘推送独立。
-# 告警投递由 notification_delivery 服务执行, 目前仅支持飞书与 Telegram;
+# 告警投递由 notification_delivery 服务执行, 支持 Feishu/Telegram/Server酱;
 # 旧规则里的 wecom 渠道在 monitor_rules.normalize 时被剥离。
-RULE_DELIVERY_CHANNELS = {"feishu", "telegram"}
+RULE_DELIVERY_CHANNELS = {"feishu", "telegram", "sct"}
 
 
 def get_review_schedule() -> dict:
@@ -1022,6 +1022,21 @@ def set_wecom_webhook_url(url: str) -> str:
     save({"wecom_webhook_url": normalize_wecom_url(url)})
     return get_wecom_webhook_url()
 
+
+# ===== Server酱 (sct.ftqq.com) =====
+
+def get_sct_sendkey() -> str:
+    """Server酱 SendKey — 微信推送渠道凭证, 与飞书/Telegram 并列。
+
+    全局共用一处, 所有勾选 sct 渠道的规则都推到同一 SendKey。
+    """
+    return load().get("sct_sendkey", "")
+
+
+def set_sct_sendkey(sendkey: str) -> str:
+    """保存 Server酱 SendKey。传入空串表示清空配置。"""
+    save({"sct_sendkey": str(sendkey or "").strip()})
+    return get_sct_sendkey()
 
 # ===== 企业微信智能机器人 (API 模式 / 长连接) =====
 
