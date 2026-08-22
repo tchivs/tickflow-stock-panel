@@ -11,6 +11,8 @@ import {
   ChevronDown,
   BookOpen,
   Lightbulb,
+  Bell,
+  BellOff,
 } from 'lucide-react'
 import {
   usePreferences,
@@ -24,6 +26,7 @@ import { QK } from '@/lib/queryKeys'
 import { tierRank } from '@/lib/capability-labels'
 import { toast } from '@/components/Toast'
 import { DepthConfigContent } from '@/components/data/DepthConfigCard'
+import { useClientRules } from '@/hooks/useClientRulesEngine'
 
 // 页面 → 显示名
 const PAGE_LABELS: Record<string, string> = {
@@ -1047,6 +1050,13 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
 
           </div>
         </Card>
+        {/* 浏览器通知权限 (客户端规则, D-05) */}
+        <Card icon={Bell} title="浏览器通知权限" badge="客户端">
+          <p className="text-xs text-secondary mb-3">
+            客户端规则命中时使用浏览器原生通知弹窗, 权限未开启时降级为页内 toast + 声效。
+          </p>
+          <BrowserNotificationStatus />
+        </Card>
       </div>
     </div>
   )
@@ -1124,5 +1134,40 @@ function Card({ icon: Icon, title, badge, right, children }: CardProps) {
       </div>
       {children}
     </section>
+  )
+}
+
+// ===== 浏览器通知权限状态 (客户端规则, D-05) =====
+
+function BrowserNotificationStatus() {
+  const { notificationPermission, requestPermission } = useClientRules()
+
+  const statusConfig = {
+    granted: { label: '已开启', icon: Bell, color: 'text-emerald-500', desc: undefined },
+    default: { label: '未开启', icon: Bell, color: 'text-warning', desc: '点击下方按钮请求通知权限' },
+    denied: { label: '被拒绝', icon: BellOff, color: 'text-danger', desc: '浏览器通知权限被拒绝, 请在浏览器地址栏左侧调整站点权限' },
+  }[notificationPermission] ?? { label: '未知', icon: Bell, color: 'text-muted', desc: undefined }
+
+  const Icon = statusConfig.icon
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2">
+        <Icon className={`h-4 w-4 ${statusConfig.color}`} />
+        <span className={`text-sm font-medium ${statusConfig.color}`}>{statusConfig.label}</span>
+      </div>
+      {statusConfig.desc && (
+        <p className="text-[11px] text-muted leading-relaxed">{statusConfig.desc}</p>
+      )}
+      {notificationPermission !== 'granted' && notificationPermission !== 'denied' && (
+        <button
+          onClick={requestPermission}
+          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-btn bg-accent text-base text-xs font-medium hover:bg-accent/90 transition-colors cursor-pointer max-md:min-h-11 max-md:min-w-11"
+        >
+          <Bell className="h-3.5 w-3.5" />
+          重新请求权限
+        </button>
+      )}
+    </div>
   )
 }

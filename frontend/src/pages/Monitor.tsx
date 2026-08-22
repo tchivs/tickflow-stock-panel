@@ -23,6 +23,7 @@ import { LEGACY_STRATEGY_NOTIFY_EVENTS, STRATEGY_NOTIFY_EVENT_OPTIONS, strategyE
 
 import { RuleEditor } from '@/components/monitor/RuleEditor'
 import { DeliveryDetailDialog } from '@/components/monitor/DeliveryDetailDialog'
+import { ClientRulesPanel } from '@/components/client-rules/ClientRulesPanel'
 import { StockPreviewDialog } from '@/components/StockPreviewDialog'
 import { DimensionMembersDialog, type DimensionKind, type DimensionMembersTarget } from '@/components/DimensionMembersDialog'
 import { usePreferences } from '@/lib/useSharedQueries'
@@ -262,35 +263,16 @@ export function Monitor() {
             </div>
           </section>
 
-          {/* 右栏: 监控规则 */}
+          {/* 右栏: 监控规则 (服务端) + 客户端规则 */}
           <section aria-label="监控规则" className="min-h-0 w-full flex-col overflow-hidden rounded-card border border-border bg-surface/40 flex md:w-[400px] md:shrink-0">
             <div className="flex items-center gap-3 border-b border-border/60 bg-surface/60 px-4 py-2.5">
               <SectionHeader icon={ListChecks} title="监控规则" />
+              <span className="rounded-md bg-blue-500/10 px-1.5 py-0.5 text-[9px] font-medium text-blue-500">服务端</span>
               <span className="rounded-md bg-elevated/50 px-1.5 py-0.5 text-[10px] font-medium text-muted">{rulesCount}</span>
               <div className="ml-auto flex items-center gap-1">
-
-                <button
-                  onClick={() => setDigestOpen(true)}
-                  title="通知摘要预览 (近 24 小时)"
-                  className="inline-flex h-6 w-6 items-center justify-center rounded-lg border border-border/60 bg-surface text-muted transition-all hover:border-accent/40 hover:text-accent hover:shadow-sm cursor-pointer max-md:min-h-11 max-md:min-w-11"
-                >
-                  <FileText className="h-3.5 w-3.5" />
-                </button>
-                <button
-                  onClick={() => { setEditingRule(null); setEditorOpen(true) }}
-                  title="新建规则"
-                  className="inline-flex h-6 w-6 items-center justify-center rounded-lg border border-border/60 bg-surface text-muted transition-all hover:border-accent/40 hover:text-accent hover:shadow-sm cursor-pointer max-md:min-h-11 max-md:min-w-11"
-                >
-                  <Plus className="h-3.5 w-3.5" />
-                </button>
-                <button
-                  onClick={() => setConfirmClearRules(true)}
-                  disabled={rulesCount === 0}
-                  title="清除全部规则"
-                  className="inline-flex h-6 w-6 items-center justify-center rounded-lg border border-border/60 bg-surface text-muted transition-all hover:border-danger/40 hover:text-danger disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer max-md:min-h-11 max-md:min-w-11"
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                </button>
+                <button onClick={() => setDigestOpen(true)} title="通知摘要预览 (近 24 小时)" className="inline-flex h-6 w-6 items-center justify-center rounded-lg border border-border/60 bg-surface text-muted transition-all hover:border-accent/40 hover:text-accent hover:shadow-sm cursor-pointer max-md:min-h-11 max-md:min-w-11"><FileText className="h-3.5 w-3.5" /></button>
+                <button onClick={() => { setEditingRule(null); setEditorOpen(true) }} title="新建规则" className="inline-flex h-6 w-6 items-center justify-center rounded-lg border border-border/60 bg-surface text-muted transition-all hover:border-accent/40 hover:text-accent hover:shadow-sm cursor-pointer max-md:min-h-11 max-md:min-w-11"><Plus className="h-3.5 w-3.5" /></button>
+                <button onClick={() => setConfirmClearRules(true)} disabled={rulesCount === 0} title="清除全部规则" className="inline-flex h-6 w-6 items-center justify-center rounded-lg border border-border/60 bg-surface text-muted transition-all hover:border-danger/40 hover:text-danger disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer max-md:min-h-11 max-md:min-w-11"><Trash2 className="h-3.5 w-3.5" /></button>
               </div>
             </div>
             {/* Phase 54: 渠道健康汇总 (sent/failed/skipped 近 7 天) */}
@@ -320,7 +302,10 @@ export function Monitor() {
                 onEdit={(r) => { setEditingRule(r); setEditorOpen(true) }}
               />
             </div>
-
+            {/* 客户端规则 section (D-04, D-06) — 与服务端规则并列, 视觉分隔 */}
+            <div className="border-t border-border/60">
+              <ClientRulesPanel />
+            </div>
           </section>
         </div>
       </div>
