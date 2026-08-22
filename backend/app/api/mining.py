@@ -40,28 +40,6 @@ from app.services.mining_schedule import (
 router = APIRouter(prefix="/api/backtest/mining", tags=["backtest"])
 _FACTOR_IDS = frozenset(str(item["id"]) for item in FACTOR_COLUMNS)
 _MAX_ARTIFACT_BYTES = 64 * 1024 * 1024
-_SSE_POLL_SECONDS = 0.5
-
-
-def _ws_broadcast(request: Request, channel: str, msg_type: str, data: dict) -> None:
-    """通过 WS ConnectionManager 广播 mining 事件到 run:{run_id} 频道。"""
-    from app.ws.broadcast import broadcast_from_thread
-
-    ws_manager = getattr(request.app.state, "ws_manager", None)
-    if ws_manager is None:
-        return
-    broadcast_from_thread(ws_manager, channel, msg_type, data)
-
-
-async def _ws_broadcast_async(request: Request, channel: str, msg_type: str, data: dict) -> None:
-    """async 上下文内直接 await broadcast_to_channel (避免 run_coroutine_threadsafe 排队延迟)。"""
-    ws_manager = getattr(request.app.state, "ws_manager", None)
-    if ws_manager is None:
-        return
-    try:
-        await ws_manager.broadcast_to_channel(channel, msg_type, data)
-    except Exception:  # noqa: BLE001 — 广播尽力而为, 不阻断 SSE 流
-        return
 
 
 class MiningStartRequest(BaseModel):

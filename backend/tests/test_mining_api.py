@@ -489,34 +489,37 @@ def test_result_fails_closed_when_artifact_is_missing(tmp_path):
     assert response.json()["detail"] == "mining result artifacts are unavailable"
 
 
-def test_sse_maps_failed_event_and_honors_last_event_id(tmp_path):
+def test_failed_run_status_and_error_are_visible_via_polling(tmp_path):
+    """Phase 55: SSE /events 端点已删除; 失败状态和错误信息通过 GET /runs/{id} 轮询获取。"""
     client, store = _client(tmp_path)
     store.create(
         {"factor_names": ["turnover_rate"]},
         {"generation": "test"},
         run_id="failed-run",
     )
-    queued = store.append_event(
+    store.append_event(
         "failed-run", "queued", {"status": "queued", "source": "manual"}
     )
     store.transition_status("failed-run", "failed", error="worker failed")
-    failed = store.append_event(
+    store.append_event(
         "failed-run", "error", {"status": "failed", "message": "worker failed"}
     )
 
-    response = client.get(
-        "/api/backtest/mining/runs/failed-run/events",
-        headers={"Last-Event-ID": str(queued["id"])},
-    )
+    # SSE /events 端点已删除, 返回 404
+    events = client.get("/api/backtest/mining/runs/failed-run/events")
+    assert events.status_code == 404
 
+    # 失败状态和错误通过轮询可见
+    response = client.get("/api/backtest/mining/runs/failed-run")
     assert response.status_code == 200
-    assert f"id: {failed['id']}" in response.text
-    assert "event: failed" in response.text
-    assert "event: error" not in response.text
-    assert "worker failed" in response.text
+    run = response.json()
+    assert run["status"] == "failed"
+    assert run.get("error") == "worker failed"
 
 
-def test_sse_recovers_progress_snapshot_when_history_is_truncated(tmp_path):
+def test_progress_snapshot_is_visible_via_polling_when_history_is_truncated(tmp_path):
+    """Phase 55: SSE /events 端点已删除; 进度快照通过 GET /runs/{id} 轮询获取,
+    不依赖完整事件历史 (summary 持久化而非事件流回放)。"""
     client, store = _client(tmp_path)
     store.create(
         {"factor_names": ["turnover_rate"]},
@@ -540,12 +543,19 @@ def test_sse_recovers_progress_snapshot_when_history_is_truncated(tmp_path):
         {"status": "failed", "message": "worker failed"},
     )
 
-    response = client.get("/api/backtest/mining/runs/truncated-run/events")
+    # SSE /events 端点已删除, 返回 404
+    events = client.get("/api/backtest/mining/runs/truncated-run/events")
+    assert events.status_code == 404
 
+    # 进度快照通过轮询可见 (summary 持久化的 progress 字段)
+    response = client.get("/api/backtest/mining/runs/truncated-run")
     assert response.status_code == 200
-    assert '"done": 7' in response.text
-    assert "event: failed" in response.text
-
+    run = response.json()
+    assert run["status"] == "failed"
+    progress = run.get("progress")
+    assert progress is not None
+    assert progress.get("done") == 7
+    assert progress.get("total") == 10
 
 def test_start_rejects_incompatible_strategy_before_creating_run(tmp_path):
     client, store = _client(tmp_path)
