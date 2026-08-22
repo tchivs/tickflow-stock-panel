@@ -53,15 +53,6 @@ _PAGE = 500  # bounded page size for the durable-ledger poll (limits in-flight r
 _POLL_INTERVAL = 1.0  # seconds between empty-poll keepalives
 
 
-def _ws_broadcast(request: Request, channel: str, msg_type: str, data: dict) -> None:
-    """Phase 55: WS 频道广播 alpha 事件到 run:{run_id} 频道。"""
-    from app.ws.broadcast import broadcast_from_thread
-
-    ws_manager = getattr(request.app.state, "ws_manager", None)
-    if ws_manager is None:
-        return
-    broadcast_from_thread(ws_manager, channel, msg_type, data)
-
 
 def _safe_seq(raw: str | None) -> int:
     """解析 SSE id (seq) 为 int, 非法回退 0。"""
