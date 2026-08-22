@@ -11,10 +11,9 @@ from __future__ import annotations
 import json
 import secrets
 import sqlite3
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
-import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -52,7 +51,7 @@ def _insert_audit_envelope(
             json.dumps({}), None, "push:test", None, None,
             "sent" if error is None else "failed",
             None, 10.0, error, 0, 0, 1,
-            datetime.now(timezone.utc).isoformat(),
+            datetime.now(UTC).isoformat(),
         ),
     )
     conn.commit()
@@ -95,7 +94,7 @@ def test_push_stats_counts_today(tmp_path):
     app, repo = _make_app(tmp_path)
     with repo._connection() as conn:
         _insert_audit_envelope(conn, tool="sct", error=None)        # sent
-        _insert_audit_envelope(conn, tool="wecom", error=None)      # sent
+        _insert_audit_envelope(conn, tool="wecom", error=None)       # sent
         _insert_audit_envelope(conn, tool="sct", error="delivery failed")  # failed
     client = TestClient(app)
     resp = client.get("/api/workbench")
@@ -130,7 +129,7 @@ def test_push_stats_recent_failures(tmp_path):
         # Insert 12 failed + 3 sent records
         for i in range(12):
             _insert_audit_envelope(conn, tool="sct", error=f"err_{i}")
-        for i in range(3):
+        for _i in range(3):
             _insert_audit_envelope(conn, tool="wecom", error=None)
     client = TestClient(app)
     resp = client.get("/api/workbench")

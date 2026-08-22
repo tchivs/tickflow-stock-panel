@@ -322,7 +322,7 @@ def _audit_wecom(title: str, payload: dict, t0: float, success: bool) -> None:
             duration_ms=(time.perf_counter() - t0) * 1000,
             error=None if success else "wecom delivery failed",
         )
-    except Exception:  # noqa: BLE001 — 审计失败不阻断推送
+    except Exception:  # 审计失败不阻断推送
         pass
 
 
