@@ -1,10 +1,11 @@
 import { Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { Loader2, Database, BellRing, ChevronDown, ChevronRight } from 'lucide-react'
+import { Loader2, Database, BellRing, Send, AlertTriangle, ChevronDown, ChevronRight } from 'lucide-react'
 import { useState, type ComponentType } from 'react'
 import { fetchWorkbench, type WorkbenchResponse } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { STAGE_LABELS } from '@/components/data/ActiveJobCard'
+import { PushQualityPanel } from '@/components/workbench/PushQualityPanel'
 import { cn } from '@/lib/cn'
 import { formatLogTime } from '@/lib/format'
 
@@ -15,12 +16,14 @@ function CollapsibleSection({
   icon: Icon,
   title,
   count,
+  badge,
   children,
   defaultOpen = true,
 }: {
   icon: IconType
   title: string
   count?: number
+  badge?: React.ReactNode
   children: React.ReactNode
   defaultOpen?: boolean
 }) {
@@ -38,6 +41,7 @@ function CollapsibleSection({
         {count != null && count > 0 && (
           <span className="ml-auto rounded-full bg-accent/15 px-1.5 py-0.5 text-[10px] font-mono text-accent">{count}</span>
         )}
+        {badge}
       </button>
       {open && <div className="px-2.5 pb-2 pt-0.5">{children}</div>}
     </div>
@@ -161,7 +165,7 @@ function AlertsSection({ alerts }: { alerts: NonNullable<WorkbenchResponse['rece
 /**
  * 工作台面板 (Phase 53 WORK-02)
  *
- * 汇总运行中/失败任务、最近报告、监控触发三个折叠区。
+ * 汇总运行中/失败任务、最近报告、监控触发、推送质量四个折叠区。
  * 各项 fail-soft: 后端返回 null 时显示空状态, 不阻断其他区。
  */
 export function WorkbenchPanel() {
@@ -171,16 +175,17 @@ export function WorkbenchPanel() {
     staleTime: 30_000,
     refetchInterval: 60_000,
   })
-
   const jobs = data?.jobs ?? null
   const reports = data?.recent_reports ?? null
   const alerts = data?.recent_alerts ?? null
-
-  // 三个区都为空时不渲染
+  const pushStats = data?.push_stats ?? null
+  const pushFailed = pushStats?.today.failed ?? 0
+  // 四个区都为空时不渲染
   const hasJobs = jobs && (jobs.running.length > 0 || jobs.failed.length > 0)
   const hasReports = reports && reports.items.length > 0
   const hasAlerts = alerts && alerts.items.length > 0
-  if (!hasJobs && !hasReports && !hasAlerts) return null
+  const hasPush = pushStats && pushStats.today.total > 0
+  if (!hasJobs && !hasReports && !hasAlerts && !hasPush) return null
 
   return (
     <section className="rounded-card border border-border bg-surface/80 p-1.5 shadow-[0_1px_2px_hsl(var(--border)/0.4)] backdrop-blur-sm">
@@ -212,6 +217,22 @@ export function WorkbenchPanel() {
       >
         {alerts ? <AlertsSection alerts={alerts} /> : <p className="py-1.5 text-center text-[10px] text-muted">触发数据不可用</p>}
       </CollapsibleSection>
+      {pushStats && (
+        <CollapsibleSection
+          icon={Send}
+          title="推送质量"
+          count={pushStats.today.total}
+          defaultOpen={pushFailed > 0}
+          badge={pushFailed > 0 && (
+            <span className="inline-flex items-center gap-0.5 rounded-full bg-red-500/15 px-1.5 py-0.5 text-[10px] font-mono text-bear" title={`推送失败 ${pushFailed} 条`}>
+              <AlertTriangle className="h-2.5 w-2.5" />
+              {pushFailed}
+            </span>
+          )}
+        >
+          <PushQualityPanel stats={pushStats} />
+        </CollapsibleSection>
+      )}
     </section>
   )
 }

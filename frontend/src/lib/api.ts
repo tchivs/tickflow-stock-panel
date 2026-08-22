@@ -4910,11 +4910,16 @@ export interface WorkbenchResponse {
     items: Array<Record<string, unknown> & { type: string; link: string }>
     counts: { lifecycle: number; promotion: number; signals: number; paper_rebalance: number; total: number }
   } | null
+  push_stats: {
+    today: { total: number; sent: number; failed: number; dedup_skipped: number }
+    by_tool: Record<string, { total: number; sent: number; failed: number }>
+    recent_failures: Array<{ tool: string; error: string; created_at: string }>
+  } | null
 }
-
 export async function fetchWorkbench(): Promise<WorkbenchResponse> {
   return request<WorkbenchResponse>('/api/workbench')
 }
+
 
 // ===== Phase 54: monitor ops + report ops =====
 export interface TestFireResponse {
