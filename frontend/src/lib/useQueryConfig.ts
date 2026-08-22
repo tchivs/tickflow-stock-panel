@@ -1,15 +1,15 @@
 /**
- * SSE 配置 — 运行时参数。
+ * WS 连接配置 — 运行时参数。
  *
- * 目前只保留 SSE 重连延迟，其他数据刷新全部走 SSE invalidation。
- * 存储在 localStorage。
+ * 目前只保留 WS 重连延迟, 其他数据刷新全部走 WS invalidation。
+ * 存储在 localStorage (key: sse, 历史命名保留兼容)。
  */
 import { storage } from '@/lib/storage'
 
 // ===== 配置结构 =====
 
 export interface QueryConfig {
-  /** SSE 配置 */
+  /** WS 重连配置 (localStorage key: sse, 历史命名保留兼容) */
   sse: {
     reconnectDelay: number
   }

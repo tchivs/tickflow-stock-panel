@@ -480,7 +480,7 @@ export function Layout() {
     placeholderData: (prev) => prev,
   })
 
-  // SSE: 行情更新时自动刷新相关 queries + 告警通知
+  // WS: 行情更新时自动刷新相关 queries + 告警通知 (Phase 55: 全局单 WebSocket 连接)
   // Phase 55: WebSocket 全局单连接 — 行情更新自动刷新 + 告警通知 + 连接状态
   useWsStream(realtimeEnabled, prefs?.sse_refresh_pages)
   // 实时 WS 连接状态 — 断开时底部显示提示, 提示可能漏策略告警

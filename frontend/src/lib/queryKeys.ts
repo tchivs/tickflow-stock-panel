@@ -2,7 +2,7 @@
  * 集中管理所有 React Query key。
  *
  * - 新增查询只需在此加一行，所有消费方自动引用。
- * - SSE invalidation 基于 WS_INVALIDATE_PREFIXES 列表，新增 key 无需改 useWsStream。
+ * - WS invalidation 基于 WS_INVALIDATE_PREFIXES 列表，新增 key 无需改 useWsStream。
  */
 
 // ===== Query Key 工厂 =====
@@ -249,8 +249,8 @@ export const QK = {
   workbench:            ['workbench'] as const,
 } as const
 
-// ===== SSE 应该 invalidate 的 key 前缀列表 =====
-// 新增需要 SSE 推送的查询，只需在此加一行
+// ===== WS 应该 invalidate 的 key 前缀列表 =====
+// 新增需要 WS 推送的查询，只需在此加一行
 //
 // 注意: 策略页 (screener-cached) 不在此列表 —— 行情刷新时策略结果不变
 // (非监控策略读盘后静态缓存, 监控策略由独立的 strategy_results_updated 事件在
