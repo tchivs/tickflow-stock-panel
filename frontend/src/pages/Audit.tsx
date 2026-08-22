@@ -164,6 +164,30 @@ const CATEGORY_OPTIONS: { value: string; label: string }[] = [
   { value: 'notification', label: '通知' },
   { value: 'external', label: '外部' },
 ]
+const TOOL_OPTIONS: { value: string; label: string }[] = [
+  { value: '', label: '全部渠道' },
+  { value: 'connection', label: 'WebSocket 连接' },
+  { value: 'sct', label: 'Server酱' },
+  { value: 'wecom', label: '企业微信' },
+  { value: 'feishu', label: '飞书' },
+  { value: 'telegram', label: 'Telegram' },
+]
+
+const TOOL_BADGE_CLS: Record<string, string> = {
+  connection: 'bg-blue-500/10 text-blue-600 dark:text-blue-400',
+  sct: 'bg-purple-500/10 text-purple-600 dark:text-purple-400',
+  wecom: 'bg-green-500/10 text-green-600 dark:text-green-400',
+  feishu: 'bg-orange-500/10 text-orange-600 dark:text-orange-400',
+  telegram: 'bg-cyan-500/10 text-cyan-600 dark:text-cyan-400',
+}
+
+const TOOL_BADGE_LABEL: Record<string, string> = {
+  connection: 'WS',
+  sct: 'Server酱',
+  wecom: '企微',
+  feishu: '飞书',
+  telegram: 'TG',
+}
 const BOOL_OPTIONS: { value: string; label: string }[] = [
   { value: '', label: '全部' },
   { value: 'true', label: '是' },
@@ -177,11 +201,17 @@ function ToolCallRow({ row }: { row: ToolCallEnvelope }) {
     const str = JSON.stringify(s)
     return str.length > 80 ? `${str.slice(0, 80)}…` : str
   }, [row.response_summary])
-
   return (
     <tr className="border-b border-border last:border-0 hover:bg-muted/40">
       <td className="px-3 py-2 text-xs tabular-nums text-muted">{row.seq}</td>
-      <td className="px-3 py-2 text-sm font-medium text-foreground">{row.tool}</td>
+      <td className="px-3 py-2 text-sm font-medium text-foreground">
+        {row.tool}
+        {TOOL_BADGE_CLS[row.tool] && (
+          <span className={cn('ml-1 rounded px-1 py-0.5 text-[10px] font-medium', TOOL_BADGE_CLS[row.tool])}>
+            {TOOL_BADGE_LABEL[row.tool]}
+          </span>
+        )}
+      </td>
       <td className="px-3 py-2 text-xs">
         <span className="rounded bg-muted px-1.5 py-0.5 text-muted">{CATEGORY_LABEL[row.category] ?? row.category}</span>
       </td>
@@ -219,6 +249,7 @@ function SummaryStat({ label, value, accent }: { label: string; value: string | 
 
 function ToolCallsTab() {
   const [category, setCategory] = useState('')
+  const [tool, setTool] = useState('')
   const [hasError, setHasError] = useState('')
   const [degraded, setDegraded] = useState('')
   const [dateFrom, setDateFrom] = useState('')
@@ -228,12 +259,13 @@ function ToolCallsTab() {
   const params = useMemo(() => {
     const p: Record<string, string | number | boolean> = { limit: PAGE_SIZE, offset }
     if (category) p.category = category
+    if (tool) p.tool = tool
     if (hasError) p.has_error = hasError === 'true'
     if (degraded) p.degraded = degraded === 'true'
     if (dateFrom) p.date_from = dateFrom
     if (dateTo) p.date_to = dateTo
     return p
-  }, [category, hasError, degraded, dateFrom, dateTo, offset])
+  }, [category, tool, hasError, degraded, dateFrom, dateTo, offset])
 
   const listQ = useQuery({
     queryKey: QK.auditToolCalls(params),
@@ -281,6 +313,12 @@ function ToolCallsTab() {
             </select>
           </label>
           <label className="space-y-1 text-sm">
+            <span className="text-xs text-muted">渠道</span>
+            <select className={selectCls} value={tool} onChange={e => resetAndApply(() => setTool(e.target.value))}>
+              {TOOL_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+          </label>
+          <label className="space-y-1 text-sm">
             <span className="text-xs text-muted">有错误</span>
             <select className={selectCls} value={hasError} onChange={e => resetAndApply(() => setHasError(e.target.value))}>
               {BOOL_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
@@ -300,10 +338,10 @@ function ToolCallsTab() {
             <span className="text-xs text-muted">结束日期</span>
             <input type="date" className={cn(inputCls, 'w-[150px]')} value={dateTo} onChange={e => resetAndApply(() => setDateTo(e.target.value))} />
           </label>
-          {(category || hasError || degraded || dateFrom || dateTo) && (
+          {(category || tool || hasError || degraded || dateFrom || dateTo) && (
             <button
               type="button"
-              onClick={() => { setCategory(''); setHasError(''); setDegraded(''); setDateFrom(''); setDateTo(''); setOffset(0) }}
+              onClick={() => { setCategory(''); setTool(''); setHasError(''); setDegraded(''); setDateFrom(''); setDateTo(''); setOffset(0) }}
               className="rounded-md border border-border px-2.5 py-1.5 text-sm text-muted transition-colors hover:bg-muted"
             >
               清除筛选
