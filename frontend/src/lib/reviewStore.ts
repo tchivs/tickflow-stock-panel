@@ -35,9 +35,9 @@ const INITIAL: ReviewState = { phase: 'idle', content: '', error: '', meta: null
 let state: ReviewState = { ...INITIAL }
 let abortCtrl: AbortController | null = null
 
-// 当前生成来源: 'manual'(手动点生成) | 'sse'(定时任务 SSE 推送) | null(空闲)
+// 当前生成来源: 'manual'(手动点生成) | 'scheduled'(定时任务 WS 推送) | null(空闲)
 // 用于区分两条流, 避免互相丢弃事件或重复归档。
-let generatingSource: 'manual' | 'sse' | null = null
+let generatingSource: 'manual' | 'scheduled' | null = null
 
 // ===== 订阅机制 =====
 type Listener = () => void
@@ -187,32 +187,32 @@ export function feedReviewEvent(evt: any): void {
   if (!evt || typeof evt !== 'object') return
   const t = evt.type
 
-  // 并发控制: 手动流进行中时, SSE 事件一律忽略(手动流优先, 避免两条流抢同一个 store)
-  // 但若当前是 SSE 流自己在跑(generatingSource==='sse'), 则正常处理后续事件
+  // 并发控制: 手动流进行中时, 定时 WS 事件一律忽略(手动流优先, 避免两条流抢同一个 store)
+  // 但若当前是定时流自己在跑(generatingSource==='scheduled'), 则正常处理后续事件
   if (generatingSource === 'manual') return
 
   if (t === 'meta') {
-    // 定时流的第一个事件: 标记来源为 sse, 进入 streaming 态, 重置 content
-    generatingSource = 'sse'
+    // 定时流的第一个事件: 标记来源为 scheduled, 进入 streaming 态, 重置 content
+    generatingSource = 'scheduled'
     state = { phase: 'streaming', content: '', error: '', meta: evt, focus: '' }
     notify()
   } else if (t === 'delta' && evt.content) {
-    // 只有 sse 流进行中时才累积(防止 meta 丢失时的孤立 delta)
-    if (generatingSource !== 'sse') return
+    // 只有定时流进行中时才累积(防止 meta 丢失时的孤立 delta)
+    if (generatingSource !== 'scheduled') return
     state = { ...state, content: state.content + evt.content, phase: 'streaming' }
     notify()
   } else if (t === 'retry') {
-    if (generatingSource !== 'sse') return
+    if (generatingSource !== 'scheduled') return
     // 后端重试: 清空已累积内容, 等待新一轮 meta/delta
     state = { ...state, content: '', phase: 'streaming' }
     notify()
   } else if (t === 'error') {
-    if (generatingSource !== 'sse') return
+    if (generatingSource !== 'scheduled') return
     state = { ...state, error: evt.message ?? '复盘生成失败', phase: 'error' }
     notify()
     generatingSource = null
   } else if (t === 'done') {
-    if (generatingSource !== 'sse') return
+    if (generatingSource !== 'scheduled') return
     // 定时场景 done 带 archived=true: 后端已归档, 前端只切 done 态, 不调归档接口。
     state = { ...state, phase: 'done' }
     notify()

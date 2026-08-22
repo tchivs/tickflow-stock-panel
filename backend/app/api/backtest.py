@@ -1068,38 +1068,41 @@ async def walkforward_start(request: Request):
 async def strategy_cancel(request: Request):
     """取消正在运行的回测任务 (前端传 query string, 后端算 job_key)。"""
     body = await request.json()
-    qs = body.get("qs", "")
-    # 解析 qs 得到参数
-    from urllib.parse import parse_qs
-    p = parse_qs(qs)
-    def _get(key: str, default: str = "") -> str:
-        return p.get(key, [default])[0]
-    def _get_opt_float(key: str) -> float | None:
-        # 可选成本参数: 缺省或空串 → None (与 stream 侧 float | None 口径一致, 保证 job_key 对齐)。
-        v = _get(key)
-        return float(v) if v else None
-    job_key = _make_job_key(
-        _get("strategy_id"),
-        _get("symbols") or None,
-        _get("start") or None,
-        _get("end") or None,
-        _get("matching", "open_t+1"),
-        _get("entry_fill") or None,
-        _get("exit_fill") or None,
-        float(_get("fees_pct", "0.0002")),
-        float(_get("slippage_bps", "5")),
-        int(_get("max_positions", "10")),
-        float(_get("max_exposure_pct", "1")),
-        float(_get("initial_capital", "1000000")),
-        _get("position_sizing", "equal"),
-        _get("params") or None,
-        _get("overrides") or None,
-        _get("mode", "position"),
-        int(_get("holding_days", "5")),
-        commission_pct=_get_opt_float("commission_pct"),
-        stamp_tax_pct=_get_opt_float("stamp_tax_pct"),
-        asset_type=_get("asset_type", "stock"),
-    )
+    # 优先用前端直接传的 job_key (竞态修复路径); 回退到 qs 解析 (旧路径)
+    job_key = body.get("job_key", "")
+    if not job_key:
+        qs = body.get("qs", "")
+        # 解析 qs 得到参数
+        from urllib.parse import parse_qs
+        p = parse_qs(qs)
+        def _get(key: str, default: str = "") -> str:
+            return p.get(key, [default])[0]
+        def _get_opt_float(key: str) -> float | None:
+            # 可选成本参数: 缺省或空串 → None (与 stream 侧 float | None 口径一致, 保证 job_key 对齐)。
+            v = _get(key)
+            return float(v) if v else None
+        job_key = _make_job_key(
+            _get("strategy_id"),
+            _get("symbols") or None,
+            _get("start") or None,
+            _get("end") or None,
+            _get("matching", "open_t+1"),
+            _get("entry_fill") or None,
+            _get("exit_fill") or None,
+            float(_get("fees_pct", "0.0002")),
+            float(_get("slippage_bps", "5")),
+            int(_get("max_positions", "10")),
+            float(_get("max_exposure_pct", "1")),
+            float(_get("initial_capital", "1000000")),
+            _get("position_sizing", "equal"),
+            _get("params") or None,
+            _get("overrides") or None,
+            _get("mode", "position"),
+            int(_get("holding_days", "5")),
+            commission_pct=_get_opt_float("commission_pct"),
+            stamp_tax_pct=_get_opt_float("stamp_tax_pct"),
+            asset_type=_get("asset_type", "stock"),
+        )
     # 持锁读任务表: 与 _cleanup_stale_jobs 的 pop、stream 的写入互斥
     with _jobs_lock:
         job = _running_jobs.get(job_key)
