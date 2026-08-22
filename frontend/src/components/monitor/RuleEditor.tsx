@@ -44,7 +44,7 @@ const SECTOR_KIND_OPTIONS: Array<{ key: SectorKind; label: string; icon: typeof 
 
 // 告警投递渠道白名单 — 与后端 monitor_rules.DELIVERY_CHANNELS 对齐。
 // 旧规则里已下线的 wecom 渠道在装载草稿时剥离, 避免出现"看不见也取消不掉"的隐形渠道。
-const RULE_DELIVERY_CHANNELS = ['feishu', 'telegram']
+const RULE_DELIVERY_CHANNELS = ['feishu', 'telegram', 'sct']
 
 const STRATEGY_SOURCE_META = {
   builtin: { label: '内置', className: 'border-accent/25 bg-accent/10 text-accent' },
@@ -87,6 +87,7 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
   const feishuConfigured = !!(prefs?.feishu_webhook_url)
   // 投递适配器 token/chat_id 缺一不可, 只配一半仍会被跳过 — 就绪判定必须两者同时存在。
   const telegramConfigured = !!(prefs?.telegram_bot_token && prefs?.telegram_chat_id)
+  const sctConfigured = !!(prefs?.sct_sendkey)
   const [editing] = useState(!!rule)
   // 新建规则: 预填全局「默认推送渠道」(多选数组), preset 显式指定时以 preset 为准。
   // 编辑规则: 完全沿用规则自身配置, 不受默认值影响。
@@ -1254,6 +1255,23 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
             )}
           </label>
 
+          {/* Server酱 (微信推送, SendKey 配置即可用) */}
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={(draft.webhook_channels ?? []).includes('sct')}
+              onChange={() => toggleChannel('sct')}
+              className="h-3 w-3 accent-accent cursor-pointer"
+            />
+            <span className="text-[11px] text-foreground">Server酱</span>
+            <span className="text-[9px] text-muted">微信推送</span>
+            {(draft.webhook_channels ?? []).includes('sct') && (
+              <span className={`ml-auto text-[9px] ${sctConfigured ? 'text-emerald-500' : 'text-warning'}`}>
+                {sctConfigured ? '已配置' : '未配置'}
+              </span>
+            )}
+          </label>
+
         </div>
 
         {/* 勾选了某渠道但该渠道地址未配置 → 提示前往设置 */}
@@ -1262,6 +1280,7 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
           const unconfigured: string[] = []
           if (selected.includes('feishu') && !feishuConfigured) unconfigured.push('飞书')
           if (selected.includes('telegram') && !telegramConfigured) unconfigured.push('Telegram')
+          if (selected.includes('sct') && !sctConfigured) unconfigured.push('Server酱')
           if (unconfigured.length === 0) return null
           return (
             <p className="text-[10px] leading-relaxed text-warning/80">
@@ -1275,6 +1294,7 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
           const ready: string[] = []
           if (selected.includes('feishu') && feishuConfigured) ready.push('飞书')
           if (selected.includes('telegram') && telegramConfigured) ready.push('Telegram')
+          if (selected.includes('sct') && sctConfigured) ready.push('Server酱')
           if (ready.length === 0) return null
           return (
             <p className="text-[10px] leading-relaxed text-muted">
