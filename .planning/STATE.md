@@ -3,17 +3,17 @@ gsd_state_version: 1.0
 milestone: v3.2
 milestone_name: 实时推送平台
 current_phase: 58
-current_phase_name: 推送审计与运维
+current_phase_name: push-audit
 status: executing
-stopped_at: Completed 57-02-PLAN.md
-last_updated: "2026-08-22T09:42:14.316Z"
+stopped_at: Completed 58-01-PLAN.md
+last_updated: "2026-08-22T09:59:26.711Z"
 last_activity: 2026-08-22
-last_activity_desc: Phase 57 complete, transitioned to Phase 58
+last_activity_desc: Phase 58 execution started
 progress:
   total_phases: 4
   completed_phases: 3
   total_plans: 10
-  completed_plans: 8
+  completed_plans: 9
   percent: 75
 ---
 
@@ -24,14 +24,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-08-18)
 
 **Core value:** An investor can turn reliable market data and their own holdings into an auditable, actionable research and monitoring workflow without operating multiple disconnected tools.
-**Current focus:** Phase 57 — client-rules
+**Current focus:** Phase 58 — push-audit
 
 ## Current Position
 
-Phase: 58 — 推送审计与运维
-Plan: Not started
+Phase: 58 (push-audit) — EXECUTING
+Plan: 2 of 2
 Status: Ready to execute
-Last activity: 2026-08-22 — Phase 57 complete, transitioned to Phase 58
+Last activity: 2026-08-22 — Phase 58 execution started
 Progress: [██░░░░░░░░] 25% (1/4 plans)
 
 ### Phase 51 Completion (2026-08-19)
@@ -142,11 +142,12 @@ None.
 | Phase 56 P02 | 12min | 3 tasks | 4 files |
 | Phase 57 P01 | 10min | 3 tasks | 5 files |
 | Phase 57 P02 | 10min | 3 tasks | 5 files |
+| Phase 58 P01 | 676 | 3 tasks | 5 files |
 
 ## Session Continuity
 
-Last session: 2026-08-22T09:27:07.812Z
-Stopped at: Completed 57-02-PLAN.md
+Last session: 2026-08-22T09:59:26.704Z
+Stopped at: Completed 58-01-PLAN.md
 Resume file: None
 
 ---
@@ -167,3 +168,5 @@ Resume file: None
 - [Phase ?]: ClientRuleEditor 弹窗用内嵌面板 (非 Modal), pct 阈值百分数↔小数双制转换 (57-02)
 - [Phase ?]: 客户端/服务端 badge 色区分: 客户端紫色 purple-500, 服务端蓝色 blue-500 (D-06, 57-02)
 - [Phase ?]: 命中列表从 triggered 数组渲染: formatTime+fmtPrice+fmtPct, 标记已处理+关闭规则 (57-02)
+- [Phase ?]: WeCom audit scope uses push:{title[:50]} prefix (D-02, 58-01)
+- [Phase ?]: push_stats queries tool_call_envelopes + notification_deliveries, fail-soft via _safe() (D-03, 58-01)

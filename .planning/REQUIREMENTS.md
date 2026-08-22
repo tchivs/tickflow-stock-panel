@@ -24,9 +24,9 @@
 
 ### 推送审计与运维
 
-- [ ] **PA-01**: WebSocket 连接审计 — 记录连接/断连/重连事件, 复用 ToolCallEnvelope (scope=ws)
-- [ ] **PA-02**: 推送投递审计 — Server酱/WeCom 每次投递记录 raw_hash + response_summary + duration
-- [ ] **PA-03**: 推送质量面板 — 首页工作台新增推送投递统计 (成功/失败/去重跳过), 复用 v3.1 workbench API
+- [x] **PA-01**: WebSocket 连接审计 — 记录连接/断连/重连事件, 复用 ToolCallEnvelope (scope=ws)
+- [x] **PA-02**: 推送投递审计 — Server酱/WeCom 每次投递记录 raw_hash + response_summary + duration
+- [x] **PA-03**: 推送质量面板 — 首页工作台新增推送投递统计 (成功/失败/去重跳过), 复用 v3.1 workbench API
 
 ## Requirement Summary
 
@@ -43,9 +43,9 @@
 | CR-01 | Phase 57 | Complete |
 | CR-02 | Phase 57 | Complete |
 | CR-03 | Phase 57 | Complete |
-| PA-01 | Phase 58 | Pending |
-| PA-02 | Phase 58 | Pending |
-| PA-03 | Phase 58 | Pending |
+| PA-01 | Phase 58 | Complete |
+| PA-02 | Phase 58 | Complete |
+| PA-03 | Phase 58 | Complete |
 
 **Coverage:** 14 requirements, no orphans, no duplicates.
 
