@@ -197,6 +197,93 @@ def _pending_section(request: Request) -> dict[str, Any]:
     }
 
 
+# ── push_stats: 推送质量统计 (PA-03, D-03) ──────────────────────
+
+_EMPTY_PUSH_STATS: dict[str, Any] = {
+    "today": {"total": 0, "sent": 0, "failed": 0, "dedup_skipped": 0},
+    "by_tool": {},
+    "recent_failures": [],
+}
+
+
+def _push_stats_section(request: Request) -> dict[str, Any]:
+    """推送投递质量统计: 今日 sct/wecom/connection 三类 tool 的 total/sent/failed
+    + notification_deliveries 去重跳过计数 + 最近 10 条失败记录。
+
+    fail-soft: 审计 repo 不可用或表不存在时返回空统计。
+    """
+    repo = _operational(request)
+    by_tool: dict[str, dict[str, int]] = {}
+    total = sent = failed = 0
+    dedup_skipped = 0
+    recent_failures: list[dict[str, Any]] = []
+
+    with repo._connection() as conn:
+        # 1. 今日 tool_call_envelopes 统计 (sct/wecom/connection)
+        rows = conn.execute(
+            """
+            SELECT
+                tool,
+                COUNT(*) as total,
+                SUM(CASE WHEN error IS NULL THEN 1 ELSE 0 END) as sent,
+                SUM(CASE WHEN error IS NOT NULL THEN 1 ELSE 0 END) as failed
+            FROM tool_call_envelopes
+            WHERE tool IN ('sct', 'wecom', 'connection')
+              AND date(created_at) = date('now')
+            GROUP BY tool
+            """
+        ).fetchall()
+        for r in rows:
+            by_tool[r["tool"]] = {
+                "total": int(r["total"] or 0),
+                "sent": int(r["sent"] or 0),
+                "failed": int(r["failed"] or 0),
+            }
+            total += int(r["total"] or 0)
+            sent += int(r["sent"] or 0)
+            failed += int(r["failed"] or 0)
+
+        # 2. 今日 notification_deliveries 去重跳过计数
+        dedup_row = conn.execute(
+            """
+            SELECT COUNT(*) as dedup_skipped
+            FROM notification_deliveries
+            WHERE status = 'skipped' AND error = 'dedup'
+              AND date(created_at) = date('now')
+            """
+        ).fetchone()
+        dedup_skipped = int(dedup_row["dedup_skipped"]) if dedup_row else 0
+
+        # 3. 最近 10 条失败记录
+        fail_rows = conn.execute(
+            """
+            SELECT tool, error, created_at
+            FROM tool_call_envelopes
+            WHERE tool IN ('sct', 'wecom', 'connection')
+              AND error IS NOT NULL
+            ORDER BY seq DESC
+            LIMIT 10
+            """
+        ).fetchall()
+        for r in fail_rows:
+            recent_failures.append({
+                "tool": r["tool"],
+                "error": r["error"],
+                "created_at": r["created_at"],
+            })
+
+    return {
+        "today": {
+            "total": total,
+            "sent": sent,
+            "failed": failed,
+            "dedup_skipped": dedup_skipped,
+        },
+        "by_tool": by_tool,
+        "recent_failures": recent_failures,
+    }
+
+
 # ── GET /api/workbench ───────────────────────────────────────────
 
 @router.get("")
@@ -213,4 +300,5 @@ def workbench(request: Request) -> dict[str, Any]:
         "recent_reports": _safe(_reports_section, request),
         "recent_alerts": _safe(_alerts_section, request),
         "pending": _safe(_pending_section, request),
+        "push_stats": _safe(_push_stats_section, request),
     }
