@@ -114,7 +114,11 @@ Plans:
 
 **Explicit non-goals**: 不新增推送重试策略配置, 不做推送 A/B 测试。
 
-**Plans**: TBD
+**Plans**: 2/2 plans
+
+Plans:
+- [ ] 58-01-PLAN.md — 后端: WeCom 推送投递审计 + workbench push_stats 统计子项 + PA-01 WS 连接审计验证
+- [ ] 58-02-PLAN.md — 前端: 推送质量面板 + 审计页渠道筛选 + WebSocket 连接标签 + 推送失败告警 banner
 
 ## Progress
 
@@ -123,7 +127,7 @@ Plans:
 | 55. WebSocket 全量迁移 | 4/4 | Complete    | 2026-08-22 |
 | 56. Server酱微信推送 | 2/2 | Complete    | 2026-08-22 |
 | 57. 客户端实时规则引擎 | 2/2 | Complete    | 2026-08-22 |
-| 58. 推送审计与运维 | 0/TBD | Not started | - |
+| 58. 推送审计与运维 | 0/2 | Not started | - |
 
 **Execution order:** 55 → 56 → 57 → 58. Phase 55 (WebSocket 传输层) 是其余三者的基础设施; 56/57 可在 55 完成后并行, 58 收口审计与运维。
 
