@@ -86,6 +86,13 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
   const [telegramTokenDraft, setTelegramTokenDraft] = useState(telegramBotToken)
   const [telegramChatDraft, setTelegramChatDraft] = useState(telegramChatId)
   const [telegramError, setTelegramError] = useState('')
+  // Server酱 (微信推送渠道, 与飞书/Telegram 并列)
+  const sctSendkey = prefs?.sct_sendkey ?? ''
+  const [sctDraft, setSctDraft] = useState(sctSendkey)
+  const [sctError, setSctError] = useState('')
+  const [sctOpen, setSctOpen] = useState(false)
+  const [sctTesting, setSctTesting] = useState(false)
+  const [sctTestResult, setSctTestResult] = useState<{ ok: boolean; error?: string } | null>(null)
   // 企业微信 webhook (复盘推送用 — 告警投递已不支持企业微信)
   const wecomWebhookUrl = prefs?.wecom_webhook_url ?? ''
   const [wecomDraft, setWecomDraft] = useState(wecomWebhookUrl)
@@ -114,6 +121,9 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
     setTelegramTokenDraft(telegramBotToken)
     setTelegramChatDraft(telegramChatId)
   }, [telegramBotToken, telegramChatId])
+  useEffect(() => {
+    setSctDraft(sctSendkey)
+  }, [sctSendkey])
   useEffect(() => {
     setWecomDraft(wecomWebhookUrl)
   }, [wecomWebhookUrl])
@@ -216,6 +226,32 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
     }
     saveTelegramBot.mutate({ token, chatId })
   }, [telegramTokenDraft, telegramChatDraft, saveTelegramBot])
+
+  const saveSctSendkey = useMutation({
+    mutationFn: (sendkey: string) => api.updateSctSendkey(sendkey),
+    onSuccess: () => {
+      setSctError('')
+      toast('Server酱 SendKey 已保存', 'success')
+      qc.invalidateQueries({ queryKey: QK.preferences })
+    },
+    onError: () => setSctError('保存失败'),
+  })
+  const submitSct = useCallback(() => {
+    saveSctSendkey.mutate(sctDraft.trim())
+  }, [sctDraft, saveSctSendkey])
+
+  const handleSctTest = useCallback(async () => {
+    setSctTesting(true)
+    setSctTestResult(null)
+    try {
+      const r = await api.testSctPush()
+      setSctTestResult(r)
+    } catch {
+      setSctTestResult({ ok: false, error: '请求失败' })
+    } finally {
+      setSctTesting(false)
+    }
+  }, [])
 
   const saveWecomWebhook = useMutation({
     mutationFn: (url: string) => api.updateWecomWebhook(url),
@@ -751,6 +787,99 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
               )}
             </div>
 
+            {/* Server酱 (微信推送渠道, 与飞书/Telegram 并列) */}
+            <div className="rounded-btn border border-border/60 bg-base/40 overflow-hidden">
+              <div className="flex items-center gap-2 px-2.5 py-2 hover:bg-base/60">
+                <input
+                  type="checkbox"
+                  checked={webhookDefaultChannels.includes('sct')}
+                  onChange={e => toggleDefaultChannel('sct', e.target.checked)}
+                  title="作为新建规则的默认推送渠道"
+                  aria-label="Server酱作为默认推送渠道"
+                  className="h-3 w-3 accent-accent cursor-pointer"
+                />
+                <button
+                  type="button"
+                  onClick={() => setSctOpen(o => !o)}
+                  aria-expanded={sctOpen}
+                  aria-controls="sct-config"
+                  className="flex flex-1 items-center gap-2 text-left cursor-pointer max-md:min-h-9 max-md:py-1"
+                >
+                  <span className="text-[11px] font-medium text-foreground">Server酱</span>
+                  <span className="text-[9px] text-muted">微信推送 · sct.ftqq.com</span>
+                  {webhookDefaultChannels.includes('sct') && (
+                    <span className="rounded bg-accent/15 px-1 py-px text-[9px] text-accent">默认</span>
+                  )}
+                  <span className={`ml-auto text-[9px] ${sctSendkey ? 'text-emerald-500' : 'text-warning'}`}>
+                    {sctSendkey ? '已配置' : '未配置'}
+                  </span>
+                  <ChevronDown className={`h-3 w-3 text-muted transition-transform ${sctOpen ? 'rotate-180' : ''}`} />
+                </button>
+              </div>
+
+              {sctOpen && (
+                <div id="sct-config" className="border-t border-border/60 bg-base/30 p-3">
+                  <label className="block space-y-1.5">
+                    <span className="text-[11px] text-muted">SendKey</span>
+                    <input
+                      type="password"
+                      value={sctDraft}
+                      onChange={e => setSctDraft(e.target.value)}
+                      placeholder="SCT1234567890abcdef"
+                      className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs font-mono text-foreground focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/60"
+                    />
+                  </label>
+
+                  {sctError && (
+                    <div className="mt-2 text-[11px] text-danger">{sctError}</div>
+                  )}
+
+                  <div className="mt-2 flex items-center gap-2">
+                    <button
+                      onClick={submitSct}
+                      disabled={saveSctSendkey.isPending || sctDraft.trim() === sctSendkey}
+                      className="px-3 py-1.5 rounded-btn bg-accent text-base text-xs font-medium disabled:opacity-50 cursor-pointer hover:bg-accent/90 transition-colors"
+                    >
+                      {saveSctSendkey.isPending ? '保存中…' : '保存'}
+                    </button>
+                    {sctSendkey && (
+                      <span className="text-[10px] text-emerald-500">● 已配置</span>
+                    )}
+                  </div>
+
+                  <div className="mt-2 flex items-center gap-2">
+                    <button
+                      onClick={handleSctTest}
+                      disabled={!sctSendkey || sctTesting}
+                      className="px-3 py-1.5 rounded-btn bg-elevated text-secondary text-xs font-medium disabled:opacity-50 cursor-pointer hover:text-foreground transition-colors"
+                    >
+                      {sctTesting ? '推送中…' : '测试推送'}
+                    </button>
+                    {sctTestResult && (
+                      <span className={`text-[10px] ${sctTestResult.ok ? 'text-emerald-500' : 'text-danger'}`}>
+                        {sctTestResult.ok ? '✓ 测试推送成功' : `✗ ${sctTestResult.error ?? '推送失败'}`}
+                      </span>
+                    )}
+                  </div>
+
+                  <details className="mt-3 text-[10px] text-muted">
+                    <summary className="cursor-pointer hover:text-secondary">如何获取 Server酱 SendKey?</summary>
+                    <ol className="mt-1.5 space-y-1 pl-4 list-decimal leading-relaxed">
+                      <li>访问 <b>sct.ftqq.com</b> 微信扫码登录</li>
+                      <li>进入「<b>SendKey</b>」页面复制 SCT 开头的 Key</li>
+                      <li>粘贴到上方输入框并保存</li>
+                      <li>点击「测试推送」验证是否收到微信消息</li>
+                    </ol>
+                    <p className="mt-1.5 pl-4 text-muted/70">
+                      <BookOpen className="inline-block h-3 w-3 text-muted" /> 官方文档:
+                      <a href="https://sct.ftqq.com/" target="_blank" rel="noreferrer" className="text-accent hover:text-accent/80">
+                        Server酱 ↗
+                      </a>
+                    </p>
+                  </details>
+                </div>
+              )}
+            </div>
             {/* 企业微信群推送 Webhook — 仅复盘推送使用; 告警投递已不支持企业微信, 不再提供默认渠道勾选 */}
             <div className="rounded-btn border border-border/60 bg-base/40 overflow-hidden">
               <button
