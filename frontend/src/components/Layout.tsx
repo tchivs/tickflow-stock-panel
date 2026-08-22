@@ -3,6 +3,7 @@ import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
 import { useWsStream, useWsStreamStatus, _reconnect, getCurrentBackoffSeconds } from '@/lib/useWsStream'
+import { ClientRulesProvider } from '@/hooks/useClientRulesEngine'
 import { ToastContainer } from '@/components/Toast'
 import { AlertToastContainer } from '@/components/AlertToast'
 import { AiAnalysisHost } from '@/components/financials/AiAnalysisHost'
@@ -638,6 +639,7 @@ export function Layout() {
   }
 
   return (
+    <ClientRulesProvider>
     <div
       className="h-screen bg-base text-foreground overflow-hidden md:grid transition-[grid-template-columns] duration-200 ease-smooth"
       style={{ gridTemplateColumns: navCollapsed ? '3.5rem 1fr' : '14rem 1fr' }}
@@ -1087,5 +1089,6 @@ export function Layout() {
       <StockAnalysisHost />
       <StockAnalysisBubble />
     </div>
+    </ClientRulesProvider>
   )
 }

@@ -136,4 +136,7 @@ export const storage = {
   dataCardVisible: kv<Record<string, boolean>>('data-card-visible'),
   /** 数据页画像卡片顺序 (卡片key 数组, 长度=卡片总数) */
   dataCardOrder: kv<string[]>('data-card-order'),
+
+  /** 客户端规则引擎 — 浏览器端价格阈值规则, 存 localStorage 不落后端 (D-01) */
+  clientRules: kv<unknown[]>('client_rules'),
 } as const
