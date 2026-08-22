@@ -300,6 +300,32 @@ def _post_wecom(webhook_url: str, payload: dict) -> bool:
         return False
 
 
+def _audit_wecom(title: str, payload: dict, t0: float, success: bool) -> None:
+    """记录 WeCom 推送投递审计 (与 SctChannel 模式一致)。
+
+    审计失败不阻断推送; get_audit_repo() 返回 None 时跳过。
+    """
+    try:
+        import json
+
+        from app.audit.service import get_audit_repo
+
+        repo = get_audit_repo()
+        if repo is None:
+            return
+        repo.append(
+            tool="wecom",
+            category="notification",
+            scope=f"push:{title[:50]}",
+            response_summary="sent" if success else "failed",
+            raw=json.dumps(payload, ensure_ascii=False)[:500],
+            duration_ms=(time.perf_counter() - t0) * 1000,
+            error=None if success else "wecom delivery failed",
+        )
+    except Exception:  # noqa: BLE001 — 审计失败不阻断推送
+        pass
+
+
 def send_wecom(webhook_url: str, title: str, body: str) -> bool:
     """推送一条文本消息到企业微信群推送 Webhook。
 
@@ -321,7 +347,13 @@ def send_wecom(webhook_url: str, title: str, body: str) -> bool:
         return False
 
     payload: dict = {"msgtype": "text", "text": {"content": text}}
-    return _post_wecom(webhook_url, payload)
+    t0 = time.perf_counter()
+    success = False
+    try:
+        success = _post_wecom(webhook_url, payload)
+        return success
+    finally:
+        _audit_wecom(title, payload, t0, success)
 
 
 def send_wecom_markdown(webhook_url: str, title: str, body_md: str) -> bool:
@@ -350,4 +382,10 @@ def send_wecom_markdown(webhook_url: str, title: str, body_md: str) -> bool:
         return False
 
     payload: dict = {"msgtype": "markdown", "markdown": {"content": content}}
-    return _post_wecom(webhook_url, payload)
+    t0 = time.perf_counter()
+    success = False
+    try:
+        success = _post_wecom(webhook_url, payload)
+        return success
+    finally:
+        _audit_wecom(title, payload, t0, success)
