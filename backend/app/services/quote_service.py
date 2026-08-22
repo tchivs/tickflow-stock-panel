@@ -1884,6 +1884,11 @@ class QuoteService:
                             channel="telegram",
                             config={"fixture_url": os.environ.get("PHASE1_TELEGRAM_RECEIVER_URL", "")},
                         ))
+                    if "sct" in requested:
+                        channel_configs.append(DeliveryConfig(
+                            channel="sct",
+                            config={"fixture_url": os.environ.get("PHASE1_SCT_RECEIVER_URL", "")},
+                        ))
                 else:
                     feishu_url = preferences.get_feishu_webhook_url()
                     if "feishu" in requested and feishu_url:
@@ -1897,6 +1902,12 @@ class QuoteService:
                         channel_configs.append(DeliveryConfig(
                             channel="telegram",
                             config={"bot_token": telegram_token, "chat_id": telegram_chat_id},
+                        ))
+                    sct_sendkey = preferences.get_sct_sendkey()
+                    if "sct" in requested and sct_sendkey:
+                        channel_configs.append(DeliveryConfig(
+                            channel="sct",
+                            config={"sendkey": sct_sendkey},
                         ))
                 if not channel_configs:
                     continue

@@ -1150,7 +1150,18 @@ def _maybe_push_review(content: str, meta: dict) -> None:
                     url, "AthenaQuant · 每日复盘", full_body
                 )
                 logger.info("review push(wecom) %s", "sent" if ok else "failed")
-            # 未来更多渠道在此追加分支
+            elif ch == "sct":
+                sendkey = preferences.get_sct_sendkey()
+                if not sendkey:
+                    logger.info("review push(sct) skipped: sendkey not configured")
+                    continue
+                try:
+                    from app.notifications.delivery import DeliveryConfig, SctChannel
+                    sct = SctChannel(DeliveryConfig(channel="sct", config={"sendkey": sendkey}))
+                    sct.deliver({"source": "review", "symbol": "", "message": content, "severity": "info"})
+                    logger.info("review push(sct) sent")
+                except Exception:
+                    logger.info("review push(sct) failed")
     except Exception as e:  # noqa: BLE001
         logger.warning("review push error: %s", e)
 

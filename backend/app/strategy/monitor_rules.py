@@ -35,8 +35,8 @@ DIRECTIONS = {"entry", "exit", "both"}
 STRATEGY_NOTIFY_EVENTS = {"buy_signal", "sell_signal", "pool_entry", "pool_exit"}
 SEVERITIES = {"info", "warn", "critical"}
 OPS = {">", ">=", "<", "<=", "==", "!="}
-# 告警投递渠道白名单 — 投递适配器仅实现飞书/Telegram; 旧规则的 wecom 在 normalize 时剥离。
-DELIVERY_CHANNELS = {"feishu", "telegram"}
+# 告警投递渠道白名单 — 投递适配器实现飞书/Telegram/SCT; 旧规则的 wecom 在 normalize 时剥离。
+DELIVERY_CHANNELS = {"feishu", "telegram", "sct"}
 TIME_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
 # ladder 规则: 封单监控的指标 (量=手, 额=元)
 LADDER_METRICS = {"sealed_vol", "sealed_amount"}
@@ -311,7 +311,7 @@ def validate(rule: dict) -> None:
         raise ValueError("bypass_quiet_period 必须是布尔值")
     channels = rule.get("webhook_channels", [])
     if not isinstance(channels, list) or any(channel not in DELIVERY_CHANNELS for channel in channels):
-        raise ValueError("channel 必须是已批准的 Feishu 或 Telegram 渠道")
+        raise ValueError("channel 必须是已批准的 Feishu、Telegram 或 SCT 渠道")
 
 
 def normalize(rule: dict) -> dict:

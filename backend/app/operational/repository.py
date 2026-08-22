@@ -456,7 +456,7 @@ class OperationalRepository:
         status: str,
         error: str | None,
     ) -> None:
-        if channel not in {"feishu", "telegram"} or status not in {"pending", "sent", "failed", "skipped"}:
+        if channel not in {"feishu", "telegram", "sct"} or status not in {"pending", "sent", "failed", "skipped"}:
             raise ValueError("notification delivery outcome is invalid")
         now = _now()
         with self._connection() as connection, connection:

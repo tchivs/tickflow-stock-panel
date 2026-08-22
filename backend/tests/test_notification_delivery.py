@@ -464,6 +464,7 @@ def test_monitor_rules_validate_accepts_sct():
 
     rule = {
         "id": "test_rule",
+        "name": "Test Rule",
         "type": "price",
         "scope": "symbols",
         "symbols": ["600519.SH"],

@@ -4,9 +4,12 @@ from __future__ import annotations
 import os
 import logging
 import re
+import time
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
+from datetime import date
 from typing import Any, Mapping, Protocol
+
 from urllib.parse import quote, urlparse
 
 import httpx
@@ -18,6 +21,10 @@ logger = logging.getLogger(__name__)
 
 _TELEGRAM_API_ORIGIN = "https://api.telegram.org"
 _SAFE_ERROR = "delivery failed"
+
+# Server酱 (SCT) dedup + daily limit (D-05)
+SCT_DEDUP_TTL = 300.0  # seconds — 5 minute dedup window
+SCT_DAILY_LIMIT = 200  # max SCT pushes per day before degradation
 
 
 def _fixture_mode() -> bool:
@@ -137,22 +144,52 @@ class SctChannel:
         self._timeout = httpx.Timeout(timeout_seconds, connect=timeout_seconds)
 
     def deliver(self, event: Mapping[str, Any]) -> Mapping[str, str]:
+        from app.audit.service import get_audit_repo
+
         title, body = _message(event)
         url = self._fixture_url or f"https://sctapi.ftqq.com/{self._sendkey}.send"
-        response = httpx.post(
-            url,
-            data={"title": title, "desp": body},
-            timeout=self._timeout,
-        )
-        if response.status_code != 200:
-            raise RuntimeError(f"SCT returned HTTP {response.status_code}")
+        t0 = time.perf_counter()
+        error: str | None = None
+        response: httpx.Response | None = None
         try:
-            body_json = response.json()
-        except ValueError:
+            response = httpx.post(
+                url,
+                data={"title": title, "desp": body},
+                timeout=self._timeout,
+            )
+            if response.status_code != 200:
+                raise RuntimeError(f"SCT returned HTTP {response.status_code}")
+            try:
+                body_json = response.json()
+            except ValueError:
+                body_json = None
+                return {"status": "sent"}
+            if isinstance(body_json, dict) and body_json.get("code", 0) != 0:
+                raise RuntimeError("Server酱 rejected the notification")
             return {"status": "sent"}
-        if isinstance(body_json, dict) and body_json.get("code", 0) != 0:
-            raise RuntimeError("Server酱 rejected the notification")
-        return {"status": "sent"}
+        except Exception as exc:
+            error = str(exc)
+            raise
+        finally:
+            audit_repo = get_audit_repo()
+            if audit_repo is not None:
+                try:
+                    response_summary = None
+                    raw_content = None
+                    if response is not None:
+                        response_summary = str(response.text)[:200] if response.text else None
+                        raw_content = response.content[:500]
+                    audit_repo.append(
+                        tool="sct",
+                        category="notification",
+                        scope=f"notification:{event.get('id', '')}",
+                        response_summary=response_summary,
+                        raw=raw_content,
+                        duration_ms=(time.perf_counter() - t0) * 1000,
+                        error=error,
+                    )
+                except Exception:  # noqa: BLE001
+                    pass  # audit failure must not block delivery
 
 
 def _safe_error(error: Exception, config: Mapping[str, Any]) -> str:
@@ -191,7 +228,10 @@ class NotificationDeliveryService:
             thread_name_prefix="notification-delivery",
         )
         self._futures: set[Future[None]] = set()
-
+        # SCT dedup + daily limit (D-05)
+        self._dedup_cache: dict[str, float] = {}
+        self._daily_count = 0
+        self._daily_date = date.today()
     def enqueue(
         self,
         *,
@@ -212,6 +252,33 @@ class NotificationDeliveryService:
                     error="quiet_period",
                 )
                 continue
+            # SCT dedup + daily limit (D-05)
+            if delivery_config.channel == SctChannel.name:
+                now = time.time()
+                today = date.today()
+                if self._daily_date != today:
+                    self._daily_count = 0
+                    self._daily_date = today
+                dedup_key = f"{event.get('rule_id', '')}:{event.get('symbol', '')}:{event.get('type', '')}"
+                last_seen = self._dedup_cache.get(dedup_key)
+                if last_seen is not None and (now - last_seen) < SCT_DEDUP_TTL:
+                    self._repository.create_delivery_outcome(
+                        event_id=event_id,
+                        channel=delivery_config.channel,
+                        status="skipped",
+                        error="dedup",
+                    )
+                    continue
+                if self._daily_count >= SCT_DAILY_LIMIT:
+                    self._repository.create_delivery_outcome(
+                        event_id=event_id,
+                        channel=delivery_config.channel,
+                        status="skipped",
+                        error="daily_limit_exceeded",
+                    )
+                    continue
+                self._dedup_cache[dedup_key] = now
+                self._daily_count += 1
             self._repository.create_delivery_outcome(
                 event_id=event_id,
                 channel=delivery_config.channel,

@@ -130,7 +130,7 @@ MIGRATIONS: tuple[str, ...] = (
     CREATE TABLE notification_deliveries (
         id INTEGER PRIMARY KEY,
         event_id TEXT NOT NULL REFERENCES alert_events(id) ON DELETE RESTRICT,
-        channel TEXT NOT NULL CHECK (channel IN ('feishu', 'telegram')),
+        channel TEXT NOT NULL CHECK (channel IN ('feishu', 'telegram', 'sct')),
         status TEXT NOT NULL CHECK (status IN ('pending', 'sent', 'failed', 'skipped')),
         error TEXT,
         created_at TEXT NOT NULL,
