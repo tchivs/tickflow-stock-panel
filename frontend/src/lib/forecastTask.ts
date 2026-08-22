@@ -191,8 +191,8 @@ export function useForecastTask({ instrument, jobId, enabled = true }: UseForeca
     unsub = wsStream.subscribe(channel, (data, type) => {
       if (disposed) return
 
-      // forecast 进度事件: forecast_progress 或 done
-      if (type === 'forecast_progress' || type === 'done') {
+      // forecast 进度事件: forecast_event (后端 WS 广播) 或 done
+      if (type === 'forecast_event' || type === 'done') {
         const progress = parseWsProgress(data, jobId)
         if (!progress) return
 

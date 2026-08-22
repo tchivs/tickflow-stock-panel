@@ -44,7 +44,7 @@ const RUN_CHANNEL_EVENTS = new Set([
   // walkforward plan 流
   'wf_progress', 'wf_done', 'wf_error',
   // forecast 流
-  'forecast_progress',
+  'forecast_event',
   // mining 流 (terminal 事件类型即状态名)
   'terminal',
   'succeeded', 'succeeded_with_budget_exhausted',
