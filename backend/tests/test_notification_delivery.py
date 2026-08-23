@@ -20,12 +20,6 @@ from app.operational.repository import OperationalRepository
 from app.services.quote_service import QuoteService
 
 
-class _RecordingSubscriber:
-    def __init__(self):
-        self.alerts: list[dict] = []
-
-    def push_alerts(self, alerts: list[dict]) -> None:
-        self.alerts.extend(alerts)
 
 
 def _event() -> dict:
@@ -57,8 +51,8 @@ def test_event_persists_and_streams_before_slow_delivery_completes(tmp_path):
             return {"status": "sent"}
 
     service = QuoteService()
-    subscriber = _RecordingSubscriber()
-    service._snapshot_subscribers = lambda: [subscriber]
+    broadcast_calls: list[tuple[str, str, dict]] = []
+    service._broadcast_alerts = lambda alerts: broadcast_calls.append(("alerts", "strategy_alert", alerts))
     delivery = NotificationDeliveryService(
         repository=repository,
         channels={"feishu": _SlowChannel()},
@@ -73,7 +67,12 @@ def test_event_persists_and_streams_before_slow_delivery_completes(tmp_path):
     )
 
     assert repository.get_alert_event("alert_01")["id"] == "alert_01"
-    assert subscriber.alerts == [_event()]
+    # Phase 55: 广播在投递完成前已发出 (通过 WS alerts 频道)
+    assert len(broadcast_calls) == 1
+    ch, mtype, broadcast_alerts = broadcast_calls[0]
+    assert ch == "alerts"
+    assert mtype == "strategy_alert"
+    assert broadcast_alerts[0]["id"] == "alert_01"
     assert delivery_started.wait(timeout=0.25) is True
     assert repository.list_delivery_outcomes("alert_01") == [
         {"channel": "feishu", "status": "pending", "error": None}
