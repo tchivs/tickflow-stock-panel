@@ -69,7 +69,6 @@
   "resolve_model_ids": "omit",
   "mode": "yolo",
   "granularity": "standard",
-  "quick_branch_template": null,
   "intel": {
     "enabled": true
   },
