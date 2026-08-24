@@ -16,7 +16,7 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from app.strategy.engine import StrategyEngine
+from app.strategy.engine import StrategyEngine, StrategyDataContext
 
 _P2_IDS = ("auction_allround", "t1_flash", "auction_intraday_confirm")
 _BUILTIN_DIR = Path(__file__).resolve().parents[1] / "app" / "strategy" / "builtin"
@@ -39,8 +39,12 @@ def _engine(minute_loader=None) -> StrategyEngine:
 def _run_auction(engine: StrategyEngine, strategy_id: str, fixture: pl.DataFrame):
     return engine.run(
         strategy_id,
-        as_of=date(2026, 8, 4),
-        precomputed=fixture,
+        context=StrategyDataContext(
+            asset_type="stock",
+            timeframe="1d",
+            as_of=date(2026, 8, 4),
+            current=fixture,
+        ),
         overrides={"basic_filter": {"enabled": False}},
     )
 

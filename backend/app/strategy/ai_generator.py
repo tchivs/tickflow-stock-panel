@@ -343,6 +343,7 @@ META = {{...}}，{entrypoint_requirement}。只输出完整 Python 代码。
         "polars",
         "numpy",
         "app.backtest.matrix",
+        "app.strategy.builtin",
         "app.strategy.builtin.factor_rank_research",
         "datetime",
         "__future__",
@@ -373,10 +374,16 @@ META = {{...}}，{entrypoint_requirement}。只输出完整 Python 代码。
         } - extra_allowed_calls
 
         def _module_allowed(module: str) -> bool:
-            return (
-                module in allowed_import_modules
-                or module.split(".", 1)[0] in allowed_import_modules
-            )
+            if module in allowed_import_modules:
+                return True
+            # 允许白名单模块的子模块 (如 app.strategy.builtin.xxx)
+            parent = module.split(".", 1)[0]
+            if parent in allowed_import_modules:
+                return True
+            for allowed in allowed_import_modules:
+                if module.startswith(allowed + "."):
+                    return True
+            return False
 
         # dunder 属性名: 访问这些属性可逃逸出策略沙箱拿到 os/subprocess 等
         forbidden_dunder_attrs = {

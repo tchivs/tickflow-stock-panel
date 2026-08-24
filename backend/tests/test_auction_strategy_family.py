@@ -40,10 +40,15 @@ def _engine(minute_loader=None):
 
 
 def _run_auction(engine, strategy_id: str, fixture: pl.DataFrame):
+    from app.strategy.engine import StrategyDataContext
     return engine.run(
         strategy_id,
-        as_of=date(2026, 8, 4),
-        precomputed=fixture,
+        context=StrategyDataContext(
+            asset_type="stock",
+            timeframe="1d",
+            as_of=date(2026, 8, 4),
+            current=fixture,
+        ),
         overrides={"basic_filter": {"enabled": False}},
     )
 
@@ -69,7 +74,7 @@ def _minute_partition_dir(tmp_path, trade_date: date) -> Path:
 
 def test_engine_short_circuit(tmp_path):
     """requires_auction_data=True + 缺 auction_volume → 空 StrategyResult, 不抛 ColumnNotFoundError。"""
-    from app.strategy.engine import StrategyEngine
+    from app.strategy.engine import StrategyEngine, StrategyDataContext
 
     _write_strategy(tmp_path, "seam_probe.py", '''"""seam probe"""
 import polars as pl
@@ -91,7 +96,10 @@ def filter(df: pl.DataFrame, params: dict) -> pl.Expr:
     )
     fixture = pl.DataFrame({"symbol": ["600001"], "open_gap": [0.03]})
     result = engine.run(
-        "seam_probe", as_of=date(2026, 8, 4), precomputed=fixture,
+        "seam_probe", context=StrategyDataContext(
+            asset_type="stock", timeframe="1d",
+            as_of=date(2026, 8, 4), current=fixture,
+        ),
         overrides={"basic_filter": {"enabled": False}},
     )
     assert result.total == 0
@@ -101,7 +109,7 @@ def filter(df: pl.DataFrame, params: dict) -> pl.Expr:
 
 def test_minute_truncation_no_future(tmp_path):
     """引擎单点截断: 分钟帧含 09:45 后 bar → "确认时刻之后无输入" 断言不触发且池只含 09:45 及之前确认的 symbol。"""
-    from app.strategy.engine import StrategyEngine
+    from app.strategy.engine import StrategyEngine, StrategyDataContext
 
     # 手工分钟帧 (canonical 8 列): 600001 与 600002 有 09:30–09:45 bar; 600003 只有 09:50/10:00 bar
     minute_dir = _minute_partition_dir(tmp_path, date(2026, 8, 4))
@@ -165,7 +173,10 @@ def minute_confirm(df_minute: pl.DataFrame, params: dict) -> pl.DataFrame:
         "open_gap": [0.03, 0.02, 0.04],
     })
     result = engine.run(
-        "minute_probe", as_of=date(2026, 8, 4), precomputed=daily,
+        "minute_probe", context=StrategyDataContext(
+            asset_type="stock", timeframe="1d",
+            as_of=date(2026, 8, 4), current=daily,
+        ),
         overrides={"basic_filter": {"enabled": False}},
     )
     assert result.total == 2
@@ -191,14 +202,14 @@ META = {"id": "bad_window", "time_window": "foo", "scoring": {"open_gap": 1.0}}
         strategy_dirs=[tmp_path / "strategies"],
     )
     errs = eng2.load_errors()
-    assert any(e["file"] == "bad_window.py" for e in errs), f"expected load error, got {errs}"
+    assert any(e["file"].endswith("bad_window.py") for e in errs), f"expected load error, got {errs}"
     ids = {m["id"] for m in eng2.list_strategies()}
     assert "bad_window" not in ids
 
 
 def test_missing_minute_required_fail_closed(tmp_path):
     """minute_confirm_required=True + minute_loader 返回空帧 → 空 StrategyResult (分钟数据缺席即空池)。"""
-    from app.strategy.engine import StrategyEngine
+    from app.strategy.engine import StrategyEngine, StrategyDataContext
 
     _write_strategy(tmp_path, "minute_req.py", '''"""minute required"""
 import polars as pl
@@ -225,7 +236,10 @@ def minute_confirm(df_minute: pl.DataFrame, params: dict) -> pl.DataFrame:
     )
     daily = pl.DataFrame({"symbol": ["600001"], "open_gap": [0.03]})
     result = engine.run(
-        "minute_req", as_of=date(2026, 8, 4), precomputed=daily,
+        "minute_req", context=StrategyDataContext(
+            asset_type="stock", timeframe="1d",
+            as_of=date(2026, 8, 4), current=daily,
+        ),
         overrides={"basic_filter": {"enabled": False}},
     )
     assert result.total == 0

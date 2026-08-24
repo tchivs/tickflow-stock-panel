@@ -106,6 +106,16 @@ def _engine(minute_loader=None, strategy_dirs=None):
     )
 
 
+def _ctx(as_of, precomputed=None, asset_type="stock", timeframe="1d"):
+    """创建 StrategyDataContext, 兼容 engine.run(context=...) 新签名。"""
+    from app.strategy.engine import StrategyDataContext
+    return StrategyDataContext(
+        asset_type=asset_type,
+        timeframe=timeframe,
+        as_of=as_of,
+        current=precomputed,
+    )
+
 def _write_strategy(tmp_path, name: str, body: str) -> Path:
     """写一个临时策略文件, 返回 strategies 目录。"""
     d = tmp_path / "strategies"
@@ -229,8 +239,7 @@ def test_make_minute_loader_empty_lake_required_fail_closed(tmp_path):
     _write_strategy(tmp_path, "minute_req.py", _MINUTE_REQ_BODY)
     daily = pl.DataFrame({"symbol": ["600001", "600002"], "open_gap": [0.03, 0.02]})
     kwargs = {
-        "as_of": date(2026, 8, 4),
-        "precomputed": daily,
+        "context": _ctx(date(2026, 8, 4), precomputed=daily),
         "overrides": {"basic_filter": {"enabled": False}},
     }
 
@@ -257,7 +266,7 @@ def test_make_minute_loader_empty_lake_optional_keeps_pool(tmp_path):
     daily = pl.DataFrame({"symbol": ["600001", "600002"], "open_gap": [0.03, 0.04]})
     engine = _engine(minute_loader=make_minute_loader(tmp_path), strategy_dirs=[tmp_path / "strategies"])
     result = engine.run(
-        "minute_opt", as_of=date(2026, 8, 4), precomputed=daily,
+        "minute_opt", context=_ctx(date(2026, 8, 4), precomputed=daily),
         overrides={"basic_filter": {"enabled": False}},
     )
     # minute_confirm 若被调用会清空池 → total==2 证明确认被跳过 (非空跑), 日线核心池保留
@@ -302,7 +311,7 @@ def test_make_minute_loader_partition_truncation_lights_confirm(tmp_path, monkey
     })
     engine = _engine(minute_loader=make_minute_loader(tmp_path), strategy_dirs=[tmp_path / "strategies"])
     result = engine.run(
-        "intraday_probe", as_of=date(2026, 8, 4), precomputed=daily,
+        "intraday_probe", context=_ctx(date(2026, 8, 4), precomputed=daily),
         overrides={"basic_filter": {"enabled": False}},
     )
     # 截断生效 (双门禁静默): 真实确认阈值 cum 1M × 16 ≥ 10M 只留 600301/600302
@@ -330,7 +339,7 @@ def test_make_minute_loader_readonly(tmp_path):
     engine = _engine(minute_loader=loader, strategy_dirs=[tmp_path / "strategies"])
     daily = pl.DataFrame({"symbol": ["600001"], "open_gap": [0.03]})
     result = engine.run(
-        "minute_req", as_of=date(2026, 8, 4), precomputed=daily,
+        "minute_req", context=_ctx(date(2026, 8, 4), precomputed=daily),
         overrides={"basic_filter": {"enabled": False}},
     )
     assert result.total == 1  # 确认点亮, 池保留 (loader 读到了分区)
@@ -457,8 +466,7 @@ def test_wired_empty_lake_byte_identical_to_unwired(tmp_path):
     _write_strategy(tmp_path, "minute_opt.py", _MINUTE_OPT_BODY)
     daily = pl.DataFrame({"symbol": ["600001", "600002"], "open_gap": [0.03, 0.04]})
     kwargs = {
-        "as_of": date(2026, 8, 4),
-        "precomputed": daily,
+        "context": _ctx(date(2026, 8, 4), precomputed=daily),
         "overrides": {"basic_filter": {"enabled": False}},
     }
 

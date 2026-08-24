@@ -577,6 +577,9 @@ class StrategyEngine:
             max_hold_days=getattr(mod, "MAX_HOLD_DAYS", None),
             filter_fn=filter_fn,
             filter_history_fn=filter_history_fn,
+            minute_confirm_fn=getattr(mod, "minute_confirm", None),
+            evaluation_time=_parse_eval_time(meta.get("evaluation_time")),
+            minute_confirm_required=bool(meta.get("minute_confirm_required", False)),
             required_features=frozenset(meta.get("required_features", []) or [])
             | frozenset(getattr(mod, "REQUIRED_FEATURES", []) or []),
             lookback_days=int(getattr(mod, "LOOKBACK_DAYS", meta.get("lookback_days", 1)) or 1),
