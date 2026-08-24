@@ -97,3 +97,65 @@ def test_send_wecom_no_audit_repo_not_error(monkeypatch):
         assert result is True  # 推送不受影响
     finally:
         set_audit_repo(original)
+
+
+def test_post_wecom_detail_success_returns_summary(monkeypatch):
+    """_post_wecom_detail 成功时返回 (True, 'HTTP 200 errcode=0')。"""
+    import httpx
+    from unittest.mock import MagicMock
+
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.json.return_value = {"errcode": 0, "errmsg": "ok"}
+    resp.text = '{"errcode":0,"errmsg":"ok"}'
+    monkeypatch.setattr(httpx, "post", lambda *a, **kw: resp)
+
+    ok, summary = webhook_adapter._post_wecom_detail(_VALID_URL, {"msgtype": "text"})
+    assert ok is True
+    assert "errcode=0" in summary
+
+
+def test_post_wecom_detail_business_failure_returns_errcode(monkeypatch):
+    """_post_wecom_detail 业务失败时返回 (False, 'HTTP 200 errcode=xxx')。"""
+    import httpx
+    from unittest.mock import MagicMock
+
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.json.return_value = {"errcode": 45009, "errmsg": "frequency limited"}
+    resp.text = '{"errcode":45009}'
+    monkeypatch.setattr(httpx, "post", lambda *a, **kw: resp)
+
+    ok, summary = webhook_adapter._post_wecom_detail(_VALID_URL, {"msgtype": "text"})
+    assert ok is False
+    assert "45009" in summary
+    assert "frequency limited" in summary
+
+
+def test_post_wecom_detail_http_error(monkeypatch):
+    """_post_wecom_detail HTTP 非200时返回 (False, 'HTTP xxx')。"""
+    import httpx
+    from unittest.mock import MagicMock
+
+    resp = MagicMock()
+    resp.status_code = 500
+    resp.text = "Internal Server Error"
+    monkeypatch.setattr(httpx, "post", lambda *a, **kw: resp)
+
+    ok, summary = webhook_adapter._post_wecom_detail(_VALID_URL, {"msgtype": "text"})
+    assert ok is False
+    assert "HTTP 500" in summary
+
+
+def test_post_wecom_detail_exception(monkeypatch):
+    """_post_wecom_detail 网络异常时返回 (False, 'exception: ...')。"""
+    import httpx
+
+    def _raise(*a, **kw):
+        raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr(httpx, "post", _raise)
+
+    ok, summary = webhook_adapter._post_wecom_detail(_VALID_URL, {"msgtype": "text"})
+    assert ok is False
+    assert "exception" in summary

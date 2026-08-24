@@ -501,3 +501,34 @@ def test_monitor_rules_normalize_keeps_sct():
     result = normalize(rule)
     assert "sct" in result["webhook_channels"]
     assert "wecom" not in result["webhook_channels"]  # wecom still stripped
+
+
+def test_sct_dedup_lock_is_thread_safe(tmp_path):
+    """并发 enqueue 不导致 daily_count 超限或 dedup 竞态。"""
+    import threading
+
+    repository, service = _make_delivery_service(tmp_path)
+    barrier = threading.Barrier(4)
+    results: list[dict] = []
+
+    def _enqueue(idx: int):
+        barrier.wait(timeout=2.0)
+        event_id = f"concurrent_{idx}"
+        repository.record_alert_event(_sct_event(event_id=event_id, rule_id=f"rule_{idx}"))
+        try:
+            service.enqueue(event_id=event_id, channel_configs=[_sct_config()])
+        except Exception as e:  # noqa: BLE001
+            results.append({"idx": idx, "error": str(e)})
+
+    threads = [threading.Thread(target=_enqueue, args=(i,)) for i in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=5.0)
+
+    service.drain(timeout=2.0)
+
+    # 每个线程应有唯一 rule_id, 不会触发 dedup
+    # daily_count 应精确等于 4, 不超过
+    assert service._daily_count == 4
+    assert len(results) == 0
