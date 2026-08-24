@@ -74,34 +74,38 @@ export function useClientRulesEngine(): ClientRulesEngine {
     return unsub
   }, [qc])
 
-  // 行情更新后评估规则 (D-02, D-03)
+  // 行情更新后评估规则 (D-02, D-03) — 错误边界保护
   useEffect(() => {
-    const quotes = quotesQuery.data?.quotes
-    if (!quotes || quotes.length === 0) return
+    try {
+      const quotes = quotesQuery.data?.quotes
+      if (!quotes || quotes.length === 0) return
 
-    const currentRules = rulesRef.current
-    if (currentRules.length === 0) return
+      const currentRules = rulesRef.current
+      if (currentRules.length === 0) return
 
-    const hits = evaluateRules(quotes, currentRules)
-    if (hits.length === 0) return
+      const hits = evaluateRules(quotes, currentRules)
+      if (hits.length === 0) return
 
-    const now = Date.now()
-    const newTriggered: TriggeredRecord[] = []
+      const now = Date.now()
+      const newTriggered: TriggeredRecord[] = []
 
-    for (const { rule, quote } of hits) {
-      if (isDebounced(rule.id, now)) continue
-      markTriggered(rule.id, now)
-      triggerAlert(rule, quote)
-      newTriggered.push({
-        ruleId: rule.id,
-        triggeredAt: now,
-        triggeredPrice: quote.price ?? quote.close ?? null,
-        triggeredPct: quote.pct ?? quote.change_pct ?? null,
-      })
-    }
+      for (const { rule, quote } of hits) {
+        if (isDebounced(rule.id, now)) continue
+        markTriggered(rule.id, now)
+        triggerAlert(rule, quote)
+        newTriggered.push({
+          ruleId: rule.id,
+          triggeredAt: now,
+          triggeredPrice: quote.price ?? quote.close ?? null,
+          triggeredPct: quote.pct ?? quote.change_pct ?? null,
+        })
+      }
 
-    if (newTriggered.length > 0) {
-      setTriggered(prev => [...prev, ...newTriggered])
+      if (newTriggered.length > 0) {
+        setTriggered(prev => [...prev, ...newTriggered])
+      }
+    } catch {
+      // evaluateRules / triggerAlert 不应抛异常, 但安全起见静默忽略
     }
   }, [quotesQuery.data])
 
