@@ -20,8 +20,6 @@ from app.operational.repository import OperationalRepository
 from app.services.quote_service import QuoteService
 
 
-
-
 def _event() -> dict:
     return {
         "id": "alert_01",
@@ -205,12 +203,13 @@ def test_operational_alert_history_filters_and_delivery_detail_are_safe(
 
 # ===== Phase 56: SCT channel audit / dedup / daily limit / pipeline =====
 
-import httpx
 import time as _time
 
-from app.notifications.delivery import SctChannel, SCT_DEDUP_TTL, SCT_DAILY_LIMIT
+import httpx
+
 from app.audit.envelope import ToolCallAuditRepository
-from app.audit.service import get_audit_repo, set_audit_repo
+from app.audit.service import set_audit_repo
+from app.notifications.delivery import SCT_DAILY_LIMIT, SCT_DEDUP_TTL, SctChannel
 
 
 def _sct_event(*, event_id="sct_evt_01", rule_id="sct_rule", symbol="600519.SH", event_type="price"):
@@ -454,8 +453,8 @@ def test_quote_service_sends_sct_when_requested(monkeypatch, tmp_path):
 
 def test_review_push_sct_branch(monkeypatch, tmp_path):
     """_maybe_push_review with channels including 'sct' → SctChannel.deliver called."""
-    from app.services import preferences
     from app.jobs import daily_pipeline
+    from app.services import preferences
 
     path = tmp_path / "preferences.json"
     monkeypatch.setattr(preferences, "_path", lambda: path)
@@ -517,7 +516,7 @@ def test_sct_dedup_lock_is_thread_safe(tmp_path):
         repository.record_alert_event(_sct_event(event_id=event_id, rule_id=f"rule_{idx}"))
         try:
             service.enqueue(event_id=event_id, channel_configs=[_sct_config()])
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             results.append({"idx": idx, "error": str(e)})
 
     threads = [threading.Thread(target=_enqueue, args=(i,)) for i in range(4)]

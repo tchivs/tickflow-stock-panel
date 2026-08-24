@@ -1,16 +1,16 @@
 """Bounded Feishu, Telegram, and Server酱 (SCT) delivery with durable, credential-safe outcomes."""
 from __future__ import annotations
 
-import os
 import logging
+import os
 import re
 import threading
 import time
+from collections.abc import Mapping
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from datetime import date
-from typing import Any, Mapping, Protocol
-
+from typing import Any, Protocol
 from urllib.parse import quote, urlparse
 
 import httpx
@@ -189,7 +189,7 @@ class SctChannel:
                         duration_ms=(time.perf_counter() - t0) * 1000,
                         error=error,
                     )
-                except Exception:  # noqa: BLE001
+                except Exception:
                     pass  # audit failure must not block delivery
 
 
@@ -332,7 +332,7 @@ class NotificationDeliveryService:
                 status=status,
                 error=safe_error,
             )
-        except Exception as error:  # noqa: BLE001 - delivery is intentionally isolated
+        except Exception as error:
             logger.warning("notification delivery failed for %s", delivery_config.channel)
             self._repository.update_delivery_outcome(
                 event_id=event_id,
@@ -361,7 +361,7 @@ class NotificationDeliveryService:
                 "occurred_at": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()),
             }
             channel.deliver(summary_event)
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.warning("SCT overflow summary delivery failed")
     def drain(self, timeout: float | None = None) -> None:
         """Wait for currently queued work in tests and controlled shutdown paths."""

@@ -32,7 +32,7 @@ def _safe(fn: Any, *args: Any, **kwargs: Any) -> Any:
     """fail-soft: 子项异常时返回 None, 不阻断汇总响应。"""
     try:
         return fn(*args, **kwargs)
-    except Exception:  # noqa: BLE001
+    except Exception:
         return None
 
 
@@ -72,7 +72,7 @@ def _reports_section(request: Request) -> dict[str, Any]:
                  "type": "financial"}
                 for r in ai_reports.list_reports()
             ]
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 
     recap_reports: list[dict[str, Any]] = []
@@ -84,7 +84,7 @@ def _reports_section(request: Request) -> dict[str, Any]:
              "type": "market_recap"}
             for r in market_recap_reports.list_reports()
         ]
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 
     all_reports = financials_reports + recap_reports
@@ -133,7 +133,7 @@ def _pending_section(request: Request) -> dict[str, Any]:
              "link": f"/review?run_id={r['id']}"}
             for r in rows
         ]
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 
     # 2. 因子晋升: pending 状态的 ticket
@@ -154,7 +154,7 @@ def _pending_section(request: Request) -> dict[str, Any]:
              "type": "promotion", "link": f"/backtest/alpha-workbench?run_id={r['run_id']}"}
             for r in rows
         ]
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 
     # 3. 自定义信号
@@ -168,7 +168,7 @@ def _pending_section(request: Request) -> dict[str, Any]:
              "type": "signal", "link": "/monitor"}
             for s in sigs if s.get("enabled")
         ]
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 
     # 4. 纸面调仓: 最近 portfolio 快照
@@ -181,7 +181,7 @@ def _pending_section(request: Request) -> dict[str, Any]:
              "type": "paper_rebalance", "link": "/portfolio"}
             for p in positions
         ]
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 
     items = lifecycle + promotion + signals + paper_rebalance

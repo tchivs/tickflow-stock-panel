@@ -101,8 +101,9 @@ def test_send_wecom_no_audit_repo_not_error(monkeypatch):
 
 def test_post_wecom_detail_success_returns_summary(monkeypatch):
     """_post_wecom_detail 成功时返回 (True, 'HTTP 200 errcode=0')。"""
-    import httpx
     from unittest.mock import MagicMock
+
+    import httpx
 
     resp = MagicMock()
     resp.status_code = 200
@@ -117,8 +118,9 @@ def test_post_wecom_detail_success_returns_summary(monkeypatch):
 
 def test_post_wecom_detail_business_failure_returns_errcode(monkeypatch):
     """_post_wecom_detail 业务失败时返回 (False, 'HTTP 200 errcode=xxx')。"""
-    import httpx
     from unittest.mock import MagicMock
+
+    import httpx
 
     resp = MagicMock()
     resp.status_code = 200
@@ -134,8 +136,9 @@ def test_post_wecom_detail_business_failure_returns_errcode(monkeypatch):
 
 def test_post_wecom_detail_http_error(monkeypatch):
     """_post_wecom_detail HTTP 非200时返回 (False, 'HTTP xxx')。"""
-    import httpx
     from unittest.mock import MagicMock
+
+    import httpx
 
     resp = MagicMock()
     resp.status_code = 500
