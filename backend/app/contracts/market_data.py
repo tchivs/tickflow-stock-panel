@@ -24,7 +24,8 @@ class FixtureInstrument(_StrictFixtureModel):
     name: str = Field(min_length=1)
     code: str = Field(min_length=1)
     exchange: str = Field(min_length=1)
-
+    total_shares: float | None = None
+    float_shares: float | None = None
 
 class FixtureDailyBar(_StrictFixtureModel):
     symbol: str = Field(min_length=1)

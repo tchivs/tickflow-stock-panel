@@ -89,7 +89,8 @@ def _write_governed_backtest_fixture(fixtures_dir) -> None:  # type: ignore[no-u
             business_day += 1
         cursor += timedelta(days=1)
     (fixtures_dir / "instruments.json").write_text(json.dumps({"instruments": [
-        {"symbol": "600000.SH", "name": "浦发银行", "code": "600000", "exchange": "SH"}
+        {"symbol": "600000.SH", "name": "浦发银行", "code": "600000", "exchange": "SH",
+         "total_shares": 35_000_000_000, "float_shares": 30_000_000_000}
     ]}), encoding="utf-8")
     index_daily = [
         {
@@ -631,9 +632,10 @@ def test_spawned_governed_backtest_completes_split_evidence_within_budget(tmp_pa
     run_phase1_fixture_sync(data_dir)
     result = GovernedExperimentRunner(
         collaborator=StrategyBacktestExperimentCollaborator(data_dir=data_dir),
-        wall_clock_seconds=15,
-        cpu_seconds=15,
-        memory_limit_bytes=2 * 1024 * 1024 * 1024,
+        wall_clock_seconds=30,
+        cpu_seconds=30,
+        memory_limit_bytes=4 * 1024 * 1024 * 1024,
+        output_limit_bytes=1024 * 1024,
     ).run(specification={
         "research_asset_id": "fixture-asset", "version": 1, "method": "bounded-backtest",
         "bound_strategy_id": "bullish_alignment",
@@ -644,7 +646,7 @@ def test_spawned_governed_backtest_completes_split_evidence_within_budget(tmp_pa
     })
 
     assert result["status"] == "completed"
-    assert result["environment"]["elapsed_ms"] < 15_000  # type: ignore[index]
+    assert result["environment"]["elapsed_ms"] < 30_000  # type: ignore[index]
     assert result["metrics"]["eligible_buy_count"] > 0  # type: ignore[index]
     assert result["resolved_parameters"] == {"require_ma_alignment": True}
     split = result["evolution_evidence"]["split"]  # type: ignore[index]

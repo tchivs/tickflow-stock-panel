@@ -50,7 +50,6 @@ class StrategyBacktestExperimentCollaborator:
     def _service(self) -> Any:
         """Rebuild non-pickleable governed data access inside the spawned worker."""
         from app.backtest.engine import BacktestEngine
-        from app.backtest.frozen_panel import FrozenPanelArtifactStore
         from app.backtest.strategy import StrategyBacktestService
         from app.services.minute_loader import make_minute_loader
         from app.services.screener import ScreenerService
@@ -74,22 +73,11 @@ class StrategyBacktestExperimentCollaborator:
         return StrategyBacktestService(
             BacktestEngine(repository),
             strategy_engine,
-            frozen_panel_store=FrozenPanelArtifactStore(data_dir / "research-artifacts"),
         )
 
     def prepare(self, *, specification: dict[str, object]) -> dict[str, object]:
-        """Freeze aggregate and split panels in the parent before process spawning."""
-        from app.backtest.frozen_panel import FrozenPanelArtifactStore
-
-        scope = _bound_scope(specification)
-        in_sample_scope, out_of_sample_scope = self._split_scopes(scope)
-        backtest = self._service()
-        store = FrozenPanelArtifactStore(Path(self._data_dir) / "research-artifacts")
-        artifacts = [
-            backtest.freeze_panel_artifact(self._config(window), store)
-            for window in (scope, in_sample_scope, out_of_sample_scope)
-        ]
-        return {**specification, "_frozen_panel_artifacts": artifacts}
+        """No-op preparation — frozen panel feature removed; panels are built on-demand."""
+        return {**specification, "_frozen_panel_artifacts": [None, None, None]}
 
     def run(self, *, specification: dict[str, object]) -> dict[str, object]:
         scope = _bound_scope(specification)
@@ -99,7 +87,7 @@ class StrategyBacktestExperimentCollaborator:
         elif (
             isinstance(prepared, list)
             and len(prepared) == 3
-            and all(isinstance(item, Mapping) for item in prepared)
+            and all(item is None or isinstance(item, Mapping) for item in prepared)
         ):
             artifacts = list(prepared)  # type: ignore[list-item]
         else:

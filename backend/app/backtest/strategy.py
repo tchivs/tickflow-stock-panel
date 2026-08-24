@@ -1144,6 +1144,23 @@ class StrategyBacktestService:
                 return _err("正式回测区间内无数据")
             feature_width = int(panel.width)
 
+        # 恢复 governed_input_manifest — 指纹回溯回测数据来源
+        if panel is not None:
+            governed_input_manifest = self._governed_input_manifest(panel, config)
+        else:
+            # matrix_native 路径: panel 未直接加载, 用简单标识
+            governed_input_manifest = {
+                "source": "governed_backtest_engine",
+                "source_kind": "matrix_native",
+                "asset_type": config.asset_type,
+                "fingerprint": hashlib.sha256(
+                    json.dumps(
+                        {"strategy_id": config.strategy_id, "start": str(config.start), "end": str(config.end)},
+                        sort_keys=True, separators=(",", ":"),
+                    ).encode("utf-8")
+                ).hexdigest(),
+            }
+
         matcher_config = MatcherConfig(
             matching=config.matching,
             entry_fill=config.entry_fill,
@@ -1574,6 +1591,7 @@ class StrategyBacktestService:
                 else []
             ),
             strategy_info=strategy_info,
+            governed_input_manifest=governed_input_manifest,
             elapsed_ms=round(elapsed, 1),
         )
 
@@ -2039,6 +2057,35 @@ class StrategyBacktestService:
             "holding_days": c.holding_days,
             "minute_fill": c.minute_fill,
             "regime_filter": c.regime_filter,
+        }
+
+    @staticmethod
+    def _governed_input_manifest(
+        loaded: pl.DataFrame,
+        config: StrategyBacktestConfig,
+    ) -> dict[str, object]:
+        """Summarize the exact governed panel loaded for reproducible strategy runs."""
+        schema = {name: str(dtype) for name, dtype in loaded.schema.items()}
+        observed_start = loaded.select(pl.col("date").min()).item()
+        observed_end = loaded.select(pl.col("date").max()).item()
+        source_reference: dict[str, object] = {
+            "loader": "BacktestEngine.load_panel",
+            "source_kind": "governed_enriched_parquet",
+            "asset_type": config.asset_type,
+            "schema": schema,
+            "observed_start": str(observed_start),
+            "observed_end": str(observed_end),
+            "loaded_row_count": loaded.height,
+        }
+
+        def _encode(value: object) -> bytes:
+            return json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+        return {
+            **source_reference,
+            "source": "governed_backtest_engine",
+            "revision": hashlib.sha256(_encode(schema)).hexdigest(),
+            "fingerprint": hashlib.sha256(_encode(source_reference)).hexdigest(),
         }
 
     @staticmethod
