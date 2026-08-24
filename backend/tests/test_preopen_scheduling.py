@@ -116,16 +116,6 @@ def _preopen_rule() -> dict:
     }
 
 
-class _RecordingSubscriber:
-    """记录 push_alerts 的 SSE 订阅者桩 (镜像 test_notification_delivery._RecordingSubscriber)。"""
-
-    def __init__(self):
-        self.alerts: list[list[dict]] = []
-
-    def push_alerts(self, alerts: list[dict]) -> None:
-        self.alerts.append(alerts)
-
-
 # ================================================================
 # T12 — 尾段接线: persist 后单飞内恰一次 evaluate_premarket_alerts(内存 payload)
 # ================================================================
