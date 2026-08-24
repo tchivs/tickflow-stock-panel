@@ -44,15 +44,28 @@ def test_all_builtin_strategies_declare_asset_types_and_timeframes():
         assert meta["timeframes"] == ["1d"]
 
 
-def test_all_builtin_strategies_use_matrix_backend_only():
+def test_all_builtin_strategies_declare_valid_backend():
+    """所有内置策略必须有合法 execution_backend + 对应实现。
+
+    matrix_native: 必须有 MATRIX_STRATEGY, 无 filter/filter_history。
+    polars_expr:   必须有 filter, 无 filter_history/MATRIX_STRATEGY。
+    """
     engine = _engine()
     assert engine.load_errors() == []
-    strategies = [engine.get(meta["id"]) for meta in engine.list_strategies()]
-    assert len(strategies) == 18
-    assert all(strategy.execution_backend == "matrix_native" for strategy in strategies)
-    assert all(strategy.matrix_strategy is not None for strategy in strategies)
-    assert all(strategy.filter_fn is None for strategy in strategies)
-    assert all(strategy.filter_history_fn is None for strategy in strategies)
+    strategies = {meta["id"]: engine.get(meta["id"]) for meta in engine.list_strategies()}
+    assert len(strategies) >= 18  # 至少 18 个原始策略
+
+    for sid, strategy in strategies.items():
+        if strategy.execution_backend == "matrix_native":
+            assert strategy.matrix_strategy is not None, f"{sid}: matrix_native 缺 MATRIX_STRATEGY"
+            assert strategy.filter_fn is None, f"{sid}: matrix_native 不应有 filter"
+            assert strategy.filter_history_fn is None, f"{sid}: matrix_native 不应有 filter_history"
+        elif strategy.execution_backend == "polars_expr":
+            assert strategy.filter_fn is not None, f"{sid}: polars_expr 缺 filter"
+            assert strategy.filter_history_fn is None, f"{sid}: polars_expr 不应有 filter_history"
+            assert strategy.matrix_strategy is None, f"{sid}: polars_expr 不应有 MATRIX_STRATEGY"
+        else:
+            pytest.fail(f"{sid}: 非预期 backend {strategy.execution_backend!r}")
 
 
 def test_all_builtin_matrix_formulas_accept_base_market_matrix():
@@ -79,11 +92,16 @@ def test_all_builtin_matrix_formulas_accept_base_market_matrix():
     from app.backtest.matrix import build_market_data_matrix
 
     fields = set()
-    for strategy in (engine.get(meta["id"]) for meta in engine.list_strategies()):
+    for meta in engine.list_strategies():
+        strategy = engine.get(meta["id"])
+        if strategy.matrix_strategy is None:
+            continue  # polars_expr / composite 无矩阵公式, 跳过
         fields.update(engine._matrix_field_columns(strategy))
     market = build_market_data_matrix(panel, field_columns=fields)
     for meta in engine.list_strategies():
         strategy = engine.get(meta["id"])
+        if strategy.matrix_strategy is None:
+            continue
         signals = strategy.matrix_strategy.compute_signals(market, {})
         assert signals.shape == market.shape, meta["id"]
 
