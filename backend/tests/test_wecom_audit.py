@@ -46,7 +46,7 @@ def _audit_repo():
 
 def test_send_wecom_success_records_audit(monkeypatch, _audit_repo):
     """send_wecom 成功时审计记录 tool=wecom, category=notification, error=None。"""
-    monkeypatch.setattr(webhook_adapter, "_post_wecom", lambda url, payload: True)
+    monkeypatch.setattr(webhook_adapter, "_post_wecom_detail", lambda url, payload: (True, "HTTP 200 errcode=0"))
     result = webhook_adapter.send_wecom(_VALID_URL, "测试标题", "正文")
     assert result is True
     records = _audit_repo.list_records()
@@ -55,14 +55,14 @@ def test_send_wecom_success_records_audit(monkeypatch, _audit_repo):
     assert rec["tool"] == "wecom"
     assert rec["category"] == "notification"
     assert rec["error"] is None
-    assert rec["response_summary"] == "sent"
+    assert rec["response_summary"] == "HTTP 200 errcode=0"
     assert rec["scope"].startswith("push:测试标题")
     assert rec["duration_ms"] >= 0
 
 
 def test_send_wecom_failure_records_audit(monkeypatch, _audit_repo):
     """send_wecom 失败时审计记录 tool=wecom, error='wecom delivery failed'。"""
-    monkeypatch.setattr(webhook_adapter, "_post_wecom", lambda url, payload: False)
+    monkeypatch.setattr(webhook_adapter, "_post_wecom_detail", lambda url, payload: (False, "HTTP 200 errcode=93000 invalid webhook url"))
     result = webhook_adapter.send_wecom(_VALID_URL, "失败标题", "正文")
     assert result is False
     records = _audit_repo.list_records()
@@ -70,12 +70,12 @@ def test_send_wecom_failure_records_audit(monkeypatch, _audit_repo):
     rec = records[0]
     assert rec["tool"] == "wecom"
     assert rec["error"] == "wecom delivery failed"
-    assert rec["response_summary"] == "failed"
+    assert rec["response_summary"] == "HTTP 200 errcode=93000 invalid webhook url"
 
 
 def test_send_wecom_markdown_success_records_audit(monkeypatch, _audit_repo):
     """send_wecom_markdown 成功时审计记录 tool=wecom。"""
-    monkeypatch.setattr(webhook_adapter, "_post_wecom", lambda url, payload: True)
+    monkeypatch.setattr(webhook_adapter, "_post_wecom_detail", lambda url, payload: (True, "HTTP 200 errcode=0"))
     result = webhook_adapter.send_wecom_markdown(_VALID_URL, "复盘报告", "## 大盘概览\n\n今日震荡收平。")
     assert result is True
     records = _audit_repo.list_records()
@@ -84,12 +84,12 @@ def test_send_wecom_markdown_success_records_audit(monkeypatch, _audit_repo):
     assert rec["tool"] == "wecom"
     assert rec["category"] == "notification"
     assert rec["error"] is None
-    assert rec["response_summary"] == "sent"
+    assert rec["response_summary"] == "HTTP 200 errcode=0"
 
 
 def test_send_wecom_no_audit_repo_not_error(monkeypatch):
     """get_audit_repo 返回 None 时不报错 (推送仍正常)。"""
-    monkeypatch.setattr(webhook_adapter, "_post_wecom", lambda url, payload: True)
+    monkeypatch.setattr(webhook_adapter, "_post_wecom_detail", lambda url, payload: (True, "HTTP 200 errcode=0"))
     original = get_audit_repo()
     set_audit_repo(None)
     try:

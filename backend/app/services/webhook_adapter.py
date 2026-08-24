@@ -278,6 +278,18 @@ def _post_wecom(webhook_url: str, payload: dict) -> bool:
 
     成功响应: HTTP 200 且 errcode=0。失败静默返回 False。
     """
+    return _post_wecom_detail(webhook_url, payload)[0]
+
+
+_wecom_last_response: dict[str, Any] | None = None
+
+
+def _post_wecom_detail(webhook_url: str, payload: dict) -> tuple[bool, str | None]:
+    """发送 WeCom webhook 并返回 (success, response_summary)。
+
+    response_summary 包含 HTTP 状态码 + errcode, 供审计记录使用。
+    """
+    global _wecom_last_response
     try:
         import httpx
 
@@ -286,24 +298,30 @@ def _post_wecom(webhook_url: str, payload: dict) -> bool:
             try:
                 data = resp.json()
                 if isinstance(data, dict):
-                    # errcode=0 表示成功; 45009=频率限制, 其它非零=业务失败
+                    _wecom_last_response = data
                     if data.get("errcode") == 0:
-                        return True
+                        return True, f"HTTP 200 errcode=0"
+                    errcode = data.get("errcode", "?")
+                    errmsg = data.get("errmsg", "")
                     logger.warning("企业微信推送业务失败: %s", data)
-                    return False
+                    return False, f"HTTP 200 errcode={errcode} {errmsg}"
             except ValueError:
-                return True
+                return True, "HTTP 200 (non-JSON)"
         logger.warning("企业微信推送 HTTP %s: %s", resp.status_code, resp.text[:200])
-        return False
+        return False, f"HTTP {resp.status_code}"
     except Exception as e:  # noqa: BLE001
         logger.warning("企业微信 Webhook 推送失败: %s", e)
-        return False
+        return False, f"exception: {type(e).__name__}"
 
 
-def _audit_wecom(title: str, payload: dict, t0: float, success: bool) -> None:
+def _audit_wecom(
+    title: str, payload: dict, t0: float, success: bool,
+    response_summary: str | None = None,
+) -> None:
     """记录 WeCom 推送投递审计 (与 SctChannel 模式一致)。
 
     审计失败不阻断推送; get_audit_repo() 返回 None 时跳过。
+    response_summary 包含 HTTP 状态码 + errcode, 便于审计页诊断。
     """
     try:
         import json
@@ -313,11 +331,12 @@ def _audit_wecom(title: str, payload: dict, t0: float, success: bool) -> None:
         repo = get_audit_repo()
         if repo is None:
             return
+        summary = response_summary or ("sent" if success else "failed")
         repo.append(
             tool="wecom",
             category="notification",
             scope=f"push:{title[:50]}",
-            response_summary="sent" if success else "failed",
+            response_summary=summary,
             raw=json.dumps(payload, ensure_ascii=False)[:500],
             duration_ms=(time.perf_counter() - t0) * 1000,
             error=None if success else "wecom delivery failed",
@@ -349,11 +368,12 @@ def send_wecom(webhook_url: str, title: str, body: str) -> bool:
     payload: dict = {"msgtype": "text", "text": {"content": text}}
     t0 = time.perf_counter()
     success = False
+    response_summary: str | None = None
     try:
-        success = _post_wecom(webhook_url, payload)
+        success, response_summary = _post_wecom_detail(webhook_url, payload)
         return success
     finally:
-        _audit_wecom(title, payload, t0, success)
+        _audit_wecom(title, payload, t0, success, response_summary)
 
 
 def send_wecom_markdown(webhook_url: str, title: str, body_md: str) -> bool:
@@ -380,12 +400,12 @@ def send_wecom_markdown(webhook_url: str, title: str, body_md: str) -> bool:
     content = _truncate_to_bytes(raw, _WECOM_MD_MAX_BYTES, suffix=_WECOM_TRUNCATED_HINT)
     if not content.strip():
         return False
-
     payload: dict = {"msgtype": "markdown", "markdown": {"content": content}}
     t0 = time.perf_counter()
     success = False
+    response_summary: str | None = None
     try:
-        success = _post_wecom(webhook_url, payload)
+        success, response_summary = _post_wecom_detail(webhook_url, payload)
         return success
     finally:
-        _audit_wecom(title, payload, t0, success)
+        _audit_wecom(title, payload, t0, success, response_summary)
