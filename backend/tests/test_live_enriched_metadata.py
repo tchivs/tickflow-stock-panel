@@ -88,7 +88,7 @@ def filter_history(df: pl.DataFrame, params: dict) -> pl.DataFrame:
     history = current.with_columns(pl.lit(cn_today() - timedelta(days=3)).alias("date"))
 
     monitor = MonitorRuleEngine()
-    monitor.set_strategy_engine(StrategyEngine([Path(strategy_dir)]))
+    monitor.set_strategy_engine(StrategyEngine(strategy_dirs=[Path(strategy_dir)]))
     monitor.set_history_loader(lambda _as_of, _lookback: history)
     monitor.set_rules([{
         "id": "history_strategy_monitor",

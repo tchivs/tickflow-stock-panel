@@ -215,10 +215,11 @@ def _stop_upstream_addons(app: FastAPI, matrix_prewarm_owner: MatrixCachePrewarm
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
-    # 单实例进程锁: 同一 data 目录只允许一个后端实例持有 mining/回测写路径。
-    mining_process_lock = MiningProcessLock(settings.data_dir)
-    mining_process_lock.acquire()
+async def _application_lifespan(app: FastAPI):
+    """应用层 lifespan — 服务初始化 + upstream 插件 + 关停编排。
+
+    与进程锁分离, 便于单元测试 monkeypatch 替换为 stub。
+    """
     matrix_prewarm_owner: MatrixCachePrewarmOwner | None = None
     try:
         init_app_state(app)
@@ -229,6 +230,18 @@ async def lifespan(app: FastAPI):
             if matrix_prewarm_owner is not None:
                 _stop_upstream_addons(app, matrix_prewarm_owner)
             shutdown_app_state(app)
+    finally:
+        pass
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # 单实例进程锁: 同一 data 目录只允许一个后端实例持有 mining/回测写路径。
+    mining_process_lock = MiningProcessLock(settings.data_dir)
+    mining_process_lock.acquire()
+    try:
+        async with _application_lifespan(app):
+            yield
     finally:
         mining_process_lock.release()
 
