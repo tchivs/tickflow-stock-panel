@@ -184,8 +184,13 @@ def _make_guest_client(tmp_path: Path, monkeypatch, engine=None) -> TestClient:
     """
     from app.main import auth_middleware
     from app.services import auth as auth_service
+    from app.strategy.engine import StrategyEngine
 
     monkeypatch.setattr(auth_service, "is_configured", lambda: True)
+
+    if engine is None:
+        builtin_dir = Path(__file__).resolve().parents[1] / "app" / "strategy" / "builtin"
+        engine = StrategyEngine(strategy_dirs=[builtin_dir])
 
     app = FastAPI()
     app.middleware("http")(auth_middleware)
