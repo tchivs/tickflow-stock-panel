@@ -138,6 +138,11 @@ def _seed_enriched_cache(
             row.update(overrides.get((sym, d), {}))
             rows.append(row)
     repo._enriched_history_cache = pl.DataFrame(rows)
+    # 同步 generation 标记, 避免 get_enriched_range 因 generation 不匹配返回 None
+    try:
+        repo._enriched_history_generation = repo.get_matrix_data_generation("stock")
+    except Exception:
+        pass
     return repo._enriched_history_cache
 
 
@@ -173,6 +178,7 @@ def test_full_backtest_sparse_lake_honest_rows(repo_env):
     engine = _make_engine()
 
     res = run_full_backtest(repo, engine, symbols=list(symbols))
+
 
     stats = {s["id"]: s for s in res["strategies"]}
     assert set(stats) == _AUCTION_FAMILY_IDS, "9 竞价族策略全部评估"
