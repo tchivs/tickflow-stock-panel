@@ -415,13 +415,33 @@ def test_quote_service_forwards_real_strategy_id(monkeypatch, tmp_path):
 
     monkeypatch.setattr(alert_store, "append_many", lambda *args: None)
     monkeypatch.setattr(preferences, "get_system_notify_enabled", lambda: False)
+
+    # Phase 55: SSE → WS 迁移, 用 broadcast_from_thread 捕获广播
+    ws_calls: list[tuple] = []
+    monkeypatch.setattr(
+        "app.ws.broadcast.broadcast_from_thread",
+        lambda mgr, ch, mt, data: ws_calls.append((ch, mt, data)),
+    )
     service = QuoteService()
-    subscriber = service.subscribe()
-    service.set_app_state(SimpleNamespace(monitor_engine=_Engine(), repo=_Repo()))
+    service.attach_ws_manager(object())
+    service.set_app_state(SimpleNamespace(
+        monitor_engine=_Engine(), repo=_Repo(),
+        operational=SimpleNamespace(
+            record_alert_event=lambda ev: {
+                "id": ev.get("id", "test-id"),
+                "occurred_at": ev.get("occurred_at", "2026-08-24T09:30:00+00:00"),
+            },
+        ),
+    ))
     service._repo = _Repo()
     service.get_enriched_today = lambda: (_quotes(), quote_service.cn_today())
 
     with patch.object(QuoteService, "_is_continuous_trading", return_value=True):
         service._evaluate_monitors(pl.DataFrame(), None)
 
-    assert subscriber.pop()["alerts"][0]["strategy_id"] == "demo"
+    # WS 广播 alerts 频道, strategy_alert 事件类型
+    assert len(ws_calls) == 1
+    ch, mt, data = ws_calls[0]
+    assert ch == "alerts"
+    assert mt == "strategy_alert"
+    assert data["alerts"][0]["strategy_id"] == "demo"
