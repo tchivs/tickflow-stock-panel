@@ -19,6 +19,7 @@ import hashlib
 import hmac
 import logging
 import time
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +34,7 @@ _CARD_MAX_LEN = 28000
 _WECOM_MD_MAX_BYTES = 4000
 
 # 截断提示行: 正文超长被截断时追加, 引导用户回应用内查看完整内容。
-_WECOM_TRUNCATED_HINT = "\n\n…内容较长已截断，更多详情请回到 AthenaQuant 应用内查看。"
+_WECOM_TRUNCATED_HINT = "\n\n…内容较长已截断，更多详情请回到 AthenaQuant 应用内查看。"  # noqa: RUF001
 
 # 飞书自定义机器人 Webhook 前缀 (用于 URL 合法性校验)
 FEISHU_HOOK_PREFIX = "https://open.feishu.cn/open-apis/bot/v2/hook/"
@@ -145,7 +146,7 @@ def _post_feishu(webhook_url: str, payload: dict, secret: str) -> bool:
             if resp.status_code < 500:
                 logger.warning("飞书推送失败(不重试, 客户端错误): %s", last_err)
                 return False
-        except Exception as e:  # noqa: BLE001 — 网络/超时, 可重试
+        except Exception as e:
             last_err = str(e)
 
         if attempt < _FEISHU_MAX_ATTEMPTS:
@@ -300,7 +301,7 @@ def _post_wecom_detail(webhook_url: str, payload: dict) -> tuple[bool, str | Non
                 if isinstance(data, dict):
                     _wecom_last_response = data
                     if data.get("errcode") == 0:
-                        return True, f"HTTP 200 errcode=0"
+                        return True, "HTTP 200 errcode=0"
                     errcode = data.get("errcode", "?")
                     errmsg = data.get("errmsg", "")
                     logger.warning("企业微信推送业务失败: %s", data)
@@ -309,7 +310,7 @@ def _post_wecom_detail(webhook_url: str, payload: dict) -> tuple[bool, str | Non
                 return True, "HTTP 200 (non-JSON)"
         logger.warning("企业微信推送 HTTP %s: %s", resp.status_code, resp.text[:200])
         return False, f"HTTP {resp.status_code}"
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning("企业微信 Webhook 推送失败: %s", e)
         return False, f"exception: {type(e).__name__}"
 

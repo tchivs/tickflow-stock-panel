@@ -23,9 +23,9 @@ async def ws_stream(websocket: WebSocket) -> None:
 
     流程: Cookie 鉴权 → accept → connected 欢迎消息 → keepalive + 消息循环 → 审计
     """
-    from app.ws.connection_manager import ConnectionManager
-    from app.audit.service import get_audit_repo
     from app.audit.envelope import AuditContext
+    from app.audit.service import get_audit_repo
+    from app.ws.connection_manager import ConnectionManager
 
     # ── Cookie 鉴权 (T-55-01) ──────────────────────────────────
     token = websocket.cookies.get(COOKIE_NAME)
@@ -68,15 +68,14 @@ async def ws_stream(websocket: WebSocket) -> None:
             await _message_loop(conn)
     except WebSocketDisconnect:
         pass
-    except Exception as exc:  # noqa: BLE001 — 捕获审计中未预期的异常
+    except Exception as exc:
         import logging
         logging.getLogger(__name__).warning("ws_stream unexpected error: %s", exc)
     finally:
         keepalive_task.cancel()
-        try:
+        import contextlib
+        with contextlib.suppress(asyncio.CancelledError):
             await keepalive_task
-        except asyncio.CancelledError:
-            pass
         # T-55-07: 断连时取消所有在跑的 request 后台 task
         pending = getattr(conn, "_pending_requests", None)
         if pending:
@@ -92,7 +91,7 @@ async def _message_loop(conn) -> None:
             msg = await conn.ws.receive_json()
         except WebSocketDisconnect:
             raise
-        except Exception:  # noqa: BLE001 — JSON 解析失败等
+        except Exception:
             await conn.ws.send_json(
                 make_msg("error", 0, {"reason": "invalid message format"})
             )
@@ -215,7 +214,7 @@ async def _keepalive(conn, interval: float = 30.0) -> None:
             msg = make_msg("ping", seq, {})
             conn.push_to_ring(msg)
             await conn.ws.send_json(msg)
-        except Exception:  # noqa: BLE001 — 连接断开, 退出心跳
+        except Exception:
             break
 
 def _verify_run_ownership(principal: str, run_id: str) -> bool:
@@ -234,7 +233,7 @@ def _verify_run_ownership(principal: str, run_id: str) -> bool:
             if job_principal is not None and job_principal != principal:
                 return False
             return True
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
     # walkforward_sse job 表
     try:
@@ -246,7 +245,7 @@ def _verify_run_ownership(principal: str, run_id: str) -> bool:
             if wf_principal is not None and wf_principal != principal:
                 return False
             return True
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
     # 未知 run_id: 允许订阅
     return True
