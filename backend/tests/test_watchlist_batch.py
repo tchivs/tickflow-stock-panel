@@ -11,9 +11,10 @@ from app.tickflow.capabilities import Cap, CapabilityLimits, CapabilitySet
 def _make_svc(engine_rules: dict) -> QuoteService:
     """创建最小可用的 QuoteService 实例 (跳过 __init__)。"""
     svc = QuoteService.__new__(QuoteService)
+    svc._ws = None
     svc._app_state = MagicMock()
-    svc._repo = MagicMock()
     svc._lock = MagicMock()
+    svc._repo = MagicMock()
 
     engine = MagicMock()
     engine.rules = engine_rules
