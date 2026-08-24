@@ -124,7 +124,7 @@ def test_minute_sync_enable_persists_and_leaves_daily_lake_unchanged(tmp_path, m
 
         from app.services import kline_sync
         assert kline_sync.can_sync_minute(capset) is True
-        monkeypatch.setattr(kline_sync, "sync_minute_batch", lambda *a, **k: _synthetic_minute_frame())
+        monkeypatch.setattr(kline_sync, "sync_minute_batch", lambda *a, on_segment=None, **k: on_segment(_synthetic_minute_frame()) if on_segment else _synthetic_minute_frame())
 
         written = kline_sync.sync_and_persist_minute(
             ["000001.SZ", "600000.SH"], repo, capset, days=1,
@@ -225,7 +225,7 @@ def test_resolve_minute_symbols_honors_scope(tmp_path, monkeypatch):
     from app.tickflow.capabilities import CapabilitySet
 
     universe = ["000001.SZ", "600000.SH", "000002.SZ"]
-    monkeypatch.setattr(daily_pipeline, "_resolve_universe", lambda capset: list(universe))
+    monkeypatch.setattr(daily_pipeline, "_resolve_universe", lambda capset, repo=None: list(universe))
 
     # Empty scope -> full universe (unchanged default behavior)
     preferences.save({"minute_sync_symbols": []})
