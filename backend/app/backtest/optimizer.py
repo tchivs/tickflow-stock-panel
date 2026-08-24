@@ -439,3 +439,210 @@ class StrategyOptimizer:
         output["elapsed_ms"] = round((time.perf_counter() - t0) * 1000, 1)
         output["timing_ms"]["total"] = output["elapsed_ms"]
         return output
+
+# ================================================================
+# WalkForwardOptimizer — OOS-excluded grid search across walk-forward folds
+# ================================================================
+
+import hashlib
+import uuid as _uuid
+
+
+class WalkForwardOptimizer:
+    """在 walk-forward 搜索折上遍历参数组合, 每次只在折叠 **测试段** 评分。
+
+    核心契约 (WFWD-02):
+    - 搜索折 = plan.folds (is_oos=False); 保留 OOS = plan.oos_fold (is_oos=True)。
+    - 搜索折的 folds 不得包含 is_oos=True 的折 — 若泄露则 fail closed。
+    - 每次试验 (combo × fold) 只回测折叠 test_start..test_end, 永不在 train 或 OOS 窗口评分。
+    - 若传入 resolver, 每折的 PIT 成员并集作为 symbol 集; 否则空集 (不退回 symbols=None)。
+    """
+
+    def __init__(self, service, strategy_engine) -> None:
+        self.service = service
+        self.strategy_engine = strategy_engine
+
+    def optimize(
+        self,
+        *,
+        plan,
+        strategy_id: str,
+        param_grid: dict,
+        objective: str,
+        resolver=None,
+        repo=None,
+    ) -> dict:
+        if objective not in VALID_OBJECTIVES:
+            raise ValueError(f"不支持的优化目标 '{objective}', 可选: {sorted(VALID_OBJECTIVES)}")
+        direction = default_direction(objective)
+
+        # 校验搜索折不含 OOS 折 — fail closed
+        for fold in plan.folds:
+            if getattr(fold, "is_oos", False):
+                raise ValueError("搜索折不得包含 OOS 折 (OOS 必须保留)")
+
+        s = self.strategy_engine.get(strategy_id)
+        params_meta = s.meta.get("params", [])
+        combos = expand_param_grid(params_meta, param_grid)
+        n_combos = len(combos)
+        search_folds = plan.folds
+        n_folds = len(search_folds)
+
+        # 每折 PIT 成员解析
+        fold_symbols: list[list[str]] = []
+        per_fold_symbol_counts: dict[str, int] = {}
+        for i, fold in enumerate(search_folds):
+            if resolver is not None:
+                from app.backtest.walkforward import _fold_symbols
+                # 直接解析 test 窗口的 PIT 成员 (不依赖 fold.chain_config)
+                membership = resolver.resolve_universe_daily(
+                    universe_name=plan.universe,
+                    start=fold.test_start,
+                    end=fold.test_end,
+                    asset_type=plan.asset_type,
+                )
+                syms = _fold_symbols(membership)
+            else:
+                syms = []  # 不退回 None (全量湖 bug)
+            fold_symbols.append(syms)
+            per_fold_symbol_counts[f"fold_{i}"] = len(syms)
+
+        # universe fingerprint
+        all_syms = sorted({s for syms in fold_symbols for s in syms})
+        fingerprint = hashlib.sha256(
+            "|".join(all_syms).encode()
+        ).hexdigest() if all_syms else hashlib.sha256(b"").hexdigest()
+
+        from app.backtest.strategy import StrategyBacktestConfig
+
+        results: list[dict] = []
+        per_trial_scores: list[float] = []
+        per_fold_scores: dict[str, list[float]] = {}
+
+        for combo in combos:
+            trial_scores: list[float] = []
+            trial_errors: list[str] = []
+            for fi, fold in enumerate(search_folds):
+                bt_cfg = StrategyBacktestConfig(
+                    strategy_id=strategy_id,
+                    symbols=fold_symbols[fi],
+                    start=fold.test_start,
+                    end=fold.test_end,
+                    params=combo,
+                )
+                try:
+                    res = self.service.run(bt_cfg)
+                except Exception as e:  # noqa: BLE001
+                    trial_errors.append(repr(e))
+                    continue
+                if getattr(res, "error", None) is not None:
+                    trial_errors.append(res.error)
+                    continue
+                stats = getattr(res, "stats", {}) or {}
+                raw = stats.get(objective)
+                if raw is None:
+                    trial_errors.append(f"回测结果缺少优化目标字段 '{objective}'")
+                    continue
+                sv = objective_value(stats, objective, direction)
+                trial_scores.append(sv)
+                per_trial_scores.append(sv)
+                fk = f"fold_{fi}"
+                per_fold_scores.setdefault(fk, []).append(sv)
+
+            avg_score = (
+                sum(trial_scores) / len(trial_scores) if trial_scores else float("-inf")
+            )
+            best_raw_trial = max(trial_scores) if trial_scores else float("-inf")
+            # 原始指标空间值
+            objective_raw = (
+                -avg_score if direction == "min" else avg_score
+            ) if trial_scores else None
+
+            result_row: dict = {
+                "params": combo,
+                "objective_raw": objective_raw,
+                "avg_score": avg_score,
+                "n_folds_scored": len(trial_scores),
+                "n_fold_errors": len(trial_errors),
+                "errors": trial_errors or None,
+            }
+            if trial_errors and not trial_scores:
+                result_row["error"] = "; ".join(trial_errors)
+            results.append(result_row)
+
+        # 排序: 有分数的按 avg_score 降序 (越大越好), 无分数沉底
+        ranked = sorted(results, key=lambda x: x.get("avg_score", float("-inf")), reverse=True)
+        for i, row in enumerate(ranked):
+            row["rank"] = i + 1
+
+        n_completed = len(results)  # 所有尝试过的 combo (含失败)
+        best = ranked[0] if ranked and ranked[0].get("objective_raw") is not None else None
+
+        # best_score 在原始指标空间 (不取负)
+        best_score = best["objective_raw"] if best else None
+        best_params = best["params"] if best else None
+
+        # 分数分布
+        import statistics as _stats
+        score_distribution: dict = {
+            "per_trial": [(-s if direction == "min" else s) for s in per_trial_scores],
+            "per_fold": {
+                k: [(-s if direction == "min" else s) for s in vs]
+                for k, vs in per_fold_scores.items()
+            },
+        }
+        if per_trial_scores:
+            raw_trials = [(-s if direction == "min" else s) for s in per_trial_scores]
+            score_distribution["min"] = min(raw_trials)
+            score_distribution["max"] = max(raw_trials)
+            score_distribution["mean"] = _stats.mean(raw_trials)
+            score_distribution["median"] = _stats.median(raw_trials)
+            score_distribution["std"] = _stats.pstdev(raw_trials) if len(raw_trials) > 1 else 0.0
+        else:
+            score_distribution["min"] = None
+            score_distribution["max"] = None
+            score_distribution["mean"] = None
+            score_distribution["median"] = None
+            score_distribution["std"] = None
+
+        search_space: dict = {
+            "param_grid": param_grid,
+            "params_meta": params_meta,
+            "universe": {
+                "n_symbols": len(all_syms),
+                "per_fold_symbol_counts": per_fold_symbol_counts,
+                "fingerprint": fingerprint,
+            },
+        }
+
+        # 持久化
+        search_run_id = None
+        if repo is not None:
+            search_run_id = repo.record_wf_search(
+                plan_id=plan.plan_id,
+                strategy_id=strategy_id,
+                objective=objective,
+                direction=direction,
+                search_space=search_space,
+                n_trials=n_combos,
+                n_completed=n_completed,
+                score_distribution=score_distribution,
+                best_params=best_params or {},
+                best_score=best_score,
+                oos_excluded=1,
+            )
+            search_run_id = search_run_id.get("id") if isinstance(search_run_id, dict) else search_run_id
+
+        return {
+            "objective": objective,
+            "direction": direction,
+            "n_trials": n_combos,
+            "n_completed": n_completed,
+            "best_params": best_params,
+            "best_score": best_score,
+            "results": ranked,
+            "search_space": search_space,
+            "score_distribution": score_distribution,
+            "search_run_id": search_run_id,
+            "oos_excluded": True,
+        }
