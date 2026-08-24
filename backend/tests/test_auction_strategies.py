@@ -56,10 +56,17 @@ def _engine() -> StrategyEngine:
 
 
 def _run_auction(engine: StrategyEngine, strategy_id: str, fixture: pl.DataFrame):
+    from app.strategy.engine import StrategyDataContext
+
+    ctx = StrategyDataContext(
+        asset_type="stock",
+        timeframe="1d",
+        as_of=date(2026, 8, 4),
+        current=fixture,
+    )
     return engine.run(
         strategy_id,
-        as_of=date(2026, 8, 4),
-        precomputed=fixture,
+        ctx,
         overrides={"basic_filter": {"enabled": False}},
     )
 
