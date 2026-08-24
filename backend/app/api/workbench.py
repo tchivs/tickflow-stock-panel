@@ -254,13 +254,14 @@ def _push_stats_section(request: Request) -> dict[str, Any]:
         ).fetchone()
         dedup_skipped = int(dedup_row["dedup_skipped"]) if dedup_row else 0
 
-        # 3. 最近 10 条失败记录
+        # 3. 最近 10 条今日失败记录
         fail_rows = conn.execute(
             """
             SELECT tool, error, created_at
             FROM tool_call_envelopes
             WHERE tool IN ('sct', 'wecom', 'connection')
               AND error IS NOT NULL
+              AND date(created_at) = date('now')
             ORDER BY seq DESC
             LIMIT 10
             """
