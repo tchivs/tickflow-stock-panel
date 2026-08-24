@@ -1,9 +1,10 @@
-import { describe, it, expect, beforeEach } from 'vitest'
 import {
   evaluateRules,
   markTriggered,
   isDebounced,
   clearTriggered,
+  getNotificationPermission,
+  showNotification,
   DEBOUNCE_MS,
   type ClientRule,
 } from './clientRules'
@@ -147,5 +148,53 @@ describe('debounce reset', () => {
     expect(isDebounced('r-reset', now + 10_000)).toBe(true)
     clearTriggered('r-reset')
     expect(isDebounced('r-reset', now + 10_000)).toBe(false)
+  })
+})
+describe('notification API', () => {
+  it('getNotificationPermission returns "denied" when Notification is undefined', () => {
+    const orig = globalThis.Notification
+    // @ts-expect-error: simulate SSR / no Notification API
+    delete globalThis.Notification
+    expect(getNotificationPermission()).toBe('denied')
+    globalThis.Notification = orig
+  })
+
+  it('showNotification is no-op when permission not granted', () => {
+    const orig = globalThis.Notification
+    const mock = { permission: 'denied' } as unknown as typeof Notification
+    globalThis.Notification = mock
+    expect(() => showNotification('test', 'body')).not.toThrow()
+    globalThis.Notification = orig
+  })
+
+  it('showNotification catches errors silently', () => {
+    const orig = globalThis.Notification
+    function ThrowingNotification() { throw new Error('SW context') }
+    ThrowingNotification.permission = 'granted'
+    globalThis.Notification = ThrowingNotification as unknown as typeof Notification
+    expect(() => showNotification('test', 'body')).not.toThrow()
+    globalThis.Notification = orig
+  })
+})
+
+// ── evaluateRules 空输入 ──────────────────────────────────────
+
+describe('evaluateRules — empty inputs', () => {
+  it('empty quotes → empty hits', () => {
+    expect(evaluateRules([], [makeRule()])).toEqual([])
+  })
+
+  it('empty rules → empty hits', () => {
+    expect(evaluateRules([makeQuote()], [])).toEqual([])
+  })
+
+  it('NaN threshold value → skip rule', () => {
+    const rule = makeRule({ value: NaN })
+    expect(evaluateRules([makeQuote({ pct: 0.05 })], [rule])).toEqual([])
+  })
+
+  it('Infinity threshold value → skip rule', () => {
+    const rule = makeRule({ value: Infinity })
+    expect(evaluateRules([makeQuote({ pct: 0.05 })], [rule])).toEqual([])
   })
 })
