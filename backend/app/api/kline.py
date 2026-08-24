@@ -424,30 +424,8 @@ def _attach_ext(resp: dict, repo, symbol: str, ext_columns: Optional[str]) -> di
     ext_values: dict = {}
     for config_id, field_name in specs:
         ext_col_name = f"{config_id}__{field_name}"
-        value = None
-        try:
-            cfg = configs.get(config_id)
-            if cfg:
-                ext_df, _ = _read_ext_dataframe(cfg, data_dir)
-            else:
-                ext_df = pl.from_arrow(
-                    repo.store.db.query(
-                        f"SELECT symbol, {quote_ident(field_name)} FROM ext_{config_id}"
-                    ).arrow()
-                )
-            if not ext_df.is_empty() and "symbol" in ext_df.columns and field_name in ext_df.columns:
-                # 时序表取最新分区，避免一个 symbol 多行
-                row = (
-                    ext_df
-                    .select(["symbol", field_name])
-                    .unique(subset=["symbol"], keep="last")
-                    .filter(pl.col("symbol") == symbol)
-                )
-                if not row.is_empty():
-                    value = row[field_name][0]
-        except Exception as e:  # noqa: BLE001
-            logger.debug("kline ext join failed for %s.%s: %s", config_id, field_name, e)
-        ext_values[ext_col_name] = value
+        vmap = value_maps.get(ext_col_name, {})
+        ext_values[ext_col_name] = vmap.get(symbol)
 
     stock_info = dict(resp.get("stock_info") or {})
     stock_info["ext"] = ext_values
