@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import types
+from pathlib import Path
 import shutil
 import subprocess
 
@@ -280,7 +282,7 @@ class _DailyRoutingProvider:
             "amount": [1000.0] * len(symbols),
         })
 
-    def get_minute(self, symbols, start_time, end_time, asset_type, on_chunk_done=None):
+    def get_minute(self, symbols, start_time, end_time, asset_type, on_chunk_done=None, freq="1m"):
         self.minute_asset_types.append(asset_type)
         return pl.DataFrame({
             "symbol": symbols,
@@ -390,6 +392,7 @@ def test_custom_provider_capabilities_bypass_tickflow_caps(monkeypatch):
 
 
 def test_on_demand_fetches_use_selected_providers(monkeypatch):
+    from app.data_providers import custom as custom_sources
     from app.services import kline_sync
 
     provider = _DailyRoutingProvider()
@@ -400,6 +403,12 @@ def test_on_demand_fetches_use_selected_providers(monkeypatch):
     )
     monkeypatch.setattr(kline_sync.preferences, "get_minute_data_provider", lambda: "custom")
     monkeypatch.setattr(kline_sync.preferences, "get_adj_factor_provider", lambda: "custom")
+    monkeypatch.setattr(
+        custom_sources,
+        "provider_has_dataset",
+        lambda name, dataset: name == "custom" and dataset in {"daily", "adj_factor", "minute"},
+    )
+    monkeypatch.setattr(custom_sources, "get_provider", lambda name: provider)
     monkeypatch.setattr(
         kline_sync,
         "get_client",
@@ -464,14 +473,17 @@ def test_custom_minute_persistence_skips_tickflow_limits(monkeypatch):
     from app.tickflow.capabilities import CapabilitySet
 
     class Repo:
-        pass
+        store = types.SimpleNamespace(data_dir=Path("/tmp/test-minute-sync"))
+
 
     calls = []
     monkeypatch.setattr(kline_sync.preferences, "get_minute_data_provider", lambda: "custom")
+    from app.data_providers import custom as custom_sources
     monkeypatch.setattr(
         "app.data_providers.custom.provider_has_dataset",
         lambda name, dataset: name == "custom" and dataset == "minute",
     )
+    monkeypatch.setattr(custom_sources, "get_provider", lambda name: _DailyRoutingProvider())
     monkeypatch.setattr(kline_sync, "_cleanup_null_datetime_minute", lambda repo: None)
     monkeypatch.setattr(kline_sync, "_migrate_symbol_to_date_partition", lambda repo: None)
     monkeypatch.setattr(kline_sync, "_latest_minute_datetime", lambda repo: None)
@@ -518,14 +530,19 @@ def test_minute_http_route_uses_selected_custom_provider(monkeypatch):
         @staticmethod
         def get_minute(symbol, trade_date, asset_type):
             return pl.DataFrame()
-
     provider = _DailyRoutingProvider()
+    from app.data_providers import custom as custom_sources
     monkeypatch.setattr(kline_sync.preferences, "get_minute_data_provider", lambda: "custom")
     monkeypatch.setattr(
         kline_sync,
         "get_custom_data_provider",
         lambda dataset, provider_name=None: provider if dataset == "minute" else None,
     )
+    monkeypatch.setattr(
+        "app.data_providers.custom.provider_has_dataset",
+        lambda name, dataset: name == "custom" and dataset == "minute",
+    )
+    monkeypatch.setattr(custom_sources, "get_provider", lambda name: provider)
 
     app = FastAPI()
     app.state.repo = Repo()

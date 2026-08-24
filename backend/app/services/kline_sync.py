@@ -774,8 +774,22 @@ def sync_minute_batch(
         不进入全局 out → 内存峰值从「全量」降到「单段」。适用于 sync_and_persist_minute。
         不传时 (如 get_minute_batch 的实时补拉) 保持原契约: 累积进 out 末尾一次性返回。
     """
-    # 多源链: free_stockdb 近端 → xyz 在线历史 → TickFlow。用户自定义 minute
-    # provider 优先。缺口/失败自动逐级回退。
+    # 优先尝试用户配置的自定义分钟源 (preferences.get_minute_data_provider)。
+    # _try_custom_minute 内部走 _resolve_minute_provider 异常边界, 成功时返回
+    # (df, False), 失败/未配时返回 (None, True) 供回退链路。
+    # on_segment 契约: 自定义源成功 + 传了 on_segment → 调 on_segment, 返回空 df;
+    # 未传 on_segment (实时补拉) 或空 df → 原样返回 df。
+    custom_df, custom_fallback = _try_custom_minute(
+        symbols, start_time=start_time, end_time=end_time,
+        asset_type=asset_type, freq="1m", on_chunk_done=on_chunk_done,
+    )
+    if not custom_fallback:
+        custom_df = custom_df if custom_df is not None else pl.DataFrame()
+        if on_segment and not custom_df.is_empty():
+            on_segment(custom_df)
+            return pl.DataFrame()
+        return custom_df
+    # 自定义源未配/失败 → 回退多源链 (free_stockdb → xyz → ...) → TickFlow。
     from app.data_providers import chain as provider_chain
 
     chain_names = _build_chain("minute")
@@ -1391,45 +1405,31 @@ def sync_and_persist_minute(
         batch_size = limit.batch
         rpm = limit.rpm
 
-    # 流式落盘 (OOM 防护, 接枝 upstream): 每段拉完立即写盘, 内存峰值 = 单段
-    # 而非全量 (1 年全市场分钟 K 全量攒内存曾 OOM)。custom 源路径仍走批量返回。
-    if minute_is_custom:
-        df = sync_minute_batch(
-            symbols,
-            start_time=start_time,
-            end_time=end_time,
-            batch_size=batch_size,
-            rpm=rpm,
-            on_chunk_done=on_chunk_done,
-        )
-        if df.is_empty():
-            return 0
+    # 流式落盘 (OOM 防护): 每段拉完立即写盘, 内存峰值 = 单段而非全量
+    # (1 年全市场分钟 K 全量攒内存曾 OOM)。custom 源与 TickFlow 路径统一走
+    # on_segment 回调 → _write_minute_partition → repo._write_lock 串行化,
+    # 避免并发补齐时同一日期分区读-改-写竞态。
+    minute_dir = repo.store.data_dir / "kline_minute"
+    written_box = [0]
+
+    def _persist_segment(seg_df: pl.DataFrame) -> None:
+        # 单股补齐与并发补齐可能同时写同一日期分区: 读-改-写复用仓库写锁。
         with repo._write_lock:
-            written = _persist_minute_partitions(df, repo)
-        if written == 0:
-            return 0
-    else:
-        minute_dir = repo.store.data_dir / "kline_minute"
-        written_box = [0]
+            written_box[0] += _write_minute_partition(seg_df, minute_dir)
 
-        def _persist_segment(seg_df: pl.DataFrame) -> None:
-            # 单股补齐与并发补齐可能同时写同一日期分区: 读-改-写复用仓库写锁。
-            with repo._write_lock:
-                written_box[0] += _write_minute_partition(seg_df, minute_dir)
-
-        sync_minute_batch(
-            symbols,
-            start_time=start_time,
-            end_time=end_time,
-            batch_size=batch_size,
-            rpm=rpm,
-            on_chunk_done=on_chunk_done,
-            segment_trading_days=preferences.get_minute_sync_segment_days(),
-            on_segment=_persist_segment,
-        )
-        written = written_box[0]
-        if written == 0:
-            return 0
+    sync_minute_batch(
+        symbols,
+        start_time=start_time,
+        end_time=end_time,
+        batch_size=batch_size,
+        rpm=rpm,
+        on_chunk_done=on_chunk_done,
+        segment_trading_days=preferences.get_minute_sync_segment_days(),
+        on_segment=_persist_segment,
+    )
+    written = written_box[0]
+    if written == 0:
+        return 0
 
     # 刷新视图
     _refresh_minute_view(repo)
