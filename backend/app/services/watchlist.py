@@ -45,7 +45,7 @@ _ENTRY_SCHEMA = {
     "symbol": pl.Utf8,
     "added_at": pl.Utf8,
     "note": pl.Utf8,
-    "group_id": pl.Utf8,
+    "group_ids": pl.List(pl.Utf8),
 }
 
 
@@ -70,15 +70,33 @@ def _read_entries() -> pl.DataFrame:
     if not p.exists():
         return _empty_entries()
     df = pl.read_parquet(p)
-    defaults = {"symbol": "", "added_at": "", "note": "", "group_id": None}
+    # 旧 schema (group_id 单值列) → 新 schema (group_ids 列表列) 迁移
+    if "group_ids" not in df.columns:
+        if "group_id" in df.columns:
+            df = df.with_columns(
+                pl.when(pl.col("group_id").is_null())
+                .then([])
+                .otherwise(pl.col("group_id").cast(pl.List(pl.Utf8)))
+                .alias("group_ids")
+            ).drop("group_id")
+        else:
+            df = df.with_columns(pl.lit([], dtype=pl.List(pl.Utf8)).alias("group_ids"))
+    defaults = {"symbol": "", "added_at": "", "note": "", "group_ids": []}
     for column, dtype in _ENTRY_SCHEMA.items():
         if column not in df.columns:
             df = df.with_columns(pl.lit(defaults[column], dtype=dtype).alias(column))
     return df.select(list(_ENTRY_SCHEMA))
 
-
 def _write_entries(df: pl.DataFrame) -> None:
     p = _path()
+    # 首次从旧 schema 迁移时备份原文件
+    if p.exists():
+        existing = pl.read_parquet(p)
+        if "group_ids" not in existing.columns and "group_id" in existing.columns:
+            bak = p.with_suffix(p.suffix + ".bak")
+            if not bak.exists():
+                import shutil
+                shutil.copy2(p, bak)
     tmp = p.with_suffix(p.suffix + ".tmp")
     df.select(list(_ENTRY_SCHEMA)).write_parquet(tmp)
     os.replace(tmp, p)
@@ -162,14 +180,18 @@ def add_batch(
             if existing is None:
                 added += 1
             rows = [row for row in rows if row["symbol"] != symbol]
-            resolved_group_id = (
-                group_id if group_id is not None else (existing or {}).get("group_id")
-            )
+            # group_id 参数: 首次添加时指定分组(单值), 已存在则保留现有 group_ids
+            if group_id is not None:
+                resolved_group_ids = [group_id]
+            elif existing is not None:
+                resolved_group_ids = existing.get("group_ids") or []
+            else:
+                resolved_group_ids = []
             rows.insert(0, {
                 "symbol": symbol,
                 "added_at": datetime.utcnow().isoformat(timespec="seconds"),
                 "note": note,
-                "group_id": resolved_group_id,
+                "group_ids": resolved_group_ids,
             })
         out = pl.DataFrame(rows, schema=_ENTRY_SCHEMA) if rows else _empty_entries()
         _write_entries(out)
@@ -247,16 +269,15 @@ def rename_group(group_id: str, name: str, color: str | None = None) -> list[dic
 
 
 def delete_group(group_id: str) -> tuple[list[dict], list[dict]]:
-    """删除分组定义,原分组内的自选保留并转为未分组。"""
+    """删除分组定义,从所有条目的 group_ids 中移除该分组 ID。"""
     with _LOCK:
         groups = _read_groups()
         if not any(group["id"] == group_id for group in groups):
             raise KeyError(group_id)
         df = _read_entries().with_columns(
-            pl.when(pl.col("group_id") == group_id)
-            .then(None)
-            .otherwise(pl.col("group_id"))
-            .alias("group_id")
+            pl.col("group_ids").list.eval(
+                pl.element().filter(pl.element() != group_id)
+            ).alias("group_ids")
         )
         remaining = [group for group in groups if group["id"] != group_id]
         _write_entries(df)
@@ -265,35 +286,95 @@ def delete_group(group_id: str) -> tuple[list[dict], list[dict]]:
 
 
 def clear_group(group_id: str) -> list[dict]:
-    """清空分组成员:把该分组内所有条目 group_id 置 null(变未分组),保留分组定义。"""
+    """清空分组成员:从所有条目的 group_ids 中移除该分组 ID, 保留分组定义。"""
     with _LOCK:
         groups = _read_groups()
         if not any(group["id"] == group_id for group in groups):
             raise KeyError(group_id)
-        df = _read_entries().with_columns(
-            pl.when(pl.col("group_id") == group_id)
-            .then(None)
-            .otherwise(pl.col("group_id"))
-            .alias("group_id")
+        df = _read_entries()
+        # 从每行的 group_ids 列表中移除该 group_id
+        df = df.with_columns(
+            pl.col("group_ids").list.eval(
+                pl.element().filter(pl.element() != group_id)
+            ).alias("group_ids")
         )
         _write_entries(df)
         return df.to_dicts()
 
 def set_group(symbol: str, group_id: str | None) -> list[dict]:
+    """互斥设定: 标的只属于指定分组。group_id=None 移出全部分组。"""
     with _LOCK:
         groups = _read_groups()
         _validate_group_id(group_id, groups)
         df = _read_entries()
         if symbol not in df["symbol"].to_list():
             raise KeyError(symbol)
+        new_ids = [group_id] if group_id is not None else []
         df = df.with_columns(
             pl.when(pl.col("symbol") == symbol)
-            .then(pl.lit(group_id, dtype=pl.Utf8))
-            .otherwise(pl.col("group_id"))
-            .alias("group_id")
+            .then(pl.lit(new_ids, dtype=pl.List(pl.Utf8)))
+            .otherwise(pl.col("group_ids"))
+            .alias("group_ids")
         )
         _write_entries(df)
         return df.to_dicts()
+
+def add_to_group(symbol: str, group_id: str) -> list[dict]:
+    """将标的加入分组(多组成员关系): 不影响其他分组。幂等。"""
+    with _LOCK:
+        groups = _read_groups()
+        if not any(group["id"] == group_id for group in groups):
+            raise ValueError("自选分组不存在")
+        df = _read_entries()
+        if symbol not in df["symbol"].to_list():
+            raise KeyError(symbol)
+        # 幂等: 已在组中则不重复添加
+        current_ids = df.filter(pl.col("symbol") == symbol)["group_ids"].to_list()[0] or []
+        if group_id in current_ids:
+            pass  # 幂等, 无需写入
+        else:
+            df = df.with_columns(
+                pl.when(pl.col("symbol") == symbol)
+                .then(pl.col("group_ids").list.concat(pl.lit([group_id])))
+                .otherwise(pl.col("group_ids"))
+                .alias("group_ids")
+            )
+            _write_entries(df)
+        return df.to_dicts()
+
+
+def remove_from_group(symbol: str, group_id: str) -> list[dict]:
+    """将标的从分组移除(仅摘本组标签; 标的仍在自选)。"""
+    with _LOCK:
+        df = _read_entries()
+        if symbol not in df["symbol"].to_list():
+            raise KeyError(symbol)
+        df = df.with_columns(
+            pl.when(pl.col("symbol") == symbol)
+            .then(
+                pl.col("group_ids").list.eval(
+                    pl.element().filter(pl.element() != group_id)
+                )
+            )
+            .otherwise(pl.col("group_ids"))
+            .alias("group_ids")
+        )
+        _write_entries(df)
+        return df.to_dicts()
+
+
+def reorder_groups(ordered_ids: list[str]) -> list[dict]:
+    """按给定 ID 顺序重排分组。ID 集合必须与现有分组完全一致,否则拒绝。"""
+    with _LOCK:
+        groups = _read_groups()
+        existing_ids = {g["id"] for g in groups}
+        requested_ids = set(ordered_ids)
+        if existing_ids != requested_ids or len(ordered_ids) != len(set(ordered_ids)):
+            raise ValueError("分组 ID 与现有分组不一致")
+        id_to_group = {g["id"]: g for g in groups}
+        reordered = [id_to_group[i] for i in ordered_ids]
+        _write_groups(reordered)
+        return reordered
 
 
 
