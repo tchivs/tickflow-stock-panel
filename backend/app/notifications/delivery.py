@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import logging
 import re
+import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
@@ -228,7 +229,8 @@ class NotificationDeliveryService:
             thread_name_prefix="notification-delivery",
         )
         self._futures: set[Future[None]] = set()
-        # SCT dedup + daily limit (D-05)
+        # SCT dedup + daily limit (D-05) — 线程安全锁
+        self._dedup_lock = threading.Lock()
         self._dedup_cache: dict[str, float] = {}
         self._daily_count = 0
         self._daily_date = date.today()
@@ -255,40 +257,41 @@ class NotificationDeliveryService:
                     error="quiet_period",
                 )
                 continue
-            # SCT dedup + daily limit (D-05)
+            # SCT dedup + daily limit (D-05) — 线程安全
             if delivery_config.channel == SctChannel.name:
-                now = time.time()
-                today = date.today()
-                if self._daily_date != today:
-                    self._daily_count = 0
-                    self._daily_date = today
-                    self._overflow_events = []
-                    self._overflow_summary_sent = False
-                dedup_key = f"{event.get('rule_id', '')}:{event.get('symbol', '')}:{event.get('type', '')}"
-                last_seen = self._dedup_cache.get(dedup_key)
-                if last_seen is not None and (now - last_seen) < SCT_DEDUP_TTL:
-                    self._repository.create_delivery_outcome(
-                        event_id=event_id,
-                        channel=delivery_config.channel,
-                        status="skipped",
-                        error="dedup",
-                    )
-                    continue
-                if self._daily_count >= SCT_DAILY_LIMIT:
-                    # 批量摘要: 收集被跳过事件 ID, 首次超限时发送一条摘要推送
-                    self._overflow_events.append(event_id)
-                    self._repository.create_delivery_outcome(
-                        event_id=event_id,
-                        channel=delivery_config.channel,
-                        status="skipped",
-                        error="daily_limit_exceeded",
-                    )
-                    if not self._overflow_summary_sent:
-                        self._overflow_summary_sent = True
-                        self._send_overflow_summary(delivery_config)
-                    continue
-                self._dedup_cache[dedup_key] = now
-                self._daily_count += 1
+                with self._dedup_lock:
+                    now = time.time()
+                    today = date.today()
+                    if self._daily_date != today:
+                        self._daily_count = 0
+                        self._daily_date = today
+                        self._overflow_events = []
+                        self._overflow_summary_sent = False
+                    dedup_key = f"{event.get('rule_id', '')}:{event.get('symbol', '')}:{event.get('type', '')}"
+                    last_seen = self._dedup_cache.get(dedup_key)
+                    if last_seen is not None and (now - last_seen) < SCT_DEDUP_TTL:
+                        self._repository.create_delivery_outcome(
+                            event_id=event_id,
+                            channel=delivery_config.channel,
+                            status="skipped",
+                            error="dedup",
+                        )
+                        continue
+                    if self._daily_count >= SCT_DAILY_LIMIT:
+                        # 批量摘要: 收集被跳过事件 ID, 首次超限时发送一条摘要推送
+                        self._overflow_events.append(event_id)
+                        self._repository.create_delivery_outcome(
+                            event_id=event_id,
+                            channel=delivery_config.channel,
+                            status="skipped",
+                            error="daily_limit_exceeded",
+                        )
+                        if not self._overflow_summary_sent:
+                            self._overflow_summary_sent = True
+                            self._send_overflow_summary(delivery_config)
+                        continue
+                    self._dedup_cache[dedup_key] = now
+                    self._daily_count += 1
             self._repository.create_delivery_outcome(
                 event_id=event_id,
                 channel=delivery_config.channel,
