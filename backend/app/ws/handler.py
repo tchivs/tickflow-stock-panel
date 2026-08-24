@@ -68,6 +68,9 @@ async def ws_stream(websocket: WebSocket) -> None:
             await _message_loop(conn)
     except WebSocketDisconnect:
         pass
+    except Exception as exc:  # noqa: BLE001 — 捕获审计中未预期的异常
+        import logging
+        logging.getLogger(__name__).warning("ws_stream unexpected error: %s", exc)
     finally:
         keepalive_task.cancel()
         try:
