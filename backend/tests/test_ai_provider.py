@@ -175,7 +175,10 @@ def test_openai_kwargs_include_configured_reasoning_effort(monkeypatch):
     stored = {"ai_provider": "openai_compat"}
     monkeypatch.setattr(secrets_store, "load", lambda: stored)
 
-    assert "reasoning_effort" not in ai_provider._openai_kwargs(temperature=None, max_tokens=1000)
+    # openai_compat 未显式配置 reasoning_effort → 默认 high 被覆盖为 max (实测最佳)
+    kwargs = ai_provider._openai_kwargs(temperature=None, max_tokens=1000)
+    assert kwargs.get("reasoning_effort") == "max"
+    assert kwargs.get("max_completion_tokens") == 1000
 
     stored["ai_provider"] = "openai"
     assert ai_provider._openai_kwargs(temperature=None, max_tokens=1000)["reasoning_effort"] == "high"
@@ -184,7 +187,7 @@ def test_openai_kwargs_include_configured_reasoning_effort(monkeypatch):
     kwargs = ai_provider._openai_kwargs(temperature=0.3, max_tokens=1000)
 
     assert kwargs == {
-        "max_tokens": 1000,
+        "max_completion_tokens": 1000,
         "temperature": 0.3,
         "reasoning_effort": "custom-high",
     }
@@ -194,17 +197,25 @@ def test_openai_kwargs_include_configured_reasoning_effort(monkeypatch):
 
     stored["ai_reasoning_effort"] = "custom-high"
     stored["ai_provider"] = "openai_compat"
-    assert "reasoning_effort" not in ai_provider._openai_kwargs(temperature=None, max_tokens=1000)
+    # openai_compat + 显式配置 reasoning_effort → 完全尊重配置, 不覆盖
+    kwargs = ai_provider._openai_kwargs(temperature=None, max_tokens=1000)
+    assert kwargs.get("reasoning_effort") == "custom-high"
+    assert kwargs.get("max_completion_tokens") == 1000
 
 
 def test_openai_kwargs_none_max_tokens_omits_limit():
     """max_tokens=None → 不传上限(推理模型思考 token 计入预算, 分析类调用放开)。"""
     kwargs = ai_provider._openai_kwargs(temperature=0.5, max_tokens=None)
+    assert "max_completion_tokens" not in kwargs
     assert "max_tokens" not in kwargs
     assert kwargs.get("temperature") == 0.5
 
     # 显式数值仍正常下发(策略标题生成等小任务依赖)
-    assert ai_provider._openai_kwargs(temperature=None, max_tokens=8) == {"max_tokens": 8}
+    # 注意: _openai_kwargs 将 max_tokens 参数映射为 max_completion_tokens (含推理预算)。
+    # openai_compat 默认 reasoning_effort=max (推理模型深度思考)。
+    result = ai_provider._openai_kwargs(temperature=None, max_tokens=8)
+    assert result.get("max_completion_tokens") == 8
+    assert result.get("reasoning_effort") == "max"
 
 
 def test_codex_prompt_none_max_tokens_skips_length_hint():

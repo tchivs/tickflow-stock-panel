@@ -27,6 +27,7 @@ class _CapturingScreenerService:
         timeframe="1d",
         params_map=None,
         overrides_map=None,
+        current=None,
     ):
         self.calls.append({
             "kind": "context",
@@ -36,6 +37,51 @@ class _CapturingScreenerService:
             "overrides_map": overrides_map,
         })
         return types.SimpleNamespace(as_of=as_of)
+
+    def run_all_with_hits(self, as_of, strategy_ids=None, engine=None):
+        """Stub for ScreenerService.run_all_with_hits — mirrors the real flow:
+        load overrides → build_strategy_context → engine.run per non-PRESET strategy.
+        """
+        # 不追加 run_all_with_hits 到 calls — build_strategy_context 追加 context call,
+        # 测试通过 calls[0] 获取 context call, 此处不应干扰 calls 顺序。
+        as_of_str = str(as_of)
+        sids = strategy_ids if strategy_ids else []
+
+        # 镜像真实代码: 从 strategy_config 加载 override 配置
+        from app.strategy import config as strategy_config
+        data_dir = self.repo.store.data_dir
+        all_overrides = strategy_config.list_overrides(data_dir)
+
+        # engine_ids = 非 PRESET 策略 (走 engine.run)
+        from app.services.screener import PRESET_STRATEGIES
+        engine_ids = [sid for sid in sids if sid not in PRESET_STRATEGIES]
+
+        # 镜像真实代码: 从 overrides 提取 params_map 传给 build_strategy_context
+        params_map = {
+            sid: dict(ov.get("params") or {})
+            for sid, ov in all_overrides.items()
+            if sid in engine_ids
+        }
+        strategy_context = None
+        if engine and engine_ids:
+            strategy_context = self.build_strategy_context(
+                engine, as_of, engine_ids,
+                current=None,
+                params_map=params_map,
+                overrides_map=all_overrides,
+            )
+
+        results = {}
+        for sid in sids:
+            overrides = all_overrides.get(sid, {})
+            if sid in PRESET_STRATEGIES:
+                results[sid] = {"total": 0, "as_of": as_of_str, "rows": []}
+            elif engine and sid in engine_ids:
+                r = engine.run(sid, strategy_context, overrides=overrides or None)
+                results[sid] = {"total": r.total, "as_of": as_of_str, "rows": []}
+            else:
+                results[sid] = {"total": 0, "as_of": as_of_str, "rows": []}
+        return results
 
 
 class _CapturingStrategyEngine:
@@ -127,13 +173,14 @@ def test_batch_run_passes_saved_params_to_strategy_engine(monkeypatch, tmp_path)
     )
 
     context_call = _CapturingScreenerService.calls[0]
-    run_all_call = _CapturingStrategyEngine.calls[0]
+    # run_all_with_hits 调用 build_strategy_context (context call), 然后 engine.run (per-strategy)
+    run_call = _CapturingStrategyEngine.calls[0]
     expected_params = {"builtin_strategy": saved["params"]}
     expected_overrides = {"builtin_strategy": saved}
     assert context_call["params_map"] == expected_params
     assert context_call["overrides_map"] == expected_overrides
-    assert run_all_call["params_map"] == expected_params
-    assert run_all_call["overrides_map"] == expected_overrides
+    # engine.run 在 run_all_with_hits 路径不传 params (只有 run_preset 传 params)
+    assert run_call["overrides"] == saved
 
 
 def test_batch_summary_response_still_writes_full_cache(monkeypatch, tmp_path):
