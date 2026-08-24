@@ -291,9 +291,8 @@ def _reset_rps_caches() -> None:
     """清空 RPS 模块级缓存 (600s 概念映射 + 120s 结果缓存), 防跨测试污染。"""
     from app.services import rps_rotation
 
-    rps_rotation._concept_map_cache = None
-    rps_rotation._concept_map_count = 0
-    rps_rotation._concept_map_ts = 0.0
+    rps_rotation._map_cache.clear()
+    rps_rotation._map_ts.clear()
     rps_rotation._cache.clear()
     rps_rotation._cache_ts.clear()
 
