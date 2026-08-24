@@ -267,7 +267,7 @@ def test_full_backfill_job_store_timeout_s_persisted(tmp_path):
     assert store.get(job_id)["timeout_s"] == 21600
 
     job_id2, _ = store.create()
-    assert "timeout_s" not in store.get(job_id2), "无参 create 不得写 timeout_s 键"
+    assert store.get(job_id2)["timeout_s"] is not None, "无参 create 也写 timeout_s (从 preferences 读取)"
 
 
 def test_full_backfill_api_passes_timeout_21600(tmp_path, monkeypatch):
@@ -314,14 +314,14 @@ def test_full_backfill_reap_stale_honors_per_job_timeout(tmp_path):
     assert store.get(job_id)["status"] == "running", "21600 豁免, 越过旧 600s 自愈顶"
 
 
-def test_full_backfill_reap_stale_default_600_still_reaps(tmp_path):
-    """缺省语义不变: 无 timeout_s 键的 job 运行 601s → 仍按 600s 回收为 failed。"""
-    from app.services.pipeline_jobs import JobStore
+def test_full_backfill_reap_stale_default_timeout_still_reaps(tmp_path):
+    """缺省语义: 无 timeout_s 的 job 运行 > DEFAULT_JOB_TIMEOUT_S → 回收为 failed。"""
+    from app.services.pipeline_jobs import JobStore, DEFAULT_JOB_TIMEOUT_S
 
     store = JobStore(store_dir=tmp_path)
     job_id, _ = store.create()
     store.start(job_id)
-    _backdate(store, job_id, 601)
+    _backdate(store, job_id, DEFAULT_JOB_TIMEOUT_S + 1)
     store.reap_stale()
     assert store.get(job_id)["status"] == "failed"
 
@@ -389,12 +389,11 @@ def test_job_store_label_job_terminal_clears_label_active(tmp_path):
 
 def test_job_store_reap_stale_covers_labeled_jobs(tmp_path):
     """label 并行 job 卡死同样能被 reap_stale 自愈 (不重启进程不阻塞同 label 去重)。"""
-    from app.services.pipeline_jobs import JobStore
-
+    from app.services.pipeline_jobs import JobStore, DEFAULT_JOB_TIMEOUT_S
     store = JobStore(store_dir=tmp_path)
     pm, _ = store.create(label="premarket_pool_preview")
     store.start(pm)
-    _backdate(store, pm, 601)
+    _backdate(store, pm, DEFAULT_JOB_TIMEOUT_S + 1)
     store.reap_stale()
     assert store.get(pm)["status"] == "failed"
 
