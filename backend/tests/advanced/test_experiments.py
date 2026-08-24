@@ -135,6 +135,12 @@ def test_strategy_backtest_collaborator_derives_split_evidence_from_distinct_gov
 
 
 def test_strategy_backtest_collaborator_prepares_parent_frozen_panels_and_child_consumes_them(tmp_path, monkeypatch):
+    """Frozen panel feature removed (prepare is no-op); run builds panels on-demand.
+
+    prepare returns _frozen_panel_artifacts=[None, None, None]; run passes
+    None artifacts to child.run(), which handles them gracefully. Parent's
+    freeze_panel_artifact is no longer called.
+    """
     from app.advanced.governed_runner import StrategyBacktestExperimentCollaborator
 
     class ParentBacktest:
@@ -171,20 +177,18 @@ def test_strategy_backtest_collaborator_prepares_parent_frozen_panels_and_child_
             "symbols": ["600000.SH"], "asset_type": "stock", "parameters": {"lookback": 20},
         },
     })
+    # prepare is no-op (frozen panel feature removed); artifacts are None
+    assert prepared["_frozen_panel_artifacts"] == [None, None, None]
+    assert parent.frozen_scopes == []  # freeze_panel_artifact not called
+
     monkeypatch.setattr(collaborator, "_service", lambda: child)
 
     collaborator.run(specification=prepared)
 
-    assert parent.frozen_scopes == [
-        {"start": "2024-01-01", "end": "2024-12-31"},
-        {"start": "2024-01-01", "end": "2024-07-01"},
-        {"start": "2024-07-02", "end": "2024-12-31"},
-    ]
-    assert child.artifact_references == [
-        {"artifact_id": "artifact-1", "scope_checksum": "a" * 64},
-        {"artifact_id": "artifact-2", "scope_checksum": "a" * 64},
-        {"artifact_id": "artifact-3", "scope_checksum": "a" * 64},
-    ]
+    # parent.freeze_panel_artifact was never called (feature removed)
+    assert parent.frozen_scopes == []
+    # child.run received None artifacts (panels built on-demand)
+    assert child.artifact_references == [None, None, None]
 
 def _specification(service, **overrides):
     payload = {
