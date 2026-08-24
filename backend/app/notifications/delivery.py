@@ -232,6 +232,9 @@ class NotificationDeliveryService:
         self._dedup_cache: dict[str, float] = {}
         self._daily_count = 0
         self._daily_date = date.today()
+        # 批量摘要: 超过每日上限后收集被跳过事件, 仅发一条摘要 (D-05 补齐)
+        self._overflow_events: list[str] = []
+        self._overflow_summary_sent = False
     def enqueue(
         self,
         *,
@@ -259,6 +262,8 @@ class NotificationDeliveryService:
                 if self._daily_date != today:
                     self._daily_count = 0
                     self._daily_date = today
+                    self._overflow_events = []
+                    self._overflow_summary_sent = False
                 dedup_key = f"{event.get('rule_id', '')}:{event.get('symbol', '')}:{event.get('type', '')}"
                 last_seen = self._dedup_cache.get(dedup_key)
                 if last_seen is not None and (now - last_seen) < SCT_DEDUP_TTL:
@@ -270,12 +275,17 @@ class NotificationDeliveryService:
                     )
                     continue
                 if self._daily_count >= SCT_DAILY_LIMIT:
+                    # 批量摘要: 收集被跳过事件 ID, 首次超限时发送一条摘要推送
+                    self._overflow_events.append(event_id)
                     self._repository.create_delivery_outcome(
                         event_id=event_id,
                         channel=delivery_config.channel,
                         status="skipped",
                         error="daily_limit_exceeded",
                     )
+                    if not self._overflow_summary_sent:
+                        self._overflow_summary_sent = True
+                        self._send_overflow_summary(delivery_config)
                     continue
                 self._dedup_cache[dedup_key] = now
                 self._daily_count += 1
@@ -328,6 +338,28 @@ class NotificationDeliveryService:
                 error=_safe_error(error, delivery_config.config),
             )
 
+
+    def _send_overflow_summary(self, delivery_config: DeliveryConfig) -> None:
+        """超限后发送一条批量摘要推送 (D-05 补齐)。
+
+        将当日被跳过的事件聚合为一条摘要, 通过 SCT 渠道发送,
+        避免逐条推送淹没用户。摘要不占用每日配额。
+        """
+        try:
+            channel = self._channel_for(delivery_config)
+            count = max(self._daily_count, SCT_DAILY_LIMIT)
+            summary_event = {
+                "id": f"overflow_summary_{date.today()}",
+                "rule_id": "system",
+                "symbol": "",
+                "type": "daily_limit_summary",
+                "severity": "info",
+                "message": f"今日 SCT 推送已达上限({count}条), 后续告警已聚合跳过",
+                "occurred_at": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()),
+            }
+            channel.deliver(summary_event)
+        except Exception:  # noqa: BLE001
+            logger.warning("SCT overflow summary delivery failed")
     def drain(self, timeout: float | None = None) -> None:
         """Wait for currently queued work in tests and controlled shutdown paths."""
         futures = tuple(self._futures)

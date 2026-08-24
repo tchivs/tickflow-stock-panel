@@ -388,8 +388,15 @@ def test_dedup_different_key_not_skipped(monkeypatch, tmp_path):
 
 
 def test_daily_limit_degrades_to_summary(monkeypatch, tmp_path):
-    """After 200 SCT pushes in a day, further pushes are skipped with daily_limit_exceeded."""
-    _stub_sct_post(monkeypatch)
+    """After 200 SCT pushes in a day, further pushes are skipped with daily_limit_exceeded
+    and a batch overflow summary is sent once."""
+    sent_posts: list[dict] = []
+
+    def _fake_post(url, **kwargs):
+        sent_posts.append({"url": url, **kwargs})
+        return type("Resp", (), {"status_code": 200, "json": lambda: {"code": 0}, "text": "ok"})()
+
+    monkeypatch.setattr("app.notifications.delivery.httpx.post", _fake_post)
     repository, service = _make_delivery_service(tmp_path)
 
     # Simulate already pushed 200 today
@@ -403,6 +410,15 @@ def test_daily_limit_degrades_to_summary(monkeypatch, tmp_path):
     assert outcomes[0]["status"] == "skipped"
     assert outcomes[0]["error"] == "daily_limit_exceeded"
 
+    # 批量摘要推送应被发送一次 (不占用每日配额)
+    assert "已达上限" in sent_posts[0]["data"]["desp"]
+
+    # 第二条超限事件不再触发摘要
+    sent_posts.clear()
+    repository.record_alert_event(_sct_event(event_id="limit_02"))
+    service.enqueue(event_id="limit_02", channel_configs=[_sct_config()])
+    service.drain(timeout=1.0)
+    assert len(sent_posts) == 0
 
 def test_quote_service_sends_sct_when_requested(monkeypatch, tmp_path):
     """_maybe_send_webhook with webhook_channels including 'sct' + sendkey → DeliveryConfig(channel=sct)."""
