@@ -281,7 +281,7 @@ def test_premarket_time_no_overlap_with_intraday_and_eod():
 
 
 def test_evaluate_premarket_alerts_persist_sse_webhook_chain(tmp_path, monkeypatch):
-    """T16 集成: 事件落库 (record_alert_event) → SSE (_preopen_sse_shape 增量键) → webhook enqueue。"""
+    """T16 集成: 事件落库 (record_alert_event) → WS 广播 (_preopen_sse_shape 增量键) → webhook enqueue。"""
     from app.services import preferences
     from app.services.quote_service import QuoteService
     from app.strategy.monitor import MonitorRuleEngine
@@ -296,7 +296,6 @@ def test_evaluate_premarket_alerts_persist_sse_webhook_chain(tmp_path, monkeypat
             "occurred_at": ev.get("occurred_at") or "2026-08-06T09:26:00+00:00",
         },
     )
-    subscriber = _RecordingSubscriber()
     enqueued: list[dict] = []
     delivery = SimpleNamespace(enqueue=lambda **kwargs: enqueued.append(kwargs))
 
@@ -307,7 +306,13 @@ def test_evaluate_premarket_alerts_persist_sse_webhook_chain(tmp_path, monkeypat
         notification_delivery=delivery,
         repo=SimpleNamespace(store=SimpleNamespace(data_dir=tmp_path)),
     )
-    service._snapshot_subscribers = lambda: [subscriber]
+    # Phase 55: SSE → WS 迁移, 用 broadcast_from_thread 捕获广播
+    ws_calls: list[tuple] = []
+    monkeypatch.setattr(
+        "app.ws.broadcast.broadcast_from_thread",
+        lambda mgr, ch, mt, data: ws_calls.append((ch, mt, data)),
+    )
+    service.attach_ws_manager(object())
 
     monkeypatch.setenv("PHASE1_FIXTURE_MODE", "yes")
     monkeypatch.setenv("PHASE1_FEISHU_RECEIVER_URL", "http://receiver:8080/feishu")
@@ -333,12 +338,15 @@ def test_evaluate_premarket_alerts_persist_sse_webhook_chain(tmp_path, monkeypat
     assert ev["strategy_ids"] == ["auction_bullish"]
     assert ev["preopen_metrics"]["open_gap"] == 0.08
 
-    # SSE: _preopen_sse_shape 在既有键集基础上追加 preopen 增量键
-    assert len(subscriber.alerts) == 1
-    sse = subscriber.alerts[0][0]
+    # WS 广播: _preopen_sse_shape 在既有键集基础上追加 preopen 增量键
+    assert len(ws_calls) == 1
+    ch, mt, data = ws_calls[0]
+    assert ch == "alerts"
+    assert mt == "strategy_alert"
+    sse = data["alerts"][0]
     for key in ("id", "occurred_at", "source", "rule_id", "symbol", "message",
                 "window", "provisional", "degraded", "probe", "strategy_ids", "preopen_metrics"):
-        assert key in sse, f"SSE 形状缺键: {key}"
+        assert key in sse, f"WS 形状缺键: {key}"
     assert sse["source"] == "preopen"
     assert sse["symbol"] == "000001.SZ"
     assert sse["strategy_ids"] == ["auction_bullish"]
@@ -350,7 +358,7 @@ def test_evaluate_premarket_alerts_persist_sse_webhook_chain(tmp_path, monkeypat
 
 
 def test_evaluate_premarket_alerts_degraded_without_operational(tmp_path, monkeypatch):
-    """T16 降级: operational=None → alert_store.append_many + SSE 仍广播 + 投递跳过。"""
+    """T16 降级: operational=None → alert_store.append_many + WS 仍广播 + 投递跳过。"""
     from app.services import alert_store
     from app.services.quote_service import QuoteService
     from app.strategy.monitor import MonitorRuleEngine
@@ -358,7 +366,6 @@ def test_evaluate_premarket_alerts_degraded_without_operational(tmp_path, monkey
     engine = MonitorRuleEngine()
     engine.set_rules([_preopen_rule()])
 
-    subscriber = _RecordingSubscriber()
     enqueued: list[dict] = []
     delivery = SimpleNamespace(enqueue=lambda **kwargs: enqueued.append(kwargs))
 
@@ -369,7 +376,13 @@ def test_evaluate_premarket_alerts_degraded_without_operational(tmp_path, monkey
         notification_delivery=delivery,
         repo=SimpleNamespace(store=SimpleNamespace(data_dir=tmp_path)),
     )
-    service._snapshot_subscribers = lambda: [subscriber]
+    # Phase 55: SSE → WS 迁移
+    ws_calls: list[tuple] = []
+    monkeypatch.setattr(
+        "app.ws.broadcast.broadcast_from_thread",
+        lambda mgr, ch, mt, data: ws_calls.append((ch, mt, data)),
+    )
+    service.attach_ws_manager(object())
 
     appended: list[tuple] = []
     monkeypatch.setattr(alert_store, "append_many", lambda data_dir, events: appended.append((data_dir, events)))
@@ -382,8 +395,10 @@ def test_evaluate_premarket_alerts_degraded_without_operational(tmp_path, monkey
     assert len(appended) == 1
     assert appended[0][0] == tmp_path
     assert len(appended[0][1]) == 1
-    # SSE 仍广播
-    assert len(subscriber.alerts) == 1
+    # WS 仍广播
+    assert len(ws_calls) == 1
+    assert ws_calls[0][0] == "alerts"
+    assert ws_calls[0][1] == "strategy_alert"
     # 投递跳过: operational=None 时不走 webhook enqueue
     assert enqueued == []
 
